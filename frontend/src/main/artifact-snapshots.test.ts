@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ArtifactSnapshotJob } from "../shared/artifact-snapshot";
-import { artifactSnapshotKey, createArtifactSnapshotStore, registerArtifactSnapshotIpc } from "./artifact-snapshots";
+import { artifactSnapshotKey, createArtifactSnapshotStore, registerArtifactSnapshotIpc, SNAPSHOT_DROPPED, SNAPSHOT_MAX_QUEUED, SnapshotUnavailableError } from "./artifact-snapshots";
 
 const job = (overrides: Partial<ArtifactSnapshotJob> = {}): ArtifactSnapshotJob => ({
 	sessionId: "s1",
@@ -31,6 +31,7 @@ describe("artifactSnapshotKey", () => {
 		expect(artifactSnapshotKey(job({ updatedAt: "2026-11-10T11:00:00Z" }))).not.toBe(base);
 		expect(artifactSnapshotKey(job({ theme: "light" }))).not.toBe(base);
 		expect(artifactSnapshotKey(job({ styleTheme: "nord" }))).not.toBe(base);
+		expect(artifactSnapshotKey(job({ hostId: "local" }))).not.toBe(base);
 		expect(artifactSnapshotKey(job({ rawUrl: "http://127.0.0.1:9/x", inlineUrl: "http://a.localhost/y" }))).toBe(base);
 	});
 });
@@ -90,6 +91,40 @@ describe("artifact snapshot store", () => {
 		expect((await store.request(job()))?.toString()).toBe("ok");
 	});
 
+	it("never retries a file with nothing to draw", async () => {
+		const render = vi.fn<() => Promise<Buffer>>().mockRejectedValue(new SnapshotUnavailableError("no preview"));
+		let clock = 1_000;
+		const store = createArtifactSnapshotStore({ directory, render, now: () => clock });
+		expect(await store.request(job())).toBeNull();
+		clock += 24 * 60 * 60 * 1000;
+		expect(await store.request(job())).toBeNull();
+		expect(render).toHaveBeenCalledTimes(1);
+	});
+
+	it("renders cards on screen before the newest request, and tells a dropped request apart from a failure", async () => {
+		const order: string[] = [];
+		const gates: Array<() => void> = [];
+		const render = vi.fn((request: ArtifactSnapshotJob) => new Promise<Buffer>((resolve) => {
+			order.push(request.path);
+			gates.push(() => resolve(Buffer.from("x")));
+		}));
+		const store = createArtifactSnapshotStore({ directory, render, gapMs: 0 });
+		const first = store.request(job({ path: "first.html" }));
+		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
+		const below = store.request(job({ path: "below.html" }), 0);
+		const newestBelow = store.request(job({ path: "newest-below.html" }), 0);
+		const onScreen = store.request(job({ path: "on-screen.html" }), 1);
+		gates.shift()?.();
+		await first;
+		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(2));
+		expect(order[1]).toBe("on-screen.html");
+		// A queue over its limit drops its lowest-priority, oldest request, and says so.
+		const fillers = Array.from({ length: SNAPSHOT_MAX_QUEUED + 1 }, (_, n) => store.request(job({ path: `fill-${n}.html` }), 0));
+		expect(await below).toBe(SNAPSHOT_DROPPED);
+		gates.splice(0).forEach((open) => open());
+		void [newestBelow, onScreen, fillers];
+	});
+
 	it("prunes the oldest-read files once the cache is over its limit", async () => {
 		const store = createArtifactSnapshotStore({ directory, render: async () => Buffer.alloc(10) });
 		await fs.mkdir(directory, { recursive: true });
@@ -112,6 +147,9 @@ describe("registerArtifactSnapshotIpc", () => {
 		const store = { get: vi.fn(async () => Buffer.from("a")), request: vi.fn(async () => Buffer.from("b")) };
 		registerArtifactSnapshotIpc({ ipcMain: { handle: (channel, handler) => void handlers.set(channel, handler as never) }, store });
 		expect(await handlers.get("artifactSnapshot:get")?.({}, { nope: true })).toBeNull();
+		// Main refuses another host's artifact whatever the renderer decided.
+		expect(await handlers.get("artifactSnapshot:request")?.({}, job({ hostId: "host-2" }))).toBeNull();
+		expect(store.request).not.toHaveBeenCalled();
 		expect(store.get).not.toHaveBeenCalled();
 		const bytes = (await handlers.get("artifactSnapshot:request")?.({}, job())) as Uint8Array;
 		expect(Buffer.from(bytes).toString()).toBe("b");

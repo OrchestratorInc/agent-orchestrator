@@ -15,7 +15,7 @@ import {
 	ARTIFACT_SNAPSHOT_WIDTH,
 	type ArtifactSnapshotJob,
 } from "../shared/artifact-snapshot";
-import type { SnapshotRenderer } from "./artifact-snapshots";
+import { type SnapshotRenderer, SnapshotUnavailableError } from "./artifact-snapshots";
 
 /** The page reports one of these while it draws the preview. */
 type PageState = "loading" | "ready" | "unavailable";
@@ -60,7 +60,12 @@ const WINDOW_IDLE_MS = 30_000;
 /** The window only paints when asked to (invalidate), so it never spends frames on its own. */
 const IDLE_FRAME_RATE = 4;
 
-export function createArtifactSnapshotRenderer(deps: WindowDeps): SnapshotRenderer {
+/**
+ * The renderer, and `close` for the window it keeps open. The window is a BaseWindow to
+ * Electron, so it counts for `getAllWindows()` and `window-all-closed`: main closes it
+ * with the shell window and on quit.
+ */
+export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: SnapshotRenderer; close: () => void } {
 	let current: Promise<BrowserWindow> | undefined;
 	let idle: ReturnType<typeof setTimeout> | undefined;
 
@@ -81,10 +86,11 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): SnapshotRender
 				},
 			});
 			const contents = window.webContents;
-			// The page is the app's own; nothing in it may leave for another address or open a window.
+			// The page is the app's own; it may not open a window or navigate away. The window shares the
+			// app's session on purpose (the artifacts need its daemon and cloud access), so it sets no
+			// session-wide handlers: a permission handler here would apply to the whole app.
 			contents.setWindowOpenHandler(() => ({ action: "deny" }));
 			contents.on("will-navigate", (event) => event.preventDefault());
-			contents.session.setPermissionRequestHandler((_contents, _permission, decide) => decide(false));
 			contents.setAudioMuted(true);
 			contents.setFrameRate(IDLE_FRAME_RATE);
 			window.once("closed", () => {
@@ -109,7 +115,7 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): SnapshotRender
 		}, () => undefined);
 	}
 
-	return async (job: ArtifactSnapshotJob) => {
+	const render: SnapshotRenderer = async (job: ArtifactSnapshotJob) => {
 		clearTimeout(idle);
 		const window = await open();
 		const contents = window.webContents;
@@ -123,7 +129,8 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): SnapshotRender
 				await sleep(POLL_MS);
 				state = await read<PageState>("window.__aoSnapshot.state()");
 			}
-			if (state !== "ready") throw new Error(state === "unavailable" ? "the artifact has no preview" : "the preview did not finish loading");
+			if (state === "unavailable") throw new SnapshotUnavailableError("the artifact has no preview");
+			if (state !== "ready") throw new Error("the preview did not finish loading");
 			const frame = await paintedFrame(window);
 			const png = frame.getSize().width === ARTIFACT_SNAPSHOT_WIDTH
 				? frame.toPNG()
@@ -133,8 +140,9 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): SnapshotRender
 			if (bytes.length === 0) throw new Error("the preview could not be encoded");
 			return bytes;
 		} catch (error) {
-			// A page that failed or hung may be stuck; the next artifact gets a fresh one.
-			close();
+			// A page that failed or hung may be stuck; the next artifact gets a fresh one. A file with
+			// nothing to draw left the page healthy.
+			if (!(error instanceof SnapshotUnavailableError)) close();
 			throw error;
 		} finally {
 			if (!window.isDestroyed()) {
@@ -145,4 +153,11 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): SnapshotRender
 			idle = setTimeout(close, WINDOW_IDLE_MS);
 		}
 	};
+
+	function closeNow(): void {
+		clearTimeout(idle);
+		close();
+	}
+
+	return { render, close: closeNow };
 }

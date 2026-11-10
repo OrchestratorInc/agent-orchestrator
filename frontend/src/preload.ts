@@ -460,7 +460,8 @@ const api = {
 	// Cached artifact preview images, rendered once in a hidden window (main/artifact-snapshots.ts).
 	artifactSnapshot: {
 		get: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:get", job) as Promise<Uint8Array | null>,
-		request: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:request", job) as Promise<Uint8Array | null>,
+		/** Renders a missing preview; priority 1 for a card on screen. "dropped" means the queue was full: ask again. */
+		request: (job: unknown, priority?: number) => ipcRenderer.invoke("artifactSnapshot:request", job, priority) as Promise<Uint8Array | null | "dropped">,
 	},
 	// Session and project share links this device made (main/session-share-urls.ts).
 	sessionShareUrls: {

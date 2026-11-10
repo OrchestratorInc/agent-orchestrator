@@ -1312,6 +1312,8 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
 
 	mainWindow.on("closed", () => {
+		// The snapshot window is a BaseWindow too: left open it would count as the app's last window.
+		artifactSnapshotRenderer.close();
 		chatDraftRisks = [];
 		chatDraftDialog = undefined;
 		chatDraftQuitConfirmed = false;
@@ -3587,15 +3589,16 @@ registerChatImageIpc({
 	downloadsDirectory: () => app.getPath("downloads"),
 	appName: app.getName(),
 });
+const artifactSnapshotRenderer = createArtifactSnapshotRenderer({
+	BrowserWindow,
+	preload: preloadPath(),
+	pageUrl: () => new URL("artifact-snapshot.html", rendererUrl()).href,
+});
 registerArtifactSnapshotIpc({
 	ipcMain,
 	store: createArtifactSnapshotStore({
 		directory: path.join(desktopDataDir, "artifact-previews"),
-		render: createArtifactSnapshotRenderer({
-			BrowserWindow,
-			preload: preloadPath(),
-			pageUrl: () => new URL("artifact-snapshot.html", rendererUrl()).href,
-		}),
+		render: artifactSnapshotRenderer.render,
 	}),
 });
 registerCloudArtifactIpc({
@@ -4381,6 +4384,7 @@ setUpdateRestartFailureHandler(() => {
 
 let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
+	artifactSnapshotRenderer.close();
 	if (desktopQuit.handleBeforeQuit(event)) return;
 	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();

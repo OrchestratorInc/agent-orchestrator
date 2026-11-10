@@ -7,7 +7,10 @@ import { ArtifactSnapshotThumbnail } from "./ArtifactSnapshotThumbnail";
 const mocks = vi.hoisted(() => ({ get: vi.fn(), request: vi.fn() }));
 
 vi.mock("../lib/bridge", () => ({ aoBridge: { artifactSnapshot: { get: mocks.get, request: mocks.request } } }));
-vi.mock("./ArtifactThumbnail", () => ({ ArtifactThumbnail: () => <div data-testid="live-thumbnail" /> }));
+vi.mock("./ArtifactThumbnail", () => ({
+	ArtifactThumbnail: () => <div data-testid="live-thumbnail" />,
+	ArtifactKindIcon: () => <svg data-testid="kind-icon" />,
+}));
 
 class FakeObserver {
 	constructor(private readonly callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
@@ -68,9 +71,26 @@ describe("ArtifactSnapshotThumbnail", () => {
 		expect(await screen.findByTestId("live-thumbnail")).toBeTruthy();
 	});
 
-	it("renders another host's artifact live, never in the hidden window", () => {
-		renderCard(row({ path: "remote.md", rawUrl: "https://host.example/api/v1/sessions/s1/preview/files/remote.md" }));
+	it("renders another host's artifact live, even with the *.localhost URL the remote proxy gives it", () => {
+		renderCard(row({ path: "remote.md", hostId: "host-2", rawUrl: "http://ao-preview-abc123.localhost:4100/api/v1/sessions/s1/preview/files/remote.md" }));
 		expect(screen.getByTestId("live-thumbnail")).toBeTruthy();
 		expect(mocks.get).not.toHaveBeenCalled();
+	});
+
+	it("shows the file's icon while its snapshot renders, and asks again when the request was dropped", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			mocks.get.mockResolvedValue(null);
+			mocks.request.mockResolvedValueOnce("dropped").mockResolvedValue(new Uint8Array([9]));
+			const { container } = renderCard(row({ path: "dropped.md" }));
+			await waitFor(() => expect(mocks.request).toHaveBeenCalledTimes(1));
+			expect(screen.getByTestId("kind-icon")).toBeTruthy();
+			expect(screen.queryByTestId("live-thumbnail")).toBeNull();
+			await vi.advanceTimersByTimeAsync(2_000);
+			await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+			expect(mocks.request).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

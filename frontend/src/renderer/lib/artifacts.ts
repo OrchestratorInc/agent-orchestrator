@@ -23,6 +23,8 @@ export type ArtifactRow = {
 	sessionId: string;
 	sessionTitle: string;
 	cloud?: WorkspaceSession["cloud"];
+	/** The remote host the session runs on; undefined for this computer's own and Cloud sessions. */
+	hostId?: string;
 	/** Undefined for a Scratchpad session. */
 	projectId?: string;
 };

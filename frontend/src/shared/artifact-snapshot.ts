@@ -14,6 +14,8 @@ export const ARTIFACT_SNAPSHOT_HEIGHT = 360;
 export const ARTIFACT_SNAPSHOT_QUALITY = 0.8;
 /** Bump when the rendering or encoding changes, so older snapshots are not reused. */
 export const ARTIFACT_SNAPSHOT_VERSION = 1;
+/** The host id of this computer's own sessions. */
+export const LOCAL_SNAPSHOT_HOST = "local";
 
 export type ArtifactSnapshotJob = {
 	sessionId: string;
@@ -26,6 +28,8 @@ export type ArtifactSnapshotJob = {
 	previewUrl?: string;
 	sessionTitle: string;
 	cloud?: { orgId: string };
+	/** The host the session runs on; absent or "local" for this computer. Another host's artifacts are never snapshotted. */
+	hostId?: string;
 	/** The resolved light or dark theme the card is shown in. */
 	theme: "light" | "dark";
 	/** The named color theme, empty for the default. */
@@ -47,6 +51,8 @@ export function parseArtifactSnapshotJob(value: unknown): ArtifactSnapshotJob | 
 		const url = input[field];
 		if (url !== undefined && (typeof url !== "string" || url.length > MAX_FIELD)) return undefined;
 	}
+	const hostId = input.hostId;
+	if (hostId !== undefined && (typeof hostId !== "string" || (hostId !== "" && hostId !== LOCAL_SNAPSHOT_HOST))) return undefined;
 	if (!input.sessionId || !input.path || (input.theme !== "light" && input.theme !== "dark")) return undefined;
 	const cloud = input.cloud;
 	if (cloud !== undefined && (typeof cloud !== "object" || cloud === null || typeof (cloud as { orgId?: unknown }).orgId !== "string")) return undefined;
@@ -61,6 +67,7 @@ export function parseArtifactSnapshotJob(value: unknown): ArtifactSnapshotJob | 
 		rawUrl: input.rawUrl as string | undefined,
 		previewUrl: input.previewUrl as string | undefined,
 		cloud: cloud ? { orgId: (cloud as { orgId: string }).orgId } : undefined,
+		hostId: hostId || undefined,
 		theme: input.theme,
 		styleTheme: input.styleTheme as string,
 	};
