@@ -7,7 +7,7 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1043,9 +1043,18 @@ export function PRSummaryCard({
 	);
 }
 
+/** The row holds as many previews as fit at this width or wider, up to the maximum. */
+const ARTIFACT_PREVIEW_MIN_WIDTH = 88;
+const ARTIFACT_PREVIEW_GAP = 8;
+const ARTIFACT_PREVIEW_MAX = 4;
+/** Fills a 5:4 preview tile with a page laid out 1000 wide. */
+const ARTIFACT_PREVIEW_PAGE_HEIGHT = 800;
+const ARTIFACT_ROWS_COLLAPSED = 3;
+
 /**
- * The Summary's artifacts: a preview of the most recently updated one, then
- * the rest by name. Each opens its file in the inspector's Artifacts tab.
+ * The Summary's artifacts: previews of the most recently updated ones, as many
+ * as fit the width, then the rest by name. Each opens its file in the
+ * inspector's Artifacts tab.
  */
 function ArtifactSummaryList({
 	artifacts,
@@ -1057,42 +1066,91 @@ function ArtifactSummaryList({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
-	const [latest, ...rest] = artifacts;
-	if (!latest) return null;
-	const row: ArtifactRow = { ...latest, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
+	const container = useRef<HTMLDivElement>(null);
+	const [columns, setColumns] = useState(3);
+	const [expanded, setExpanded] = useState(false);
+	useLayoutEffect(() => {
+		const element = container.current;
+		if (!element) return;
+		const measure = (width: number) => {
+			if (width <= 0) return;
+			const fit = Math.floor((width + ARTIFACT_PREVIEW_GAP) / (ARTIFACT_PREVIEW_MIN_WIDTH + ARTIFACT_PREVIEW_GAP));
+			setColumns(Math.min(ARTIFACT_PREVIEW_MAX, Math.max(1, fit)));
+		};
+		measure(element.getBoundingClientRect().width);
+		const observer = new ResizeObserver(([entry]) => {
+			if (entry) measure(entry.contentRect.width);
+		});
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
+	const previews = artifacts.slice(0, columns);
+	const rest = artifacts.slice(columns);
+	const rows = expanded ? rest : rest.slice(0, ARTIFACT_ROWS_COLLAPSED);
 	return (
-		<div className="flex min-w-0 flex-col">
-			<Pressable
-				className="group flex min-w-0 flex-col gap-2 rounded-lg focus-visible:ring-1 focus-visible:ring-ring"
-				onClick={() => onOpenArtifact?.({ path: latest.path })}
-				title={latest.path}
-			>
-				<span className="relative block aspect-[16/9] overflow-hidden rounded-lg bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
-					<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} />
-				</span>
-				<span className="flex min-w-0 flex-col gap-0.5 px-0.5">
-					<span className="truncate text-sm font-medium leading-5 text-foreground">{latest.name}</span>
-					{latest.updatedAt ? (
-						<time
-							className="text-caption tabular-nums text-passive"
-							dateTime={latest.updatedAt}
-							title={new Date(latest.updatedAt).toLocaleString()}
-						>
-							{t("shell.updatedAt", { time: formatTimeCompact(latest.updatedAt) })}
-						</time>
-					) : null}
-				</span>
-			</Pressable>
+		<div className="flex min-w-0 flex-col" ref={container}>
+			<div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+				{previews.map((artifact) => (
+					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} session={session} />
+				))}
+			</div>
 			{rest.length > 0 ? (
 				<ul className="mt-2 flex min-w-0 flex-col border-t border-border pt-1">
-					{rest.map((artifact) => (
+					{rows.map((artifact) => (
 						<li key={artifact.path}>
 							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} />
 						</li>
 					))}
+					{rest.length > ARTIFACT_ROWS_COLLAPSED ? (
+						<li>
+							<Pressable
+								aria-expanded={expanded}
+								className="flex min-h-8 w-full min-w-0 items-center rounded-md px-1 text-sm text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+								onClick={() => setExpanded((current) => !current)}
+							>
+								{t(expanded ? "inspector.showLess" : "inspector.showMore")}
+							</Pressable>
+						</li>
+					) : null}
 				</ul>
 			) : null}
 		</div>
+	);
+}
+
+/** One Summary preview: a small thumbnail with the file's name and last update. */
+function ArtifactPreviewTile({
+	artifact,
+	onOpenArtifact,
+	session,
+}: {
+	artifact: SessionArtifact;
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	session: WorkspaceSession;
+}) {
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
+	return (
+		<Pressable
+			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
+			onClick={() => onOpenArtifact?.({ path: artifact.path })}
+			title={artifact.path}
+		>
+			<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={ARTIFACT_PREVIEW_PAGE_HEIGHT} row={row} />
+			</span>
+			<span className="flex min-w-0 flex-col">
+				<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
+				{artifact.updatedAt ? (
+					<time
+						className="truncate text-caption leading-4 tabular-nums text-passive"
+						dateTime={artifact.updatedAt}
+						title={new Date(artifact.updatedAt).toLocaleString()}
+					>
+						{formatTimeCompact(artifact.updatedAt)}
+					</time>
+				) : null}
+			</span>
+		</Pressable>
 	);
 }
 
