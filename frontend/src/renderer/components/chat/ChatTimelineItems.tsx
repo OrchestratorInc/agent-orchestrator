@@ -22,6 +22,7 @@ import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { ProviderMark } from "./ProviderMark";
 import { useChatSessionId } from "./chat-image-source";
+import { useChatEntrance } from "./chat-entrance";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -1390,7 +1391,9 @@ const LIVE_RECONNECT_CHIP =
  * when the turn settles this row fades out where it is and "Worked for" opens at the
  * top of the turn, so nothing appears to travel between the two.
  */
-export function LiveResponseStatus({ startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+	/** Names this row across remounts (windowing), so its label's entrance plays once. */
+	entranceKey?: string;
 	startedAt?: string;
 	/** Replaces the timer while the session is still being set up. */
 	startupLabel?: string;
@@ -1433,6 +1436,12 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	// entrance, each time; keyed by kind it updates in place and crossfades only when
 	// the row changes what it is showing.
 	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
+	// A row that mounts with its chat (a switch to a working session) shows the
+	// label it opened with in place; any label after that fades in.
+	const labelEnters = useChatEntrance(entranceKey ?? labelId);
+	const quietLabelKind = useRef<string | null | undefined>(labelEnters ? null : labelKind);
+	if (quietLabelKind.current !== null && quietLabelKind.current !== labelKind) quietLabelKind.current = null;
+	const labelEntrance = quietLabelKind.current === null;
 	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
 	const row = (
 		<>
@@ -1448,7 +1457,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 				{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
 				    while the text inside updates in place. */}
 				{label && labelKind ? (
-					<span key={labelKind} className="chat-live-label min-w-0 truncate" data-testid="live-working-task">
+					<span key={labelKind} className={cn(labelEntrance && "chat-live-label", "min-w-0 truncate")} data-testid="live-working-task">
 						{reconnect && !startupLabel ? (
 							<span className={LIVE_RECONNECT_CHIP}>
 								<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
@@ -1584,6 +1593,9 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
  * would hide work the agent really did.
  */
 export function ActivityRow({ activity }: { activity: ConversationActivity }) {
+	// A call already in the chat when it opened, or scrolled back into view, is
+	// drawn in place; only a call that arrives fades in.
+	const entering = useChatEntrance(`row:${activity.id}`, activity.sequence);
 	const toolActivity =
 		activity.activityKind === "command" ||
 		activity.activityKind === "file_change" ||
@@ -1612,7 +1624,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 
 	if (!toolActivity) return content;
 	return (
-		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`}>
+		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`} enter={entering}>
 			{content}
 		</ActivityTransition>
 	);
@@ -1622,10 +1634,13 @@ export function ActivityTransition({
 	value,
 	children,
 	inline = false,
+	enter = true,
 }: {
 	value: string;
 	children: ReactNode;
 	inline?: boolean;
+	/** Fades in on mount. Off for content that was already on screen (see chat-entrance.ts). */
+	enter?: boolean;
 }) {
 	const reducedMotion = useReducedMotion();
 	const previousValue = useRef(value);
@@ -1640,7 +1655,7 @@ export function ActivityTransition({
 	const MotionElement = inline ? motion.span : motion.div;
 	return (
 		<MotionElement
-			initial={reducedMotion ? false : { opacity: 0 }}
+			initial={reducedMotion || !enter ? false : { opacity: 0 }}
 			animate={
 				reducedMotion || !settling
 					? { opacity: 1 }
