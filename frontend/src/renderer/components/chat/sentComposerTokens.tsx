@@ -1,10 +1,10 @@
-import { useSyncExternalStore } from "react";
+import { createContext, Fragment, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import type { ChatSkill } from "../../types/conversation";
 
 /**
  * A skill or file chip the composer sent. The message itself carries only `wire`
- * (`/review`, `src/app.ts`, `"docs/a b.md"`), so a sent message can show the chip
- * again only for a wire this records or a skill the session lists.
+ * (`/review`, `src/app.ts`, `"docs/a b.md"`), so a sent message can mark it again
+ * only for a wire this records or a skill the session lists.
  */
 export type ComposerSentToken = {
 	kind: "skill" | "file";
@@ -111,10 +111,13 @@ export function recordSentComposerTokens(scope: string, tokens: readonly Compose
 }
 
 /** The recorded chips for these scopes, re-read when a send records more. */
-export function useSentComposerTokens(...scopes: string[]): readonly ComposerSentToken[] {
+function useSentComposerTokens(scopes: readonly string[]): readonly ComposerSentToken[] {
 	const store = useSyncExternalStore(subscribe, load, load);
-	const found = scopes.flatMap((scope) => store.find(([key]) => key === scope)?.[1] ?? []);
-	return found.length > 0 ? found : EMPTY;
+	const key = scopes.join("\n");
+	return useMemo(() => {
+		const found = key.split("\n").flatMap((scope) => store.find(([entry]) => entry === scope)?.[1] ?? []);
+		return found.length > 0 ? found : EMPTY;
+	}, [store, key]);
 }
 
 export function skillToken(skill: Pick<ChatSkill, "name">): ComposerSentToken {
@@ -156,4 +159,40 @@ export function splitComposerTokens(text: string, tokens: readonly ComposerSentT
 	if (segments.length === 0) return [{ text }];
 	if (cursor < text.length) segments.push({ text: text.slice(cursor) });
 	return segments;
+}
+
+/** The skills the session's agent lists, so a sent `/name` is marked like the chip it was. */
+export const ChatTokenSkills = createContext<readonly ChatSkill[]>([]);
+
+/** Renders a run of text, marking the sent skills and files in it. */
+export type ComposerTokenRenderer = (text: string, renderPlain?: (text: string) => ReactNode) => ReactNode;
+
+/**
+ * A text renderer that colors a sent message's skills and files, or undefined when
+ * the message can have none. Only exact wires count: a skill the session lists, or
+ * a chip this app recorded when the message was sent. The text stays what was sent,
+ * so selection, copy and find are unchanged. It handles one run of inline text, so
+ * a Markdown renderer can call it per text node (list items and emphasis included)
+ * and leave code elements alone. Stable while the known tokens are.
+ */
+export function useComposerTokenRenderer(sessionId: string, text: string): ComposerTokenRenderer | undefined {
+	const skills = useContext(ChatTokenSkills);
+	const recorded = useSentComposerTokens([sessionTokenScope(sessionId), messageTokenScope(text)]);
+	return useMemo(() => {
+		const tokens = skills.length > 0 ? [...recorded, ...skills.map(skillToken)] : recorded;
+		if (tokens.length === 0) return undefined;
+		return (run: string, renderPlain: (text: string) => ReactNode = (plain) => plain) => {
+			const segments = splitComposerTokens(run, tokens);
+			if (segments.length === 1 && !segments[0]?.token) return renderPlain(run);
+			return segments.map((segment, index) =>
+				segment.token ? (
+					<span key={index} data-message-token={segment.token.kind} className="text-logo-accent">
+						{segment.text}
+					</span>
+				) : (
+					<Fragment key={index}>{renderPlain(segment.text)}</Fragment>
+				),
+			);
+		};
+	}, [recorded, skills]);
 }

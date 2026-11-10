@@ -50,10 +50,10 @@ import {
 	type JSX,
 	type KeyboardEvent,
 } from "react";
-import { Image as ImageIcon } from "@/components/app-icons";
+import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
-import { ComposerTokenChip } from "./ComposerTokenChip";
+import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
 import type { ComposerSentToken } from "./sentComposerTokens";
@@ -288,14 +288,22 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 
 	decorate(): JSX.Element {
 		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
+		const Icon = this.__kind === "skill" ? Box : composerFileIcon(this.__value);
 		return (
-			<ComposerTokenChip
-				kind={this.__kind}
-				value={this.__value}
-				display={this.__display}
-				wire={this.__wire}
+			<span
+				data-composer-token={this.__kind}
+				data-value={this.__value}
 				contentEditable={false}
-			/>
+				className={cn(
+					"mx-0.5 inline-flex items-center gap-1 rounded-md border border-border-strong bg-interactive-hover px-1.5 py-0.5 align-middle text-[0.9em] leading-none select-none",
+					this.__kind === "skill"
+						? "text-logo-accent"
+						: "text-foreground",
+				)}
+			>
+				<Icon aria-hidden="true" className="size-3 shrink-0" />
+				{this.__display}
+			</span>
 		);
 	}
 }

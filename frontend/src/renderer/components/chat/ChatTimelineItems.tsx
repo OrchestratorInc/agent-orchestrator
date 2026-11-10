@@ -126,8 +126,7 @@ import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ComposerTokenText, copyTokenWires } from "./ComposerTokenChip";
-import { messageTokenScope, sessionTokenScope } from "./sentComposerTokens";
+import { useComposerTokenRenderer } from "./sentComposerTokens";
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
@@ -1018,9 +1017,8 @@ export function HumanMessage({
 		/>
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
-	// The chips its send recorded: under the session, or by its text when it was sent
-	// before the session existed.
-	const tokenScopes = [sessionTokenScope(sessionId), messageTokenScope(body)];
+	// The skills and files it sent as chips, drawn as colored text.
+	const renderTokens = useComposerTokenRenderer(sessionId, body);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
@@ -1096,19 +1094,15 @@ export function HumanMessage({
 						>
 							<CollapsibleHumanBody stateKey={visibleMessageText}>
 								{body ? (
-									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty" onCopy={copyTokenWires}>
+									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
 										<ProseWithInlineImages
 											text={body}
 											attachments={attachments}
 											sessionId={sessionId}
 											apiBaseUrl={apiBaseUrl}
-											renderText={(text) => (
-												<ComposerTokenText
-													text={text}
-													scopes={tokenScopes}
-													renderText={(prose) => <SessionLinkedText text={prose} />}
-												/>
-											)}
+											renderText={(text) => renderTokens
+												? renderTokens(text, (prose) => <SessionLinkedText text={prose} />)
+												: <SessionLinkedText text={text} />}
 										/>
 									</p>
 								) : null}
@@ -3296,6 +3290,8 @@ export function SteerMessage({
 		: undefined;
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
 	const { body, attachments } = stagedAttachmentParts(visibleText);
+	// Only the person's own steer is marked; a steer from another session is not theirs.
+	const renderTokens = useComposerTokenRenderer(sessionId, body);
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
@@ -3368,19 +3364,13 @@ export function SteerMessage({
 					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
 						<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 							{body ? (
-								<p onCopy={copyTokenWires}>
+								<p>
 									<ProseWithInlineImages
 										text={body}
 										attachments={attachments}
 										sessionId={sessionId}
 										apiBaseUrl={apiBaseUrl}
-										renderText={(text) => (
-											<ComposerTokenText
-												text={text}
-												scopes={[sessionTokenScope(sessionId), messageTokenScope(body)]}
-												renderText={(prose) => prose}
-											/>
-										)}
+										renderText={(text) => renderTokens ? renderTokens(text) : text}
 									/>
 								</p>
 							) : null}
