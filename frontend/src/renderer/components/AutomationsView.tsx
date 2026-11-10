@@ -673,7 +673,7 @@ function AutomationFormDialog({
 					</DialogClose>
 				</div>
 				<form className="flex min-h-0 flex-1 flex-col" noValidate onSubmit={(event) => void submit(event)}>
-					<div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[minmax(0,1fr)_320px] md:overflow-hidden">
+					<div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[minmax(0,1fr)_380px] md:overflow-hidden">
 					<div className="flex min-h-0 flex-col gap-4 p-6 md:overflow-y-auto">
 						{Object.keys(validationErrors).length > 0 ? (
 							<div role="alert" className={cn(onboardingAlertErrorClass, "flex items-start gap-2")}>
@@ -683,7 +683,7 @@ function AutomationFormDialog({
 						) : null}
 						<div className="flex flex-col gap-1">
 							<input id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} placeholder={t("automations.field.name")} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }}
-								className="w-full rounded-md bg-transparent text-2xl font-semibold text-foreground outline-none placeholder:text-passive focus-visible:ring-2 focus-visible:ring-ring/30" />
+								className="w-full rounded-md bg-transparent text-heading! font-semibold! leading-tight text-foreground outline-none placeholder:text-passive focus-visible:ring-2 focus-visible:ring-ring/30" />
 							<label htmlFor={AUTOMATION_FIELD_IDS.name} className={onboardingFieldHintClass}>{t("automations.field.name")}</label>
 							{validationErrors.name ? <p id={`${AUTOMATION_FIELD_IDS.name}-error`} className={onboardingFieldErrorClass}>{validationErrors.name}</p> : null}
 						</div>
@@ -806,7 +806,7 @@ function AutomationFormDialog({
 						</div>
 						{schedule.preset === "custom" ? (
 							<div className="grid grid-cols-2 gap-3">
-								<Field label={t("automations.field.frequency")}>
+								<div className="col-span-2"><Field label={t("automations.field.frequency")}>
 									<AutomationSelect
 										label={t("automations.field.frequency")}
 										value={schedule.customFrequency}
@@ -821,9 +821,9 @@ function AutomationFormDialog({
 											{ value: "monthly", label: t("automations.customFrequency.monthly") },
 										]}
 									/>
-								</Field>
+								</Field></div>
 								{schedule.customFrequency === "monthly" ? (
-									<Field label={t("automations.field.date")} id={AUTOMATION_FIELD_IDS.monthDay} error={validationErrors.monthDay}>
+									<div className="col-span-2"><Field label={t("automations.field.date")} id={AUTOMATION_FIELD_IDS.monthDay} error={validationErrors.monthDay}>
 										<Input
 											id={AUTOMATION_FIELD_IDS.monthDay}
 											inputMode="numeric"
@@ -839,9 +839,9 @@ function AutomationFormDialog({
 												if (/^[1-9]$|^[12]\d$|^3[01]$/.test(next)) clearValidationError("monthDay");
 											}}
 										/>
-									</Field>
+									</Field></div>
 								) : schedule.customFrequency === "weekly" ? (
-									<Field label={t("automations.field.weekday")}>
+									<div className="col-span-2"><Field label={t("automations.field.weekday")}>
 										<AutomationSelect
 											label={t("automations.field.weekday")}
 											value={schedule.weekday}
@@ -851,10 +851,8 @@ function AutomationFormDialog({
 												label: t(`automations.weekday.${code}`),
 											}))}
 										/>
-									</Field>
-								) : (
-									<div aria-hidden="true" />
-								)}
+									</Field></div>
+								) : null}
 								<Field label={t("automations.field.hour")} id={AUTOMATION_FIELD_IDS.hour} error={validationErrors.hour}>
 									<Input
 										id={AUTOMATION_FIELD_IDS.hour}
