@@ -15,7 +15,7 @@ var findInlineImage = regexp.MustCompile(`\.ao/attachments/(?:attachment|image)-
 
 const maxFindBlockCacheBytes = 16 << 20
 
-// findBlockCache keeps parsed settled replies, so a re-search of a long
+// findBlockCache keeps parsed settled messages, so a re-search of a long
 // transcript does not run Markdown over all of it again. Blocks depend only on
 // the text, so its hash is the key. Cached slices are shared and read-only.
 var findBlockCache = struct {
@@ -26,18 +26,27 @@ var findBlockCache = struct {
 
 func findMessageBlocks(message domain.ConversationMessage) []string {
 	source := findMessageText(message)
-	markdown := message.Role == domain.MessageRoleAssistant
-	if !markdown || message.Streaming {
-		return FindBlocks(source, markdown)
+	var parse func(string) []string
+	switch message.Role {
+	case domain.MessageRoleAssistant:
+		parse = func(source string) []string { return FindBlocks(source, true) }
+	case domain.MessageRoleUser:
+		parse = FindUserBlocks
+	default:
+		return FindBlocks(source, false)
 	}
-	key := sha256.Sum256([]byte(source))
+	if message.Streaming {
+		return parse(source)
+	}
+	// The same text splits differently as a reply and as a person's message.
+	key := sha256.Sum256([]byte(string(message.Role) + "\x00" + source))
 	findBlockCache.Lock()
 	blocks, ok := findBlockCache.blocks[key]
 	findBlockCache.Unlock()
 	if ok {
 		return blocks
 	}
-	blocks = FindBlocks(source, true)
+	blocks = parse(source)
 	size := 0
 	for _, block := range blocks {
 		size += len(block)
