@@ -4980,9 +4980,13 @@ html.sidebar-reordering * {
    hides the shell topbar; windowed mode reserves the native traffic-light band,
    while native fullscreen keeps a 0px top inset. Linux keeps its ShellTopbar
    offset below. */
-/* Maximized files use the same geometry as the maximized browser (backdrop,
-   titlebar band, inset frame) but their own rules, so the native-view
-   composition overrides for the browser never reach the files overlay. */
+/* Maximized files share the maximized browser's overlay geometry (backdrop,
+   titlebar band, full-width frame) but keep their own frame and composition
+   rules, so the native-view overrides for the browser never reach files.
+   Browser maximize switches geometry atomically. A live WebContentsView cannot
+   share a compositor timeline with DOM layout; animating its box would resize
+   Chromium over IPC every frame and make the controls visibly trail the page. */
+.browser-popout-overlay,
 .files-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
 	box-sizing: border-box;
@@ -4994,20 +4998,6 @@ html.sidebar-reordering * {
 	/* The macOS shell has a separate traffic-light drag strip. Keep the
 	   maximized surface interactive even if those regions overlap while the
 	   window is transitioning between layouts. */
-	-webkit-app-region: no-drag;
-}
-
-/* Browser maximize switches geometry atomically. A live WebContentsView cannot
-   share a compositor timeline with DOM layout; animating its box would resize
-   Chromium over IPC every frame and make the controls visibly trail the page. */
-.browser-popout-overlay {
-	--browser-popout-top: env(titlebar-area-height, 0px);
-	box-sizing: border-box;
-	position: fixed;
-	inset: var(--browser-popout-top) 0 0;
-	z-index: 40;
-	overflow: hidden;
-	background: transparent;
 	-webkit-app-region: no-drag;
 }
 

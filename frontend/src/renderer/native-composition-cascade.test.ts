@@ -118,10 +118,11 @@ describe("native-composition transparency cascade", () => {
 		expect(clearsBackgroundFor((selector) => selector.includes(".browser-popout-frame"))).toBe(true);
 	});
 
-	it("spans the expanded browser to both window edges", () => {
-		const frameRule = rules().find((rule) => rule.selector === ".browser-popout-frame");
-		expect(frameRule?.body).toMatch(/left:\s*0;/);
-		expect(frameRule?.body).toMatch(/right:\s*0;/);
+	it.each([".browser-popout-frame", ".files-popout-frame"])("spans the expanded %s to both window edges", (selector) => {
+		const frameRules = rules().filter((rule) => rule.selector.split(",").some((part) => part.trim().endsWith(selector)));
+		const insets = frameRules.flatMap((rule) => [...rule.body.matchAll(/(?:^|[;\s])(left|right|inset-inline):\s*([^;]+);/g)]);
+		expect(insets.map((match) => match[1])).toEqual(expect.arrayContaining(["left", "right"]));
+		for (const [, property, value] of insets) expect(`${property}: ${value.trim()}`).toBe(`${property}: 0`);
 	});
 
 	it("masks the reserved macOS titlebar band for the files popout", () => {
