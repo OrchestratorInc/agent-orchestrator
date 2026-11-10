@@ -100,6 +100,8 @@ export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: Ar
 	const priority = inView ? 1 : 0;
 	const priorityRef = useRef(priority);
 	priorityRef.current = priority;
+	// Whether a render request for the current key is waiting on main.
+	const requested = useRef(false);
 
 	useEffect(() => {
 		const element = container.current;
@@ -123,6 +125,7 @@ export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: Ar
 		let retry: ReturnType<typeof setTimeout> | undefined;
 		const finish = (bytes: Uint8Array | null | "dropped") => {
 			if (!current) return;
+			requested.current = false;
 			if (bytes === "dropped") {
 				// The queue was full: not a failure. Ask again once it has had time to drain.
 				retry = setTimeout(() => setAttempt((count) => count + 1), RETRY_DROPPED_MS);
@@ -136,7 +139,11 @@ export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: Ar
 			setResult({ key, url: entry.url });
 		};
 		aoBridge.artifactSnapshot.get(job)
-			.then((bytes) => bytes ?? aoBridge.artifactSnapshot.request(job, priorityRef.current))
+			.then((bytes) => {
+				if (bytes || !current) return bytes;
+				requested.current = true;
+				return aoBridge.artifactSnapshot.request(job, priorityRef.current);
+			})
 			.then(finish, () => finish(null));
 		return () => {
 			current = false;
@@ -148,7 +155,7 @@ export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: Ar
 
 	// Once a card scrolls into view, a request still waiting in the queue moves ahead of those below the fold.
 	useEffect(() => {
-		if (!job || !near || cached || !inView || result?.key === key) return;
+		if (!job || !requested.current || !inView) return;
 		void aoBridge.artifactSnapshot.request(job, 1).catch(() => undefined);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [inView]);

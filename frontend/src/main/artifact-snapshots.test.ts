@@ -121,8 +121,11 @@ describe("artifact snapshot store", () => {
 		// A queue over its limit drops its lowest-priority, oldest request, and says so.
 		const fillers = Array.from({ length: SNAPSHOT_MAX_QUEUED + 1 }, (_, n) => store.request(job({ path: `fill-${n}.html` }), 0));
 		expect(await below).toBe(SNAPSHOT_DROPPED);
-		gates.splice(0).forEach((open) => open());
-		void [newestBelow, onScreen, fillers];
+		// Let every remaining render finish, so nothing is still writing when the directory goes.
+		const settled = Promise.all([newestBelow, onScreen, ...fillers]);
+		const opener = setInterval(() => gates.splice(0).forEach((open) => open()), 2);
+		await settled;
+		clearInterval(opener);
 	});
 
 	it("prunes the oldest-read files once the cache is over its limit", async () => {
