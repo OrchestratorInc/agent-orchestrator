@@ -5,28 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/getsentry/sentry-go"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 func TestCaptureBackgroundScrubsAndTagsFailure(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
 	SetPolicyCheck(func(context.Context) bool { return true })
 	const secret = "PrivateProjectOrSession_Z9"
 	CaptureBackground(context.Background(), fmt.Errorf("spawn %s: %w", secret, context.DeadlineExceeded), "session_manager", "chat_spawn", map[string]string{
-		"agent": "claude-code", "reason": "provision", "session": secret, "project": secret,
+		"agent": "claude-code", "reason": "record_failure", "session": secret, "project": secret,
 	})
 	event := <-transport.events
 	if event.Message != "Async chat spawn failed (context_deadline)" ||
 		event.Tags["component"] != "session_manager" || event.Tags["operation"] != "chat_spawn" ||
-		event.Tags["agent"] != "claude-code" || event.Tags["reason"] != "provision" ||
+		event.Tags["agent"] != "claude-code" || event.Tags["reason"] != "record_failure" ||
 		event.Tags["error_type"] != "context_deadline" || event.Tags["session"] != "" ||
 		len(event.Fingerprint) != 1 || !safeFingerprint.MatchString(event.Fingerprint[0]) {
 		t.Fatalf("background capture = %+v", event)
@@ -39,7 +42,7 @@ func TestCaptureBackgroundScrubsAndTagsFailure(t *testing.T) {
 
 func TestCaptureBackgroundSkipsCanceledAndUnregistered(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 4)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -65,7 +68,7 @@ func TestCaptureBackgroundSkipsCanceledAndUnregistered(t *testing.T) {
 
 func TestCaptureBackgroundGroupsOnlyValidatedTags(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -96,7 +99,7 @@ func TestCaptureBackgroundDoesNotBlockAndOptOutDrainsAdmittedSends(t *testing.T)
 		recordingTransport: recordingTransport{events: make(chan *sentry.Event, 5)},
 		release:            make(chan struct{}),
 	}
-	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -110,7 +113,7 @@ func TestCaptureBackgroundDoesNotBlockAndOptOutDrainsAdmittedSends(t *testing.T)
 		enabled.Store(false)
 	})
 	SetPolicyCheck(func(context.Context) bool { return true })
-	for _, operation := range []string{"model_discovery", "agent_install", "chat_turn", "chat_spawn"} {
+	for _, operation := range []string{"reconcile", "agent_install", "chat_turn", "chat_spawn"} {
 		returned := make(chan struct{})
 		go func() {
 			CaptureBackground(context.Background(), errors.New("boom"), "chat", operation, nil)
@@ -191,5 +194,46 @@ func TestErrorBudgetOverflowIsPerOperation(t *testing.T) {
 	}
 	if !allowErrorFingerprintFor("dddddddddddddddd", "chat_spawn", when) {
 		t.Fatal("a noisy operation starved a different operation's new failure")
+	}
+}
+
+func TestCaptureErrorAsyncOwnsTagsAndPreservesHTTPMetadata(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	SetPolicyCheck(func(context.Context) bool { return true })
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	tags := map[string]string{"operation": "http_request", "category": "http_fault", "status": "409", "error_code": "CHAT_RESUME_FAILED"}
+	CaptureErrorAsync(context.Background(), errors.New("private"), tags, "123456789abcdef0", telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{})
+	tags["operation"] = "mutated"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-transport.events:
+		if event.Tags["operation"] != "http_request" || event.Tags["category"] != "http_fault" || event.Tags["status"] != "409" {
+			t.Fatalf("lost admitted HTTP tags: %v", event.Tags)
+		}
+	default:
+		t.Fatal("HTTP capture missing")
+	}
+}
+
+func TestModelDiscoveryFailuresAreNotReported(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
+	// A missing or misconfigured agent CLI is user setup state, exec_exit included.
+	CaptureBackground(context.Background(), &exec.ExitError{}, "session_manager", "model_discovery", map[string]string{"agent": "codex"})
+	select {
+	case event := <-transport.events:
+		t.Fatalf("model discovery failure reached Sentry: %+v", event.Tags)
+	case <-time.After(50 * time.Millisecond):
 	}
 }

@@ -14,6 +14,8 @@ package sentryobs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"log"
 	"net"
@@ -36,12 +38,18 @@ import (
 
 var enabled atomic.Bool
 var installID atomic.Pointer[string]
+
+// sampled reports whether this install sends non-fatal errors. Panics always
+// send. The same hash picks the same installs in Electron main
+// (frontend/src/shared/sentry-config.ts installInErrorSample).
+var sampled atomic.Bool
 var release atomic.Pointer[string]
 var environment atomic.Pointer[string]
 var approvedRoutes sync.Map
 var errorBudget = struct {
 	sync.Mutex
 	day    int
+	total  int
 	groups map[string]errorBudgetGroup
 }{groups: make(map[string]errorBudgetGroup)}
 
@@ -49,7 +57,29 @@ const (
 	maxErrorsPerFingerprintMinute = 5
 	maxErrorsPerFingerprintDay    = 200
 	maxErrorFingerprintsPerDay    = 1024
+	// maxErrorsPerInstallDay bounds one install's non-fatal errors across all
+	// fingerprints, matching the Electron main cap.
+	maxErrorsPerInstallDay = 25
+	// errorSampleBuckets: one install in this many sends non-fatal errors.
+	errorSampleBuckets = 10
 )
+
+// Sample rates tagged on every event so Sentry counts can be scaled back up.
+const (
+	sampledErrorRate = "0.1"
+	fatalErrorRate   = "1"
+)
+
+// InstallInErrorSample reports whether an install sends non-fatal errors:
+// sha256(install_id) read as a big-endian uint32, modulo 10, equals 0. An
+// unknown install is never in the sample.
+func InstallInErrorSample(id string) bool {
+	if id == "" {
+		return false
+	}
+	sum := sha256.Sum256([]byte(id))
+	return binary.BigEndian.Uint32(sum[:4])%errorSampleBuckets == 0
+}
 
 type errorBudgetGroup struct {
 	minute      int64
@@ -172,9 +202,11 @@ func Init(cfg Config) error {
 	enabled.Store(false)
 	errorBudget.Lock()
 	errorBudget.day = 0
+	errorBudget.total = 0
 	errorBudget.groups = make(map[string]errorBudgetGroup)
 	errorBudget.Unlock()
 	installID.Store(&cfg.InstallID)
+	sampled.Store(InstallInErrorSample(cfg.InstallID))
 	version := cfg.Release
 	if !safeRelease.MatchString(version) {
 		version = "unknown"
@@ -406,6 +438,8 @@ func safeSentryTag(key, value string) bool {
 		return telemetrymeta.IsPanicKind(value)
 	case "error_code":
 		return safeErrorCode(value)
+	case "sample_rate":
+		return value == sampledErrorRate || value == fatalErrorRate
 	case "install_id":
 		id := installID.Load()
 		return id != nil && value != "" && value == *id
@@ -441,8 +475,17 @@ func CaptureError(ctx context.Context, err error, tags map[string]string, finger
 	captureErrorFor(ctx, err, tags, fingerprint, route, site, tags["operation"])
 }
 
+// CaptureErrorAsync reports HTTP faults without waiting for Sentry transport.
+// It shares bounded admission, budgets and consent draining with background captures.
+func CaptureErrorAsync(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	captureAsync(ctx, tags, fingerprint, route, site, tags["operation"])
+}
+
 func captureErrorFor(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
-	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture(ctx) {
+	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !sampled.Load() || !enterCapture(ctx) {
 		return
 	}
 	defer leaveCapture()
@@ -452,11 +495,8 @@ func captureErrorFor(ctx context.Context, err error, tags map[string]string, fin
 	capture(sentry.LevelError, tags, fingerprint, route, site, false)
 }
 
-func allowErrorFingerprint(fingerprint string, now time.Time) bool {
-	return allowErrorFingerprintFor(fingerprint, "", now)
-}
-
-// allowErrorFingerprintFor applies the per-fingerprint budget. Once a day has
+// allowErrorFingerprintFor applies the per-fingerprint budget and the
+// per-install daily total (maxErrorsPerInstallDay). Once a day has
 // seen maxErrorFingerprintsPerDay distinct fingerprints, a new one shares an
 // overflow bucket for its operation rather than one bucket for the whole
 // daemon, so a noisy day cannot hide a new failure in a different operation.
@@ -473,7 +513,11 @@ func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool
 	day := now.YearDay() + now.Year()*366
 	if errorBudget.day != day {
 		errorBudget.day = day
+		errorBudget.total = 0
 		errorBudget.groups = make(map[string]errorBudgetGroup)
+	}
+	if errorBudget.total >= maxErrorsPerInstallDay {
+		return false
 	}
 	group, known := errorBudget.groups[fingerprint]
 	if !known && len(errorBudget.groups) >= maxErrorFingerprintsPerDay {
@@ -490,6 +534,7 @@ func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool
 	}
 	group.minuteCount++
 	group.dayCount++
+	errorBudget.total++
 	errorBudget.groups[fingerprint] = group
 	return true
 }
@@ -525,7 +570,7 @@ func capture(level sentry.Level, tags map[string]string, fingerprint string, rou
 	hub := sentry.CurrentHub().Clone()
 	hub.WithScope(func(scope *sentry.Scope) {
 		scope.SetLevel(level)
-		applyTags(scope, tags, route)
+		applyTags(scope, level, tags, route)
 		if fingerprint != "" {
 			scope.SetFingerprint([]string{fingerprint})
 		}
@@ -550,10 +595,15 @@ func stackAtSite(site telemetrymeta.FailureSite, operation string) *sentry.Stack
 	return &sentry.Stacktrace{Frames: []sentry.Frame{{Function: "ao.daemon." + operation, InApp: true}}}
 }
 
-func applyTags(scope *sentry.Scope, tags map[string]string, route telemetrymeta.SafeRoute) {
+func applyTags(scope *sentry.Scope, level sentry.Level, tags map[string]string, route telemetrymeta.SafeRoute) {
 	scope.SetTag("platform", "daemon")
+	if level == sentry.LevelFatal {
+		scope.SetTag("sample_rate", fatalErrorRate)
+	} else {
+		scope.SetTag("sample_rate", sampledErrorRate)
+	}
 	for k, v := range tags {
-		if k == "install_id" || k == "path" || k == "area" {
+		if k == "install_id" || k == "path" || k == "area" || k == "sample_rate" {
 			continue
 		}
 		if v != "" {

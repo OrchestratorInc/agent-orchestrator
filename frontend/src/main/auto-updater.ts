@@ -1745,7 +1745,7 @@ function clearUnrecoverableRememberedBuild(): void {
 // failures, unrecognized errors) is reported under a fixed phase and kind.
 const UNREPORTED_UPDATE_KINDS = new Set(["timeout", "unreachable", "rate-limited", "not-found", "unavailable"]);
 
-function reportUpdateFailure(err: unknown, phase: UpdateErrorPhase, reason?: MainErrorReason): void {
+export function reportUpdateFailure(err: unknown, phase: UpdateErrorPhase, reason?: MainErrorReason): void {
   const kind = describeUpdateFailure(err, phase).info?.kind;
   if (kind && UNREPORTED_UPDATE_KINDS.has(kind)) return;
   captureMainError({ category: "update", reason: reason ?? phase, error: err, ...(kind ? { detail: `kind:${kind}` } : {}) });
