@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -98,7 +97,7 @@ API_URL = "http://127.0.0.1"
 	}
 	want := domain.ProjectConfig{
 		Env:        map[string]string{"EXISTING": "old", "API_URL": "http://127.0.0.1"},
-		PostCreate: []string{copyStep(".env", "config/a.local.json"), setup},
+		PostCreate: []string{copyStep(".env*", "config/*.local.json"), setup},
 		PreRemove:  []string{"docker compose down"},
 		AgentRules: "Keep changes small.",
 	}
@@ -149,7 +148,7 @@ func TestReadLegacyConductorJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Source != "conductor.json" || !reflect.DeepEqual(plan.Config.PostCreate, []string{copyStep(".env.local"), "npm ci"}) || !reflect.DeepEqual(plan.Config.PreRemove, []string{"rm -rf tmp"}) {
+	if plan.Source != "conductor.json" || !reflect.DeepEqual(plan.Config.PostCreate, []string{copyStep(".env*"), "npm ci"}) || !reflect.DeepEqual(plan.Config.PreRemove, []string{"rm -rf tmp"}) {
 		t.Fatalf("plan = %+v", plan)
 	}
 	if !reflect.DeepEqual(plan.Cues, []CueDraft{{Key: "scripts.run", Name: "Run", Command: "npm run dev"}}) || plan.Config.Symlinks != nil {
@@ -185,27 +184,35 @@ func TestEnvGivesEachWorkspaceAStablePortBlock(t *testing.T) {
 	}
 }
 
-func copyStep(files ...string) string {
-	quoted := make([]string, len(files))
-	for i, file := range files {
-		quoted[i] = shellQuote(file)
-	}
-	return `for f in ` + strings.Join(quoted, " ") + `; do if [ -e "$AO_SOURCE_TREE_PATH/$f" ]; then mkdir -p "$(dirname "$f")" && cp -pR "$AO_SOURCE_TREE_PATH/$f" "$f" || exit; fi; done`
-}
-
 func TestCopyStepCopiesIgnoredFilesIntoTheWorkspace(t *testing.T) {
 	root := repo(t, map[string]string{
 		".gitignore":               ".env\n*.local.json\n",
 		".env":                     "A=1",
 		".worktreeinclude":         ".env\n*.local.json\n",
 		"config/it's a.local.json": "{}",
+		"config/linked.local.json": "{}",
 		".conductor/settings.toml": "[scripts]\nsetup = \"true\"\n",
 	}, ".gitignore", ".conductor/settings.toml")
-	plan, err := Read(context.Background(), root, domain.ProjectConfig{Symlinks: []string{"config/linked.local.json"}})
+	ctx := context.Background()
+	plan, err := Read(ctx, root, domain.ProjectConfig{Symlinks: []string{"config/linked.local.json"}})
 	if err != nil || len(plan.Config.PostCreate) != 2 {
 		t.Fatalf("plan = %+v, %v", plan, err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "config", "new.local.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Read(ctx, root, plan.Config)
+	if err != nil || len(again.Added) != 0 || !reflect.DeepEqual(again.Config, plan.Config) {
+		t.Fatalf("a new matching file changed the import: %+v, %v", again.Added, err)
+	}
 	workspace := t.TempDir()
+	linked := filepath.Join(workspace, "config", "linked.local.json")
+	if err := os.MkdirAll(filepath.Dir(linked), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "config", "linked.local.json"), linked); err != nil {
+		t.Fatal(err)
+	}
 	for range 2 {
 		run := exec.Command("sh", "-c", plan.Config.PostCreate[0])
 		run.Dir, run.Env = workspace, append(os.Environ(), "AO_SOURCE_TREE_PATH="+root)
@@ -213,10 +220,13 @@ func TestCopyStepCopiesIgnoredFilesIntoTheWorkspace(t *testing.T) {
 			t.Fatalf("copy step: %v: %s", err, out)
 		}
 	}
-	for _, name := range []string{".env", "config/it's a.local.json"} {
+	for _, name := range []string{".env", "config/it's a.local.json", "config/new.local.json"} {
 		info, err := os.Lstat(filepath.Join(workspace, name))
 		if err != nil || !info.Mode().IsRegular() {
 			t.Fatalf("%s in workspace: %v, %v", name, info, err)
 		}
+	}
+	if info, err := os.Lstat(linked); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("linked file replaced: %v, %v", info, err)
 	}
 }

@@ -390,8 +390,10 @@ func (p *Plan) hasEnv(name string) bool {
 	return false
 }
 
-// copyFiles copies the ignored files Conductor copies into each workspace,
-// before the imported Setup runs. A file the project already links stays linked.
+// copyFiles adds a Setup step, before the imported Setup, that copies the
+// ignored files matching Conductor's include patterns into each workspace. The
+// step finds the files when it runs and keeps a path that already exists, such
+// as a project symlink.
 func (p *Plan) copyFiles(ctx context.Context, repo *os.Root, root string, settings map[string]any) error {
 	key, patterns := includePatterns(repo, settings)
 	files, err := ignoredMatches(ctx, root, patterns)
@@ -402,11 +404,7 @@ func (p *Plan) copyFiles(ctx context.Context, repo *os.Root, root string, settin
 	if len(files) == 0 {
 		return nil
 	}
-	quoted := make([]string, len(files))
-	for i, file := range files {
-		quoted[i] = shellQuote(file)
-	}
-	step := `for f in ` + strings.Join(quoted, " ") + `; do if [ -e "$AO_SOURCE_TREE_PATH/$f" ]; then mkdir -p "$(dirname "$f")" && cp -pR "$AO_SOURCE_TREE_PATH/$f" "$f" || exit; fi; done`
+	step := copyStep(patterns...)
 	if slices.Contains(p.Config.PostCreate, step) {
 		return nil
 	}
@@ -429,6 +427,16 @@ func includePatterns(repo *os.Root, settings map[string]any) (string, []string) 
 		}
 	}
 	return key, patterns
+}
+
+func copyStep(patterns ...string) string {
+	excludes := make([]string, len(patterns))
+	for i, pattern := range patterns {
+		excludes[i] = shellQuote("--exclude=" + pattern)
+	}
+	return `git -C "$AO_SOURCE_TREE_PATH" ls-files -z --others --ignored ` + strings.Join(excludes, " ") +
+		` | git -C "$AO_SOURCE_TREE_PATH" check-ignore -z --stdin` +
+		` | xargs -0 sh -c 'for f; do [ -e "$f" ] || [ -L "$f" ] || { mkdir -p "$(dirname "$f")" && cp -pR "$AO_SOURCE_TREE_PATH/$f" "$f"; } || exit 1; done' sh`
 }
 
 func ignoredMatches(ctx context.Context, root string, patterns []string) ([]string, error) {
