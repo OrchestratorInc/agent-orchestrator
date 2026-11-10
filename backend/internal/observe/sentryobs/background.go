@@ -77,7 +77,7 @@ func isBackgroundComponent(value string) bool {
 // scrubber. The fingerprint groups by component, operation, error type and
 // code, so one failing path is one Sentry issue.
 func CaptureBackground(ctx context.Context, err error, component, operation string, extra map[string]string) {
-	if err == nil || errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, context.Canceled) || IsRepeat(err) {
 		return
 	}
 	if ctx == nil {
@@ -173,4 +173,26 @@ func safeBackgroundTag(key, value string) (bool, bool) {
 		return ok, true
 	}
 	return false, false
+}
+
+// repeatError marks a failure whose state was already reported (see Repeat).
+type repeatError struct{ err error }
+
+func (e *repeatError) Error() string { return e.err.Error() }
+func (e *repeatError) Unwrap() error { return e.err }
+
+// Repeat marks err as the same failure state its owner already reported, so
+// every capture path skips it. A polled read that keeps failing the same way
+// then reports once per state change instead of once per poll (AO-DAEMON-9).
+func Repeat(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &repeatError{err: err}
+}
+
+// IsRepeat reports whether err was marked with Repeat.
+func IsRepeat(err error) bool {
+	var repeat *repeatError
+	return errors.As(err, &repeat)
 }

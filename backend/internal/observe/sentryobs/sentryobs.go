@@ -480,14 +480,14 @@ func withErrorTags(tags map[string]string, err error) map[string]string {
 // CaptureErrorAsync reports HTTP faults without waiting for Sentry transport.
 // It shares bounded admission, budgets and consent draining with background captures.
 func CaptureErrorAsync(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
-	if err == nil || errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, context.Canceled) || IsRepeat(err) {
 		return
 	}
 	captureAsync(ctx, withErrorTags(tags, err), fingerprint, route, site, tags["operation"])
 }
 
 func captureErrorFor(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
-	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture(ctx) {
+	if err == nil || errors.Is(err, context.Canceled) || IsRepeat(err) || ctx.Err() != nil || !enterCapture(ctx) {
 		return
 	}
 	defer leaveCapture()

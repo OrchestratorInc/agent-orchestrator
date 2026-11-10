@@ -21,6 +21,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -1023,12 +1024,12 @@ func TestLinkedWorkspaceMissingCommonRepository(t *testing.T) {
 }
 
 func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
-	busy := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
+	busy := classifyWorkspaceGitError(context.Background(), "/repo", errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
 	var apiErr *apierr.Error
 	if !errors.As(busy, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
 		t.Fatalf("lock error = %v, want retryable WORKSPACE_GIT_BUSY", busy)
 	}
-	unknown := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: bad object")
+	unknown := classifyWorkspaceGitError(context.Background(), "/repo-unknown", errors.New("git exit"), "fatal: bad object")
 	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
 		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
 	}
@@ -6631,5 +6632,39 @@ func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
 	mgr.refuse["mer-old"] = errors.New("disk I/O error")
 	if err := svc.DeleteExpired(ctx, 30); err == nil || !strings.Contains(err.Error(), "mer-old") {
 		t.Fatalf("failed delete err = %v, want it reported", err)
+	}
+}
+
+// A polled read against a repository stuck in one broken state reports to
+// Sentry once per state change, not once per poll (AO-DAEMON-9).
+func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "w-1")
+	read := func(detail string) error {
+		return classifyWorkspaceGitError(context.Background(), root, errors.New("git exit"), detail)
+	}
+	steps := []struct {
+		name   string
+		run    func() error
+		repeat bool
+	}{
+		{"first failure", func() error { return read("fatal: bad object HEAD") }, false},
+		{"same failure on the next poll", func() error { return read("fatal: bad object HEAD") }, true},
+		{"and the poll after", func() error { return read("fatal: bad object HEAD") }, true},
+		{"a different failure", func() error { return read("fatal: your current branch appears to be broken") }, false},
+		{"after a successful read", func() error { noteWorkspaceGitReadOK(root); return read("fatal: your current branch appears to be broken") }, false},
+	}
+	for _, step := range steps {
+		err := step.run()
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+			t.Fatalf("%s: client sees %v, want WORKSPACE_GIT_READ_FAILED", step.name, err)
+		}
+		if got := sentryobs.IsRepeat(err); got != step.repeat {
+			t.Errorf("%s: skipped by Sentry = %v, want %v", step.name, got, step.repeat)
+		}
+	}
+	other := classifyWorkspaceGitError(context.Background(), filepath.Join(t.TempDir(), "w-2"), errors.New("git exit"), "fatal: bad object HEAD")
+	if sentryobs.IsRepeat(other) {
+		t.Error("a second workspace's first failure was skipped")
 	}
 }

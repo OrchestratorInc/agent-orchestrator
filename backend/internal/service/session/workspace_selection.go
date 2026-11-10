@@ -610,7 +610,7 @@ func applyCommitRun(ctx context.Context, root string, env []string, run commitRu
 		// git apply rejects empty input.
 		_ = patch.Close()
 		if waitErr := diff.Wait(); waitErr != nil {
-			return nil, classifyWorkspaceGitError(ctx, waitErr, strings.TrimSpace(diffStderr.buffer.String()))
+			return nil, classifyWorkspaceGitError(ctx, root, waitErr, strings.TrimSpace(diffStderr.buffer.String()))
 		}
 		if !errors.Is(peekErr, io.EOF) {
 			return nil, peekErr
@@ -637,7 +637,7 @@ func applyCommitRun(ctx context.Context, root string, env []string, run commitRu
 		return applyConflictPaths(applyStderr.buffer.String()), nil
 	}
 	if diffErr != nil {
-		return nil, classifyWorkspaceGitError(ctx, diffErr, strings.TrimSpace(diffStderr.buffer.String()))
+		return nil, classifyWorkspaceGitError(ctx, root, diffErr, strings.TrimSpace(diffStderr.buffer.String()))
 	}
 	return nil, nil
 }
