@@ -431,15 +431,17 @@ func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
 				catalog.Models[0].Efforts = []string{"low", "medium"}
 			}
 			var refreshes []bool
-			m.modelCatalog = refreshRecordingCatalog{saved: catalog, fresh: catalog, refreshes: &refreshes}
+			refreshed := make(chan struct{}, 4)
+			m.modelCatalog = refreshRecordingCatalog{saved: catalog, fresh: catalog, refreshes: &refreshes, refreshed: refreshed}
 			if tc.catalogError {
 				m.modelCatalog = tuningCatalog{err: errors.New("catalog offline")}
 			}
 			ws.createErr = nil
 			_, err = m.ResumeAgentWithMode(context.Background(), rec.ID)
 			if tc.catalogError {
-				if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) || len(*deferred) != 1 || len(launcher.started) != 0 || st.sessions[rec.ID].ProvisionState != domain.SessionProvisionFailed {
-					t.Fatalf("catalog error = %v, starts = %d, want early error preserving failed session", err, len(launcher.started))
+				// An unreadable catalog no longer blocks the retry: the CLI decides.
+				if err != nil || len(*deferred) != 2 {
+					t.Fatalf("catalog error = %v, deferred starts = %d, want the retry to go ahead", err, len(*deferred))
 				}
 				return
 			}
@@ -457,8 +459,13 @@ func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
 			if ready.ProvisionState != domain.SessionProvisionReady || ready.Metadata.Model != tc.wantModel || ready.Metadata.Effort != tc.wantEffort {
 				t.Fatalf("persisted retry = %+v, want ready with launched tuning", ready)
 			}
-			if len(refreshes) == 0 || (tc.catalogDrift && (len(refreshes) < 2 || !refreshes[1])) {
-				t.Fatalf("catalog reads = %v, want validation and refresh on drift", refreshes)
+			if len(refreshes) == 0 {
+				t.Fatalf("catalog reads = %v, want validation against the saved catalog", refreshes)
+			}
+			if tc.catalogDrift {
+				// Drift is answered from the saved catalog; the rediscovery runs
+				// in the background rather than inside the retry.
+				waitForBackgroundRefresh(t, refreshed)
 			}
 			if len(launcher.queued) != 1 || len(launcher.drained) != 1 {
 				t.Fatalf("opening prompts = %d, drains = %d, want 1 each", len(launcher.queued), len(launcher.drained))

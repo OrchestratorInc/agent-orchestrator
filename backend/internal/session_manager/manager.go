@@ -1752,19 +1752,25 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		return resolved, nil
 	}
-	// Validate against the saved catalog first so a launch does not wait on a
-	// live model discovery. Rediscover only when the saved catalog cannot answer:
-	// it failed, is stale or updating, or lacks the requested model or effort.
+	// A spawn never waits on live model discovery: it runs the agent's CLI and
+	// can take up to the catalog's load timeout, inside the spawn request.
+	// Validate against the saved catalog only. When it cannot answer (the read
+	// failed, or it is stale, updating, or does not list the model or effort),
+	// refresh it in the background and let the launch go ahead: the agent CLI
+	// has the final say, as it already does for Codex. Only what the saved
+	// catalog proves is refused here: a model that needs a newer Claude Code,
+	// and an effort the listed model does not support.
 	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false)
 	if err != nil || !savedCatalogCovers(catalog, modelID, resolved.Effort) {
-		catalog, err = m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+		m.refreshModelCatalogInBackground(cfg.Harness, cfg.ProjectID)
 	}
 	if err != nil {
+		// Only the spawn's own cancellation stops the launch here.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
+		}
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
-		}
-		if validateClaudeModel || resolved.Effort != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
 		}
 		return resolved, nil
 	}
@@ -1776,18 +1782,6 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			}
 		}
 	}
-	// A catalog left stale only because the stored login's access token expired
-	// (its refresh token still in date) must not block the launch: Claude Code
-	// renews the token when it starts. The stale list still validates what it
-	// knows. Models it lacks are left to the CLI only when there is no
-	// account-scoped list (the built-in fallback); against the account's own
-	// last-known list an unlisted ID is more likely a typo than a new release.
-	renewableLogin := catalog.Stale && catalog.WarningCode == ports.ModelCatalogWarningAuthExpired &&
-		cfg.Harness == domain.HarnessClaudeCode
-	unlistedToCLI := renewableLogin && catalog.LastSuccessAt == nil
-	if catalog.Stale && validateClaudeModel && !renewableLogin {
-		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
-	}
 	var selected *ports.AgentModelInfo
 	for i := range catalog.Models {
 		if catalog.Models[i].ID == modelID {
@@ -1795,14 +1789,10 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
-	if validateClaudeModel && selected == nil && !unlistedToCLI {
-		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
-	}
 	if selected != nil && selected.RequiresVersion != "" {
 		// Launching would only fail on the first turn with the provider's
-		// claude_code_version_too_old rejection; say so before spawning. This runs
-		// for any listed model, not only when the model is validated: a model the
-		// catalog does not list (a gateway alias) has no known requirement.
+		// claude_code_version_too_old rejection; say so before spawning. A model
+		// the catalog does not list (a gateway alias) has no known requirement.
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q: %s", ErrUnsupportedModel, modelID, selected.UnavailableReason)
 	}
 	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {
@@ -1820,21 +1810,28 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if resolved.Effort == "" {
 		return resolved, nil
 	}
-	if unlistedToCLI && selected == nil {
-		// The CLI owns per-model capabilities, but a level no Claude model
-		// accepts can still be refused here rather than after the session starts.
-		if !containsString(claudeEffortLevels, resolved.Effort) {
+	if selected == nil {
+		// The saved catalog does not list the model, so the CLI owns its
+		// capabilities. A level no Claude model accepts is still certain.
+		if cfg.Harness == domain.HarnessClaudeCode && !containsString(claudeEffortLevels, resolved.Effort) {
 			return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 		}
 		return resolved, nil
 	}
-	if (catalog.Stale && !renewableLogin) || selected == nil {
-		return ports.AgentConfig{}, fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID)
-	}
-	if resolved.Effort != "" && !containsString(selected.Efforts, resolved.Effort) {
+	if !containsString(selected.Efforts, resolved.Effort) {
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
+}
+
+// refreshModelCatalogInBackground rediscovers a harness's catalog without
+// holding up the spawn that found it stale. The catalog service coalesces
+// concurrent loads, so a burst of spawns starts one discovery.
+func (m *Manager) refreshModelCatalogInBackground(harness domain.AgentHarness, projectID domain.ProjectID) {
+	ctx := m.backgroundContext
+	go func() {
+		_, _ = m.modelCatalog.Models(ctx, string(harness), string(projectID), true)
+	}()
 }
 
 var (
