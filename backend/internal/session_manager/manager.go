@@ -1828,9 +1828,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 // holding up the spawn that found it stale. The catalog service coalesces
 // concurrent loads, so a burst of spawns starts one discovery.
 func (m *Manager) refreshModelCatalogInBackground(harness domain.AgentHarness, projectID domain.ProjectID) {
-	ctx := m.backgroundContext
+	ctx, catalog := m.backgroundContext, m.modelCatalog
 	go func() {
-		_, _ = m.modelCatalog.Models(ctx, string(harness), string(projectID), true)
+		_, _ = catalog.Models(ctx, string(harness), string(projectID), true)
 	}()
 }
 
