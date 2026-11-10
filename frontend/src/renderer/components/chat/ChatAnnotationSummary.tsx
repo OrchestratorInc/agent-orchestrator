@@ -165,6 +165,9 @@ function ChatExcerptPreview({ annotation, index, disabled, onNavigate }: { annot
 	const [expanded, setExpanded] = useState(false);
 	const [overflow, setOverflow] = useState(false);
 	const preview = useRef<HTMLPreElement>(null);
+	const card = useRef<HTMLDivElement>(null);
+	const pointerStart = useRef<{ x: number; y: number } | null>(null);
+	const dragged = useRef(false);
 	const previewId = useId();
 	const text = annotation.snapshot?.badgeOnly ? "" : annotation.text;
 	const shortened = Array.from(text.split("\n").slice(0, 6).join("\n")).slice(0, 600).join("");
@@ -178,13 +181,35 @@ function ChatExcerptPreview({ annotation, index, disabled, onNavigate }: { annot
 		observer?.observe(element);
 		return () => observer?.disconnect();
 	}, [text, expanded]);
-	return <>
-		<Pressable disabled={disabled} onClick={onNavigate} aria-label={annotation.text || t("chat.excerpt.flowchartAttached")}
+	const navigate = () => {
+		if (disabled || dragged.current) return;
+		const selection = window.getSelection();
+		if (selection && !selection.isCollapsed && selection.rangeCount && card.current && selection.getRangeAt(0).intersectsNode(card.current)) return;
+		onNavigate();
+	};
+	return <div
+		ref={card}
+		className={disabled ? undefined : "cursor-pointer text-popover-foreground hover:text-foreground"}
+		onPointerDownCapture={event => {
+			pointerStart.current = { x: event.clientX, y: event.clientY };
+			dragged.current = false;
+		}}
+		onPointerMoveCapture={event => {
+			const start = pointerStart.current;
+			if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) dragged.current = true;
+		}}
+		onPointerUpCapture={() => { pointerStart.current = null; }}
+		onClick={event => {
+			if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
+			navigate();
+		}}
+	>
+		<Pressable disabled={disabled} onClick={event => { if (event.detail === 0) dragged.current = false; navigate(); }} aria-label={annotation.text || t("chat.excerpt.flowchartAttached")}
 			className="mb-1 flex w-full min-w-0 items-center gap-2 border-b border-border/60 pb-1.5 text-left text-popover-foreground hover:text-foreground">
 			<span className="min-w-0 flex-1 font-semibold">{index}. {t("chat.excerpt.selectedText")}</span>
 			{annotation.snapshot?.containsFlowchart ? <span className="shrink-0 rounded bg-background/60 px-1.5 py-0.5 font-mono text-[10px]">{t("chat.excerpt.flowchartAttached")}</span> : null}
 		</Pressable>
 		{text ? <pre ref={preview} id={previewId} className={cn("whitespace-pre-wrap break-words font-sans text-xs leading-5 select-text", expanded ? "max-h-48 overflow-auto" : "line-clamp-6")}>{expanded ? text : shortened + (clipped ? "…" : "")}</pre> : null}
 		{clipped || overflow ? <Button type="button" variant="link" disabled={disabled} className="mt-1 text-xs text-muted-foreground" aria-expanded={expanded} aria-controls={previewId} onClick={() => setExpanded(value => !value)}>{t(expanded ? "chat.fileAnnotationShowLess" : "chat.fileAnnotationShowMore")}</Button> : null}
-	</>;
+	</div>;
 }

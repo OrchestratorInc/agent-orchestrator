@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatMarkdown } from "../components/chat/ChatMarkdown";
+import { ChatLinkProvider, ChatMarkdown } from "../components/chat/ChatMarkdown";
 import { captureExcerptSnapshot, captureExcerptTurn, excerptRenderedText, renderedExcerptRange, upgradeExcerpt } from "./chat-excerpt-snapshot";
 import { codeSourceOffsets } from "./rehype-excerpt-source";
 import * as sourceMapping from "./rehype-excerpt-source";
@@ -26,6 +26,46 @@ function select(body: HTMLElement, first: string, last: string = first) {
 }
 
 describe("captured chat excerpts", () => {
+	it.each(["src/app.ts", "src/app.ts:42", "src/你好.ts"])("captures a clickable filename, partial selection and exact return navigation: %s", filename => {
+		const source = `Open \`${filename}\` then \`${filename}\` here`;
+		const path = filename.replace(/:42$/, "");
+		const onFileOpen = vi.fn();
+		const { container } = render(<ChatLinkProvider workspacePaths={[path]} onFileOpen={onFileOpen}><ChatMarkdown text={source} /></ChatLinkProvider>);
+		const buttons = container.querySelectorAll("button[data-excerpt-include]");
+		expect(buttons).toHaveLength(2);
+		const node = buttons[1].querySelector("code")!.firstChild!;
+		// Build from the DOM, independently of the projection under test.
+		const range = document.createRange();
+		range.setStart(node, 0); range.setEnd(node, filename.length);
+		const captured = captureExcerptSnapshot(container, range, source);
+		expect(captured.text).toBe(filename);
+		expect(captured.snapshot.rawText).toBe(filename);
+		expect(captured.snapshot.captureMode).toBe("exact");
+		expect(captured.snapshot.sourceRange?.start).toBe(source.lastIndexOf(filename));
+		const restored = renderedExcerptRange(container, captured.text, captured.snapshot)!;
+		expect(restored.toString()).toBe(filename);
+		expect(restored.startContainer).toBe(node);
+		range.setStart(node, 4); range.setEnd(node, filename.length - 1);
+		const partial = captureExcerptSnapshot(container, range, source);
+		expect(partial.text).toBe(filename.slice(4, -1));
+		expect(partial.snapshot.rawText).toBe(filename.slice(4, -1));
+		fireEvent.click(buttons[1]);
+		expect(onFileOpen).toHaveBeenCalledWith(path, ...(filename.endsWith(":42") ? [42] : []));
+	});
+	it("keeps clickable filenames in mixed prose and excludes controls even when explicitly opted in", () => {
+		const source = "Open `src/app.ts` here";
+		const { container } = render(<ChatLinkProvider workspacePaths={["src/app.ts"]} onFileOpen={vi.fn()}><ChatMarkdown text={source} /></ChatLinkProvider>);
+		const paragraph = container.querySelector("p")!;
+		const range = document.createRange(); range.selectNodeContents(paragraph);
+		const captured = captureExcerptSnapshot(container, range, source);
+		expect(captured.text).toBe("Open src/app.ts here");
+		expect(captured.snapshot.rawText).toBe(source);
+		expect(renderedExcerptRange(container, captured.text, captured.snapshot)?.toString()).toBe(captured.text);
+		const controls = document.createElement("div");
+		controls.innerHTML = '<button>Copy</button><button data-chat-find-include>Find-only</button><button data-excerpt-include data-excerpt-exclude>Excluded</button><button data-excerpt-include hidden>Hidden</button><button data-excerpt-include aria-hidden="true">Hidden ARIA</button><span data-excerpt-exclude><button data-excerpt-include>Hidden parent</button></span><input value="input"><select><option>option</option></select><textarea>textarea</textarea>';
+		container.append(controls);
+		expect(excerptRenderedText(container).text.trim()).toBe(captured.text);
+	});
 	it("builds each selected element's map once at capture time, never on render", () => {
 		const mapping = vi.spyOn(sourceMapping, "excerptSourceOffsets");
 		try {

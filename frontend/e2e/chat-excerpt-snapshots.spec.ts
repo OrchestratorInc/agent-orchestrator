@@ -1,5 +1,48 @@
 import { expect, test } from "@playwright/test";
 
+for (const mixed of [false, true]) {
+	test(`clickable filename ${mixed ? "with prose" : "alone"} captures and navigates from the whole preview @T0`, async ({ page }) => {
+		await page.goto("/e2e/excerpt-snapshots/harness.html?filenames=1");
+		const file = page.getByRole("button", { name: "Open src/app.ts in Files", exact: true });
+		await expect(file).toBeVisible();
+		await file.evaluate((element, mixed) => {
+			const selected = mixed ? element.closest("p")! : element.querySelector("code")!;
+			const range = document.createRange(); range.selectNodeContents(selected);
+			window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
+			document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+		}, mixed);
+		await page.getByRole("button", { name: "Add to chat", exact: true }).click();
+		await page.getByRole("button", { name: "1 annotation", exact: true }).click();
+		const text = mixed ? "Open src/app.ts here" : "src/app.ts";
+		const preview = page.getByRole("dialog").locator("pre");
+		await expect(preview).toHaveText(text);
+		await preview.evaluate(element => {
+			const range = document.createRange(); range.selectNodeContents(element);
+			window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
+			element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+		});
+		await expect(page.getByRole("dialog")).toBeVisible();
+		await page.evaluate(() => window.getSelection()!.removeAllRanges());
+		await preview.click();
+		await expect(page.getByRole("dialog")).toHaveCount(0);
+		await expect.poll(() => page.evaluate(() => {
+			const highlight = CSS.highlights.get("chat-annotation");
+			return highlight ? [...highlight].map(range => range.toString()).join("") : "";
+		})).toBe(text);
+		await page.getByLabel("Message the agent").fill("Explain this reference.");
+		await page.getByRole("button", { name: "Send message", exact: true }).click();
+		await expect(page.getByTestId("sent-payload")).not.toHaveText("[]");
+		const [sent] = JSON.parse(await page.getByTestId("sent-payload").textContent() ?? "[]");
+		expect(sent.text).toBe(text);
+		expect(sent.snapshot.rawText).toBe(mixed ? "Open `src/app.ts` here" : "src/app.ts");
+		expect(sent.snapshot.turn.messages[1].text).toBe("Open `src/app.ts` here");
+		await page.locator('[data-chat-message-id="sent"]').getByRole("button", { name: "1 annotation" }).click();
+		await expect(page.getByRole("dialog").locator("pre")).toHaveText(text);
+		await page.getByRole("dialog").locator("pre").click();
+		await expect(page.getByRole("dialog")).toHaveCount(0);
+	});
+}
+
 test("diagram annotations navigate to the selected repeated block and fall back after edits @T0", async ({ page }) => {
 	await page.setViewportSize({ width: 1100, height: 800 });
 	await page.goto("/e2e/excerpt-snapshots/harness.html?navigation=1");

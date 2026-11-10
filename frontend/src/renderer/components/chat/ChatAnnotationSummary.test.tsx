@@ -6,6 +6,51 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 
 describe("ChatAnnotationSummary", () => {
+	it("navigates from the preview body and keeps a standalone keyboard-accessible header", async () => {
+		const user = userEvent.setup();
+		const onSelect = vi.fn();
+		const annotation = { id: "one", text: "click the whole preview" };
+		render(<ChatAnnotationSummary annotations={[annotation]} onSelect={onSelect} />);
+		const trigger = screen.getByRole("button", { name: "1 annotation" });
+		await user.click(trigger);
+		const preview = screen.getByText(annotation.text, { selector: "pre" });
+		expect(preview.closest("button,[role=button]")).toBeNull();
+		await user.click(preview);
+		expect(onSelect).toHaveBeenCalledExactlyOnceWith(annotation);
+		await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
+		for (const key of ["{Enter}", " "]) {
+			await user.click(trigger);
+			screen.getByRole("button", { name: annotation.text }).focus();
+			await user.keyboard(key);
+			await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
+		}
+		expect(onSelect).toHaveBeenCalledTimes(3);
+	});
+	it("does not navigate on preview text selection, dragging, expansion, or disabled body clicks", async () => {
+		const user = userEvent.setup();
+		const onSelect = vi.fn();
+		const annotations = [{ id: "one", text: "preview\n".repeat(8) }];
+		const view = render(<ChatAnnotationSummary annotations={annotations} onSelect={onSelect} />);
+		await user.click(screen.getByRole("button", { name: "1 annotation" }));
+		const preview = screen.getByRole("dialog").querySelector("pre")!;
+		const selection = vi.spyOn(window, "getSelection").mockReturnValue({
+			isCollapsed: false, rangeCount: 1, getRangeAt: () => ({ intersectsNode: () => true }),
+		} as unknown as Selection);
+		fireEvent.click(preview);
+		expect(onSelect).not.toHaveBeenCalled();
+		selection.mockRestore();
+		fireEvent.pointerDown(preview, { clientX: 1, clientY: 1 });
+		fireEvent.pointerMove(preview, { clientX: 30, clientY: 1 });
+		fireEvent.pointerUp(preview);
+		fireEvent.click(preview);
+		expect(onSelect).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Show more" }));
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(screen.getByRole("dialog")).toBeVisible();
+		view.rerender(<ChatAnnotationSummary annotations={annotations} onSelect={onSelect} disabled />);
+		await user.click(preview);
+		expect(onSelect).not.toHaveBeenCalled();
+	});
 	it("switches between main and side chat popovers with one click in either direction", async () => {
 		const user = userEvent.setup();
 		render(<>
@@ -133,7 +178,7 @@ describe("ChatAnnotationSummary", () => {
 		expect(remove).toBeDisabled();
 		expect(remove).toHaveClass("absolute", "right-1", "top-1");
 		expect(remove.parentElement).toHaveClass("relative");
-		expect(screen.getByRole("button", { name: "selected text" }).parentElement).toHaveClass("pr-7");
+		expect(screen.getByRole("button", { name: "selected text" }).parentElement?.parentElement).toHaveClass("pr-7");
 		expect(remove.querySelector("svg")).toHaveClass("size-3");
 		expect(screen.getByRole("button", { name: "selected text" })).toBeDisabled();
 		await user.click(remove);

@@ -591,6 +591,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
 			<Pressable
 				data-chat-find-include=""
+				data-excerpt-include=""
 				onClick={openFile}
 				aria-label={`Open ${file.filePath} in Files`}
 				className="inline rounded transition-colors hover:bg-interactive-hover"

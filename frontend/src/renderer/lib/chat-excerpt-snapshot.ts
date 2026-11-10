@@ -4,7 +4,7 @@ import type { ChatDraftExcerptReference } from "./chat-drafts";
 import { codeSourceOffsets, excerptSourceOffsets } from "./rehype-excerpt-source";
 
 const BLOCKS = new Set(["P", "PRE", "LI", "TR", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE"]);
-const EXCLUDED = 'button, input, select, textarea, [hidden], .katex-mathml, [data-excerpt-exclude]';
+const EXCLUDED = 'button:not([data-excerpt-include]), input, select, textarea, [hidden], .katex-mathml, [data-excerpt-exclude]';
 type TextEntry = { node: Text; start: number; end: number };
 
 /** One projection for capture and navigation, independent of browser whitespace rules. */
