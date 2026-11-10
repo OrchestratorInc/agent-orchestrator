@@ -99,6 +99,20 @@ describe("useResetStaleProjectTuning", () => {
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
+	it("clears saved effort for a no-effort Claude model while keeping the model", async () => {
+		const saved = { worker: { agentConfig: { model: "claude-haiku-4-5", effort: "high" } } };
+		getMock.mockResolvedValue({ data: { status: "ok", project: { id: "mer", name: "Mer", config: saved } } });
+		renderHook(() => useResetStaleProjectTuning({
+			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
+			config: saved, catalog: { models: [{ id: "claude-haiku-4-5" }] },
+		}), { wrapper });
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
+			params: { path: { id: "mer" } },
+			body: { displayName: "Mer", config: { worker: { agentConfig: { model: "claude-haiku-4-5" } } } },
+		});
+	});
+
 	it("leaves valid settings and other agents alone", async () => {
 		renderHook(() => useResetStaleProjectTuning({
 			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",

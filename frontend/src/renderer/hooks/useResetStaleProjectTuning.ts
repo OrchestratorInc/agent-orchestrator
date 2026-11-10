@@ -44,7 +44,7 @@ export function useResetStaleProjectTuning(args: {
 	const attempted = useRef(new Set<string>());
 	const { projectId, hostId, agent, agentLabel, projectAgent, config, catalog } = args;
 	const { model, effort, modelSlot, effortSlot } = effectiveSavedTuning(config);
-	const stale = agent !== "" && agent === projectAgent ? staleSavedTuning(catalog, model, effort) : undefined;
+	const stale = agent !== "" && agent === projectAgent ? staleSavedTuning(catalog, model, effort, agent) : undefined;
 	useEffect(() => {
 		if (!projectId || !stale) return;
 		const key = `${hostId ?? ""}|${projectId}|${modelSlot}|${model}|${effortSlot}|${effort}`;
