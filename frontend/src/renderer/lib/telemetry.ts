@@ -3,6 +3,7 @@ import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
 import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
+import { IMPORTABLE_AGENTS } from "./session-import-agents";
 import { TOPBAR_ACTIONS, TOPBAR_VIEWS } from "./topbar-actions";
 import { isWebDistinctId } from "../../shared/cloud-account";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
@@ -1013,6 +1014,15 @@ const EDITOR_ID_SET = new Set<string>(EDITOR_IDS);
 const OPEN_TARGET_KIND_SET = new Set(["editor", "file_manager", "terminal"]);
 const TOPBAR_ACTION_SET = new Set<string>(TOPBAR_ACTIONS);
 const TOPBAR_VIEW_SET = new Set<string>(TOPBAR_VIEWS);
+const SESSION_IMPORT_SURFACE_SET = new Set(["home", "project_board"]);
+const SESSION_IMPORT_SOURCE_SET = new Set(["home_folders", "project_offer", "project_dialog", "settings"]);
+const SESSION_IMPORT_OPEN_OUTCOME_SET = new Set(["succeeded", "failed", "open_elsewhere"]);
+
+function agentList(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const agents = value.split(",").filter((agent) => IMPORTABLE_AGENTS.has(agent));
+	return agents.length ? agents.join(",") : undefined;
+}
 
 export async function sanitizeRendererProperties(
 	event: string,
@@ -1126,6 +1136,34 @@ export async function sanitizeRendererProperties(
 			// Where the session lives, never which project.
 			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
 			break;
+		case "ao.session_imports.offer_shown":
+			if (typeof properties?.surface === "string" && SESSION_IMPORT_SURFACE_SET.has(properties.surface)) safe.surface = properties.surface;
+			break;
+		case "ao.session_imports.scan_completed":
+			if (properties?.outcome === "succeeded" || properties?.outcome === "failed") safe.outcome = properties.outcome;
+			for (const key of ["candidate_count", "duration_ms"] as const) {
+				const value = nonNegativeNumber(properties?.[key]);
+				if (value !== undefined) safe[key] = value;
+			}
+			break;
+		case "ao.session_imports.completed": {
+			if (typeof properties?.source === "string" && SESSION_IMPORT_SOURCE_SET.has(properties.source)) safe.source = properties.source;
+			for (const key of ["created_count", "existing_count", "failed_count", "folder_count"] as const) {
+				const value = nonNegativeNumber(properties?.[key]);
+				if (value !== undefined) safe[key] = value;
+			}
+			const agents = agentList(properties?.agents);
+			if (agents) safe.agents = agents;
+			break;
+		}
+		case "ao.session_imports.first_opened": {
+			if (typeof properties?.outcome === "string" && SESSION_IMPORT_OPEN_OUTCOME_SET.has(properties.outcome)) safe.outcome = properties.outcome;
+			if (typeof properties?.agent === "string" && IMPORTABLE_AGENTS.has(properties.agent)) safe.agent = properties.agent;
+			if (typeof properties?.error_code === "string" && /^[A-Z0-9_]+$/.test(properties.error_code)) safe.error_code = properties.error_code;
+			const duration = nonNegativeNumber(properties?.duration_ms);
+			if (duration !== undefined) safe.duration_ms = duration;
+			break;
+		}
 		case "ao.notifications.opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
 			break;
@@ -1554,16 +1592,9 @@ export async function captureRendererException(error: unknown, properties?: Reco
 		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
 	}
 	if (isDeniedEvent("$exception")) return;
-	// Budget per error type and call site, so one noisy TypeError cannot starve
-	// a different failure that happens to share the same constructor name.
-	const site = typeof properties?.operation === "string" ? properties.operation : typeof properties?.source === "string" ? properties.source : "unknown";
-	// The source labels are shared by many locations (window-error,
-	// unhandledrejection, react_render). Use the first stack frame as well.
-	// This bounded key stays in memory and is never sent as telemetry.
-	const frame = error instanceof Error ? error.stack?.split("\n").slice(1).find((line) => /^\s*at\s/.test(line))?.trim().slice(0, 256) : undefined;
-	if (!reserveCapture(`exception:${exceptionName(error)}:${site.slice(0, 64)}:${frame ?? "unknown"}`)) return;
-	// The main-owned policy gate decides whether this reaches Sentry. Renderer
-	// exceptions no longer enter the PostHog product-analytics path.
+	// The main-owned policy gate decides whether this reaches Sentry, and
+	// Electron main samples and budgets it per install on the final scrubbed
+	// fingerprint. Renderer exceptions no longer enter the PostHog path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
 	captureExceptionToSentry(normalizeException(error), {
 		category: source === "react-error-boundary" ? "render_crash" : undefined,

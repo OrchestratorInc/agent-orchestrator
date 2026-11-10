@@ -101,12 +101,16 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 	await page.waitForTimeout(1_000);
 
 	let streaming: ReturnType<typeof setInterval> | undefined;
+	let dispatching = false;
 	return {
 		drafts,
 		requests,
 		/** Grows every session's reply and tells the app, as the daemon does while agents stream. */
 		startStreaming() {
 			streaming = setInterval(() => {
+				// Bound CDP delivery while the throttled page is busy.
+				if (dispatching) return;
+				dispatching = true;
 				for (const session of sessions) chunks.set(session.id, (chunks.get(session.id) ?? 1) + 1);
 				void page.evaluate((ids) => {
 					const sources = (window as unknown as { __heldSources: { url: string; readyState: number; _dispatch: (type: string, data: string) => void }[] }).__heldSources;
@@ -116,10 +120,9 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 							source._dispatch("session_updated", JSON.stringify({ seq: Date.now(), projectId: "fake-proj", sessionId: id, type: "session_updated", payload: { conversationId: `conversation-${id}` }, createdAt: new Date().toISOString() }));
 						}
 					}
-				}, sessions.map((session) => session.id)).catch(() => undefined);
+				}, sessions.map((session) => session.id)).catch(() => undefined).finally(() => { dispatching = false; });
 			}, 120);
 		},
-		chunks: (session: HeldSession) => chunks.get(session.id) ?? 1,
 		stop() {
 			if (streaming) clearInterval(streaming);
 		},
@@ -133,6 +136,16 @@ async function throttle(page: Page, rate: number) {
 
 function conversationLog(page: Page) {
 	return page.getByRole("log", { name: "Conversation" });
+}
+
+/**
+ * The highest reply chunk the conversation shows, or -1 before any. The last
+ * chunk runs into the turn's elapsed time in the log's text ("chunk-128h 7m"),
+ * so only chunks followed by a space count.
+ */
+async function latestShownChunk(page: Page) {
+	const text = await conversationLog(page).textContent() ?? "";
+	return Math.max(-1, ...Array.from(text.matchAll(/chunk-(\d+) /g), (match) => Number(match[1])));
 }
 
 async function expectShowing(page: Page, session: HeldSession) {
@@ -232,9 +245,11 @@ test("renderer: streaming replies keep updating through rapid session switches @
 			const shownAt = frames.find((frame) => frame.log === session.title)?.at ?? Infinity;
 			expect(frames.filter((frame) => frame.at > shownAt && frame.log === previous.title), report).toEqual([]);
 			previous = session;
-			// The shown session keeps streaming after the switch.
-			const seen = harness.chunks(session);
-			await expect(conversationLog(page)).toContainText(`chunk-${seen}`, { timeout: 10_000 });
+			// The shown session keeps streaming after the switch. Its reply grows
+			// faster than a throttled dev build repaints it, so wait for the
+			// shown reply to advance rather than to catch up with the stream.
+			const shownChunk = await latestShownChunk(page);
+			await expect.poll(() => latestShownChunk(page), { timeout: 10_000 }).toBeGreaterThan(shownChunk);
 		}
 	} finally {
 		harness.stop();

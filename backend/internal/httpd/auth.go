@@ -22,6 +22,9 @@ type authHashes struct {
 	retired []string
 }
 
+// maxRetiredHashes bounds how many rotated passwords stay exempt from lockout.
+const maxRetiredHashes = 8
+
 func (a *authState) setHash(h string) {
 	for {
 		previous := a.hashes.Load()
@@ -34,6 +37,9 @@ func (a *authState) setHash(h string) {
 			next.retired = append(next.retired, previous.retired...)
 			if previous.current != "" {
 				next.retired = append(next.retired, previous.current)
+			}
+			if len(next.retired) > maxRetiredHashes {
+				next.retired = next.retired[len(next.retired)-maxRetiredHashes:]
 			}
 		}
 		if a.hashes.CompareAndSwap(previous, next) {
@@ -165,6 +171,16 @@ func clientSource(r *http.Request) string {
 	return src
 }
 
+// lockoutKey groups IPv6 sources by /64, since one client usually holds a
+// whole /64 and could otherwise rotate addresses past the lockout.
+func lockoutKey(src string) string {
+	ip := net.ParseIP(src)
+	if ip == nil || ip.To4() != nil {
+		return src
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	if strings.HasPrefix(h, "Bearer ") {
@@ -287,7 +303,7 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				return
 			}
 			remoteSrc := sourceKey(r)
-			src := clientSource(r) // for the lockout only
+			src := lockoutKey(clientSource(r))
 			if lock.blocked(src) {
 				envelope.WriteAPIError(w, r, http.StatusTooManyRequests, "too_many_requests", "LOCKED_OUT",
 					"too many failed attempts; try again shortly", nil)
@@ -319,7 +335,10 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !state.retiredPasswordMatches(tok) {
+			// Only a presented password is a guess. A request with none (a
+			// browser opening the tunnel URL, its favicon) reveals nothing, and
+			// counting it locks out every device behind the visitor's IP.
+			if tok != "" && !state.retiredPasswordMatches(tok) {
 				lock.fail(src)
 			}
 			envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "BAD_PASSWORD",

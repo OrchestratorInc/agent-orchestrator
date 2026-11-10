@@ -23,18 +23,20 @@ default.
 
 The packaged desktop app gives its spawned Go daemon the daemon Sentry project
 DSN through `AO_SENTRY_DSN`. An explicit `AO_SENTRY_DSN` value takes precedence;
-without one, development builds hand the daemon an empty value. Daemon error
-reporting remains subject to the existing Share error events control.
+without one, development and self-built copies hand the daemon an empty value
+(see Published builds only below). Daemon error reporting remains subject to the
+existing Share error events control.
 
 Electron main and the renderer have a separate desktop Sentry project. Their
 default DSN is distinct from the daemon project; Electron main uses
 `AO_ELECTRON_SENTRY_DSN` for an explicit override. Without one, development
-builds use an empty Electron DSN. The renderer uses this main-owned sender
-and has no independent DSN override. Packaged stable and nightly builds send
-error events through Electron main only when Share error events is enabled.
-All consented desktop error reports are kept, subject to the renderer's
-per-error budget and side-chat recovery budgets. This includes fatal crashes, handled main-process failures,
-unhandled renderer window errors, and rejected promises.
+and self-built copies use an empty Electron DSN. The renderer uses this
+main-owned sender and has no independent DSN override. Published stable and
+nightly builds send error events through Electron main only when Share error
+events is enabled, subject to the install sampling and daily caps below. This
+covers fatal crashes, handled main-process failures, unhandled renderer window
+errors, and rejected promises.
+
 On a fresh or existing packaged install, Share error events starts on unless
 it was explicitly turned off. You can turn it off at any time in Settings.
 Renderer diagnostics pass through the existing main-owned consent boundary;
@@ -48,7 +50,15 @@ Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Fai
 Sentry sends can wait in an offline queue under AO's Electron data directory.
 Error events can include a standard exception type, bounded function names,
 bounded line and column numbers, and a validated app relative JavaScript asset
-filename. The asset filename preserves the location needed for source map matching. Local
+filename. Anonymous minified frames (`at app://renderer/assets/x.js:L:C`) are
+kept, and a frame whose function name is not on the fixed allowlist is kept as
+`renderer_frame` with its location only, so a renderer title reads, for
+example, `Renderer TypeError in assets/useSessionWorkspaceFiles:123:45`. Release
+builds stamp the Electron main and renderer bundles with Sentry debug IDs and
+upload their source maps to the ao-electron project; the maps are not shipped
+in the app. An event may carry the debug ID of each app bundle in its stack and
+the bundle's app URL (`app://renderer/assets/...` or `app:///.vite/build/...`),
+never an install path. Local
 filesystem paths, full URLs, and raw exception messages are removed before sending.
 The app's global renderer error boundary binds handlers independently of
 PostHog setup. Electron main still checks Share error events before sending.
@@ -107,6 +117,43 @@ owning Git repository disappeared returns a missing-workspace or
 `WORKSPACE_GIT_READ_FAILED` 500 for investigation; the app does not infer
 session death or remove worktrees from these read failures.
 
+### Published builds only
+
+Sentry initializes only in a published build: the version must be a
+release-stamped stable (`0.14.10`) or nightly (`0.14.11-nightly.202611100625`)
+version, and the build must carry the `AO_PUBLISHED_BUILD=1` marker that only
+the release workflow (`build-artifacts.yml`) bakes into Electron main. A
+development run, a fork or self-built copy (for example `0.13.0`,
+`0.14.10+fork.1`, `0.13.0-company.7`), and an edge or PR build send nothing to
+either Sentry project. The daemon applies the same version pattern to the DSN
+it receives.
+
+### Sampling and daily caps
+
+Sentry quota is shared by every install, so desktop and daemon errors are
+sampled by install rather than by event:
+
+- An install is in the error sample when `sha256(install_id)`, read as a
+  big-endian 32-bit integer, modulo 10 is 0. Electron main and the daemon use
+  the same rule, so about one install in ten sends non-fatal errors from all
+  of its processes, and the rest send none. An install whose identifier cannot
+  be read is outside the sample.
+- Fatal events send from every install: Electron main uncaught exceptions,
+  Electron process crashes (`process_exit`), and daemon panics. Renderer errors,
+  including unhandled window errors and rejections, are non-fatal and sampled.
+- Every event carries a `sample_rate` tag: `0.1` for sampled non-fatal events
+  and `1` for always-sent fatal events. Multiply counts of `sample_rate:0.1`
+  events by 10 to estimate the real volume.
+- Electron main caps every desktop event (main and renderer) after scrubbing,
+  keyed on its final Sentry fingerprint: at most 3 events per fingerprint and 25
+  events in total per install per UTC day. The counters are saved in
+  `telemetry_sentry_budget.json` in the AO data directory, so a renderer reload,
+  a new window or an app restart does not reset them. The renderer has no
+  exception budget of its own.
+- The daemon caps non-fatal errors at 25 per install per UTC day across all
+  fingerprints, on top of its per-fingerprint budget below. This counter is in
+  memory and resets when the daemon restarts.
+
 ## What Orchestrator.inc sends
 
 Orchestrator.inc sends structured events in a few broad categories:
@@ -128,6 +175,11 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Reliability data, such as an error type and context, a crash message and
   stack trace after path redaction, an HTTP status, or an agent waiting for
   input
+- Slow database writes: when one write holds the daemon's database write lock
+  for a second or more, `ao.daemon.write_lock_held` sends how long it was held
+  (`duration_ms`) and the names and line numbers of the four innermost code
+  functions that held it (`caller`). It never includes file paths, database
+  contents, or message text
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available. Desktop and
   daemon events carry the operating system name (`$os`) and version
@@ -513,6 +565,33 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## Chat import
+
+When desktop product telemetry is enabled, Orchestrator.inc records these events
+when you import chats from other agents:
+
+| Event | When it is sent | Import-specific properties |
+| --- | --- | --- |
+| `ao.session_imports.offer_shown` | An import offer appears | `surface` |
+| `ao.session_imports.scan_completed` | A scan for chats ends | `outcome`, `candidate_count`, `duration_ms` |
+| `ao.session_imports.completed` | An import ends | `source`, `created_count`, `existing_count`, `failed_count`, `folder_count`, `agents` |
+| `ao.session_imports.first_opened` | The first open of an imported chat ends | `agent`, `outcome`, `error_code`, `duration_ms` |
+
+`surface` is `home` or `project_board`. `source` is `home_folders`,
+`project_offer`, `project_dialog`, or `settings`. The scan `outcome` is
+`succeeded` or `failed`. The first-open `outcome` is `succeeded`, `failed`, or
+`open_elsewhere`. `agents` lists the agents of the imported chats, such as
+`claude-code,codex`, and `agent` names one; both accept only the ids of agents
+AO can import from. `error_code` is the API error code, such as
+`CHAT_RESUME_FAILED`.
+
+The offer and scan events are sent at most once per surface each time the app
+starts. The import and first-open events are sent only when you import or open
+an imported chat.
+
+No chat title, chat content, folder name, path, project identifier, session
+identifier, or error message is sent.
+
 ## What Orchestrator.inc does not intentionally send
 
 Product telemetry is designed not to include:
@@ -752,17 +831,21 @@ their raw path. Every daemon Sentry event has release and environment values.
 Typed daemon 503 envelopes remain breadcrumbs in the renderer, matching daemon
 Sentry policy. Untyped renderer 503 responses remain reportable. The existing
 API client skips its confirmed expected 409 probes, while other 409 responses
-remain ordinary 4xx breadcrumbs. Renderer exception intake is capped per exception
-name and call site at five per minute and 200 per day. HTTP and background daemon sends
+remain ordinary 4xx breadcrumbs. Renderer exceptions are sampled and capped in
+Electron main as described under Sampling and daily caps. HTTP and background daemon sends
 share a limit of four concurrent reports, dropping diagnostics at capacity without
 retaining a queue. Their transport runs outside the caller's locks and database
 transactions, and opt-out waits for admitted sends before it completes.
 The daemon admits the first five
 reportable errors per fingerprint each minute and at most 200 per day. Its
 in process budget tracks at most 1,024 distinct fingerprints per day, then
-uses one overflow group per operation. It samples
-admitted errors at full rate. Project quota and spike protection still need
-verification before a stable release.
+uses one overflow group per operation. On top of that, the daemon sends
+non-fatal errors only from sampled installs and at most 25 per install per UTC
+day; panics always send.
+Model discovery failures (a missing, outdated or misconfigured agent CLI,
+including a non-zero exit) and an unfinished Codex account setup
+(`CODEX_ACCOUNT_SETUP_INCOMPLETE`, even when its staging step hits a deadline)
+are user setup states and never create Sentry issues.
 The daemon tags these error events with the same `install_id` and sets Sentry
 `user.id` to that identifier when available. If it cannot be read, consented
 error reporting continues without either identity field. These fields do not

@@ -827,6 +827,12 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
 }
 
+/* Light: the selected tab's fill leans toward the panel's surface, keeps the
+ * control edge, and does not darken on hover. */
+html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
+}
+
 .center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(> button:focus-visible)::before {
 	outline: 2px solid var(--ring);
 	outline-offset: 2px;
@@ -2204,6 +2210,11 @@ textarea,
 	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size, 24px));
 }
 
+/* Where a scroller sits as it mounts is not a change: no fade-in on open. */
+.edge-fade[data-fade-instant] {
+	transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.edge-fade {
 		transition: none;
@@ -2337,14 +2348,6 @@ textarea,
 .ao-startup-logo {
 	animation: ao-startup-logo-breathe 3.2s ease-in-out infinite;
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
-}
-
-.ao-mascot-eyes {
-	fill: transparent;
-}
-
-:root[data-theme="light"] .ao-mascot-eyes {
-	fill: #000;
 }
 
 /* Startup requirements checklist — each row fades/slides in on its own
@@ -3024,6 +3027,11 @@ html.sidebar-reordering * {
 
 .queue-dock-enter {
 	animation: queue-dock-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* A question already waiting when its chat opens is drawn in place (ChatComposer's useDockEntrance). */
+[data-dock-quiet] .elicitation-dock {
+	animation: none;
 }
 
 /* The dock stays in the composer column's flow, so opening it shortens the

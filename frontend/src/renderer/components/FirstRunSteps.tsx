@@ -3,7 +3,7 @@ import { ChevronLeft, FolderClosed, MessageSquarePlus } from "@/components/app-i
 import { motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import aoLogo from "../assets/ao-mascot.png";
+import aoMascot from "../../../assets/ao-mascot.svg";
 import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
@@ -45,7 +45,7 @@ export function FirstRunWelcome({ disabled, onNext }: { disabled?: boolean; onNe
 	}, []);
 	return (
 		<div className="flex flex-col items-center px-6 pb-6 pt-8 text-center">
-			<img alt="" className="size-16" draggable={false} src={aoLogo} />
+			<img alt="" className="size-16" draggable={false} src={aoMascot} />
 			<Dialog.Title className="mt-5 text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.welcomeTitle")}</Dialog.Title>
 			<Dialog.Description className="mt-2 max-w-[34ch] text-pretty text-[13px] leading-5 text-muted-foreground">{t("firstRun.welcomeBody")}</Dialog.Description>
 			<Button type="button" variant="primary" className="mt-6 w-full" autoFocus disabled={disabled} onClick={onNext}>{t("firstRun.getStarted")}</Button>

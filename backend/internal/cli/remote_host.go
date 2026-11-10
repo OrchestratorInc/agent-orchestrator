@@ -37,7 +37,7 @@ type remoteHostStatus struct {
 
 func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 	root := &cobra.Command{Use: "remote-host", Short: "Manage this machine's remote listener"}
-	var tunnel, tunnelOnly bool
+	var tunnel, tunnelOnly, showPassword bool
 	for _, action := range []struct {
 		name, method, path string
 	}{
@@ -137,6 +137,10 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						return err
 					}
 				}
+				if status.Password != "" && action.name == "status" && !showPassword {
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "Pairing password hidden; run `ao remote-host status --show-password` to show it.")
+					return err
+				}
 				if status.Password != "" {
 					_, err := fmt.Fprintf(cmd.OutOrStdout(), "Password: %s\n", status.Password)
 					return err
@@ -148,6 +152,9 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 			cmd.Flags().BoolVar(&tunnel, "tunnel", false, "Start Orchestrator's managed Cloudflare tunnel for access beyond the LAN")
 			cmd.Flags().BoolVar(&tunnelOnly, "tunnel-only", false, "Bind only to loopback and start Orchestrator's managed Cloudflare tunnel")
 			cmd.MarkFlagsMutuallyExclusive("tunnel", "tunnel-only")
+		}
+		if action.name == "status" {
+			cmd.Flags().BoolVar(&showPassword, "show-password", false, "Print the pairing password")
 		}
 		root.AddCommand(cmd)
 	}

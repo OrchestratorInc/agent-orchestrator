@@ -98,9 +98,9 @@ vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 }));
 
 const artifacts: SessionArtifact[] = [
-	{ kind: "markdown", name: "notes.md", path: "notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z" },
-	{ kind: "html", name: "report.html", path: "report.html", previewUrl: "http://artifact.localhost/report.html", inlineUrl: "http://ao-inline-artifact.sess-1.localhost/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
-	{ kind: "file", name: "plan.md", path: "reports/plan.md", size: 20, updatedAt: "2026-09-21T00:00:00Z" },
+	{ kind: "markdown", name: "notes.md", path: "notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z", registered: true },
+	{ kind: "html", name: "report.html", path: "report.html", previewUrl: "http://artifact.localhost/report.html", inlineUrl: "http://ao-inline-artifact.sess-1.localhost/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+	{ kind: "file", name: "plan.md", path: "reports/plan.md", size: 20, updatedAt: "2026-09-21T00:00:00Z", registered: true },
 ];
 
 function session(artifactFiles: SessionArtifact[] = artifacts): WorkspaceSession {
@@ -125,8 +125,8 @@ function cloudSession(): WorkspaceSession {
 		id: "cloud-1",
 		cloud: { orgId: "org-1" },
 		artifactFiles: [
-			{ kind: "html", name: "report.html", path: "report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
-			{ kind: "markdown", name: "notes.md", path: "docs/notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z" },
+			{ kind: "html", name: "report.html", path: "report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+			{ kind: "markdown", name: "notes.md", path: "docs/notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z", registered: true },
 		],
 	} as WorkspaceSession;
 }
@@ -145,6 +145,21 @@ describe("SessionArtifactsView for a cloud session", () => {
 		openPreviewMock.mockReset();
 		cloudAccessMock.mockReset().mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
 		sendSessionMessageMock.mockReset().mockResolvedValue({});
+	});
+
+	it("lists the session's artifacts two to a row without repeating the session name", () => {
+		const current = cloudSession();
+		current.title = "Quarterly planning";
+		current.artifactFiles = [
+			{ kind: "markdown", name: "plan.md", path: "plan.md", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
+			{ kind: "markdown", name: "notes.md", path: "notes.md", size: 20, updatedAt: "2026-09-22T00:00:00Z" },
+		];
+		renderView(<SessionArtifactsView session={current} />);
+
+		const gallery = screen.getAllByRole("listitem")[0]!.closest("ul")!;
+		expect(gallery).toHaveClass("grid-cols-2");
+		expect(within(gallery).getAllByRole("listitem")).toHaveLength(2);
+		expect(within(gallery).queryByText("Quarterly planning")).not.toBeInTheDocument();
 	});
 
 	it("previews metadata-only HTML in the session gallery with at most four live pages", async () => {
@@ -378,7 +393,61 @@ describe("SessionArtifactsView", () => {
 		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "cloud-1", cloud: { orgId: "org-1" } }), true);
 	});
 
-	it("lists every artifact newest first", () => {
+	it("lists only the registered files, and still opens another file by its link", () => {
+		const files: SessionArtifact[] = [
+			{ kind: "html", name: "brand.html", path: "brand.html", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+			{ kind: "markdown", name: "draft.md", path: "draft.md", size: 12, updatedAt: "2026-09-24T00:00:00Z" },
+			{ kind: "file", name: "a.png", path: "assets/a.png", size: 20, updatedAt: "2026-09-25T00:00:00Z" },
+		];
+		const { unmount } = renderView(<SessionArtifactsView session={session(files)} />);
+		expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.getByRole("button", { name: /^brand\.html/ })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^draft\.md/ })).not.toBeInTheDocument();
+		unmount();
+
+		renderView(<SessionArtifactsView request={{ key: 1, path: "assets/a.png" }} session={session(files)} />);
+		expect(screen.queryByText("No artifacts")).not.toBeInTheDocument();
+		expect(screen.queryByRole("list")).not.toBeInTheDocument();
+	});
+
+	it("keeps a renamed file open, and opens it by a link from before the rename", () => {
+		const before: SessionArtifact[] = [
+			{ id: "art-1", kind: "markdown", name: "draft.md", path: "draft.md", size: 12, updatedAt: "2026-09-24T00:00:00Z", registered: true },
+		];
+		const after: SessionArtifact[] = [
+			{ id: "art-1", kind: "markdown", name: "summary.md", path: "final/summary.md", size: 12, updatedAt: "2026-09-24T00:00:00Z", registered: true, previousPaths: ["draft.md"] },
+		];
+		const view = renderView(<SessionArtifactsView request={{ key: 1, path: "draft.md" }} session={session(before)} />);
+		expect(screen.getByRole("button", { name: "draft.md" })).toBeInTheDocument();
+		view.rerender(<SessionArtifactsView request={{ key: 1, path: "draft.md" }} session={session(after)} />);
+		expect(screen.getByRole("button", { name: "summary.md" })).toBeInTheDocument();
+		view.unmount();
+
+		renderView(<SessionArtifactsView request={{ key: 2, path: "draft.md" }} session={session(after)} />);
+		expect(screen.getByRole("button", { name: "summary.md" })).toBeInTheDocument();
+	});
+
+	it("falls back to the root files when nothing is registered", () => {
+		const files: SessionArtifact[] = [
+			{ kind: "html", name: "brand.html", path: "brand.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
+			{ kind: "file", name: "a.png", path: "assets/a.png", size: 20, updatedAt: "2026-09-25T00:00:00Z" },
+		];
+		renderView(<SessionArtifactsView session={session(files)} />);
+		expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(1);
+	});
+
+	it("lists a bundle as one card with no file actions", () => {
+		const files: SessionArtifact[] = [
+			{ kind: "file", name: "icon.json", path: "app.icon/icon.json", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+			{ kind: "file", name: "mark.png", path: "app.icon/mark.png", size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true },
+		];
+		renderView(<SessionArtifactsView session={session(files)} />);
+		expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.getByRole("button", { name: /^app\.icon/ })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /actions/i })).not.toBeInTheDocument();
+	});
+
+	it("lists every registered artifact newest first", () => {
 		renderView(<SessionArtifactsView session={session()} />);
 
 		expect(within(screen.getByRole("list")).getAllByRole("listitem").map((item) => within(item).getAllByRole("button")[0].textContent)).toEqual([
@@ -724,8 +793,8 @@ describe("SessionArtifactsView", () => {
 	});
 
 	it("offers version history for text and local media files but not for another binary file", async () => {
-		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
-		const archive: SessionArtifact = { kind: "file", name: "bundle.zip", path: "bundle.zip", size: 30, updatedAt: "2026-09-20T00:00:00Z" };
+		const image: SessionArtifact = { kind: "file", name: "chart.png", path: "chart.png", size: 30, updatedAt: "2026-09-20T00:00:00Z", registered: true };
+		const archive: SessionArtifact = { kind: "file", name: "bundle.zip", path: "bundle.zip", size: 30, updatedAt: "2026-09-20T00:00:00Z", registered: true };
 		renderView(<SessionArtifactsView session={session([...artifacts, image, archive])} />);
 
 		await userEvent.click(screen.getByRole("button", { name: /^plan\.md/ }));
@@ -821,12 +890,12 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView hostId={hostId} request={{ key: 1, path: "notes.md" }} session={currentSession} />);
 
 		await screen.findByRole("button", { name: "notes.md" });
-		const share = screen.queryByRole("button", { name: "Share: notes.md" });
+		const share = screen.queryByRole("button", { name: "Publish: notes.md" });
 		if (!shown) {
 			expect(share).not.toBeInTheDocument();
 			return;
 		}
-		expect(share).toHaveTextContent("Share");
+		expect(share).toHaveTextContent("Publish");
 		// After the file's menu and the viewer's own buttons (Edit), before full screen.
 		const after = (first: Element, second: Element) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 		expect(after(screen.getByRole("button", { name: "notes.md" }), share!)).toBe(true);
@@ -835,20 +904,20 @@ describe("SessionArtifactsView", () => {
 		expect(await screen.findByRole("dialog")).toBeInTheDocument();
 	});
 
-	it("hides Share while the open file is being edited", async () => {
+	it("hides Publish while the open file is being edited", async () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
-		expect(await screen.findByRole("button", { name: "Share: notes.md" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Publish: notes.md" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "start editing" }));
-		expect(screen.queryByRole("button", { name: "Share: notes.md" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Publish: notes.md" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "stop editing" }));
-		expect(screen.getByRole("button", { name: "Share: notes.md" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Publish: notes.md" })).toBeInTheDocument();
 	});
 
-	it("disables Share for a video and says why", async () => {
+	it("disables Publish for a video and says why", async () => {
 		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
 		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
 
-		expect(await screen.findByRole("button", { name: "Share: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {

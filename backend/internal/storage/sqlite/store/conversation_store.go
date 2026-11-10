@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -333,6 +334,11 @@ func (s *Store) createConversation(
 			CreatedAt:              options.now,
 		}); err != nil {
 			return err
+		}
+		if scope == domain.ConversationScopeSession && owner.ImportSource != "" {
+			var seedErr error
+			latestSequence, seedErr = q.SeedImportedConversationSequence(ctx, gen.SeedImportedConversationSequenceParams{SessionID: string(options.session), ID: options.id})
+			return seedErr
 		}
 		if !options.adoptQueue || scope != domain.ConversationScopeProject {
 			return nil
@@ -813,7 +819,7 @@ func (s *Store) commitChatSpawn(
 				return fmt.Errorf("project native provider history: %w", err)
 			}
 		}
-		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+		if err := updateSessionRow(ctx, q, rec); err != nil {
 			return fmt.Errorf("commit Chat session owner: %w", err)
 		}
 		return nil
@@ -2236,6 +2242,9 @@ func (s *Store) ConversationAccount(ctx context.Context, conversationID string) 
 // newer failures, generation claims, and branch/account changes.
 func (s *Store) ReconcileConversationAuthentication(ctx context.Context, conversationID, generation, providerTurnID string, now time.Time) (*domain.ConversationAccount, error) {
 	if _, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); !ok {
+		if account, verifiedAt, err := authenticationEvidence(ctx, s.qr, conversationID, generation, providerTurnID); err != nil || verifiedAt == nil {
+			return account, err
+		}
 		s.writeMu.Lock()
 		defer s.writeMu.Unlock()
 		tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -2252,15 +2261,28 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 		}
 		return account, nil
 	}
-	q := s.conversationReader(ctx)
+	account, verifiedAt, err := authenticationEvidence(ctx, s.conversationReader(ctx), conversationID, generation, providerTurnID)
+	if err != nil || verifiedAt == nil {
+		return account, err
+	}
+	markAuthenticated(account, *verifiedAt)
+	if err := s.RecordAccount(ctx, conversationID, *account, now); err != nil {
+		return nil, err
+	}
+	return account, nil
+}
+
+// authenticationEvidence returns the conversation's account and, when a verified
+// turn would update it, that turn's completion time.
+func authenticationEvidence(ctx context.Context, q *gen.Queries, conversationID, generation, providerTurnID string) (*domain.ConversationAccount, *time.Time, error) {
 	row, err := q.SelectConversationByID(ctx, conversationID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	account := conversationToDomain(row).Account
 	if account == nil {
 		if providerTurnID == "" {
-			return nil, nil
+			return nil, nil, nil
 		}
 		account = &domain.ConversationAccount{AuthenticationState: "unknown"}
 	}
@@ -2276,19 +2298,15 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 		AfterAt: sql.NullTime{Time: cutoff, Valid: true},
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return account, nil
+		return account, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if account.AuthVerifiedAt != nil && !turn.CompletedAt.Time.After(*account.AuthVerifiedAt) && account.ReauthRequiredAt == nil {
-		return account, nil
+		return account, nil, nil
 	}
-	markAuthenticated(account, turn.CompletedAt.Time)
-	if err := s.RecordAccount(ctx, conversationID, *account, now); err != nil {
-		return nil, err
-	}
-	return account, nil
+	return account, &turn.CompletedAt.Time, nil
 }
 
 // ConversationAwaitingLogin is a session conversation whose provider asked for
@@ -2335,6 +2353,31 @@ func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID str
 		return s.RecordAccount(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationID, *account, now)
 	})
 	return cleared && err == nil, err
+}
+
+// RequireSessionLogin records a login demand on the session's chat unless one is pending.
+func (s *Store) RequireSessionLogin(ctx context.Context, id domain.SessionID, reason string, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "require session login", func(q *gen.Queries) error {
+		row, err := q.SelectConversationBySession(ctx, &id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		record := conversationToDomain(row)
+		account := domain.ConversationAccount{AuthenticationState: "unknown"}
+		if record.Account != nil {
+			if record.Account.ReauthRequiredAt != nil {
+				return nil
+			}
+			account = *record.Account
+		}
+		account.RequireLogin(reason, uuid.NewString(), now)
+		return s.RecordAccount(context.WithValue(ctx, conversationProjectionTxKey{}, q), record.ID, account, now)
+	})
 }
 
 // markAuthenticated records provider success at verifiedAt. A demand it
@@ -2684,7 +2727,9 @@ func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dis
 
 // CompleteQueuedBatch links each source receipt to the provider turn that took
 // its input. The original messages keep their own transcript metadata.
-func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID string, now time.Time) error {
+// steerActivityID names the steer that carried the turns into a running turn;
+// empty means a queue drain, the turns joining the input providerTurnID started with.
+func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error {
 	if len(turnIDs) == 0 {
 		return nil
 	}
@@ -2699,9 +2744,11 @@ func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, 
 		}
 		for _, id := range turnIDs {
 			changed, err := q.CompleteQueuedConversationBatchMember(ctx, gen.CompleteQueuedConversationBatchMemberParams{
-				CompletedAt:      sql.NullTime{Time: now, Valid: true},
-				PromotedToTurnID: sql.NullString{String: target.ID, Valid: true},
-				ID:               id, ConversationID: conversationID,
+				CompletedAt:          sql.NullTime{Time: now, Valid: true},
+				PromotedToTurnID:     sql.NullString{String: target.ID, Valid: true},
+				BatchDeliveryKind:    batchDeliveryKind(steerActivityID),
+				BatchDeliverySteerID: steerActivityID,
+				ID:                   id, ConversationID: conversationID,
 			})
 			if checkErr := expectBatchRow("complete queued batch turn", id, changed, err); checkErr != nil {
 				return checkErr
@@ -3899,7 +3946,8 @@ type ConversationSnapshot struct {
 	OldestSequence                   int64
 	HasMoreBefore                    bool
 	// AfterSequence is the floor a range read applied, or zero.
-	AfterSequence int64
+	AfterSequence     int64
+	BatchedDeliveries []domain.ConversationBatchedDelivery
 }
 
 // DefaultConversationPageSize is the standard number of messages in a conversation page.
@@ -4280,6 +4328,9 @@ func (s *Store) loadConversationSnapshotRange(
 		return ConversationSnapshot{}, err
 	}
 
+	// Only the batches this page's messages belong to, not the whole history.
+	batchedDeliveries := s.conversationBatchedDeliveriesInRange(ctx, conversationID, max(oldest, floor+1), beforeSequence)
+
 	snapshot := ConversationSnapshot{
 		Conversation:                     conversationToDomain(conv),
 		ActiveBranch:                     presentation.activeBranch,
@@ -4290,6 +4341,7 @@ func (s *Store) loadConversationSnapshotRange(
 		OldestSequence:                   oldest,
 		HasMoreBefore:                    hasMore,
 		AfterSequence:                    afterSequence,
+		BatchedDeliveries:                batchedDeliveries,
 	}
 	for _, row := range turnRows {
 		if !conversationTurnVisibleAfterSequence(row, conv, visibleAfterSequence) {
@@ -4320,6 +4372,21 @@ func (s *Store) conversationVisibleAfterSequence(
 	ctx context.Context,
 	conv gen.Conversation,
 ) (int64, error) {
+	if conv.Scope == domain.ConversationScopeSession && conv.SessionID != nil {
+		// An adopted import hides the provider's partial replay; the chat service
+		// shows the import archive below it instead.
+		raw, err := s.qr.GetSessionImportSource(ctx, *conv.SessionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, fmt.Errorf("select session %s import source: %w", *conv.SessionID, err)
+		}
+		if source := unmarshalImportSource(raw); source != nil {
+			return source.HistoryThrough, nil
+		}
+		return 0, nil
+	}
 	if conv.Scope != domain.ConversationScopeProject || conv.CurrentSessionID == nil || *conv.CurrentSessionID == "" {
 		return 0, nil
 	}
@@ -4432,6 +4499,8 @@ func (s *Store) LoadConversationSnapshot(
 		return ConversationSnapshot{}, fmt.Errorf("select activities: %w", err)
 	}
 
+	batchedDeliveries := s.conversationBatchedDeliveries(ctx, conversationID)
+
 	presentation := s.conversationHistoryPresentation(ctx, conversationID)
 	snapshot := ConversationSnapshot{
 		Conversation:                     conversationToDomain(conv),
@@ -4440,6 +4509,7 @@ func (s *Store) LoadConversationSnapshot(
 		NativeForkAvailableAfterSequence: presentation.nativeForkAvailableAfterSequence,
 		BranchPoints:                     presentation.branchPoints,
 		BranchedFromEarlierMessage:       presentation.branchedFromEarlierMessage,
+		BatchedDeliveries:                batchedDeliveries,
 	}
 	for _, row := range turnRows {
 		turn := turnToDomain(row)
@@ -5337,9 +5407,11 @@ func (s *Store) CompleteSteerBatchDelivery(
 			}
 			for _, id := range turnIDs {
 				changed, err := q.CompleteQueuedConversationBatchMember(ctx, gen.CompleteQueuedConversationBatchMemberParams{
-					CompletedAt:      sql.NullTime{Time: now, Valid: true},
-					PromotedToTurnID: sql.NullString{String: target.ID, Valid: true},
-					ID:               id, ConversationID: conversationID,
+					CompletedAt:          sql.NullTime{Time: now, Valid: true},
+					PromotedToTurnID:     sql.NullString{String: target.ID, Valid: true},
+					BatchDeliveryKind:    batchDeliveryKind(activity.ID),
+					BatchDeliverySteerID: activity.ID,
+					ID:                   id, ConversationID: conversationID,
 				})
 				if checkErr := expectBatchRow("complete steered batch turn", id, changed, err); checkErr != nil {
 					return checkErr
@@ -5452,4 +5524,55 @@ WHERE id = ? AND conversation_id = ? AND provider_conversation_id = ?
 		return fmt.Errorf("rebind branch %s provider: %d rows", branchID, rows)
 	}
 	return nil
+}
+
+// batchDeliveryKind is how a batch reached the provider: by the steer named,
+// or with no steer, in a queue drain.
+func batchDeliveryKind(steerActivityID string) string {
+	if steerActivityID != "" {
+		return "steer"
+	}
+	return "drain"
+}
+
+// conversationBatchedDeliveries reads where each batched queued turn was
+// delivered, as recorded when its batch completed. The links only place report
+// lines, so a failed read leaves them out rather than failing the snapshot.
+func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationID string) []domain.ConversationBatchedDelivery {
+	turns, err := s.qr.ListConversationBatchedTurns(ctx, conversationID)
+	if err != nil {
+		slog.Warn("list batched turns failed", "conversation", conversationID, "error", err)
+		return nil
+	}
+	out := make([]domain.ConversationBatchedDelivery, 0, len(turns))
+	for _, turn := range turns {
+		out = append(out, batchedDelivery(gen.ListConversationBatchedTurnsInRangeRow(turn)))
+	}
+	return out
+}
+
+// conversationBatchedDeliveriesInRange reads the deliveries a page needs: every
+// member of a batch with a message in [from, before), siblings included, so a
+// drain finds its human message. A failed read leaves them out.
+func (s *Store) conversationBatchedDeliveriesInRange(ctx context.Context, conversationID string, from, before int64) []domain.ConversationBatchedDelivery {
+	turns, err := s.qr.ListConversationBatchedTurnsInRange(ctx, gen.ListConversationBatchedTurnsInRangeParams{
+		ConversationID: conversationID, FromSequence: from, BeforeSequence: before,
+	})
+	if err != nil {
+		slog.Warn("list batched turns in range failed", "conversation", conversationID, "error", err)
+		return nil
+	}
+	out := make([]domain.ConversationBatchedDelivery, 0, len(turns))
+	for _, turn := range turns {
+		out = append(out, batchedDelivery(turn))
+	}
+	return out
+}
+
+func batchedDelivery(row gen.ListConversationBatchedTurnsInRangeRow) domain.ConversationBatchedDelivery {
+	return domain.ConversationBatchedDelivery{
+		TurnID:              row.ID,
+		DeliveredWithTurnID: row.PromotedToTurnID.String,
+		SteerActivityID:     row.BatchDeliverySteerID,
+	}
 }
