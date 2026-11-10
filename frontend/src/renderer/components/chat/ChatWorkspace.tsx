@@ -4052,7 +4052,10 @@ export function Timeline({
 		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
 		const items = atCarryingSteer(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
-		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
+		const groups = groupByTurn({ ...snapshot, items }, {
+			controllerStopped,
+			joinedTurns: drainedInto(snapshot.batchedDeliveries, batchedReports.moved),
+		})
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
@@ -6341,6 +6344,25 @@ function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: b
 }
 
 /**
+ * Queued turns AO drained into another turn's starting input, by the turn they
+ * joined. Their messages were that turn's prompt, so they draw above its work and
+ * reply rather than below it, where their own later sequence would put them. A
+ * steer keeps its place mid-turn, and a report already drawn under a message
+ * (`moved`) is left to that message.
+ */
+function drainedInto(
+	deliveries: readonly BatchedDelivery[] | undefined,
+	moved: ReadonlySet<string>,
+): ReadonlyMap<string, string> {
+	const joined = new Map<string, string>();
+	for (const delivery of deliveries ?? []) {
+		if (delivery.steerActivityId || moved.has(delivery.turnId)) continue;
+		joined.set(delivery.turnId, delivery.deliveredWithTurnId);
+	}
+	return joined;
+}
+
+/**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
  *
@@ -6363,13 +6385,16 @@ function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: b
  * daemon refuses to roll back a turn it still holds open; the stopped banner's
  * Resume and Open shell are the way on.
  */
-function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false }: { controllerStopped?: boolean } = {}): TimelineGroup[] {
+function groupByTurn(
+	snapshot: ConversationSnapshot,
+	{ controllerStopped = false, joinedTurns = new Map() }: { controllerStopped?: boolean; joinedTurns?: ReadonlyMap<string, string> } = {},
+): TimelineGroup[] {
 	const byTurn = new Map(snapshot.turns.map((turn) => [turn.id, turn]));
 	const groups: TimelineGroup[] = [];
 	const groupForTurn = new Map<string, TimelineGroup>();
 
 	for (const item of snapshot.items) {
-		const turnId = carriedInto.get(item) ?? item.turnId;
+		const turnId = carriedInto.get(item) ?? (item.turnId === undefined ? undefined : joinedTurns.get(item.turnId) ?? item.turnId);
 		if (turnId === undefined) {
 			// Consecutive turn-less items share one group rather than getting one each.
 			// A provider can run a turn AO never dispatched — a compaction, or a turn
