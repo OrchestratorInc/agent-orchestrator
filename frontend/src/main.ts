@@ -1527,10 +1527,10 @@ function telemetryOverrides(): Record<string, string> {
 		AO_TELEMETRY_POSTHOG_KEY: process.env.AO_TELEMETRY_POSTHOG_KEY ?? DEFAULT_POSTHOG_PROJECT_KEY,
 		AO_TELEMETRY_POSTHOG_HOST: process.env.AO_TELEMETRY_POSTHOG_HOST ?? DEFAULT_POSTHOG_HOST,
 		// Daemon-side Sentry (5xx + panics with Go stacks). Stamped on the daemon
-		// env so the spawned daemon inherits the DSN; off in dev to match the
-		// PostHog remote gate, and an explicit env always wins. A blank value
-		// leaves the daemon's Sentry a no-op.
-		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, isDev),
+		// env so the spawned daemon inherits the DSN; off in dev and in any copy
+		// that is not a published stable or nightly build, and an explicit env
+		// always wins. A blank value leaves the daemon's Sentry a no-op.
+		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(), isDev),
 		// The daemon binary has no version of its own that release tooling sets,
 		// so without this every daemon event lands unattributable to a release.
 		AO_TELEMETRY_APP_VERSION: process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(),
