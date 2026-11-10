@@ -25,18 +25,6 @@ const MARKDOWN_PAGE_WIDTH = 700;
 
 const PLAIN_TEXT = /\.(?:txt|json|jsonl|yaml|yml|toml|ini|conf|log|xml|css|js|jsx|ts|tsx|sql|sh|py|go|rs|diff|patch)$/i;
 
-/** The icon a preview shows when it has nothing to draw yet: the file's kind. */
-export function ArtifactKindIcon({ row, className }: { row: ArtifactRow; className?: string }) {
-	const Icon = isRasterImagePath(row.path) || isSvgPath(row.path) ? Image
-		: !row.cloud && fileMediaKind(row.path) === "video" ? Video
-		: row.kind === "html" ? Globe
-		: isDelimitedTextPath(row.path) ? Table2
-		: isMermaidPath(row.path) ? Workflow
-		: row.kind === "markdown" || isMarkdownPreviewPath(row.path) || PLAIN_TEXT.test(row.path) || /\.pdf$/i.test(row.path) ? FileText
-		: File;
-	return <Icon className={className} />;
-}
-
 /** Gallery previews load near the viewport; pages keep the isolated inline origin. */
 export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_HEIGHT }: { row: ArtifactRow; previewLive?: boolean; /** Layout height of an HTML page, for tiles taller than 16:10. */ pageHeight?: number }) {
 	const { t } = useTranslation();

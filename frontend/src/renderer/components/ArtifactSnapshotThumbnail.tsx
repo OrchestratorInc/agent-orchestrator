@@ -3,7 +3,8 @@ import type { ArtifactSnapshotJob } from "../../shared/artifact-snapshot";
 import { aoBridge } from "../lib/bridge";
 import type { ArtifactRow } from "../lib/artifacts";
 import { LOCAL_HOST } from "../lib/hosts";
-import { ArtifactKindIcon, ArtifactThumbnail } from "./ArtifactThumbnail";
+import { artifactFileIcon } from "./artifact-file-icon";
+import { ArtifactThumbnail } from "./ArtifactThumbnail";
 
 /** Decoded images kept for cards that scroll away and come back; the bytes themselves live on disk. */
 const MEMORY_LIMIT = 300;
@@ -160,6 +161,7 @@ export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: Ar
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [inView]);
 
+	const KindIcon = artifactFileIcon(row);
 	const entry = cached ?? (result?.key === key && result.url ? images.get(key) : undefined);
 	useEffect(() => (entry ? hold(key, entry) : undefined), [key, entry]);
 	if (!job) return <ArtifactThumbnail row={row} previewLive={previewLive} />;
@@ -170,7 +172,7 @@ export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: Ar
 				<img alt="" className="size-full object-cover object-top" decoding="async" draggable={false} src={entry.url} />
 			) : (
 				<span className="absolute inset-0 grid place-items-center text-passive">
-					<ArtifactKindIcon className="size-7" row={row} />
+					<KindIcon aria-hidden="true" className="size-7" />
 				</span>
 			)}
 		</span>

@@ -7,10 +7,7 @@ import { ArtifactSnapshotThumbnail } from "./ArtifactSnapshotThumbnail";
 const mocks = vi.hoisted(() => ({ get: vi.fn(), request: vi.fn() }));
 
 vi.mock("../lib/bridge", () => ({ aoBridge: { artifactSnapshot: { get: mocks.get, request: mocks.request } } }));
-vi.mock("./ArtifactThumbnail", () => ({
-	ArtifactThumbnail: () => <div data-testid="live-thumbnail" />,
-	ArtifactKindIcon: () => <svg data-testid="kind-icon" />,
-}));
+vi.mock("./ArtifactThumbnail", () => ({ ArtifactThumbnail: () => <div data-testid="live-thumbnail" /> }));
 
 class FakeObserver {
 	constructor(private readonly callback: (entries: Array<{ isIntersecting: boolean }>) => void) {}
@@ -84,7 +81,7 @@ describe("ArtifactSnapshotThumbnail", () => {
 			mocks.request.mockResolvedValueOnce("dropped").mockResolvedValue(new Uint8Array([9]));
 			const { container } = renderCard(row({ path: "dropped.md" }));
 			await waitFor(() => expect(mocks.request).toHaveBeenCalledTimes(1));
-			expect(screen.getByTestId("kind-icon")).toBeTruthy();
+			expect(container.querySelector("svg")).not.toBeNull();
 			expect(screen.queryByTestId("live-thumbnail")).toBeNull();
 			await vi.advanceTimersByTimeAsync(2_000);
 			await waitFor(() => expect(container.querySelector("img")).not.toBeNull());
