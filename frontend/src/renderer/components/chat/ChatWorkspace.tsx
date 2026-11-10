@@ -10,7 +10,7 @@ import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
-import { useEdgeFade } from "../../hooks/useEdgeFade";
+import { useEdgeFadeRef } from "../../hooks/useEdgeFade";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -170,6 +170,7 @@ import {
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
+import { ChatEntrance, createChatEntranceGate } from "./chat-entrance";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
@@ -2930,11 +2931,27 @@ export function Timeline({
 	const arrivedEmpty = useRef(false);
 	if (arriving && !hasTranscript) arrivedEmpty.current = true;
 	const revealTranscript = arrivedEmpty.current && hasTranscript;
+	// Rows above the newest sequence this chat opened with arrived while it was on
+	// screen; only they play an entrance (chat-entrance.ts). Taken from the first
+	// render with a transcript, so a placeholder or loading frame does not count.
+	const [entranceGate] = useState(createChatEntranceGate);
+	if (entranceGate.floor === undefined && sourceSnapshot.items.length > 0) {
+		entranceGate.floor = sourceSnapshot.items.reduce((floor, item) => Math.max(floor, item.sequence), sourceSnapshot.latestSequence);
+	}
+	useEffect(() => {
+		entranceGate.settled = true;
+	}, [entranceGate]);
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
 	// The transcript fades out under the top bar once it is scrolled, and above
-	// the composer while there is more below.
-	useEdgeFade(scroller);
+	// the composer while there is more below. A callback ref, not an effect: the
+	// scroller is not rendered while the chat is empty, and an effect that ran
+	// then never attached once it was.
+	const edgeFadeRef = useEdgeFadeRef<HTMLDivElement>();
+	const scrollerRef = useCallback((node: HTMLDivElement | null) => {
+		scroller.current = node;
+		edgeFadeRef(node);
+	}, [edgeFadeRef]);
 	const scrollContent = useRef<HTMLDivElement>(null);
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
@@ -4700,6 +4717,7 @@ export function Timeline({
 
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
+		<ChatEntrance.Provider value={entranceGate}>
 		<LiveStepChoices.Provider value={liveStepChoices}>
 		<div
 			ref={findSurface}
@@ -4716,7 +4734,7 @@ export function Timeline({
 				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
 				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
 			<div
-				ref={scroller}
+				ref={scrollerRef}
 				tabIndex={-1}
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
@@ -5008,6 +5026,7 @@ export function Timeline({
 			) : null}
 		</div>
 		</LiveStepChoices.Provider>
+		</ChatEntrance.Provider>
 		</ChatOpeningRef.Provider>
 	);
 }
@@ -5338,6 +5357,7 @@ const TurnGroup = memo(function TurnGroup({
 	const workingRow =
 		startup || group.live ? (
 			<LiveResponseStatus
+				entranceKey={`live:${group.key}`}
 				startedAt={group.liveStartedAt}
 				startupLabel={startup ? startup.label ?? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : group.liveStartupLabel}
 				failed={startup?.failed}

@@ -208,6 +208,19 @@ export type ChatComposerHandle = {
 	setDraft(text: string): void;
 };
 
+/**
+ * Whether a dock above the composer slides in. One already up when the composer
+ * mounts (a chat switched to with a queued message, a question or an unsent
+ * message waiting) was on screen before the switch, so it is drawn in place;
+ * whatever takes its slot afterwards slides in. `shown` names what the dock
+ * holds, or null when it is down.
+ */
+function useDockEntrance(shown: string | null): boolean {
+	const quiet = useRef(shown);
+	if (quiet.current !== null && quiet.current !== shown) quiet.current = null;
+	return quiet.current === null;
+}
+
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
 	onSend,
@@ -2024,12 +2037,15 @@ export const ChatComposer = memo(function ChatComposer({
 	) : discardedUnsent ? (
 		<UnsentMessageStrip discarded onUndo={undoDiscardUnsent} />
 	) : null;
+	const queueEnters = useDockEntrance(queuedDock ? "queue" : null);
+	const elicitationEnters = useDockEntrance(elicitation ? String((isValidElement(elicitation) && elicitation.key) || "elicitation") : null);
+	const unsentEnters = useDockEntrance(unsentStrip ? (stripDelivery?.draft ? "unsent" : "discarded") : null);
 	const withQueueStack = (form: ReactElement) =>
 		(
 			<div className="relative mx-auto flex w-full max-w-3xl flex-col">
 				{queuedDock ? (
 				<div
-					className="cursor-chat-composer-queue queue-dock-enter relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]"
+					className={cn("cursor-chat-composer-queue relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]", queueEnters && "queue-dock-enter")}
 					data-testid="queued-composer-dock"
 				>
 					{queuedDockWithSteer}
@@ -2037,14 +2053,15 @@ export const ChatComposer = memo(function ChatComposer({
 				) : null}
 				{elicitation ? (
 					<div
-						className="queue-dock-enter relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]"
+						className={cn("relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]", elicitationEnters && "queue-dock-enter")}
 						data-testid="elicitation-composer-dock"
+						data-dock-quiet={elicitationEnters ? undefined : ""}
 					>
 						{elicitation}
 					</div>
 				) : null}
 				{unsentStrip ? (
-					<div className="queue-dock-enter relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]">
+					<div className={cn("relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]", unsentEnters && "queue-dock-enter")}>
 						{unsentStrip}
 					</div>
 				) : null}

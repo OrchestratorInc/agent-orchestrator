@@ -20,6 +20,7 @@ import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import { ActivityRow, ActivityTransition } from "./ChatTimelineItems";
+import { useChatEntrance } from "./chat-entrance";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandCategory,
@@ -51,6 +52,9 @@ export function ActivityRun({
 	};
 	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
+	// The group fades in when it forms while the chat is on screen, never when the
+	// chat opens onto it or it scrolls back into view.
+	const entering = useChatEntrance(`run:${activities[0]?.id ?? ""}`, newestSequence(activities));
 	const running = activities.some((a) => a.status === "running");
 	const nonzeroExits = activities.filter(isNonzeroCommandExit).length;
 	const failed = activities.filter(
@@ -82,7 +86,7 @@ export function ActivityRun({
 
 	return (
 		<motion.div
-			initial={reducedMotion ? false : { opacity: 0 }}
+			initial={reducedMotion || !entering ? false : { opacity: 0 }}
 			animate={{ opacity: 1 }}
 			transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 			className="flex flex-col"
@@ -93,7 +97,7 @@ export function ActivityRun({
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
 				<span className="activity-summary-label text-xs text-muted-foreground">
-					<ActivityTransition value={summary} inline>{summary}</ActivityTransition>
+					<ActivityTransition value={summary} inline enter={entering}>{summary}</ActivityTransition>
 				</span>
 				{nonzeroExits > 0 ? (
 					<span className="text-caption text-muted-foreground/70">
@@ -196,6 +200,10 @@ function FailedCalls({ activities, folded }: { activities: ConversationActivity[
 	);
 }
 
+function newestSequence(activities: readonly ConversationActivity[]): number {
+	return activities.reduce((newest, activity) => Math.max(newest, activity.sequence), 0);
+}
+
 type ActivitySubgroupData = { key: string; activities: ConversationActivity[] };
 
 function groupSimilarActivities(activities: ConversationActivity[]): ActivitySubgroupData[] {
@@ -238,6 +246,7 @@ function ActivitySubgroup({
 }) {
 	const [localOpen, setLocalOpen] = useState(false);
 	const reducedMotion = useReducedMotion();
+	const entering = useChatEntrance(`sub:${activities[0]?.id ?? ""}`, newestSequence(activities));
 	const open = disclosureKey ? disclosureOverrides[disclosureKey] ?? false : localOpen;
 	const updateOverride = (next: boolean) => {
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
@@ -271,7 +280,7 @@ function ActivitySubgroup({
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
 				<span className="activity-summary-label text-xs text-muted-foreground">
-					<ActivityTransition value={summary} inline>
+					<ActivityTransition value={summary} inline enter={entering}>
 						{summary}
 					</ActivityTransition>
 				</span>
