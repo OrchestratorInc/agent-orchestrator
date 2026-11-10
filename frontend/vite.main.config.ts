@@ -4,6 +4,11 @@ import { defineConfig } from "vite";
 // of Vite's bundle so the packaged app loads the rebuilt binary from
 // node_modules (the auto-unpack plugin moves that binary outside app.asar).
 export default defineConfig({
+	// Set only by the release build (build-artifacts.yml). Without it a packaged
+	// copy never initializes Sentry (src/shared/sentry-config.ts).
+	define: {
+		"process.env.AO_PUBLISHED_BUILD": JSON.stringify(process.env.AO_PUBLISHED_BUILD === "1" ? "1" : ""),
+	},
 	build: {
 		rollupOptions: {
 			external: ["better-sqlite3"],

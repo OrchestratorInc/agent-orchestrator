@@ -1,16 +1,74 @@
 // Electron main is the only desktop Sentry sender. The policy controller owns
 // this transport's lifetime, and the SDK never receives raw renderer text.
 import * as Sentry from "@sentry/electron/main";
+import { createHash } from "node:crypto";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
-import { DEFAULT_ELECTRON_SENTRY_DSN, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
+import { DEFAULT_ELECTRON_SENTRY_DSN, isPublishedSentryBuild, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 import { isSafeMainErrorDetail, MAIN_ERROR_CATEGORIES, MAIN_ERROR_REASONS, sanitizeMainErrorCapture, type MainErrorCapture } from "./main-error-capture";
 
-export function electronMainSentryDsn(isDev: boolean): string {
-	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isDev ? "" : DEFAULT_ELECTRON_SENTRY_DSN);
+export function electronMainSentryDsn(version: string, isDev: boolean): string {
+	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isPublishedSentryBuild(version, isDev) ? DEFAULT_ELECTRON_SENTRY_DSN : "");
+}
+
+// One install in ten sends non-fatal errors: sha256(install_id) read as a
+// big-endian uint32, modulo 10, equals 0. The daemon uses the same hash
+// (sentryobs.InstallInErrorSample), so an install is in or out everywhere.
+// Main-process crashes and uncaught exceptions send from every install.
+const ERROR_SAMPLE_RATE = "0.1";
+const ALWAYS_SENT_KINDS = new Set(["uncaught_exception", "process_exit"]);
+
+export function installInErrorSample(installId: string): boolean {
+	return installId !== "" && createHash("sha256").update(installId).digest().readUInt32BE(0) % 10 === 0;
+}
+
+// Per install and UTC day, keyed on the final scrubbed fingerprint. The
+// counters live on disk so a reload, a new window or a restart cannot hand a
+// crash loop a fresh budget.
+const ERRORS_PER_FINGERPRINT_PER_DAY = 3;
+const ERRORS_PER_INSTALL_PER_DAY = 25;
+export const ERROR_BUDGET_FILE = "telemetry_sentry_budget.json";
+type ErrorBudgetState = { day: string; total: number; fingerprints: Record<string, number> };
+
+function readErrorBudget(file: string): ErrorBudgetState {
+	try {
+		const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<ErrorBudgetState> | null;
+		if (parsed && typeof parsed.day === "string" && Number.isSafeInteger(parsed.total) && parsed.fingerprints && typeof parsed.fingerprints === "object" && !Array.isArray(parsed.fingerprints)) {
+			const fingerprints = Object.fromEntries(Object.entries(parsed.fingerprints).filter((entry): entry is [string, number] => Number.isSafeInteger(entry[1])));
+			return { day: parsed.day, total: parsed.total as number, fingerprints };
+		}
+	} catch { /* missing or corrupt: start a fresh day */ }
+	return { day: "", total: 0, fingerprints: {} };
+}
+
+export function createErrorBudget(file: string): (fingerprint: readonly string[], now?: number) => boolean {
+	let state = readErrorBudget(file);
+	return (fingerprint, now = Date.now()) => {
+		const day = new Date(now).toISOString().slice(0, 10);
+		if (state.day !== day) state = { day, total: 0, fingerprints: {} };
+		const key = fingerprint.join("|");
+		const count = state.fingerprints[key] ?? 0;
+		if (state.total >= ERRORS_PER_INSTALL_PER_DAY || count >= ERRORS_PER_FINGERPRINT_PER_DAY) return false;
+		state = { day, total: state.total + 1, fingerprints: { ...state.fingerprints, [key]: count + 1 } };
+		try {
+			const temporary = `${file}.${process.pid}.tmp`;
+			writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 });
+			renameSync(temporary, file);
+		} catch { /* the in-memory budget still holds for this run */ }
+		return true;
+	};
+}
+
+function admitMainSentryEvent(event: Sentry.ErrorEvent | null, sampled: boolean, budget: (fingerprint: readonly string[]) => boolean): Sentry.ErrorEvent | null {
+	if (!event) return null;
+	const alwaysSent = ALWAYS_SENT_KINDS.has(String(event.tags?.kind));
+	if (!alwaysSent && !sampled) return null;
+	if (!budget(event.fingerprint ?? [])) return null;
+	return { ...event, tags: { ...event.tags, sample_rate: alwaysSent ? "1" : ERROR_SAMPLE_RATE } };
 }
 
 const CAPTURE_KEYS = new Set(["consentGeneration", "kind", "level", "message", "tags", "exception"]);
@@ -155,10 +213,13 @@ function errorTypeOf(error: unknown): string {
 }
 
 export async function initMainSentry(version: string, dataDir: string, cacheRoot: string, isDev = false): Promise<DesktopTelemetryTransport> {
-	const dsn = electronMainSentryDsn(isDev);
+	const appVersion = process.env.AO_TELEMETRY_APP_VERSION ?? version;
+	const dsn = electronMainSentryDsn(appVersion, isDev);
 	if (!dsn) return { capture: () => undefined, closeAndDrain: async () => undefined, clearCache: async () => undefined };
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
-	const environment = sentryEnvironment(process.env.AO_TELEMETRY_APP_VERSION ?? version);
+	const sampled = installInErrorSample(installId);
+	const budget = createErrorBudget(path.join(dataDir, ERROR_BUDGET_FILE));
+	const environment = sentryEnvironment(appVersion);
 	const queuePath = sentryQueuePath(cacheRoot);
 	let accepting = true;
 	const inFlight = new Set<Promise<unknown>>();
@@ -191,13 +252,13 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		],
 		maxBreadcrumbs: 0,
 		sendDefaultPii: false,
-		// Keep admitted consented errors. Renderer call-site budgets and main's
-		// per-category/reason/detail budgets limit handled capture volume.
+		// Sampling is per install, not per event, and happens in beforeSend
+		// together with the persisted per-fingerprint and per-install caps.
 		sampleRate: 1,
 		tracesSampleRate: 0,
 		skipOpenTelemetrySetup: true,
 		beforeBreadcrumb: () => null,
-		beforeSend: (event) => scrubMainSentryEvent(event, installId, version, environment),
+		beforeSend: (event) => admitMainSentryEvent(scrubMainSentryEvent(event, installId, version, environment), sampled, budget),
 	});
 	const uncaughtListeners = process.listeners("uncaughtException").filter((listener) => !priorUncaught.has(listener));
 	const rejectionListeners = process.listeners("unhandledRejection").filter((listener) => !priorRejections.has(listener));
