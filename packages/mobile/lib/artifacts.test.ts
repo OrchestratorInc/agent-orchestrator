@@ -185,6 +185,17 @@ describe("artifactCacheEntry", () => {
 		expect(artifactCacheEntry("host.a", "ao-1", "other.pdf", "v1").prefix).not.toBe(entry.prefix);
 	});
 
+	it("names a file with 128 bits and a version with 64", () => {
+		const entry = artifactCacheEntry("host.a", "ao-1", "docs/spec.pdf", "v1");
+		expect(entry.prefix).toMatch(/^[0-9a-f]{32}$/);
+		expect(entry.name).toMatch(/^[0-9a-f]{32}-[0-9a-f]{16}\.pdf$/);
+	});
+
+	it("gives near-identical paths unrelated names", () => {
+		const prefixes = new Set(Array.from({ length: 2000 }, (_, index) => artifactCacheEntry("host.a", "ao-1", `out/report-${index}.pdf`, "v1").prefix));
+		expect(prefixes.size).toBe(2000);
+	});
+
 	it("keeps the same session and path on two paired machines apart", () => {
 		const onA = artifactCacheEntry("host.a", "standalone-1", "report.pdf", "2026-11-10T10:00:00Z");
 		const onB = artifactCacheEntry("host.b", "standalone-1", "report.pdf", "2026-11-10T10:00:00Z");

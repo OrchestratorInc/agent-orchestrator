@@ -315,21 +315,41 @@ export const MAX_ARTIFACT_CACHE_BYTES = 200 * 1024 * 1024;
  */
 export type ArtifactCacheEntry = { prefix: string; name: string };
 
-function hashText(text: string): string {
-	let hash = 0x811c9dc5;
+/**
+ * A 128-bit hash of `text` as four 32-bit lanes (cyrb128): wide enough that two
+ * different files never share a cache name, where a 32-bit hash could collide
+ * and open one file's cached copy for another.
+ */
+function hash128(text: string): number[] {
+	let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762;
 	for (let index = 0; index < text.length; index += 1) {
-		hash ^= text.charCodeAt(index);
-		hash = Math.imul(hash, 0x01000193);
+		const k = text.charCodeAt(index);
+		h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+		h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+		h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+		h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
 	}
-	return (hash >>> 0).toString(36);
+	h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+	h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+	h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+	h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+	h1 ^= h2 ^ h3 ^ h4;
+	h2 ^= h1;
+	h3 ^= h1;
+	h4 ^= h1;
+	return [h1, h2, h3, h4];
+}
+
+function hex(lanes: number[]): string {
+	return lanes.map((lane) => (lane >>> 0).toString(16).padStart(8, "0")).join("");
 }
 
 /** `machine` is the paired machine's stable identity (machineIdentity). */
 export function artifactCacheEntry(machine: string, sessionId: string, path: string, version: string): ArtifactCacheEntry {
-	// The separator keeps "hash + length" unambiguous: no two files share a prefix by concatenation.
-	const prefix = `${hashText(`${machine}\n${sessionId}\n${path}`)}_${path.length.toString(36)}`;
+	// 128 bits name the file; 64 tell its versions apart (only ever compared within one file).
+	const prefix = hex(hash128(`${machine}\n${sessionId}\n${path}`));
 	const ext = /\.([a-z0-9]{1,6})$/i.exec(path)?.[1]?.toLowerCase() ?? "bin";
-	return { prefix, name: `${prefix}-${hashText(version)}.${ext}` };
+	return { prefix, name: `${prefix}-${hex(hash128(version).slice(0, 2))}.${ext}` };
 }
 
 /** A file in the download cache, as the viewer finds it there. */
