@@ -1,5 +1,5 @@
 import type { WorkspaceSession } from "../types/workspace";
-import type { CloudCpClient } from "./cloud-cp";
+import type { CloudCpClient, CloudCpSessionReadyCheck } from "./cloud-cp";
 import { FREESTYLE_PROVIDER } from "./cloud-offering";
 
 export type CloudLifecycleStage =
@@ -75,13 +75,15 @@ export function cloudLifecycleStage(session?: WorkspaceSession): CloudLifecycleS
  *   explains why and the user can retry startup.
  * - "retrying": AO hit a startup problem but is still retrying in the
  *   background (any other runtime state, including the transient "failed");
- *   the lifecycle loader stays up with the reason as a note.
+ *   the lifecycle loader stays up with the reason as a note, or, while AO
+ *   waits for a bring-your-own workspace's own ready check, with the check's
+ *   progress.
  * - "unavailable": the runtime was parked without a recorded startup reason;
  *   the pane explains that instead of rendering blank.
  */
 export type CloudStartupProblem =
 	| { phase: "failed"; message: string; code?: string; detail?: string; /** When the failure was recorded. */ at?: string }
-	| { phase: "retrying"; message: string }
+	| { phase: "retrying"; message: string; readyCheck?: CloudCpSessionReadyCheck }
 	| { phase: "unavailable"; message?: string };
 
 // Only "terminated" means AO stopped trying; "failed" is retried with backoff.
@@ -120,7 +122,10 @@ export function cloudStartupProblem(session?: WorkspaceSession): CloudStartupPro
 	const final = runtimeState !== undefined && FINAL_RUNTIME_STATES.has(runtimeState);
 	const message = lifecycle.startupError?.message?.trim();
 	if (message) {
-		if (!final) return { phase: "retrying", message };
+		if (!final) {
+			const readyCheck = lifecycle.startupError?.readyCheck;
+			return readyCheck ? { phase: "retrying", message, readyCheck } : { phase: "retrying", message };
+		}
 		const detail = lifecycle.startupError?.detail?.trim() || undefined;
 		return { phase: "failed", message, code: lifecycle.startupError?.code, detail };
 	}

@@ -2919,7 +2919,7 @@ export interface components {
             requireMountedDurableRoot?: boolean;
             startupTimeoutSeconds?: number;
             workerUser: components["schemas"]["CoderWorkerUser"];
-            /** @description Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0. */
+            /** @description Shell command run as the workspace user after the Coder agent is ready and before AO starts its worker; polled every 5 seconds until it exits 0. While AO waits, the session's startupError (workspace_setup_pending) carries its progress and the tail of what it prints, redacted. */
             readyProbe?: string;
             /** @description Ready check budget, measured from the agent becoming ready. 900 when a ready check is set without one. On timeout the session fails with startup error workspace_setup_not_ready. */
             readyProbeTimeoutSeconds?: number;
@@ -4391,7 +4391,7 @@ export interface components {
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
-            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed or agent_start_failed (the terminal agent could not start in the ready workspace), all reported by the worker. Clients must tolerate codes added later. */
+            /** @description Stable reason code: workspace_not_ready, terminal_unavailable, unsupported_architecture, durable_root_unavailable, worker_never_started, bootstrap_failed, workspace_setup_not_ready (a Coder connection's workspace ready check never passed), workspace_setup_pending (not a failure: AO is still waiting for that ready check to pass, see readyCheck), working_directory_not_durable (the project's working folder is outside the Coder connection's durable root), repository_checkout_failed, working_directory_unusable (also reported when the Coder bootstrap cannot prepare the project's working folder), working_directory_occupied, project_setup_failed or agent_start_failed (the terminal agent could not start in the ready workspace), all reported by the worker. Clients must tolerate codes added later. */
             code: string;
             /** @description Human-readable explanation suitable for display as-is. */
             message: string;
@@ -4399,6 +4399,28 @@ export interface components {
             at: string;
             /** @description Redacted detail behind the error: operator detail for an organization's own (bring-your-own) compute, and the failed command's output for project_setup_failed. */
             detail?: string;
+            readyCheck?: components["schemas"]["SessionReadyCheck"];
+        };
+        /** @description A bring-your-own Coder workspace's own ready check while AO waits for it to pass before starting the worker (startupError code workspace_setup_pending), on an organization's own compute only. It updates as the check runs, and is gone once the check passes. */
+        SessionReadyCheck: {
+            /**
+             * Format: date-time
+             * @description When the workspace's Coder agent became ready. The check's timeout runs from it, so the time waited is now minus since.
+             */
+            since: string;
+            /** @description How long after since AO keeps checking before it stops. */
+            timeoutSeconds?: number;
+            /** @description How many runs of the check have not passed since the agent became ready. */
+            attempts: number;
+            /** @description The latest run's exit status. */
+            exitCode: number;
+            /** @description The tail of the latest run's output, bounded and redacted. */
+            output?: string;
+            /**
+             * Format: date-time
+             * @description When the latest run was recorded.
+             */
+            checkedAt: string;
         };
         CreateSessionInput: {
             /** Format: uuid */

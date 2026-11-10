@@ -11,6 +11,7 @@ import {
 	type SessionStatus,
 } from "@aoagents/product-ui";
 
+import type { CloudCpSessionReadyCheck } from "../lib/cloud-cp/types";
 import type { ReviewerHarnessId } from "../lib/reviewer-harnesses";
 
 export { toKanbanColumn, toSessionActivity, toSessionStatus };
@@ -263,7 +264,7 @@ export type WorkspaceSession = {
 		runtimeState?: string;
 		runtimeError?: string;
 		/** Why the worker has not started; cleared once it connects. */
-		startupError?: { code: string; message: string; at: string; detail?: string };
+		startupError?: { code: string; message: string; at: string; detail?: string; readyCheck?: CloudCpSessionReadyCheck };
 		/** Bring-your-own Coder workspace page; absent for managed compute. */
 		coderWorkspaceUrl?: string;
 	};

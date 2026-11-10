@@ -768,7 +768,9 @@ export interface CloudCpArtifactAccessResponse {
  * workspace_create_failed, working_directory_not_durable (the project's
  * working folder is outside the Coder durable root), sandbox_unresponsive (a
  * running session's compute stopped responding and every repair failed, so
- * it was stopped); treat any other code generically.
+ * it was stopped), workspace_setup_pending (not a failure: AO is waiting for
+ * a bring-your-own workspace's own ready check, see `readyCheck`); treat any
+ * other code generically.
  */
 export interface CloudCpSessionStartupError {
 	code: string;
@@ -780,6 +782,28 @@ export interface CloudCpSessionStartupError {
 	 * compute, where the customer can act on them. Absent otherwise.
 	 */
 	detail?: string;
+	/**
+	 * The workspace's own ready check while AO waits for it to pass
+	 * (workspace_setup_pending), on bring-your-own compute only. Absent from
+	 * older control planes.
+	 */
+	readyCheck?: CloudCpSessionReadyCheck;
+}
+
+/** A bring-your-own Coder workspace's own ready check while AO waits for it. */
+export interface CloudCpSessionReadyCheck {
+	/** RFC 3339 time the workspace's Coder agent became ready; the wait runs from it. */
+	since: string;
+	/** How long after `since` AO keeps checking. */
+	timeoutSeconds?: number;
+	/** Runs of the check that have not passed. */
+	attempts: number;
+	/** The latest run's exit status. */
+	exitCode: number;
+	/** The tail of the latest run's output, bounded and redacted. */
+	output?: string;
+	/** RFC 3339 time the latest run was recorded. */
+	checkedAt: string;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/startup-retry responds 202. */
