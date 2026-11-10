@@ -130,7 +130,7 @@ Use this when Orchestrator runs on a computer that has no Grok Bot desktop app, 
 1. Ask for a short host name (letters, digits, `-`) and which connected computer to use as `via`. Default: the one the user's message came from.
 2. Tell the user, in one message:
    "On the host, open Orchestrator, go to remote access (Connect Mobile) and turn on network access. It shows an address and a password. Send me the **address** here. You'll type the password on <via> in a window I open, so it never passes through this chat."
-   On the host's own terminal, `ao remote-host enable` turns on the same network access, and `ao remote-host status` shows the address and the password.
+   On the host's own terminal, `ao remote-host enable` turns on the same network access, and `ao remote-host status --show-password` shows the address and the password.
 3. When the address arrives, check it looks like `http://<ip or name>:<port>`. Then, on `via`, write a one-time password window and open it. Replace `<name>` with the host name you checked: run "Password window" below.
    Tell the user: "A Terminal window opened on <via>. Type the password there and press Return."
    On Linux, `open` doesn't run `.command` files: write the same lines to `~/.ao-grok/add-<name>.sh` and ask the user to run `zsh ~/.ao-grok/add-<name>.sh` in a terminal on `via`.
