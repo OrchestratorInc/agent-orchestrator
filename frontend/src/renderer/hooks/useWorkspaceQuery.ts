@@ -5,6 +5,7 @@ import { useRemoteUnpinStore, withRemoteUnpins } from "../stores/remote-unpin-st
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useStableArray } from "./useStable";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
@@ -888,13 +889,26 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 	// Pins removed here that the host has not confirmed yet (it may be offline).
 	const unpins = useRemoteUnpinStore((state) => state.unpins);
 	const live = (predicate: (index: number) => boolean) => hostIds.filter((hostId, index) => connected.includes(hostId) && predicate(index));
-	return {
-		data: hostIds.flatMap((hostId, index) => projects[index]?.data
+	// Every render of the shell would otherwise hand out new lists, which
+	// re-renders the sidebar and its rows even with no remote hosts. Rebuild
+	// them only when a host's data or a pending unpin changed.
+	const dataInputs = useStableArray([hostIds, unpins, ...projects.map((query) => query.data), ...sessions.map((query) => query.data)]);
+	const data = useMemo(
+		() => hostIds.flatMap((hostId, index) => projects[index]?.data
 			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []).map((workspace) => withRemoteUnpins(workspace, unpins))
 			: []),
-		loadedProjectHostIds: live((index) => projects[index]?.data !== undefined),
-		loadedSessionHostIds: live((index) => sessions[index]?.data !== undefined),
-		failedHostIds: live((index) => Boolean(projects[index]?.isError || sessions[index]?.isError)),
+		// dataInputs holds every value read here.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[dataInputs],
+	);
+	const loadedProjectHostIds = useStableArray(live((index) => projects[index]?.data !== undefined));
+	const loadedSessionHostIds = useStableArray(live((index) => sessions[index]?.data !== undefined));
+	const failedHostIds = useStableArray(live((index) => Boolean(projects[index]?.isError || sessions[index]?.isError)));
+	return {
+		data,
+		loadedProjectHostIds,
+		loadedSessionHostIds,
+		failedHostIds,
 		refetch: () => Promise.all([...projects, ...sessions].map((query) => query.refetch())),
 	};
 }

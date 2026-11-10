@@ -183,3 +183,24 @@ it("shows a saved host's last lists without reading it, and its session while it
 	expect(result.current.session.data?.id).toBe("session-1");
 	expect(fetchMock).not.toHaveBeenCalled();
 });
+
+it("keeps the same lists across re-renders until a host's data changes", async () => {
+	await prepareTwoHosts();
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const { result, rerender } = renderHook(() => useRemoteWorkspaces(), {
+		wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+	});
+	await waitFor(() => {
+		expect(result.current.data).toHaveLength(1);
+		expect(result.current.loadedSessionHostIds).toEqual(["box-a"]);
+	});
+	const { data, failedHostIds, loadedProjectHostIds, loadedSessionHostIds } = result.current;
+	rerender();
+	// The shell passes these to the memoized sidebar; new lists on every render would re-render it.
+	expect(result.current.data).toBe(data);
+	expect(result.current.failedHostIds).toBe(failedHostIds);
+	expect(result.current.loadedProjectHostIds).toBe(loadedProjectHostIds);
+	expect(result.current.loadedSessionHostIds).toBe(loadedSessionHostIds);
+	act(() => client.setQueryData(["remote-workspaces", "box-a", "projects"], [{ id: "project-1", name: "Renamed", path: "/remote" }]));
+	await waitFor(() => expect(result.current.data[0]?.name).toBe("Renamed"));
+});
