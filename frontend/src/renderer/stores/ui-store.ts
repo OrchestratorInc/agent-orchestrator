@@ -227,6 +227,10 @@ export type UiState = {
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	// One-shot "open this project's archive" from Cmd+K. The project's board
+	// consumes it when it is (or becomes) the visible page; `at` lets a request
+	// whose board never showed up expire instead of firing on a later visit.
+	archiveOpenRequest: { projectId: string; hostId?: string; nonce: number; at: number } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
@@ -318,6 +322,8 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
+	requestArchiveOpen: (projectId: string, hostId?: string) => void;
+	clearArchiveOpenRequest: (nonce: number) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
@@ -473,6 +479,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	archiveOpenRequest: null,
 	firstRunPromptActive: false,
 	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
@@ -870,6 +877,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
+	requestArchiveOpen: (projectId, hostId) =>
+		set((state) => ({
+			archiveOpenRequest: { projectId, hostId, nonce: (state.archiveOpenRequest?.nonce ?? 0) + 1, at: Date.now() },
+		})),
+	clearArchiveOpenRequest: (nonce) =>
+		set((state) => (state.archiveOpenRequest?.nonce === nonce ? { archiveOpenRequest: null } : state)),
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {
