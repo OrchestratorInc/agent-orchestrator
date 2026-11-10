@@ -11,6 +11,7 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
@@ -876,14 +877,21 @@ function ProseWithInlineImages({
 		segment.path === undefined ? (
 			<Fragment key={index}>{renderText(segment.text)}</Fragment>
 		) : (
-			<ChatImage
+			<InlineStagedImage
 				key={index}
-				inline
-				src={attachmentURL(apiBaseUrl, sessionId, segment.path)}
+				path={segment.path}
+				sessionId={sessionId}
+				apiBaseUrl={apiBaseUrl}
 				alt={t("chat.image.numbered", { index: images.indexOf(segment.path) + 1 })}
 			/>
 		),
 	);
+}
+
+/** An inline image chip, drawn from the composer's copy while the file was just sent. */
+function InlineStagedImage({ path, sessionId, apiBaseUrl, alt }: { path: string; sessionId: string; apiBaseUrl: string; alt: string }) {
+	const local = useSentAttachmentPreview(path);
+	return <ChatImage inline src={local ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} />;
 }
 
 /** Collapse the home directory so a long absolute path does not eat the row. */
