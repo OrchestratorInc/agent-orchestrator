@@ -23,6 +23,7 @@ var plans = []Plan{
 	plan("opencode-v2", ActionLogin, "Log in to OpenCode 2", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://opencode.ai/v2/docs"),
 	plan("mimo-code", ActionLogin, "Log in to MiMo Code", []string{"mimo", "auth", "login"}, "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code"),
 	documentationPlan("memcode", "Set up memcode", "Configure a native endpoint and provider credentials before launching Orchestrator", "https://github.com/memcode-ai/memcode"),
+	documentationPlan("zcode", "Set up ZCode", "Install the @zcode/cli package and configure ZCode's personal provider config (~/.zcode/v2/provider_config.json)", "https://github.com/zai-org/ZCode"),
 	documentationPlan("aider", "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
 	copilotLoginPlan(),
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
