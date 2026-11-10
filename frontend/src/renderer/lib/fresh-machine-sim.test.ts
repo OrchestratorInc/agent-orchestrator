@@ -48,6 +48,17 @@ describe("simulateFreshMachine", () => {
 		]);
 	});
 
+	it("installs agents through their own endpoint, with progress, listed with the other jobs", async () => {
+		const plans = await (await simulateFreshMachine(get("/api/v1/agents/installers"), noDaemon))!.json();
+		expect(plans.agents.every((plan: { automatic: boolean }) => plan.automatic)).toBe(true);
+
+		const started = await (await simulateFreshMachine(new Request("http://127.0.0.1:3001/api/v1/agents/codex/install", { method: "POST" }), noDaemon))!.json();
+		expect(started).toMatchObject({ target: "codex", status: "installing", progress: { phase: "downloading" } });
+
+		const listed = await (await simulateFreshMachine(get("/api/v1/agents/install-jobs"), noDaemon))!.json();
+		expect(listed.jobs.map((job: { target: string }) => job.target)).toEqual(["codex"]);
+	});
+
 	it("lets every other request through to the daemon", async () => {
 		expect(await simulateFreshMachine(get("/api/v1/sessions"), noDaemon)).toBeUndefined();
 	});

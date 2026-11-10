@@ -15,7 +15,7 @@ import { developerModeStorageKey } from "./window-translucency";
 // lasts for this window's session; the simulated installs reset on reload.
 
 const STORAGE_KEY = "ao.dev.freshMachine";
-const FAKE_INSTALL_MS = 2_000;
+const FAKE_INSTALL_MS = 3_000;
 // Readiness lists agents by id; installs use their own target names.
 const AGENT_ID_FOR_TARGET: Record<string, string> = { claude: "claude-code" };
 
@@ -54,17 +54,29 @@ const installStartedAt = new Map<string, number>();
 const json = (body: unknown, status = 200) =>
 	new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
+/** A pretend install: it downloads, then installs, reporting progress as a
+ * real installer's output would, and succeeds after FAKE_INSTALL_MS. */
 function installJob(target: string) {
+	const command = `brew install ${target} (simulated)`;
 	const startedAt = installStartedAt.get(target);
-	if (startedAt === undefined) return { target, status: "idle", command: `brew install ${target} (simulated)` };
-	const done = Date.now() - startedAt >= FAKE_INSTALL_MS;
+	if (startedAt === undefined) return { target, status: "idle", command };
+	const elapsed = Date.now() - startedAt;
+	const done = elapsed >= FAKE_INSTALL_MS;
 	if (done) installed.add(AGENT_ID_FOR_TARGET[target] ?? target);
+	const downloading = elapsed < FAKE_INSTALL_MS / 2;
 	return {
 		target,
 		status: done ? "succeeded" : "installing",
-		command: `brew install ${target} (simulated)`,
+		command,
 		startedAt: new Date(startedAt).toISOString(),
 		finishedAt: done ? new Date(startedAt + FAKE_INSTALL_MS).toISOString() : null,
+		...(done ? {} : {
+			progress: {
+				phase: downloading ? "downloading" : "installing",
+				percent: Math.round((elapsed / FAKE_INSTALL_MS) * 100),
+				detail: downloading ? `Downloading ${target}… (simulated)` : `Installing ${target}… (simulated)`,
+			},
+		}),
 	};
 }
 
@@ -131,6 +143,22 @@ async function agentReadiness(send: () => Promise<Response>): Promise<Response> 
 	return json({ ...body, agents });
 }
 
+/** One-click install plans for the agents (Settings > Harness and onboarding
+ * read these to offer an Install). */
+async function installers(send: () => Promise<Response>): Promise<Response> {
+	const body = await realOr(send, {
+		agents: BASE_AGENTS.agents.map(({ id }) => ({
+			agentId: id,
+			automatic: true,
+			available: true,
+			method: "script",
+			methods: [{ id: "script", label: "Install script", available: true, recommended: true, reinstallAvailable: false, updateAvailable: false }],
+			documentationUrl: "https://example.invalid/install",
+		})),
+	});
+	return json(body);
+}
+
 /** Answers the request from the simulation, or returns undefined to let it
  * reach the daemon. `send` performs the real request when the simulation
  * only rewrites the daemon's answer. */
@@ -149,6 +177,17 @@ export async function simulateFreshMachine(input: Request, send: () => Promise<R
 	if (method === "GET" && path === "/api/v1/system/github-auth") {
 		const satisfied = installed.has("gh");
 		return json({ id: "github-auth", label: "GitHub", satisfied, required: false, detail: satisfied ? "Signed in (simulated)" : "Not signed in." });
+	}
+	if (method === "GET" && path === "/api/v1/agents/installers") return installers(send);
+	// Agents install through their own endpoint, and every job shows in one list.
+	if (method === "GET" && path === "/api/v1/agents/install-jobs") {
+		return json({ jobs: [...installStartedAt.keys()].map(installJob) });
+	}
+	const agentInstall = path.match(/^\/api\/v1\/agents\/([^/]+)\/install$/);
+	if (agentInstall) {
+		const agent = decodeURIComponent(agentInstall[1]!);
+		if (method === "POST" && !installStartedAt.has(agent)) installStartedAt.set(agent, Date.now());
+		return json(installJob(agent));
 	}
 	const install = path.match(/^\/api\/v1\/system\/install\/([^/]+)$/);
 	if (install) {
