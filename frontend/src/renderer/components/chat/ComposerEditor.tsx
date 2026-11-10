@@ -18,10 +18,12 @@ import {
 	$createTextNode,
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
+	COMMAND_PRIORITY_LOW,
 	DecoratorNode,
 	getDOMSelectionFromTarget,
 	HISTORY_MERGE_TAG,
 	HISTORY_PUSH_TAG,
+	KEY_BACKSPACE_COMMAND,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
@@ -55,6 +57,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
 import { splitInlineImagePaths } from "./messageAttachments";
 import type { ComposerSentToken } from "./sentComposerTokens";
 
@@ -511,6 +514,47 @@ function $caretOffset(): number | undefined {
 	return undefined;
 }
 
+/**
+ * The caret's line as $serializeComposer counts it, with the lines above it.
+ * Only for a collapsed caret in the plain text node the line starts with, since
+ * list keys rewrite the line's start; anything else keeps the default key.
+ */
+function $caretLine() {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection) || !selection.isCollapsed() || selection.anchor.type !== "text") return undefined;
+	const node = selection.anchor.getNode();
+	if (!$isTextNode(node) || node.getType() !== "text") return undefined;
+	const caret = $caretOffset();
+	if (caret === undefined) return undefined;
+	const text = $serializeComposer();
+	const start = caret === 0 ? 0 : text.lastIndexOf("\n", caret - 1) + 1;
+	const column = caret - start;
+	if (selection.anchor.offset !== column) return undefined;
+	const end = text.indexOf("\n", caret);
+	return {
+		selection,
+		node,
+		column,
+		line: text.slice(start, end < 0 ? undefined : end),
+		previous: start === 0 ? [] : text.slice(0, start - 1).split("\n"),
+	};
+}
+
+/** Rewrites the start of the caret's line as one undo step, keeping the caret on the same text. */
+function $applyLinePrefixEdit(node: TextNode, column: number, edit: LinePrefixEdit): boolean {
+	if (node.getTextContentSize() < edit.remove) return false;
+	$addUpdateTag(HISTORY_PUSH_TAG);
+	const selection = node.select(0, edit.remove);
+	if (edit.insert) selection.insertText(edit.insert);
+	else selection.removeText();
+	const caret = Math.max(column - edit.remove, 0) + edit.insert.length;
+	if (caret === edit.insert.length) return true;
+	const after = $getSelection();
+	const anchor = $isRangeSelection(after) ? after.anchor.getNode() : undefined;
+	if ($isTextNode(anchor)) anchor.select(caret, caret);
+	return true;
+}
+
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
 	const caret = $caretOffset();
@@ -779,6 +823,48 @@ const EditorBridge = forwardRef<
 			removeEscape();
 		};
 	}, [editor, enterSends, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
+
+	// Markdown list keys. They run after send and completion above decline the
+	// key, so they only ever replace a plain newline, Tab focus move or Backspace.
+	useEffect(() => {
+		const plainKey = (event: globalThis.KeyboardEvent | null): event is globalThis.KeyboardEvent =>
+			event !== null && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229 &&
+			!editor.isComposing() && !event.metaKey && !event.ctrlKey && !event.altKey;
+		const handled = (event: globalThis.KeyboardEvent) => {
+			event.preventDefault();
+			return true;
+		};
+		const removeEnter = editor.registerCommand(KEY_ENTER_COMMAND, (event) => {
+			if (!plainKey(event)) return false;
+			const caret = $caretLine();
+			const action = caret && listEnter(caret.line, caret.column, caret.previous);
+			if (!caret || !action) return false;
+			if (action.kind === "exit") return $applyLinePrefixEdit(caret.node, caret.column, action.edit) && handled(event);
+			$addUpdateTag(HISTORY_PUSH_TAG);
+			caret.selection.insertRawText(action.text);
+			return handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		const removeTab = editor.registerCommand(KEY_TAB_COMMAND, (event) => {
+			if (!plainKey(event)) return false;
+			const caret = $caretLine();
+			const edit = caret && listIndent(caret.line, caret.previous, event.shiftKey);
+			return Boolean(caret && edit && $applyLinePrefixEdit(caret.node, caret.column, edit)) && handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		const removeBackspace = editor.registerCommand(KEY_BACKSPACE_COMMAND, (event) => {
+			if (!plainKey(event) || event.shiftKey) return false;
+			// A marker always ends in a space or tab; skip reading the draft on every other Backspace.
+			const selection = $getSelection();
+			if (!$isRangeSelection(selection) || !/[ \t]/.test(selection.anchor.getNode().getTextContent()[selection.anchor.offset - 1] ?? "")) return false;
+			const caret = $caretLine();
+			const edit = caret && listBackspace(caret.line, caret.column, caret.previous);
+			return Boolean(caret && edit && $applyLinePrefixEdit(caret.node, caret.column, edit)) && handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		return () => {
+			removeEnter();
+			removeTab();
+			removeBackspace();
+		};
+	}, [editor]);
 
 	return null;
 });

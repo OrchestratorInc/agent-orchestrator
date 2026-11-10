@@ -2210,6 +2210,11 @@ textarea,
 	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size, 24px));
 }
 
+/* Where a scroller sits as it mounts is not a change: no fade-in on open. */
+.edge-fade[data-fade-instant] {
+	transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.edge-fade {
 		transition: none;
@@ -3022,6 +3027,11 @@ html.sidebar-reordering * {
 
 .queue-dock-enter {
 	animation: queue-dock-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* A question already waiting when its chat opens is drawn in place (ChatComposer's useDockEntrance). */
+[data-dock-quiet] .elicitation-dock {
+	animation: none;
 }
 
 /* The parent reserves one compact footprint; the expanded dock floats above it. */

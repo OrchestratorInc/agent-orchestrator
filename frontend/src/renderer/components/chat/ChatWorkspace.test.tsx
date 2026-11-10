@@ -404,7 +404,7 @@ describe("HumanMessage attachments", () => {
 		renderImageAttachment(header, name);
 	});
 
-	it("preserves authored trailing whitespace before generated references", () => {
+	it("keeps the authored body before generated references", () => {
 		const authoredBody = "keep my spacing  \n";
 		const { container } = render(
 			<HumanMessage
@@ -415,8 +415,9 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
+		// Markdown drops the trailing spaces from the display; the stored text keeps them.
 		expect(container.querySelector(".cursor-chat-human-message [data-chat-message-body]")?.textContent).toBe(
-			authoredBody,
+			authoredBody.trim(),
 		);
 	});
 
@@ -482,18 +483,21 @@ describe("HumanMessage attachments", () => {
 		render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
 		expect(screen.queryByRole("img")).not.toBeInTheDocument();
-		expect(document.body.textContent).toContain(text);
+		expect(document.body.textContent).toContain("Attached files (read these files in the workspace):");
+		expect(screen.getByRole("listitem")).toHaveTextContent("docs/screenshot.png");
 	});
 
-	it("linkifies session URLs without parsing the human message as Markdown", () => {
-		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
+	it("renders the light markdown a person types and keeps their line breaks", () => {
+		const text = "Notes:\n- fix *bug*\n- see ao://sessions/proj/sess\n\n> write test\n\n# not a heading\nline two";
 		const { container } = render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
-		const paragraph = container.querySelector(".cursor-chat-human-message [data-chat-message-body]");
-		expect(paragraph).toHaveClass("whitespace-pre-wrap");
-		expect(paragraph?.textContent).toBe(text);
+		const body = container.querySelector(".cursor-chat-human-message [data-chat-message-body]")!;
+		expect(body.querySelector("ul em")).toHaveTextContent("bug");
 		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();
-		expect(container.querySelector("ul, blockquote, em")).toBeNull();
+		expect(body.querySelector("blockquote")).toHaveTextContent("write test");
+		expect(body.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
+		expect(body).toHaveTextContent("# not a heading");
+		expect(body.querySelector("br")).not.toBeNull();
 	});
 });
 

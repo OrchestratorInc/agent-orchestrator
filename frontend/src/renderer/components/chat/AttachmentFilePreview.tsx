@@ -47,10 +47,15 @@ export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPre
 	useEffect(() => {
 		if (!near || kind !== "text" || !src) return;
 		const controller = new AbortController();
-		void fetch(`${src}${src.includes("?") ? "&" : "?"}raw=true`, { signal: controller.signal, headers: { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` } })
+		// A file just sent is read from its in-memory copy, which takes no query or range.
+		const local = src.startsWith("blob:");
+		void fetch(local ? src : `${src}${src.includes("?") ? "&" : "?"}raw=true`, {
+			signal: controller.signal,
+			headers: local ? undefined : { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` },
+		})
 			.then(async (response) => {
 				if (!response.ok) throw new Error(`Preview failed: ${response.status}`);
-				return response.text();
+				return local ? (await response.blob()).slice(0, TEXT_PREVIEW_BYTES).text() : response.text();
 			})
 			.then(setText)
 			.catch(() => {

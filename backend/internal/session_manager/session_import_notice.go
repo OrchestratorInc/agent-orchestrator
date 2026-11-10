@@ -12,7 +12,7 @@ func (n importNotice) Error() string { return string(n) }
 // ImportFailureFallback is shown when an import fails for a reason that has no
 // user-facing notice, such as a Git or filesystem error whose text names local
 // paths. The caller logs the full error.
-const ImportFailureFallback = "AO could not prepare this imported chat. See the AO daemon log for details."
+const ImportFailureFallback = "Orchestrator could not prepare this imported chat. See the Orchestrator daemon log for details."
 
 // ImportFailureNotice returns the text of a pending import's failure that is
 // safe to send to a client: the first notice the failure carries, or a failed

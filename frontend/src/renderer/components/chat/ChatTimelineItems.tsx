@@ -11,9 +11,10 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
@@ -22,6 +23,7 @@ import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { ProviderMark } from "./ProviderMark";
 import { useChatSessionId } from "./chat-image-source";
+import { useChatEntrance } from "./chat-entrance";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -127,7 +129,7 @@ import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { useComposerTokenRenderer } from "./sentComposerTokens";
-import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText, UserMarkdown } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
@@ -808,6 +810,49 @@ function formatTokens(tokens: number): string {
 }
 
 /**
+ * The bubble's text renderer: inline image chips when the message has images,
+ * nothing otherwise, so a message without them keeps UserMarkdown's memo.
+ */
+function inlineImageRenderer(attachments: string[], sessionId: string, apiBaseUrl: string | null) {
+	if (apiBaseUrl === null || !attachments.some((path) => IMAGE_ATTACHMENT_PATH.test(path))) return undefined;
+	return (text: string) => (
+		<ProseWithInlineImages text={text} attachments={attachments} sessionId={sessionId} apiBaseUrl={apiBaseUrl} renderText={(plain) => plain} />
+	);
+}
+
+/**
+ * The bubble's text renderer: skills and files it sent as chips in the accent
+ * color, and inline image chips. Undefined when neither applies, which keeps
+ * UserMarkdown's memo; stable while the message and its attachments are.
+ */
+function useUserTextRenderer(sessionId: string, body: string, attachments: string[], apiBaseUrl: string | null) {
+	const renderTokens = useComposerTokenRenderer(sessionId, body);
+	const attachmentKey = attachments.join("\n");
+	return useMemo(() => {
+		const renderImages = inlineImageRenderer(attachmentKey ? attachmentKey.split("\n") : [], sessionId, apiBaseUrl);
+		return renderTokens ? (text: string) => renderTokens(text, renderImages) : renderImages;
+	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl]);
+}
+
+// A list, quote or code block at either end of a message sits flush with the
+// bubble's padding instead of adding its own outer margin.
+const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
+
+const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
+
+/**
+ * Copying the whole of a rendered message gives back what the person typed, list
+ * markers and backticks included, as the Copy button does. A partial selection
+ * copies what it shows.
+ */
+function copyWholeMessageAsTyped(event: ClipboardEvent<HTMLDivElement>, typed: string) {
+	const selected = window.getSelection()?.toString() ?? "";
+	if (!selected.trim() || collapseWhitespace(selected) !== collapseWhitespace(event.currentTarget.textContent ?? "")) return;
+	event.preventDefault();
+	event.clipboardData.setData("text/plain", typed);
+}
+
+/**
  * Prose whose inline staged image paths (written by the composer's image chips)
  * render as chips that open the image. "Image N" counts images in attachment
  * order, the same label the attachment row and the composer use.
@@ -832,14 +877,21 @@ function ProseWithInlineImages({
 		segment.path === undefined ? (
 			<Fragment key={index}>{renderText(segment.text)}</Fragment>
 		) : (
-			<ChatImage
+			<InlineStagedImage
 				key={index}
-				inline
-				src={attachmentURL(apiBaseUrl, sessionId, segment.path)}
+				path={segment.path}
+				sessionId={sessionId}
+				apiBaseUrl={apiBaseUrl}
 				alt={t("chat.image.numbered", { index: images.indexOf(segment.path) + 1 })}
 			/>
 		),
 	);
+}
+
+/** An inline image chip, drawn from the composer's copy while the file was just sent. */
+function InlineStagedImage({ path, sessionId, apiBaseUrl, alt }: { path: string; sessionId: string; apiBaseUrl: string; alt: string }) {
+	const local = useSentAttachmentPreview(path);
+	return <ChatImage inline src={local ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} />;
 }
 
 /** Collapse the home directory so a long absolute path does not eat the row. */
@@ -1018,7 +1070,7 @@ export function HumanMessage({
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
 	// The skills and files it sent as chips, drawn as colored text.
-	const renderTokens = useComposerTokenRenderer(sessionId, body);
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
@@ -1094,17 +1146,12 @@ export function HumanMessage({
 						>
 							<CollapsibleHumanBody stateKey={visibleMessageText}>
 								{body ? (
-									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
-										<ProseWithInlineImages
+									<div data-chat-message-body="" className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+										<UserMarkdown
 											text={body}
-											attachments={attachments}
-											sessionId={sessionId}
-											apiBaseUrl={apiBaseUrl}
-											renderText={(text) => renderTokens
-												? renderTokens(text, (prose) => <SessionLinkedText text={prose} />)
-												: <SessionLinkedText text={text} />}
+											renderText={renderText}
 										/>
-									</p>
+									</div>
 								) : null}
 							</CollapsibleHumanBody>
 						</div>
@@ -1352,7 +1399,9 @@ const LIVE_RECONNECT_CHIP =
  * when the turn settles this row fades out where it is and "Worked for" opens at the
  * top of the turn, so nothing appears to travel between the two.
  */
-export function LiveResponseStatus({ startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+	/** Names this row across remounts (windowing), so its label's entrance plays once. */
+	entranceKey?: string;
 	startedAt?: string;
 	/** Replaces the timer while the session is still being set up. */
 	startupLabel?: string;
@@ -1395,6 +1444,12 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	// entrance, each time; keyed by kind it updates in place and crossfades only when
 	// the row changes what it is showing.
 	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
+	// A row that mounts with its chat (a switch to a working session) shows the
+	// label it opened with in place; any label after that fades in.
+	const labelEnters = useChatEntrance(entranceKey ?? labelId);
+	const quietLabelKind = useRef<string | null | undefined>(labelEnters ? null : labelKind);
+	if (quietLabelKind.current !== null && quietLabelKind.current !== labelKind) quietLabelKind.current = null;
+	const labelEntrance = quietLabelKind.current === null;
 	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
 	const row = (
 		<>
@@ -1410,7 +1465,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 				{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
 				    while the text inside updates in place. */}
 				{label && labelKind ? (
-					<span key={labelKind} className="chat-live-label min-w-0 truncate" data-testid="live-working-task">
+					<span key={labelKind} className={cn(labelEntrance && "chat-live-label", "min-w-0 truncate")} data-testid="live-working-task">
 						{reconnect && !startupLabel ? (
 							<span className={LIVE_RECONNECT_CHIP}>
 								<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
@@ -1546,6 +1601,9 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
  * would hide work the agent really did.
  */
 export function ActivityRow({ activity }: { activity: ConversationActivity }) {
+	// A call already in the chat when it opened, or scrolled back into view, is
+	// drawn in place; only a call that arrives fades in.
+	const entering = useChatEntrance(`row:${activity.id}`, activity.sequence);
 	const toolActivity =
 		activity.activityKind === "command" ||
 		activity.activityKind === "file_change" ||
@@ -1574,7 +1632,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 
 	if (!toolActivity) return content;
 	return (
-		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`}>
+		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`} enter={entering}>
 			{content}
 		</ActivityTransition>
 	);
@@ -1584,10 +1642,13 @@ export function ActivityTransition({
 	value,
 	children,
 	inline = false,
+	enter = true,
 }: {
 	value: string;
 	children: ReactNode;
 	inline?: boolean;
+	/** Fades in on mount. Off for content that was already on screen (see chat-entrance.ts). */
+	enter?: boolean;
 }) {
 	const reducedMotion = useReducedMotion();
 	const previousValue = useRef(value);
@@ -1602,7 +1663,7 @@ export function ActivityTransition({
 	const MotionElement = inline ? motion.span : motion.div;
 	return (
 		<MotionElement
-			initial={reducedMotion ? false : { opacity: 0 }}
+			initial={reducedMotion || !enter ? false : { opacity: 0 }}
 			animate={
 				reducedMotion || !settling
 					? { opacity: 1 }
@@ -3291,7 +3352,7 @@ export function SteerMessage({
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
 	const { body, attachments } = stagedAttachmentParts(visibleText);
 	// Only the person's own steer is marked; a steer from another session is not theirs.
-	const renderTokens = useComposerTokenRenderer(sessionId, body);
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
@@ -3362,17 +3423,11 @@ export function SteerMessage({
 						</AttachmentStrip>
 					) : null}
 					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
-						<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 							{body ? (
-								<p>
-									<ProseWithInlineImages
-										text={body}
-										attachments={attachments}
-										sessionId={sessionId}
-										apiBaseUrl={apiBaseUrl}
-										renderText={(text) => renderTokens ? renderTokens(text) : text}
-									/>
-								</p>
+								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+									<UserMarkdown text={body} renderText={renderText} />
+								</div>
 							) : null}
 						</div>
 					) : null}
