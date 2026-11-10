@@ -2,10 +2,12 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
 import { Chat, CheckWaves, FileText, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
+import { ArtifactThumbnail } from "./ArtifactThumbnail";
+import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -75,6 +77,7 @@ import {
 	openPRs,
 	resolveNextNavigationAfterSessionKill,
 	sessionArtifacts,
+	sessionWorkspaceReady,
 	sortedPRs,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
@@ -197,8 +200,9 @@ export const SessionInspector = memo(function SessionInspector({
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
 	const inspectorQueryClient = useQueryClient();
+	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
-		orchestrator || session?.cloud ? undefined : session?.id,
+		orchestrator || session?.cloud || session?.needsResume || (session && !sessionWorkspaceReady(session)) ? undefined : session?.id,
 		hostId,
 	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
@@ -329,6 +333,7 @@ export const SessionInspector = memo(function SessionInspector({
 						<SummaryView
 							canOpenReviews={reviewsAvailable}
 							hostId={hostId}
+							inspectorVisible={isInspectorVisible}
 							key={sessionUiKey(session.id, hostId)}
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
@@ -366,6 +371,7 @@ const SummaryView = memo(function SummaryView({
 	canOpenReviews,
 	onOpenArtifact,
 	hostId,
+	inspectorVisible,
 	onOpenFiles,
 	onOpenReviews,
 	orchestrator,
@@ -374,6 +380,8 @@ const SummaryView = memo(function SummaryView({
 	canOpenReviews: boolean;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	hostId?: string;
+	/** The Summary stays mounted while the inspector is closed. */
+	inspectorVisible: boolean;
 	onOpenFiles: () => void;
 	onOpenReviews: () => void;
 	orchestrator: boolean;
@@ -443,15 +451,7 @@ const SummaryView = memo(function SummaryView({
 			}
 			activityTitle={t("inspector.activity")}
 			artifactCards={
-				hasArtifacts ? (
-					artifacts.map((artifact) => (
-						<ArtifactSummaryCard
-							artifact={artifact}
-							key={artifact.path}
-							onOpenArtifact={onOpenArtifact}
-						/>
-					))
-				) : undefined
+				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
 			branch={orchestrator ? undefined : (
@@ -1048,38 +1048,152 @@ export function PRSummaryCard({
 	);
 }
 
-/** One Summary row opens its file in the inspector's contextual Artifacts tab. */
-function ArtifactSummaryCard({
+/** The row holds as many previews as fit at this width or wider, up to the maximum. */
+const ARTIFACT_PREVIEW_MIN_WIDTH = 88;
+const ARTIFACT_PREVIEW_GAP = 8;
+const ARTIFACT_PREVIEW_MAX = 4;
+/** Fills a 5:4 preview tile with a page laid out 1000 wide. */
+const ARTIFACT_PREVIEW_PAGE_HEIGHT = 800;
+const ARTIFACT_ROWS_COLLAPSED = 3;
+
+/**
+ * The Summary's artifacts: previews of the most recently updated ones, as many
+ * as fit the width, then the rest by name. Each opens its file in the
+ * inspector's Artifacts tab.
+ */
+function ArtifactSummaryList({
+	artifacts,
+	onOpenArtifact,
+	previewLive,
+	session,
+}: {
+	artifacts: SessionArtifact[];
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	/** Off while the inspector is closed, so hidden pages and PDFs unload. */
+	previewLive: boolean;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const container = useRef<HTMLDivElement>(null);
+	const [columns, setColumns] = useState(3);
+	const [expanded, setExpanded] = useState(false);
+	useLayoutEffect(() => {
+		const element = container.current;
+		if (!element) return;
+		const measure = (width: number) => {
+			if (width <= 0) return;
+			const fit = Math.floor((width + ARTIFACT_PREVIEW_GAP) / (ARTIFACT_PREVIEW_MIN_WIDTH + ARTIFACT_PREVIEW_GAP));
+			setColumns(Math.min(ARTIFACT_PREVIEW_MAX, Math.max(1, fit)));
+		};
+		measure(element.getBoundingClientRect().width);
+		const observer = new ResizeObserver(([entry]) => {
+			if (entry) measure(entry.contentRect.width);
+		});
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
+	const previews = artifacts.slice(0, columns);
+	const rest = artifacts.slice(columns);
+	const rows = expanded ? rest : rest.slice(0, ARTIFACT_ROWS_COLLAPSED);
+	return (
+		<div className="flex min-w-0 flex-col" ref={container}>
+			<div className="grid" style={{ gap: ARTIFACT_PREVIEW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+				{previews.map((artifact) => (
+					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} />
+				))}
+			</div>
+			{rest.length > 0 ? (
+				<ul className="mt-2 flex min-w-0 flex-col border-t border-border pt-1">
+					{rows.map((artifact) => (
+						<li key={artifact.path}>
+							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} />
+						</li>
+					))}
+					{rest.length > ARTIFACT_ROWS_COLLAPSED ? (
+						<li>
+							<Pressable
+								aria-expanded={expanded}
+								className="flex min-h-8 w-full min-w-0 items-center rounded-md px-1 text-sm text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+								onClick={() => setExpanded((current) => !current)}
+							>
+								{t(expanded ? "inspector.showLess" : "inspector.showMore")}
+							</Pressable>
+						</li>
+					) : null}
+				</ul>
+			) : null}
+		</div>
+	);
+}
+
+/** One Summary preview: a small thumbnail with the file's name and last update. */
+function ArtifactPreviewTile({
 	artifact,
 	onOpenArtifact,
+	previewLive,
+	session,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	previewLive: boolean;
+	session: WorkspaceSession;
 }) {
-	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
 	return (
-		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
-			<Pressable
-				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5"
-				onClick={handleOpen}
-			>
-				{artifact.kind === "html" ? (
-					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-				) : (
-					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-				)}
-				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+		<Pressable
+			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
+			onClick={() => onOpenArtifact?.({ path: artifact.path })}
+			title={artifact.path}
+		>
+			<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={ARTIFACT_PREVIEW_PAGE_HEIGHT} previewLive={previewLive} row={row} />
+			</span>
+			<span className="flex min-w-0 flex-col">
+				<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
 				{artifact.updatedAt ? (
 					<time
-						className="shrink-0 text-caption tabular-nums text-settings-muted"
+						className="truncate text-caption leading-4 tabular-nums text-passive"
 						dateTime={artifact.updatedAt}
 						title={new Date(artifact.updatedAt).toLocaleString()}
 					>
 						{formatTimeCompact(artifact.updatedAt)}
 					</time>
 				) : null}
-			</Pressable>
-		</div>
+			</span>
+		</Pressable>
+	);
+}
+
+/** One Summary row: icon, name and last update. */
+function ArtifactSummaryRow({
+	artifact,
+	onOpenArtifact,
+}: {
+	artifact: SessionArtifact;
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+}) {
+	return (
+		<Pressable
+			className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+			onClick={() => onOpenArtifact?.({ path: artifact.path })}
+			title={artifact.path}
+		>
+			{artifact.kind === "html" ? (
+				<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+			) : (
+				<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+			)}
+			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+			{artifact.updatedAt ? (
+				<time
+					className="shrink-0 text-caption tabular-nums text-settings-muted"
+					dateTime={artifact.updatedAt}
+					title={new Date(artifact.updatedAt).toLocaleString()}
+				>
+					{formatTimeCompact(artifact.updatedAt)}
+				</time>
+			) : null}
+		</Pressable>
 	);
 }
 
@@ -1097,7 +1211,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		queryFn: sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId).queryFn,
 		staleTime: Infinity,
 		placeholderData: (previous) => previous,
-		enabled: !session.cloud && session.kind !== "orchestrator",
+		enabled: !session.cloud && session.kind !== "orchestrator" && !session.needsResume && sessionWorkspaceReady(session),
 	});
 	// A Cloud session's commits come from its worker's workspace review, the
 	// same read (and cache entry) the inspector polls for its Files count.
@@ -1195,7 +1309,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	const activityView = accountMoving
 		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
 		: getAgentActivityView(session.activity);
-	const activityAt = session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
+	const activityAt = (accountMoving ? transition?.createdAt : undefined) ?? session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
 	pushEvent(
 		{
 			tone: "now",

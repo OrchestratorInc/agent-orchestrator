@@ -58,6 +58,8 @@ import { HarnessHealthTab } from "./HarnessHealthTab";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
+import { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
+import { SessionImportPanel } from "./SessionImportPanel";
 
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -812,6 +814,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	};
 
 	const selectedDetails = selectedAgentId ? describe(selectedAgentId) : null;
+	// Import reads this computer's chat files, so other hosts have no Import tab.
+	const importable = !hostId && selectedDetails !== null && IMPORTABLE_AGENTS.has(selectedDetails.agentId);
 	const detailsOpen = Boolean(selectedDetails);
 	// The list and the open page each scroll on their own, so the layout always
 	// fills the Settings body and the body itself never scrolls. Its scrolling is
@@ -898,11 +902,12 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							{/* Pane title: one step above row labels (15px), below the page heading. */}
 							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
-						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => { if (value !== "account") closeUILogin(); setDetailTab(value as HarnessDetailTab); }}>
+						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab === "import" && !importable ? "account" : detailTab} onValueChange={(value) => { if (value !== "account") closeUILogin(); setDetailTab(value as HarnessDetailTab); }}>
 							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
+								{importable ? <TabsTrigger className={HARNESS_TAB_CLASS} value="import">{t("settings.harness.tabImport")}</TabsTrigger> : null}
 							</TabsList>
 							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
 							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
@@ -930,6 +935,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									})()}
 								/>
 							</TabsContent>
+							{importable ? <TabsContent value="import" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
+								<SessionImportPanel harness={selectedDetails.agentId} />
+							</TabsContent> : null}
 						</Tabs>
 					</div>
 				) : null}

@@ -334,6 +334,11 @@ func (s *Store) createConversation(
 		}); err != nil {
 			return err
 		}
+		if scope == domain.ConversationScopeSession && owner.ImportSource != "" {
+			var seedErr error
+			latestSequence, seedErr = q.SeedImportedConversationSequence(ctx, gen.SeedImportedConversationSequenceParams{SessionID: string(options.session), ID: options.id})
+			return seedErr
+		}
 		if !options.adoptQueue || scope != domain.ConversationScopeProject {
 			return nil
 		}
@@ -813,7 +818,7 @@ func (s *Store) commitChatSpawn(
 				return fmt.Errorf("project native provider history: %w", err)
 			}
 		}
-		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+		if err := updateSessionRow(ctx, q, rec); err != nil {
 			return fmt.Errorf("commit Chat session owner: %w", err)
 		}
 		return nil
@@ -1313,8 +1318,17 @@ func (s *Store) appendUserMessage(
 		if readErr != nil {
 			return false, fmt.Errorf("check queued session %s: %w", session, readErr)
 		}
-		if record.IsTerminated || (!record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid) {
+		if record.IsTerminated {
 			return false, domain.ErrSessionNotProvisioning
+		}
+		if !record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid {
+			move, moveErr := s.qw.GetActiveSessionInterfaceTransition(ctx, session)
+			if moveErr != nil && !errors.Is(moveErr, sql.ErrNoRows) {
+				return false, fmt.Errorf("check account move of %s: %w", session, moveErr)
+			}
+			if moveErr != nil || !transitionRowToDomain(move).AccountMoveAwaitsTarget() {
+				return false, domain.ErrSessionNotProvisioning
+			}
 		}
 		// The caller read the conversation before taking writeMu. An orchestrator's
 		// first controller may have moved the queue out of it since then; a turn
@@ -4164,7 +4178,7 @@ func (s *Store) LoadConversationSnapshotPage(
 	beforeSequence int64,
 	limit int64,
 ) (ConversationSnapshot, error) {
-	return s.LoadConversationSnapshotRange(ctx, conversationID, beforeSequence, 0, limit)
+	return s.loadConversationSnapshotRange(ctx, conversationID, beforeSequence, 0, limit, true)
 }
 
 // LoadConversationSnapshotRange is LoadConversationSnapshotPage with a floor:
@@ -4179,6 +4193,18 @@ func (s *Store) LoadConversationSnapshotRange(
 	beforeSequence, afterSequence int64,
 	limit int64,
 ) (ConversationSnapshot, error) {
+	return s.loadConversationSnapshotRange(ctx, conversationID, beforeSequence, afterSequence, limit, true)
+}
+
+// loadConversationSnapshotRange skips the lazy auth reconciliation write when
+// reconcile is false, so read-only callers such as find stay off the writer lock.
+func (s *Store) loadConversationSnapshotRange(
+	ctx context.Context,
+	conversationID string,
+	beforeSequence, afterSequence int64,
+	limit int64,
+	reconcile bool,
+) (ConversationSnapshot, error) {
 	conv, err := s.qr.SelectConversationByID(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ConversationSnapshot{}, ErrConversationNotFound
@@ -4189,7 +4215,7 @@ func (s *Store) LoadConversationSnapshotRange(
 
 	// Targeted lazy reconciliation of legacy demands, using durable provider
 	// evidence. Ordinary snapshots remain read-only and avoid the writer lock.
-	if account := conversationToDomain(conv).Account; account != nil && account.ReauthRequiredAt != nil {
+	if account := conversationToDomain(conv).Account; reconcile && account != nil && account.ReauthRequiredAt != nil {
 		reconciled, reconcileErr := s.ReconcileConversationAuthentication(ctx, conversationID, "", "", time.Now())
 		if reconcileErr != nil {
 			return ConversationSnapshot{}, reconcileErr
@@ -4299,6 +4325,21 @@ func (s *Store) conversationVisibleAfterSequence(
 	ctx context.Context,
 	conv gen.Conversation,
 ) (int64, error) {
+	if conv.Scope == domain.ConversationScopeSession && conv.SessionID != nil {
+		// An adopted import hides the provider's partial replay; the chat service
+		// shows the import archive below it instead.
+		raw, err := s.qr.GetSessionImportSource(ctx, *conv.SessionID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, fmt.Errorf("select session %s import source: %w", *conv.SessionID, err)
+		}
+		if source := unmarshalImportSource(raw); source != nil {
+			return source.HistoryThrough, nil
+		}
+		return 0, nil
+	}
 	if conv.Scope != domain.ConversationScopeProject || conv.CurrentSessionID == nil || *conv.CurrentSessionID == "" {
 		return 0, nil
 	}

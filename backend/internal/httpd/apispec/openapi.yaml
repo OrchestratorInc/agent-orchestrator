@@ -2990,6 +2990,145 @@ paths:
         background service, and macOS permissions
       tags:
       - computer-use
+  /api/v1/conversations/{conversationId}/find:
+    get:
+      operationId: findConversation
+      parameters:
+      - in: path
+        name: conversationId
+        required: true
+        schema:
+          type: string
+      - description: Case-insensitive literal substring in displayed message text
+          (maximum 512 characters).
+        in: query
+        name: query
+        schema:
+          description: Case-insensitive literal substring in displayed message text
+            (maximum 512 characters).
+          type: string
+      - description: Opaque continuation bound to query and transcript revision.
+        in: query
+        name: cursor
+        schema:
+          description: Opaque continuation bound to query and transcript revision.
+          type: string
+      - description: Start at or after this visible message when cursor is absent.
+        in: query
+        name: anchorMessageId
+        schema:
+          description: Start at or after this visible message when cursor is absent.
+          type: string
+      - in: query
+        name: anchorBlock
+        schema:
+          minimum: 0
+          type: integer
+      - in: query
+        name: anchorOffset
+        schema:
+          minimum: 0
+          type: integer
+      - description: Fallback position when the anchor message was removed.
+        in: query
+        name: anchorSequence
+        schema:
+          description: Fallback position when the anchor message was removed.
+          format: int64
+          minimum: 0
+          type: integer
+      - description: Choose the preceding match if a removed anchor has no following
+          match.
+        in: query
+        name: fallbackToPrevious
+        schema:
+          description: Choose the preceding match if a removed anchor has no following
+            match.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationFindResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Find literal occurrences in the active conversation branch
+      tags:
+      - conversations
+  /api/v1/conversations/{conversationId}/find-window:
+    get:
+      operationId: findConversationWindow
+      parameters:
+      - in: path
+        name: conversationId
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: sequence
+        required: true
+        schema:
+          format: int64
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSnapshotResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Load a read-only transcript page around a find result
+      tags:
+      - conversations
   /api/v1/conversations/search:
     get:
       operationId: searchConversations
@@ -5870,6 +6009,67 @@ paths:
       summary: Report a reviewer-owned hook signal
       tags:
       - reviews
+  /api/v1/session-import:
+    get:
+      operationId: scanSessionImport
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionImportPreview'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Preview readable local agent histories from Git folders and Standalone
+      tags:
+      - import
+    post:
+      operationId: importSelectedSessions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionImportRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionImportResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Import selected histories as idle AO sessions without starting providers
+      tags:
+      - import
   /api/v1/sessions:
     get:
       operationId: listSessions
@@ -16381,6 +16581,8 @@ components:
           type: string
         model:
           type: string
+        needsResume:
+          type: boolean
         outputType:
           enum:
           - none
@@ -16489,6 +16691,8 @@ components:
           type: string
         terminalHandleId:
           type: string
+        terminalTitle:
+          type: string
         terminateOnPrMerge:
           type: boolean
         updatedAt:
@@ -16504,7 +16708,12 @@ components:
           type: string
         workspaceCleanupReportOnly:
           type: boolean
+        workspacePublished:
+          description: Whether the session has a recorded workspace that workspace
+            reads can use.
+          type: boolean
       required:
+      - needsResume
       - id
       - kind
       - autoReviewEnabled
@@ -16518,6 +16727,7 @@ components:
       - createdAt
       - updatedAt
       - isPinned
+      - workspacePublished
       - statusReadiness
       - chatProviderPreserved
       - status
@@ -16869,6 +17079,60 @@ components:
       - endLine
       - lines
       - truncated
+      type: object
+    ConversationFindOccurrence:
+      properties:
+        block:
+          type: integer
+        end:
+          type: integer
+        messageId:
+          type: string
+        revision:
+          format: int64
+          type: integer
+        sequence:
+          format: int64
+          type: integer
+        start:
+          type: integer
+      required:
+      - messageId
+      - revision
+      - sequence
+      - block
+      - start
+      - end
+      type: object
+    ConversationFindResponse:
+      properties:
+        conversationId:
+          type: string
+        initialIndex:
+          type: integer
+        lastCursor:
+          type: string
+        nextCursor:
+          type: string
+        occurrences:
+          items:
+            $ref: '#/components/schemas/ConversationFindOccurrence'
+          type: array
+        offset:
+          type: integer
+        previousCursor:
+          type: string
+        total:
+          type: integer
+        transcriptRevision:
+          type: string
+      required:
+      - conversationId
+      - transcriptRevision
+      - occurrences
+      - total
+      - offset
+      - initialIndex
       type: object
     ConversationImageContentRequest:
       properties:
@@ -20285,6 +20549,81 @@ components:
       - agentResponse
       - at
       type: object
+    SessionImportCandidate:
+      properties:
+        folder:
+          type: string
+        harness:
+          type: string
+        id:
+          type: string
+        lastActivity:
+          format: date-time
+          type: string
+        messageCount:
+          type: integer
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        shortened:
+          type: boolean
+        title:
+          type: string
+      required:
+      - id
+      - harness
+      - title
+      - lastActivity
+      - messageCount
+      type: object
+    SessionImportPreview:
+      properties:
+        candidates:
+          items:
+            $ref: '#/components/schemas/SessionImportCandidate'
+          type: array
+      required:
+      - candidates
+      type: object
+    SessionImportRequest:
+      properties:
+        ids:
+          items:
+            type: string
+          maxItems: 500
+          minItems: 1
+          type: array
+      required:
+      - ids
+      type: object
+    SessionImportResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/SessionImportResult'
+          type: array
+      required:
+      - results
+      type: object
+    SessionImportResult:
+      properties:
+        error:
+          type: string
+        id:
+          type: string
+        sessionId:
+          type: string
+        status:
+          enum:
+          - created
+          - already_imported
+          - failed
+          type: string
+      required:
+      - id
+      - status
+      type: object
     SessionInterfaceTransition:
       properties:
         completedAt:
@@ -21290,6 +21629,8 @@ components:
           type: string
         sessionId:
           type: string
+        terminalTitle:
+          type: string
         title:
           type: string
         workingDir:
@@ -21775,6 +22116,8 @@ components:
         displayName:
           maxLength: 100
           type: string
+        displayNameExplicit:
+          type: boolean
         effort:
           maxLength: 32
           type: string

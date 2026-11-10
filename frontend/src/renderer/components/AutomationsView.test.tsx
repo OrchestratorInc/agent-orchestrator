@@ -358,7 +358,7 @@ describe("AutomationsView", () => {
 		const user = userEvent.setup();
 		renderView();
 		await user.click(screen.getAllByRole("button", { name: /new automation/i })[0]);
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_opened");
+		expect(mocks.capture).toHaveBeenCalledWith("ao.automations.create_opened");
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));

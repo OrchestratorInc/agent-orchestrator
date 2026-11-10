@@ -2189,7 +2189,7 @@ function wireUpdaterEvents(): void {
     clearDownloadStallWatchdog();
     downloadStalled = false;
     emitUpdateOutcome({
-      event: "ao.renderer.update_downloaded",
+      event: "ao.updates.downloaded",
       phase: "download",
       trigger: activeUpdateTrigger(),
       ...(info?.version ? { to_version: info.version } : {}),

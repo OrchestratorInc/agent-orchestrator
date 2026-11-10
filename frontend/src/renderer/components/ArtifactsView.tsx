@@ -20,6 +20,7 @@ import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifact
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { useArtifactShareFile } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
@@ -295,6 +296,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
+	const share = useArtifactShareFile(row);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
 	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
@@ -327,6 +329,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							artifact={row}
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
+							share={share}
 							onOpenInSession={openInSession}
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
@@ -352,6 +355,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 					artifact={row}
 					session={{ id: row.sessionId, cloud: row.cloud }}
 					iconOnly
+					share={share}
 					onOpenInSession={openInSession}
 					pinned={pinned}
 					onTogglePin={() => togglePinnedArtifact(id)}

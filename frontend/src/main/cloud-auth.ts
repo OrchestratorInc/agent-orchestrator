@@ -747,6 +747,9 @@ export function registerCloudProtocol(): void {
 export function installCloudIPC(
   getDataDir: () => string,
   notifyRenderers: (session: CloudAccount | null) => void,
+  // Runs before an explicit sign-out completes, so its effects are durable even
+  // if the app quits right after.
+  onSignedOut: () => Promise<void> = async () => undefined,
 ): void {
   notifyRenderersFn = notifyRenderers;
   ipcMain.handle("cloud:getSession", () => getCloudSessionCached(getDataDir()));
@@ -776,6 +779,7 @@ export function installCloudIPC(
       // Sign-out must never fail on a revoke round-trip; clear the store anyway.
     }
     await signOutCloud(dataDir);
+    await onSignedOut().catch(() => undefined);
     notifyRenderers(null);
   });
   ipcMain.handle("cloud:cancelProviderAuth", async () => {

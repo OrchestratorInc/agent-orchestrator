@@ -41,12 +41,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: useWorkspaceQueryMock,
-	useWorkspaceScope: () => {
+	useWorkspaceScope: (projectId?: string, sessionId?: string) => {
 		const query = useWorkspaceQueryMock();
-		const project = query.data?.find((workspace: WorkspaceSummary) => workspace.id === paramsMock.projectId);
+		const project = query.data?.find((workspace: WorkspaceSummary) => workspace.id === projectId);
 		const session = query.data
 			?.flatMap((workspace: WorkspaceSummary) => workspace.sessions)
-			.find((candidate: WorkspaceSession) => candidate.id === paramsMock.sessionId);
+			.find((candidate: WorkspaceSession) => candidate.id === sessionId);
 		return {
 			...query,
 			data: {
@@ -339,6 +339,44 @@ describe("SessionTopbarActions embedded actions", () => {
 
 });
 
+describe("SessionTopbarActions route", () => {
+	// A session switch renders in the background while the previous session
+	// stays on screen; its actions must follow that session, not the URL.
+	function renderRouted(urlSessionId: string, routeSessionId?: string) {
+		const data: WorkspaceSummary[] = [{
+			id: "proj-1",
+			name: "my-app",
+			path: "/repo/my-app",
+			orchestratorAgent: "claude-code",
+			kind: "single_repo",
+			sessions: [worker, orchestrator],
+		}];
+		useWorkspaceQueryMock.mockReturnValue({ data, isError: false, isLoading: false, isSuccess: true });
+		paramsMock.projectId = "proj-1";
+		paramsMock.sessionId = urlSessionId;
+		const route = routeSessionId ? { projectId: "proj-1", sessionId: routeSessionId } : undefined;
+		return render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><SessionTopbarActions route={route} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+	}
+
+	it("follows the session it is rendered for over the URL", () => {
+		const held = renderRouted(worker.id, orchestrator.id);
+		expect(screen.getByRole("button", { name: "New task" })).toBeInTheDocument();
+		held.unmount();
+
+		renderRouted(orchestrator.id, worker.id);
+		expect(screen.queryByRole("button", { name: "New task" })).toBeNull();
+	});
+
+	it("falls back to the URL without a route", () => {
+		renderRouted(orchestrator.id);
+		expect(screen.getByRole("button", { name: "New task" })).toBeInTheDocument();
+	});
+});
+
 describe("SessionTopbarActions without Developer Mode", () => {
 	beforeEach(() => useUiStore.setState({ developerMode: false }));
 
@@ -417,7 +455,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 			},
 		]);
 
-		const button = screen.getByRole("button", { name: `Orchestrator agent, ${label}` });
+		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
 		const indicator = button.querySelector("span.size-dot-sm");
 		expect(indicator).toBeNull();
 	});
@@ -431,7 +469,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		} satisfies WorkspaceSession;
 		renderBoardActions([worker, exitedOrchestrator]);
 
-		await userEvent.click(screen.getByRole("button", { name: "Orchestrator agent, Exited" }));
+		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
 		expect(navigateMock).toHaveBeenCalledTimes(1);

@@ -3,6 +3,7 @@ import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
+import { useImportedAgentBlock } from "../../lib/session-import";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { useSideChatsAvailable } from "../../lib/side-chats";
@@ -104,8 +105,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	accountMoving,
+	accountMoveQueues,
 	agentResuming,
 	controllerResumeError,
+	controllerResumeOpenElsewhere,
 	newWorkDisabled,
 	arriving,
 	onConversationWorkChange,
@@ -161,9 +164,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	controllerTransitioning?: boolean;
 	/** The handoff is an account move; see ChatWorkspace. */
 	accountMoving?: boolean;
+	accountMoveQueues?: boolean;
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
 	controllerResumeError?: string;
+	/** controllerResumeError says another app still holds this chat. */
+	controllerResumeOpenElsewhere?: boolean;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** A switch from the terminal is under way and the conversation is not readable yet. */
@@ -190,6 +196,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
+	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
 	// Whether the project has a setup script, so a start lists that step only when it
@@ -400,7 +407,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
 		rememberChatSkills(skillsHarness, hostId, skills);
 	}, [hostId, session.kind, skills, skillsHarness]);
-	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
+	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
 	// a request still held would scroll it back to the same message on return.
@@ -621,6 +628,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				newWorkDisabled={newWorkDisabled || hostUnreachable}
 				composerLockedPlaceholder={hostUnreachable ? t("remote.offlineCopy") : undefined}
 				savedCopy={hostUnreachable}
+				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
@@ -652,6 +660,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
 				accountMoving={accountMoving}
+				accountMoveQueues={accountMoveQueues}
 				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}
@@ -766,6 +775,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
+				resumeOpenElsewhere={commands.resumeError ? commands.resumeOpenElsewhere : controllerResumeOpenElsewhere}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}
