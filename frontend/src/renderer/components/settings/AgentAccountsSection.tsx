@@ -195,7 +195,7 @@ export function AccountLimits({ account }: { account: AgentAccount }) {
 	</div>;
 }
 
-function formatPlanName(plan: string | null | undefined): string | null {
+export function formatPlanName(plan: string | null | undefined): string | null {
 	const value = plan?.trim();
 	if (!value) return null;
 	const known: Record<string, string> = { free: "Free", plus: "Plus", pro: "Pro", max: "Max", team: "Team", business: "Business", enterprise: "Enterprise" };

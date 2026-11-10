@@ -147,7 +147,7 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 	deleteProtectedEnv(env, EnvSessionID, envKeysCaseInsensitive)
 	pinRuntimePermissionEnv(env, config.Permissions)
 
-	return run(ctx, rec.Harness, ports.ChatStartConfig{
+	out, err := run(ctx, rec.Harness, ports.ChatStartConfig{
 		DataDir:       m.dataDir,
 		WorkspacePath: workspace,
 		Env:           env,
@@ -156,6 +156,14 @@ func (m *Manager) runRecordBackgroundTask(ctx context.Context, rec domain.Sessio
 		Permissions:   config.Permissions,
 		SystemPrompt:  systemPrompt,
 	}, prompt)
+	if m.backgroundTaskUsage != nil {
+		if usageErr := m.backgroundTaskUsage.RecordBackgroundTask(
+			context.WithoutCancel(ctx), rec.ID, rec.Harness, workspace,
+		); usageErr != nil {
+			m.logger.Warn("background task usage not recorded", "sessionID", rec.ID, "error", usageErr)
+		}
+	}
+	return out, err
 }
 
 func backgroundTaskPermissions(harness domain.AgentHarness) ports.PermissionMode {
