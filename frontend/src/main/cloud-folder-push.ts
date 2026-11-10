@@ -108,8 +108,15 @@ export interface GitRunOptions {
 
 export type GitRunner = (args: string[], options: GitRunOptions) => Promise<{ stdout: string; stderr: string }>;
 
+export interface GitStreamOptions extends GitRunOptions {
+	/** Written to git's standard input, which is then closed. */
+	input?: string;
+	/** How git's output is decoded; latin1 keeps one character per byte. Defaults to utf8. */
+	encoding?: "utf8" | "latin1";
+}
+
 /** Runs git, handing its output to onChunk as it arrives rather than holding all of it. */
-export type GitStreamRunner = (args: string[], options: GitRunOptions, onChunk: (chunk: string) => void) => Promise<void>;
+export type GitStreamRunner = (args: string[], options: GitStreamOptions, onChunk: (chunk: string) => void) => Promise<void>;
 
 export interface PushFolderDeps {
 	/** The configured control plane, the only server the token is sent to. */
@@ -163,7 +170,7 @@ const defaultGit: GitRunner = (args, options) =>
 
 const defaultGitStream: GitStreamRunner = (args, options, onChunk) =>
 	new Promise((resolve, reject) => {
-		const child = spawn("git", args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn("git", args, { cwd: options.cwd, env: options.env, stdio: ["pipe", "pipe", "pipe"] });
 		let stderr = "";
 		let killed = false;
 		let failed: unknown;
@@ -171,7 +178,10 @@ const defaultGitStream: GitStreamRunner = (args, options, onChunk) =>
 			killed = true;
 			child.kill();
 		}, options.timeout);
-		child.stdout.setEncoding("utf8");
+		// git stops reading when it fails; how it exited says why, not the closed pipe.
+		child.stdin.on("error", () => undefined);
+		child.stdin.end(options.input ?? "");
+		child.stdout.setEncoding(options.encoding ?? "utf8");
 		child.stdout.on("data", (chunk: string) => {
 			if (failed !== undefined) return;
 			try {
@@ -372,10 +382,11 @@ export function secretPathKind(relativePath: string): SecretPathKind {
 const MAX_SECRET_CHECK_BYTES = 1024 * 1024;
 
 /**
- * An .npmrc line setting a credential: _authToken, _auth or _password, alone
- * or for one registry ("//registry.npmjs.org/:_authToken=...").
+ * An .npmrc key npm reads a credential from: _authToken, _auth or _password,
+ * at the end of the key, however the key starts ("//registry.npmjs.org/:",
+ * "https://registry.npmjs.org/:", "@scope:", or nothing).
  */
-const NPMRC_CREDENTIAL = /^\s*(?:\/\/[^\s=]*:)?(?:_authToken|_auth|_password)\s*=(.*)$/gim;
+const NPMRC_CREDENTIAL_KEY = /_(?:authToken|auth|password)$/i;
 
 /** A value naming an environment variable npm substitutes, not a credential itself. */
 const NPMRC_ENV_REFERENCE = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
@@ -383,30 +394,93 @@ const NPMRC_ENV_REFERENCE = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
 /** A PEM block holding a private key: "PRIVATE KEY", "RSA PRIVATE KEY", "OPENSSH PRIVATE KEY", "PGP PRIVATE KEY BLOCK"... */
 const PEM_PRIVATE_BLOCK = /-----BEGIN [^\r\n-]*PRIVATE[^\r\n-]*-----/;
 
+const PEM_PUBLIC_LABELS = "CERTIFICATE|TRUSTED CERTIFICATE|X509 CRL|PUBLIC KEY|RSA PUBLIC KEY|CERTIFICATE REQUEST|NEW CERTIFICATE REQUEST";
+
 /** PEM blocks of public material: certificates, public keys, certificate requests and revocation lists. */
-const PEM_PUBLIC_BLOCK = /-----BEGIN (?:CERTIFICATE|TRUSTED CERTIFICATE|X509 CRL|PUBLIC KEY|RSA PUBLIC KEY|CERTIFICATE REQUEST|NEW CERTIFICATE REQUEST)-----/;
+const PEM_PUBLIC_BLOCK = new RegExp(`-----BEGIN (?:${PEM_PUBLIC_LABELS})-----`);
+
+/** Each whole PEM block of public material, from its BEGIN line to its own END line. */
+const PEM_PUBLIC_BLOCKS = new RegExp(`-----BEGIN (${PEM_PUBLIC_LABELS})-----[\\s\\S]*?-----END \\1-----`, "g");
+
+/** A word of 40 or more base64 characters and nothing else. */
+const BASE64_RUN = /^[A-Za-z0-9+/]{40,}={0,2}$/;
+
+/**
+ * Whether a word could be key material: a base64 run in both cases, as
+ * encoded bytes are. Hashes and serial numbers bundles print beside their
+ * certificates (hex in one case, decimal) are not.
+ */
+function keyMaterialWord(word: string): boolean {
+	return BASE64_RUN.test(word) && /[A-Z]/.test(word) && /[a-z]/.test(word);
+}
+
+/** A line setting a value ("api_key=...", "export TOKEN=..."), as a credential is written. */
+const SETTING_LINE = /^\s*(?:export\s+)?["']?([A-Za-z_][A-Za-z0-9_.-]*)["']?\s*=\s*\S/;
+
+/** Settings openssl writes beside the certificates it prints, naming them. */
+const CERTIFICATE_DESCRIPTIONS = new Set(["subject", "issuer", "serial", "notbefore", "notafter", "depth"]);
+
+/**
+ * Text that is not plain text read as UTF-8: a NUL byte (binary, or UTF-16
+ * of plain ASCII) or a UTF-16 byte order mark (FF FE or FE FF, two
+ * replacement characters once decoded). What it holds cannot be read here,
+ * and a tool reading it some other way could find a credential.
+ */
+function notPlainText(content: string): boolean {
+	return content.includes("\0") || content.startsWith("\uFFFD\uFFFD");
+}
+
+function unquoted(value: string): string {
+	return value.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+}
+
+/** Whether an .npmrc sets a credential key to a value other than an environment reference. */
+function npmrcHoldsCredential(content: string): boolean {
+	for (const line of content.split(/\r\n|\r|\n/)) {
+		const text = line.trim();
+		if (text === "" || text.startsWith(";") || text.startsWith("#")) continue;
+		const equals = text.indexOf("=");
+		if (equals < 0 || !NPMRC_CREDENTIAL_KEY.test(unquoted(text.slice(0, equals)))) continue;
+		const value = unquoted(text.slice(equals + 1));
+		if (value !== "" && !NPMRC_ENV_REFERENCE.test(value)) return true;
+	}
+	return false;
+}
+
+/**
+ * Whether a .pem or .key file holds anything beside PEM blocks of public
+ * material that could be a credential: a key without its PEM header
+ * (keyMaterialWord) or a setting ("api_key=..."). Comments, names, hashes,
+ * serial numbers, and the subject= and issuer= lines openssl writes beside
+ * certificates are kept.
+ */
+function besidePublicBlocks(content: string): boolean {
+	const rest = content.replace(PEM_PUBLIC_BLOCKS, "\n");
+	return rest.split(/\r\n|\r|\n/).some((line) => {
+		const setting = SETTING_LINE.exec(line);
+		if (setting && !CERTIFICATE_DESCRIPTIONS.has((setting[1] ?? "").toLowerCase())) return true;
+		return line.split(/\s+/).some(keyMaterialWord);
+	});
+}
 
 /**
  * Whether a file of secretPathKind "content" holds a credential:
+ * - anything that is not plain text (notPlainText), or that holds a PEM
+ *   private key;
  * - an .npmrc setting _authToken, _auth or _password to a value, unless that
  *   value only names an environment variable (${NPM_TOKEN}), which npm fills
  *   in where it runs;
- * - a .pem or .key file holding a private key, or anything but PEM blocks of
- *   public material (a binary key, a key without its PEM header).
+ * - a .pem or .key file without a PEM block of public material (a binary key,
+ *   a key without its PEM header), or with anything beside those blocks that
+ *   could be a credential (besidePublicBlocks).
  * A private key counts wherever it sits, test fixture folders included: its
  * path does not say whether it is a real one.
  */
 export function contentHoldsSecret(relativePath: string, content: string): boolean {
+	if (notPlainText(content) || PEM_PRIVATE_BLOCK.test(content)) return true;
 	const name = relativePath.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
-	if (CONTENT_FILE_NAMES.has(name)) {
-		for (const match of content.matchAll(NPMRC_CREDENTIAL)) {
-			const value = (match[1] ?? "").trim().replace(/^(["'])(.*)\1$/, "$2").trim();
-			if (value !== "" && !NPMRC_ENV_REFERENCE.test(value)) return true;
-		}
-		return false;
-	}
-	if (PEM_PRIVATE_BLOCK.test(content)) return true;
-	return !PEM_PUBLIC_BLOCK.test(content);
+	if (CONTENT_FILE_NAMES.has(name)) return npmrcHoldsCredential(content);
+	return !PEM_PUBLIC_BLOCK.test(content) || besidePublicBlocks(content);
 }
 
 /** Whether a file in the folder whose content decides (secretPathKind "content") holds a credential. */
@@ -559,59 +633,118 @@ async function checkRepositoryCommit(folder: string, commit: string, git: GitRun
 	}
 }
 
-/** Whether a committed blob of a file whose content decides (secretPathKind "content") holds a credential. */
-async function committedBlobHoldsSecret(folder: string, file: string, blob: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<boolean> {
-	try {
-		const size = Number((await git(["-C", folder, "cat-file", "-s", blob], { env, timeout: 15_000 })).stdout.trim());
-		if (!(size <= MAX_SECRET_CHECK_BYTES)) return true;
-		return contentHoldsSecret(file, (await git(["-C", folder, "cat-file", "blob", blob], { env, timeout: 15_000 })).stdout);
-	} catch {
-		return true;
-	}
+/**
+ * The blobs' contents, read through one `git cat-file --batch` (gitArgs say
+ * which repository). A blob larger than maxBytes streams past unread and
+ * answers undefined, as does one git cannot find.
+ */
+async function readBlobs(gitArgs: readonly string[], blobs: readonly string[], gitStream: GitStreamRunner, env: NodeJS.ProcessEnv, maxBytes = MAX_SECRET_CHECK_BYTES): Promise<Map<string, string | undefined>> {
+	const contents = new Map<string, string | undefined>();
+	if (blobs.length === 0) return contents;
+	// Each answer is "<blob> <type> <size>\n<content>\n", or "<name> missing\n"
+	// (or "ambiguous"). latin1 keeps one character per byte, so sizes, in
+	// bytes, count characters.
+	let pending = "";
+	let current: { blob: string; remaining: number; keep: boolean; parts: string[] } | undefined;
+	await gitStream([...gitArgs, "cat-file", "--batch"], { env, timeout: GIT_STEP_TIMEOUT_MS, input: blobs.map((blob) => `${blob}\n`).join(""), encoding: "latin1" }, (chunk) => {
+		pending += chunk;
+		for (;;) {
+			if (current === undefined) {
+				const end = pending.indexOf("\n");
+				if (end < 0) return;
+				const [name = "", type, size] = pending.slice(0, end).split(" ");
+				pending = pending.slice(end + 1);
+				const bytes = Number(size);
+				if (type === undefined || size === undefined || !Number.isSafeInteger(bytes) || bytes < 0) {
+					contents.set(name, undefined);
+					continue;
+				}
+				current = { blob: name, remaining: bytes + 1, keep: type === "blob" && bytes <= maxBytes, parts: [] };
+			}
+			const taken = Math.min(current.remaining, pending.length);
+			if (current.keep) current.parts.push(pending.slice(0, taken));
+			pending = pending.slice(taken);
+			current.remaining -= taken;
+			if (current.remaining > 0) return;
+			contents.set(current.blob, current.keep ? Buffer.from(current.parts.join("").slice(0, -1), "latin1").toString("utf8") : undefined);
+			current = undefined;
+		}
+	});
+	return contents;
 }
 
 /**
- * The files holding credentials anywhere in the history a repository folder
- * would upload. Every path a commit holds was added by some commit (renames
- * are read as a delete and an add), so the additions are enough for names; a
- * file whose content decides is read in every version added or changed. -m
- * reads a merge against each parent, so a file only a merge brought in is
- * seen too. The history streams through: a long one never has to fit in memory.
+ * A change in git's raw diff format: ":<old mode> <new mode> <old blob> <new
+ * blob> <status>", or, for a merge in combined form, one more colon, mode and
+ * blob per parent. Its new mode, new blob and status, when it reads as one.
  */
-async function committedSecretFiles(folder: string, commit: string, git: GitRunner, gitStream: GitStreamRunner, env: NodeJS.ProcessEnv): Promise<string[]> {
+function rawChange(header: string): { mode: string; blob: string; status: string } | undefined {
+	const parents = /^:+/.exec(header)?.[0].length ?? 0;
+	const fields = header.slice(parents).trim().split(" ");
+	const [mode, blob, status] = [fields[parents], fields[2 * parents + 1], fields[2 * parents + 2]];
+	return parents > 0 && mode && blob && status ? { mode, blob, status } : undefined;
+}
+
+/**
+ * How git lists every change in a history, whatever the person's own git
+ * settings: the first commit's files as added (--root, over log.showRoot), a
+ * merge against each parent (--diff-merges=separate, over log.diffMerges,
+ * git 2.31+), no signature checks or notes printed among the changes (over
+ * log.showSignature), renames as a delete and an add.
+ */
+const HISTORY_LOG_ARGS = ["log", "--format=", "--raw", "--no-abbrev", "--no-renames", "--root", "--diff-merges=separate", "--no-show-signature", "--no-notes", "--no-color", "--diff-filter=AMT", "-z"];
+
+/**
+ * The files holding credentials anywhere in the history a repository folder
+ * would upload. Every path a commit holds was added by some commit, so the
+ * changes name every path (HISTORY_LOG_ARGS); a secret name counts in any of
+ * them, and a file whose content decides is read in every version added or
+ * changed, by the rules of each name it was stored under. A merge is read
+ * against each parent, so a file only a merge brought in is seen too. The
+ * history streams through, never held whole, and its files are read through
+ * one git process (readBlobs).
+ */
+async function committedSecretFiles(folder: string, commit: string, gitStream: GitStreamRunner, env: NodeJS.ProcessEnv): Promise<string[]> {
 	const secrets = new Set<string>();
 	// Blobs whose content decides, with the paths they were committed at.
 	const toRead = new Map<string, Set<string>>();
-	// Each change is ":<old mode> <new mode> <old blob> <new blob> <status>" then its path, NUL-separated.
-	let change: string | undefined;
+	// Each change's header, then its path, NUL-separated.
+	let change: ReturnType<typeof rawChange> | null | undefined;
 	const take = (token: string) => {
 		if (change === undefined) {
-			const trimmed = token.replace(/^\n+/, "");
-			if (trimmed.startsWith(":")) change = trimmed;
+			// A header, past anything git printed ahead of it.
+			const start = token.startsWith(":") ? 0 : token.lastIndexOf("\n:") + 1;
+			if (start > 0 || token.startsWith(":")) change = rawChange(token.slice(start)) ?? null;
 			return;
 		}
-		const [, mode, , blob, status] = change.slice(1).split(" ");
+		const header = change;
 		change = undefined;
 		const kind = secretPathKind(token);
-		if (kind === "secret" && status === "A") secrets.add(token);
-		// A link's blob is the path it points at; a submodule's is a commit.
-		if (kind === "content" && mode !== "120000" && mode !== "160000" && blob && !/^0+$/.test(blob)) {
-			const paths = toRead.get(blob) ?? new Set<string>();
-			paths.add(token);
-			toRead.set(blob, paths);
+		if (kind === "secret") secrets.add(token);
+		if (kind !== "content") return;
+		// A change that does not read is not trusted to hold nothing.
+		if (header === null) {
+			secrets.add(token);
+			return;
 		}
+		// A link's blob is the path it points at; a submodule's is a commit.
+		if (header.mode === "120000" || header.mode === "160000" || /^0+$/.test(header.blob)) return;
+		const paths = toRead.get(header.blob) ?? new Set<string>();
+		paths.add(token);
+		toRead.set(header.blob, paths);
 	};
 	let rest = "";
-	await gitStream(["-C", folder, "log", "--format=", "--raw", "--no-abbrev", "--no-renames", "-m", "--diff-filter=AMT", "-z", commit], { env, timeout: GIT_STEP_TIMEOUT_MS }, (chunk) => {
+	await gitStream(["-C", folder, ...HISTORY_LOG_ARGS, commit], { env, timeout: GIT_STEP_TIMEOUT_MS }, (chunk) => {
 		const tokens = (rest + chunk).split("\0");
 		rest = tokens.pop() ?? "";
 		for (const token of tokens) if (token !== "") take(token);
 	});
 	if (rest !== "") take(rest);
-	for (const [blob, paths] of toRead) {
-		const unflagged = [...paths].filter((file) => !secrets.has(file));
-		if (unflagged.length === 0) continue;
-		if (await committedBlobHoldsSecret(folder, unflagged[0] as string, blob, git, env)) for (const file of unflagged) secrets.add(file);
+	const unread = [...toRead].filter(([, paths]) => [...paths].some((file) => !secrets.has(file)));
+	const contents = await readBlobs(["-C", folder], unread.map(([blob]) => blob), gitStream, env);
+	for (const [blob, paths] of unread) {
+		const content = contents.get(blob);
+		for (const file of paths) if (content === undefined || contentHoldsSecret(file, content)) secrets.add(file);
 	}
 	return [...secrets].sort();
 }
@@ -639,6 +772,21 @@ function commitRecentlyChecked(key: string, now: number): boolean {
 	if (now >= at && now - at <= CHECKED_COMMIT_TTL_MS) return true;
 	checkedCommits.delete(key);
 	return false;
+}
+
+/**
+ * A commit's history checks still running, by checkedCommitKey: a request for
+ * the same commit while they run (the folder picked again after its dialog
+ * closed) waits for them rather than walking the history again.
+ */
+const runningCommitChecks = new Map<string, Promise<void>>();
+
+function checkCommitOnce(key: string, check: () => Promise<void>): Promise<void> {
+	const running = runningCommitChecks.get(key);
+	if (running) return running;
+	const started = check().finally(() => runningCommitChecks.delete(key));
+	runningCommitChecks.set(key, started);
+	return started;
 }
 
 function rememberCheckedCommit(key: string, now: number): void {
@@ -713,10 +861,14 @@ async function scanImport(folder: string, files: readonly string[], limit: numbe
 	return scan;
 }
 
-/** Paths an import staged as links to other repositories (gitlinks), not as files. */
-async function embeddedRepositories(gitDir: string, folder: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<string[]> {
+/** What an import staged: each path with its mode and blob, as the index holds them. */
+async function stagedEntries(gitDir: string, folder: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<Array<{ mode: string; blob: string; file: string }>> {
 	const { stdout } = await git(["--git-dir", gitDir, "--work-tree", folder, "ls-files", "--stage", "-z"], { env, timeout: GIT_STEP_TIMEOUT_MS });
-	return stdout.split("\0").filter((entry) => entry.startsWith("160000 ")).map((entry) => entry.slice(entry.indexOf("\t") + 1));
+	return stdout.split("\0").filter((entry) => entry !== "").map((entry) => {
+		const tab = entry.indexOf("\t");
+		const [mode = "", blob = ""] = entry.slice(0, tab).split(" ");
+		return { mode, blob, file: entry.slice(tab + 1) };
+	});
 }
 
 /**
@@ -778,10 +930,12 @@ async function planFolderUpload(folder: string, deps: PushFolderDeps, git: GitRu
 			await checkNotShallow(realFolder, git, env);
 			const key = checkedCommitKey(realFolder, commit, maxFileBytes);
 			if (!commitRecentlyChecked(key, now())) {
-				await checkRepositoryCommit(realFolder, commit, git, env, maxFileBytes);
-				const secrets = await committedSecretFiles(realFolder, commit, git, deps.gitStream ?? defaultGitStream, env);
-				if (secrets.length > 0) throw secretFilesError(name, secrets);
-				rememberCheckedCommit(key, now());
+				await checkCommitOnce(key, async () => {
+					await checkRepositoryCommit(realFolder, commit, git, env, maxFileBytes);
+					const secrets = await committedSecretFiles(realFolder, commit, deps.gitStream ?? defaultGitStream, env);
+					if (secrets.length > 0) throw secretFilesError(name, secrets);
+					rememberCheckedCommit(key, now());
+				});
 			}
 			return { realFolder, source: "head", commit, ...(branch ? { branch } : {}), leftOut: [] };
 		}
@@ -828,7 +982,7 @@ async function hasConfiguredIdentity(folder: string, git: GitRunner, env: NodeJS
  * Commits an import's kept files in its git directory, with the folder as the
  * work tree; returns the commit.
  */
-async function commitImport(plan: Extract<FolderUploadPlan, { source: "import" }>, git: GitRunner, env: NodeJS.ProcessEnv): Promise<string> {
+async function commitImport(plan: Extract<FolderUploadPlan, { source: "import" }>, git: GitRunner, gitStream: GitStreamRunner, env: NodeJS.ProcessEnv): Promise<string> {
 	const { realFolder: folder, gitDir, kept, newestMs } = plan;
 	const scoped = ["--git-dir", gitDir, "--work-tree", folder];
 	if (kept.length > 0) {
@@ -837,18 +991,22 @@ async function commitImport(plan: Extract<FolderUploadPlan, { source: "import" }
 		const pathspecs = path.join(gitDir, "ao-import-paths");
 		await fs.writeFile(pathspecs, `${kept.join("\0")}\0`);
 		await git([...scoped, "add", `--pathspec-from-file=${pathspecs}`, "--pathspec-file-nul"], { env: { ...env, GIT_LITERAL_PATHSPECS: "1" }, timeout: GIT_STEP_TIMEOUT_MS });
-		// A file kept for what it held is read again as added: it may have
-		// changed since it was checked.
-		for (const file of kept.filter((candidate) => secretPathKind(candidate) === "content")) {
-			const staged = (await git(["--git-dir", gitDir, "cat-file", "blob", `:${file}`], { env, timeout: 15_000 })).stdout;
-			if (contentHoldsSecret(file, staged)) {
-				throw new PushFolderError("import_failed", `${file} in ${path.basename(folder)} changed while it was being uploaded and now holds a credential, so nothing was uploaded. Try again.`);
-			}
+	}
+	const staged = await stagedEntries(gitDir, folder, git, env);
+	// A file kept for what it held is read again as added, by the blob the
+	// index holds for its exact path: it may have changed since it was
+	// checked. One grown past what is checked is refused unread.
+	const reread = staged.filter((entry) => entry.mode !== "160000" && secretPathKind(entry.file) === "content");
+	const contents = await readBlobs(["--git-dir", gitDir], [...new Set(reread.map((entry) => entry.blob))], gitStream, env);
+	for (const { file, blob } of reread) {
+		const content = contents.get(blob);
+		if (content === undefined || contentHoldsSecret(file, content)) {
+			throw new PushFolderError("import_failed", `${file} in ${path.basename(folder)} changed while it was being uploaded and now may hold a credential, so nothing was uploaded. Try again.`);
 		}
 	}
 	// planFolderUpload refuses a folder holding repositories; this keeps a link
 	// to one (a repository made since) out of the commit all the same.
-	const embedded = await embeddedRepositories(gitDir, folder, git, env);
+	const embedded = staged.filter((entry) => entry.mode === "160000").map((entry) => entry.file);
 	if (embedded.length > 0) throw embeddedRepositoriesError(path.basename(folder), embedded);
 	// Dated by the folder's newest change, so a retry of an unchanged folder
 	// (say after a push whose reply was lost) makes the same commit and finds
@@ -891,7 +1049,7 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 			pushArgs.push("-C", realFolder);
 		} else {
 			try {
-				commit = await commitImport(plan, git, env);
+				commit = await commitImport(plan, git, deps.gitStream ?? defaultGitStream, env);
 			} catch (error) {
 				if (error instanceof PushFolderError) throw error;
 				throw new PushFolderError("import_failed", `Could not prepare ${path.basename(realFolder)}: ${gitMessage(error)}`);

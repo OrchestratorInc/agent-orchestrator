@@ -65,7 +65,8 @@ function deps(overrides: Partial<PushFolderDeps> = {}): PushFolderDeps & { calls
 	const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
 	const runner: GitRunner = async (args, options) => {
 		calls.push({ args, env: options.env });
-		const { stdout, stderr } = await execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "utf8" });
+		// The app's own runner holds up to 64 MB of output.
+		const { stdout, stderr } = await execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 		return { stdout, stderr };
 	};
 	return {
@@ -395,6 +396,15 @@ async function commitAll(dir: string, message = "commit"): Promise<void> {
 	await git(dir, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", message);
 }
 
+type StreamOptions = { cwd?: string; env: NodeJS.ProcessEnv; input?: string; encoding?: "utf8" | "latin1" };
+
+/** git's whole output, as a stream runner would hand it on: fed its input, in its encoding. */
+async function streamOutput(args: string[], options: StreamOptions): Promise<string> {
+	const run = execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+	run.child.stdin?.end(options.input ?? "");
+	return (await run).stdout.toString(options.encoding ?? "utf8");
+}
+
 describe("previewFolderUpload", () => {
 	// Each folder an upload refuses, set up in the test's folder; setup returns
 	// the dependencies both the preview and the upload run with.
@@ -530,10 +540,9 @@ describe("previewFolderUpload", () => {
 describe("checks the upload repeats after its preview", () => {
 	/** A history walk that counts how often it runs. */
 	function countingStream(): GitStreamRunner & { walks: number } {
-		const stream = Object.assign(async (args: string[], options: { cwd?: string; env: NodeJS.ProcessEnv }, onChunk: (chunk: string) => void) => {
-			stream.walks += 1;
-			const { stdout } = await execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-			onChunk(stdout);
+		const stream = Object.assign(async (args: string[], options: StreamOptions, onChunk: (chunk: string) => void) => {
+			if (args.includes("log")) stream.walks += 1;
+			onChunk(await streamOutput(args, options));
 		}, { walks: 0 });
 		return stream;
 	}
@@ -794,7 +803,7 @@ describe("secret-looking files", () => {
 		await commitAll(folder, "drop");
 		// Three characters at a time, so names and changes are cut anywhere.
 		const gitStream: GitStreamRunner = async (args, options, onChunk) => {
-			const { stdout } = await execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+			const stdout = await streamOutput(args, options);
 			for (let i = 0; i < stdout.length; i += 3) onChunk(stdout.slice(i, i + 3));
 		};
 		expect(await previewFolderUpload({ folder }, deps({ gitStream }))).toMatchObject({ status: "error", code: "secret_files", files: ["config/.env.production"] });
@@ -861,6 +870,235 @@ describe("secret-looking files", () => {
 		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "import", leftOut: [".env"] });
 		expect(await git(remote, "branch", "--list")).toBe("");
 		expect(await fs.readdir(tmpRoot)).toEqual([]);
+	});
+});
+
+/** A PEM block; its label is passed in, so no key header is written in this file. */
+function pem(label: string, body: string): string {
+	return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+}
+
+/** A line of base64, as a key body is written (64 characters), made here rather than written out. */
+const BASE64_LINE = Buffer.from("Man is distinguished, not only by his reason, but by this").toString("base64").slice(0, 64);
+
+describe("history checks the person's git settings cannot change", () => {
+	let settings: string;
+	/** Dependencies whose git reads the person's own (global) settings. */
+	async function configured(text: string) {
+		await fs.writeFile(settings, text);
+		return deps({ env: () => ({ ...gitEnv, GIT_CONFIG_GLOBAL: settings }) });
+	}
+
+	beforeEach(async () => {
+		settings = path.join(root, "gitconfig");
+		await git(folder, "init", "--quiet", "-b", "main");
+	});
+
+	it("sees a secret its first commit added with log.showRoot off, changed since or not", async () => {
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=1\n`);
+		await fs.writeFile(path.join(folder, ".netrc"), `machine x password ${FAKE}\n`);
+		await commitAll(folder, "first");
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=2\n`);
+		await commitAll(folder, "second");
+		const d = await configured("[log]\n\tshowRoot = false\n");
+		expect(await previewFolderUpload({ folder }, d)).toMatchObject({ status: "error", code: "secret_files", files: [".env", ".netrc"] });
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, d)).toMatchObject({ status: "error", code: "secret_files" });
+		expect(await git(remote, "branch", "--list")).toBe("");
+	});
+
+	it.each(["combined", "dense-combined", "first-parent"])("sees a secret only a merge added with log.diffMerges = %s", async (format) => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		await commitAll(folder, "a");
+		await git(folder, "checkout", "--quiet", "-b", "side");
+		await fs.writeFile(path.join(folder, "b.txt"), "b");
+		await commitAll(folder, "b");
+		await git(folder, "checkout", "--quiet", "main");
+		await fs.writeFile(path.join(folder, "c.txt"), "c");
+		await commitAll(folder, "c");
+		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "merge", "--quiet", "--no-ff", "--no-commit", "side");
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		await fs.writeFile(path.join(folder, ".npmrc"), `//registry.npmjs.org/:_authToken=${FAKE}\n`);
+		await git(folder, "add", ".env", ".npmrc");
+		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", "merge");
+		const d = await configured(`[log]\n\tdiffMerges = ${format}\n`);
+		expect(await previewFolderUpload({ folder }, d)).toMatchObject({ status: "error", code: "secret_files", files: [".env", ".npmrc"] });
+	});
+
+	it("sees the secret a signed commit added with log.showSignature on", async (context) => {
+		const key = path.join(root, "signing-key");
+		try {
+			await execFileAsync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "test", "-f", key]);
+			await fs.writeFile(path.join(folder, "a.txt"), "a");
+			await commitAll(folder, "a");
+			await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+			await git(folder, "add", ".env");
+			await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "-c", "gpg.format=ssh", "-c", `user.signingkey=${key}`, "commit", "--quiet", "-S", "-m", "signed");
+		} catch {
+			// No ssh-keygen, or a git without SSH signing (before 2.34).
+			context.skip();
+		}
+		expect(await git(folder, "cat-file", "commit", "HEAD")).toContain("gpgsig");
+		const d = await configured(`[log]\n\tshowSignature = true\n[gpg]\n\tformat = ssh\n`);
+		expect(await previewFolderUpload({ folder }, d)).toMatchObject({ status: "error", code: "secret_files", files: [".env"] });
+	});
+
+	it("reads a change past anything git prints before it", async () => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		await commitAll(folder, "a");
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		await commitAll(folder, "env");
+		// What a signature check, or another setting, puts ahead of a commit's changes.
+		const chatty: GitStreamRunner = async (args, options, onChunk) => {
+			const stdout = await streamOutput(args, options);
+			onChunk(args.includes("log") ? `Good "git" signature for t@e with ED25519 key SHA256:${FAKE}\n${stdout}` : stdout);
+		};
+		expect(await previewFolderUpload({ folder }, deps({ gitStream: chatty }))).toMatchObject({ status: "error", code: "secret_files", files: [".env"] });
+	});
+
+	it("reads a merge's change in git's combined format", async () => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		await commitAll(folder, "a");
+		const zero = "0".repeat(40);
+		const blob = "1".repeat(40);
+		const combined: GitStreamRunner = async (args, options, onChunk) => {
+			if (args.includes("log")) onChunk(`::000000 000000 100644 ${zero} ${zero} ${blob} AA\0.env\0`);
+			else onChunk(await streamOutput(args, options));
+		};
+		expect(await previewFolderUpload({ folder }, deps({ gitStream: combined }))).toMatchObject({ status: "error", code: "secret_files", files: [".env"] });
+	});
+});
+
+describe("credentials read by content", () => {
+	it("finds an .npmrc credential however its key or encoding is written", () => {
+		const utf16 = (text: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]).toString("utf8");
+		for (const content of [
+			utf16(`//registry.npmjs.org/:_authToken=${FAKE}\r\n`),
+			`//registry.npmjs.org/:_authToken=${FAKE}\0\n`,
+			`https://registry.npmjs.org/:_authToken=${FAKE}\n`,
+			`@acme:_authToken=${FAKE}\n`,
+			`"//registry.npmjs.org/:_authToken"=${FAKE}\n`,
+			`'_password' = '${FAKE}'\n`,
+			`key="${pem("PRIVATE KEY", FAKE).replace(/\n/g, "\\n")}"\n`,
+		]) expect(contentHoldsSecret(".npmrc", content), content).toBe(true);
+		for (const content of [
+			"always-auth=true\n@acme:registry=https://npm.pkg.github.com\n",
+			"\"//registry.npmjs.org/:_authToken\"=\"${NPM_TOKEN}\"\n",
+			"\uFEFF//registry.npmjs.org/:_authToken=${NPM_TOKEN}\r\n",
+		]) expect(contentHoldsSecret(".npmrc", content), content).toBe(false);
+	});
+
+	it("finds a secret beside public certificates, and keeps a certificate chain", () => {
+		const cert = pem("CERTIFICATE", `${BASE64_LINE}\n${BASE64_LINE}\nMIIB`);
+		// A key without its header, a setting, and text that is not plain.
+		expect(contentHoldsSecret("server.pem", `${cert}${BASE64_LINE}\n${BASE64_LINE}\n`)).toBe(true);
+		expect(contentHoldsSecret("bundle.pem", `${cert}api_key=${FAKE}\n`)).toBe(true);
+		expect(contentHoldsSecret("bundle.pem", `${cert}export API_TOKEN="${FAKE}"\n`)).toBe(true);
+		expect(contentHoldsSecret("server.key", `${cert}\0`)).toBe(true);
+		// An unfinished public block keeps its body.
+		expect(contentHoldsSecret("server.pem", `${cert}-----BEGIN CERTIFICATE-----\n${BASE64_LINE}\n`)).toBe(true);
+		// A chain as openssl and curl write them: subjects, issuers, attributes and comments.
+		const chain = [
+			"##\n## Bundle of CA Root Certificates\n## Source: https://hg.mozilla.org/releases/mozilla-release/raw-file/default/security/nss/lib/ckfw/builtins/certdata.txt\n##\n",
+			"Example Root CA\n===============\n",
+			"Bag Attributes\n    friendlyName: example.com\n    localKeyID: 01 00 00 00\n",
+			// A bundle's hashes and serial numbers: hex in one case, or decimal.
+			`# SHA256 Fingerprint: ${"e5".repeat(32)}\n# Serial: ${"6870496496".repeat(5)}\n## SHA256: ${"E5".repeat(32)}\n`,
+			"subject=/C=US/O=Example Inc/CN=example.com\nissuer=/C=US/O=Example CA/CN=Example Intermediate\n",
+			cert,
+			"subject=C = US, O = Example CA, CN = Example Intermediate\nissuer=C = US, O = Example CA, CN = Example Root\n",
+			cert,
+			pem("PUBLIC KEY", BASE64_LINE),
+		].join("");
+		expect(contentHoldsSecret("certs/fullchain.pem", chain)).toBe(false);
+		expect(contentHoldsSecret("certs/ca.key", chain.replace(/\n/g, "\r\n"))).toBe(false);
+	});
+
+	it("leaves out an imported UTF-16 .npmrc holding a token", async () => {
+		await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+		await fs.writeFile(path.join(folder, ".npmrc"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`//registry.npmjs.org/:_authToken=${FAKE}\r\n`, "utf16le")]));
+		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "import", leftOut: [".npmrc"] });
+	});
+});
+
+describe("committed files read by content", () => {
+	beforeEach(async () => {
+		await git(folder, "init", "--quiet", "-b", "main");
+	});
+
+	it("reads a file stored under two kinds of name by each kind's rules", async () => {
+		const both = `${pem("CERTIFICATE", "MIIB")}//registry.npmjs.org/:_authToken=${FAKE}\n`;
+		await fs.writeFile(path.join(folder, ".npmrc"), both);
+		await commitAll(folder, "npmrc");
+		await fs.writeFile(path.join(folder, "ca.pem"), both);
+		await commitAll(folder, "certificate");
+		// As a certificate it holds nothing; as an .npmrc it holds a token.
+		expect(contentHoldsSecret("ca.pem", both)).toBe(false);
+		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "error", code: "secret_files", files: [".npmrc"] });
+	});
+
+	it("reads every committed version through one git process, never one too large to check", async () => {
+		await fs.mkdir(path.join(folder, "certs"));
+		await fs.writeFile(path.join(folder, ".npmrc"), "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n");
+		for (let i = 0; i < 4; i++) await fs.writeFile(path.join(folder, "certs", `ca${i}.pem`), pem("CERTIFICATE", `MIIB${i}`));
+		await commitAll(folder, "first");
+		await fs.writeFile(path.join(folder, "certs", "ca0.pem"), pem("CERTIFICATE", "MIIC"));
+		await commitAll(folder, "second");
+		const runs: string[][] = [];
+		const recording: GitStreamRunner = async (args, options, onChunk) => {
+			runs.push(args);
+			onChunk(await streamOutput(args, options));
+		};
+		const d = deps({ gitStream: recording });
+		expect(await previewFolderUpload({ folder }, d)).toMatchObject({ status: "ok", source: "head" });
+		expect(runs.filter((args) => args.includes("cat-file"))).toEqual([["-C", folder, "cat-file", "--batch"]]);
+		expect(d.calls.some((call) => call.args.includes("cat-file"))).toBe(false);
+
+		// A version too large to check is taken as holding a secret, and skipped unread.
+		await fs.writeFile(path.join(folder, "certs", "big.pem"), `${pem("CERTIFICATE", "MIIB")}${"#".repeat(1024 * 1024 + 1)}\n`);
+		await commitAll(folder, "big");
+		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "error", code: "secret_files", files: ["certs/big.pem"] });
+	});
+
+	it("walks a commit's history once for requests that overlap", async () => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		await commitAll(folder);
+		let walks = 0;
+		const slow: GitStreamRunner = async (args, options, onChunk) => {
+			if (args.includes("log")) {
+				walks += 1;
+				await new Promise((resolve) => setTimeout(resolve, 200));
+			}
+			onChunk(await streamOutput(args, options));
+		};
+		const results = await Promise.all([previewFolderUpload({ folder }, deps({ gitStream: slow })), previewFolderUpload({ folder }, deps({ gitStream: slow }))]);
+		for (const result of results) expect(result).toMatchObject({ status: "ok", source: "head" });
+		expect(walks).toBe(1);
+	});
+});
+
+describe("an import's files read again once added", () => {
+	function racing(file: string, content: string | Buffer): GitRunner {
+		const base = deps();
+		return async (args, options) => {
+			if (args.includes("add")) await fs.writeFile(path.join(folder, file), content);
+			return base.git!(args, options);
+		};
+	}
+
+	it("reads the file added, not another whose name it starts like", async () => {
+		const cert = pem("CERTIFICATE", "MIIB");
+		await fs.writeFile(path.join(folder, "a.pem"), cert);
+		await fs.writeFile(path.join(folder, "0:a.pem"), cert);
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps({ git: racing("0:a.pem", pem("PRIVATE KEY", FAKE)) }));
+		expect(result).toMatchObject({ status: "error", code: "import_failed", message: expect.stringContaining("0:a.pem") });
+		expect(await git(remote, "branch", "--list")).toBe("");
+	});
+
+	it("refuses a kept file that grew past what is checked", async () => {
+		await fs.writeFile(path.join(folder, ".npmrc"), "engine-strict=true\n");
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps({ git: racing(".npmrc", `engine-strict=true\n${"#".repeat(2 * 1024 * 1024)}\n`) }));
+		expect(result).toMatchObject({ status: "error", code: "import_failed", message: expect.stringContaining(".npmrc") });
+		expect(await git(remote, "branch", "--list")).toBe("");
 	});
 });
 
