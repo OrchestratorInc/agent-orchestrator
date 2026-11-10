@@ -44,7 +44,7 @@ func TestRemoteHostCLIUsesLocalControlAPI(t *testing.T) {
 		want       []string
 		absent     string
 	}{
-		{"enable", "enable", []string{"POST /api/v1/mobile/enable-lan-only"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
+		{"enable", "enable", []string{"POST /api/v1/mobile/enable-lan-only", "POST /api/v1/mobile/pairing-code"}, []string{"host-a", "http://192.168.1.10:3011", "pairing-secret"}, ""},
 		{"status", "status", []string{"GET /api/v1/mobile/status"}, []string{"host-a", "http://192.168.1.10:3011", "--show-password"}, "pairing-secret"},
 		{"status --show-password", "status --show-password", []string{"GET /api/v1/mobile/status"}, []string{"Password: pairing-secret"}, ""},
 		{"disable", "disable", []string{"POST /api/v1/mobile/disable"}, []string{"disabled"}, "pairing-secret"},
@@ -106,7 +106,7 @@ func TestRemoteHostCLITunnelFromDisabledAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/enable-lan-only,POST /api/v1/mobile/remote-access" {
+	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/enable-lan-only,POST /api/v1/mobile/remote-access,POST /api/v1/mobile/pairing-code" {
 		t.Fatalf("requests = %s", got)
 	}
 	for _, want := range []string{"pairing-secret", "Tunnel: starting", "Cloudflare terminates TLS"} {
@@ -146,7 +146,7 @@ func TestRemoteHostCLITunnelOnlyUsesLoopbackRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(requests, ","); got != "POST /api/v1/mobile/enable-tunnel-only" {
+	if got := strings.Join(requests, ","); got != "POST /api/v1/mobile/enable-tunnel-only,POST /api/v1/mobile/pairing-code" {
 		t.Fatalf("tunnel-only requests = %s", got)
 	}
 	if !strings.Contains(out, "Tunnel: starting") || !strings.Contains(out, "pairing-secret") || strings.Contains(out, "http://") {
@@ -199,7 +199,7 @@ func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access" {
+			if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access,POST /api/v1/mobile/pairing-code" {
 				t.Fatalf("requests = %s, want no listener restart", got)
 			}
 			if !strings.Contains(out, "existing-secret") || !strings.Contains(out, want) {

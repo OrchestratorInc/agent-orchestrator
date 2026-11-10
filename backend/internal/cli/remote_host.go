@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -20,7 +22,10 @@ type remoteHostStatus struct {
 	AccountLinkRefused bool   `json:"accountLinkRefused"`
 	HostID             string `json:"hostId"`
 	Password           string `json:"password"`
-	Tunnel             struct {
+	// RequireDeviceCredentials: the remote listener refuses the pairing password.
+	RequireDeviceCredentials bool       `json:"requireDeviceCredentials"`
+	PasswordLastUsedAt       *time.Time `json:"passwordLastUsedAt"`
+	Tunnel                   struct {
 		Supported  bool   `json:"supported"`
 		Installing bool   `json:"installing"`
 		Running    bool   `json:"running"`
@@ -137,8 +142,26 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						return err
 					}
 				}
+				if status.RequireDeviceCredentials {
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "The pairing password is off. Run `ao remote-host pair` for a code to pair a device.")
+					return err
+				}
+				if action.name == "enable" {
+					// A new device pairs with a one-time code, not the password that
+					// works until it is rotated. A daemon without pairing codes
+					// prints the password, as before.
+					var pairing remoteHostPairingCode
+					if err := ctx.doJSON(cmd.Context(), http.MethodPost, "mobile/pairing-code", nil, &pairing); err == nil && pairing.Code != "" {
+						return printPairingCode(cmd, pairing)
+					}
+				}
 				if status.Password != "" && action.name == "status" && !showPassword {
-					_, err := fmt.Fprintln(cmd.OutOrStdout(), "Pairing password hidden; run `ao remote-host status --show-password` to show it.")
+					if status.PasswordLastUsedAt != nil {
+						if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Pairing password last used: %s\n", status.PasswordLastUsedAt.Local().Format("2006-01-02 15:04")); err != nil {
+							return err
+						}
+					}
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "Pairing password hidden; run `ao remote-host status --show-password` to show it, or `ao remote-host pair` for a one-time code.")
 					return err
 				}
 				if status.Password != "" {
@@ -159,6 +182,9 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 		root.AddCommand(cmd)
 	}
 	root.AddCommand(newRemoteHostLinkCommand(ctx))
+	root.AddCommand(newRemoteHostPairCommand(ctx))
+	root.AddCommand(newRemoteHostDevicesCommand(ctx))
+	root.AddCommand(newRemoteHostRequireDeviceCredentialsCommand(ctx))
 	return root
 }
 
