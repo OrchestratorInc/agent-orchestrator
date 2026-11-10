@@ -802,6 +802,31 @@ describe("ArtifactsView", () => {
 		expect(container.querySelector("a, script")).toBeNull();
 	});
 
+	it("lists an orchestrator's artifacts and opens them in the orchestrator session", async () => {
+		const user = userEvent.setup();
+		mocks.workspaces = [{
+			id: "ao",
+			name: "agent-orchestrator",
+			path: "/code/ao",
+			sessions: [
+				{ ...session("ao-48", "ao-48", [{ name: "weekly-status.html", updatedAt: "2026-10-12T10:00:00Z", kind: "html" }]), kind: "orchestrator" },
+				session("ao-1", "Design the Artifacts entry point", [{ name: "artifacts-user-flow.html", updatedAt: "2026-10-11T10:00:00Z", kind: "html" }]),
+			],
+		}, withArtifacts[1]];
+		renderView();
+
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		expect(project.getAllByRole("listitem").map((row) => row.textContent)).toEqual([
+			expect.stringContaining("weekly-status.html"),
+			expect.stringContaining("artifacts-user-flow.html"),
+		]);
+		expect(within(screen.getByRole("region", { name: "Recent" })).getByText("agent-orchestrator · Orchestrator")).toBeInTheDocument();
+		await user.click(project.getByRole("button", { name: /^weekly-status\.html/ }));
+		await user.click(within(screen.getByRole("dialog", { name: "weekly-status.html" })).getByRole("button", { name: "Open in session" }));
+
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "ao", sessionId: "ao-48" } });
+	});
+
 	it("previews the artifact on this page before opening its source session", async () => {
 		const user = userEvent.setup();
 		renderView();

@@ -1,7 +1,7 @@
 import {
+	isOrchestratorSession,
 	sessionDeliverables,
 	STANDALONE_WORKSPACE_ID,
-	workerSessions,
 	type ArtifactKind,
 	type WorkspaceSummary,
 	type WorkspaceSession,
@@ -75,16 +75,19 @@ export type ArtifactGroup = {
 };
 
 /**
- * Groups the listed artifacts of live local and cloud worker sessions by project.
- * Remote-host projects, archived sessions and projects without artifacts are
- * left out; rows sort newest first and groups by their newest row.
+ * Groups the listed artifacts of live local and cloud sessions by project,
+ * orchestrators included: they get the same artifact directory and listing rule
+ * as workers. Remote-host projects, archived sessions and projects without
+ * artifacts are left out; rows sort newest first and groups by their newest
+ * row. An orchestrator's rows carry `orchestratorTitle` as their session title
+ * when given, since its own title is only its session ID.
  */
-export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[]): ArtifactGroup[] {
+export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[], orchestratorTitle?: string): ArtifactGroup[] {
 	const groups: ArtifactGroup[] = [];
 	for (const workspace of workspaces) {
 		if (workspace.hostId) continue;
 		const isScratchpad = workspace.id === STANDALONE_WORKSPACE_ID;
-		const rows = workerSessions(workspace.sessions)
+		const rows = workspace.sessions
 			.filter((session) => !isArchivedSession(session))
 			.flatMap((session) =>
 				sessionDeliverables(session).map((artifact): ArtifactRow => ({
@@ -97,7 +100,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 					rawUrl: artifact.rawUrl,
 					updatedAt: artifact.updatedAt,
 					sessionId: session.id,
-					sessionTitle: session.title,
+					sessionTitle: orchestratorTitle && isOrchestratorSession(session) ? orchestratorTitle : session.title,
 					cloud: session.cloud,
 					projectId: isScratchpad ? undefined : workspace.id,
 					bundle: artifact.bundle,

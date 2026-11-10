@@ -90,14 +90,56 @@ describe("groupArtifactsByProject", () => {
 		expect(group.rows[0].projectId).toBeUndefined();
 	});
 
-	it("skips orchestrators, remote hosts, and PR-only output", () => {
+	it("skips remote hosts and PR-only output", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
-				session("ao-orchestrator", [artifact("orch.md", "2026-10-09T10:00:00Z")], { kind: "orchestrator" }),
 				session("ao-1", [artifact("pr-only.md", "2026-10-09T10:00:00Z")], { outputType: "pr" }),
 			]),
 			workspace("remote", "remote-project", [session("r-1", [artifact("remote.md", "2026-10-09T10:00:00Z")])], { hostId: "host-2" }),
 		]);
+
+		expect(groups).toEqual([]);
+	});
+
+	it("lists an orchestrator's artifacts beside its workers', titled as the orchestrator", () => {
+		const groups = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [
+				session("ao-48", [artifact("status-report.md", "2026-10-11T10:00:00Z")], { kind: "orchestrator", title: "ao-48" }),
+				session("ao-1", [artifact("plan.md", "2026-10-10T10:00:00Z")]),
+			]),
+		], "Orchestrator");
+
+		expect(groups[0].rows.map((row) => [row.name, row.sessionId, row.sessionTitle])).toEqual([
+			["status-report.md", "ao-48", "Orchestrator"],
+			["plan.md", "ao-1", "Session ao-1"],
+		]);
+		expect(artifactCount(groups)).toBe(2);
+	});
+
+	it("keeps an orchestrator to its registered deliverables, with bundles as one entry", () => {
+		const page = { ...artifact("brief.html", "2026-10-11T10:00:00Z", "html"), registered: true };
+		const asset = artifact("assets/chart.png", "2026-10-11T10:00:00Z", "file");
+		const draft = artifact("draft.md", "2026-10-11T09:00:00Z");
+		const icon = [
+			{ ...artifact("brand.icon/icon.json", "2026-10-11T08:00:00Z", "file"), registered: true },
+			{ ...artifact("brand.icon/Assets/glyph.svg", "2026-10-11T08:00:00Z", "file"), registered: true },
+		];
+		const [group] = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [
+				session("ao-48", [page, asset, draft, ...icon], { kind: "orchestrator" }),
+			]),
+		], "Orchestrator");
+
+		expect(group.rows.map((row) => row.name)).toEqual(["brief.html", "brand.icon"]);
+		expect(group.rows[1].bundle).toEqual({ path: "brand.icon", fileCount: 2 });
+	});
+
+	it("hides a replaced orchestrator's artifacts as it does a killed worker's", () => {
+		const groups = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [
+				session("ao-40", [artifact("old-report.md", "2026-10-09T10:00:00Z")], { kind: "orchestrator", isTerminated: true }),
+			]),
+		], "Orchestrator");
 
 		expect(groups).toEqual([]);
 	});
