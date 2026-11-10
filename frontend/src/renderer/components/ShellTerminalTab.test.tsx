@@ -116,21 +116,24 @@ describe("ShellTerminalTab rename", () => {
 	it("makes the full connected tile the semantic selection button", () => {
 		const { onSelect } = renderTab({ appearance: "connected" });
 		const tab = screen.getByRole("tab", { name: "ao" });
-		expect(tab).toHaveClass("h-full", "min-w-0", "pl-2", "cursor-pointer");
+		expect(tab).toHaveClass("h-full", "min-w-0", "px-2", "cursor-pointer");
 		fireEvent.click(tab);
 		expect(onSelect).toHaveBeenCalledOnce();
 	});
 
-	it("reveals close after the title on hover, leaving the glyph alone", () => {
+	it("reveals close in the terminal glyph's slot on hover", () => {
 		renderTab({ appearance: "connected", isActive: true });
 
 		const closeButton = screen.getByRole("button", { name: "Close terminal ao" });
-		expect(closeButton.parentElement).toHaveClass("mr-2", "shrink-0", "opacity-0", "group-hover:opacity-100");
-		expect(closeButton.parentElement).not.toHaveClass("absolute");
-		expect(screen.getByRole("tab", { name: "ao" }).nextElementSibling).toBe(closeButton.parentElement);
+		expect(closeButton.parentElement).toHaveClass(
+			"absolute",
+			"left-2",
+			"opacity-0",
+			"group-hover:opacity-100",
+		);
 		expect(closeButton).not.toHaveClass("transition-opacity", "transition-[opacity,background,color]");
 		expect(closeButton).not.toHaveClass("w-control-sm");
-		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")?.parentElement).not.toHaveClass("group-hover:opacity-0");
+		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")?.parentElement).toHaveClass("group-hover:opacity-0");
 		expect(screen.getByRole("tab", { name: "ao" })).toHaveAttribute("aria-selected", "true");
 	});
 
@@ -176,7 +179,7 @@ describe("ShellTerminalTab rename", () => {
 		expect(indicator).toHaveClass("bottom-0", "h-0.5");
 	});
 
-	it("closes from the close button without selecting the tab", () => {
+	it("closes from the glyph slot without selecting the tab", () => {
 		const { onClose, onSelect } = renderTab({ appearance: "connected" });
 		fireEvent.click(screen.getByRole("button", { name: "Close terminal ao" }));
 		expect(onClose).toHaveBeenCalledOnce();

@@ -63,9 +63,9 @@ export function SessionFileTab({
 }) {
 	const { t } = useTranslation();
 	const name = `${basename(path)}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
-	// The close button shows after the name on hover, matching the other tabs.
-	// A dirty file keeps an always-visible dot in that slot; the dot swaps to
-	// the cross on hover.
+	// The close button takes the file icon's slot on hover, matching the other
+	// tabs. A dirty file keeps an always-visible dot in that slot; the dot swaps
+	// to the cross on hover.
 	const closeAction = (
 		<Pressable
 			aria-label={t("files.closeTab", { name })}

@@ -782,7 +782,9 @@ export function SessionPaneTab({
 	const tabFrame = (
 		<TerminalTabFrame
 			action={!rename.isEditing && tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			actionPosition="end"
 			actionPinned={tabActionPinned}
+			wide={session ? "session" : undefined}
 			active={isActive}
 			buttonProps={{
 				"aria-current": isActive,

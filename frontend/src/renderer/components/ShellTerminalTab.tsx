@@ -34,7 +34,7 @@ type ShellTerminalTabProps = {
 // discarded. The close control is a sibling
 // button, not nested inside the tab button - nesting interactive elements is
 // invalid HTML and breaks keyboard traversal. Connected session-strip tabs use
-// the shared TerminalTabFrame, which shows that sibling after the title on hover.
+// the shared TerminalTabFrame, which shows that sibling in the glyph's slot on hover.
 export function ShellTerminalTab({
 	shell,
 	isActive,
