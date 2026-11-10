@@ -664,6 +664,10 @@ export function SessionArtifactsView({
 		).slice(0, 4).map((artifact) => artifact.path),
 	), [artifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	// A file a request opened before the session listed it, until the list has
+	// it. Only that file gets the not-listed-yet note: one that leaves the list
+	// later (deleted here or by the agent) is gone, not on its way.
+	const [awaitedPath, setAwaitedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
 	// Share hides while the open file is being edited.
 	const [editingFile, setEditingFile] = useState(false);
@@ -705,7 +709,7 @@ export function SessionArtifactsView({
 		await cloudClient.sendSessionMessage(cloudOrgId, session.id, { text: message });
 	}, [cloudClient, cloudOrgId, session.id, t]);
 
-	useEffect(() => { setSelectedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
+	useEffect(() => { setSelectedPath(null); setAwaitedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
 	// Every file, and each look at its page or source, opens at fit.
@@ -747,10 +751,12 @@ export function SessionArtifactsView({
 			setEditingPath(null);
 			setHtmlSourcePath(null);
 			setSelectedPath(request.path);
+			setAwaitedPath(request.path);
 		}
 	}, [request]);
 
 	const listed = artifacts.find((artifact) => artifact.path === selectedPath);
+	if (awaitedPath !== null && listed?.path === awaitedPath) setAwaitedPath(null);
 	// An open cloud file keeps the URL it opened with while the access prefix
 	// is refreshed, so the refresh does not reload it.
 	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
@@ -942,7 +948,7 @@ export function SessionArtifactsView({
 			{/* A file opened by its path (a chat link to one the agent just wrote)
 			    shows once the session lists it; until then, say so rather than
 			    leave the gallery as if nothing was asked. */}
-			{selectedPath ? (
+			{selectedPath !== null && selectedPath === awaitedPath ? (
 				<PanelMessage action={<Button onClick={() => setSelectedPath(null)} size="sm" type="button" variant="secondary">{t("artifacts.back")}</Button>}>
 					{t("artifacts.notListedYet", { name: selectedPath })}
 				</PanelMessage>

@@ -674,6 +674,26 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
 	});
 
+	it("returns to the gallery, not the not-listed-yet note, when the open file leaves the list", async () => {
+		// Deleted from the viewer's menu, or by the agent: the file is gone, not on its way.
+		const view = renderView(<SessionArtifactsView session={session()} />);
+		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		const remaining = artifacts.filter((artifact) => artifact.path !== "notes.md");
+		view.rerender(<SessionArtifactsView session={session(remaining)} />);
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
+
+		// A requested file that was listed and then removed goes back to the gallery too.
+		const request = { key: 1, path: "notes/fresh.md" };
+		const fresh: SessionArtifact = { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" };
+		view.rerender(<SessionArtifactsView request={request} session={session([...remaining, fresh])} />);
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
+		view.rerender(<SessionArtifactsView request={request} session={session(remaining)} />);
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
+	});
+
 	it("returns to the gallery from a requested file that is not listed", async () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "missing.md" }} session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
