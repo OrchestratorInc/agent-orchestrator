@@ -858,6 +858,16 @@ UPDATE conversation_turns
 SET diff_json = ?
 WHERE conversation_id = ? AND provider_turn_id = ?;
 
+-- Record the session artifacts a turn created or edited. AO computes the whole
+-- list once, when the turn ends, so this replaces whatever was there.
+-- execrows so the caller can tell "recorded" from "no such turn".
+-- NOTE: keep these comments ASCII. sqlc locates its star-expansion edits by byte
+-- offset, so a multi-byte character here silently corrupts later queries.
+-- name: UpdateConversationTurnArtifacts :execrows
+UPDATE conversation_turns
+SET artifacts_json = ?
+WHERE conversation_id = ? AND provider_turn_id = ?;
+
 -- Overwrite the turn's plan. The provider re-sends the whole plan on every change,
 -- so the latest payload is the complete answer and there is nothing to merge.
 --
