@@ -27,6 +27,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	remoteSessionsQueryKey: (hostId: string) => ["remote-workspaces", hostId, "sessions"],
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	useWorkspaceQuery: () => ({
 		data: [{ id: "shared", name: "Local", sessions: [worker("local", "Local worker")] }],

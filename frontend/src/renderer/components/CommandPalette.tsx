@@ -1,6 +1,7 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
 import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -8,7 +9,7 @@ import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -39,6 +40,7 @@ import {
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
 import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
+import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -59,6 +61,7 @@ import { useUiStore } from "../stores/ui-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
+import { Button } from "./ui/button";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "./ui/command";
 
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
@@ -108,6 +111,7 @@ export function CommandPalette() {
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
 	const developerMode = useUiStore((s) => s.developerMode);
 	const diagnostics = useUiStore((s) => s.developerMode && s.diagnostics);
+	const splitPanes = useSplitPanesEnabled();
 	// The palette stays mounted to preserve its close animation and global
 	// shortcut. While closed, commands are invisible, so retain the cached
 	// snapshot without subscribing this hidden surface to streamed updates.
@@ -305,11 +309,12 @@ export function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
+				developerMode,
 			}, t),
-			...buildShortcutCommands(t),
+			...buildShortcutCommands(t, { splitPanes }),
 			...buildSettingsCommands(t, { developerMode, diagnostics }),
 		],
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -527,6 +532,7 @@ export function CommandPalette() {
 		(target: NavigateTarget) => {
 			switch (target.to) {
 				case "/":
+				case "/usage":
 					void navigate({ to: target.to });
 					break;
 				case "/settings":
@@ -671,7 +677,7 @@ export function CommandPalette() {
 					const { error: triggerError } = await apiClient.POST("/api/v1/sessions/{sessionId}/reviews/trigger", {
 						params: { path: { sessionId: action.sessionId } },
 					});
-					if (triggerError) throw new Error(apiErrorMessage(triggerError, "Unable to start review"));
+					if (triggerError) throw apiErrorException(triggerError, "Unable to start review");
 					await queryClient.invalidateQueries({ queryKey: ["session-reviews", action.sessionId] });
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					if (!isCurrentRun()) break;
@@ -753,6 +759,17 @@ export function CommandPalette() {
 					case "open-orchestrator":
 							await openOrchestrator(action.projectId, isCurrentRun);
 							break;
+					case "open-archive": {
+						// The project's board opens its archive once it is on screen.
+						useUiStore.getState().requestArchiveOpen(action.projectId, params.hostId);
+						if (params.hostId) {
+							void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId: params.hostId, projectId: action.projectId } });
+						} else {
+							void navigate({ to: "/projects/$projectId", params: { projectId: action.projectId } });
+						}
+						closePalette();
+						break;
+					}
 				}
 			} catch (err) {
 				if (isCurrentRun()) setError(err instanceof Error ? err.message : t("command.failed"));
@@ -763,7 +780,7 @@ export function CommandPalette() {
 				}
 			}
 		},
-		[findChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[findChatWorkspace, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -878,14 +895,16 @@ export function CommandPalette() {
 	// Nested views keep the bar as it is: Back takes the search glyph's place,
 	// so the field never moves.
 	const backButton = view.mode === "root" ? undefined : (
-		<button
+		<Button
 			type="button"
 			onClick={() => requestDismiss("pop")}
-			className="-m-1 grid shrink-0 place-items-center rounded-sm p-1 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground"
+			className="-m-1"
 			aria-label={t("command.back")}
+			size="icon-xs"
+			variant="quiet"
 		>
 			<ArrowLeft className="size-icon-base" aria-hidden="true" />
-		</button>
+		</Button>
 	);
 
 	return (
@@ -1050,6 +1069,7 @@ function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensMo
 		case "open-new-task":
 			return taskOpensModal;
 		case "open-new-project":
+		case "open-archive":
 		case "open-shared-link":
 		case "open-settings-section":
 			return true;
@@ -1109,7 +1129,7 @@ function PaletteRow({
 				{item.status ? (
 					<span className={cn("size-2 rounded-full", item.status.className, item.status.breathe && "animate-status-pulse")} />
 				) : Icon ? (
-					<Icon strokeWidth={1.75} />
+					<Icon />
 				) : null}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">

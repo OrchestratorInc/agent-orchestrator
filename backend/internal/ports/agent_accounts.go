@@ -61,6 +61,13 @@ type AgentAccountStore interface {
 	AgentAccountUsageSince(ctx context.Context, since time.Time) ([]domain.AgentAccountUsage, error)
 }
 
+// AgentLimitReadingStore keeps the recent history of account limit readings.
+type AgentLimitReadingStore interface {
+	RecordAgentLimitReadings(ctx context.Context, readings []domain.AgentLimitReading) error
+	ListAgentLimitReadings(ctx context.Context, since time.Time) ([]domain.AgentLimitReading, error)
+	LimitHistoryEnabled(ctx context.Context) bool
+}
+
 // AgentAccountLaunchEnv gives Session Manager the account environment of a
 // session's agent launch.
 type AgentAccountLaunchEnv interface {

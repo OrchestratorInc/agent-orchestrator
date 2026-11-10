@@ -1,5 +1,5 @@
 {
 	"title": "Guides",
 	"defaultOpen": false,
-	"pages": ["choosing-agents", "parallel-issues", "ci-recovery", "review-loop", "reactions", "multi-project", "cloud"]
+	"pages": ["choosing-agents", "parallel-issues", "ci-recovery", "review-loop", "reactions", "multi-project", "cloud", "migrate-from-conductor"]
 }

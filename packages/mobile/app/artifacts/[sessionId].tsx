@@ -4,10 +4,11 @@ import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleShe
 import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactImageSource } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
+import { artifactVisual } from "../../lib/artifactVisual";
 import { artifactExtensionLabel, artifactViewKind, formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
-import { Feather, type FeatherIconName } from "../../lib/icons";
+import { Feather } from "../../lib/icons";
 import { relativeTime } from "../../lib/notificationView";
 import { imageSourceForPlatform } from "../../lib/imageSource";
 import type { ServerConfig } from "../../lib/config";
@@ -83,7 +84,7 @@ function SessionArtifactsContent() {
 		}
 	}, [reload]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="layers" title="These artifacts belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="These artifacts belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Artifacts load once the app reconnects." /></View>;
 	if (!artifacts && (loading || !config)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifacts) return <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't load artifacts" message={error} action={<Button title="Try again" icon="refresh-cw" onPress={() => void onRefresh()} />} /></View>;
@@ -93,6 +94,7 @@ function SessionArtifactsContent() {
 			<FlatList
 				key={columns}
 				style={styles.screen}
+				contentInsetAdjustmentBehavior="automatic"
 				contentContainerStyle={[styles.content, artifacts.length === 0 && styles.emptyContent]}
 				data={artifacts}
 				numColumns={columns}
@@ -102,7 +104,7 @@ function SessionArtifactsContent() {
 				viewabilityConfig={viewabilityConfig}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} tintColor={t.accent} />}
 				ListHeaderComponent={title ? <Text numberOfLines={1} style={styles.caption}>{title}</Text> : null}
-				ListEmptyComponent={<EmptyState icon="layers" title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
+				ListEmptyComponent={<EmptyState icon={{ ios: "doc.text", android: "description" }} title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
 						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} versionOf={versionOf} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
@@ -140,9 +142,9 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 	const [previewFailedAt, setPreviewFailedAt] = useState<string>();
 	const preview = Boolean(config && hasContentThumbnail(artifact)) && previewFailedAt !== attempt;
 	const onPreviewFailed = useCallback(() => setPreviewFailedAt(attempt), [attempt]);
-	const visual = cardVisual(artifact, t);
+	const visual = artifactVisual(artifact, t);
 	const age = relativeTime(artifact.updatedAt);
-	const meta = [age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
+	const meta = [artifact.shareUrl ? "Public" : "", age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
 	return (
 		<Pressable
 			accessibilityRole="button"
@@ -182,17 +184,6 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 			</>)}
 		</Pressable>
 	);
-}
-
-/** Each kind of file gets its own glyph and hue, so a grid of them scans at a glance. */
-function cardVisual(artifact: SessionArtifact, t: Theme): { icon: FeatherIconName; color: string; tint: string } {
-	switch (artifactViewKind(artifact)) {
-		case "html": return { icon: "globe", color: t.blue, tint: t.tintBlue };
-		case "markdown": return { icon: "file-text", color: t.purple, tint: t.tintPurple };
-		case "image": return { icon: "image", color: t.green, tint: t.tintGreen };
-		case "web-media": return { icon: /\.svg$/i.test(artifact.path) ? "image" : "play", color: t.amber, tint: t.tintAmber };
-		case "text": return { icon: "code", color: t.orange, tint: t.tintOrange };
-	}
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({

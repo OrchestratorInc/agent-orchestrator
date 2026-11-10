@@ -71,10 +71,6 @@ export function SessionInspectorShellView({
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
 }) {
-	const prefersReducedMotion = useReducedMotion();
-	const tabIndicatorTransition = prefersReducedMotion
-		? { duration: 0 }
-		: { type: "spring" as const, duration: 0.3, bounce: 0 };
 
 	if (loadingText) {
 		return (
@@ -139,22 +135,13 @@ export function SessionInspectorShellView({
 								aria-selected={activeView === tab.id}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
-									"session-inspector__tab-button relative inline-flex size-control-md shrink-0 items-center justify-center rounded-md p-0 font-semibold text-passive transition-[color] duration-fast hover:bg-interactive-hover hover:text-foreground",
+									"session-inspector__tab-button relative inline-flex size-control-md shrink-0 items-center justify-center rounded-md border border-transparent p-0 font-medium text-passive outline-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2",
 									activeView === tab.id && "text-foreground",
 								)}
 								onClick={() => onViewChange(tab.id)}
 								onKeyDown={(event) => selectAdjacentTab(event, index)}
 								title={tab.label}
 							>
-								{activeView === tab.id ? (
-									<motion.span
-										aria-hidden="true"
-										className="absolute inset-0 rounded-md bg-interactive-active"
-										initial={false}
-										layoutId="session-inspector-tab-indicator"
-										transition={tabIndicatorTransition}
-									/>
-								) : null}
 								<span className="relative z-[1] inline-flex shrink-0 [&_svg]:size-icon-md">
 									{tab.icon}
 									{tab.badge ? (

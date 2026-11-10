@@ -134,11 +134,11 @@ func TestAfterStartPromptWrapsStandingInstructionsAndTaskInOneTurn(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `## AO Standing Instructions
+	want := `## Orchestrator Standing Instructions
 
 Keep changes surgical.
 
-## AO Task
+## Orchestrator Task
 
 Implement a task.`
 	if got != want {

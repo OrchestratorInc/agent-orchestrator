@@ -135,7 +135,7 @@ it("saves the full Project form on its owning host", async () => {
 it("saves a role approval change on the selected host without replacing the orchestrator", async () => {
 	connect("box-b");
 	renderForm("box-b", "agents");
-	await userEvent.click(await screen.findByRole("button", { name: "Orchestrator approval" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Orchestrator agent approval" }));
 	await userEvent.click(await screen.findByRole("menuitem", { name: "Accept edits" }));
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));

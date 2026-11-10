@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, writeChatComposerText } from "../lib/chat-drafts";
 import type { ApprovalMode } from "../types/conversation";
@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
 	harness: "codex",
 	approvalMode: "auto" as ApprovalMode,
 	approvalModes: undefined as ApprovalMode[] | undefined,
+	modelWarning: undefined as string | undefined,
+	modelWarningRetries: true,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -51,6 +53,8 @@ vi.mock("./TaskComposer", () => ({
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
 		refreshModels: async () => undefined,
+		modelWarning: h.modelWarning,
+		modelWarningRetries: h.modelWarningRetries,
 		chatModels: [{ id: "gpt-6", displayName: "GPT-6", default: true }],
 		turnSettings: { model: "gpt-6", reasoningEffort: "high", approvalMode: h.approvalMode },
 		approvalModes: h.approvalModes,
@@ -94,10 +98,24 @@ beforeEach(() => {
 	h.harness = "codex";
 	h.approvalMode = "auto";
 	h.approvalModes = undefined;
+	h.modelWarning = undefined;
+	h.modelWarningRetries = true;
 	window.localStorage.clear();
 });
 
 describe("NewChatPage", () => {
+	it("offers Retry beside a model notice only when reading the list again can clear it", () => {
+		h.modelWarning = "Couldn't load Cloud's models for Codex.";
+		renderPage();
+		expect(screen.getByText("Couldn't load Cloud's models for Codex.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+		cleanup();
+		h.modelWarning = "This project's model, gpt-x, isn't available to your Codex account on Cloud, so its tasks use the default. Change it in Project settings.";
+		h.modelWarningRetries = false;
+		renderPage();
+		expect(screen.getByText(/isn't available to your Codex account on Cloud/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+	});
 	it("shows a confirmed branch choice as status before the next send", () => {
 		h.status = "Branch fix/login selected for your next task.";
 		renderPage();

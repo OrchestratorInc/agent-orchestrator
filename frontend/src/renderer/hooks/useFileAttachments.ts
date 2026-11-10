@@ -28,6 +28,8 @@ export type FileAttachment = {
 	data?: string;
 	/** Durable worktree-relative path, present only after daemon staging succeeds. */
 	stagedPath?: string;
+	/** The picked file, kept in memory only, so a sent message can show it at once. */
+	file?: File;
 };
 
 /** Attachment payload shape accepted by the spawn API. */
@@ -477,6 +479,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				name: file.name,
 				dataUrl: isImage ? result.dataUrl : undefined,
 				data: result.data,
+				file,
 			});
 		}
 

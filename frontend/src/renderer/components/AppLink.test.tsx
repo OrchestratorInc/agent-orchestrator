@@ -27,9 +27,9 @@ describe("AppLink", () => {
 		fireEvent.contextMenu(screen.getByRole("link"));
 		expect(open).not.toHaveBeenCalled();
 		expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual([
-			"Open in ao browser", "Open in external browser", "Copy link",
+			"Open in Orchestrator Browser", "Open in external browser", "Copy link",
 		]);
-		await user.click(screen.getByRole("menuitem", { name: "Open in ao browser" }));
+		await user.click(screen.getByRole("menuitem", { name: "Open in Orchestrator Browser" }));
 		expect(open).toHaveBeenCalledExactlyOnceWith(url);
 	});
 
@@ -39,7 +39,7 @@ describe("AppLink", () => {
 		fireEvent.click(screen.getByRole("link"));
 		expect(external).toHaveBeenCalledExactlyOnceWith(url);
 		fireEvent.contextMenu(screen.getByRole("link"));
-		expect(screen.getByRole("menuitem", { name: "Open in ao browser" })).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getByRole("menuitem", { name: "Open in Orchestrator Browser" })).toHaveAttribute("aria-disabled", "true");
 	});
 
 	it("preserves handlers that cancel navigation and fragment links", () => {
@@ -74,11 +74,11 @@ describe("AppLink", () => {
 
 		fireEvent.contextMenu(screen.getByRole("link", { name: "Report" }));
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Open in ao browser",
-			"Open in Files",
+			"Open in Orchestrator Browser",
+			"Open in Orchestrator",
 			"Copy link",
 		]);
-		await user.click(screen.getByRole("menuitem", { name: "Open in Files" }));
+		await user.click(screen.getByRole("menuitem", { name: "Open in Orchestrator" }));
 		expect(openFile).toHaveBeenCalledExactlyOnceWith(path);
 		expect(open).not.toHaveBeenCalled();
 	});

@@ -1,4 +1,4 @@
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
@@ -15,11 +15,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 export function SessionAccountSummary({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const provider = agentAccountProviderFor(session.provider);
-	const accounts = useAgentAccounts();
-	const current = useSessionAgentAccounts(provider ? session.id : undefined);
+	// Only a live local Claude Code or Codex session has an account to show; no
+	// other session asks the local daemon for accounts, its account or a move.
+	const shown = Boolean(provider) && !session.cloud && !session.isTerminated;
+	const shownId = shown ? session.id : undefined;
+	const accounts = useAgentAccounts(shown);
+	const current = useSessionAgentAccounts(shownId);
 	const actions = useAgentAccountActions();
-	const label = useAgentAccountLabel();
-	const { transition } = useSessionInterfaceTransitionStatus(provider ? session.id : undefined);
+	const label = useAgentAccountLabel(shown);
+	const { transition } = useSessionInterfaceTransitionStatus(shownId);
 	const [message, setMessage] = useState("");
 	const [confirming, setConfirming] = useState<string | null>(null);
 	const accountMove = transition?.targetAccountId ? transition : undefined;
@@ -74,6 +78,7 @@ export function SessionAccountSummary({ session }: { session: WorkspaceSession }
 				<Select value={currentId ?? ""} disabled={moving || options.length < 2} onValueChange={(value) => void move(value)}>
 					<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
 					<SelectContent align="end">
+						{/* Only a subscription takes a session: the daemon refuses a move to an API-key login. */}
 						{options.map((option) => <SelectItem key={option.id} value={option.id} disabled={!option.signedIn}>{agentAccountName(option, t)}</SelectItem>)}
 					</SelectContent>
 				</Select>

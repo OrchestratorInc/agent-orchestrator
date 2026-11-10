@@ -9,6 +9,7 @@ import { NativeModePicker } from "./NativeModePicker";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
+import { MENU_TRIGGER_CHROME } from "./ui/option-menu";
 
 // The agent, model and effort menus share one compact width.
 export const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
@@ -52,6 +53,7 @@ export function TaskModelPicker({
 	showFollowAgentAction,
 	allowNativeSelection = false,
 	footer,
+	modelHint,
 }: TaskComposerModelControl & {
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
@@ -59,6 +61,8 @@ export function TaskModelPicker({
 	allowNativeSelection?: boolean;
 	/** Where the listed models come from. */
 	footer?: ReactNode;
+	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
+	modelHint?: { id: string; label: string };
 }) {
 	const { t } = useTranslation();
 
@@ -66,7 +70,7 @@ export function TaskModelPicker({
 	if (agentId === "") {
 		return (
 			<span
-				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
+				className={`${MENU_TRIGGER_CHROME} composer-chip composer-toolbar-option pointer-events-none w-fit cursor-not-allowed justify-start opacity-50`}
 				aria-disabled="true"
 				aria-label={t("newTask.model")}
 			>
@@ -110,6 +114,7 @@ export function TaskModelPicker({
 			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
 			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
 			footer={footer}
+			modelHint={modelHint}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
 			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}

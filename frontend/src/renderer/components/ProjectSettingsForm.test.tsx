@@ -410,7 +410,7 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const worker = await screen.findByRole("button", { name: "Worker approval" });
-		const orchestrator = screen.getByRole("button", { name: "Orchestrator approval" });
+		const orchestrator = screen.getByRole("button", { name: "Orchestrator agent approval" });
 		// A project role has no agent of its own, so "default" defers to whichever agent the session uses.
 		expect(worker).toHaveTextContent("Use agent permissions");
 		expect(orchestrator).toHaveTextContent("Use agent permissions");
@@ -595,7 +595,7 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "general");
 
-		const toggle = await screen.findByRole("switch", { name: "Workers request AO review" });
+		const toggle = await screen.findByRole("switch", { name: "Workers request a built-in review" });
 		expect(toggle).not.toBeChecked();
 
 		await userEvent.click(toggle);

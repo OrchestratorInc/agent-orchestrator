@@ -32,7 +32,7 @@ afterEach(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[] } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -56,7 +56,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 				if (options.unreachable) throw new TypeError("fetch failed");
 				authorizations.push(new Headers(init.headers).get("authorization"));
 				if (options.listStatus) return json({ code: "not_found" }, options.listStatus);
-				return json({ shares: [], limit: 3, used: 1 });
+				return json({ shares: options.shares ?? [], limit: 3, used: 1 });
 			}
 			if (pathname.endsWith("/uploads")) return json({ uploadToken: "tok", partSize: 1024, partCount: 1 }, 201);
 			if (pathname.endsWith("/uploads/parts")) return json({ parts: [{ partNumber: 1, method: "PUT", url: "https://s3.test/p", headers: {}, size: 20 }] });
@@ -135,6 +135,37 @@ describe("cloudShare IPC", () => {
 		await expect(records.get(shareRecordKey("https://cp.test", "sess-1", "docs/report.html"))).resolves.toBeUndefined();
 	});
 
+	it("keeps an active link's URL in its record, which the daemon shows agents", async () => {
+		const key = shareRecordKey("https://cp.test", "sess-1", "docs/report.html");
+		const stored = async () => JSON.parse(await fs.readFile(path.join(dataDir, "share-links.json"), "utf8"))[key];
+		await setup().publish();
+		expect(await stored()).toMatchObject({ shareId: SHARE_ID, url: "https://abc.share.test/" });
+
+		await fs.writeFile(path.join(dataDir, "share-links.json"), JSON.stringify({ [key]: SHARE_ID }));
+		const share = { id: SHARE_ID, slug: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://share.test/abc" };
+		await setup({ shares: [share] }).invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		expect(await stored()).toEqual({ shareId: SHARE_ID, url: "https://share.test/abc" });
+
+		const { invoke, file } = setup({ shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
+		await invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		expect(await stored()).toBe(SHARE_ID);
+		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID });
+	});
+
+	it("drops a link's URL once the control plane no longer lists it, and keeps other control planes' links", async () => {
+		const key = shareRecordKey("https://cp.test", "sess-1", "docs/report.html");
+		const other = shareRecordKey("https://other.test", "sess-1", "docs/report.html");
+		const recordsFile = path.join(dataDir, "share-links.json");
+		await fs.writeFile(recordsFile, JSON.stringify({
+			[key]: { shareId: SHARE_ID, url: "https://share.test/abc" },
+			[other]: { shareId: "other-share", url: "https://other.share.test/" },
+		}));
+		await setup({ shares: [] }).invoke("cloudShare:list", { baseUrl: "https://cp.test" });
+		const records = JSON.parse(await fs.readFile(recordsFile, "utf8"));
+		expect(records[key]).toBe(SHARE_ID);
+		expect(records[other]).toEqual({ shareId: "other-share", url: "https://other.share.test/" });
+	});
+
 	it("remembers what a file held when it was published, so a later change shows", async () => {
 		const { invoke, publish, file } = setup();
 		await expect(invoke("cloudShare:inspect", file)).resolves.not.toHaveProperty("publishedFingerprint");
@@ -145,6 +176,19 @@ describe("cloudShare IPC", () => {
 		const changed = await invoke("cloudShare:inspect", file) as { fingerprint: string; publishedFingerprint?: string };
 		expect(changed.publishedFingerprint).toBe(published.fingerprint);
 		expect(changed.fingerprint).not.toBe(published.fingerprint);
+	});
+
+	it("republishes a changed file to its link, which clears the change", async () => {
+		const { invoke, publish, file, bodies } = setup();
+		await publish();
+		await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), "a newer version of the report");
+		const changed = await invoke("cloudShare:inspect", file) as { fingerprint: string };
+		const result = await invoke("cloudShare:publish", { ...file, fingerprint: changed.fingerprint, shareId: SHARE_ID });
+		expect(result).toMatchObject({ status: "published", share: { id: SHARE_ID } });
+		// An update names the link alone, not a document.
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).toMatchObject({ shareId: SHARE_ID });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/uploads")).not.toHaveProperty("project");
+		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ shareId: SHARE_ID, publishedFingerprint: changed.fingerprint, fingerprint: changed.fingerprint });
 	});
 
 	it("reads a record kept before fingerprints were, as a link with nothing to compare", async () => {

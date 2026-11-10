@@ -424,6 +424,17 @@ type ConversationAccount struct {
 	ReauthReason string `json:"reauthReason,omitempty"`
 }
 
+// RequireLogin records that the provider refused the login at at.
+func (a *ConversationAccount) RequireLogin(reason, failureID string, at time.Time) {
+	a.AuthenticationState = "required"
+	a.ReauthRequiredAt = &at
+	a.ReauthReason = reason
+	a.LastAuthFailureAt = &at
+	a.LastAuthFailureReason = reason
+	a.AuthFailureID = failureID
+	a.AuthVerifiedAt = nil
+}
+
 // ThreadStatus is the provider's own lifecycle state for a thread. It is NOT AO's
 // session status, which stays derived from durable facts at read time; this is one
 // more such fact.
@@ -891,3 +902,12 @@ const (
 	ConversationSteerRejectedByProvider          ConversationSteerRejectionKind = "provider_refused"
 	ConversationSteerRejectedInterfaceTransition ConversationSteerRejectionKind = "interface_transition"
 )
+
+// ConversationBatchedDelivery links a queued turn AO batched into another turn's
+// provider input. SteerActivityID names the steer that carried it; empty means a
+// queue drain, where the turn joined DeliveredWithTurnID's input from the start.
+type ConversationBatchedDelivery struct {
+	TurnID              string `json:"turnId"`
+	DeliveredWithTurnID string `json:"deliveredWithTurnId"`
+	SteerActivityID     string `json:"steerActivityId,omitempty"`
+}

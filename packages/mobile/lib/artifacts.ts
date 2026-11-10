@@ -17,6 +17,8 @@ export type SessionArtifact = {
 	kind: ArtifactKind;
 	size: number;
 	updatedAt: string;
+	/** The file's public link, when someone published it from the desktop's Share. */
+	shareUrl?: string;
 };
 
 /** How the viewer draws a file. */
@@ -57,17 +59,32 @@ export function parseArtifacts(raw: unknown): SessionArtifact[] {
 	const out: SessionArtifact[] = [];
 	for (const item of raw) {
 		if (!item || typeof item !== "object") continue;
-		const { path, name, kind, size, updatedAt } = item as Record<string, unknown>;
+		const { path, name, kind, size, updatedAt, shareUrl } = item as Record<string, unknown>;
 		if (typeof path !== "string" || !isSafeArtifactPath(path)) continue;
+		const link = artifactShareUrl(shareUrl);
 		out.push({
 			path,
 			name: typeof name === "string" && name ? name : path.split("/").pop() || path,
 			kind: kind === "html" || kind === "markdown" ? kind : "file",
 			size: typeof size === "number" && size >= 0 ? size : 0,
 			updatedAt: typeof updatedAt === "string" ? updatedAt : "",
+			...(link ? { shareUrl: link } : {}),
 		});
 	}
 	return out;
+}
+
+const MAX_SHARE_URL_LENGTH = 512;
+
+/** An http(s) URL of sensible length, as the desktop keeps share links; anything else is not one. */
+export function artifactShareUrl(value: unknown): string | undefined {
+	if (typeof value !== "string" || value.length > MAX_SHARE_URL_LENGTH) return undefined;
+	try {
+		const { protocol } = new URL(value);
+		return protocol === "https:" || protocol === "http:" ? value : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Newest first; equal times by path, so the order holds between polls. */
@@ -130,15 +147,16 @@ export function canShowArtifactHistory(artifact: Pick<SessionArtifact, "path" | 
 }
 
 /** One entry in an artifact's long-press or header menu. */
-export type ArtifactMenuAction = "open" | "ask" | "copy" | "history" | "delete";
+export type ArtifactMenuAction = "open" | "share-link" | "copy-link" | "ask" | "copy" | "history" | "delete";
 
 /**
  * What an artifact's menu offers, in order. The viewer already shows the file,
- * so it leaves out Open.
+ * so it leaves out Open. A published file offers its public link.
  */
-export function artifactMenuActions(artifact: Pick<SessionArtifact, "path" | "kind" | "size">, { inViewer = false }: { inViewer?: boolean } = {}): ArtifactMenuAction[] {
+export function artifactMenuActions(artifact: Pick<SessionArtifact, "path" | "kind" | "size" | "shareUrl">, { inViewer = false }: { inViewer?: boolean } = {}): ArtifactMenuAction[] {
 	return [
 		...(inViewer ? [] : ["open" as const]),
+		...(artifact.shareUrl ? ["share-link" as const, "copy-link" as const] : []),
 		// Any file can be asked about as a whole; text can also be quoted from the viewer.
 		"ask",
 		...(canCopyArtifact(artifact) && artifact.size <= MAX_ARTIFACT_TEXT_BYTES ? ["copy" as const] : []),
@@ -240,4 +258,28 @@ export function artifactExtensionLabel(path: string): string {
 function timeOf(value: string): number {
 	const time = Date.parse(value);
 	return Number.isNaN(time) ? 0 : time;
+}
+
+/** The page a horizontal pager of artifacts rests on at a scroll offset. */
+export function artifactPageAt<T>(pages: readonly T[], offsetX: number, pageWidth: number): T | undefined {
+	if (pageWidth <= 0 || pages.length === 0) return undefined;
+	const index = Math.min(pages.length - 1, Math.max(0, Math.round(offsetX / pageWidth)));
+	return pages[index];
+}
+
+/**
+ * The viewer's page order. It is the list's order when the viewer opened, so a
+ * file the agent rewrites (which moves to the front of the newest-first list)
+ * keeps its page. Files that appear later go at the end, in list order, and
+ * removed ones drop out.
+ */
+export function stableArtifactOrder<T extends { path: string }>(previous: readonly string[] | undefined, artifacts: readonly T[]): T[] {
+	if (!previous) return [...artifacts];
+	const byPath = new Map(artifacts.map((artifact) => [artifact.path, artifact]));
+	const kept = previous.flatMap((path) => {
+		const artifact = byPath.get(path);
+		return artifact ? [artifact] : [];
+	});
+	const known = new Set(previous);
+	return [...kept, ...artifacts.filter((artifact) => !known.has(artifact.path))];
 }

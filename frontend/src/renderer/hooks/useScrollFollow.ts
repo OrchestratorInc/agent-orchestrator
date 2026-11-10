@@ -154,11 +154,14 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	/**
 	 * Re-issue the smooth scroll in flight at the current end. Call after an instant
 	 * write elsewhere would have cancelled it (the browser aborts a smooth scroll on
-	 * any instant programmatic scroll).
+	 * any instant programmatic scroll). Small moves of the end are left to the
+	 * landing: restarting replays the ease-in, so a send laying out its new turn
+	 * would crawl instead of gliding.
 	 */
 	const reaim = useCallback(() => {
 		const node = getNode();
-		if (node && flying() && !snap.current) smoothTo(node, endOf(node));
+		if (!node || !flying() || snap.current) return;
+		if (Math.abs(flight.current!.to - endOf(node)) > REAIM_PX) smoothTo(node, endOf(node));
 	}, [getNode]);
 
 	/**
