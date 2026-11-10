@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -162,19 +161,6 @@ func TestSessionListDerivesDisplayStatus(t *testing.T) {
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs:   []domain.CurrentHeadReviewRun{{PRURL: "pr1", Status: domain.ReviewRunFailed, FailedAutoRuns: 1}},
 			want:   contract.DisplayRetryingReview,
-		},
-		{
-			name: "an approval receipt cannot deliver another harness changes request",
-			record: domain.SessionRecord{
-				ID: "mer-1", ProjectID: "mer", AutoInjectReview: true,
-				Activity: domain.Activity{State: domain.ActivityIdle},
-			},
-			pr: &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
-			runs: []domain.CurrentHeadReviewRun{
-				{PRURL: "pr1", Harness: "claude-code", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested},
-				{PRURL: "pr1", Harness: "codex", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, FeedbackDelivered: true},
-			},
-			want: contract.DisplayChangesRequested,
 		},
 		{
 			name:   "a failed pass at the retry limit has failed",
@@ -515,130 +501,6 @@ func TestSessionGetDoesNotPromiseARetryAutoReviewWillNotRun(t *testing.T) {
 	}
 }
 
-func TestSessionKanbanUsesCurrentReviewFeedbackDeliveryReceipt(t *testing.T) {
-	st := newSQLiteKanbanTestStore(t)
-	ctx := context.Background()
-	seedKanbanTestProject(t, st, "mer")
-	now := time.Now().UTC().Truncate(time.Second)
-	rec, err := st.CreateSession(ctx, domain.SessionRecord{
-		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
-		Activity: domain.Activity{State: domain.ActivityIdle}, AutoInjectReview: true,
-		CreatedAt: now, UpdatedAt: now,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	comment := func(id, reviewID string, resolved bool) domain.PullRequestComment {
-		return domain.PullRequestComment{
-			ID: id, ThreadID: "thread-" + id, ReviewID: reviewID, Author: "ao", File: "a.go", Line: 1,
-			Body: "fix this", Resolved: resolved, CreatedAt: now, AutoInjectReview: true,
-		}
-	}
-	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
-		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now.Add(-7 * 24 * time.Hour), ObservedAt: now,
-	}, nil, nil, nil, []domain.PullRequestComment{
-		comment("PRRC_first", "103", false),
-		comment("PRRC_second", "103", false),
-		comment("PRRC_resolved", "103", true),
-		comment("PRRC_old", "101", false),
-		comment("PRRC_superseded", "102", false),
-		comment("PRRC_other", "999", false),
-	}, ports.ReviewWriteReplace); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.UpsertReview(ctx, domain.Review{
-		ID: "rev", SessionID: rec.ID, ProjectID: "mer", Harness: "claude-code",
-		PRURL: "pr/1", CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for i, run := range []struct{ id, sha, reviewID string }{
-		{"stale-head", "head0", "101"},
-		{"superseded", "head1", "102"},
-		{"current", "head1", "103"},
-	} {
-		if err := st.InsertReviewRun(ctx, domain.ReviewRun{
-			ID: run.id, ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
-			PRURL: "pr/1", TargetSHA: run.sha, GithubReviewID: run.reviewID,
-			Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
-			AutoInjectReview: true, CreatedAt: now.Add(time.Duration(i) * time.Second),
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	svc := &Service{store: st}
-	previousReceipt := ""
-	for _, tc := range []struct {
-		name, receipt string
-		want          contract.DisplayStatus
-	}{
-		{"before delivery", "", contract.DisplayChangesRequested},
-		{"attempt is not delivery", `{"attempts":{"comment:pr/1:PRRC_first":1,"comment:pr/1:PRRC_second":1}}`, contract.DisplayChangesRequested},
-		{"another PR receipt", `{"seen":{"comment:pr/2:PRRC_first":"sig","comment:pr/2:PRRC_second":"sig"}}`, contract.DisplayChangesRequested},
-		{"another review receipt", `{"seen":{"comment:pr/1:PRRC_other":"sig"}}`, contract.DisplayChangesRequested},
-		{"older head receipt", `{"seen":{"comment:pr/1:PRRC_old":"sig"}}`, contract.DisplayChangesRequested},
-		{"superseded pass receipt", `{"seen":{"comment:pr/1:PRRC_superseded":"sig"}}`, contract.DisplayChangesRequested},
-		{"review-level key is not comment delivery", `{"seen":{"review:pr/1:103":"changes_requested"}}`, contract.DisplayChangesRequested},
-		{"one of two comments delivered", `{"seen":{"comment:pr/1:PRRC_first":"sig"}}`, contract.DisplayChangesRequested},
-		{"every unresolved comment delivered", `{"seen":{"comment:pr/1:PRRC_first":"sig","comment:pr/1:PRRC_second":"sig"},"attempts":{"comment:pr/1:PRRC_first":1,"comment:pr/1:PRRC_second":1}}`, contract.DisplayAddressingComments},
-		{"same delivery again", `{"seen":{"comment:pr/1:PRRC_first":"sig","comment:pr/1:PRRC_second":"sig"},"attempts":{"comment:pr/1:PRRC_first":1,"comment:pr/1:PRRC_second":1}}`, contract.DisplayAddressingComments},
-		{"malformed receipt", `{invalid`, contract.DisplayChangesRequested},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			seq, err := st.LatestSeq(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := st.UpdatePRLastNudgeSignature(ctx, "pr/1", tc.receipt); err != nil {
-				t.Fatal(err)
-			}
-			events, err := st.EventsAfter(ctx, seq, 10)
-			if err != nil {
-				t.Fatal(err)
-			}
-			wantEvents := 0
-			if tc.receipt != previousReceipt {
-				wantEvents = 1
-			}
-			if len(events) != wantEvents {
-				t.Fatalf("receipt update emitted %d events, want %d", len(events), wantEvents)
-			}
-			for _, event := range events {
-				if string(event.Type) != "pr_updated" || event.ProjectID != "mer" || event.SessionID != string(rec.ID) {
-					t.Fatalf("receipt event = %+v, want pr_updated for %s", event, rec.ID)
-				}
-				if event.CreatedAt.Before(now) {
-					t.Fatalf("receipt event timestamp = %s, want delivery time rather than the old PR timestamp", event.CreatedAt)
-				}
-				var payload map[string]any
-				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					t.Fatal(err)
-				}
-				if len(payload) != 6 || payload["url"] != "pr/1" || payload["session"] != string(rec.ID) {
-					t.Fatalf("receipt event payload = %#v, want the existing PR envelope without receipt contents", payload)
-				}
-			}
-			previousReceipt = tc.receipt
-			detail, err := svc.Get(ctx, rec.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			list, err := svc.List(ctx, ListFilter{ProjectID: "mer"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(list) != 1 {
-				t.Fatalf("list returned %d sessions, want 1", len(list))
-			}
-			for read, got := range map[string]domain.Session{"get": detail, "list": list[0]} {
-				if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != tc.want {
-					t.Fatalf("%s presentation = %s/%s, want %s/%s", read, got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, tc.want)
-				}
-			}
-		})
-	}
-}
-
 type kanbanRecordingMessenger struct{ messages []string }
 
 func (m *kanbanRecordingMessenger) Send(_ context.Context, _ domain.SessionID, message string) error {
@@ -647,9 +509,9 @@ func (m *kanbanRecordingMessenger) Send(_ context.Context, _ domain.SessionID, m
 }
 
 // An AO review posts as COMMENT and reaches the worker only as inline comment
-// nudges, so this drives the real lifecycle write instead of hand-writing a
-// receipt: a key format that drifts from the query fails here.
-func TestSessionKanbanAddressesCommentsOnceLifecycleDeliversThem(t *testing.T) {
+// nudges. Delivering them does not mean the worker is addressing them: an idle
+// worker still reads "Changes requested" after the real lifecycle delivery.
+func TestSessionKanbanIdleWorkerAfterAOReviewDeliveryRequestsChanges(t *testing.T) {
 	st := newSQLiteKanbanTestStore(t)
 	ctx := context.Background()
 	seedKanbanTestProject(t, st, "mer")
@@ -709,8 +571,8 @@ func TestSessionKanbanAddressesCommentsOnceLifecycleDeliversThem(t *testing.T) {
 	if len(messenger.messages) != 1 {
 		t.Fatalf("nudges = %v, want the one inline comment", messenger.messages)
 	}
-	if got := display(); got != contract.DisplayAddressingComments {
-		t.Fatalf("after delivery = %q, want %q", got, contract.DisplayAddressingComments)
+	if got := display(); got != contract.DisplayChangesRequested {
+		t.Fatalf("after delivery = %q, want %q", got, contract.DisplayChangesRequested)
 	}
 }
 

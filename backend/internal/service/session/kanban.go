@@ -45,7 +45,6 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 		facts.Present = true
 		facts.Running = facts.Running || run.Status == domain.ReviewRunRunning
 		facts.ChangesRequested = facts.ChangesRequested || run.Verdict == domain.VerdictChangesRequested
-		facts.FeedbackDelivered = facts.FeedbackDelivered || (run.Verdict == domain.VerdictChangesRequested && run.FeedbackDelivered)
 		facts.Outcome = facts.Outcome || run.Verdict.Valid()
 		facts.Failed = facts.Failed || run.Status == domain.ReviewRunFailed
 		facts.Cancelled = facts.Cancelled || run.Status == domain.ReviewRunCancelled

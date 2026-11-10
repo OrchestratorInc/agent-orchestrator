@@ -150,10 +150,6 @@ type CurrentHeadReviewRun struct {
 	// AutoRetryBlocked reports a cancelled pass or a verdict on this PR head for
 	// this harness, either of which stops auto review from retrying the head.
 	AutoRetryBlocked bool
-	// FeedbackDelivered reports persisted nudge receipts for every actionable
-	// inline comment of this pass's provider review, rather than whether
-	// injection was merely enabled.
-	FeedbackDelivered bool
 }
 
 // AutoReviewFailedRetryLimit is how many failed auto review passes one PR head

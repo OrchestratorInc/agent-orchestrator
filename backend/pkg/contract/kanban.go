@@ -60,9 +60,6 @@ type KanbanReviewRunFacts struct {
 	// ChangesRequested reports that a pass for the current head asked the
 	// worker for changes.
 	ChangesRequested bool
-	// FeedbackDelivered reports that a current-head changes request reached
-	// the worker through AO's inline review-comment nudges.
-	FeedbackDelivered bool
 	// Outcome reports that a pass for the current head returned a verdict.
 	// Present without Outcome is a head AO tried and failed to review, which
 	// still owes the PR the pass auto review promised it.
@@ -370,9 +367,9 @@ func noPRDisplayStatus(session KanbanSessionFacts, now time.Time, noSignalGrace 
 
 // validatingDisplayStatus reports the AO-driven loop turning the PR. A worker
 // that needs a person outranks the loop it was running, and the work AO is
-// doing outranks the review pass that asked for it. An idle worker only gets
-// credit for addressing feedback once AO has recorded its delivery; the
-// auto-inject flag alone does not establish that the message reached it.
+// doing outranks the review pass that asked for it. "Addressing comments" and
+// "Fixing CI" mean the worker is busy on them right now, so an idle worker
+// reads as the outcome it is sitting on even after AO delivered the feedback.
 func validatingDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now time.Time, noSignalGrace time.Duration) DisplayStatus {
 	if status, ok := workerNeedsAttention(session, now, noSignalGrace); ok {
 		return status
@@ -389,8 +386,6 @@ func validatingDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now t
 		return DisplayWorking
 	case pr.CI == CIFailing:
 		return DisplayCIFailing
-	case pr.ReviewRun.ChangesRequested && session.AutoInjectReview && pr.ReviewRun.FeedbackDelivered && session.Activity == ActivityIdle:
-		return DisplayAddressingComments
 	case pr.ReviewRun.ChangesRequested:
 		return DisplayChangesRequested
 	case pr.Draft:

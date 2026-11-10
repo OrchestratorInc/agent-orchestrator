@@ -461,34 +461,7 @@ SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, 
              AND settled.target_sha = review_run.target_sha
              AND settled.harness = review_run.harness
              AND (settled.status = 'cancelled' OR settled.verdict IN ('approved', 'changes_requested'))
-       ) AS INTEGER) AS auto_retry_blocked,
-       CAST(
-           EXISTS (
-               SELECT 1
-               FROM pr_comment AS feedback
-               WHERE review_run.github_review_id != ''
-                 AND feedback.pr_url = review_run.pr_url
-                 AND feedback.review_id = review_run.github_review_id
-                 AND EXISTS (
-                     SELECT 1
-                     FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
-                     WHERE nudge.key = 'comment:' || feedback.pr_url || ':' || feedback.comment_id
-                 )
-           )
-           AND NOT EXISTS (
-               SELECT 1
-               FROM pr_comment AS feedback
-               WHERE feedback.pr_url = review_run.pr_url
-                 AND feedback.review_id = review_run.github_review_id
-                 AND feedback.resolved = 0
-                 AND (feedback.is_bot = 0 OR (TRIM(feedback.file) != '' AND feedback.line > 0))
-                 AND NOT EXISTS (
-                     SELECT 1
-                     FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
-                     WHERE nudge.key = 'comment:' || feedback.pr_url || ':' || feedback.comment_id
-                 )
-           )
-       AS INTEGER) AS feedback_delivered
+       ) AS INTEGER) AS auto_retry_blocked
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 WHERE review_run.session_id = ?
@@ -509,15 +482,14 @@ WHERE review_run.session_id = ?
 `
 
 type ListCurrentHeadReviewRunsBySessionRow struct {
-	ID                string
-	Harness           domain.ReviewerHarness
-	PRURL             string
-	Status            domain.ReviewRunStatus
-	Verdict           domain.ReviewVerdict
-	CreatedAt         time.Time
-	FailedAutoRuns    int64
-	AutoRetryBlocked  int64
-	FeedbackDelivered int64
+	ID               string
+	Harness          domain.ReviewerHarness
+	PRURL            string
+	Status           domain.ReviewRunStatus
+	Verdict          domain.ReviewVerdict
+	CreatedAt        time.Time
+	FailedAutoRuns   int64
+	AutoRetryBlocked int64
 }
 
 // AO review passes recorded against each PR's CURRENT head commit. Passes for
@@ -528,10 +500,6 @@ type ListCurrentHeadReviewRunsBySessionRow struct {
 // review compares against its retry limit. auto_retry_blocked mirrors the other
 // reasons auto review will not run this head again for this harness: any
 // cancelled pass, or any pass with a verdict, even if a later pass superseded it.
-// feedback_delivered is true once every actionable inline comment of this pass's
-// provider review has a lifecycle nudge receipt. AO reviews post as COMMENT and
-// the worker receives only their inline comments, so those receipts are the
-// delivery record; pr_comment.review_id matches github_review_id.
 func (q *Queries) ListCurrentHeadReviewRunsBySession(ctx context.Context, sessionID domain.SessionID) ([]ListCurrentHeadReviewRunsBySessionRow, error) {
 	rows, err := q.db.QueryContext(ctx, listCurrentHeadReviewRunsBySession, sessionID)
 	if err != nil {
@@ -550,7 +518,6 @@ func (q *Queries) ListCurrentHeadReviewRunsBySession(ctx context.Context, sessio
 			&i.CreatedAt,
 			&i.FailedAutoRuns,
 			&i.AutoRetryBlocked,
-			&i.FeedbackDelivered,
 		); err != nil {
 			return nil, err
 		}
@@ -588,34 +555,7 @@ SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_u
              AND settled.target_sha = review_run.target_sha
              AND settled.harness = review_run.harness
              AND (settled.status = 'cancelled' OR settled.verdict IN ('approved', 'changes_requested'))
-       ) AS INTEGER) AS auto_retry_blocked,
-       CAST(
-           EXISTS (
-               SELECT 1
-               FROM pr_comment AS feedback
-               WHERE review_run.github_review_id != ''
-                 AND feedback.pr_url = review_run.pr_url
-                 AND feedback.review_id = review_run.github_review_id
-                 AND EXISTS (
-                     SELECT 1
-                     FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
-                     WHERE nudge.key = 'comment:' || feedback.pr_url || ':' || feedback.comment_id
-                 )
-           )
-           AND NOT EXISTS (
-               SELECT 1
-               FROM pr_comment AS feedback
-               WHERE feedback.pr_url = review_run.pr_url
-                 AND feedback.review_id = review_run.github_review_id
-                 AND feedback.resolved = 0
-                 AND (feedback.is_bot = 0 OR (TRIM(feedback.file) != '' AND feedback.line > 0))
-                 AND NOT EXISTS (
-                     SELECT 1
-                     FROM json_each(CASE WHEN json_valid(pr.last_nudge_signature) THEN pr.last_nudge_signature ELSE '{}' END, '$.seen') AS nudge
-                     WHERE nudge.key = 'comment:' || feedback.pr_url || ':' || feedback.comment_id
-                 )
-           )
-       AS INTEGER) AS feedback_delivered
+       ) AS INTEGER) AS auto_retry_blocked
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 JOIN wanted_session ON wanted_session.session_id = review_run.session_id
@@ -636,16 +576,15 @@ WHERE pr.head_sha != ''
 `
 
 type ListCurrentHeadReviewRunsBySessionsRow struct {
-	SessionID         domain.SessionID
-	ID                string
-	Harness           domain.ReviewerHarness
-	PRURL             string
-	Status            domain.ReviewRunStatus
-	Verdict           domain.ReviewVerdict
-	CreatedAt         time.Time
-	FailedAutoRuns    int64
-	AutoRetryBlocked  int64
-	FeedbackDelivered int64
+	SessionID        domain.SessionID
+	ID               string
+	Harness          domain.ReviewerHarness
+	PRURL            string
+	Status           domain.ReviewRunStatus
+	Verdict          domain.ReviewVerdict
+	CreatedAt        time.Time
+	FailedAutoRuns   int64
+	AutoRetryBlocked int64
 }
 
 // Batch form of ListCurrentHeadReviewRunsBySession for session-list reads.
@@ -670,7 +609,6 @@ func (q *Queries) ListCurrentHeadReviewRunsBySessions(ctx context.Context, jsonE
 			&i.CreatedAt,
 			&i.FailedAutoRuns,
 			&i.AutoRetryBlocked,
-			&i.FeedbackDelivered,
 		); err != nil {
 			return nil, err
 		}
