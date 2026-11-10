@@ -186,9 +186,13 @@ let rutoDefs = "<defs>"
     + "<linearGradient id=\"ruto-sunk\" y2=\"1\" x2=\"0\"><stop offset=\"0\" stop-color=\"#fff\" stop-opacity=\".55\"/><stop offset=\"1\" stop-color=\"#fff\" stop-opacity=\"0\"/></linearGradient>"
     + "</defs>"
 let batonMarkup = batonRect("url(#ruto-stick)")
-// A blue-grey edge so the white baton still reads on light surfaces. Flat
-// artwork only; in the app icon the baton sits on the dark tile.
-let batonEdge = batonRect("#8496AA", extra: " stroke=\"#8496AA\" stroke-width=\"7\"")
+// Flat artwork shades the baton warm grey, like the old mascot, so it still
+// reads on light surfaces. The app icon keeps ruto-stick on its dark tile.
+let flatBaton = "<defs>"
+    // Bright on the upper side, dimming smoothly across the stick to the lower side.
+    + "<linearGradient id=\"ruto-stick-flat\" x2=\"1\"><stop offset=\"0\" stop-color=\"#FFFFFF\"/><stop offset=\".5\" stop-color=\"#EEE7E0\"/><stop offset=\"1\" stop-color=\"#BBADA2\"/></linearGradient>"
+    + "</defs>"
+    + batonRect("url(#ruto-stick-flat)")
 let bodyMarkup = pupils.map { "<rect x=\"\(Int($0.minX))\" y=\"\(Int($0.minY))\" width=\"\(Int($0.width))\" height=\"\(Int($0.height))\" fill=\"url(#ruto-pupil)\"/>" }.joined()
     + "<use href=\"#ruto-outline\" fill=\"url(#ruto-face)\"/>"
     + "<rect x=\"200\" y=\"300\" width=\"300\" height=\"250\" fill=\"url(#ruto-corner)\" clip-path=\"url(#ruto-clip)\"/>"
@@ -197,7 +201,7 @@ let bodyMarkup = pupils.map { "<rect x=\"\(Int($0.minX))\" y=\"\(Int($0.minY))\"
     + "<g clip-path=\"url(#ruto-clip)\">" + batonRect("url(#ruto-sunk)", from: 168, extra: " opacity=\".8\"") + "</g>"
 
 let layerHeader = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">"
-let source = layerHeader + rutoDefs + "<g id=\"baton\">" + batonEdge + batonMarkup + "</g><g id=\"body\">" + bodyMarkup + "</g></svg>"
+let source = layerHeader + rutoDefs + "<g id=\"baton\">" + flatBaton + "</g><g id=\"body\">" + bodyMarkup + "</g></svg>"
 
 // Icon Composer layers, one glass group each.
 let rutoLayer = layerHeader + rutoDefs + bodyMarkup + "</svg>"
