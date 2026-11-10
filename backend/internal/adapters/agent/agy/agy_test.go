@@ -35,6 +35,9 @@ func TestGetLaunchCommand(t *testing.T) {
 		{name: "accept-edits", mode: ports.PermissionModeAcceptEdits, flags: []string{"--mode", "accept-edits"}},
 		{name: "auto", mode: ports.PermissionModeAuto, flags: []string{"--mode", "auto"}},
 		{name: "bypass-permissions", mode: ports.PermissionModeBypassPermissions, flags: []string{"--dangerously-skip-permissions"}},
+		// NormalizePermissionMode collapses unknown and empty modes to default.
+		{name: "unknown", mode: ports.PermissionMode("bogus")},
+		{name: "empty", mode: ports.PermissionMode("")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			plugin := &Plugin{resolvedBinary: "agy"}
@@ -109,6 +112,9 @@ func TestGetRestoreCommand(t *testing.T) {
 		{name: "accept-edits", mode: ports.PermissionModeAcceptEdits, flags: []string{"--mode", "accept-edits"}},
 		{name: "auto", mode: ports.PermissionModeAuto, flags: []string{"--mode", "auto"}},
 		{name: "bypass-permissions", mode: ports.PermissionModeBypassPermissions, flags: []string{"--dangerously-skip-permissions"}},
+		// NormalizePermissionMode collapses unknown and empty modes to default.
+		{name: "unknown", mode: ports.PermissionMode("bogus")},
+		{name: "empty", mode: ports.PermissionMode("")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			plugin := &Plugin{resolvedBinary: "agy"}

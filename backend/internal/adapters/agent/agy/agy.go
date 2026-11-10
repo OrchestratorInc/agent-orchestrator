@@ -124,6 +124,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		cmd = append(cmd, "--mode", "auto")
 	case ports.PermissionModeBypassPermissions:
 		cmd = append(cmd, "--dangerously-skip-permissions")
+	default:
+		// default emits no approval flag and lets Agy use its own config.
 	}
 
 	appendModelFlag(&cmd, cfg.Config)
@@ -165,6 +167,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		cmd = append(cmd, "--mode", "auto")
 	case ports.PermissionModeBypassPermissions:
 		cmd = append(cmd, "--dangerously-skip-permissions")
+	default:
+		// default emits no approval flag and lets Agy use its own config.
 	}
 
 	appendModelFlag(&cmd, cfg.Config)
