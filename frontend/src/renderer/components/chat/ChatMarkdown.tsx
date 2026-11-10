@@ -572,8 +572,12 @@ export function ArtifactPathCode({ text, children, unlisted = children }: { text
 	const workspaces = useChatLinkWorkspaces();
 	const href = artifactLinkForPath(text, workspaces);
 	const path = explicitWorkspaceFilePath(text);
-	if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
-	return path ? <ChatPathMenu path={path}><span>{unlisted}</span></ChatPathMenu> : <>{unlisted}</>;
+	// Every workspace refresh, for any session's status, reaches here; the same
+	// element back lets the path menu below skip it unless the link changed.
+	return useMemo(() => {
+		if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
+		return path ? <ChatPathMenu path={path}><span>{unlisted}</span></ChatPathMenu> : <>{unlisted}</>;
+	}, [children, href, path, unlisted]);
 }
 
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {

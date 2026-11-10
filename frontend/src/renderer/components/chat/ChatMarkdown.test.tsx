@@ -538,6 +538,22 @@ describe("ChatMarkdown", () => {
 		}
 	});
 
+	it("links an inline artifact path once a workspace refresh lists it, and unlinks it when it goes", () => {
+		linkSource.workspaces = [];
+		// The same children each time, as a re-render of unchanged markdown passes.
+		const children = <code>plan.md</code>;
+		const path = () => <ArtifactPathCode text="/tmp/ao/artifacts/worker-1/plan.md">{children}</ArtifactPathCode>;
+		const view = render(path());
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		view.rerender(path());
+		expect(screen.getByRole("link", { name: "plan.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/plan.md");
+		linkSource.workspaces = [];
+		view.rerender(path());
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		expect(screen.getByText("plan.md")).toBeInTheDocument();
+	});
+
 	it("keeps a worker report renderable when its artifact is removed from the catalog", async () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
