@@ -271,7 +271,9 @@ export function SessionArchiveModal({
 					data-keyboard={keyboardSelecting || undefined}
 					// The arrow-key selection looks like the board card's own hover.
 					// Hover and selection switch instantly, without the card's fade.
-					className="[&[data-keyboard]_[cmdk-item][data-selected=true]_[data-testid=board-session-card]]:bg-interactive-hover [&_[data-testid=board-session-card]]:transition-none max-h-[calc(88vh-6rem)]! px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
+					// Always full height, however few cards there are, so the modal
+					// keeps one size while searching.
+					className="[&[data-keyboard]_[cmdk-item][data-selected=true]_[data-testid=board-session-card]]:bg-interactive-hover [&_[data-testid=board-session-card]]:transition-none h-[calc(88vh-6rem)] max-h-[calc(88vh-6rem)]! px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
 				>
 					<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
 						{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
