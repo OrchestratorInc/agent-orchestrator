@@ -4576,7 +4576,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		}
 	}
 	if recreated {
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionWorkspaceWith(ctx, project, ws.Path, attributionRecorded); err != nil {
 			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
 			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 			return
@@ -4713,7 +4713,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
 	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancel()
-	return m.provisionWorkspace(ctx, project, workspacePath)
+	return m.provisionWorkspaceWith(ctx, project, workspacePath, attributionRecorded)
 }
 
 func workspacePathMissing(path string) (bool, error) {
@@ -6610,8 +6610,15 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // post-create commands. Either failing aborts the spawn so a half-provisioned
 // workspace never launches an agent.
 func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+	return m.provisionWorkspaceWith(ctx, project, workspacePath, attributionFromSettings)
+}
+
+// provisionWorkspaceWith is provisionWorkspace with the attribution choice
+// made explicit: a recreated worktree of an existing session keeps the choice
+// that session started with.
+func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.ProjectRecord, workspacePath string, choice attributionChoice) error {
 	// Before post-create commands, so commits they make are credited too.
-	m.applyCommitAttribution(ctx, project, workspacePath)
+	m.applyCommitAttribution(ctx, project, workspacePath, choice)
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}

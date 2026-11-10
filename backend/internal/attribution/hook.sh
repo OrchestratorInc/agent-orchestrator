@@ -32,6 +32,41 @@ original_hook() {
 	fi
 }
 
+# replaying reports whether git is replaying existing commits (a rebase or a
+# cherry-pick). Those commits were written before, often by someone else, so
+# they keep the message they had. A revert is a new commit and is credited.
+replaying() {
+	for name in rebase-merge rebase-apply CHERRY_PICK_HEAD; do
+		path=$(git rev-parse --git-path "$name" 2>/dev/null) || continue
+		[ -e "$path" ] && return 0
+	done
+	return 1
+}
+
+# has_message reports whether the message file holds anything besides comment
+# lines and whitespace. The comment string is matched literally. With
+# core.commentChar=auto git picks a character the message does not start a
+# line with, so any of git's candidates counts as a comment there; at worst
+# that skips the trailer, never breaks the commit. `git commit -v` appends a
+# diff below a scissors line; it is not message.
+has_message() {
+	cs=$(git config --get core.commentString 2>/dev/null) ||
+		cs=$(git config --get core.commentChar 2>/dev/null) || cs='#'
+	[ -n "$cs" ] || cs='#'
+	awk -v cs="$cs" '
+		function comment(line,   i) {
+			if (cs != "auto") return index(line, cs) == 1
+			for (i = 1; i <= length(auto); i++)
+				if (substr(line, 1, 1) == substr(auto, i, 1)) return 1
+			return 0
+		}
+		BEGIN { auto = "#;@!$%^&|:"; found = 0 }
+		comment($0) && index($0, "------------------------ >8 ------------------------") { exit }
+		!comment($0) && $0 ~ /[^ \t\r]/ { found = 1; exit }
+		END { exit !found }
+	' "$1"
+}
+
 # add_trailer adds the trailer to the message file in $1. $2 is the commit
 # source git passes to prepare-commit-msg (empty for commit-msg).
 add_trailer() {
@@ -41,15 +76,22 @@ add_trailer() {
 	# A merge commit (git merge, or a conflicted merge being concluded).
 	merge_head=$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)
 	[ -n "$merge_head" ] && [ -f "$merge_head" ] && return 0
+	replaying && return 0
 	coauthor=$(git config --get orchestrator.coauthor 2>/dev/null)
 	[ -n "$coauthor" ] || return 0
-	# Nothing written yet: the editor is about to open. commit-msg adds the
-	# trailer after it closes, and an empty message still aborts the commit.
-	cc=$(git config --get core.commentChar 2>/dev/null)
-	case "$cc" in "" | auto) cc='#' ;; esac
-	# `git commit -v` appends a diff below a scissors line; it is not message.
-	sed "/^$cc -* >8 -*\$/,\$d" "$msg" | grep -v "^$cc" | grep -q '[^[:space:]]' || return 0
-	git interpret-trailers --in-place --if-exists addIfDifferent \
+	# -m and -F messages are taken as written: nothing in them is a comment.
+	# Otherwise, with nothing written yet the editor is about to open; commit-msg
+	# adds the trailer after it closes, and an empty message still aborts.
+	if [ "$2" != message ]; then
+		has_message "$msg" || return 0
+	elif ! grep -q '[^[:space:]]' "$msg"; then
+		return 0
+	fi
+	# The person's trailer.* config must not change our trailer: the separator,
+	# placement and duplicate handling are pinned. --no-divider: a "---" line in
+	# the body is not a patch divider here.
+	git -c trailer.separators=: interpret-trailers --in-place --no-divider \
+		--where end --if-exists addIfDifferent --if-missing add \
 		--trailer "Co-authored-by: $coauthor" "$msg" 2>/dev/null || true
 }
 
