@@ -10,6 +10,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { DEFAULT_POSTHOG_HOST } from "./src/shared/posthog-config";
 import { parseTeamsFlag } from "./src/shared/teams-flag";
+import { sentrySourceMaps } from "./vite.sentry";
 
 // Read once, when the renderer is built or served: a value that is neither
 // "on" nor "off" stops here instead of shipping a build that guessed.
@@ -200,6 +201,8 @@ const productUiReactBoundary: Plugin = {
 	},
 };
 
+const sentry = sentrySourceMaps();
+
 export default defineConfig({
 	define: {
 		"import.meta.env.VITE_AO_GIT_BRANCH": JSON.stringify(DEV_BUILD_INFO.branch),
@@ -256,7 +259,9 @@ export default defineConfig({
 		react(),
 		tailwindcss(),
 		injectCspMeta,
+		...sentry.plugins,
 	],
+	build: { sourcemap: sentry.sourcemap },
 	test: {
 		environment: "jsdom",
 		silent: "passed-only",

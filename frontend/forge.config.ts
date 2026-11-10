@@ -44,7 +44,8 @@ const PACKAGED_EXTERNAL_DEPENDENCIES = [
 
 function ignoreFromVitePackage(file: string): boolean {
 	if (!file) return false;
-	if (file.startsWith("/.vite")) return false;
+	// Release source maps are uploaded to Sentry, never shipped (vite.sentry.ts).
+	if (file.startsWith("/.vite")) return file.endsWith(".map");
 	if (file === "/node_modules") return false;
 	return !PACKAGED_EXTERNAL_DEPENDENCIES.some(
 		(dependency) => file === dependency || file.startsWith(`${dependency}/`),

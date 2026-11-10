@@ -424,6 +424,10 @@ describe("packaged native dependencies", () => {
 		if (typeof ignore !== "function") return;
 
 		expect(ignore("/.vite/build/main.js")).toBe(false);
+		// Release source maps go to Sentry, never into the app.
+		expect(ignore("/.vite/build/main.js.map")).toBe(true);
+		expect(ignore("/.vite/renderer/main_window/assets/index-RzpjvxTk.js.map")).toBe(true);
+		expect(ignore("/.vite/renderer/main_window/assets/index-RzpjvxTk.js")).toBe(false);
 		expect(ignore("/node_modules")).toBe(false);
 		expect(ignore("/node_modules/better-sqlite3/build/Release/better_sqlite3.node")).toBe(false);
 		expect(ignore("/node_modules/bindings/bindings.js")).toBe(false);
