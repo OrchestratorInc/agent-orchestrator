@@ -3855,6 +3855,7 @@
 	"usage.limits.checked": "Vérifié {{value}}",
 	"usage.limits.noWindows": "Aucune fenêtre de limite signalée pour l’instant.",
 	"usage.limits.signedOut": "Déconnecté",
+	"usage.limits.staleFrom": "Dernières valeurs : {{value}}",
 	"usage.limits.thisComputer": "Connexion de cet ordinateur",
 	"usage.limits.paceLeft": "À ce rythme : environ {{value}} restant à la réinitialisation",
 	"usage.limits.paceRanOut": "À ce rythme, déjà épuisé",

@@ -3855,6 +3855,7 @@
 	"usage.limits.checked": "Verificado {{value}}",
 	"usage.limits.noWindows": "Nenhuma janela de limite informada ainda.",
 	"usage.limits.signedOut": "Desconectado",
+	"usage.limits.staleFrom": "Última leitura: {{value}}",
 	"usage.limits.thisComputer": "Login deste computador",
 	"usage.limits.paceLeft": "Neste ritmo: restará cerca de {{value}} na redefinição",
 	"usage.limits.paceRanOut": "Neste ritmo já acabou",

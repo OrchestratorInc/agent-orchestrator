@@ -3786,6 +3786,7 @@
 	"usage.limits.checked": "Geprüft {{value}}",
 	"usage.limits.noWindows": "Noch keine Limitfenster gemeldet.",
 	"usage.limits.signedOut": "Abgemeldet",
+	"usage.limits.staleFrom": "Stand: {{value}}",
 	"usage.limits.thisComputer": "Anmeldung dieses Computers",
 	"usage.limits.paceLeft": "Bei diesem Tempo: etwa {{value}} übrig beim Zurücksetzen",
 	"usage.limits.paceRanOut": "Bei diesem Tempo bereits aufgebraucht",
