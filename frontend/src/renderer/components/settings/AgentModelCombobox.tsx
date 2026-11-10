@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Loader2, RefreshCw, Search } from "@/components/app-icons";
-import { type ReactNode, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useRef, useState } from "react";
+import { useUiStore } from "../../stores/ui-store";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -129,6 +130,7 @@ export function AgentModelCombobox({
 	"aria-label": string;
 }) {
 	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const concreteModels = useMemo(
 		() => models.filter((model) => isConcreteModelID(model.id)),
 		[models],
@@ -423,10 +425,10 @@ export function AgentModelCombobox({
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
 								{!compact && <DropdownMenuLabel className="normal-case tracking-normal">{group.label}</DropdownMenuLabel>}
-								{group.models.map((item) =>
-									compact ? (
+								{group.models.map((item) => (
+									<Fragment key={item.id}>
+									{compact ? (
 										<DropdownMenuItem
-											key={item.id}
 											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
@@ -445,7 +447,6 @@ export function AgentModelCombobox({
 										</DropdownMenuItem>
 									) : (
 										<DropdownMenuItem
-											key={item.id}
 											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
@@ -468,8 +469,18 @@ export function AgentModelCombobox({
 												)}
 											</div>
 										</DropdownMenuItem>
-									),
-								)}
+									)}
+									{item.model.requiresVersion && agentId === "claude-code" && (
+										// The model row is disabled; the way out is the usual update flow.
+										<DropdownMenuItem
+											onSelect={() => openGlobalSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}
+											className="pl-6 text-xs text-settings-label"
+										>
+											{t("settings.models.updateClaudeCode", { defaultValue: "Update Claude Code" })}
+										</DropdownMenuItem>
+									)}
+									</Fragment>
+								))}
 							</div>
 						))}
 
