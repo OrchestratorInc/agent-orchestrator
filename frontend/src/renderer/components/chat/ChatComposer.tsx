@@ -710,8 +710,40 @@ export const ChatComposer = memo(function ChatComposer({
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
 
 	const staged = fileAttachments.attachments.length > 0 || visibleRetainedAttachments.length > 0;
+	// A plain send already shows its echo in the timeline. Its text stays held in the
+	// editor until the daemon accepts, so a rejection or lost response can restore it,
+	// but it is not drawn meanwhile: the composer reads as sent, not stranded.
+	// A steer is never cleared before the daemon answers (a refusal hands it back to
+	// be sent as a new message), but its echo is already in the turn too, so its text
+	// and files are hidden the same way.
+	const steerInFlight = Boolean(
+		submitting &&
+			!deliveryUncertain &&
+			durableDelivery?.kind === "steer" &&
+			durableDelivery.state === "dispatching",
+	);
+	const sendInFlight = steerInFlight || Boolean(
+		submitting &&
+			!staged &&
+			!deliveryUncertain &&
+			durableDelivery?.kind === "send" &&
+			durableDelivery.state === "dispatching",
+	);
+	// The request has no timeout. If the daemon stalls, bring the text back so a stuck
+	// send never reads as a vanished draft.
+	const [concealExpired, setConcealExpired] = useState(false);
+	useEffect(() => {
+		if (!sendInFlight) {
+			setConcealExpired(false);
+			return;
+		}
+		const timer = window.setTimeout(() => setConcealExpired(true), SEND_CONCEAL_MS);
+		return () => window.clearTimeout(timer);
+	}, [sendInFlight]);
+	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
-	const stripAttachments = (optimisticSend || nextDraftHasChanged ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
+	const stripConcealed = steerInFlight && sendConcealed;
+	const stripAttachments = (optimisticSend || nextDraftHasChanged || stripConcealed ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
 		// A cloud file's reference is no daemon path: it previews from its bytes
@@ -751,28 +783,6 @@ export const ChatComposer = memo(function ChatComposer({
 			draftScope &&
 			!submitting,
 	);
-	// A plain send already shows its echo in the timeline. Its text stays held in the
-	// editor until the daemon accepts, so a rejection or lost response can restore it,
-	// but it is not drawn meanwhile: the composer reads as sent, not stranded.
-	const sendInFlight = Boolean(
-		submitting &&
-			!staged &&
-			!deliveryUncertain &&
-			durableDelivery?.kind === "send" &&
-			durableDelivery.state === "dispatching",
-	);
-	// The request has no timeout. If the daemon stalls, bring the text back so a stuck
-	// send never reads as a vanished draft.
-	const [concealExpired, setConcealExpired] = useState(false);
-	useEffect(() => {
-		if (!sendInFlight) {
-			setConcealExpired(false);
-			return;
-		}
-		const timer = window.setTimeout(() => setConcealExpired(true), SEND_CONCEAL_MS);
-		return () => window.clearTimeout(timer);
-	}, [sendInFlight]);
-	const sendConcealed = sendInFlight && !concealExpired;
 	const canSend =
 		hasDraft &&
 		(savingQueuedEdit || !busy) &&
@@ -2135,9 +2145,9 @@ export const ChatComposer = memo(function ChatComposer({
 						</Button>
 					</div>
 				) : null}
-				{staged || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
+				{(staged && !stripConcealed) || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
 					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
-						{staged || pendingAttachments.length > 0 ? (
+						{(staged && !stripConcealed) || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
 								{stripAttachments.map(({ file, path, preview }) => {
 									return (

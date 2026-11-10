@@ -1084,6 +1084,7 @@ function ChatWorkspaceContent({
 	const queuedMessages = useQueuedMessages(snapshot, openingTurnId);
 	const [steerStartedAt, setSteerStartedAt] = useState<ReadonlyMap<string, string>>(() => new Map());
 	const [steerErrors, setSteerErrors] = useState<Readonly<Record<string, string>>>({});
+	const [steerEchoes, setSteerEchoes] = useState<readonly SteerEcho[]>([]);
 	const backgroundWakeQueuedTurnIds = useMemo(
 		() => new Set(
 			(localEchos ?? [])
@@ -1129,13 +1130,45 @@ function ChatWorkspaceContent({
 		],
 		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerStartedAt],
 	);
+	// A steer sent from the composer shows in its turn at once, as a send's echo does,
+	// placed where it was sent so output that streams after it stays below it. The
+	// daemon's own row, matched by its client id, replaces it.
+	const pendingSteerEchoes = useMemo(
+		() => turn?.state === "running"
+			? steerEchoes.filter((echo) => echo.turnId === turn.id && !snapshot.items.some((item) => steerEchoArrived(item, echo)))
+			: [],
+		[snapshot.items, steerEchoes, turn],
+	);
+	useEffect(() => {
+		setSteerEchoes((current) => {
+			const next = current.filter((echo) => pendingSteerEchoes.includes(echo));
+			return next.length === current.length ? current : next;
+		});
+	}, [pendingSteerEchoes]);
 	const timelineSnapshot = useMemo(() => {
 		const steering = queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
-		if (turn?.state !== "running" || steering.length === 0) return snapshot;
+		if (turn?.state !== "running" || (steering.length === 0 && pendingSteerEchoes.length === 0)) return snapshot;
+		const items = [...snapshot.items];
+		pendingSteerEchoes.forEach((echo, index) => {
+			const sequence = echo.afterSequence + 0.4 + index / 1000;
+			const at = items.findIndex((item) => item.sequence > sequence);
+			items.splice(at < 0 ? items.length : at, 0, {
+				kind: "activity",
+				id: `steer-echo:${echo.clientMessageId}`,
+				turnId: turn.id,
+				sequence,
+				revision: 0,
+				activityKind: "system",
+				status: "completed",
+				summary: echo.text,
+				detail: { event: "steer", text: echo.text, origin: "human", clientMessageId: echo.clientMessageId },
+				createdAt: echo.createdAt,
+			});
+		});
 		return {
 			...snapshot,
 			items: [
-				...snapshot.items,
+				...items,
 				...steering.map(({ turnId, message }, index): ConversationActivity => ({
 					kind: "activity",
 					id: `steering:${turnId}`,
@@ -1150,7 +1183,7 @@ function ChatWorkspaceContent({
 				})),
 			],
 		};
-	}, [queuedMessages, snapshot, steerStartedAt, turn]);
+	}, [pendingSteerEchoes, queuedMessages, snapshot, steerStartedAt, turn]);
 	// The dock omits queued turns that are not the user's own; the daemon needs
 	// the whole queue, with those turns left where they were.
 	const reorderQueuedTurns = useCallback(
@@ -1328,14 +1361,36 @@ function ChatWorkspaceContent({
 		},
 		[stablePromoteQueuedTurn],
 	);
+	const steerEchoTarget = useStableCallback(() =>
+		turn?.state === "running" ? { turnId: turn.id, afterSequence: snapshot.latestSequence } : undefined);
 	const steer = useCallback(
 		async (
 			text: string,
 			attachments?: { mimeType: string; data: string }[],
 			clientMessageId?: string,
 			recoverOnly?: boolean,
-		) => stableSteer(text, attachments, clientMessageId, recoverOnly),
-		[stableSteer],
+		) => {
+			const id = clientMessageId ?? crypto.randomUUID();
+			// A recovery re-asks about a steer sent before; the daemon may already have it.
+			const target = recoverOnly ? undefined : steerEchoTarget();
+			if (target) {
+				setSteerEchoes((current) => [
+					...current.filter((echo) => echo.clientMessageId !== id),
+					{ clientMessageId: id, text, createdAt: new Date().toISOString(), ...target },
+				]);
+			}
+			const dropEcho = () => setSteerEchoes((current) => current.filter((echo) => echo.clientMessageId !== id));
+			try {
+				const outcome = await stableSteer(text, attachments, id, recoverOnly);
+				// A refused steer stays in the composer, so its echo goes.
+				if (outcome?.status === "not-accepted") dropEcho();
+				return outcome;
+			} catch (error) {
+				dropEcho();
+				throw error;
+			}
+		},
+		[stableSteer, steerEchoTarget],
 	);
 	const acceptedClientMessageIds = useMemo(
 		() =>
@@ -5826,6 +5881,17 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		// reference check here is exact and avoids walking their contents twice.
 		a.items.every((item, index) => item === b.items[index])
 	);
+}
+
+/** A steer the composer sent that the daemon has not yet recorded. */
+type SteerEcho = { clientMessageId: string; text: string; createdAt: string; turnId: string; afterSequence: number };
+
+/** Whether this row is the daemon's record of the steer. */
+function steerEchoArrived(item: ConversationItem, echo: SteerEcho): boolean {
+	if (item.kind !== "activity" || item.detail?.event !== "steer") return false;
+	return item.detail.clientMessageId
+		? item.detail.clientMessageId === echo.clientMessageId
+		: item.sequence > echo.afterSequence && (item.detail.text ?? item.summary) === echo.text;
 }
 
 /**
