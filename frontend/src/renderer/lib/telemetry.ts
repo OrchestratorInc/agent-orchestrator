@@ -1136,17 +1136,17 @@ export async function sanitizeRendererProperties(
 			// Where the session lives, never which project.
 			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
 			break;
-		case "ao.renderer.session_import_offer_shown":
+		case "ao.session_imports.offer_shown":
 			if (typeof properties?.surface === "string" && SESSION_IMPORT_SURFACE_SET.has(properties.surface)) safe.surface = properties.surface;
 			break;
-		case "ao.renderer.session_import_scan_completed":
+		case "ao.session_imports.scan_completed":
 			if (properties?.outcome === "succeeded" || properties?.outcome === "failed") safe.outcome = properties.outcome;
 			for (const key of ["candidate_count", "duration_ms"] as const) {
 				const value = nonNegativeNumber(properties?.[key]);
 				if (value !== undefined) safe[key] = value;
 			}
 			break;
-		case "ao.renderer.session_import_completed": {
+		case "ao.session_imports.completed": {
 			if (typeof properties?.source === "string" && SESSION_IMPORT_SOURCE_SET.has(properties.source)) safe.source = properties.source;
 			for (const key of ["created_count", "existing_count", "failed_count", "folder_count"] as const) {
 				const value = nonNegativeNumber(properties?.[key]);
@@ -1156,7 +1156,7 @@ export async function sanitizeRendererProperties(
 			if (agents) safe.agents = agents;
 			break;
 		}
-		case "ao.renderer.session_import_first_open": {
+		case "ao.session_imports.first_opened": {
 			if (typeof properties?.outcome === "string" && SESSION_IMPORT_OPEN_OUTCOME_SET.has(properties.outcome)) safe.outcome = properties.outcome;
 			if (typeof properties?.agent === "string" && IMPORTABLE_AGENTS.has(properties.agent)) safe.agent = properties.agent;
 			if (typeof properties?.error_code === "string" && /^[A-Z0-9_]+$/.test(properties.error_code)) safe.error_code = properties.error_code;

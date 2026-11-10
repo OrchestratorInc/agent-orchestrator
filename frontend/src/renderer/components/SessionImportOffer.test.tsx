@@ -43,7 +43,7 @@ it("shows only logos for harnesses with import enabled", () => {
 
 it("does not offer imports when only deferred harnesses are configured", () => {
 	renderOffer(agent("kimi", true, "authorized"), agent("droid", true, "authorized"));
-	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();
+	expect(screen.queryByText("Bring your earlier chats into Orchestrator")).not.toBeInTheDocument();
 });
 
 it("counts an agent whose sign-in check was inconclusive", () => {
@@ -53,13 +53,13 @@ it("counts an agent whose sign-in check was inconclusive", () => {
 
 it("shows nothing when no importable agent is configured", () => {
 	renderOffer(agent("claude-code", false, "authorized"), agent("codex", true, "unauthorized"));
-	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();
+	expect(screen.queryByText("Bring your earlier chats into Orchestrator")).not.toBeInTheDocument();
 });
 
 it("stays hidden once dismissed", () => {
 	const { unmount } = renderOffer(agent("codex", true, "authorized"));
 	fireEvent.click(screen.getByRole("button", { name: "Not now" }));
-	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();
+	expect(screen.queryByText("Bring your earlier chats into Orchestrator")).not.toBeInTheDocument();
 	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
 	unmount();

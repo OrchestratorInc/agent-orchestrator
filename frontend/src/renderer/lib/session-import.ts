@@ -23,7 +23,7 @@ export const sessionImportPreviewQuery = queryOptions({
 	queryFn: async ({ signal }) => {
 		const started = Date.now();
 		const response = await apiClient.GET("/api/v1/session-import", { signal });
-		captureOncePerRun("scan", "ao.renderer.session_import_scan_completed", {
+		captureOncePerRun("scan", "ao.session_imports.scan_completed", {
 			outcome: response.error ? "failed" : "succeeded",
 			candidate_count: response.data?.candidates.length,
 			duration_ms: Date.now() - started,
@@ -45,15 +45,15 @@ function captureOncePerRun(key: string, event: string, properties: Record<string
 
 export function useImportOfferShown(surface: "home" | "project_board", shown: boolean): void {
 	useEffect(() => {
-		if (shown) captureOncePerRun(`offer:${surface}`, "ao.renderer.session_import_offer_shown", { surface });
+		if (shown) captureOncePerRun(`offer:${surface}`, "ao.session_imports.offer_shown", { surface });
 	}, [surface, shown]);
 }
 
 export function trackImportFirstOpen(agent: string, opening: Promise<void>): void {
 	const started = Date.now();
 	void opening.then(
-		() => captureRendererEvent("ao.renderer.session_import_first_open", { agent, outcome: "succeeded", duration_ms: Date.now() - started }),
-		(error: unknown) => captureRendererEvent("ao.renderer.session_import_first_open", {
+		() => captureRendererEvent("ao.session_imports.first_opened", { agent, outcome: "succeeded", duration_ms: Date.now() - started }),
+		(error: unknown) => captureRendererEvent("ao.session_imports.first_opened", {
 			agent,
 			outcome: apiErrorCode(error) === "SESSION_OPEN_ELSEWHERE" ? "open_elsewhere" : "failed",
 			error_code: apiErrorCode(error),
@@ -130,7 +130,7 @@ export async function importChats(queryClient: QueryClient, source: ImportSource
 	} finally {
 		const harness = new Map(queryClient.getQueryData(sessionImportPreviewQuery.queryKey)?.candidates.map((c) => [c.id, c.harness] as const));
 		const created = results.filter((r) => r.status === "created");
-		void captureRendererEvent("ao.renderer.session_import_completed", {
+		void captureRendererEvent("ao.session_imports.completed", {
 			source,
 			created_count: created.length,
 			existing_count: results.filter((r) => r.status === "already_imported").length,
