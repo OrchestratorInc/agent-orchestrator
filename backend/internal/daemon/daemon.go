@@ -822,6 +822,8 @@ func Run(buildVersion string) error {
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	// "Let agents use this computer" gives new chat sessions the computer-use tools.
 	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
+	// The Orchestrator attribution beta credits Orchestrator on new sessions' commits and PRs.
+	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})

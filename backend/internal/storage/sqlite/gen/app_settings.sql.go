@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, session_retention_days, commit_attribution FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -31,6 +31,7 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.VersionRefresh,
 		&i.ComputerUse,
 		&i.SessionRetentionDays,
+		&i.CommitAttribution,
 	)
 	return i, err
 }
@@ -49,6 +50,20 @@ type ResetHarnessDefaultParams struct {
 
 func (q *Queries) ResetHarnessDefault(ctx context.Context, arg ResetHarnessDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, resetHarnessDefault, arg.HarnessPath, arg.UpdatedAt)
+	return err
+}
+
+const setCommitAttribution = `-- name: SetCommitAttribution :exec
+UPDATE app_settings SET commit_attribution = ?, updated_at = ? WHERE id = 1
+`
+
+type SetCommitAttributionParams struct {
+	CommitAttribution bool
+	UpdatedAt         time.Time
+}
+
+func (q *Queries) SetCommitAttribution(ctx context.Context, arg SetCommitAttributionParams) error {
+	_, err := q.db.ExecContext(ctx, setCommitAttribution, arg.CommitAttribution, arg.UpdatedAt)
 	return err
 }
 

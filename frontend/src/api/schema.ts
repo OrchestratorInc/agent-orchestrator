@@ -4230,6 +4230,23 @@ export interface paths {
         patch: operations["updateChatHibernation"];
         trace?: never;
     };
+    "/api/v1/settings/commit-attribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose whether new sessions credit Orchestrator on their commits and PRs (beta) */
+        patch: operations["updateCommitAttribution"];
+        trace?: never;
+    };
     "/api/v1/settings/computer-use": {
         parameters: {
             query?: never;
@@ -5010,6 +5027,10 @@ export interface components {
         AttachmentInput: {
             data: string;
             mimeType?: string;
+        };
+        AttributionConfig: {
+            disableCommitTrailer?: boolean;
+            disablePRFooter?: boolean;
         };
         AutomationEnvelope: {
             automation: components["schemas"]["AutomationResponse"];
@@ -6832,6 +6853,7 @@ export interface components {
             agentConfig?: components["schemas"]["AgentConfig"];
             agentRules?: string;
             agentRulesFile?: string;
+            attribution?: components["schemas"]["AttributionConfig"];
             autoReview?: boolean;
             canonicalRepoURL?: string;
             containerReap?: components["schemas"]["ContainerReapConfig"];
@@ -7627,6 +7649,8 @@ export interface components {
             client: string;
             cloudControlPlaneUrl: string;
             cloudEnabled: boolean;
+            /** @description Beta: new sessions add a Co-authored-by: Orchestrator trailer to commits and an Opened with Orchestrator line to PR bodies, unless the project turns them off. */
+            commitAttribution: boolean;
             /** @description New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents). */
             computerUse: boolean;
             /** @enum {string} */
@@ -8140,6 +8164,9 @@ export interface components {
             useCase?: "pr_review" | "issue_triage" | "repo_digest" | "ci_triage" | "release_notes" | "security_audit" | "dependency_maintenance" | "docs_maintenance" | "other" | "unknown" | null;
         };
         UpdateChatHibernationRequest: {
+            enabled: null | boolean;
+        };
+        UpdateCommitAttributionRequest: {
             enabled: null | boolean;
         };
         UpdateComputerUseRequest: {
@@ -24130,6 +24157,57 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateChatHibernationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateCommitAttribution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCommitAttributionRequest"];
             };
         };
         responses: {

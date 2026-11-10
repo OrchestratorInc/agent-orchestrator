@@ -173,6 +173,7 @@ type AppSetting struct {
 	VersionRefresh       bool
 	ComputerUse          bool
 	SessionRetentionDays int64
+	CommitAttribution    bool
 }
 
 type Automation struct {
@@ -800,6 +801,11 @@ type SessionCleanupFact struct {
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
 	ReportOnly           bool
+}
+
+type SessionCommitAttribution struct {
+	SessionID string
+	CoAuthor  string
 }
 
 type SessionHarnessRelease struct {

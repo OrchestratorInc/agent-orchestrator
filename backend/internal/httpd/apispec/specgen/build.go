@@ -212,6 +212,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
+	"ControllersUpdateCommitAttributionRequest":            "UpdateCommitAttributionRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
@@ -334,6 +335,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainTrackerIntakeConfig":       "TrackerIntakeConfig",
 	"ControllersTriggerReviewRequest": "TriggerReviewRequest",
 	"DomainContainerReapConfig":       "ContainerReapConfig",
+	"DomainAttributionConfig":         "AttributionConfig",
 	"DomainAgentConfig":               "AgentConfig",
 	"DomainRoleOverride":              "RoleOverride",
 	// httpd/controllers (wire envelopes)
@@ -1226,6 +1228,17 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPatch, path: "/api/v1/settings/session-retention", id: "updateSessionRetention", tag: "settings",
 			summary: "Choose how long archived sessions are kept before they are deleted",
 			reqBody: controllers.UpdateSessionRetentionRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/commit-attribution", id: "updateCommitAttribution", tag: "settings",
+			summary: "Choose whether new sessions credit Orchestrator on their commits and PRs (beta)",
+			reqBody: controllers.UpdateCommitAttributionRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

@@ -242,6 +242,15 @@ export function ProjectWorkersRequestReviewToggle({ checked, onCheckedChange }: 
 	return <ProjectToggleRow id="project-workers-request-review" label={t("settings.project.workersRequestReviewToggle")} description={t("settings.project.workersRequestReviewDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
 }
 
+/** The Orchestrator attribution beta's per-project switches. Both are on by default. */
+export function ProjectAttributionToggles({ commitTrailer, prFooter, onChange }: { commitTrailer: boolean; prFooter: boolean; onChange: (values: { attributionCommitTrailer?: boolean; attributionPRFooter?: boolean }) => void }) {
+	const { t } = useTranslation();
+	return <>
+		<ProjectToggleRow id="project-attribution-commit-trailer" label={t("settings.project.attributionCommitTrailer")} description={t("settings.project.attributionCommitTrailerDescription")} checked={commitTrailer} onCheckedChange={(attributionCommitTrailer) => onChange({ attributionCommitTrailer })} />
+		<ProjectToggleRow id="project-attribution-pr-footer" label={t("settings.project.attributionPRFooter")} description={t("settings.project.attributionPRFooterDescription")} checked={prFooter} onCheckedChange={(attributionPRFooter) => onChange({ attributionPRFooter })} />
+	</>;
+}
+
 function ProjectToggleRow({ id, label, description, checked, onCheckedChange }: { id: string; label: string; description: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
 	return (
 		<SettingsRow label={label} description={description}>

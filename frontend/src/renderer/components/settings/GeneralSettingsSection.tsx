@@ -23,7 +23,7 @@ import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useSettings, useUpdateCommitAttribution, useUpdateSessionInterface, useUpdateSessionRetention, useUpdateVersionRefresh } from "../../hooks/useSettings";
 import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
 import { TargetIcon } from "../TopbarOpenEditorButton";
 import type { EditorId } from "../../../shared/editor-handoff";
@@ -503,6 +503,7 @@ export function GeneralSettingsSection({
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <NewSidebarDesignRow />}
 				{developerMode && <ChromeAgentsRow />}
+				{developerMode && <CommitAttributionRow />}
 			</SettingsSection>
 		</>
 	);
@@ -602,6 +603,33 @@ function SideChatsRow() {
 	return (
 		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
 			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only beta: credit Orchestrator on new sessions' commits and
+ * PRs. Daemon-owned, because the daemon installs the commit hook at spawn.
+ */
+function CommitAttributionRow() {
+	const { t } = useTranslation();
+	const { settings } = useSettings();
+	const { update, saving, error } = useUpdateCommitAttribution();
+	return (
+		<SettingsRow
+			label={t("settings.commitAttribution")}
+			description={
+				<span className={cn(error && "text-error")} role={error ? "alert" : undefined}>
+					{error ? t("settings.commitAttributionSaveFailed") : t("settings.commitAttributionHint")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.commitAttribution")}
+				checked={settings?.commitAttribution ?? false}
+				disabled={saving || !settings}
+				onCheckedChange={update}
+			/>
 		</SettingsRow>
 	);
 }

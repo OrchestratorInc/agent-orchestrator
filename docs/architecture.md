@@ -358,9 +358,9 @@ prompt generate a title and task slug together
 through the selected agent's background-task driver. The call starts with
 provisioning and has a twenty-second deadline, but neither setup nor the agent
 waits for it: the worktree is created at `worktrees/<project-id>/<session-id>` on
-the temporary branch `ao/<session-id>/root` and keeps that folder for its whole
+the temporary branch `orchestrator/<session-id>/root` and keeps that folder for its whole
 life. After launch, a background step renames only the branch to
-`ao/<slug>/root` (numeric suffix when the namespace is occupied) in every
+`orchestrator/<slug>/root` (numeric suffix when the namespace is occupied) in every
 repository of the task and records it on the session and its repository rows
 together, only after a start that succeeded. The session also keeps the
 temporary branch it replaced: a full-row write from an older read never puts it

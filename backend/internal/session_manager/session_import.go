@@ -671,7 +671,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		// top of the resume request's budget, so a long install is not cut
 		// short and rerun from the start on every retry.
 		setupCtx, cancelSetup := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
-		err := m.provisionWorkspace(setupCtx, project, ws.Path)
+		err := m.provisionWorkspace(setupCtx, project, rec.ID, ws.Path)
 		cancelSetup()
 		if err != nil {
 			return rec, err

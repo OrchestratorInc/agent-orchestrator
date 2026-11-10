@@ -1408,19 +1408,24 @@ func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
-	base := "ao/" + string(sr.session.ID)
-	if branch == base {
-		return true
+	// New sessions use "orchestrator/"; sessions created before the rename
+	// still own their "ao/" branches.
+	for _, prefix := range domain.SessionBranchPrefixes {
+		base := prefix + "/" + string(sr.session.ID)
+		if branch == base {
+			return true
+		}
+		suffix, ok := strings.CutPrefix(branch, base+"-")
+		if !ok {
+			continue
+		}
+		// workspaceProjectBranch appends -2, -3, ... when a ref already exists.
+		// Do not treat arbitrary topics, another session ID, or padded numbers as
+		// a generated branch and broaden their ownership.
+		n, err := strconv.Atoi(suffix)
+		return err == nil && n >= 2 && strconv.Itoa(n) == suffix
 	}
-	suffix, ok := strings.CutPrefix(branch, base+"-")
-	if !ok {
-		return false
-	}
-	// workspaceProjectBranch appends -2, -3, ... when a ref already exists.
-	// Do not treat arbitrary topics, another session ID, or padded numbers as
-	// a generated branch and broaden their ownership.
-	n, err := strconv.Atoi(suffix)
-	return err == nil && n >= 2 && strconv.Itoa(n) == suffix
+	return false
 }
 
 func sessionBranchPrefixes(branch string) []string {

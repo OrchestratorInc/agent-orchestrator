@@ -2390,7 +2390,7 @@ func resolvedSessionPrefix(cfg ports.WorkspaceConfig) string {
 }
 
 func defaultSessionBranchName(id domain.SessionID) string {
-	return "ao/" + string(id)
+	return domain.SessionBranchPrefix + "/" + string(id)
 }
 
 func firstNonEmpty(values ...string) string {

@@ -13,7 +13,7 @@ ao spawn [flags]
 
 | Flag | Meaning | Default / Required |
 |---|---|---|
-| `--branch string` | Branch for the session worktree | `ao/<session-id>/root` |
+| `--branch string` | Branch for the session worktree | `orchestrator/<session-id>/root` |
 | `--claim-pr string` | Claim an existing PR for authorized implementation continuation. Omit for review-only work | - |
 | `--kind string` | Session role: `worker` or `orchestrator` | `worker` |
 | `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |

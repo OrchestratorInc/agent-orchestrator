@@ -12877,6 +12877,44 @@ paths:
       summary: Turn idle Chat hibernation on or off for this machine
       tags:
       - settings
+  /api/v1/settings/commit-attribution:
+    patch:
+      operationId: updateCommitAttribution
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCommitAttributionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose whether new sessions credit Orchestrator on their commits and
+        PRs (beta)
+      tags:
+      - settings
   /api/v1/settings/computer-use:
     patch:
       operationId: updateComputerUse
@@ -14709,6 +14747,13 @@ components:
           type: string
       required:
       - data
+      type: object
+    AttributionConfig:
+      properties:
+        disableCommitTrailer:
+          type: boolean
+        disablePRFooter:
+          type: boolean
       type: object
     AutomationEnvelope:
       properties:
@@ -19619,6 +19664,8 @@ components:
           type: string
         agentRulesFile:
           type: string
+        attribution:
+          $ref: '#/components/schemas/AttributionConfig'
         autoReview:
           type: boolean
         canonicalRepoURL:
@@ -21589,6 +21636,11 @@ components:
           type: string
         cloudEnabled:
           type: boolean
+        commitAttribution:
+          description: 'Beta: new sessions add a Co-authored-by: Orchestrator trailer
+            to commits and an Opened with Orchestrator line to PR bodies, unless the
+            project turns them off.'
+          type: boolean
         computerUse:
           description: New chat sessions get tools to drive desktop apps through Cua
             Driver (Settings, Computer use agents).
@@ -21622,6 +21674,7 @@ components:
       - chatHibernationEnabled
       - versionRefresh
       - computerUse
+      - commitAttribution
       - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
@@ -22916,6 +22969,15 @@ components:
           - string
       type: object
     UpdateChatHibernationRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
+    UpdateCommitAttributionRequest:
       properties:
         enabled:
           type:

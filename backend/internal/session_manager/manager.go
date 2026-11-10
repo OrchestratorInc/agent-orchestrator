@@ -339,6 +339,8 @@ type Store interface {
 	// config into the launch command. ok=false means the project is unknown.
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
+	SetSessionCommitAttribution(ctx context.Context, id domain.SessionID, coAuthor string) error
+	SessionCommitAttribution(ctx context.Context, id domain.SessionID) (string, error)
 	CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error)
 	CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
 	CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
@@ -547,6 +549,9 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu sync.Mutex
 	computerUse   func(context.Context) bool
+	// commitAttribution reports the Orchestrator attribution beta; nil is off.
+	commitAttributionMu sync.Mutex
+	commitAttribution   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -1380,7 +1385,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
-	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+	if err := m.provisionWorkspace(ctx, project, id, ws.Path); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 	}
@@ -4693,7 +4698,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		}
 	}
 	if recreated {
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded); err != nil {
 			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
 			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 			return
@@ -4784,7 +4789,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 		}
 		if recreated {
-			if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
+			if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 			}
 		}
@@ -4816,7 +4821,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
 	if recreated {
-		if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 	}
@@ -4827,10 +4832,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 // worktree was reclaimed. Only such a restore runs Setup, so only it extends
 // a REST restore's budget, from now, by the Setup steps' limits; any other
 // restore keeps the request's ordinary budget.
-func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string) error {
 	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancel()
-	return m.provisionWorkspace(ctx, project, workspacePath)
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionRecorded)
 }
 
 func workspacePathMissing(path string) (bool, error) {
@@ -5940,7 +5945,7 @@ func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, 
 	// A fresh, unique branch per worker session: gitworktree can't add a worktree
 	// on a branch already checked out elsewhere (e.g. main). Put the root work
 	// branch under a session namespace so sibling PR branches such as
-	// ao/<session>/<topic> remain valid Git refs.
+	// orchestrator/<session>/<topic> remain valid Git refs.
 	return aoBranch(branchNamespace, string(id), "root")
 }
 
@@ -5963,8 +5968,17 @@ func DefaultOrchestratorBranch(prefix, dataDir string) string {
 	return defaultSessionBranch("", domain.KindOrchestrator, prefix, generatedBranchNamespace(dataDir))
 }
 
+// LegacyOrchestratorBranch is the orchestrator branch a session created before
+// the "orchestrator/" rename recorded, still accepted where branches are checked.
+func LegacyOrchestratorBranch(prefix, dataDir string) string {
+	return strings.Replace(DefaultOrchestratorBranch(prefix, dataDir), domain.SessionBranchPrefix+"/", domain.LegacySessionBranchPrefix+"/", 1)
+}
+
+// aoBranch builds a generated session branch under the "orchestrator/" prefix.
+// Sessions created before the rename keep their recorded "ao/" branches, which
+// PR attribution still matches.
 func aoBranch(namespace string, parts ...string) string {
-	all := []string{"ao"}
+	all := []string{domain.SessionBranchPrefix}
 	if namespace != "" {
 		all = append(all, namespace)
 	}
@@ -6207,6 +6221,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if chat && m.computerUseEnabled(ctx) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
+	}
+	if projectID != "" && m.prFooterWanted(ctx, project) {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, prAttributionPrompt())
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
@@ -6716,11 +6733,25 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // worktree exists: symlink shared files from the project repo, then run any
 // post-create commands. Either failing aborts the spawn so a half-provisioned
 // workspace never launches an agent.
-func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string) error {
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionFromSettings)
+}
+
+// provisionWorkspaceWith is provisionWorkspace with the attribution choice
+// made explicit: a recreated worktree of an existing session keeps the choice
+// that session started with.
+func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice) error {
+	// Before post-create commands, so commits they make are credited too.
+	m.applyCommitAttribution(ctx, project, sessionID, workspacePath, choice)
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
-	return runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env)
+	if err := runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env); err != nil {
+		return err
+	}
+	// Setup may have installed a repository hook that needs a dispatcher.
+	m.refreshAttributionHooks(ctx, project, workspacePath)
+	return nil
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that
