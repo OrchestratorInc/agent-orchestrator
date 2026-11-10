@@ -1,8 +1,11 @@
 #import <React/RCTBridgeModule.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 // A one-shot HTTP listener on 127.0.0.1 for a coding agent's sign-in.
@@ -81,6 +84,40 @@ static NSString *AOEscapeHTML(NSString *text)
     stringByReplacingOccurrencesOfString:@"<" withString:@"&lt;"];
 }
 
+enum { AORequestLineLimit = 8192 };
+static const uint64_t AORequestLineDeadline = 3 * NSEC_PER_SEC;
+
+// The request line ("GET /callback?code=… HTTP/1.1"), read through its line
+// end: one read() may return only part of it. nil when the client closes, or
+// the line isn't complete within 8 KiB and 3 seconds in all, so a client that
+// trickles bytes can't hold the listener.
+static NSString *AOReadRequestLine(int fd)
+{
+  char buffer[AORequestLineLimit];
+  size_t length = 0;
+  uint64_t start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+  while (length < sizeof(buffer)) {
+    uint64_t elapsed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start;
+    if (elapsed >= AORequestLineDeadline) return nil;
+    uint64_t left = AORequestLineDeadline - elapsed;
+    // Each read waits only as long as the deadline has left; a zero timeout would wait forever.
+    struct timeval timeout = { .tv_sec = (time_t)(left / NSEC_PER_SEC), .tv_usec = (suseconds_t)((left % NSEC_PER_SEC) / NSEC_PER_USEC) };
+    if (timeout.tv_sec == 0 && timeout.tv_usec == 0) timeout.tv_usec = 1;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    ssize_t count = read(fd, buffer + length, sizeof(buffer) - length);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) return nil;
+    const char *end = memchr(buffer + length, '\n', (size_t)count);
+    length += (size_t)count;
+    if (end) {
+      size_t lineLength = (size_t)(end - buffer);
+      if (lineLength > 0 && buffer[lineLength - 1] == '\r') lineLength--;
+      return [[NSString alloc] initWithBytes:buffer length:lineLength encoding:NSUTF8StringEncoding] ?: @"";
+    }
+  }
+  return nil;
+}
+
 // Must run on _queue.
 - (void)acceptOn:(int)listener
 {
@@ -88,20 +125,14 @@ static NSString *AOEscapeHTML(NSString *text)
   if (client < 0) return;
   int flags = fcntl(client, F_GETFL, 0);
   fcntl(client, F_SETFL, flags & ~O_NONBLOCK);
-  struct timeval timeout = { .tv_sec = 3, .tv_usec = 0 };
-  setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
   int noSigPipe = 1;
   setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
 
-  char buffer[8192];
-  ssize_t length = read(client, buffer, sizeof(buffer) - 1);
-  if (length <= 0) {
+  NSString *line = AOReadRequestLine(client);
+  if (!line) {
     close(client);
     return;
   }
-  buffer[length] = 0;
-  NSString *request = [[NSString alloc] initWithBytes:buffer length:(NSUInteger)length encoding:NSUTF8StringEncoding] ?: @"";
-  NSString *line = [[request componentsSeparatedByString:@"\r\n"] firstObject] ?: @"";
   NSArray<NSString *> *parts = [line componentsSeparatedByString:@" "];
   NSString *target = parts.count >= 2 ? parts[1] : @"";
   NSString *path = [[target componentsSeparatedByString:@"?"] firstObject] ?: @"";
