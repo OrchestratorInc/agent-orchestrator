@@ -186,6 +186,9 @@ let rutoDefs = "<defs>"
     + "<linearGradient id=\"ruto-sunk\" y2=\"1\" x2=\"0\"><stop offset=\"0\" stop-color=\"#fff\" stop-opacity=\".55\"/><stop offset=\"1\" stop-color=\"#fff\" stop-opacity=\"0\"/></linearGradient>"
     + "</defs>"
 let batonMarkup = batonRect("url(#ruto-stick)")
+// A blue-grey edge so the white baton still reads on light surfaces. Flat
+// artwork only; in the app icon the baton sits on the dark tile.
+let batonEdge = batonRect("#8496AA", extra: " stroke=\"#8496AA\" stroke-width=\"7\"")
 let bodyMarkup = pupils.map { "<rect x=\"\(Int($0.minX))\" y=\"\(Int($0.minY))\" width=\"\(Int($0.width))\" height=\"\(Int($0.height))\" fill=\"url(#ruto-pupil)\"/>" }.joined()
     + "<use href=\"#ruto-outline\" fill=\"url(#ruto-face)\"/>"
     + "<rect x=\"200\" y=\"300\" width=\"300\" height=\"250\" fill=\"url(#ruto-corner)\" clip-path=\"url(#ruto-clip)\"/>"
@@ -194,7 +197,7 @@ let bodyMarkup = pupils.map { "<rect x=\"\(Int($0.minX))\" y=\"\(Int($0.minY))\"
     + "<g clip-path=\"url(#ruto-clip)\">" + batonRect("url(#ruto-sunk)", from: 168, extra: " opacity=\".8\"") + "</g>"
 
 let layerHeader = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1024\" height=\"1024\" viewBox=\"0 0 1024 1024\">"
-let source = layerHeader + rutoDefs + "<g id=\"baton\">" + batonMarkup + "</g><g id=\"body\">" + bodyMarkup + "</g></svg>"
+let source = layerHeader + rutoDefs + "<g id=\"baton\">" + batonEdge + batonMarkup + "</g><g id=\"body\">" + bodyMarkup + "</g></svg>"
 
 // Icon Composer layers, one glass group each.
 let rutoLayer = layerHeader + rutoDefs + bodyMarkup + "</svg>"
@@ -601,6 +604,11 @@ writePNG(fitted(tinted(placed(silhouette), white), width: 96, height: 96, box: C
 
 writePNG(fitted(foreground, width: 1024, height: 1024, box: CGSize(width: 760, height: 760)), "packages/mobile/assets/splash-icon.png")
 writePNG(resized(ictool(platform: "iOS", size: 1024), 256, 256), "packages/mobile/assets/favicon.png")
-// Cropped to the artwork, not its glow. lib/ui.tsx MASCOT_ASPECT is 200 / 256,
-// and WAND_TIP_X/Y there locate the baton tip in this crop.
-writePNG(fitted(foreground, width: 256, height: 200, box: CGSize(width: 256, height: 200), threshold: 128), "packages/mobile/assets/mascot.png")
+// The flat artwork, like the desktop app's mascot: the glass render loses the
+// baton's edge and looks washed out on light themes. lib/ui.tsx MASCOT_ASPECT
+// is 200 / 256, and WAND_TIP_X/Y there locate the baton tip in this crop.
+do {
+    let context = canvas(1024, 1024)
+    draw(svg: source, in: context, rect: CGRect(x: 0, y: 0, width: 1024, height: 1024))
+    writePNG(fitted(context.makeImage()!, width: 256, height: 200, box: CGSize(width: 256, height: 200), threshold: 128), "packages/mobile/assets/mascot.png")
+}

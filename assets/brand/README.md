@@ -39,12 +39,13 @@ when the bundle changes, tracked by `Assets.car.sha256`.
 | `packages/mobile/assets/icon.png` | Expo fallback icon: full-bleed square, no rounding, no alpha. |
 | `packages/mobile/assets/android-icon-{background,foreground,monochrome}.png` | Android adaptive icon. The foreground and monochrome layers are scaled so Ruto stays inside the 66 dp safe zone. |
 | `packages/mobile/assets/notification-icon.png` | Android notification icon (white silhouette). |
-| `packages/mobile/assets/splash-icon.png`, `favicon.png`, `mascot.png` | Splash screen, web favicon, onboarding and connection lamp. |
+| `packages/mobile/assets/splash-icon.png`, `favicon.png` | Splash screen and web favicon. |
+| `packages/mobile/assets/mascot.png` | Onboarding, chat empty state and connection lamp: the flat artwork, like `ao-mascot.svg`, so it reads on light themes. |
 
 To see the iOS icon in every appearance, as a device draws it, run
 `packages/mobile/scripts/preview-icon.sh`.
 
-Glass renders that need no tile (Android foreground, splash, mobile mascot)
+Glass renders that need no tile (Android foreground, splash)
 come from rendering the bundle on a black and a white tile and solving for
 each pixel's alpha, so they carry the same glass shading as the app icon.
 
