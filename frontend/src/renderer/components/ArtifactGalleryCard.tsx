@@ -1,5 +1,4 @@
-import { BrowserIcon } from "./icons";
-import { File, FileText } from "@/components/app-icons";
+import { artifactFileIcon } from "./artifact-file-icon";
 import { useId, type ReactNode } from "react";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
@@ -35,7 +34,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 	previewLive?: boolean;
 	selection?: ArtifactCardSelection;
 }) {
-	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
+	const KindIcon = artifactFileIcon(row);
 	const toggle = selection && !selection.disabledReason ? selection.onToggle : undefined;
 	const descriptionId = useId();
 	return (

@@ -1,5 +1,5 @@
-import { BrowserIcon } from "./icons";
-import { ChevronDown, Clock, Cloud, File, FileText, Filter, Folder, List, Loader2, Package, Pin, Plus, Search, SelectMultiple, Trash2, X } from "@/components/app-icons";
+import { artifactFileIcon } from "./artifact-file-icon";
+import { ChevronDown, Clock, Cloud, File, Filter, Folder, List, Loader2, Package, Pin, Plus, Search, SelectMultiple, Trash2, X } from "@/components/app-icons";
 import { ScrollArea } from "radix-ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
@@ -559,7 +559,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 	const share = useArtifactShareFile(row);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
-	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
+	const KindIcon = artifactFileIcon(row);
 	const selectionDescriptionId = useId();
 
 	const open = () => {
