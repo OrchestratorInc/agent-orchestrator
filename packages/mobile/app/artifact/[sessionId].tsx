@@ -4,12 +4,15 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ViewToken } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
-import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
+import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, artifactStreamSource, getArtifactHead, getArtifactText } from "../../lib/api";
+import { ArtifactMedia } from "../../lib/ArtifactMedia";
+import { ArtifactPdf } from "../../lib/ArtifactPdf";
+import { ArtifactTable } from "../../lib/ArtifactTable";
 import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactVisual } from "../../lib/artifactVisual";
 import { headerTitleWidth } from "../../lib/pagerTitle";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, artifactViewerPages, type SessionArtifact } from "../../lib/artifacts";
+import { ARTIFACT_PROBE_BYTES, artifactCommentTarget, artifactFormatLabel, artifactLanguage, artifactPageAt, artifactViewerPages, artifactViewKind, canShowArtifactHistory, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
@@ -26,6 +29,7 @@ import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { imageSourceForPlatform } from "../../lib/imageSource";
+import { MermaidDiagram } from "../../lib/MermaidDiagram";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -35,10 +39,14 @@ import { font, fontScaleCap, iconSize, radius, space, type } from "../../lib/tok
 import { Button, EmptyState } from "../../lib/ui";
 import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
+import { ViewModeControl, type ViewMode } from "../../lib/view-mode-control";
 
 // Above this, a text file shows as plain text: a full grammar pass over it
 // would stall the JS thread.
 const MAX_HIGHLIGHTED_BYTES = 100 * 1024;
+
+/** Kinds an unlisted file opens in their own viewer: a page would not show them (or would start a download). */
+const UNLISTED_VIEWERS: ReadonlySet<string> = new Set(["video", "audio", "pdf", "image", "binary"]);
 
 /**
  * One artifact, full screen: the phone's counterpart of the desktop's artifact
@@ -79,6 +87,8 @@ function ArtifactViewerContent() {
 	// The page on screen: the file the route opened, until a swipe moves on, or
 	// a link replaces the route's path (below).
 	const [currentPath, setCurrentPath] = useState(path);
+	// An unlisted file has no modified time: the time the viewer opened stands in, so it is fetched fresh each time.
+	const [openedAt] = useState(() => new Date().toISOString());
 	const [openedPath, setOpenedPath] = useState(path);
 	// The pages keep the order they had on open: the list is newest first, so a
 	// file the agent rewrites would otherwise jump to the front and remount.
@@ -208,6 +218,11 @@ function ArtifactViewerContent() {
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
 	if (!config || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifact || !pages) {
+		// A file the session does not list (a worker report's link): media, a PDF,
+		// an image or a binary file gets its own viewer; anything else opens as
+		// the page the daemon renders.
+		const unlisted: SessionArtifact = { path: currentPath, name: currentPath.split("/").pop() || currentPath, kind: /\.html?$/i.test(currentPath) ? "html" : "file", size: 0, updatedAt: openedAt };
+		if (UNLISTED_VIEWERS.has(artifactViewKind(unlisted))) return <ArtifactBody config={config} sessionId={sessionId} artifact={unlisted} active versionOf={versionOf} onAsk={() => {}} />;
 		const url = artifactFileUrl(config, sessionId, currentPath);
 		return url ? <ArtifactWeb config={config} url={url} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
@@ -223,7 +238,7 @@ function ArtifactViewerContent() {
 				// A comment belongs to the file it was opened on; paging waits until it is sent or closed.
 				scrollEnabled={!ask}
 				onPage={showPage}
-				renderPage={(page) => <ArtifactBody config={config} sessionId={sessionId} artifact={page} versionOf={versionOf} onAsk={page.path === currentPath ? askAbout : () => {}} />}
+				renderPage={(page) => <ArtifactBody config={config} sessionId={sessionId} artifact={page} active={page.path === currentPath} versionOf={versionOf} onAsk={page.path === currentPath ? askAbout : () => {}} />}
 			/>
 			{filmstrip ? <ArtifactFilmstrip config={config} sessionId={sessionId} artifacts={pages} index={pageIndex} versionOf={versionOf} onSelect={pageTo} /> : null}
 			{notice ? <View pointerEvents="none" style={[styles.notice, { top: glassInset + space.md }]}><Text style={styles.noticeText}>{notice}</Text></View> : null}
@@ -423,23 +438,66 @@ function PagerTitle({ title, position, actions }: { title: string; position: str
 	);
 }
 
-function ArtifactBody({ config, sessionId, artifact, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; versionOf: (path: string) => string | undefined; onAsk: (quote?: string) => void }) {
+function ArtifactBody({ config, sessionId, artifact, active, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; active: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote?: string) => void }) {
 	const kind = artifactViewKind(artifact);
 	const url = artifactFileUrl(config, sessionId, artifact.path);
 	if (!url) return <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
-	// A text file too large to load into the app still shows, as the page the
-	// daemon serves.
-	const tooLargeForText = artifact.size > MAX_ARTIFACT_TEXT_BYTES;
-	if (kind === "html") return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} page={{ sessionId, path: artifact.path }} />;
-	if (kind === "web-media" && !showsInWebView(artifact.path, Platform.OS)) {
-		return <Unavailable title="PDFs can't be shown on Android yet" message="Open it on the machine, or ask the agent about it from the ⋯ menu." />;
+	switch (kind) {
+		case "html":
+			return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} page={{ sessionId, path: artifact.path }} />;
+		case "svg":
+			return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;
+		case "video":
+		case "audio": {
+			const source = artifactStreamSource(config, sessionId, artifact.path, artifact.updatedAt);
+			return source ? <ArtifactMedia source={source} kind={kind} active={active} name={artifact.name} label={artifactFormatLabel(artifact)} /> : <NoPreview artifact={artifact} />;
+		}
+		case "pdf":
+			// Android's WebView has no PDF viewer: the platform's renderer draws it instead.
+			return Platform.OS === "android" ? <ArtifactPdf config={config} sessionId={sessionId} artifact={artifact} /> : <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;
+		case "binary":
+			return <NoPreview artifact={artifact} />;
+		case "image": {
+			const image = artifactImageSource(config, sessionId, artifact.path, artifact.updatedAt);
+			return image ? <ArtifactImage source={image} name={artifact.name} /> : <NoPreview artifact={artifact} />;
+		}
+		case "markdown":
+		case "text":
+		case "table":
+		case "diagram":
+			// A text file too large to load into the app still shows, as the page the
+			// daemon serves, unless its start shows it is not text.
+			if (artifact.size > MAX_ARTIFACT_TEXT_BYTES) return <LargeArtifact config={config} sessionId={sessionId} artifact={artifact} url={url} />;
+			return <ArtifactText config={config} sessionId={sessionId} artifact={artifact} kind={kind} versionOf={versionOf} onAsk={onAsk} />;
 	}
-	if (kind === "web-media" || ((kind === "markdown" || kind === "text") && tooLargeForText)) {
-		return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;
-	}
-	const image = kind === "image" ? artifactImageSource(config, sessionId, artifact.path, artifact.updatedAt) : undefined;
-	if (image) return <ArtifactImage source={image} name={artifact.name} />;
-	return <ArtifactText config={config} sessionId={sessionId} artifact={artifact} markdown={kind === "markdown"} versionOf={versionOf} onAsk={onAsk} />;
+}
+
+/** A file the phone has no viewer for, said as the desktop says it, with what the file is. */
+function NoPreview({ artifact }: { artifact: Pick<SessionArtifact, "path" | "size"> }) {
+	return <Unavailable title="Preview not available" message={artifactFormatLabel(artifact)} />;
+}
+
+/**
+ * A file too large to load as text: its start decides, as on desktop. Binary
+ * says it has no preview instead of loading megabytes into a page that would
+ * show nothing (or start a download); text opens as the daemon's page.
+ */
+function LargeArtifact({ config, sessionId, artifact, url }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; url: string }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const key = `${sessionId}|${artifact.path}|${artifact.updatedAt}`;
+	const [probe, setProbe] = useState<{ key: string; binary: boolean }>();
+	useEffect(() => {
+		const controller = new AbortController();
+		getArtifactHead(config, sessionId, artifact.path, ARTIFACT_PROBE_BYTES, { signal: controller.signal })
+			.then((head) => setProbe({ key, binary: looksBinary(head) }))
+			// The probe is only a guard: if it fails, the page still opens, as it did before it.
+			.catch(() => { if (!controller.signal.aborted) setProbe({ key, binary: false }); });
+		return () => controller.abort();
+	}, [artifact.path, config, key, sessionId]);
+	if (probe?.key !== key) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	if (probe.binary) return <NoPreview artifact={artifact} />;
+	return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;
 }
 
 function ArtifactWeb({ config, url, version, page }: {
@@ -531,7 +589,9 @@ function ArtifactImage({ source, name }: { source: { uri: string; headers: Recor
 
 type TextState = { key: string; text?: string; error?: string };
 
-function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; markdown: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote: string) => void }) {
+type TextKind = "markdown" | "text" | "table" | "diagram";
+
+function ArtifactText({ config, sessionId, artifact, kind, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; kind: TextKind; versionOf: (path: string) => string | undefined; onAsk: (quote: string) => void }) {
 	const glassInset = useGlassBarInset();
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -539,6 +599,8 @@ function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk 
 	const key = `${sessionId}|${artifact.path}|${artifact.updatedAt}`;
 	const [state, setState] = useState<TextState | null>(null);
 	const [attempt, setAttempt] = useState(0);
+	// A table or diagram opens drawn, and its source is one tap away, as on desktop.
+	const [mode, setMode] = useState<ViewMode>("rendered");
 	// A document's own images live beside it in the artifact folder and need the
 	// connection's credential; a web image loads as it is, with no credential.
 	const resolveImage = useCallback((url: string): MarkdownImageSource | undefined => artifactMarkdownImageSource(config, sessionId, artifact.path, url, versionOf), [artifact.path, config, sessionId, versionOf]);
@@ -555,11 +617,11 @@ function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk 
 		if (state?.key === key && state.error) return <Unavailable title="Couldn't load the artifact" message={state.error} action={<Button title="Try again" icon="refresh-cw" onPress={() => setAttempt((n) => n + 1)} />} />;
 		return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	}
-	if (looksBinary(text)) return <Unavailable title="This file can't be shown on the phone" message={`It isn't text (${formatArtifactSize(artifact.size)}). Open it on the machine instead.`} />;
+	if (looksBinary(text)) return <NoPreview artifact={artifact} />;
 	// A long file shows its start: a text view is laid out whole, on Android on the UI thread.
 	const shown = shownText(text);
 	const cut = shown.truncated ? <View style={[styles.truncated, { marginTop: glassInset }]}><Text style={styles.truncatedText}>Showing the start of this file. Copy contents in the ⋯ menu copies all of it.</Text></View> : null;
-	if (markdown) {
+	if (kind === "markdown") {
 		return (
 			<View style={styles.screen}>
 				{cut}
@@ -570,19 +632,34 @@ function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk 
 			</View>
 		);
 	}
+	const source = (
+		<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.code}>
+			<HighlightedCodeText
+				code={shown.text}
+				language={artifactLanguage(artifact.path)}
+				// Plain text past the cap: highlighting is skipped the same way it is for streaming code.
+				streaming={artifact.size > MAX_HIGHLIGHTED_BYTES}
+				style={styles.codeText}
+				onAddSelection={onAsk}
+			/>
+		</ScrollView>
+	);
+	if (kind === "table" || kind === "diagram") {
+		// Under the header, the switch between the drawn file and its source, as the desktop's Rendered / Source.
+		const rendered = kind === "table"
+			? <ArtifactTable content={text} path={artifact.path} />
+			: <MermaidDiagram code={text} fallback={<View style={styles.screen}><View style={styles.truncated}><Text style={styles.truncatedText}>Couldn't draw this diagram.</Text></View>{source}</View>} />;
+		return (
+			<View style={[styles.screen, { paddingTop: glassInset }]}>
+				<ViewModeControl mode={mode} renderedLabel={kind === "table" ? "Table" : "Diagram"} onChange={setMode} />
+				{mode === "rendered" ? rendered : <View style={styles.screen}>{shown.truncated ? <View style={styles.truncated}><Text style={styles.truncatedText}>Showing the start of this file. Copy contents in the ⋯ menu copies all of it.</Text></View> : null}{source}</View>}
+			</View>
+		);
+	}
 	return (
 		<View style={styles.screen}>
 			{cut}
-			<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.code}>
-				<HighlightedCodeText
-					code={shown.text}
-					language={artifactLanguage(artifact.path)}
-					// Plain text past the cap: highlighting is skipped the same way it is for streaming code.
-					streaming={artifact.size > MAX_HIGHLIGHTED_BYTES}
-					style={styles.codeText}
-					onAddSelection={onAsk}
-				/>
-			</ScrollView>
+			{source}
 		</View>
 	);
 }

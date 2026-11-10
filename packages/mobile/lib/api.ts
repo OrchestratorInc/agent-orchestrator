@@ -687,6 +687,26 @@ export function artifactFileUrl(cfg: ServerConfig, sessionId: string, path: stri
 	return route ? `${httpBase(cfg)}${route}` : undefined;
 }
 
+/**
+ * An authenticated source for a native player or downloader: the preview-files
+ * URL, which streams the file whatever its size and answers range requests,
+ * with the Bearer header the native side sends on every request (a WebView
+ * sends it only on the page load). `version` makes a rewritten file load again.
+ */
+export function artifactStreamSource(cfg: ServerConfig, sessionId: string, path: string, version?: string): { uri: string; headers: Record<string, string> } | undefined {
+	const route = artifactFilePath(sessionId, path, { raw: true });
+	if (!route) return undefined;
+	return { uri: `${httpBase(cfg)}${route}${version ? `&v=${encodeURIComponent(version)}` : ""}`, headers: authHeaders(cfg) };
+}
+
+/** The first `bytes` of an artifact as text, to tell a large text file from a binary one. */
+export async function getArtifactHead(cfg: ServerConfig, sessionId: string, path: string, bytes: number, init?: Pick<RequestInit, "signal">): Promise<string> {
+	const route = artifactFilePath(sessionId, path, { raw: true });
+	if (!route) throw new Error("This artifact's path can't be opened.");
+	const res = await req(cfg, route, { ...init, headers: { Range: `bytes=0-${Math.max(0, bytes - 1)}` } });
+	return res.text();
+}
+
 /** The URL the app reads one artifact's bytes from, with the Bearer header (see artifactFilesPath). */
 export function artifactBytesUrl(cfg: ServerConfig, sessionId: string, path: string): string | undefined {
 	const route = artifactFilesPath(sessionId, path);
