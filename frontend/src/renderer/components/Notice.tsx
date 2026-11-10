@@ -113,7 +113,7 @@ export function NoticeDismissAction({ children }: { children: ReactNode }) {
 type SlotEntry = { id: string; label: string };
 let slotEntries: readonly SlotEntry[] = [];
 let slotHost: HTMLElement | null = null;
-let slotSnapshot = { slots: slotEntries, host: slotHost };
+let slotSnapshot: { slots: readonly SlotEntry[]; host: HTMLElement | null } = { slots: slotEntries, host: slotHost };
 const slotListeners = new Set<() => void>();
 function emitSlots() {
 	slotSnapshot = { slots: slotEntries, host: slotHost };
