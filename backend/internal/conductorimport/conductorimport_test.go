@@ -292,3 +292,19 @@ func TestCopyStepCopiesIgnoredFilesIntoTheWorkspace(t *testing.T) {
 		t.Fatalf("linked file replaced: %v, %v", info, err)
 	}
 }
+
+func TestCopyStepReviewListsTheFirstSortedFiles(t *testing.T) {
+	files := map[string]string{".gitignore": ".env*\n", ".conductor/settings.toml": "[scripts]\nsetup = \"true\"\n"}
+	for i := range maxCopiedFiles + 2 {
+		files[fmt.Sprintf(".env.%03d", i)] = "x"
+	}
+	root := repo(t, files, ".gitignore", ".conductor/settings.toml")
+	plan, err := Read(context.Background(), root, domain.ProjectConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := strings.Split(plan.Added[0].Detail, ", ")
+	if len(listed) != maxCopiedFiles+1 || listed[0] != ".env.000" || listed[maxCopiedFiles-1] != ".env.199" || listed[maxCopiedFiles] != "+2" {
+		t.Fatalf("listed %d files: %q … %q", len(listed), listed[0], listed[len(listed)-1])
+	}
+}

@@ -67,7 +67,7 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 		if (error) throw apiErrorException(error);
 	};
 	return <ScriptsEditor key={`${projectId}:${imports}`} projectId={project.id} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
-		notice={scratch ? undefined : <ConductorImport projectId={project.id} onImported={() => setImports((count) => count + 1)} />}
+		notice={scratch ? undefined : (dirty) => <ConductorImport projectId={project.id} disabled={dirty} onImported={() => setImports((count) => count + 1)} />}
 		save={save} onSaveState={onSaveState} onSaved={() => {
 			void client.invalidateQueries({ queryKey: ["project", projectId] });
 			void client.invalidateQueries({ queryKey: workspaceQueryKey });
@@ -230,7 +230,7 @@ function CopyVariableButton({ text, label }: { text: string; label: string }) {
 function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories = [], cloud, notice, save, onSaveState, onSaved }: {
 	/** The local project, for retrying its cleanup; absent for a Cloud project. */
 	projectId?: string;
-	notice?: ReactNode;
+	notice?: (dirty: boolean) => ReactNode;
 	scratch: boolean;
 	postCreate?: ScriptStepDraft[];
 	preRemove?: ScriptStepDraft[];
@@ -314,7 +314,7 @@ function ScriptsEditor({ projectId, scratch, postCreate, preRemove, repositories
 		setSavedAt(false);
 	};
 	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-3" onSubmit={(event) => { event.preventDefault(); if (!timeoutError) mutation.mutate(commands); }}>
-		{notice}
+		{notice?.(dirty)}
 		<Tabs className="flex flex-1 flex-col gap-3" value={activeTab} onValueChange={(value) => setActiveTab(value as ScriptKind)}>
 			<TabsList aria-label={t("settings.project.scripts")} className="shrink-0 self-start">
 				<TabsTrigger value="setup">{t("settings.project.scriptSetup")}</TabsTrigger>

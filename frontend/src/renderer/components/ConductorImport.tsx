@@ -21,7 +21,7 @@ const rowLabels = {
 	files: "settings.project.conductor.files",
 } as const;
 
-export function ConductorImport({ projectId, onImported }: { projectId: string; onImported: () => void }) {
+export function ConductorImport({ projectId, disabled, onImported }: { projectId: string; disabled: boolean; onImported: () => void }) {
 	const { t } = useTranslation();
 	const client = useQueryClient();
 	const [open, setOpen] = useState(false);
@@ -83,7 +83,7 @@ export function ConductorImport({ projectId, onImported }: { projectId: string; 
 				{t("settings.project.conductor.skipped", { keys: data.skipped.map((item) => item.key).join(", ") })}
 			</p>}
 			<div className="settings-content-row flex flex-wrap items-center gap-2">
-				<Button disabled={run.isPending} onClick={() => run.mutate()} size="sm" type="button" variant="primary">{t("settings.project.conductor.import")}</Button>
+				<Button disabled={disabled || run.isPending} onClick={() => run.mutate()} size="sm" type="button" variant="primary">{t("settings.project.conductor.import")}</Button>
 				<Button disabled={run.isPending} onClick={() => setOpen(false)} size="sm" type="button" variant="quiet">{t("settings.project.conductor.cancel")}</Button>
 				{run.isError && <p role="alert" className="text-sm text-error">{run.error.message}</p>}
 			</div>

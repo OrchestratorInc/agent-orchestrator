@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -96,7 +97,7 @@ type Plan struct {
 // Read merges the Conductor settings in root into current. Source is empty when root has none.
 func Read(ctx context.Context, root string, current domain.ProjectConfig) (Plan, error) {
 	plan := Plan{Config: current, Cues: []CueDraft{}, Added: []Item{}, Warnings: []Item{}, Skipped: []Item{}}
-	if root == "" {
+	if root == "" || runtime.GOOS == "windows" {
 		return plan, nil
 	}
 	repo, err := os.OpenRoot(root)
@@ -436,6 +437,9 @@ func (p *Plan) copyFiles(ctx context.Context, repo *os.Root, root string, settin
 		return nil
 	}
 	p.Config.PostCreate = append(p.Config.PostCreate, step)
+	if len(files) > maxCopiedFiles {
+		files = append(files[:maxCopiedFiles:maxCopiedFiles], fmt.Sprintf("+%d", len(files)-maxCopiedFiles))
+	}
 	p.Added = append(p.Added, Item{Key: key, Detail: strings.Join(files, ", ")})
 	return nil
 }
@@ -513,7 +517,7 @@ func ignoredMatches(ctx context.Context, root string, patterns []string) ([]stri
 	}
 	var files []string
 	for _, file := range strings.Split(string(ignored), "\x00") {
-		if file != "" && len(files) < maxCopiedFiles {
+		if file != "" {
 			files = append(files, file)
 		}
 	}
