@@ -1885,6 +1885,7 @@ const ProjectItem = memo(function ProjectItem({
 				? [{
 					kind: "item" as const,
 					id: "new-task",
+					telemetryAction: "new_task",
 					icon: <Plus aria-hidden="true" />,
 					label: t("shell.newTask"),
 					disabled: isProjectRestarting,
@@ -1895,6 +1896,7 @@ const ProjectItem = memo(function ProjectItem({
 				? [{
 					kind: "item" as const,
 					id: "orchestrator",
+					telemetryAction: "open_orchestrator",
 					icon: <OrchestratorIcon aria-hidden="true" />,
 					label: orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower"),
 					disabled: isSpawning || isProjectProvisioning || isProjectRestarting,
