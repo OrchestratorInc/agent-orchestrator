@@ -11,7 +11,7 @@ import {
 	type BrowserNavState,
 } from "../hooks/useBrowserView";
 import type { BrowserTabsState } from "../../main/browser-view-host";
-import type { BrowserAnnotationStatePayload } from "../../shared/browser-annotations";
+import type { BrowserAnnotationModeInput, BrowserAnnotationStatePayload } from "../../shared/browser-annotations";
 import type { WorkspaceSession } from "../types/workspace";
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { TooltipProvider } from "./ui/tooltip";
@@ -95,14 +95,14 @@ describe("BrowserPanelView with the live browser hook", () => {
 	const navListeners = new Set<(state: BrowserNavState) => void>();
 	const tabsListeners = new Set<(state: BrowserTabsState) => void>();
 	const annotationListeners = new Set<(payload: BrowserAnnotationStatePayload) => void>();
-	let setAnnotationModeMock: ReturnType<typeof vi.fn>;
+	const setAnnotationModeMock = vi.fn<(input: BrowserAnnotationModeInput) => Promise<void>>(async () => undefined);
 
 	beforeEach(() => {
 		navListeners.clear();
 		tabsListeners.clear();
 		annotationListeners.clear();
 		postMock.mockReset();
-		setAnnotationModeMock = vi.fn(async () => undefined);
+		setAnnotationModeMock.mockClear();
 		window.ao = {
 			...original,
 			browser: {
