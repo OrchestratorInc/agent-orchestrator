@@ -202,6 +202,9 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		: processReason ? "Electron process failure" : `Electron main ${exceptionType} in ${topFunction}`;
 	return {
 		type: undefined,
+		// Rebuilt events must keep a JS platform: Sentry applies source maps
+		// (debug IDs) only to javascript or node events.
+		platform: renderer ? "javascript" : "node",
 		event_id: event.event_id,
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
@@ -226,6 +229,7 @@ function scrubMainHandledEvent(event: Sentry.ErrorEvent, installId: string, vers
 	const exceptionType = safeSentryExceptionType(event.exception?.values?.[0]?.type);
 	return {
 		type: undefined,
+		platform: "node",
 		event_id: event.event_id,
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "warning" ? event.level : "error",

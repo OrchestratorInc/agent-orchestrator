@@ -536,6 +536,8 @@ describe("Electron main error sampling and budget", () => {
 		expect(sent.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
 		const event = beforeSendOf()(sent);
 		expect(event?.message).toBe("Renderer TypeError in assets/useSessionWorkspaceFiles:123:45 (unknown)");
+		// Sentry applies source maps only to javascript or node events.
+		expect(event?.platform).toBe("javascript");
 		expect(event?.exception?.values?.[0]?.value).toBe("");
 		expect(event?.exception?.values?.[0]?.stacktrace?.frames?.[0]).toMatchObject({ abs_path: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45 });
 		expect(event?.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
@@ -553,6 +555,9 @@ describe("Electron main error sampling and budget", () => {
 		});
 		expect(event?.exception?.values?.[0]?.stacktrace?.frames?.[0]).toMatchObject({ function: "startDaemon", abs_path: "app:///.vite/build/main.js" });
 		expect(event?.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app:///.vite/build/main.js", debug_id: debugId }]);
+		expect(event?.platform).toBe("node");
+		const handled = beforeSendOf()({ type: undefined, platform: "node", exception: { values: [{ type: "Error" }] }, tags: { "ao.origin": "main_handled", "ao.category": "daemon", "ao.reason": "spawn_failed" } });
+		expect(handled).toMatchObject({ message: "Electron main daemon failure (spawn_failed)", platform: "node" });
 		expect(JSON.stringify(event)).not.toMatch(/alice|Applications/);
 	});
 
