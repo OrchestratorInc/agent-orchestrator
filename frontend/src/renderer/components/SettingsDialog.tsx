@@ -18,6 +18,8 @@ import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
+import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
+import { useCloudCp } from "../hooks/useCloudCp";
 import { isCloudWorkspaceProject } from "../lib/cloud-project-repos";
 import { CloudProjectEnvironmentSettings, ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
@@ -99,7 +101,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// record of it. Resolve it here so its settings load from the control plane.
 	const explicitCloudOrgId = displaySettings?.scope === "project" ? displaySettings.cloudOrgId : undefined;
 	const localProjectScope = displaySettings?.scope === "project" && !remoteHostId && explicitCloudOrgId === undefined;
-	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope || explicitCloudOrgId !== undefined });
+	// Only a project the local daemon may hold needs the org's list to tell
+	// whether it is a Cloud project; one opened as a Cloud project is read on
+	// its own below.
+	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope });
 	const cloudProject = localProjectScope
 		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
 		: undefined;
@@ -117,6 +122,16 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
 	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
+	// The Cloud project itself, by the query its settings pages load it with,
+	// so they share one read: whichever org it is in, wherever it sits in the
+	// org's list.
+	const cloudCp = useCloudCp(isCloudProjectSettings);
+	const cloudProjectRecord = useQuery({
+		queryKey: cloudProjectSettingsQueryKey(cloudCp.baseUrl, cloudOrgId ?? "", projectId),
+		enabled: isCloudProjectSettings && cloudCp.ready,
+		retry: false,
+		queryFn: ({ signal }) => cloudCp.client.getProject(cloudOrgId ?? "", projectId, { signal }).then((response) => response.project),
+	});
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
@@ -132,7 +147,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// instructions added to its agents' prompts live on the control plane.
 	if (isCloudProjectSettings) {
 		// A workspace's repositories are all its own, side by side in its folder.
-		const workspace = isCloudWorkspaceProject(cloudProjects.data?.find((project) => project.id === projectId));
+		const workspace = isCloudWorkspaceProject(cloudProjectRecord.data ?? cloudProject);
 		projectSections.push({ id: "repositories", label: workspace ? t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" }) : t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
 		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
 	}
