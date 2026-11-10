@@ -1849,7 +1849,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Have the organization's new sessions run `expectedVersion` of this harness in place of the AO-tested release (organization admins). The version must be a stable release newer than the AO-tested one that the publisher has (the npm registry, or Cursor's download host); a harness whose version covers more tools (Claude Code's Chat adapter) moves them to their newest releases with it. Each new session's worker installs the release and checks it against what the publisher listed; when that fails the session runs the AO-tested release and the failure shows as the entry's failed `job`. Sessions already running keep their release. */
+        /** @description Have the organization's new sessions run `expectedVersion` of this harness in place of the AO-tested release (organization admins). The version must be a stable release newer than the AO-tested one that the publisher has (the npm registry, or Cursor's download host). Only the harness's CLI moves: the tools it also runs (Claude Code's Chat adapter) keep the release AO tested. Each new session's worker installs the release and checks it against what the publisher listed; when that fails the session runs the AO-tested release and the failure shows as the entry's failed `job`. Sessions already running keep their release. */
         post: operations["installOrgHarnessVersion"];
         delete?: never;
         options?: never;
@@ -1871,7 +1871,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Have the organization's new sessions run the AO-tested release of this harness again, and of every tool its version covers (organization admins; 403 ORG_ADMIN_REQUIRED otherwise). */
+        /** @description Have the organization's new sessions run the AO-tested release of this harness's CLI again (organization admins; 403 ORG_ADMIN_REQUIRED otherwise). */
         delete: operations["resetOrgHarnessVersion"];
         options?: never;
         head?: never;
@@ -2770,7 +2770,7 @@ export interface components {
             plan: components["schemas"]["CloudHarnessInstallPlan"];
             advisory: components["schemas"]["CloudHarnessUpdateAdvisory"];
             job?: components["schemas"]["CloudHarnessInstallJob"];
-            /** @description Tools the harness's version covers besides its CLI (Claude Code's Chat adapter), at the release new sessions run. */
+            /** @description Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter). They always run the release AO tested; clients show them read-only. */
             components?: components["schemas"]["CloudHarnessComponent"][];
         };
         CloudHarnessComponent: {

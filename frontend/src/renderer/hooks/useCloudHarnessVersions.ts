@@ -133,7 +133,7 @@ export interface CloudHarnessDetails {
 	actionable: boolean;
 	/** The latest install of the chosen release failed; that session ran the AO-tested release. */
 	failed: boolean;
-	/** The Chat adapter, for Claude Code. */
+	/** The Chat adapter, for Claude Code: always the release AO tested, shown read-only. */
 	adapterVersion?: string;
 }
 

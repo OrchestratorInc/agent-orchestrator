@@ -1321,7 +1321,7 @@ export interface CloudCpHarnessVersion {
 		finishedAt?: string;
 		updatedAt?: string;
 	};
-	/** Tools the harness's version covers besides its CLI (Claude Code's Chat adapter). */
+	/** Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter), always at the release AO tested. Read-only. */
 	components?: Array<{ tool: string; version: string; defaultVersion: string }>;
 }
 
