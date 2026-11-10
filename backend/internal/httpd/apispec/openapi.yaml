@@ -16673,6 +16673,28 @@ components:
       - hostPath
       - channels
       type: object
+    ControllersConversationTurnArtifactResponse:
+      properties:
+        path:
+          type: string
+        status:
+          enum:
+          - added
+          - modified
+          type: string
+      required:
+      - path
+      - status
+      type: object
+    ControllersConversationTurnArtifactsResponse:
+      properties:
+        files:
+          items:
+            $ref: '#/components/schemas/ControllersConversationTurnArtifactResponse'
+          type: array
+      required:
+      - files
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -17880,6 +17902,8 @@ components:
       type: object
     ConversationTurnResponse:
       properties:
+        artifacts:
+          $ref: '#/components/schemas/ControllersConversationTurnArtifactsResponse'
         completedAt:
           type:
           - "null"

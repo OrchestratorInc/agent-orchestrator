@@ -173,6 +173,7 @@ import {
 	type DiffStatus,
 	type FileChangeFile,
 	type ConversationItem,
+	type TurnArtifactChange,
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
@@ -3830,12 +3831,16 @@ const TURN_ARTIFACT_PAGE_HEIGHT = 800;
  */
 export function TurnResults({
 	diff,
+	reportedArtifacts,
 	items,
 	onReview,
 	onOpenFile,
 	onOpenArtifact,
 }: {
-	diff: TurnDiff;
+	/** Absent for an agent that reports no diffs, or a turn that only wrote artifacts. */
+	diff?: TurnDiff;
+	/** The artifacts the daemon saw the turn create or edit. */
+	reportedArtifacts?: TurnArtifactChange[];
 	items?: ConversationItem[];
 	onReview?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
@@ -3845,16 +3850,16 @@ export function TurnResults({
 	const source = useChatArtifactFiles();
 	const pathHints = useMemo(() => turnPathHints(items), [items]);
 	const split = useMemo(
-		() => splitTurnArtifacts(diff, source?.sessionId, source?.artifacts, (path) => resolveTurnFilePath(path, pathHints)),
-		[diff, source?.sessionId, source?.artifacts, pathHints],
+		() => splitTurnArtifacts(diff, source?.sessionId, source?.artifacts, (path) => resolveTurnFilePath(path, pathHints), reportedArtifacts),
+		[diff, source?.sessionId, source?.artifacts, pathHints, reportedArtifacts],
 	);
-	const files = useMemo<TurnDiff>(() => ({ ...diff, files: split.files }), [diff, split.files]);
+	const files = useMemo<TurnDiff | undefined>(() => (diff ? { ...diff, files: split.files } : undefined), [diff, split.files]);
 	return (
 		<>
 			{split.artifacts.length > 0 && source ? (
 				<TurnArtifacts artifacts={split.artifacts} sessionId={source.sessionId} cloud={source.cloud} onOpenArtifact={onOpenArtifact} />
 			) : null}
-			<TurnChangedFiles diff={files} items={items} onReview={onReview} onOpenFile={onOpenFile} />
+			{files ? <TurnChangedFiles diff={files} items={items} onReview={onReview} onOpenFile={onOpenFile} /> : null}
 		</>
 	);
 }

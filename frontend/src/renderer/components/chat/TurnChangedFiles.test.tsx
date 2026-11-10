@@ -640,6 +640,20 @@ describe("TurnResults", () => {
 		expect(onOpenFile).not.toHaveBeenCalled();
 	});
 
+	it("shows cards for artifacts a shell command wrote, with no turn diff", () => {
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatImageSourceProvider sessionId="session-1" artifacts={artifacts}>
+					<TurnResults reportedArtifacts={[{ path: "guide.md", status: "added" }]} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("1 Artifact")).toBeInTheDocument();
+		expect(screen.getByText("guide.md")).toBeInTheDocument();
+		expect(screen.getByText("Created")).toBeInTheDocument();
+		expect(screen.queryByText(/Files? Changed/)).not.toBeInTheDocument();
+	});
+
 	it("drops the changed-files card when the turn only made artifacts", () => {
 		render(
 			<QueryClientProvider client={new QueryClient()}>

@@ -222,6 +222,7 @@ import {
 	type ConversationMessage,
 	type ConversationTurn,
 	type ConversationUsageLimit,
+	type TurnArtifactChange,
 	type TurnDiff,
 	type TurnSettings,
 } from "../../types/conversation";
@@ -5633,9 +5634,10 @@ const TurnGroup = memo(function TurnGroup({
 			{group.plan ? <TurnPlan plan={group.plan} live={group.live} /> : null}
 			{/* Changed-files review is a settled result, not live activity. Keep it
 			    below the completed assistant response and its bottom action row. */}
-			{group.diff && group.outcome?.state === "completed" && copyableMessageId ? (
+			{(group.diff || group.artifacts?.length) && group.outcome?.state === "completed" && copyableMessageId ? (
 				<TurnResults
 					diff={group.diff}
+					reportedArtifacts={group.artifacts}
 					items={group.items}
 					onReview={onOpenFiles}
 					onOpenFile={onOpenFile}
@@ -6073,6 +6075,8 @@ type TimelineGroup = {
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
+	/** The session artifacts the turn created or edited, whatever wrote them. */
+	artifacts?: TurnArtifactChange[];
 	/** The agent's plan for this turn, when it made one. */
 	plan?: ConversationPlan;
 	/** The turn is still running, so its diff and plan can still change. */
@@ -6262,6 +6266,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
+		group.artifacts = turn.artifacts;
 		// A later turn or run carries a newer copy of a list that spans turns.
 		group.plan = turn.plan?.steps.length && !turn.plan.superseded ? turn.plan : undefined;
 		group.live = turn.state === "running";

@@ -89,6 +89,49 @@ describe("splitTurnArtifacts", () => {
 		expect(split.artifacts[0]?.artifact.path).toBe("final.md");
 	});
 
+	it("labels a bundle Created only when the turn added every file in it, in any order", () => {
+		const bundle = [artifact("demo.app/index.html", { registered: true }), artifact("demo.app/extra.css", { registered: true })];
+		const added = { path: `${ROOT}/demo.app/extra.css`, additions: 3, deletions: 0, status: "added" as const };
+		const modified = { path: `${ROOT}/demo.app/index.html`, additions: 1, deletions: 1, status: "modified" as const };
+		for (const files of [[added, modified], [modified, added]]) {
+			const split = splitTurnArtifacts({ files }, SESSION, bundle);
+			expect(split.artifacts).toHaveLength(1);
+			expect(split.artifacts[0]?.status).toBe("modified");
+		}
+		const created = splitTurnArtifacts(
+			{ files: [added, { ...modified, status: "added" }] },
+			SESSION,
+			bundle,
+		);
+		expect(created.artifacts[0]?.status).toBe("added");
+	});
+
+	it("shows artifacts the daemon saw without any provider diff", () => {
+		const split = splitTurnArtifacts(undefined, SESSION, [artifact("chart.svg"), artifact("notes.md")], undefined, [
+			{ path: "chart.svg", status: "added" },
+			{ path: "notes.md", status: "modified" },
+			{ path: "scratch/tmp.txt", status: "added" },
+		]);
+		expect(split.artifacts.map((entry) => [entry.artifact.path, entry.status])).toEqual([
+			["chart.svg", "added"],
+			["notes.md", "modified"],
+		]);
+		expect(split.files).toEqual([]);
+	});
+
+	it("makes one card when the diff and the daemon both report a file", () => {
+		const split = splitTurnArtifacts(
+			{ files: [{ path: `${ROOT}/report.md`, additions: 26, deletions: 0, status: "added" }] },
+			SESSION,
+			[artifact("report.md")],
+			undefined,
+			[{ path: "report.md", status: "added" }],
+		);
+		expect(split.artifacts).toHaveLength(1);
+		expect(split.artifacts[0]?.status).toBe("added");
+		expect(split.files).toEqual([]);
+	});
+
 	it("leaves the diff untouched without a session or artifacts", () => {
 		expect(splitTurnArtifacts(diff, undefined, [artifact("report.md")]).files).toBe(diff.files);
 		expect(splitTurnArtifacts(diff, SESSION, []).files).toBe(diff.files);
