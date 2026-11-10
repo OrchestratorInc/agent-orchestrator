@@ -2719,6 +2719,7 @@
 	"chat.reauth.expired": "你的 {{agent}} 登录已过期。请重新登录以继续使用此聊天。",
 	"chat.reauth.expiredOnHost": "你在 {{host}} 上的 {{agent}} 登录已过期。请重新登录以继续使用此聊天。",
 	"chat.reauth.logInAgain": "重新登录",
+	"chat.reauth.composerPlaceholder": "登录以继续",
 	"chat.versionSwitch.failedTitle": "无法切换到 {{version}}",
 	"chat.versionSwitch.failedBody": "代理未能在新版本上启动。排队的消息已保留，请恢复代理后重试。",
 	"settings.harness.viewSessions": "查看会话（{{count}}）",

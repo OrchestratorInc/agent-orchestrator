@@ -2689,6 +2689,7 @@
 	"chat.reauth.expired": "Tu sesión de {{agent}} ha caducado. Vuelve a iniciar sesión para seguir usando este chat.",
 	"chat.reauth.expiredOnHost": "Tu sesión de {{agent}} en {{host}} ha caducado. Vuelve a iniciar sesión para seguir usando este chat.",
 	"chat.reauth.logInAgain": "Volver a iniciar sesión",
+	"chat.reauth.composerPlaceholder": "Inicia sesión para continuar",
 	"chat.versionSwitch.failedTitle": "No se pudo cambiar a {{version}}",
 	"chat.versionSwitch.failedBody": "El agente no se inició con la nueva versión. Tus mensajes en cola se conservan; reanuda el agente para volver a intentarlo.",
 	"settings.harness.viewSessions": "Ver sesiones ({{count}})",

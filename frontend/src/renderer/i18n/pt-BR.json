@@ -2689,6 +2689,7 @@
 	"chat.reauth.expired": "Seu login do {{agent}} expirou. Entre novamente para continuar usando este chat.",
 	"chat.reauth.expiredOnHost": "Seu login do {{agent}} em {{host}} expirou. Entre novamente para continuar usando este chat.",
 	"chat.reauth.logInAgain": "Entrar novamente",
+	"chat.reauth.composerPlaceholder": "Entre para continuar",
 	"chat.versionSwitch.failedTitle": "Não foi possível mudar para {{version}}",
 	"chat.versionSwitch.failedBody": "O agente não iniciou na nova versão. Suas mensagens na fila foram mantidas; retome o agente para tentar novamente.",
 	"settings.harness.viewSessions": "Ver sessões ({{count}})",

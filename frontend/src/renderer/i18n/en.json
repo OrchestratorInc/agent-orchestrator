@@ -1672,6 +1672,7 @@
 	"chat.reauth.expired": "Your {{agent}} login has expired. Log in again to keep using this chat.",
 	"chat.reauth.expiredOnHost": "Your {{agent}} login on {{host}} has expired. Log in again to keep using this chat.",
 	"chat.reauth.logInAgain": "Log in again",
+	"chat.reauth.composerPlaceholder": "Log in to continue",
 	"chat.versionSwitch.failedTitle": "Couldn't switch to {{version}}",
 	"chat.versionSwitch.failedBody": "The agent didn't start on the new version. Your queued messages are kept; resume the agent to try again.",
 	"settings.harness.viewSessions": "View sessions ({{count}})",

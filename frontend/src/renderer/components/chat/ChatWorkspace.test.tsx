@@ -2645,7 +2645,7 @@ describe("ChatWorkspace timeline", () => {
 	it.each([
 		["codex", false],
 		["opencode", true],
-	] as const)("on a refused %s login, keeps Resume agent only where the daemon cannot see a sign-in: %s", (harness, keepsResume) => {
+	] as const)("on a refused %s login, asks for a sign-in and keeps Resume agent only where the daemon cannot see one: %s", (harness, keepsResume) => {
 		const stopped = { ...chatFixtureSettled, harness, controller: { state: "stopped" as const } };
 		const view = (account: ConversationSnapshot["account"]) => (
 			<QueryClientProvider client={new QueryClient()}>
@@ -2655,10 +2655,12 @@ describe("ChatWorkspace timeline", () => {
 		const { rerender } = render(view({ authenticationState: "required", reauthRequiredAt: "2026-08-03T00:00:00Z" }));
 		expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
 		expect(Boolean(screen.queryByRole("button", { name: "Resume agent" }))).toBe(keepsResume);
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", keepsResume ? "The controller is not connected" : "Log in to continue");
 
 		rerender(view({ authenticationState: "authenticated" }));
 		expect(screen.queryByRole("button", { name: "Log in again" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", "The controller is not connected");
 	});
 
 	it("offers Restore, not Resume, on a terminated session", async () => {

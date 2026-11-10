@@ -909,6 +909,7 @@ function ChatWorkspaceContent({
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
 		session?.statusReadiness === "checking";
+	const signInRequired = needsReauth(snapshot) && agentAccountProviderFor(snapshot.harness) !== null && !activeRemoteHostId && !session?.cloud;
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -2056,7 +2057,7 @@ function ChatWorkspaceContent({
 							onOpenShell={onOpenShell}
 							openingShell={openingShell}
 							shellError={shellError}
-							signInRequired={needsReauth(snapshot) && agentAccountProviderFor(snapshot.harness) !== null && !activeRemoteHostId && !session?.cloud}
+							signInRequired={signInRequired}
 						/>
 					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
@@ -2258,7 +2259,9 @@ function ChatWorkspaceContent({
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: startupReconnecting
 														? "Reconnecting to the agent…"
-														: undefined
+														: signInRequired && snapshot.controller.state === "stopped"
+															? t("chat.reauth.composerPlaceholder")
+															: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat

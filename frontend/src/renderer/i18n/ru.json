@@ -1729,6 +1729,7 @@
 	"chat.reauth.expired": "Срок действия вашего входа в {{agent}} истёк. Войдите снова, чтобы продолжить пользоваться этим чатом.",
 	"chat.reauth.expiredOnHost": "Срок действия вашего входа в {{agent}} на {{host}} истёк. Войдите снова, чтобы продолжить пользоваться этим чатом.",
 	"chat.reauth.logInAgain": "Войти снова",
+	"chat.reauth.composerPlaceholder": "Войдите, чтобы продолжить",
 	"chat.versionSwitch.failedTitle": "Не удалось перейти на {{version}}",
 	"chat.versionSwitch.failedBody": "Агент не запустился на новой версии. Сообщения в очереди сохранены; возобновите агента, чтобы повторить попытку.",
 	"settings.harness.viewSessions": "Посмотреть сессии ({{count}})",
