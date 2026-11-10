@@ -1,11 +1,9 @@
 package catalogsync_test
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -16,21 +14,12 @@ import (
 // Break caught: the generator accepted fractional trailing zeroes that the
 // runtime's stricter canonical decimal decoder rejected.
 func TestGeneratedFractionalRatesLoadInRuntime(t *testing.T) {
-	root := t.TempDir()
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "openai/o":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":0.0010,"output_cost_per_token":1.2300e-3},
 "zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`)
-	_, err := catalogsync.Sync(root, upstream, catalogsync.Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := pricing.NewCache(root).Load(t.Context())
+	catalog, err := catalogsync.Catalog(upstream)
 	if err != nil {
 		t.Fatalf("runtime load generated catalog: %v", err)
 	}
@@ -52,7 +41,7 @@ func TestGeneratedFractionalRatesLoadInRuntime(t *testing.T) {
 	}
 }
 
-func TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache(t *testing.T) {
+func TestLiveTableBuildsThroughTheFetcherAndSurvivesCache(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/claude-sonnet-4":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":0.000003,"output_cost_per_token":0.000015,"cache_read_input_token_cost":0.0000003,"cache_creation_input_token_cost":0.00000375},
 "openai/gpt-5":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":0.00000125,"output_cost_per_token":0.00001,"input_cost_per_token_priority":0.0000025,"output_cost_per_token_priority":0.00002},
@@ -63,22 +52,6 @@ func TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache(t *testing.T) {
 		if upstream, err = os.ReadFile(path); err != nil { //nolint:gosec // CI-supplied path
 			t.Fatalf("read AO_PRICING_SOURCE: %v", err)
 		}
-	}
-	root := t.TempDir()
-	if _, err := catalogsync.Sync(root, upstream, catalogsync.Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	}); err != nil {
-		t.Fatalf("generate catalog: %v", err)
-	}
-	generated, err := pricing.NewCache(root).Load(t.Context())
-	if err != nil {
-		t.Fatalf("load generated catalog from disk: %v", err)
-	}
-	providerIDs := manifestProviderIDs(t, filepath.Join(root, "pricing", "catalog", "v1", "manifest.json"))
-	if len(providerIDs) == 0 {
-		t.Fatal("generated manifest lists no providers")
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +71,12 @@ func TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache(t *testing.T) {
 	if result.NotModified || result.Catalog == nil || result.ETag != `"v1"` {
 		t.Fatalf("fetch result = %+v, want a complete catalog with its ETag", result)
 	}
+	fetched := result.Catalog.Snapshot()
+	for _, providerID := range pricing.RequiredProviderIDs {
+		if fetched.ProviderVersion(providerID) == "" {
+			t.Fatalf("fetched catalog has no version for required provider %q", providerID)
+		}
+	}
 
 	cache := pricing.NewCache(t.TempDir())
 	if err := cache.Install(t.Context(), result.Catalog); err != nil {
@@ -107,15 +86,8 @@ func TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload installed catalog: %v", err)
 	}
-	for _, providerID := range providerIDs {
-		want := generated.Snapshot().ProviderVersion(providerID)
-		if want == "" {
-			t.Fatalf("generated catalog has no version for provider %q", providerID)
-		}
-		if got := result.Catalog.Snapshot().ProviderVersion(providerID); got != want {
-			t.Errorf("fetched %s version = %q, want %q", providerID, got, want)
-		}
-		if got := reloaded.Snapshot().ProviderVersion(providerID); got != want {
+	for _, providerID := range fetched.ProviderIDs() {
+		if got, want := reloaded.Snapshot().ProviderVersion(providerID), fetched.ProviderVersion(providerID); got != want {
 			t.Errorf("reloaded %s version = %q, want %q", providerID, got, want)
 		}
 	}
@@ -126,25 +98,4 @@ func TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache(t *testing.T) {
 	if cold, err := fetcher.Fetch(t.Context(), `"v1"`, false); err != nil || cold.Catalog == nil {
 		t.Fatalf("fetch without a cache = %+v, %v; want the full table", cold, err)
 	}
-}
-
-func manifestProviderIDs(t *testing.T, path string) []string {
-	t.Helper()
-	contents, err := os.ReadFile(path) //nolint:gosec // test-controlled generated path
-	if err != nil {
-		t.Fatalf("read generated manifest: %v", err)
-	}
-	var manifest struct {
-		Providers []struct {
-			ProviderID string `json:"providerId"`
-		} `json:"providers"`
-	}
-	if err := json.Unmarshal(contents, &manifest); err != nil {
-		t.Fatalf("decode generated manifest: %v", err)
-	}
-	ids := make([]string, 0, len(manifest.Providers))
-	for _, provider := range manifest.Providers {
-		ids = append(ids, provider.ProviderID)
-	}
-	return ids
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
 )
 
 type reportStoreStub struct {
@@ -23,11 +24,21 @@ type snapshotStub struct{ snapshot *pricing.Snapshot }
 
 func (s snapshotStub) Snapshot() *pricing.Snapshot { return s.snapshot }
 
-func repoCatalog(t *testing.T) *pricing.Snapshot {
+const reportPriceTable = `{
+"gpt-6.1-sol":{"litellm_provider":"openai","mode":"responses","input_cost_per_token":0.000005,"output_cost_per_token":0.00003,"cache_read_input_token_cost":0.0000005,
+  "input_cost_per_token_priority":0.00001,"output_cost_per_token_priority":0.00006,"cache_read_input_token_cost_priority":0.000001},
+"gpt-5.5":{"litellm_provider":"openai","mode":"responses","input_cost_per_token":0.000005,"output_cost_per_token":0.00003,"cache_read_input_token_cost":0.0000005,
+  "input_cost_per_token_above_272k_tokens":0.00001,"output_cost_per_token_above_272k_tokens":0.000045,"cache_read_input_token_cost_above_272k_tokens":0.000001},
+"claude-opus-5-5":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":0.000005,"output_cost_per_token":0.000025,"cache_read_input_token_cost":0.0000005,
+  "cache_creation_input_token_cost":0.00000625,"cache_creation_input_token_cost_above_1hr":0.00001},
+"glm-test":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":0.0000006,"output_cost_per_token":0.0000022}
+}`
+
+func testCatalog(t *testing.T) *pricing.Snapshot {
 	t.Helper()
-	catalog, err := pricing.NewCache("../../../..").Load(context.Background())
+	catalog, err := catalogsync.Catalog([]byte(reportPriceTable))
 	if err != nil {
-		t.Fatalf("load repository catalog: %v", err)
+		t.Fatalf("build test catalog: %v", err)
 	}
 	return catalog.Snapshot()
 }
@@ -54,7 +65,7 @@ func pricedEvent(t *testing.T, snapshot *pricing.Snapshot, event domain.UsageRep
 func int64p(value int64) *int64 { return &value }
 
 func TestReportBucketsSplitsAndFilters(t *testing.T) {
-	snapshot := repoCatalog(t)
+	snapshot := testCatalog(t)
 	kolkata, err := time.LoadLocation("Asia/Kolkata")
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +188,7 @@ func TestReportCountsReportedTotalWithoutSplit(t *testing.T) {
 		}
 	}
 	store := &reportStoreStub{events: []domain.UsageReportEvent{event("paid-model", 7_591_330), event("big-pickle", 0)}}
-	reader := NewReportReader(store, snapshotStub{repoCatalog(t)})
+	reader := NewReportReader(store, snapshotStub{testCatalog(t)})
 	reader.now = func() time.Time { return now }
 
 	report, err := reader.Report(context.Background(), 1, 0, "UTC", "app")
@@ -200,7 +211,7 @@ func TestReportCountsReportedTotalWithoutSplit(t *testing.T) {
 }
 
 func TestReportCacheSavingsIgnoreSummedLongContext(t *testing.T) {
-	snapshot := repoCatalog(t)
+	snapshot := testCatalog(t)
 	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 	const providerUsage = `{"last_token_usage":{"cache_write_input_tokens":0}}`
 	request := pricedEvent(t, snapshot, domain.UsageReportEvent{

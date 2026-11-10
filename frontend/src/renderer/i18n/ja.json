@@ -3788,6 +3788,7 @@
 	"usage.limits.checked": "確認: {{value}}",
 	"usage.limits.noWindows": "上限の期間はまだ報告されていません。",
 	"usage.limits.signedOut": "サインアウト済み",
+	"usage.limits.staleFrom": "{{value}}の数値を表示中",
 	"usage.limits.thisComputer": "このコンピューターのログイン",
 	"usage.limits.paceLeft": "このペースならリセット時の残りは約 {{value}}",
 	"usage.limits.paceRanOut": "このペースではすでに使い切っています",

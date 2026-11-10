@@ -2279,45 +2279,6 @@ type MemoryPressureResponse struct {
 	PressureSource string  `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
 }
 
-// UsageTotalsResponse is the canonical telemetry aggregate for one scope.
-//
-// Provider-specific counters are no longer projected here: they live verbatim
-// in each event's bounded provider usage object, where a field the provider
-// adds later survives without a schema change on this boundary.
-type UsageTotalsResponse struct {
-	InputTokens         *int64                 `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
-	CachedInputTokens   *int64                 `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens."`
-	UncachedInputTokens *int64                 `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache. Includes cache writes."`
-	OutputTokens        *int64                 `json:"outputTokens" minimum:"0" description:"Total output, including provider-specific subsets such as reasoning output."`
-	ProcessedTokens     *int64                 `json:"processedTokens" minimum:"0" description:"Canonical input plus output. Null when either component is unknown."`
-	CacheReadTokens     *int64                 `json:"cacheReadTokens" minimum:"0" description:"Deprecated compatibility alias for cachedInputTokens."`
-	EstimatedCost       *EstimatedCostResponse `json:"estimatedCost"`
-}
-
-// UsageModelResponse is telemetry grouped by model. The billing provider is a
-// pricing input rather than a product distinction: each event was costed
-// against its own provider's rates before reaching this aggregate, so one model
-// stays one row even when more than one provider served it.
-type UsageModelResponse struct {
-	ModelID string              `json:"modelId"`
-	Totals  UsageTotalsResponse `json:"totals"`
-}
-
-// UsageHarnessResponse groups model telemetry under one AO harness.
-type UsageHarnessResponse struct {
-	Harness string               `json:"harness"`
-	Totals  UsageTotalsResponse  `json:"totals"`
-	Models  []UsageModelResponse `json:"models"`
-}
-
-// SessionUsageResponse is detailed telemetry for the session inspector.
-type SessionUsageResponse struct {
-	SessionID  domain.SessionID       `json:"sessionId"`
-	Incomplete bool                   `json:"incomplete"`
-	Totals     UsageTotalsResponse    `json:"totals"`
-	Harnesses  []UsageHarnessResponse `json:"harnesses"`
-}
-
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
 type SystemRequirementsResponse = systemcheck.Report
 

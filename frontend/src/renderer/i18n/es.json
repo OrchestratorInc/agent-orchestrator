@@ -3857,6 +3857,7 @@
 	"usage.limits.checked": "Comprobado {{value}}",
 	"usage.limits.noWindows": "Aún no se ha informado de ninguna ventana de límite.",
 	"usage.limits.signedOut": "Sesión cerrada",
+	"usage.limits.staleFrom": "Datos de {{value}}",
 	"usage.limits.thisComputer": "Sesión de este equipo",
 	"usage.limits.paceLeft": "A este ritmo: quedará cerca de {{value}} al reiniciarse",
 	"usage.limits.paceRanOut": "A este ritmo ya se agotó",

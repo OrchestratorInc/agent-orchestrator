@@ -1391,7 +1391,6 @@ describe("SessionInspector usage", () => {
 		renderWithQuery(<SessionInspector session={session([])} />);
 		expect(await screen.findByText("Branch")).toBeInTheDocument();
 		expect(screen.queryByText("Usage & cost")).not.toBeInTheDocument();
-		expect(getMock).not.toHaveBeenCalledWith("/api/v1/usage/sessions/{sessionId}", expect.anything());
 	});
 });
 

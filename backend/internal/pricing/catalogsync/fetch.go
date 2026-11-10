@@ -23,11 +23,7 @@ const (
 
 // Catalog builds a runtime catalog from one copy of LiteLLM's price table, with every provider it prices: a harness can bill through any of them.
 func Catalog(upstream []byte) (*pricing.Catalog, error) {
-	generated, err := build(upstream, Source{
-		Repository: "BerriAI/litellm",
-		Revision:   gitBlobID(upstream),
-		Path:       "model_prices_and_context_window.json",
-	}, true)
+	generated, err := build(upstream)
 	if err != nil {
 		return nil, err
 	}

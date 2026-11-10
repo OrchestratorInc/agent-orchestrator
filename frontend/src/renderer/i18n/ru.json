@@ -4140,6 +4140,7 @@
 	"usage.limits.checked": "Проверено {{value}}",
 	"usage.limits.noWindows": "Окна лимитов пока не получены.",
 	"usage.limits.signedOut": "Вход не выполнен",
+	"usage.limits.staleFrom": "Показаны данные, полученные {{value}}",
 	"usage.limits.thisComputer": "Вход на этом компьютере",
 	"usage.limits.paceLeft": "В таком темпе к сбросу останется около {{value}}",
 	"usage.limits.paceRanOut": "В таком темпе лимит уже закончился",

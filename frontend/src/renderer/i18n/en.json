@@ -3770,6 +3770,7 @@
 	"usage.limits.checked": "Checked {{value}}",
 	"usage.limits.noWindows": "No limit windows reported yet.",
 	"usage.limits.signedOut": "Signed out",
+	"usage.limits.staleFrom": "Showing numbers from {{value}}",
 	"usage.limits.thisComputer": "This computer's login",
 	"usage.limits.paceLeft": "At this pace: about {{value}} left at the reset",
 	"usage.limits.paceRanOut": "At this pace it has run out",

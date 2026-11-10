@@ -278,6 +278,11 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
+			s.mu.Lock()
+			if prev := s.readings[account.ID]; prev != nil && prev.limits != nil && strings.EqualFold(prev.identity.Email, identity.Email) {
+				r.limits = prev.limits
+			}
+			s.mu.Unlock()
 		} else {
 			r.limits = &limits
 			email, plan := identity.Email, identity.Plan
@@ -302,7 +307,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	s.mu.Unlock()
 	// The limits come from the provider's API under this login, so a reading
 	// that has them shows the login worked when the reading began.
-	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil {
+	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil && r.limitsErr == "" {
 		confirmed(account, r.at)
 	}
 	return r

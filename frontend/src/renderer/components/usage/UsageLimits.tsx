@@ -56,7 +56,7 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 }
 
 function AccountLimitRows({ account, harness, first, now }: { account: AgentAccount; harness: string; first: boolean; now: Date }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const windows = account.limits?.windows ?? [];
 	const plan = formatPlanName(account.plan);
 	const resetCredits = account.limits?.resetCredits ?? 0;
@@ -67,6 +67,8 @@ function AccountLimitRows({ account, harness, first, now }: { account: AgentAcco
 		resetCredits > 0 ? t("usage.limits.resetCredits", { value: resetCredits }) : null,
 	].filter(Boolean).join(" · ");
 	const issue = account.problem || (account.signedIn ? null : t("usage.limits.signedOut"));
+	const fetchedAt = account.limits?.fetchedAt;
+	const staleFrom = issue && windows.length > 0 && fetchedAt ? t("usage.limits.staleFrom", { value: formatRelativeTime(fetchedAt, now, i18n.language) }) : null;
 	return (
 		<>
 			<div className={cn("col-span-full flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5", !first && "mt-4")} data-usage-account={account.id}>
@@ -75,7 +77,7 @@ function AccountLimitRows({ account, harness, first, now }: { account: AgentAcco
 				{issue ? (
 					<span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
 						<TriangleAlert aria-hidden="true" className="size-icon-sm self-center text-warning" />
-						{issue}
+						{staleFrom ? `${issue} · ${staleFrom}` : issue}
 					</span>
 				) : null}
 			</div>

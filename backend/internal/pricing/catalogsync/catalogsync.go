@@ -10,10 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"os"
-	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,23 +19,9 @@ import (
 )
 
 const (
-	catalogRelativePath = "pricing/catalog/v1"
 	schemaVersion       = 1
 	maxCanonicalRateLen = 128
 )
-
-// Source identifies the immutable upstream file from which a catalog was
-// generated.
-type Source struct {
-	Repository string
-	Revision   string
-	Path       string
-}
-
-// Result reports whether Sync changed the reviewed catalog.
-type Result struct {
-	Changed bool
-}
 
 type manifest struct {
 	SchemaVersion int            `json:"schemaVersion"`
@@ -218,88 +201,12 @@ func decodeNumber(raw json.RawMessage) (*json.Number, error) {
 	return &number, nil
 }
 
-// Sync generates a catalog under root. Existing, hash-addressed provider blobs
-// are never modified or removed. A source revision change with identical
-// provider payload hashes is a semantic no-op and leaves the manifest intact.
-func Sync(root string, upstream []byte, source Source) (Result, error) {
-	generated, err := build(upstream, source, false)
-	if err != nil {
-		return Result{}, err
-	}
-	dir := filepath.Join(root, filepath.FromSlash(catalogRelativePath))
-	current, err := readManifest(filepath.Join(dir, "manifest.json"))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Result{}, err
-	}
-	if err == nil && sameProviders(current.Providers, generated.manifest.Providers) {
-		return Result{}, nil
-	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return Result{}, fmt.Errorf("create catalog directory: %w", err)
-	}
-	for providerID, blob := range generated.blobs {
-		ref := findProvider(generated.manifest.Providers, providerID)
-		path := filepath.Join(dir, filepath.FromSlash(ref.Path))
-		if err := writeAppendOnly(path, blob); err != nil {
-			return Result{}, err
-		}
-	}
-	manifestBytes, err := canonicalJSON(generated.manifest)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifestBytes, 0o600); err != nil {
-		return Result{}, fmt.Errorf("write manifest: %w", err)
-	}
-	return Result{Changed: true}, nil
-}
-
-// Validate verifies the manifest and every provider blob it references. It
-// intentionally permits unreferenced historical blobs in the provider folders.
-func Validate(root string) error {
-	dir := filepath.Join(root, filepath.FromSlash(catalogRelativePath))
-	m, err := readManifest(filepath.Join(dir, "manifest.json"))
-	if err != nil {
-		return err
-	}
-	if err := validateManifest(m); err != nil {
-		return err
-	}
-	for _, ref := range m.Providers {
-		if !isProviderPath(ref.ProviderID, ref.SHA256, ref.Path) {
-			return fmt.Errorf("provider %q has unsafe or noncanonical path %q", ref.ProviderID, ref.Path)
-		}
-		contents, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ref.Path)))
-		if err != nil {
-			return fmt.Errorf("read provider %q: %w", ref.ProviderID, err)
-		}
-		if hash(contents) != ref.SHA256 {
-			return fmt.Errorf("provider %q hash mismatch", ref.ProviderID)
-		}
-		var blob providerBlob
-		if err := json.Unmarshal(contents, &blob); err != nil {
-			return fmt.Errorf("decode provider %q: %w", ref.ProviderID, err)
-		}
-		canonical, err := canonicalJSON(blob)
-		if err != nil || !bytes.Equal(contents, canonical) {
-			return fmt.Errorf("provider %q is not canonical JSON", ref.ProviderID)
-		}
-		if err := validateBlob(blob, ref); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 type generatedCatalog struct {
 	manifest manifest
 	blobs    map[string][]byte
 }
 
-func build(upstream []byte, source Source, every bool) (generatedCatalog, error) {
-	if source.Repository != "BerriAI/litellm" || source.Path != "model_prices_and_context_window.json" || !isSHA(source.Revision) {
-		return generatedCatalog{}, errors.New("source must identify BerriAI/litellm at an exact 40-character revision")
-	}
+func build(upstream []byte) (generatedCatalog, error) {
 	decoder := json.NewDecoder(bytes.NewReader(upstream))
 	var records map[string]json.RawMessage
 	if err := decoder.Decode(&records); err != nil {
@@ -316,7 +223,7 @@ func build(upstream []byte, source Source, every bool) (generatedCatalog, error)
 			continue
 		}
 		providerID, ok := canonicalProvider(record.Provider)
-		if !ok || !supportedMode(record.Mode) || (!every && !slices.Contains(pricing.RequiredProviderIDs, providerID)) {
+		if !ok || !supportedMode(record.Mode) {
 			continue
 		}
 		// LiteLLM also carries metadata-only model entries in chat/responses
@@ -370,7 +277,11 @@ func build(upstream []byte, source Source, every bool) (generatedCatalog, error)
 	}
 	sort.Strings(providers)
 	generated := generatedCatalog{blobs: make(map[string][]byte)}
-	generated.manifest = manifest{SchemaVersion: schemaVersion, Source: manifestSource(source), Providers: make([]providerRef, 0, len(providers))}
+	generated.manifest = manifest{SchemaVersion: schemaVersion, Source: manifestSource{
+		Repository: "BerriAI/litellm",
+		Revision:   gitBlobID(upstream),
+		Path:       "model_prices_and_context_window.json",
+	}, Providers: make([]providerRef, 0, len(providers))}
 	for _, providerID := range providers {
 		models := modelsByProvider[providerID]
 		ids := make([]string, 0, len(models))
@@ -677,73 +588,6 @@ func hash(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func readManifest(path string) (manifest, error) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return manifest{}, err
-	}
-	var m manifest
-	if err := json.Unmarshal(contents, &m); err != nil {
-		return manifest{}, fmt.Errorf("decode manifest: %w", err)
-	}
-	canonical, err := canonicalJSON(m)
-	if err != nil || !bytes.Equal(contents, canonical) {
-		return manifest{}, errors.New("manifest is not canonical JSON")
-	}
-	return m, nil
-}
-
-func writeAppendOnly(path string, contents []byte) (err error) {
-	if existing, err := os.ReadFile(path); err == nil {
-		if !bytes.Equal(existing, contents) {
-			return fmt.Errorf("refusing to modify existing provider blob %s", path)
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return writeAppendOnly(path, contents)
-		}
-		return err
-	}
-	defer func() {
-		if closeErr := file.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-	if _, err := file.Write(contents); err != nil {
-		return err
-	}
-	return nil
-}
-
-func sameProviders(left, right []providerRef) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func findProvider(providers []providerRef, providerID string) providerRef {
-	for _, provider := range providers {
-		if provider.ProviderID == providerID {
-			return provider
-		}
-	}
-	panic("missing generated provider " + providerID)
-}
-
 func equalRates(left, right rates) bool {
 	return left.UncachedInputUSDPerToken == right.UncachedInputUSDPerToken &&
 		equalOptionalRate(left.CacheReadUSDPerToken, right.CacheReadUSDPerToken) &&
@@ -757,42 +601,6 @@ func equalOptionalRate(left, right *string) bool {
 		return left == nil && right == nil
 	}
 	return *left == *right
-}
-
-func isSHA(value string) bool {
-	if len(value) != 40 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
-}
-
-func isProviderPath(providerID, digest, path string) bool {
-	return path == "providers/"+providerID+"/"+digest+".json" && isSHA256(digest)
-}
-
-func isSHA256(value string) bool {
-	if len(value) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
-}
-
-func validateManifest(m manifest) error {
-	if m.SchemaVersion != schemaVersion || m.Source.Repository != "BerriAI/litellm" || m.Source.Path != "model_prices_and_context_window.json" || !isSHA(m.Source.Revision) {
-		return errors.New("invalid manifest schema or source")
-	}
-	if len(m.Providers) != len(pricing.RequiredProviderIDs) {
-		return errors.New("manifest must contain exactly the required providers")
-	}
-	for index, providerID := range pricing.RequiredProviderIDs {
-		ref := m.Providers[index]
-		if ref.ProviderID != providerID || ref.ModelCount < 1 || ref.Version != "ao-catalog:"+providerID+":sha256:"+ref.SHA256 || !isProviderPath(providerID, ref.SHA256, ref.Path) {
-			return fmt.Errorf("invalid manifest provider %q", providerID)
-		}
-	}
-	return nil
 }
 
 // withPlausibleCacheTiers drops an Anthropic cache-write rate the upstream feed
@@ -873,50 +681,4 @@ func optionalRat(value *string) (*big.Rat, error) {
 		return nil, fmt.Errorf("uninterpretable rate %q", *value)
 	}
 	return parsed, nil
-}
-
-func validateBlob(blob providerBlob, ref providerRef) error {
-	if blob.SchemaVersion != schemaVersion || blob.ProviderID != ref.ProviderID || len(blob.Models) != ref.ModelCount {
-		return fmt.Errorf("invalid provider blob %q", ref.ProviderID)
-	}
-	previous := ""
-	for _, model := range blob.Models {
-		if model.ModelID == "" || model.ModelID != strings.ToLower(strings.TrimSpace(model.ModelID)) || model.ModelID <= previous {
-			return fmt.Errorf("provider %q has unsorted or noncanonical models", ref.ProviderID)
-		}
-		previous = model.ModelID
-		if err := validateCanonicalRate(model.Rates.UncachedInputUSDPerToken); err != nil {
-			return fmt.Errorf("provider %q invalid input rate: %w", ref.ProviderID, err)
-		}
-		if err := validateCanonicalRate(model.Rates.OutputUSDPerToken); err != nil {
-			return fmt.Errorf("provider %q invalid output rate: %w", ref.ProviderID, err)
-		}
-		for _, optional := range []*string{model.Rates.CacheReadUSDPerToken, model.Rates.CacheWriteUSDPerToken, model.Rates.CacheWrite1HUSDPerToken} {
-			if optional != nil {
-				if err := validateCanonicalRate(*optional); err != nil {
-					return fmt.Errorf("provider %q invalid cache rate: %w", ref.ProviderID, err)
-				}
-			}
-		}
-		// Canonical spelling says nothing about whether a number is possible.
-		// A rate the provider cannot mean is billed as confidently as a right
-		// one, so the relationship is checked on everything that ships.
-		if ref.ProviderID == "anthropic" {
-			if err := checkAnthropicCacheTiers(model.Rates); err != nil {
-				return fmt.Errorf("provider %q model %q implausible cache tiers: %w", ref.ProviderID, model.ModelID, err)
-			}
-		}
-	}
-	return nil
-}
-
-func validateCanonicalRate(value string) error {
-	normalized, err := normalizeDecimal(value)
-	if err != nil {
-		return err
-	}
-	if normalized != value {
-		return fmt.Errorf("noncanonical rate %q", value)
-	}
-	return nil
 }

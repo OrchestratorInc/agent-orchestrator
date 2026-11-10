@@ -999,15 +999,6 @@ func (s *Store) ListUsageModelAggregates(ctx context.Context, sessionID domain.S
 	return out, nil
 }
 
-// GetUsageSessionIncomplete reports whether durable collection facts indicate missing usage.
-func (s *Store) GetUsageSessionIncomplete(ctx context.Context, sessionID domain.SessionID) (bool, error) {
-	incomplete, err := s.qr.GetUsageSessionIncomplete(ctx, string(sessionID))
-	if err != nil {
-		return false, fmt.Errorf("get usage integrity for session %s: %w", sessionID, err)
-	}
-	return incomplete != 0, nil
-}
-
 // ListCompactSessionUsageAggregates returns sessions with observed usage in
 // one grouped read. projectID optionally limits the rows to one dashboard board.
 func (s *Store) ListCompactSessionUsageAggregates(ctx context.Context, projectID domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error) {

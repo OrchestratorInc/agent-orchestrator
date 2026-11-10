@@ -3770,6 +3770,7 @@
 	"usage.limits.checked": "检查于 {{value}}",
 	"usage.limits.noWindows": "尚未报告任何限额窗口。",
 	"usage.limits.signedOut": "已退出登录",
+	"usage.limits.staleFrom": "显示{{value}}的数据",
 	"usage.limits.thisComputer": "此电脑的登录",
 	"usage.limits.paceLeft": "按此速度，重置时约剩 {{value}}",
 	"usage.limits.paceRanOut": "按此速度已用完",

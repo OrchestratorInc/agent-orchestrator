@@ -404,19 +404,6 @@ func (q *Queries) GetUsageBindingBySessionHarnessRoot(ctx context.Context, arg G
 	return i, err
 }
 
-const getUsageSessionIncomplete = `-- name: GetUsageSessionIncomplete :one
-SELECT CAST(COALESCE((
-    SELECT incomplete FROM usage_session_integrity WHERE session_id = ?
-), 0) AS INTEGER)
-`
-
-func (q *Queries) GetUsageSessionIncomplete(ctx context.Context, sessionID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getUsageSessionIncomplete, sessionID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const getUsageSourceWithBindingAndSession = `-- name: GetUsageSourceWithBindingAndSession :one
 SELECT
     us.id AS source_id,
