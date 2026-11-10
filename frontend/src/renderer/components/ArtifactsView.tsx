@@ -84,7 +84,8 @@ export function ArtifactsView() {
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
-	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
+	const orchestratorTitle = t("shell.orchestrator");
+	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? [], orchestratorTitle), [workspaces, orchestratorTitle]);
 	const projectAvatars = useProjectAvatars(workspaces ?? NO_WORKSPACES);
 	const [query, setQuery] = useState("");
 	const [projectId, setProjectId] = useState("");
