@@ -6035,6 +6035,7 @@ export interface components {
             activities: components["schemas"]["ConversationActivityResponse"][];
             /** Format: int64 */
             afterSequence?: number;
+            batchedDeliveries?: components["schemas"]["DomainConversationBatchedDelivery"][];
             branchMaterialization?: components["schemas"]["ConversationBranchMaterializationResponse"];
             branchPoints?: components["schemas"]["ConversationBranchPointResponse"][];
             branchedFromEarlierMessage: boolean;
@@ -6260,6 +6261,11 @@ export interface components {
             /** Format: date-time */
             lastActivityAt: string;
             state: string;
+        };
+        DomainConversationBatchedDelivery: {
+            deliveredWithTurnId: string;
+            steerActivityId?: string;
+            turnId: string;
         };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];

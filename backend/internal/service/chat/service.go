@@ -1958,6 +1958,8 @@ type Snapshot struct {
 	HasMoreBefore                    bool
 	// AfterSequence is the floor of a tail read, or zero for a whole page.
 	AfterSequence int64
+	// BatchedDeliveries links queued turns AO batched into another turn's input.
+	BatchedDeliveries []domain.ConversationBatchedDelivery
 	// Usage and RateLimits are current state carried on the snapshot the client
 	// already polls, rather than timeline entries or a second request. Both are nil
 	// until the provider has reported, so a client can tell "not known yet" from a
@@ -2004,6 +2006,8 @@ type ConversationRows struct {
 	OldestSequence                   int64
 	HasMoreBefore                    bool
 	AfterSequence                    int64
+	// BatchedDeliveries links queued turns AO batched into another turn's input.
+	BatchedDeliveries []domain.ConversationBatchedDelivery
 }
 
 // idleControllerState is what a session with no live controller reports. A
@@ -2112,6 +2116,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		Activities:                       rows.Activities,
 		BranchPoints:                     rows.BranchPoints,
 		BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+		BatchedDeliveries:                rows.BatchedDeliveries,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,
@@ -2157,7 +2162,7 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 		state, caps = controller.State(), controller.Capabilities()
 		dispatching = controller.DispatchingTurnIDs()
 	}
-	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
+	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, BatchedDeliveries: rows.BatchedDeliveries, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
 }
 
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
@@ -2234,6 +2239,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		OldestSequence:                   rows.OldestSequence,
 		HasMoreBefore:                    rows.HasMoreBefore,
 		AfterSequence:                    rows.AfterSequence,
+		BatchedDeliveries:                rows.BatchedDeliveries,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,

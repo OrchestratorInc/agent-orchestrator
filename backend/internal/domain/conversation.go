@@ -891,3 +891,12 @@ const (
 	ConversationSteerRejectedByProvider          ConversationSteerRejectionKind = "provider_refused"
 	ConversationSteerRejectedInterfaceTransition ConversationSteerRejectionKind = "interface_transition"
 )
+
+// ConversationBatchedDelivery links a queued turn AO batched into another turn's
+// provider input. SteerActivityID names the steer that carried it; empty means a
+// queue drain, where the turn joined DeliveredWithTurnID's input from the start.
+type ConversationBatchedDelivery struct {
+	TurnID              string `json:"turnId"`
+	DeliveredWithTurnID string `json:"deliveredWithTurnId"`
+	SteerActivityID     string `json:"steerActivityId,omitempty"`
+}

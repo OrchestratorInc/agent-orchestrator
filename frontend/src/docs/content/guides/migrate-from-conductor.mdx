@@ -1,0 +1,156 @@
+---
+title: Move from Conductor
+description: Save Conductor Cloud work before 13 November and set up your repositories in Orchestrator.
+---
+
+Conductor Cloud goes read-only on Friday, 13 November 2026, and Conductor starts deleting Cloud data on Friday, 20 November. The local Conductor app keeps working until early 2027, and its files stay on your Mac.
+
+## Save your Conductor Cloud work before 13 November
+
+Do these steps in Conductor. Orchestrator cannot read Conductor Cloud, so anything you do not move out is deleted on 20 November.
+
+<Steps>
+<Step>
+
+### Push every branch
+
+Push each branch you want to keep, including unfinished work. In the workspace terminal:
+
+```sh
+git add -A && git commit -m "WIP: move from Conductor" && git push -u origin HEAD
+```
+
+Git does not push ignored files such as `.env`. Copy those separately.
+
+</Step>
+<Step>
+
+### Transfer the workspaces you want to continue
+
+Right-click each Cloud workspace and choose **Transfer to local**. Conductor moves the workspace and its chats to your Mac.
+
+</Step>
+<Step>
+
+### Export your account
+
+Choose **Settings → Account → Export data** and keep the archive.
+
+</Step>
+<Step>
+
+### Write down your Cloud settings
+
+Copy your Cloud setup script, environment variables, secrets, run actions, and routines somewhere safe. You set them up again in Orchestrator.
+
+</Step>
+</Steps>
+
+## Move a repository
+
+<Steps>
+<Step>
+
+### Add the repository
+
+Choose **New project → Open a local folder** and pick the repository Conductor uses as the root, not a folder under `~/conductor/workspaces`. Orchestrator creates its own worktree and branch for each session, so your Conductor workspaces stay where they are.
+
+</Step>
+<Step>
+
+### Copy the Conductor settings
+
+Conductor keeps a repository's settings in `.conductor/settings.toml`, with personal overrides in `.conductor/settings.local.toml`, or in `conductor.json` in older repositories. Open **Project settings → Scripts** and copy each setting:
+
+| Conductor | Orchestrator |
+| --- | --- |
+| `scripts.setup` | a **Setup** step |
+| `scripts.archive` | a **Cleanup** step |
+| `scripts.run` actions | one command **Cue** each |
+| `environment_variables` | project **Environment** variables |
+| `prompts.general` | **Instructions** |
+| Files to copy, `.worktreeinclude`, or `file_include_globs` | a **Setup** step that copies them, before your setup script |
+
+A Setup step runs in the new worktree, so a copy step looks like this:
+
+```sh
+cp "$AO_SOURCE_TREE_PATH/.env" .env
+```
+
+</Step>
+<Step>
+
+### Rename the Conductor variables
+
+Setup and Cleanup steps get Orchestrator's names instead of Conductor's:
+
+| Conductor | Orchestrator |
+| --- | --- |
+| `CONDUCTOR_ROOT_PATH` | `$AO_SOURCE_TREE_PATH` |
+| `CONDUCTOR_WORKSPACE_PATH` | `$AO_WORKTREE_PATH` |
+| `CONDUCTOR_WORKSPACE_NAME` | `$(basename "$AO_WORKTREE_PATH")` |
+| `CONDUCTOR_PORT` | none; set the port in the command |
+| `CONDUCTOR_DEFAULT_BRANCH` | none; name the branch in the command |
+| `CONDUCTOR_IS_LOCAL` | none |
+
+</Step>
+<Step>
+
+### Continue the work
+
+Start a session on each branch you want to continue. Your Conductor chats stay readable in the Conductor app.
+
+</Step>
+</Steps>
+
+## Move Conductor Cloud work
+
+<Steps>
+<Step>
+
+### Create a Cloud project
+
+Follow [Cloud sessions](/guides/cloud) to create a project from the same GitHub repository. Each session gets its own remote workspace, as in Conductor Cloud.
+
+</Step>
+<Step>
+
+### Set up your scripts
+
+Open the Cloud project's **Project settings** and add the Cloud settings you wrote down:
+
+- **Scripts → Setup:** your Cloud Computer install script first, then the repository's setup script.
+- **Scripts → Cleanup:** the archive script.
+- **Environment:** your Cloud environment variables and secrets.
+- **Cues:** each run action.
+- **Instructions:** the general prompt.
+
+Rename the Conductor variables using the table above. Conductor Cloud ran Amazon Linux; check package commands such as `dnf install` in the new workspace.
+
+</Step>
+<Step>
+
+### Continue the work
+
+Start a session on each branch you pushed. For a workspace you transferred to your Mac, add its repository as in [Move a repository](#move-a-repository).
+
+</Step>
+</Steps>
+
+## Teams and your phone
+
+| Conductor | Orchestrator |
+| --- | --- |
+| Shared chats and presence | **Share session** with **Can watch** or **Can write**, or share the whole project. People find it under **Shared with you**. |
+| Reassign to | **Request turn** and **Take over** in a shared Chat |
+| iOS app | **Settings → Connect mobile** |
+| Routines | **Automations** |
+
+Sharing needs everyone signed in to Orchestrator.
+
+<details>
+<summary>Verification scope</summary>
+
+Checked against the Orchestrator source and Conductor's public announcement on 10 November 2026. Conductor Cloud could not be tested.
+
+</details>
