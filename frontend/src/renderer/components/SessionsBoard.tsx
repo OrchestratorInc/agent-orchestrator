@@ -21,6 +21,7 @@ import {
 	workerSessions,
 	hasConfiguredOrchestratorAgent,
 } from "../types/workspace";
+import { isArchivedSession } from "../lib/standalone-archive";
 import {
 	boardKanbanColumnOrder,
 	getKanbanColumnView,
@@ -68,17 +69,8 @@ type SessionsBoardProps = {
 	hostId?: string;
 };
 
-
-// Live merged sessions remain in-flow. A terminated runtime is archived even
-// when its SCM outcome remains `merged`, which is exactly what the daemon's
-// `archive` column means.
-function isArchivedSession(session: WorkspaceSession): boolean {
-	return (
-		session.kanbanColumn === "archive" ||
-		session.isTerminated === true ||
-		session.status === "terminated"
-	);
-}
+/** How long Cmd+K's "Open archive" waits for the board it navigated to. */
+const ARCHIVE_REQUEST_TTL_MS = 5000;
 
 export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const { t } = useTranslation();
@@ -212,6 +204,16 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	activeScopeRef.current = scopeKey;
 	const [archiveOpen, setArchiveOpen] = useState(false);
 	useEffect(() => setArchiveOpen(false), [scopeKey]);
+	// Cmd+K's "Open archive" asks this project's board to open it, from here or
+	// from a page that navigates here first.
+	const archiveOpenRequest = useUiStore((state) => state.archiveOpenRequest);
+	useEffect(() => {
+		if (!archiveOpenRequest || !projectId) return;
+		if (archiveOpenRequest.projectId !== projectId || (archiveOpenRequest.hostId ?? "") !== (hostId ?? "")) return;
+		useUiStore.getState().clearArchiveOpenRequest(archiveOpenRequest.nonce);
+		if (Date.now() - archiveOpenRequest.at > ARCHIVE_REQUEST_TTL_MS) return;
+		setArchiveOpen(true);
+	}, [archiveOpenRequest, hostId, projectId]);
 
 	const openSession = useCallback((session: WorkspaceSession) => {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);

@@ -11,6 +11,7 @@ import { isMacPlatform } from "../lib/platform";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
+import { CloseButton } from "./ui/close-button";
 import { ArchivedSessionCardAdapter, DeleteArchivedSessionDialog } from "./SessionsBoardAdapters";
 import {
 	CommandDialog,
@@ -84,8 +85,6 @@ export function SessionArchiveModal({
 	// each time the pointer crossed into another one.
 	const [keyboardSelecting, setKeyboardSelecting] = useState(false);
 	const [limit, setLimit] = useState(PAGE_SIZE);
-	// Cards mount the frame after the modal opens, so they never hold up its entrance.
-	const [cardsReady, setCardsReady] = useState(false);
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
 	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
 	const [restoreUnavailableSession, setRestoreUnavailableSession] = useState<WorkspaceSession | undefined>();
@@ -102,15 +101,8 @@ export function SessionArchiveModal({
 			setQuery("");
 			setLimit(PAGE_SIZE);
 			setKeyboardSelecting(false);
-			setCardsReady(false);
 		}
 	}
-
-	useEffect(() => {
-		if (!open) return;
-		const frame = requestAnimationFrame(() => startTransition(() => setCardsReady(true)));
-		return () => cancelAnimationFrame(frame);
-	}, [open]);
 
 	useEffect(() => {
 		setRestoringSessionId(undefined);
@@ -134,10 +126,8 @@ export function SessionArchiveModal({
 		if (tokens.length === 0) return sessions;
 		return index.filter((entry) => tokens.every((token) => entry.text.includes(token))).map((entry) => entry.session);
 	}, [deferredQuery, index, sessions]);
-	const shown = useMemo(
-		() => (!cardsReady ? [] : results.length > limit ? results.slice(0, limit) : results),
-		[cardsReady, limit, results],
-	);
+	// The first page renders with the modal, so it never opens empty.
+	const shown = useMemo(() => (results.length > limit ? results.slice(0, limit) : results), [limit, results]);
 	const shownRef = useRef(shown);
 	shownRef.current = shown;
 	const restoreAvailable = connected && restoringSessionId === undefined;
@@ -157,7 +147,7 @@ export function SessionArchiveModal({
 	};
 
 	useEffect(() => {
-		if (!open || !cardsReady || limit >= Math.min(results.length, IDLE_LIMIT)) return;
+		if (!open || limit >= Math.min(results.length, IDLE_LIMIT)) return;
 		const grow = () => setLimit((current) => current + IDLE_BATCH);
 		if (typeof requestIdleCallback !== "function") {
 			const timer = setTimeout(grow, 50);
@@ -165,7 +155,7 @@ export function SessionArchiveModal({
 		}
 		const handle = requestIdleCallback(grow, { timeout: 500 });
 		return () => cancelIdleCallback(handle);
-	}, [cardsReady, limit, open, results.length]);
+	}, [limit, open, results.length]);
 
 	const openSession = (session: WorkspaceSession) => {
 		onOpenChange(false);
@@ -261,6 +251,17 @@ export function SessionArchiveModal({
 					}}
 					onKeyDown={onInputKeyDown}
 					placeholder={t("archiveModal.searchPlaceholder")}
+					trailing={
+						<CloseButton
+							aria-label={t("command.close")}
+							className="-my-1 -mr-1.5"
+							onClick={() => onOpenChange(false)}
+							// Its keys stay its own: the list would take Enter as "open the
+							// selected card". Esc still closes, from the dialog's own listener.
+							onKeyDown={(event) => event.stopPropagation()}
+							size="icon-sm"
+						/>
+					}
 				/>
 				<CommandList
 					onScroll={onListScroll}
@@ -272,11 +273,9 @@ export function SessionArchiveModal({
 					// Hover and selection switch instantly, without the card's fade.
 					className="[&[data-keyboard]_[cmdk-item][data-selected=true]_[data-testid=board-session-card]]:bg-interactive-hover [&_[data-testid=board-session-card]]:transition-none max-h-[calc(88vh-6rem)]! px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
 				>
-					{cardsReady ? (
-						<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
-							{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
-						</CommandEmpty>
-					) : null}
+					<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
+						{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
+					</CommandEmpty>
 					{shown.map((session) => (
 						<ArchiveCardCell
 							key={session.id}
