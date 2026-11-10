@@ -2623,6 +2623,26 @@ describe("attachments", () => {
 		expect(field.textContent).toBe("");
 	});
 
+	it("opens an attached image at full size from the strip", async () => {
+		const { field } = renderComposer({
+			draftSessionId: "composer-strip-image",
+			onStageAttachments: vi.fn().mockResolvedValue([".ao/attachments/shot.png"]),
+		});
+		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
+		await userEvent.click(await screen.findByRole("button", { name: "Open image: shot.png" }));
+		expect(within(await screen.findByRole("dialog")).getByRole("img", { name: "shot.png" })).toBeInTheDocument();
+	});
+
+	it("labels an attached file in the strip with its type and size", async () => {
+		const { field } = renderComposer({
+			draftSessionId: "composer-strip-file",
+			onStageAttachments: vi.fn().mockResolvedValue([".ao/attachments/notes.txt"]),
+		});
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
+		expect(await screen.findByText("TXT · 5 B")).toBeInTheDocument();
+		expect(screen.getByText("notes.txt")).toBeInTheDocument();
+	});
+
 	it("retains retry attachments while the next draft is typed and removes them after acceptance", async () => {
 		const sessionId = "composer-accepted-attachment-send";
 		let acceptSend!: () => void;

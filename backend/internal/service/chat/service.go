@@ -449,6 +449,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 
 	replayCheckpoint := nativeHistoryCheckpoint{harness: cfg.Harness}
 	nativeEvidence := ""
+	importingHistory := false
 	if cfg.HistoryMode == ports.ChatHistoryRequired {
 		if s.sessions == nil {
 			return nil, errors.New("native history replay requires a session reader")
@@ -460,6 +461,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		if !found {
 			return nil, ports.ErrSessionNotFound
 		}
+		importingHistory = rec.NeedsImportResume()
 		nativeEvidence = rec.Metadata.NativeCheckpointEvidence
 		replayCheckpoint.latestUserPromptAt = rec.Metadata.LatestUserPromptAt
 		replayCheckpoint.latestAssistantUpdateAt = rec.Metadata.LatestAssistantUpdateAt
@@ -1120,6 +1122,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			ctx, existing.Turns, existing.Messages, existing.Activities,
 			(cfg.HistoryMode == ports.ChatHistoryRequired), replayCheckpoint,
 		)
+		if historyErr == nil && importingHistory && !slices.ContainsFunc(events, func(event ports.ChatEvent) bool {
+			return (event.Kind == ports.ChatEventUserMessageCompleted || event.Kind == ports.ChatEventMessageCompleted) &&
+				strings.TrimSpace(event.Text) != ""
+		}) {
+			historyErr = fmt.Errorf("%w: the provider returned no readable messages for the imported conversation", ports.ErrChatHistoryUnavailable)
+		}
 		if historyErr != nil {
 			if cleanupErr := cleanupUnpublishedConversation(conv, false); cleanupErr != nil && (cfg.HistoryMode == ports.ChatHistoryRequired) {
 				return nil, fmt.Errorf("%w: failed history target shutdown: %w",
@@ -1986,6 +1994,8 @@ type Snapshot struct {
 	HasMoreBefore                    bool
 	// AfterSequence is the floor of a tail read, or zero for a whole page.
 	AfterSequence int64
+	// BatchedDeliveries links queued turns AO batched into another turn's input.
+	BatchedDeliveries []domain.ConversationBatchedDelivery
 	// Usage and RateLimits are current state carried on the snapshot the client
 	// already polls, rather than timeline entries or a second request. Both are nil
 	// until the provider has reported, so a client can tell "not known yet" from a
@@ -2032,6 +2042,8 @@ type ConversationRows struct {
 	OldestSequence                   int64
 	HasMoreBefore                    bool
 	AfterSequence                    int64
+	// BatchedDeliveries links queued turns AO batched into another turn's input.
+	BatchedDeliveries []domain.ConversationBatchedDelivery
 }
 
 // idleControllerState is what a session with no live controller reports. A
@@ -2078,9 +2090,13 @@ func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...
 // controller state is reported separately so the client can distinguish "no
 // history" from "agent not running".
 func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
-	record, err := s.requireChatSession(ctx, id)
+	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
+	}
+
+	if record.NeedsImportResume() {
+		return s.importedSnapshot(ctx, record, 0, 100)
 	}
 
 	conversation, err := s.store.ConversationForSession(ctx, id)
@@ -2136,6 +2152,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		Activities:                       rows.Activities,
 		BranchPoints:                     rows.BranchPoints,
 		BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+		BatchedDeliveries:                rows.BatchedDeliveries,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,
@@ -2181,7 +2198,7 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 		state, caps = controller.State(), controller.Capabilities()
 		dispatching = controller.DispatchingTurnIDs()
 	}
-	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
+	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, BatchedDeliveries: rows.BatchedDeliveries, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
 }
 
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
@@ -2190,10 +2207,14 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 // A positive afterSequence reads only the tail after it; AfterSequence echoes it
 // when the reader applied it.
 func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, afterSequence, limit int64) (Snapshot, error) {
-	record, err := s.requireChatSession(ctx, id)
+	record, err := s.requireReadableConversation(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	if record.NeedsImportResume() {
+		return s.importedSnapshot(ctx, record, beforeSequence, limit)
+	}
+
 	conversation, err := s.store.ConversationForSession(ctx, id)
 	if errors.Is(err, domain.ErrNoConversation) {
 		return Snapshot{
@@ -2214,6 +2235,11 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, afterSequence, limit)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
+	}
+	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && !rows.HasMoreBefore && rows.AfterSequence == 0 {
+		if rows, err = s.withImportedHistory(ctx, id, source.HistoryThrough, rows, beforeSequence, limit); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	waking := s.isWaking(id)
 	state := idleControllerState(record)
@@ -2249,6 +2275,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		OldestSequence:                   rows.OldestSequence,
 		HasMoreBefore:                    rows.HasMoreBefore,
 		AfterSequence:                    rows.AfterSequence,
+		BatchedDeliveries:                rows.BatchedDeliveries,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,

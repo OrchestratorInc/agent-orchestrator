@@ -12,33 +12,92 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
 var findMarkdownPool = sync.Pool{New: func() any { return goldmark.New(goldmark.WithExtensions(extension.GFM)) }}
+var findUserMarkdownPool = sync.Pool{New: func() any { return newUserFindMarkdown() }}
 
-// FindBlocks projects message prose into independent displayed text blocks.
-// Human messages are plain text in the transcript; only agent messages use Markdown.
+// newUserFindMarkdown parses the markdown the chat renders in a person's own
+// message (UserMarkdown in ChatMarkdown.tsx): lists, task boxes, block quotes,
+// fenced code, code spans, emphasis and links. Headings, rules, HTML, tables,
+// strikethrough and link definitions stay literal text there, so they have no
+// parser here, and indented code reads as prose. Change both together.
+func newUserFindMarkdown() goldmark.Markdown {
+	return goldmark.New(
+		goldmark.WithParser(parser.NewParser(
+			parser.WithBlockParsers(
+				util.Prioritized(parser.NewListParser(), 300),
+				util.Prioritized(parser.NewListItemParser(), 400),
+				// Indented lines are prose in the bubble; goldmark's paragraph
+				// parser refuses them, so they are parsed as code and projected
+				// back as paragraphs in findMarkdownBlocks.
+				util.Prioritized(parser.NewCodeBlockParser(), 500),
+				util.Prioritized(parser.NewFencedCodeBlockParser(), 700),
+				util.Prioritized(parser.NewBlockquoteParser(), 800),
+				util.Prioritized(parser.NewParagraphParser(), 1000),
+			),
+			parser.WithInlineParsers(
+				util.Prioritized(parser.NewCodeSpanParser(), 100),
+				util.Prioritized(parser.NewLinkParser(), 200),
+				util.Prioritized(parser.NewAutoLinkParser(), 300),
+				util.Prioritized(parser.NewEmphasisParser(), 500),
+			),
+		)),
+		goldmark.WithExtensions(extension.Linkify, extension.TaskList),
+	)
+}
+
+// FindBlocks projects message prose into independent displayed text blocks:
+// agent messages as full Markdown, or the whole source as one plain block.
 func FindBlocks(source string, markdown bool) []string {
 	if !markdown {
 		return []string{source}
 	}
-	input := []byte(source)
-	parser, ok := findMarkdownPool.Get().(goldmark.Markdown)
+	md, ok := findMarkdownPool.Get().(goldmark.Markdown)
 	if !ok {
-		parser = goldmark.New(goldmark.WithExtensions(extension.GFM))
+		md = goldmark.New(goldmark.WithExtensions(extension.GFM))
 	}
-	root := parser.Parser().Parse(text.NewReader(input))
-	defer findMarkdownPool.Put(parser)
+	defer findMarkdownPool.Put(md)
+	return findMarkdownBlocks(md, []byte(source), false)
+}
+
+// FindUserBlocks projects a person's own message through the light Markdown
+// subset its bubble renders.
+func FindUserBlocks(source string) []string {
+	md, ok := findUserMarkdownPool.Get().(goldmark.Markdown)
+	if !ok {
+		md = newUserFindMarkdown()
+	}
+	defer findUserMarkdownPool.Put(md)
+	return findMarkdownBlocks(md, []byte(source), true)
+}
+
+// In a person's message image syntax is not parsed: `![alt](url)` shows as a
+// "!" before a link, every fence (mermaid and math included) is shown as code,
+// indented lines are paragraphs, and staged image paths in prose are image chips.
+func findMarkdownBlocks(md goldmark.Markdown, input []byte, user bool) []string {
+	root := md.Parser().Parse(text.NewReader(input))
 	var blocks []string
 	var body strings.Builder
+	// Where the current block shows its text as written: code spans and link labels.
+	var literal [][2]int
 	flush := func() {
 		if body.Len() > 0 {
-			blocks = append(blocks, body.String())
+			block := body.String()
+			if user {
+				block = stripInlineImages(block, literal)
+			}
+			if block != "" {
+				blocks = append(blocks, block)
+			}
 			body.Reset()
 		}
+		literal = literal[:0]
 	}
 	_ = ast.Walk(root, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -49,13 +108,17 @@ func FindBlocks(source string, markdown bool) []string {
 		}
 		switch n := node.(type) {
 		case *ast.Image:
+			if user {
+				body.WriteByte('!')
+				return ast.WalkContinue, nil
+			}
 			return ast.WalkSkipChildren, nil
 		case *ast.AutoLink:
 			body.Write(n.Label(input))
 		case *ast.FencedCodeBlock:
 			flush()
 			language := strings.ToLower(string(n.Language(input)))
-			if language != "mermaid" && language != "math" {
+			if user || language != "mermaid" && language != "math" {
 				var code bytes.Buffer
 				for i := 0; i < n.Lines().Len(); i++ {
 					line := n.Lines().At(i)
@@ -68,15 +131,33 @@ func FindBlocks(source string, markdown bool) []string {
 			flush()
 			for i := 0; i < n.Lines().Len(); i++ {
 				line := n.Lines().At(i)
-				body.Write(line.Value(input))
+				if !user {
+					body.Write(line.Value(input))
+					continue
+				}
+				// The bubble renders these lines as paragraphs: each line trimmed,
+				// a blank line starting the next paragraph.
+				value := unescapeFindText(strings.TrimSpace(string(line.Value(input))))
+				if value == "" {
+					flush()
+					continue
+				}
+				if body.Len() > 0 {
+					body.WriteByte('\n')
+				}
+				body.WriteString(value)
 			}
 			flush()
 			return ast.WalkSkipChildren, nil
 		case *ast.Text:
 			value := string(n.Segment.Value(input))
 			// Goldmark retains backslash escapes and entities in ordinary text.
-			if _, code := node.Parent().(*ast.CodeSpan); !code {
+			_, code := node.Parent().(*ast.CodeSpan)
+			if !code {
 				value = unescapeFindText(value)
+			}
+			if user && (code || findInsideLink(node)) {
+				literal = append(literal, [2]int{body.Len(), body.Len() + len(value)})
 			}
 			body.WriteString(value)
 			if n.SoftLineBreak() || n.HardLineBreak() {
@@ -110,6 +191,15 @@ func FindBlocks(source string, markdown bool) []string {
 	})
 	flush()
 	return blocks
+}
+
+func findInsideLink(node ast.Node) bool {
+	for parent := node.Parent(); parent != nil; parent = parent.Parent() {
+		if _, ok := parent.(*ast.Link); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func unescapeFindText(s string) string {

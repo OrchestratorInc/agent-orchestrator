@@ -8,6 +8,7 @@ import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
+import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS } from "./messageAttachments";
 
 export interface ChatAnnotationSummaryItem {
 	snapshot?: ChatExcerptSnapshot;
@@ -28,6 +29,8 @@ interface ChatAnnotationSummaryProps {
 	onRemoveAll?: () => void;
 	disabled?: boolean;
 	className?: string;
+	/** Drawn as an attachment tile, with a line of the text, in a sent message's row. */
+	tile?: boolean;
 }
 
 /** Compact, keyboard-accessible annotation count with an interactive list. */
@@ -38,6 +41,7 @@ export function ChatAnnotationSummary({
 	onRemoveAll,
 	disabled = false,
 	className,
+	tile = false,
 }: ChatAnnotationSummaryProps) {
 	const [open, setOpen] = useState(false);
 	annotations = [...annotations].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || Number(Boolean(a.fileReference)) - Number(Boolean(b.fileReference)));
@@ -57,19 +61,40 @@ export function ChatAnnotationSummary({
 	if (annotations.length === 0) return null;
 	const label = `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
 	const removeClass = "absolute right-1 top-1/2 -translate-y-1/2";
+	const firstLine = annotations[0]?.text || annotations[0]?.fileReference?.path;
 
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
-			<div className={cn("relative inline-flex w-fit max-w-full min-w-0 self-start rounded bg-interactive-hover transition-colors", !disabled && "has-[>button:first-child:hover]:bg-interactive-active", className)}>
+			<div
+				className={cn(
+					tile
+						? cn(ATTACHMENT_TILE_CLASS, "p-0 transition-colors", !disabled && "has-[>button:first-child:hover]:bg-interactive-active")
+						: cn("relative inline-flex w-fit max-w-full min-w-0 self-start rounded-md bg-interactive-hover transition-colors", !disabled && "has-[>button:first-child:hover]:bg-interactive-active"),
+					className,
+				)}
+			>
 				<PopoverTrigger asChild>
 					<Pressable
 						ref={triggerRef}
 						disabled={disabled}
 						aria-label={label}
-						className={cn("inline-flex h-7 w-full min-w-0 select-none items-center gap-1.5 rounded px-1.5 text-xs leading-tight text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50", onRemoveAll && "pr-7")}
+						className={cn(
+							"inline-flex w-full min-w-0 select-none items-center rounded-md text-xs leading-tight text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
+							tile ? "h-full flex-col items-start justify-between p-2 text-left text-caption focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" : "h-7 gap-1.5 px-1.5",
+							onRemoveAll && "pr-7",
+						)}
 					>
-						<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0" />
-						<span className="truncate">{label}</span>
+						{tile ? (
+							<>
+								<span className="line-clamp-2 text-foreground">{firstLine}</span>
+								<span className={ATTACHMENT_TILE_PILL_CLASS}>{label}</span>
+							</>
+						) : (
+							<>
+								<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0" />
+								<span className="truncate">{label}</span>
+							</>
+						)}
 					</Pressable>
 				</PopoverTrigger>
 				{onRemoveAll ? (

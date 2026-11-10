@@ -42,6 +42,10 @@ import { renderChat as render } from "../../test/render-chat";
 import codexInput from "../../../../../backend/internal/adapters/chatdriver/codexappserver/testdata/user_input.json";
 
 vi.mock("../NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
+	useSessionAgentAccounts: () => ({ data: {}, isPending: false }),
+}));
 
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 let restoreTimelineGeometry: (() => void) | undefined;
@@ -387,6 +391,12 @@ describe("HumanMessage attachments", () => {
 		).not.toBeInTheDocument();
 	}
 
+	it("shows a read-only archive for a pending Terminal import", () => {
+		render(<ChatWorkspace snapshot={chatFixtureSettled} session={{ ...chatSession, mode: "tui", needsResume: true }} sessionRole="worker" />);
+		expect(screen.getByText("Saved history. This conversation continues in Terminal when the agent resumes.")).toBeInTheDocument();
+		expect(screen.queryByRole("textbox", { name: "Message the agent" })).not.toBeInTheDocument();
+	});
+
 	it("renders staged image references in human messages as images", () => {
 		renderImageAttachment(
 			"Attached files (read these files in the workspace):",
@@ -409,7 +419,7 @@ describe("HumanMessage attachments", () => {
 		renderImageAttachment(header, name);
 	});
 
-	it("preserves authored trailing whitespace before generated references", () => {
+	it("keeps the authored body before generated references", () => {
 		const authoredBody = "keep my spacing  \n";
 		const { container } = render(
 			<HumanMessage
@@ -420,8 +430,9 @@ describe("HumanMessage attachments", () => {
 			/>,
 		);
 
+		// Markdown drops the trailing spaces from the display; the stored text keeps them.
 		expect(container.querySelector(".cursor-chat-human-message [data-chat-message-body]")?.textContent).toBe(
-			authoredBody,
+			authoredBody.trim(),
 		);
 	});
 
@@ -437,6 +448,7 @@ describe("HumanMessage attachments", () => {
 
 		expect(screen.getByRole("img", { name: "Image 1" })).toBeInTheDocument();
 		expect(screen.getByText("attachment-cd34.pdf")).toBeInTheDocument();
+		expect(screen.getByText("PDF")).toBeInTheDocument();
 		expect(screen.getByRole("list", { name: "Attached files" })).toBeInTheDocument();
 		expect(screen.queryByText(/Attached files \(read these files/)).not.toBeInTheDocument();
 	});
@@ -486,18 +498,21 @@ describe("HumanMessage attachments", () => {
 		render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
 		expect(screen.queryByRole("img")).not.toBeInTheDocument();
-		expect(document.body.textContent).toContain(text);
+		expect(document.body.textContent).toContain("Attached files (read these files in the workspace):");
+		expect(screen.getByRole("listitem")).toHaveTextContent("docs/screenshot.png");
 	});
 
-	it("linkifies session URLs without parsing the human message as Markdown", () => {
-		const text = "Notes:\n- fix *bug*\nao://sessions/proj/sess\n> write test";
+	it("renders the light markdown a person types and keeps their line breaks", () => {
+		const text = "Notes:\n- fix *bug*\n- see ao://sessions/proj/sess\n\n> write test\n\n# not a heading\nline two";
 		const { container } = render(<HumanMessage message={humanMessage(text)} sessionId="ao-1" />);
 
-		const paragraph = container.querySelector(".cursor-chat-human-message [data-chat-message-body]");
-		expect(paragraph).toHaveClass("whitespace-pre-wrap");
-		expect(paragraph?.textContent).toBe(text);
+		const body = container.querySelector(".cursor-chat-human-message [data-chat-message-body]")!;
+		expect(body.querySelector("ul em")).toHaveTextContent("bug");
 		expect(screen.getByRole("link", { name: "ao://sessions/proj/sess" })).toBeInTheDocument();
-		expect(container.querySelector("ul, blockquote, em")).toBeNull();
+		expect(body.querySelector("blockquote")).toHaveTextContent("write test");
+		expect(body.querySelector("h1, h2, h3, h4, h5, h6")).toBeNull();
+		expect(body).toHaveTextContent("# not a heading");
+		expect(body.querySelector("br")).not.toBeNull();
 	});
 });
 
@@ -888,7 +903,8 @@ describe("ChatWorkspace timeline", () => {
 		const workerTab = screen.getByRole("tab", { name: "Reviewer chat · Codex · Working" });
 		expect(workerTab).toHaveTextContent(chatSession.title);
 		expect(workerTab).not.toHaveTextContent("Codex");
-		expect(workerTab.querySelector('img[aria-hidden="true"], [style*="mask"][aria-hidden="true"]')).toBeInTheDocument();
+		// The chat tab names its agent for assistive tech but draws no logo.
+		expect(workerTab.querySelector('img[aria-hidden="true"], [style*="mask"][aria-hidden="true"]')).toBeNull();
 
 		view.rerender(
 			<ChatWorkspace
@@ -903,7 +919,7 @@ describe("ChatWorkspace timeline", () => {
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).toHaveClass("session-topbar-actions");
 		expect(actionRegion).not.toHaveClass("px-3");
-		expect(screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -911,7 +927,7 @@ describe("ChatWorkspace timeline", () => {
 				session={{ ...chatSession, id: "legacy-orchestrator", kind: undefined }}
 			/>,
 		);
-		expect(screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Orchestrator · Codex · Working" })).toBeInTheDocument();
 	});
 
 	it("shows live provider context usage beside the composer settings", () => {
@@ -971,7 +987,7 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 
-		const tab = screen.getByRole("tab", { name: "Orchestrator agent · Codex · Working" });
+		const tab = screen.getByRole("tab", { name: "Orchestrator · Codex · Working" });
 		await user.dblClick(tab);
 		fireEvent.contextMenu(tab);
 
@@ -1195,7 +1211,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(copy.closest("[data-turn-actions]")).not.toHaveTextContent("1m");
 	});
 
-	it("keeps only the run the agent is working in open while the turn runs", () => {
+	it("keeps every run folded while the turn runs", () => {
 		const turnId = "live-turn-runs";
 		const at = "2026-08-11T10:01:00Z";
 		const call = (id: string, sequence: number, summary: string) => ({
@@ -1228,13 +1244,50 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		// The current run is open and shows each call; the earlier run is folded to
-		// its summary line.
+		// Both the current run and the earlier one are folded to their summary lines.
 		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
 		expect(toggle(/^Listed files · Read 1 file$/)).toHaveAttribute("aria-expanded", "false");
-		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
-		expect(screen.getByText("Built project")).toBeInTheDocument();
-		expect(screen.getByText("Ran lint")).toBeInTheDocument();
+		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText("Built project")).not.toBeInTheDocument();
+		expect(screen.queryByText("Ran lint")).not.toBeInTheDocument();
+	});
+
+	it("keeps a failed call in view after the turn settles and folds its work", () => {
+		const turnId = "settled-turn-failure";
+		const at = "2026-08-11T10:01:00Z";
+		const call = (id: string, sequence: number, activity: Pick<ConversationActivity, "activityKind" | "status" | "summary" | "detail">) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0, createdAt: at, ...activity,
+		});
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 5,
+			turns: [{ id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: "2026-08-11T10:01:30Z" }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Look it up",
+					streaming: false, createdAt: at,
+				},
+				call("first", 2, { activityKind: "command", status: "completed", summary: "go build ./...", detail: { command: "go build ./..." } }),
+				{
+					kind: "message", id: "note", turnId, sequence: 3, revision: 0,
+					role: "assistant", origin: "provider", text: "Now the tracker.",
+					streaming: false, createdAt: at,
+				},
+				call("lookup", 4, { activityKind: "mcp_tool", status: "failed", summary: "search_issues", detail: { server: "github", toolName: "search_issues", error: "rate limited" } }),
+				{
+					kind: "message", id: "reply", turnId, sequence: 5, revision: 0,
+					role: "assistant", origin: "provider", text: "The tracker was unavailable.",
+					streaming: false, createdAt: at,
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		expect(screen.getByRole("button", { name: /Worked for/ })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText("Built project")).not.toBeInTheDocument();
+		expect(screen.getByText("search_issues")).toBeInTheDocument();
 	});
 
 	it("names the running step once, on the live row under the steps, with the plan under it", async () => {
@@ -1581,6 +1634,18 @@ describe("ChatWorkspace timeline", () => {
 				/>,
 			);
 			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Editing 2 files$/);
+		});
+
+		it("holds a printing step to one line on the live row until the reader opens it", async () => {
+			const user = userEvent.setup();
+			render(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "running", { output: "compiling" })])} />);
+			const row = screen.getByTestId("live-working-row");
+			expect(row).toHaveAttribute("aria-expanded", "false");
+			expect(screen.queryByText("compiling")).not.toBeInTheDocument();
+
+			await user.click(row);
+			expect(row).toHaveAttribute("aria-expanded", "true");
+			expect(await screen.findByText("compiling")).toBeInTheDocument();
 		});
 
 		it("keeps a step the reader opened on the live row open once it moves up", async () => {
@@ -2586,6 +2651,27 @@ describe("ChatWorkspace timeline", () => {
 		await user.click(screen.getByRole("button", { name: "Open shell" }));
 		expect(resume).toHaveBeenCalledOnce();
 		expect(openShell).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		["codex", false],
+		["opencode", true],
+	] as const)("on a refused %s login, asks for a sign-in and keeps Resume agent only where the daemon cannot see one: %s", (harness, keepsResume) => {
+		const stopped = { ...chatFixtureSettled, harness, controller: { state: "stopped" as const } };
+		const view = (account: ConversationSnapshot["account"]) => (
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatWorkspace snapshot={{ ...stopped, account }} onResumeAgent={vi.fn()} onOpenShell={vi.fn()} />
+			</QueryClientProvider>
+		);
+		const { rerender } = render(view({ authenticationState: "required", reauthRequiredAt: "2026-08-03T00:00:00Z" }));
+		expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
+		expect(Boolean(screen.queryByRole("button", { name: "Resume agent" }))).toBe(keepsResume);
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", keepsResume ? "The controller is not connected" : "Log in to continue");
+
+		rerender(view({ authenticationState: "authenticated" }));
+		expect(screen.queryByRole("button", { name: "Log in again" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", "The controller is not connected");
 	});
 
 	it("offers Restore, not Resume, on a terminated session", async () => {

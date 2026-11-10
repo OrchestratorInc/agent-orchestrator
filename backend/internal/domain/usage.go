@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -12,11 +13,46 @@ type UsageSourceKind string
 
 // UsageSourceKind values identify certified native usage artifact shapes.
 const (
-	UsageSourceClaudeMain     UsageSourceKind = "claude_main"
-	UsageSourceClaudeSubagent UsageSourceKind = "claude_subagent"
-	UsageSourceCodexRollout   UsageSourceKind = "codex_rollout"
-	UsageSourceKimiWire       UsageSourceKind = "kimi_wire"
+	UsageSourceClaudeMain        UsageSourceKind = "claude_main"
+	UsageSourceClaudeSubagent    UsageSourceKind = "claude_subagent"
+	UsageSourceCodexRollout      UsageSourceKind = "codex_rollout"
+	UsageSourceKimiWire          UsageSourceKind = "kimi_wire"
+	UsageSourcePiSession         UsageSourceKind = "pi_session"
+	UsageSourceQwenMonthly       UsageSourceKind = "qwen_monthly"
+	UsageSourceOMPSession        UsageSourceKind = "omp_session"
+	UsageSourceKimchiSession     UsageSourceKind = "kimchi_session"
+	UsageSourcePrimeAgentSession UsageSourceKind = "prime_agent_session"
+	UsageSourceGooseLedger       UsageSourceKind = "goose_ledger"
+	UsageSourceOpenCodeDB        UsageSourceKind = "opencode_db"
+	UsageSourceKiloDB            UsageSourceKind = "kilo_db"
+	UsageSourceGrokUsage         UsageSourceKind = "grok_usage"
+	UsageSourceDeepSeekSession   UsageSourceKind = "deepseek_session"
+	UsageSourceAgyConversation   UsageSourceKind = "agy_conversation"
 )
+
+// AllUsageSourceKinds lists every certified usage artifact shape.
+var AllUsageSourceKinds = []UsageSourceKind{
+	UsageSourceClaudeMain,
+	UsageSourceClaudeSubagent,
+	UsageSourceCodexRollout,
+	UsageSourceKimiWire,
+	UsageSourcePiSession,
+	UsageSourceQwenMonthly,
+	UsageSourceOMPSession,
+	UsageSourceKimchiSession,
+	UsageSourcePrimeAgentSession,
+	UsageSourceGooseLedger,
+	UsageSourceOpenCodeDB,
+	UsageSourceKiloDB,
+	UsageSourceGrokUsage,
+	UsageSourceDeepSeekSession,
+	UsageSourceAgyConversation,
+}
+
+// IsKnown reports whether k is a certified usage source kind.
+func (k UsageSourceKind) IsKnown() bool {
+	return slices.Contains(AllUsageSourceKinds, k)
+}
 
 // UsageBindingState tracks the root native-session binding lifecycle.
 type UsageBindingState string
@@ -208,25 +244,34 @@ type ModelUsageEvent struct {
 	MeasurementKind       UsageMeasurementKind
 	Tokens                UsageTokenMetrics
 	ProviderUsageJSON     string
+	ServiceTier           string
+	ProviderMessageID     string
 	Costs                 UsageEventCosts
 	CreatedAt             time.Time
 	SourceEventKey        string
 }
 
-// UsageCostCandidate is one still-total-null event selected for an exact
-// provider catalog attempt. Source facts remain immutable and are carried back
-// to storage as compare-and-swap guards.
+// UsagePriceOverride is the user's own price for one stored model ID: either their own rates in USD per million tokens, or the rates of a catalog model to price as.
+type UsagePriceOverride struct {
+	ModelID                              string
+	Input, Output, CacheRead, CacheWrite string
+	PriceAs                              string
+}
+
+// UsageCostCandidate is one event selected for a catalog or override pricing attempt.
 type UsageCostCandidate struct {
-	ID                int64
-	BindingID         int64
-	ProviderID        UsageProviderID
-	BillingProviderID string
-	ModelID           string
-	MeasurementKind   UsageMeasurementKind
-	Tokens            UsageTokenMetrics
-	ProviderUsageJSON string
-	PricingVersion    string
-	SourceEventKey    string
+	ID                 int64
+	BindingID          int64
+	ProviderID         UsageProviderID
+	BillingProviderID  string
+	ModelID            string
+	MeasurementKind    UsageMeasurementKind
+	Tokens             UsageTokenMetrics
+	ProviderUsageJSON  string
+	ServiceTier        string
+	PricingVersion     string
+	SourceEventKey     string
+	EstimatedCostNanos *int64
 }
 
 // UsageCostUpdate carries one candidate's immutable compare-and-swap facts and
@@ -266,6 +311,7 @@ type LegacyUsageRepair struct {
 	BillingProviderID       string
 	BillingProviderSource   UsageBillingProviderSource
 	ProviderUsageJSON       string
+	ServiceTier             string
 	Costs                   UsageEventCosts
 }
 

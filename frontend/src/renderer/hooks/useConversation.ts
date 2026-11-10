@@ -29,7 +29,7 @@ import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
-import { resumeAgentErrorMessage } from "./useCanResumeAgent";
+import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
 import { useRestoreSession } from "./useRestoreSession";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
@@ -943,7 +943,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				},
 			);
 			if (error)
-				throw new Error(resumeAgentErrorMessage(error, response.status));
+				throw resumeAgentError(error, response.status);
 			return data;
 		},
 		onSuccess: () => {
@@ -1349,6 +1349,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		resumeAgent: () => resume.mutateAsync(),
 		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
+		resumeOpenElsewhere: resumeOpenElsewhere(resume.error),
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
 		chooseSettings: (settings: TurnSettings) => chooseSettings.mutate({ targetSessionId: sessionId as string, settings }),
@@ -1974,6 +1975,13 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 		capabilities: wire.capabilities?.length ? wire.capabilities : undefined,
 		activeBranchId: wire.activeBranchId || undefined,
 		branchedFromEarlierMessage: wire.branchedFromEarlierMessage ?? undefined,
+		batchedDeliveries: wire.batchedDeliveries?.length
+			? wire.batchedDeliveries.map((delivery) => ({
+					turnId: delivery.turnId,
+					deliveredWithTurnId: delivery.deliveredWithTurnId,
+					steerActivityId: delivery.steerActivityId || undefined,
+				}))
+			: undefined,
 		branchMaterialization: wire.branchMaterialization
 			? {
 					strategy: wire.branchMaterialization.strategy,
@@ -2090,11 +2098,14 @@ export function mergeConversationPages(pages: ConversationSnapshot[]): Conversat
 
 	const items = new Map<string, ConversationItem>();
 	const turns = new Map<string, ConversationSnapshot["turns"][number]>();
+	// Each page carries only its own batches' deliveries.
+	const deliveries = new Map<string, NonNullable<ConversationSnapshot["batchedDeliveries"]>[number]>();
 	// Walk oldest to newest so the live page wins when a row changed after an older
 	// page was fetched (for example, a streamed message settling).
 	for (const page of [...pages].reverse()) {
 		for (const item of page.items) items.set(`${item.kind}:${item.id}`, item);
 		for (const turn of page.turns) turns.set(turn.id, turn);
+		for (const delivery of page.batchedDeliveries ?? []) deliveries.set(delivery.turnId, delivery);
 	}
 
 	const oldest = pages[pages.length - 1] ?? live;
@@ -2104,6 +2115,7 @@ export function mergeConversationPages(pages: ConversationSnapshot[]): Conversat
 		hasMoreBefore: oldest.hasMoreBefore,
 		items: [...items.values()].sort((a, b) => a.sequence - b.sequence),
 		turns: [...turns.values()].sort((a, b) => a.requestedAt.localeCompare(b.requestedAt)),
+		batchedDeliveries: deliveries.size > 0 ? [...deliveries.values()] : undefined,
 	};
 }
 

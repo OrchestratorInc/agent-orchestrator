@@ -19,6 +19,16 @@ export function isNonzeroCommandExit(activity: ConversationActivity): boolean {
 	);
 }
 
+/**
+ * A call that really failed, as opposed to a command that exited non-zero (a grep
+ * with no match is not an error). These stay visible when the steps around them fold.
+ */
+export function isFailedCall(activity: ConversationActivity): boolean {
+	if (isNonzeroCommandExit(activity)) return false;
+	if (activity.status === "failed") return true;
+	return activity.activityKind === "mcp_tool" && (activity.detail?.success === false || Boolean(activity.detail?.error));
+}
+
 const VCS = new Set(["git", "gh"]);
 
 /**

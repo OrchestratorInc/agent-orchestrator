@@ -100,7 +100,7 @@ type Store interface {
 	NextQueuedTurn(ctx context.Context, conversationID string) (domain.QueuedTurn, error)
 	ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error)
 	ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error)
-	CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID string, now time.Time) error
+	CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error
 	ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error
 	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error
 	FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error
@@ -169,6 +169,7 @@ type Store interface {
 
 	ProjectProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
 	ProjectReviewProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
+	LoadSessionImportMessages(ctx context.Context, id domain.SessionID, before, limit int64) ([]domain.ConversationMessage, bool, error)
 }
 
 // ActivityRecorder feeds derived session status.
@@ -2132,7 +2133,7 @@ func (c *Controller) dispatch(
 		}
 	}
 	if len(followers) > 0 {
-		if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, ref.ProviderTurnID, c.now()); err != nil {
+		if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, ref.ProviderTurnID, "", c.now()); err != nil {
 			failFollowers("batch provider acceptance could not be recorded: " + err.Error())
 			return domain.ConversationTurn{}, fmt.Errorf("complete queued batch: %w", err)
 		}
@@ -4029,13 +4030,7 @@ func (c *Controller) recordAccount(
 		account.PlanLabel = update.PlanLabel
 	}
 	if update.ReauthRequired {
-		account.AuthenticationState = "required"
-		account.ReauthRequiredAt = &now
-		account.ReauthReason = update.ReauthReason
-		account.LastAuthFailureAt = &now
-		account.LastAuthFailureReason = update.ReauthReason
-		account.AuthFailureID = c.newID()
-		account.AuthVerifiedAt = nil
+		account.RequireLogin(update.ReauthReason, c.newID(), now)
 	}
 	return c.store.RecordAccount(ctx, c.conversation.ID, account, now)
 }

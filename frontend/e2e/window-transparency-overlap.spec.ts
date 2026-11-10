@@ -103,7 +103,7 @@ async function expectOccludes(surface: Locator, underneath: Locator, occludes = 
 
 for (const theme of ["dark", "light"]) {
 	for (const transparency of [false, true]) {
-		test(`@P0 sticky project and archive occlude sessions: ${theme}, transparency ${transparency}`, async ({ page }) => {
+		test(`@P0 sticky project occludes sessions and the archive opens: ${theme}, transparency ${transparency}`, async ({ page }) => {
 			await page.setViewportSize({ width: 1400, height: 650 });
 			await page.emulateMedia({ reducedMotion: "reduce" });
 			await installFakeAgent(page, {
@@ -123,32 +123,13 @@ for (const theme of ["dark", "light"]) {
 			await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 			if (transparency) await expect(page.locator("html")).toHaveAttribute("data-window-translucent", "true");
 
-			const toggle = page.getByRole("button", { name: "Archive, 8 sessions", exact: true });
-			const archive = toggle.locator("../..");
-			// Light keeps the center panel solid in a translucent window (only the
-			// sidebar chrome is frosted), so the board's archive is opaque there.
-			const centerClear = transparency && theme === "dark";
-			await expectSurfaceTransparency(archive, centerClear);
-			await toggle.click();
-			await expect(toggle).toHaveAttribute("aria-expanded", "true");
-			await expect(page.getByRole("list", { name: "Archived sessions" })).toBeVisible();
-			await expectSurfaceTransparency(archive, centerClear);
-			await expectOccludes(archive, page.locator('[data-testid="board-column"] [data-session-id]'));
-			if (centerClear) {
-				// A negative control keeps the pixel tolerance honest: removing the
-				// production clip must expose the active cards through the clear archive.
-				const lanes = page.locator('[style*="clip-path"]').filter({ has: page.getByTestId("board-column") });
-				await expect(lanes).toHaveCount(1);
-				const clip = await lanes.evaluate((element) => (element as HTMLElement).style.clipPath);
-				try {
-					await lanes.evaluate((element) => { (element as HTMLElement).style.clipPath = "none"; });
-					await expectOccludes(archive, page.locator('[data-testid="board-column"] [data-session-id]'), false);
-				} finally {
-					await lanes.evaluate((element, clip) => { (element as HTMLElement).style.clipPath = clip; }, clip);
-				}
-			}
-			await toggle.click();
-			await expect(toggle).toHaveAttribute("aria-expanded", "false");
+			// The archive is a modal now, not a sheet over the lanes.
+			await page.getByRole("button", { name: "Archive, 8 sessions", exact: true }).click();
+			const archive = page.getByRole("dialog", { name: "Archived sessions" });
+			await expect(archive).toBeVisible();
+			await expect(archive.getByText("Archived session 0")).toBeVisible();
+			await page.keyboard.press("Escape");
+			await expect(archive).toBeHidden();
 
 			const scroller = page.getByTestId("sidebar-projects-scroller");
 			await scroller.getByRole("button", { name: /Show .* more/ }).click();

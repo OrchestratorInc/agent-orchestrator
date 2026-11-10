@@ -1,6 +1,4 @@
-// Package catalogsync builds the reviewed, content-addressed pricing catalog
-// from LiteLLM's model price source. It deliberately has no network dependency
-// so the command and its tests can supply a pinned source file directly.
+// Package catalogsync builds AO's content-addressed pricing catalog from LiteLLM's model price table.
 package catalogsync
 
 import (
@@ -14,9 +12,13 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
 )
 
 const (
@@ -77,15 +79,31 @@ type rates struct {
 	OutputUSDPerToken        string  `json:"outputUsdPerToken"`
 }
 
+type upstreamRates struct {
+	Input   *json.Number
+	Output  *json.Number
+	Read    *json.Number
+	Write   *json.Number
+	Write1H *json.Number
+}
+
 type upstreamRecord struct {
 	Provider string `json:"litellm_provider"`
 	Mode     string `json:"mode"`
-	Input    *json.Number
-	Output   *json.Number
-	Read     *json.Number
-	Write    *json.Number
-	Write1H  *json.Number
+	upstreamRates
+	Tiers        map[string]upstreamRates
+	FastMultiple *json.Number
+	LongContext  map[int64]longContextRates
 }
+
+type longContextRates struct {
+	upstreamRates
+	Tiers map[string]upstreamRates
+}
+
+var longContextInputField = regexp.MustCompile(`^input_cost_per_token_above_(\d+)k_tokens$`)
+
+var suffixTiers = []string{pricing.ServiceTierPriority, pricing.ServiceTierFlex, pricing.ServiceTierUltrafast}
 
 func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
@@ -101,22 +119,80 @@ func (u *upstreamRecord) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("mode: %w", err)
 	}
 	var err error
-	if u.Input, err = decodeNumber(fields["input_cost_per_token"]); err != nil {
-		return fmt.Errorf("input_cost_per_token: %w", err)
+	if u.upstreamRates, err = decodeRates(fields, ""); err != nil {
+		return err
 	}
-	if u.Output, err = decodeNumber(fields["output_cost_per_token"]); err != nil {
-		return fmt.Errorf("output_cost_per_token: %w", err)
+	if u.Tiers, err = decodeTiers(fields, ""); err != nil {
+		return err
 	}
-	if u.Read, err = decodeNumber(fields["cache_read_input_token_cost"]); err != nil {
-		return fmt.Errorf("cache_read_input_token_cost: %w", err)
+	for name := range fields {
+		match := longContextInputField.FindStringSubmatch(name)
+		if match == nil {
+			continue
+		}
+		aboveK, err := strconv.ParseInt(match[1], 10, 64)
+		if err != nil || aboveK <= 0 {
+			return fmt.Errorf("%s: size out of range", name)
+		}
+		suffix := "_above_" + match[1] + "k_tokens"
+		long := longContextRates{}
+		if long.upstreamRates, err = decodeRates(fields, suffix); err != nil {
+			return err
+		}
+		if long.Tiers, err = decodeTiers(fields, suffix); err != nil {
+			return err
+		}
+		if u.LongContext == nil {
+			u.LongContext = make(map[int64]longContextRates)
+		}
+		u.LongContext[aboveK] = long
 	}
-	if u.Write, err = decodeNumber(fields["cache_creation_input_token_cost"]); err != nil {
-		return fmt.Errorf("cache_creation_input_token_cost: %w", err)
-	}
-	if u.Write1H, err = decodeNumber(fields["cache_creation_input_token_cost_above_1hr"]); err != nil {
-		return fmt.Errorf("cache_creation_input_token_cost_above_1hr: %w", err)
+	var entry map[string]json.RawMessage
+	if raw := fields["provider_specific_entry"]; len(raw) > 0 && json.Unmarshal(raw, &entry) == nil {
+		if u.FastMultiple, err = decodeNumber(entry["fast"]); err != nil {
+			return fmt.Errorf("provider_specific_entry.fast: %w", err)
+		}
 	}
 	return nil
+}
+
+func decodeTiers(fields map[string]json.RawMessage, suffix string) (map[string]upstreamRates, error) {
+	var tiers map[string]upstreamRates
+	for _, tier := range suffixTiers {
+		rates, err := decodeRates(fields, suffix+"_"+tier)
+		if err != nil {
+			return nil, err
+		}
+		if rates != (upstreamRates{}) {
+			if tiers == nil {
+				tiers = make(map[string]upstreamRates, len(suffixTiers))
+			}
+			tiers[tier] = rates
+		}
+	}
+	return tiers, nil
+}
+
+func decodeRates(fields map[string]json.RawMessage, suffix string) (upstreamRates, error) {
+	var r upstreamRates
+	for _, field := range []struct {
+		name   string
+		target **json.Number
+	}{
+		{"input_cost_per_token", &r.Input},
+		{"output_cost_per_token", &r.Output},
+		{"cache_read_input_token_cost", &r.Read},
+		{"cache_creation_input_token_cost", &r.Write},
+		{"cache_creation_input_token_cost_above_1hr", &r.Write1H},
+	} {
+		name := field.name + suffix
+		number, err := decodeNumber(fields[name])
+		if err != nil {
+			return upstreamRates{}, fmt.Errorf("%s: %w", name, err)
+		}
+		*field.target = number
+	}
+	return r, nil
 }
 
 func decodeString(raw json.RawMessage, target *string) error {
@@ -146,7 +222,7 @@ func decodeNumber(raw json.RawMessage) (*json.Number, error) {
 // are never modified or removed. A source revision change with identical
 // provider payload hashes is a semantic no-op and leaves the manifest intact.
 func Sync(root string, upstream []byte, source Source) (Result, error) {
-	generated, err := build(upstream, source)
+	generated, err := build(upstream, source, false)
 	if err != nil {
 		return Result{}, err
 	}
@@ -220,54 +296,83 @@ type generatedCatalog struct {
 	blobs    map[string][]byte
 }
 
-func build(upstream []byte, source Source) (generatedCatalog, error) {
+func build(upstream []byte, source Source, every bool) (generatedCatalog, error) {
 	if source.Repository != "BerriAI/litellm" || source.Path != "model_prices_and_context_window.json" || !isSHA(source.Revision) {
 		return generatedCatalog{}, errors.New("source must identify BerriAI/litellm at an exact 40-character revision")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(upstream))
-	decoder.UseNumber()
-	var records map[string]upstreamRecord
+	var records map[string]json.RawMessage
 	if err := decoder.Decode(&records); err != nil {
 		return generatedCatalog{}, fmt.Errorf("decode upstream catalog: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return generatedCatalog{}, errors.New("upstream catalog must contain one JSON object")
 	}
-	modelsByProvider := map[string]map[string]rates{
-		"anthropic": {}, "openai": {}, "zai": {},
-	}
-	for name, record := range records {
+	modelsByProvider := map[string]map[string]rates{}
+	conflicted := map[string]map[string]bool{}
+	for name, data := range records {
+		var record upstreamRecord
+		if json.Unmarshal(data, &record) != nil {
+			continue
+		}
 		providerID, ok := canonicalProvider(record.Provider)
-		if !ok || !supportedMode(record.Mode) {
+		if !ok || !supportedMode(record.Mode) || (!every && !slices.Contains(pricing.RequiredProviderIDs, providerID)) {
 			continue
 		}
 		// LiteLLM also carries metadata-only model entries in chat/responses
-		// modes. They are not price records and cannot enter a reviewed catalog.
+		// modes. They are not price records.
 		if record.Input == nil || record.Output == nil {
 			continue
 		}
 		modelID, err := canonicalModel(providerID, name)
 		if err != nil {
-			return generatedCatalog{}, err
+			continue
 		}
-		r, err := normalizeRates(record)
+		r, err := normalizeRates(record.upstreamRates)
 		if err != nil {
-			return generatedCatalog{}, fmt.Errorf("%s/%s: %w", providerID, modelID, err)
+			continue
 		}
-		if previous, exists := modelsByProvider[providerID][modelID]; exists && !equalRates(previous, r) {
-			return generatedCatalog{}, fmt.Errorf("%s/%s: conflicting duplicate rates", providerID, modelID)
+		rows, err := serviceTierRows(modelID, record, r)
+		if err != nil {
+			continue
 		}
-		modelsByProvider[providerID][modelID] = r
+		rows[modelID] = r
+		if err := addLongContextRows(rows, modelID, record); err != nil {
+			continue
+		}
+		if modelsByProvider[providerID] == nil {
+			modelsByProvider[providerID] = map[string]rates{}
+			conflicted[providerID] = map[string]bool{}
+		}
+		for rowID, rowRates := range rows {
+			if previous, exists := modelsByProvider[providerID][rowID]; exists && !equalRates(previous, rowRates) {
+				conflicted[providerID][rowID] = true
+			}
+			modelsByProvider[providerID][rowID] = rowRates
+		}
+	}
+	for providerID, rows := range conflicted {
+		for rowID := range rows {
+			delete(modelsByProvider[providerID], rowID)
+		}
 	}
 
-	providers := []string{"anthropic", "openai", "zai"}
+	for _, providerID := range pricing.RequiredProviderIDs {
+		if len(modelsByProvider[providerID]) == 0 {
+			return generatedCatalog{}, fmt.Errorf("provider %q produced zero supported models", providerID)
+		}
+	}
+	providers := make([]string, 0, len(modelsByProvider))
+	for providerID, models := range modelsByProvider {
+		if len(models) > 0 {
+			providers = append(providers, providerID)
+		}
+	}
+	sort.Strings(providers)
 	generated := generatedCatalog{blobs: make(map[string][]byte)}
 	generated.manifest = manifest{SchemaVersion: schemaVersion, Source: manifestSource(source), Providers: make([]providerRef, 0, len(providers))}
 	for _, providerID := range providers {
 		models := modelsByProvider[providerID]
-		if len(models) == 0 {
-			return generatedCatalog{}, fmt.Errorf("provider %q produced zero supported models", providerID)
-		}
 		ids := make([]string, 0, len(models))
 		for modelID := range models {
 			ids = append(ids, modelID)
@@ -297,7 +402,118 @@ func build(upstream []byte, source Source) (generatedCatalog, error) {
 	return generated, nil
 }
 
-func normalizeRates(record upstreamRecord) (rates, error) {
+func serviceTierRows(modelID string, record upstreamRecord, standard rates) (map[string]rates, error) {
+	rows := make(map[string]rates)
+	for tier, upstream := range record.Tiers {
+		if upstream.Input == nil || upstream.Output == nil {
+			continue
+		}
+		r, err := normalizeRates(upstream)
+		if err != nil {
+			return nil, fmt.Errorf("%s tier: %w", tier, err)
+		}
+		if !coversCacheRates(r, standard) {
+			continue
+		}
+		rows[pricing.TierModelID(modelID, tier)] = r
+	}
+	if record.FastMultiple != nil {
+		multiple, err := normalizeDecimal(record.FastMultiple.String())
+		if err != nil {
+			return nil, fmt.Errorf("fast multiple: %w", err)
+		}
+		if multiple != "0" {
+			r, err := scaleRates(standard, multiple)
+			if err != nil {
+				return nil, fmt.Errorf("fast tier: %w", err)
+			}
+			rows[pricing.TierModelID(modelID, pricing.ServiceTierFast)] = r
+		}
+	}
+	return rows, nil
+}
+
+func coversCacheRates(r, base rates) bool {
+	return (base.CacheReadUSDPerToken == nil || r.CacheReadUSDPerToken != nil) &&
+		(base.CacheWriteUSDPerToken == nil || r.CacheWriteUSDPerToken != nil) &&
+		(base.CacheWrite1HUSDPerToken == nil || r.CacheWrite1HUSDPerToken != nil)
+}
+
+func addLongContextRows(rows map[string]rates, modelID string, record upstreamRecord) error {
+	for aboveK, long := range record.LongContext {
+		extend := func(rowID string, upstream upstreamRates) error {
+			base, ok := rows[rowID]
+			if !ok || upstream.Input == nil || upstream.Output == nil {
+				return nil
+			}
+			r, err := normalizeRates(upstream)
+			if err != nil {
+				return fmt.Errorf("above %dk: %w", aboveK, err)
+			}
+			if !coversCacheRates(r, base) {
+				return nil
+			}
+			rows[pricing.LongContextModelID(rowID, aboveK)] = r
+			return nil
+		}
+		if err := extend(modelID, long.upstreamRates); err != nil {
+			return err
+		}
+		for tier, upstream := range long.Tiers {
+			if err := extend(pricing.TierModelID(modelID, tier), upstream); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func scaleRates(r rates, multiple string) (rates, error) {
+	var scaled rates
+	var err error
+	if scaled.UncachedInputUSDPerToken, err = multiplyDecimals(r.UncachedInputUSDPerToken, multiple); err != nil {
+		return rates{}, err
+	}
+	if scaled.OutputUSDPerToken, err = multiplyDecimals(r.OutputUSDPerToken, multiple); err != nil {
+		return rates{}, err
+	}
+	for _, field := range []struct {
+		from *string
+		to   **string
+	}{
+		{r.CacheReadUSDPerToken, &scaled.CacheReadUSDPerToken},
+		{r.CacheWriteUSDPerToken, &scaled.CacheWriteUSDPerToken},
+		{r.CacheWrite1HUSDPerToken, &scaled.CacheWrite1HUSDPerToken},
+	} {
+		if field.from == nil {
+			continue
+		}
+		value, err := multiplyDecimals(*field.from, multiple)
+		if err != nil {
+			return rates{}, err
+		}
+		*field.to = &value
+	}
+	return scaled, nil
+}
+
+func multiplyDecimals(left, right string) (string, error) {
+	x, okX := new(big.Rat).SetString(left)
+	y, okY := new(big.Rat).SetString(right)
+	if !okX || !okY {
+		return "", errors.New("rate is not a decimal")
+	}
+	return normalizeDecimal(new(big.Rat).Mul(x, y).FloatString(fractionDigits(left) + fractionDigits(right)))
+}
+
+func fractionDigits(decimal string) int {
+	if point := strings.IndexByte(decimal, '.'); point >= 0 {
+		return len(decimal) - point - 1
+	}
+	return 0
+}
+
+func normalizeRates(record upstreamRates) (rates, error) {
 	input, err := normalizeRequired(record.Input)
 	if err != nil {
 		return rates{}, fmt.Errorf("input: %w", err)
@@ -417,15 +633,14 @@ func normalizeDecimal(input string) (string, error) {
 
 func canonicalProvider(value string) (string, bool) {
 	provider := strings.ToLower(strings.TrimSpace(value))
-	if provider == "z.ai" {
-		provider = "zai"
+	if strings.HasPrefix(provider, "vertex_ai-") {
+		provider = "vertex_ai"
 	}
-	switch provider {
-	case "anthropic", "openai", "zai":
-		return provider, true
-	default:
+	provider = pricing.CanonicalProviderID(provider)
+	if !pricing.ValidProviderID(provider) {
 		return "", false
 	}
+	return provider, true
 }
 
 func canonicalModel(providerID, value string) (string, error) {
@@ -433,6 +648,9 @@ func canonicalModel(providerID, value string) (string, error) {
 	modelID = strings.TrimPrefix(modelID, providerID+"/")
 	if modelID == "" {
 		return "", fmt.Errorf("%s: empty model identifier", providerID)
+	}
+	if pricing.CanonicalModelID(providerID, modelID) != modelID {
+		return "", fmt.Errorf("%s: model identifier %q is not canonical", providerID, modelID)
 	}
 	return modelID, nil
 }
@@ -565,10 +783,10 @@ func validateManifest(m manifest) error {
 	if m.SchemaVersion != schemaVersion || m.Source.Repository != "BerriAI/litellm" || m.Source.Path != "model_prices_and_context_window.json" || !isSHA(m.Source.Revision) {
 		return errors.New("invalid manifest schema or source")
 	}
-	if len(m.Providers) != 3 {
-		return errors.New("manifest must contain exactly three providers")
+	if len(m.Providers) != len(pricing.RequiredProviderIDs) {
+		return errors.New("manifest must contain exactly the required providers")
 	}
-	for index, providerID := range []string{"anthropic", "openai", "zai"} {
+	for index, providerID := range pricing.RequiredProviderIDs {
 		ref := m.Providers[index]
 		if ref.ProviderID != providerID || ref.ModelCount < 1 || ref.Version != "ao-catalog:"+providerID+":sha256:"+ref.SHA256 || !isProviderPath(providerID, ref.SHA256, ref.Path) {
 			return fmt.Errorf("invalid manifest provider %q", providerID)

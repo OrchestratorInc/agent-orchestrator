@@ -37,6 +37,7 @@ import {
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
+import { appI18n } from "../i18n";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
@@ -75,6 +76,14 @@ export function toBoardSessionPresentation(
 					tone: "var(--color-status-exited)",
 				}
 			: undefined;
+	const importStatus = session.needsResume && !session.isTerminated
+		? {
+				className: "text-status-idle",
+				indicatorClassName: "bg-status-idle",
+				label: appI18n.t("session.importedNotOpened"),
+				tone: "var(--color-status-idle)",
+			}
+		: undefined;
 	return {
 		activity: session.activity,
 		branch: sessionBranchPresentation(session).branch,
@@ -85,7 +94,7 @@ export function toBoardSessionPresentation(
 		provider: session.provider,
 		status: session.status,
 		statusReadiness: session.statusReadiness,
-		statusPresentation: provisioningStatus ?? failedStartStatus,
+		statusPresentation: provisioningStatus ?? failedStartStatus ?? importStatus,
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
 		updatedAt: session.updatedAt,
@@ -146,15 +155,24 @@ export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSessi
 }
 
 export function ArchivedSessionCardAdapter({
+	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
+	onDelete,
+	onOpen,
 	isRestoring,
 	restoreAction,
 	restoreError,
 	session,
 }: {
+	/** Drops the "1 of 1 PR merged" line; the PR links already say it. */
+	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
+	/** Asks the host to confirm the delete, for a card inside a list that owns its keys. */
+	onDelete?: () => void;
+	/** Opens the session on click, making this a live board card (hover, menu). */
+	onOpen?: () => void;
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
@@ -164,6 +182,7 @@ export function ArchivedSessionCardAdapter({
 	const branch = sessionBranchPresentation(session).branch ?? "";
 	return (
 		<DesktopSessionCard
+			hidePullRequestProgress={hidePullRequestProgress}
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<div className="flex items-center">
@@ -174,7 +193,7 @@ export function ArchivedSessionCardAdapter({
 						onClick={restoreAction}
 					/>
 					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
-					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} session={session} />}
+					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} onRequest={onDelete} session={session} />}
 				</div>
 			}
 			branchAction={
@@ -187,7 +206,8 @@ export function ArchivedSessionCardAdapter({
 				) : undefined
 			}
 			footer={<ArchiveRestoreError message={restoreError} />}
-			interactive={false}
+			interactive={Boolean(onOpen)}
+			onOpen={onOpen}
 			session={session}
 		/>
 	);
@@ -199,6 +219,7 @@ function DesktopSessionCard({
 	action,
 	branchAction,
 	footer,
+	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	interactive = true,
 	memory,
@@ -213,6 +234,7 @@ function DesktopSessionCard({
 	action?: ReactNode;
 	branchAction?: ReactNode;
 	footer?: ReactNode;
+	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
 	memory?: SessionMemoryReading;
@@ -316,7 +338,7 @@ function DesktopSessionCard({
 			labels={{
 				formatTime: formatTimeCompact,
 				intakeIssue: (id) => t("shell.intakeIssue", { id }),
-				pr: pullRequestLabels(t),
+				pr: hidePullRequestProgress ? { ...pullRequestLabels(t), progress: undefined } : pullRequestLabels(t),
 				updatedAt: (timestamp: string) =>
 					t("shell.lastMessageAt", { time: formatTimeCompact(timestamp) }),
 			}}
@@ -630,6 +652,8 @@ function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessi
 	return {
 		...session,
 		displayStatus: undefined,
+		// No red tint either: the card reads like every other ended session.
+		plainSurface: true,
 		statusPresentation: {
 			className: "hidden",
 			indicatorClassName: "hidden",
@@ -692,32 +716,18 @@ function toResourcePresentation(
  * up first the way session cleanup does it, never forced: uncommitted work
  * refuses the delete, and the dialog says why.
  */
-function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; session: WorkspaceSession }) {
+function ArchiveDeleteButton({
+	isDisabled,
+	onRequest,
+	session,
+}: {
+	isDisabled: boolean;
+	/** When set, the host shows the confirm instead of this button. */
+	onRequest?: () => void;
+	session: WorkspaceSession;
+}) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const [open, setOpen] = useState(false);
-	const [deleting, setDeleting] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
-	const confirmDelete = async () => {
-		setDeleting(true);
-		setError(null);
-		try {
-			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
-				params: { path: { sessionId: session.id }, query: { cleanup: true } },
-			});
-			if (deleteError) {
-				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
-				return;
-			}
-			setOpen(false);
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
-		} catch (err) {
-			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
-		} finally {
-			setDeleting(false);
-		}
-	};
 	return (
 		<>
 			<Tooltip>
@@ -731,8 +741,8 @@ function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; ses
 							disabled={isDisabled}
 							onClick={(event) => {
 								event.stopPropagation();
-								setError(null);
-								setOpen(true);
+								if (onRequest) onRequest();
+								else setOpen(true);
 							}}
 							type="button"
 						>
@@ -742,19 +752,67 @@ function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; ses
 				</TooltipTrigger>
 				<TooltipContent side="top">{t("shell.deleteSession")}</TooltipContent>
 			</Tooltip>
-			<ConfirmDialog
-				busy={deleting}
-				confirmAriaLabel={t("deleteSession.confirmAria")}
-				confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
-				description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
-				destructive
-				error={error}
-				onConfirm={() => void confirmDelete()}
-				onOpenChange={setOpen}
-				open={open}
-				title={t("deleteSession.dialog")}
-			/>
+			{onRequest ? null : <DeleteArchivedSessionDialog onOpenChange={setOpen} open={open} session={session} />}
 		</>
+	);
+}
+
+/** The confirm behind every "delete permanently" on an archived session. */
+export function DeleteArchivedSessionDialog({
+	onDeleted,
+	onOpenChange,
+	open,
+	session,
+}: {
+	onDeleted?: () => void;
+	onOpenChange: (open: boolean) => void;
+	open: boolean;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const [deleting, setDeleting] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	// Each opening starts without the last attempt's error.
+	const [wasOpen, setWasOpen] = useState(open);
+	if (open !== wasOpen) {
+		setWasOpen(open);
+		if (open) setError(null);
+	}
+	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
+	const confirmDelete = async () => {
+		setDeleting(true);
+		setError(null);
+		try {
+			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
+				params: { path: { sessionId: session.id }, query: { cleanup: true } },
+			});
+			if (deleteError) {
+				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
+				return;
+			}
+			onOpenChange(false);
+			onDeleted?.();
+			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+		} catch (err) {
+			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
+		} finally {
+			setDeleting(false);
+		}
+	};
+	return (
+		<ConfirmDialog
+			busy={deleting}
+			confirmAriaLabel={t("deleteSession.confirmAria")}
+			confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
+			description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
+			destructive
+			error={error}
+			onConfirm={() => void confirmDelete()}
+			onOpenChange={onOpenChange}
+			open={open}
+			title={t("deleteSession.dialog")}
+		/>
 	);
 }
 

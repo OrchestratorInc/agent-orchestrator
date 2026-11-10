@@ -178,7 +178,7 @@ func seedDaemonClaudeUsage(t *testing.T, store *sqlite.Store, projectID, model s
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
-	transcript := `{"type":"assistant","uuid":"one","message":{"id":"msg-1","model":"` + model + `","stop_reason":"end_turn","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}` + "\n"
+	transcript := `{"type":"assistant","uuid":"one","message":{"id":"msg-` + projectID + `","model":"` + model + `","stop_reason":"end_turn","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}` + "\n"
 	if err := os.WriteFile(path, []byte(transcript), 0o600); err != nil {
 		t.Fatal(err)
 	}

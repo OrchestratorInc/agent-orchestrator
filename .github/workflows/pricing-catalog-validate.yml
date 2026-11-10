@@ -70,18 +70,16 @@ jobs:
             git status --short -- pricing/catalog/v1
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      # The generator's own validation cannot see the second supply-chain
-      # boundary. Serve the catalog just generated from the pinned revision,
-      # fetch it with the real runtime fetcher, and install it into a throwaway
-      # cache, so a blob that generates cleanly but cannot be loaded at runtime
-      # fails here rather than on a user's machine.
-      - name: Verify generated catalog through the runtime fetcher and cache
+      # The daemon builds its catalog from the live LiteLLM table. Run that
+      # build on the table just downloaded, through a throwaway cache, so a
+      # table the daemon cannot load fails here rather than on a user's machine.
+      - name: Verify the live table through the runtime fetcher and cache
         env:
-          AO_PRICING_CATALOG_ROOT: ${{ github.workspace }}
+          AO_PRICING_SOURCE: ${{ runner.temp }}/model_prices_and_context_window.json
         run: |
           set -euo pipefail
           (cd backend && go test ./internal/pricing/catalogsync \
-            -run TestGeneratedCatalogLoadsThroughRuntimeFetcherAndCache -count 1)
+            -run TestLiveBuildMatchesGeneratedCatalogAndSurvivesCache -count 1)
       - name: Upload generated catalog preview
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

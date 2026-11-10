@@ -289,3 +289,74 @@ func TestConfirmedLoginClearsOnlyAnOlderDemand(t *testing.T) {
 		t.Fatalf("still waiting = %+v, %v", waiting, err)
 	}
 }
+
+func TestLaunchRefusalRaisesTheChatLoginDemand(t *testing.T) {
+	ctx := context.Background()
+	s, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	seedProject(t, s, "launch")
+	record := sampleRecord("launch")
+	record.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := s.CreateConversation(ctx, "launch-conv", domain.ConversationScopeSession, "launch", session.ID, histClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordAccount(ctx, conversation.ID, domain.ConversationAccount{AuthenticationState: "authenticated", PlanLabel: "Team"}, histClock); err != nil {
+		t.Fatal(err)
+	}
+	refusedAt := histClock.Add(time.Minute)
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAt); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.ConversationAccount(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.AuthenticationState != "required" || first.ReauthRequiredAt == nil || !first.ReauthRequiredAt.Equal(refusedAt) ||
+		first.AuthFailureID == "" || first.PlanLabel != "Team" {
+		t.Fatalf("account after refusal = %+v", first)
+	}
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.ConversationAccount(ctx, conversation.ID); err != nil || again.AuthFailureID != first.AuthFailureID || !again.ReauthRequiredAt.Equal(refusedAt) {
+		t.Fatalf("account after second refusal = %+v, %v", again, err)
+	}
+	release := s.HoldWriterForTest()
+	loaded := make(chan error, 1)
+	go func() {
+		_, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+		loaded <- err
+	}()
+	select {
+	case err := <-loaded:
+		release()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("reading a chat that waits for a sign-in waited for the writer")
+	}
+	if cleared, err := s.ConfirmConversationLogin(ctx, conversation.ID, refusedAt.Add(time.Second), refusedAt.Add(time.Second)); err != nil || !cleared {
+		t.Fatalf("confirmed login cleared=%v, %v", cleared, err)
+	}
+	refusedAgainAt := refusedAt.Add(2 * time.Minute)
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAgainAt); err != nil {
+		t.Fatal(err)
+	}
+	if raised, err := s.ConversationAccount(ctx, conversation.ID); err != nil || raised.AuthFailureID == first.AuthFailureID ||
+		raised.ReauthRequiredAt == nil || !raised.ReauthRequiredAt.Equal(refusedAgainAt) {
+		t.Fatalf("account after a refusal that follows a sign-in = %+v, %v", raised, err)
+	}
+	if err := s.RequireSessionLogin(ctx, "no-such-session", "agent requires authentication", refusedAt); err != nil {
+		t.Fatal(err)
+	}
+}
