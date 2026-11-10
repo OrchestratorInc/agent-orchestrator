@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 import PdfRendererView from "react-native-pdf-renderer";
 import { artifactStreamSource } from "./api";
 import { downloadArtifact } from "./artifactDownload";
-import { artifactCacheName, type SessionArtifact } from "./artifacts";
+import { artifactCacheEntry, type SessionArtifact } from "./artifacts";
 import type { ServerConfig } from "./config";
 import { userFacingError } from "./connectionError";
 import type { Theme } from "./theme";
@@ -33,7 +33,7 @@ export function ArtifactPdf({ config, sessionId, artifact }: { config: ServerCon
 			setState({ key, error: "Its path isn't one the phone can request." });
 			return;
 		}
-		downloadArtifact(source, artifactCacheName(sessionId, artifact.path, artifact.updatedAt)).then(
+		downloadArtifact(source, artifactCacheEntry(sessionId, artifact.path, artifact.updatedAt)).then(
 			(uri) => { if (live) setState({ key, uri }); },
 			(cause) => { if (live) setState({ key, error: userFacingError(cause, "The PDF didn't download.") }); },
 		);

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { formatFileAnnotationMessage } from "../../shared/files/file-annotations";
 import {
-	artifactCacheName,
+	artifactCacheEntry,
+	artifactCacheEvictions,
 	artifactCommentTarget,
 	artifactExtensionLabel,
 	artifactFormatLabel,
@@ -149,18 +150,59 @@ describe("artifactFormatLabel", () => {
 	});
 });
 
-describe("artifactCacheName", () => {
-	it("is stable for one version of a file and keeps its extension", () => {
-		const name = artifactCacheName("ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z");
-		expect(name).toBe(artifactCacheName("ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z"));
-		expect(name).toMatch(/^[a-z0-9]+-[a-z0-9]+\.pdf$/);
+describe("artifactCacheEntry", () => {
+	it("names one version of a file, and keeps its extension", () => {
+		const entry = artifactCacheEntry("ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z");
+		expect(entry).toEqual(artifactCacheEntry("ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z"));
+		expect(entry.name.startsWith(`${entry.prefix}-`)).toBe(true);
+		expect(entry.name).toMatch(/\.pdf$/);
 	});
 
-	it("changes with the session, the path and the version", () => {
-		const name = artifactCacheName("ao-1", "spec.pdf", "v1");
-		expect(artifactCacheName("ao-2", "spec.pdf", "v1")).not.toBe(name);
-		expect(artifactCacheName("ao-1", "other.pdf", "v1")).not.toBe(name);
-		expect(artifactCacheName("ao-1", "spec.pdf", "v2")).not.toBe(name);
+	it("shares its prefix with the file's other versions only", () => {
+		const entry = artifactCacheEntry("ao-1", "spec.pdf", "v1");
+		const rewritten = artifactCacheEntry("ao-1", "spec.pdf", "v2");
+		expect(rewritten.prefix).toBe(entry.prefix);
+		expect(rewritten.name).not.toBe(entry.name);
+		expect(artifactCacheEntry("ao-2", "spec.pdf", "v1").prefix).not.toBe(entry.prefix);
+		expect(artifactCacheEntry("ao-1", "other.pdf", "v1").prefix).not.toBe(entry.prefix);
+	});
+});
+
+describe("artifactCacheEvictions", () => {
+	const v1 = artifactCacheEntry("ao-1", "spec.pdf", "v1");
+	const v2 = artifactCacheEntry("ao-1", "spec.pdf", "v2");
+	const other = artifactCacheEntry("ao-1", "other.pdf", "v1");
+	const file = (name: string, size = 10, modified = 1) => ({ name, size, modified });
+	const idle = () => false;
+
+	it("drops a file's older copies once a new version is in place", () => {
+		expect(artifactCacheEvictions([file(v1.name), file(v2.name), file(other.name)], v2, idle)).toEqual([v1.name]);
+	});
+
+	it("drops an interrupted download of an older version", () => {
+		expect(artifactCacheEvictions([file(`${v1.name}.part`), file(v2.name)], v2, idle)).toEqual([`${v1.name}.part`]);
+	});
+
+	it("keeps a download still in progress", () => {
+		expect(artifactCacheEvictions([file(`${v1.name}.part`), file(v2.name)], v2, (name) => name === v1.name)).toEqual([]);
+	});
+
+	it("keeps one copy of an unlisted file opened again and again", () => {
+		const opens = ["2026-11-10T10:00:00Z", "2026-11-10T10:05:00Z", "2026-11-10T10:09:00Z"].map((openedAt) => artifactCacheEntry("ao-1", "report/spec.pdf", openedAt));
+		const latest = opens[opens.length - 1];
+		expect(artifactCacheEvictions(opens.map((entry) => file(entry.name)), latest, idle).sort()).toEqual(opens.slice(0, -1).map((entry) => entry.name).sort());
+	});
+
+	it("drops the least recently written other files while over the cap", () => {
+		const a = artifactCacheEntry("ao-1", "a.pdf", "v1");
+		const b = artifactCacheEntry("ao-1", "b.pdf", "v1");
+		const files = [file(a.name, 60, 1), file(b.name, 60, 2), file(v2.name, 60, 3)];
+		expect(artifactCacheEvictions(files, v2, idle, 130)).toEqual([a.name]);
+		expect(artifactCacheEvictions(files, v2, idle, 200)).toEqual([]);
+	});
+
+	it("never drops the copy just downloaded, even alone over the cap", () => {
+		expect(artifactCacheEvictions([file(v2.name, 500)], v2, idle, 100)).toEqual([]);
 	});
 });
 
