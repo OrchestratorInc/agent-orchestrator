@@ -13,6 +13,7 @@ vi.mock("motion/react", async (importOriginal) => {
 });
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
 import {
@@ -60,6 +61,7 @@ const {
 	navigateMock,
 	mockLocation,
 	mockParams,
+	routeStore,
 	postMock,
 	renameSessionMock,
 	spawnMock,
@@ -85,6 +87,9 @@ const {
 		navigateMock: vi.fn(),
 		mockLocation: { pathname: "/" },
 		mockParams: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+		// The router hooks subscribe to the route, as the real ones do, so a
+		// memoized Sidebar still sees a route change without new props.
+		routeStore: { version: 0, listeners: new Set<() => void>() },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
 		resumeOrchestratorMock: vi.fn(),
@@ -165,11 +170,31 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 	return {
 		...actual,
 		useNavigate: () => navigateMock,
-		useParams: () => ({ ...mockParams }),
-		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
-			select({ location: { pathname: mockLocation.pathname } }),
+		useParams: () => {
+			useSyncExternalStore(subscribeRoute, routeVersion);
+			return { ...mockParams };
+		},
+		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) => {
+			useSyncExternalStore(subscribeRoute, routeVersion);
+			return select({ location: { pathname: mockLocation.pathname } });
+		},
 	};
 });
+
+function subscribeRoute(listener: () => void) {
+	routeStore.listeners.add(listener);
+	return () => routeStore.listeners.delete(listener);
+}
+
+function routeVersion() {
+	return routeStore.version;
+}
+
+/** Tells the mocked router hooks that `mockParams` / `mockLocation` changed. */
+function notifyRouteChange() {
+	routeStore.version += 1;
+	for (const listener of routeStore.listeners) listener();
+}
 
 vi.mock("../lib/bridge", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/bridge")>();
@@ -4183,7 +4208,7 @@ describe("Sidebar session switch rendering", () => {
 		sessionRowRenders.clear();
 		mockParams.projectId = p2.id;
 		mockParams.sessionId = "p2-a";
-		view.rerender(tree());
+		act(() => notifyRouteChange());
 
 		expect([...sessionRowRenders.keys()].sort()).toEqual(["p1-a", "p2-a"]);
 
