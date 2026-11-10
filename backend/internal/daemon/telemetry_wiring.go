@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
@@ -67,7 +66,7 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
 	// CLI usage is already one event per command path and error kind. The
 	// minute cap would drop most of that daily burst. The day cap stays.
-	rateLimited.SkipMinuteWindow("ao.cli.usage_errors")
+	rateLimited.SkipMinuteWindow("ao.usage.cli_usage_errors")
 	rateLimited.SkipMinuteWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed")
 	rateLimited.UseUsageDailyWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed")
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
@@ -84,6 +83,20 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// export. Local storage is unaffected, so silenced events stay debuggable.
 	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
 	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), true
+}
+
+const writeLockHeldEvent = "ao.daemon.write_lock_held"
+
+func recordSlowWriteLocks(store *sqlite.Store, sink ports.EventSink) {
+	store.SetWriteLockObserver(func(caller string, held time.Duration) {
+		sink.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       writeLockHeldEvent,
+			Source:     "daemon",
+			OccurredAt: time.Now().UTC(),
+			Level:      ports.TelemetryLevelWarn,
+			Payload:    map[string]any{"caller": caller, "duration_ms": held.Milliseconds()},
+		})
+	})
 }
 
 // Recording is independent of sink startup so a temporary remote setup
@@ -117,7 +130,7 @@ var gitHubLoginRetryDelays = []time.Duration{0, 30 * time.Second, 2 * time.Minut
 
 // startGitHubLoginResolver resolves the authenticated human GitHub login in the
 // background and stores it on the telemetry identity, so every exported daemon
-// event carries github_actor, not just ao.session.spawned. The provider is
+// event carries github_actor, not just ao.sessions.spawned. The provider is
 // rebuilt per attempt because it reads the token at construction. Only the
 // authenticated GitHub account is used, never git config.
 func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident ports.TelemetryIdentityStore, log *slog.Logger) {
@@ -147,54 +160,46 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 	}()
 }
 
-// emitInstallLifecycleEvents sends the install anchors once each.
-// ao.app.installed only fires on a brand-new install's first daemon start, so
-// it undercounts installs whose CLI ran first or that predate it.
-// ao.install.created fires once per install ID on any build and is the reliable
-// "first seen" count. Each is reserved durably before it is queued, so a
+// emitInstallLifecycleEvents sends ao.app.installed once, on the first daemon
+// start of a brand-new install. hasPriorState reports whether the local store
+// already holds projects or sessions: an install ID created on upgrade (or
+// after the file was lost) is then not a new install, so the event is spent
+// without being sent. The event is reserved durably before it is queued, so a
 // restart cannot send it twice.
-func emitInstallLifecycleEvents(cfg config.Config, ident ports.TelemetryIdentityStore, sink ports.EventSink, log *slog.Logger) {
+func emitInstallLifecycleEvents(cfg config.Config, ident ports.TelemetryIdentityStore, sink ports.EventSink, hasPriorState func(context.Context) bool, log *slog.Logger) {
 	if ident == nil || !cfg.Telemetry.Events {
 		return
 	}
-	payload := map[string]any{"launcher": daemonLauncher(os.Getenv)}
-	marked, err := ident.MarkInstalledEvent(context.Background())
+	ctx := context.Background()
+	prior := hasPriorState != nil && hasPriorState(ctx)
+	marked, err := ident.MarkInstalledEvent(ctx)
 	if err != nil {
 		log.Warn("record telemetry install event", "error", err)
-	} else if marked {
-		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.app.installed",
-			Source:     "daemon",
-			OccurredAt: time.Now().UTC(),
-			Level:      ports.TelemetryLevelInfo,
-			Payload:    payload,
-		})
-	}
-	// Only reserve first_open when it can actually be exported; otherwise a
-	// local-only run would spend the one send.
-	if !remoteExportConfigured(cfg) {
 		return
 	}
-	marked, err = ident.MarkFirstOpenEvent(context.Background())
-	if err != nil {
-		log.Warn("record telemetry first open event", "error", err)
+	if !marked || prior {
 		return
 	}
-	if marked {
-		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.install.created",
-			Source:     "daemon",
-			OccurredAt: time.Now().UTC(),
-			Level:      ports.TelemetryLevelInfo,
-			Payload:    payload,
-		})
-	}
+	sink.Emit(ctx, ports.TelemetryEvent{
+		Name:       "ao.app.installed",
+		Source:     "daemon",
+		OccurredAt: time.Now().UTC(),
+		Level:      ports.TelemetryLevelInfo,
+		Payload:    map[string]any{"launcher": daemonLauncher(os.Getenv)},
+	})
 }
 
-func remoteExportConfigured(cfg config.Config) bool {
-	return cfg.Telemetry.Remote == config.TelemetryRemotePostHog &&
-		strings.TrimSpace(cfg.Telemetry.PostHogKey) != "" &&
-		strings.TrimSpace(cfg.Telemetry.PostHogHost) != ""
+// storeHasPriorState reports whether the store already has projects or
+// committed sessions. A read error counts as prior state: a missed install
+// event is safer than a false one.
+func storeHasPriorState(store *sqlite.Store) func(context.Context) bool {
+	return func(ctx context.Context) bool {
+		if sessions, err := store.LifetimeSessions(ctx); err != nil || sessions > 0 {
+			return true
+		}
+		projects, err := store.CountProjectsIncludingArchived(ctx)
+		return err != nil || projects > 0
+	}
 }
 
 // daemonLauncher reports who started this daemon. The desktop supervisor

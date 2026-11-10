@@ -38,7 +38,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 			return fmt.Errorf("amp.GetAgentHooks: %w", err)
 		}
 		if !managed {
-			return fmt.Errorf("amp.GetAgentHooks: refusing to overwrite non-AO file at %s", pluginPath)
+			return fmt.Errorf("amp.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s", pluginPath)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("amp.GetAgentHooks: stat plugin: %w", err)

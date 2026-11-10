@@ -1,10 +1,13 @@
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import type { ChatFileReference } from "../../../shared/chat-file-reference";
-import { MessageSquareQuote, X } from "lucide-react";
+import { MessageSquareQuote, X } from "@/components/app-icons";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
+import { ATTACHMENT_TILE_CLASS, ATTACHMENT_TILE_PILL_CLASS } from "./messageAttachments";
 
 export interface ChatAnnotationSummaryItem {
 	kind?: "chat" | "file";
@@ -24,6 +27,8 @@ interface ChatAnnotationSummaryProps {
 	onRemoveAll?: () => void;
 	disabled?: boolean;
 	className?: string;
+	/** Drawn as an attachment tile, with a line of the text, in a sent message's row. */
+	tile?: boolean;
 }
 
 /** Compact, keyboard-accessible annotation count with an interactive list. */
@@ -34,6 +39,7 @@ export function ChatAnnotationSummary({
 	onRemoveAll,
 	disabled = false,
 	className,
+	tile = false,
 }: ChatAnnotationSummaryProps) {
 	const [open, setOpen] = useState(false);
 	annotations = [...annotations].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -52,26 +58,48 @@ export function ChatAnnotationSummary({
 	}, [annotations]);
 	if (annotations.length === 0) return null;
 	const label = `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
-	const removeClass = "absolute right-1 top-1/2 -translate-y-1/2 inline-flex size-5 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
+	const removeClass = "absolute right-1 top-1/2 -translate-y-1/2";
+	const firstLine = annotations[0]?.text || annotations[0]?.fileReference?.path;
 
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
-			<div className={cn("relative inline-flex w-fit max-w-full min-w-0 self-start rounded bg-interactive-hover transition-colors", !disabled && "hover:bg-interactive-active", className)}>
+			<div
+				className={cn(
+					tile
+						? cn(ATTACHMENT_TILE_CLASS, "p-0 transition-colors", !disabled && "hover:bg-interactive-active")
+						: cn("relative inline-flex w-fit max-w-full min-w-0 self-start rounded-md bg-interactive-hover transition-colors", !disabled && "hover:bg-interactive-active"),
+					className,
+				)}
+			>
 				<PopoverTrigger asChild>
-					<button
+					<Pressable
 						ref={triggerRef}
-						type="button"
 						disabled={disabled}
 						aria-label={label}
-						className={cn("inline-flex h-7 w-full min-w-0 select-none items-center gap-1.5 rounded px-1.5 text-xs leading-tight text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50", onRemoveAll && "pr-7")}
+						className={cn(
+							"inline-flex w-full min-w-0 select-none items-center rounded-md text-xs leading-tight text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50",
+							tile ? "h-full flex-col items-start justify-between p-2 text-left text-caption focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" : "h-7 gap-1.5 px-1.5",
+							onRemoveAll && "pr-7",
+						)}
 					>
-						<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0" />
-						<span className="truncate">{label}</span>
-					</button>
+						{tile ? (
+							<>
+								<span className="line-clamp-2 text-foreground">{firstLine}</span>
+								<span className={ATTACHMENT_TILE_PILL_CLASS}>{label}</span>
+							</>
+						) : (
+							<>
+								<MessageSquareQuote aria-hidden="true" className="size-3.5 shrink-0" />
+								<span className="truncate">{label}</span>
+							</>
+						)}
+					</Pressable>
 				</PopoverTrigger>
 				{onRemoveAll ? (
-					<button
+					<Button
 						type="button"
+						variant="destructive-ghost"
+						size="icon-xs"
 						disabled={disabled}
 						aria-label={t("chat.removeAllAnnotations")}
 						className={removeClass}
@@ -81,7 +109,7 @@ export function ChatAnnotationSummary({
 						}}
 					>
 						<X aria-hidden="true" className="size-3" />
-					</button>
+					</Button>
 				) : null}
 			</div>
 			<PopoverContent
@@ -103,20 +131,21 @@ export function ChatAnnotationSummary({
 						<div key={annotation.id ?? `${annotation.messageId ?? "annotation"}-${index}`} className="relative min-w-0 rounded bg-interactive-hover">
        {annotation.fileReference ? <div className={cn("px-2.5 py-1.5 text-xs", onRemove && "pr-7")}>
 <FileAnnotationPreview reference={annotation.fileReference} onNavigate={() => setOpen(false)} />
-       </div> : <button
-								type="button"
-								disabled={disabled}
-								className={cn("block w-full min-w-0 rounded bg-transparent px-2.5 py-1.5 text-left text-xs leading-5 text-popover-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50", onRemove && "pr-7")}
+       </div> : <Pressable
+	disabled={disabled}
+	className={cn("block w-full min-w-0 select-none rounded bg-transparent px-2.5 py-1.5 text-xs leading-5 text-popover-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50", onRemove && "pr-7")}
 								onClick={() => {
 									onSelect?.(annotation);
 									setOpen(false);
 								}}
 							>
 								<span className="block truncate">{annotation.text}</span>
-							</button>}
+							</Pressable>}
 							{onRemove ? (
- <button
- type="button"
+								<Button
+									type="button"
+									variant="destructive-ghost"
+									size="icon-xs"
 									ref={(node) => { removeRefs.current[index] = node; }}
 									disabled={disabled}
 									aria-label={t("chat.removeAnnotation", { count: index + 1 })}
@@ -127,7 +156,7 @@ export function ChatAnnotationSummary({
 									}}
 								>
 									<X aria-hidden="true" className="size-3" />
-								</button>
+								</Button>
 							) : null}
 						</div>
 					))}

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { WorkspaceSession } from "../types/workspace";
 import { useCloudCp } from "./useCloudCp";
 
@@ -17,7 +17,11 @@ export const cloudArtifactAccessQueryKey = (baseUrl: string, orgId: string, sess
  * commit changes the files.
  */
 export const cloudArtifactFilesQueryKey = (baseUrl: string, orgId: string, sessionId: string, version: string) =>
-	["cloud-artifact-files", baseUrl, orgId, sessionId, version] as const;
+	[...cloudArtifactSessionFilesQueryKey(baseUrl, orgId, sessionId), version] as const;
+
+/** The prefix of every version of one cloud session's artifact list, to reread whichever is current. */
+export const cloudArtifactSessionFilesQueryKey = (baseUrl: string, orgId: string, sessionId: string) =>
+	["cloud-artifact-files", baseUrl, orgId, sessionId] as const;
 
 type CloudArtifactAccess = { root: string; expiresAt: number };
 
@@ -78,10 +82,9 @@ export function usePinnedArtifactUrl(root: string | undefined, path: string | un
 			setPinned(current);
 		}
 	}
-	return {
-		url: current.url,
-		root: current.root,
-		repin: () => setPinned((previous) => (previous?.url ? { ...previous, refused: previous.url } : previous)),
-		refresh: () => setPinned(undefined),
-	};
+	// Stable, since a viewer that takes repin as its file's onAccessRefused
+	// starts over (leaving an edit) when the callback changes.
+	const repin = useCallback(() => setPinned((previous) => (previous?.url ? { ...previous, refused: previous.url } : previous)), []);
+	const refresh = useCallback(() => setPinned(undefined), []);
+	return { url: current.url, root: current.root, repin, refresh };
 }

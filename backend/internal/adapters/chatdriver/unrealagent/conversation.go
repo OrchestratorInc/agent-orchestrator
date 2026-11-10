@@ -166,7 +166,7 @@ func (c *conversation) pump() {
 			if decodeErr := json.Unmarshal(line, &incoming); decodeErr != nil {
 				c.log.Warn("discarding invalid Unreal Agent frame", "error", decodeErr)
 			} else if incoming.Version != protocolVersion {
-				versionErr := fmt.Errorf("unreal agent protocol version %d is incompatible with AO version %d", incoming.Version, protocolVersion)
+				versionErr := fmt.Errorf("unreal agent protocol version %d is incompatible with Orchestrator version %d", incoming.Version, protocolVersion)
 				if !readyDelivered {
 					c.ready <- versionErr
 				}

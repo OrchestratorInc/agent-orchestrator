@@ -2512,3 +2512,30 @@ func TestRecheckAfterExternalLoginFindsTheNewDeviceCredential(t *testing.T) {
 		t.Fatalf("authentication after login recheck = %#v (structured=%t)", authentication, ok)
 	}
 }
+
+func TestCustomModelProviderSkipsCodexAccountCheck(t *testing.T) {
+	root := t.TempDir()
+	globalHome := filepath.Join(root, "global-codex")
+	if err := ensurePrivateDirectory(globalHome); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", globalHome)
+	manager := newCodexAccountManager(context.Background(), filepath.Join(root, "accounts"), filepath.Join(root, "pending"), filepath.Join(root, "staging"), globalHome, nil, nil)
+	manager.accountStoreReady = true
+	manager.factory = &fakeCodexAccountFactory{capabilities: supportedCodexAccountCapabilities()}
+	service := &Service{codexAccounts: manager, readiness: newReadinessCoordinator(readinessCoordinatorConfig{})}
+	if err := manager.reconcileGlobal(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if auth, handled := service.authenticationWithAccount(context.Background(), string(domain.HarnessCodex), domain.AgentReadinessPurposeLaunch); !handled || auth.State != domain.AgentAuthenticationUnauthorized {
+		t.Fatalf("signed out with the OpenAI provider = %#v (handled=%t)", auth, handled)
+	}
+
+	config := "model_provider = \"litellm\"\n[model_providers.litellm]\nenv_key = \"LITELLM_API_KEY\"\n"
+	if err := os.WriteFile(filepath.Join(globalHome, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if auth, handled := service.authenticationWithAccount(context.Background(), string(domain.HarnessCodex), domain.AgentReadinessPurposeLaunch); handled {
+		t.Fatalf("custom provider was decided by the Codex account check: %#v", auth)
+	}
+}

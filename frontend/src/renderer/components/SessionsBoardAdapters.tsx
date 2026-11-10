@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "@/components/app-icons";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
@@ -36,6 +36,9 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
+import { useUiStore } from "../stores/ui-store";
+import { appI18n } from "../i18n";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -43,6 +46,8 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionContextMenuItems } from "./SessionContextMenuItems";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./ui/context-menu";
 import { Input } from "./ui/input";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -71,6 +76,14 @@ export function toBoardSessionPresentation(
 					tone: "var(--color-status-exited)",
 				}
 			: undefined;
+	const importStatus = session.needsResume && !session.isTerminated
+		? {
+				className: "text-status-idle",
+				indicatorClassName: "bg-status-idle",
+				label: appI18n.t("session.importedNotOpened"),
+				tone: "var(--color-status-idle)",
+			}
+		: undefined;
 	return {
 		activity: session.activity,
 		branch: sessionBranchPresentation(session).branch,
@@ -81,7 +94,7 @@ export function toBoardSessionPresentation(
 		provider: session.provider,
 		status: session.status,
 		statusReadiness: session.statusReadiness,
-		statusPresentation: provisioningStatus ?? failedStartStatus,
+		statusPresentation: provisioningStatus ?? failedStartStatus ?? importStatus,
 		title: session.title,
 		trackerIssueId: canonicalTrackerIssueId(session.issueId),
 		updatedAt: session.updatedAt,
@@ -136,16 +149,30 @@ export function BoardSessionCardAdapter({
 	);
 }
 
+/** The board card for a session, rendered static for a sidebar hover preview. */
+export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSession }) {
+	return <DesktopSessionCard interactive={false} session={session} still />;
+}
+
 export function ArchivedSessionCardAdapter({
+	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
+	onDelete,
+	onOpen,
 	isRestoring,
 	restoreAction,
 	restoreError,
 	session,
 }: {
+	/** Drops the "1 of 1 PR merged" line; the PR links already say it. */
+	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
+	/** Asks the host to confirm the delete, for a card inside a list that owns its keys. */
+	onDelete?: () => void;
+	/** Opens the session on click, making this a live board card (hover, menu). */
+	onOpen?: () => void;
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
@@ -155,6 +182,7 @@ export function ArchivedSessionCardAdapter({
 	const branch = sessionBranchPresentation(session).branch ?? "";
 	return (
 		<DesktopSessionCard
+			hidePullRequestProgress={hidePullRequestProgress}
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<div className="flex items-center">
@@ -165,7 +193,7 @@ export function ArchivedSessionCardAdapter({
 						onClick={restoreAction}
 					/>
 					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
-					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} session={session} />}
+					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} onRequest={onDelete} session={session} />}
 				</div>
 			}
 			branchAction={
@@ -178,7 +206,8 @@ export function ArchivedSessionCardAdapter({
 				) : undefined
 			}
 			footer={<ArchiveRestoreError message={restoreError} />}
-			interactive={false}
+			interactive={Boolean(onOpen)}
+			onOpen={onOpen}
 			session={session}
 		/>
 	);
@@ -190,6 +219,7 @@ function DesktopSessionCard({
 	action,
 	branchAction,
 	footer,
+	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	interactive = true,
 	memory,
@@ -199,10 +229,12 @@ function DesktopSessionCard({
 	onOpenArtifacts,
 	onTerminate,
 	session,
+	still = false,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
 	footer?: ReactNode;
+	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
 	memory?: SessionMemoryReading;
@@ -214,6 +246,7 @@ function DesktopSessionCard({
 	session: WorkspaceSession;
 	participants?: readonly SessionPerson[];
 	me?: string;
+	still?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -224,34 +257,35 @@ function DesktopSessionCard({
 		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
 	const termination = useTerminateSessionState(session.id, session.hostId);
-	const showTerminate = interactive && session.isTerminated !== true && onTerminate;
+	// Archiving is the owner workspace's; a guest's archive would always be refused.
+	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
 
 	const terminationOverlay = showTerminate ? (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<span className="inline-flex">
-					<SessionArchiveDialog
-						onConfirm={(choice) => {
-							setConfirmOpen(false);
-							onTerminate(choice);
-						}}
-						onOpenChange={setConfirmOpen}
-						open={confirmOpen}
-						session={session}
-						trigger={
-							<button
+		<SessionArchiveDialog
+			onConfirm={(choice) => {
+				setConfirmOpen(false);
+				onTerminate(choice);
+			}}
+			onOpenChange={setConfirmOpen}
+			open={confirmOpen}
+			session={session}
+			trigger={
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<span className="inline-flex">
+							<Button
 								aria-label={
 									termination.isPending
 										? t("shell.archivingNamedAria", { title: session.title })
 										: t("shell.archiveNamed", { title: session.title })
 								}
 								className={cn(
-									"inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-[color,background-color,opacity] hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+									"rounded-sm",
 									keepTerminateVisible || termination.isPending
-										? "opacity-100"
+										? "opacity-100 disabled:opacity-100"
 										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
 								)}
 								onClick={(event) => {
@@ -261,24 +295,27 @@ function DesktopSessionCard({
 									setConfirmOpen(true);
 								}}
 								disabled={termination.isPending}
+								size="icon-sm"
 								type="button"
+								variant="quiet"
 							>
 								{termination.isPending ? (
 									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
 								) : (
 									<Archive className="size-icon-sm" aria-hidden="true" />
 								)}
-							</button>
-						}
-					/>
-				</span>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">
-				{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
-			</TooltipContent>
-		</Tooltip>
+							</Button>
+						</span>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{termination.isPending ? t("shell.archivingSession") : t("shell.archiveSession")}
+					</TooltipContent>
+				</Tooltip>
+			}
+		/>
 	) : undefined;
 
+	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const card = (
 		<SessionCardView
 			action={action}
@@ -301,7 +338,7 @@ function DesktopSessionCard({
 			labels={{
 				formatTime: formatTimeCompact,
 				intakeIssue: (id) => t("shell.intakeIssue", { id }),
-				pr: pullRequestLabels(t),
+				pr: hidePullRequestProgress ? { ...pullRequestLabels(t), progress: undefined } : pullRequestLabels(t),
 				updatedAt: (timestamp: string) =>
 					t("shell.lastMessageAt", { time: formatTimeCompact(timestamp) }),
 			}}
@@ -334,6 +371,8 @@ function DesktopSessionCard({
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
 					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
+			still={still}
+			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
 	);
@@ -512,9 +551,9 @@ function BoardArtifactLinks({
 								}}
 							>
 								<HoverCardTrigger asChild>
-									<button
+									<Pressable
 										aria-label={t("shell.openArtifactNamed", { name: artifact.name })}
-										className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-left text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+										className="flex min-w-0 max-w-full items-center gap-1.5 self-start rounded-sm py-0.5 text-foreground hover:underline"
 										onFocus={() => {
 											cancelPendingPreview();
 											suppressedPointer.current = null;
@@ -539,7 +578,7 @@ function BoardArtifactLinks({
 									>
 										<File aria-hidden="true" className="size-icon-2xs shrink-0 text-muted-foreground" />
 										<span className="truncate leading-none">{artifact.name}</span>
-									</button>
+									</Pressable>
 								</HoverCardTrigger>
 								<ArtifactPreviewCard artifact={artifact} session={session} />
 							</HoverCard>
@@ -549,10 +588,10 @@ function BoardArtifactLinks({
 			</div>
 			{artifacts.length > BOARD_ARTIFACT_LIMIT ? (
 				<div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-					<button
+					<Pressable
 						aria-controls={listId}
 						aria-expanded={expanded}
-						className="self-start rounded-sm py-0.5 text-left text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						className="self-start rounded-sm py-0.5 text-muted-foreground hover:text-foreground hover:underline"
 						onClick={(event) => {
 							event.stopPropagation();
 							cancelPendingPreview();
@@ -563,10 +602,10 @@ function BoardArtifactLinks({
 						type="button"
 					>
 						{expanded ? t("shell.showLess") : t("shell.moreArtifacts", { count: artifacts.length - BOARD_ARTIFACT_LIMIT })}
-					</button>
+					</Pressable>
 					{expanded && artifacts.length > BOARD_ARTIFACT_EXPANDED_LIMIT && onOpenInspector ? (
-						<button
-							className="rounded-sm py-0.5 text-left text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						<Pressable
+							className="rounded-sm py-0.5 text-muted-foreground hover:text-foreground hover:underline"
 							onClick={(event) => {
 								event.stopPropagation();
 								onOpenInspector();
@@ -574,7 +613,7 @@ function BoardArtifactLinks({
 							type="button"
 						>
 							{t("shell.openArtifactsInInspector")}
-						</button>
+						</Pressable>
 					) : null}
 				</div>
 			) : null}
@@ -613,6 +652,8 @@ function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessi
 	return {
 		...session,
 		displayStatus: undefined,
+		// No red tint either: the card reads like every other ended session.
+		plainSurface: true,
 		statusPresentation: {
 			className: "hidden",
 			indicatorClassName: "hidden",
@@ -675,12 +716,69 @@ function toResourcePresentation(
  * up first the way session cleanup does it, never forced: uncommitted work
  * refuses the delete, and the dialog says why.
  */
-function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; session: WorkspaceSession }) {
+function ArchiveDeleteButton({
+	isDisabled,
+	onRequest,
+	session,
+}: {
+	isDisabled: boolean;
+	/** When set, the host shows the confirm instead of this button. */
+	onRequest?: () => void;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	return (
+		<>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex">
+						<Button
+							aria-label={t("shell.deleteSessionNamed", { title: session.title })}
+							className="size-control-board-sm"
+							size="none"
+							variant="destructive-ghost"
+							disabled={isDisabled}
+							onClick={(event) => {
+								event.stopPropagation();
+								if (onRequest) onRequest();
+								else setOpen(true);
+							}}
+							type="button"
+						>
+							<Trash2 className="size-icon-md" aria-hidden="true" />
+						</Button>
+					</span>
+				</TooltipTrigger>
+				<TooltipContent side="top">{t("shell.deleteSession")}</TooltipContent>
+			</Tooltip>
+			{onRequest ? null : <DeleteArchivedSessionDialog onOpenChange={setOpen} open={open} session={session} />}
+		</>
+	);
+}
+
+/** The confirm behind every "delete permanently" on an archived session. */
+export function DeleteArchivedSessionDialog({
+	onDeleted,
+	onOpenChange,
+	open,
+	session,
+}: {
+	onDeleted?: () => void;
+	onOpenChange: (open: boolean) => void;
+	open: boolean;
+	session: WorkspaceSession;
+}) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const [open, setOpen] = useState(false);
 	const [deleting, setDeleting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// Each opening starts without the last attempt's error.
+	const [wasOpen, setWasOpen] = useState(open);
+	if (open !== wasOpen) {
+		setWasOpen(open);
+		if (open) setError(null);
+	}
 	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
 	const confirmDelete = async () => {
 		setDeleting(true);
@@ -693,7 +791,8 @@ function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; ses
 				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
 				return;
 			}
-			setOpen(false);
+			onOpenChange(false);
+			onDeleted?.();
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
@@ -702,40 +801,18 @@ function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; ses
 		}
 	};
 	return (
-		<>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex">
-						<button
-							aria-label={t("shell.deleteSessionNamed", { title: session.title })}
-							className="grid size-control-board-sm shrink-0 place-items-center rounded-md text-passive transition-colors hover:bg-interactive-hover hover:text-error focus-visible:text-error focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 disabled:cursor-not-allowed disabled:opacity-35"
-							disabled={isDisabled}
-							onClick={(event) => {
-								event.stopPropagation();
-								setError(null);
-								setOpen(true);
-							}}
-							type="button"
-						>
-							<Trash2 className="size-icon-md" aria-hidden="true" />
-						</button>
-					</span>
-				</TooltipTrigger>
-				<TooltipContent side="top">{t("shell.deleteSession")}</TooltipContent>
-			</Tooltip>
-			<ConfirmDialog
-				busy={deleting}
-				confirmAriaLabel={t("deleteSession.confirmAria")}
-				confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
-				description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
-				destructive
-				error={error}
-				onConfirm={() => void confirmDelete()}
-				onOpenChange={setOpen}
-				open={open}
-				title={t("deleteSession.dialog")}
-			/>
-		</>
+		<ConfirmDialog
+			busy={deleting}
+			confirmAriaLabel={t("deleteSession.confirmAria")}
+			confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
+			description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
+			destructive
+			error={error}
+			onConfirm={() => void confirmDelete()}
+			onOpenChange={onOpenChange}
+			open={open}
+			title={t("deleteSession.dialog")}
+		/>
 	);
 }
 
@@ -755,15 +832,17 @@ function ArchiveRestoreButton({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex">
-					<button
+					<Button
 						aria-label={label}
-						className="grid size-control-board-sm shrink-0 place-items-center rounded-md text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 disabled:cursor-not-allowed disabled:opacity-35"
+						className="size-control-board-sm"
+						size="none"
+						variant="quiet"
 						disabled={isDisabled}
 						onClick={onClick}
 						type="button"
 					>
 						<RotateCcw className={cn("size-icon-md", isRestoring && "animate-spin")} aria-hidden="true" />
-					</button>
+					</Button>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="top">
@@ -816,9 +895,11 @@ function CopyActionButton({
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<button
+				<Button
 					aria-label={buttonLabel}
-					className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-passive transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+					className="size-4 rounded-sm"
+					size="none"
+					variant="quiet"
 					onClick={(event) => void copyValue(event)}
 					type="button"
 				>
@@ -827,7 +908,7 @@ function CopyActionButton({
 					) : (
 						<Copy className="size-icon-2xs" aria-hidden="true" />
 					)}
-				</button>
+				</Button>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">{buttonLabel}</TooltipContent>
 		</Tooltip>

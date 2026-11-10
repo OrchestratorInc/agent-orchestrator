@@ -139,6 +139,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 // GetRestoreCommandWithSessionID returns the native identity selected by the
 // command so the manager validates recovered history rather than stale metadata.
 func (p *Plugin) GetRestoreCommandWithSessionID(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, agentSessionID string, ok bool, err error) {
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		return p.importedRestoreCommand(ctx, cfg)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, "", false, err
 	}

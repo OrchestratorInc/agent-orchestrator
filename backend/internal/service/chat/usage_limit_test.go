@@ -20,6 +20,11 @@ import (
 
 func failUsageLimitedTurn(t *testing.T, h *harness, message string) domain.ConversationTurn {
 	t.Helper()
+	return failUsageLimitedTurnAt(t, h, message, time.Time{})
+}
+
+func failUsageLimitedTurnAt(t *testing.T, h *harness, message string, reset time.Time) domain.ConversationTurn {
+	t.Helper()
 	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
 		Text: "finish this task", ClientMessageID: uuid.NewString(), Origin: domain.MessageOriginHuman,
 	})
@@ -27,7 +32,7 @@ func failUsageLimitedTurn(t *testing.T, h *harness, message string) domain.Conve
 		t.Fatal(err)
 	}
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
-		TurnState: domain.TurnStateFailed, Err: errors.New(message)})
+		TurnState: domain.TurnStateFailed, Err: errors.New(message), UsageLimitResetsAt: reset})
 	snapshot := failedTurnSnapshot(t, h, turn.ID)
 	failed, _ := turnByID(snapshot, turn.ID)
 	return failed

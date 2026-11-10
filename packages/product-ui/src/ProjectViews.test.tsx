@@ -123,12 +123,9 @@ describe("project presentation", () => {
 			<ProjectSetupFormView
 				canSubmit
 				intakeControl={<span>Intake control</span>}
-				isBusy={false}
-				onCancel={vi.fn()}
 				onSubmit={onSubmit}
 				setupNotice={{ message: "Git setup required", warning: "Nested repository" }}
-				submitLabel="Create and start"
-				cancelLabel="Cancel"
+				actions={<button type="submit">Create and start</button>}
 			/>,
 		);
 

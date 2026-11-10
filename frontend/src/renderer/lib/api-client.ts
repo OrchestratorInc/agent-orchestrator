@@ -4,6 +4,7 @@ import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
+import { markApiError, withApiErrorOwnership } from "./reported-errors";
 
 function devApiBaseUrl(): string {
 	return typeof window === "undefined" ? "http://127.0.0.1:3001" : window.location.origin;
@@ -93,6 +94,7 @@ const ROUTE_TEMPLATES = [
     "/api/v1/awake/recover", "/api/v1/awake/history", "/api/v1/awake/downloads",
     "/api/v1/awake/low-power/authorize", "/api/v1/awake/low-power/revoke", "/api/v1/awake/sessions/{awakeId}/end",
     "/api/v1/awake/sessions/{awakeId}/extend",
+    "/api/v1/session-import",
 	"/api/v1/agents",
 	"/api/v1/agents/install-jobs",
 	"/api/v1/agents/auth-plans",
@@ -101,6 +103,9 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/readiness",
 	"/api/v1/agents/readiness/ensure",
 	"/api/v1/agents/{agent}/auth",
+	"/api/v1/agents/{agent}/auth/operations",
+	"/api/v1/agents/{agent}/auth/operations/{operationId}",
+	"/api/v1/agents/{agent}/auth/operations/{operationId}/code",
 	"/api/v1/agents/{agent}/logout",
 	"/api/v1/settings/harness-defaults/{agent}",
 	"/api/v1/agents/{agent}/install",
@@ -143,6 +148,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/projects",
 "/api/v1/projects/clone",
 	"/api/v1/projects/clone/prepare",
+	"/api/v1/projects/clone/prepare/stream",
 	"/api/v1/projects/clone/check",
 	"/api/v1/projects/clone/cleanup",
 	"/api/v1/projects/initialize",
@@ -230,7 +236,9 @@ function fallbackNormalize(pathname: string): string {
 			i += 1;
 		}
 	}
-	return segments.join("/");
+	// Route words never contain a digit, apart from the API version; any other
+	// segment with one is an identifier (a side-chat UUID, a shell terminal ID).
+	return segments.map((segment) => (/\d/.test(segment) && !/^v\d+$/.test(segment) ? ":id" : segment)).join("/");
 }
 
 export function normalizeApiOperation(method: string, pathname: string): string {
@@ -252,6 +260,8 @@ const API_ERROR_DEDUPE_MS = 30_000;
 // wired in this process, or a shell the user already closed. Other 401 and
 // 404 responses still report, including an expired GitHub token.
 const EXPECTED_API_ERROR_CODES = new Set([
+	"UPSTREAM_UNAVAILABLE",
+	"HOST_IDENTITY_UNVERIFIED",
 	"CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE",
 	"SHELL_TERMINAL_NOT_FOUND",
 ]);
@@ -283,14 +293,53 @@ function reportApiError(
 	const last = lastApiErrorAt.get(key);
 	if (last !== undefined && now - last < API_ERROR_DEDUPE_MS) return;
 	lastApiErrorAt.set(key, now);
-	void captureRendererEvent("ao.renderer.api_error", {
+	void captureRendererEvent("ao.requests.failed", {
 		operation,
 		error_category: category,
 		status,
+		error_code: code,
 	});
 	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
 		captureApiErrorToSentry(operation, category, status, code, requestId);
 	}
+}
+
+// Reads the daemon error envelope's `code` (via a clone so the caller still
+// gets an unconsumed body) and reports the failure unless it is expected.
+async function reportResponseError(operation: string, response: Response): Promise<void> {
+	let code: string | undefined;
+	let requestId: string | undefined;
+	try {
+		const body = (await response.clone().json()) as Partial<components["schemas"]["APIError"]>;
+		if (typeof body?.code === "string" && body.code !== "") code = body.code;
+		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
+	} catch {
+		// Non-JSON or empty body: fall back to status-only classification.
+	}
+	if (!(code && EXPECTED_API_ERROR_CODES.has(code)) && !expectedProbeConflict(operation, response.status)) reportApiError(
+		operation,
+		response.status >= 500 ? "http_5xx" : "http_4xx",
+		response.status,
+		code,
+		requestId,
+	);
+}
+
+// A fetch for clients that talk to a daemon directly (a connected remote host)
+// rather than through runtimeFetch's rebasing. Failures are reported the same
+// way the local client reports them; they used to be invisible.
+export async function reportingFetch(input: Request): Promise<Response> {
+	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
+	let response: Response;
+	try {
+		response = await fetch(input);
+	} catch (error) {
+		markApiError(error);
+		if (!(error instanceof DOMException && error.name === "AbortError")) reportApiError(operation, "network_error");
+		throw error;
+	}
+	if (!response.ok) await reportResponseError(operation, response);
+	return response;
 }
 
 async function runtimeFetch(input: Request): Promise<Response> {
@@ -340,39 +389,21 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	try {
 		response = await send();
 	} catch (error) {
+		markApiError(error);
 		// Caller-initiated aborts (unmounted components cancelling queries) are not failures.
 		if (!(error instanceof DOMException && error.name === "AbortError")) {
 			reportApiError(operation, "network_error");
 		}
 		throw error;
 	}
-	if (!response.ok) {
-		// Best-effort read the daemon error envelope's `code` (via a clone so the
-		// caller still gets an unconsumed body) to drive classification.
-		let code: string | undefined;
-		let requestId: string | undefined;
-		try {
-			const body = (await response.clone().json()) as Partial<components["schemas"]["APIError"]>;
-			if (typeof body?.code === "string" && body.code !== "") code = body.code;
-			if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
-		} catch {
-			// Non-JSON or empty body: fall back to status-only classification.
-		}
-		if (!(code && EXPECTED_API_ERROR_CODES.has(code)) && !expectedProbeConflict(operation, response.status)) reportApiError(
-			operation,
-			response.status >= 500 ? "http_5xx" : "http_4xx",
-			response.status,
-			code,
-			requestId,
-		);
-	}
+	if (!response.ok) await reportResponseError(operation, response);
 	return response;
 }
 
-export const apiClient = createClient<paths>({
+export const apiClient = withApiErrorOwnership(createClient<paths>({
 	baseUrl: initialApiBaseUrl,
 	fetch: runtimeFetch,
-});
+}));
 
 // Build each request against the daemon's current address, so runtimeFetch
 // passes it straight to fetch. Rebasing a request built against the

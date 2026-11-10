@@ -132,6 +132,7 @@ describe("formatVersionTime", () => {
 describe("ArtifactVersionPreview", () => {
 	function renderPreview(props: Partial<React.ComponentProps<typeof ArtifactVersionPreview>> = {}, data: { truncated?: boolean } = {}) {
 		versionMock.mockReturnValue({ data: { content: "the older text", createdAt: at(0), ...data }, isPending: false, isError: false, dataUpdatedAt: 1 });
+		versionsMock.mockReturnValue({ data: [v(2, "agent", 0)] });
 		const onRestore = vi.fn();
 		const onBack = vi.fn();
 		render(<ArtifactVersionPreview onBack={onBack} onRestore={onRestore} path="notes.txt" restoring={false} sessionId="s1" version={2} {...props} />);
@@ -145,6 +146,23 @@ describe("ArtifactVersionPreview", () => {
 		expect(onRestore).toHaveBeenCalledTimes(1);
 		await userEvent.click(screen.getByRole("button", { name: "Back to current" }));
 		expect(onBack).toHaveBeenCalledTimes(1);
+	});
+
+	it("loads a media version through its viewer and still offers Restore", async () => {
+		versionMock.mockClear();
+		const { onRestore } = renderPreview({ path: "chart.png", rawUrl: "http://daemon.test/chart.png?raw=true" });
+		expect(versionMock).toHaveBeenCalledWith(expect.objectContaining({ version: null }));
+		expect(screen.queryByText("the older text")).toBeNull();
+		expect(screen.getByRole("img", { name: "chart.png" }).getAttribute("src")).toContain("artifactVersion=2");
+		await userEvent.click(screen.getByRole("button", { name: "Restore this version" }));
+		expect(onRestore).toHaveBeenCalledTimes(1);
+	});
+
+	it("offers no Restore to someone who only views the file", () => {
+		renderPreview({ onRestore: undefined });
+		expect(screen.getByText("the older text")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Restore this version" })).toBeNull();
+		expect(screen.getByRole("button", { name: "Back to current" })).toBeTruthy();
 	});
 
 	it("says when only the start of a long version is shown", () => {

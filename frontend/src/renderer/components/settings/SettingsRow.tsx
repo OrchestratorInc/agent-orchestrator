@@ -1,7 +1,8 @@
-import { Pencil, type LucideIcon } from "lucide-react";
+import { Pencil, type AppIcon } from "@/components/app-icons";
 import { useEffect, useRef, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 
 function SettingsRowLabel({
 	icon: Icon,
@@ -9,7 +10,7 @@ function SettingsRowLabel({
 	label,
 	description,
 }: {
-	icon?: LucideIcon;
+	icon?: AppIcon;
 	leading?: ReactNode;
 	label: ReactNode;
 	description?: ReactNode;
@@ -30,7 +31,10 @@ function SettingsRowLabel({
 		<div className="flex min-w-0 flex-1 items-start gap-(--size-settings-row-icon-gap)">
 			{lead}
 			{Icon ? <Icon className="mt-0.5 size-icon-lg shrink-0 text-settings-muted" aria-hidden="true" /> : null}
-			<div className="min-w-0">
+			{/* flex-1: the column takes the width up to the control, so a full-width
+			    child (the Updates progress track) spans it instead of shrink-wrapping
+			    to the longest text line. */}
+			<div className="min-w-0 flex-1">
 				<div className="text-sm leading-5 text-settings-label">{label}</div>
 				<div className="mt-0.5 text-pretty text-control leading-4 text-settings-muted">{description}</div>
 			</div>
@@ -65,7 +69,7 @@ export function SettingsRow({
 	className,
 	...rowProps
 }: Omit<ComponentPropsWithoutRef<"div">, "children"> & {
-	icon?: LucideIcon;
+	icon?: AppIcon;
 	leading?: ReactNode;
 	label: ReactNode;
 	description?: ReactNode;
@@ -149,8 +153,7 @@ export function SettingsInlineInput({
 
 	if (!editing) {
 		return (
-			<button
-				type="button"
+			<Pressable
 				className={cn("settings-inline-edit-trigger", className)}
 				aria-label={t("settings.field.edit", { label })}
 				onClick={() => setEditing(true)}
@@ -159,7 +162,7 @@ export function SettingsInlineInput({
 					{value || placeholder}
 				</span>
 				<Pencil className="settings-inline-edit-icon" aria-hidden="true" />
-			</button>
+			</Pressable>
 		);
 	}
 
@@ -188,7 +191,7 @@ export function SettingsInputRow({
 	onCancel,
 	placeholder,
 }: {
-	icon?: LucideIcon;
+	icon?: AppIcon;
 	label: string;
 	id: string;
 	value: string;

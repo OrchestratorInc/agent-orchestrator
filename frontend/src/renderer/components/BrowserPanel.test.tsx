@@ -1552,16 +1552,16 @@ describe("BrowserPanel", () => {
 		{
 			rejectionCode: "BROWSER_RUNTIME_TOKEN_REJECTED",
 			message:
-				"The AO daemon refused the browser runtime because another AO launch started it. Run `ao stop`, then reopen AO.",
+				"The Orchestrator daemon refused the browser runtime because another Orchestrator launch started it. Run `ao stop`, then reopen Orchestrator.",
 		},
 		{
 			rejectionCode: "BROWSER_RUNTIME_PROTOCOL_MISMATCH",
 			message:
-				"The AO daemon refused the browser runtime because it comes from a different AO version than this app. Run `ao stop`, then reopen AO.",
+				"The Orchestrator daemon refused the browser runtime because it comes from a different Orchestrator version than this app. Run `ao stop`, then reopen Orchestrator.",
 		},
 		// A malformed hello, a code this app doesn't know, or none: no cause is claimed.
-		{ rejectionCode: "BROWSER_RUNTIME_BAD_HELLO", message: "The AO daemon refused the browser runtime. Run `ao stop`, then reopen AO." },
-		{ rejectionCode: undefined, message: "The AO daemon refused the browser runtime. Run `ao stop`, then reopen AO." },
+		{ rejectionCode: "BROWSER_RUNTIME_BAD_HELLO", message: "The Orchestrator daemon refused the browser runtime. Run `ao stop`, then reopen Orchestrator." },
+		{ rejectionCode: undefined, message: "The Orchestrator daemon refused the browser runtime. Run `ao stop`, then reopen Orchestrator." },
 	])(
 		"says why the daemon refused the runtime ($rejectionCode), without a Reconnect that can't help (#6466)",
 		({ rejectionCode, message }) => {
@@ -1634,7 +1634,8 @@ describe("BrowserPanel", () => {
 		expect(screen.getByRole("button", { name: "Send annotations" })).toHaveTextContent("2");
 		expect(screen.getByRole("button", { name: "Send annotations" })).toHaveClass(
 			"browser-panel__annotation-send",
-			"bg-primary",
+			"button-raised",
+			"[--button-color:var(--primary)]",
 			"text-primary-foreground",
 		);
 
@@ -1968,7 +1969,7 @@ describe("BrowserPanel", () => {
 	});
 
 	it("shows annotation send errors", async () => {
-		postMock.mockResolvedValue({ error: { message: "AO daemon is not ready." } });
+		postMock.mockResolvedValue({ error: { message: "Orchestrator daemon is not ready." } });
 		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/" };
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -1976,12 +1977,12 @@ describe("BrowserPanel", () => {
 			annotationSubmitListeners.forEach((listener) => listener(annotationPayload("Make this button blue.")));
 		});
 
-		expect(await screen.findByText("AO daemon is not ready.")).toBeInTheDocument();
+		expect(await screen.findByText("Orchestrator daemon is not ready.")).toBeInTheDocument();
 	});
 
 	it("keeps a failed annotation queued so the user can retry it", async () => {
 		postMock
-			.mockResolvedValueOnce({ error: { message: "AO daemon is not ready." } })
+			.mockResolvedValueOnce({ error: { message: "Orchestrator daemon is not ready." } })
 			.mockResolvedValueOnce({ data: {} });
 		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/" };
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
@@ -1992,7 +1993,7 @@ describe("BrowserPanel", () => {
 			);
 		});
 
-		expect(await screen.findByText("AO daemon is not ready.")).toBeInTheDocument();
+		expect(await screen.findByText("Orchestrator daemon is not ready.")).toBeInTheDocument();
 		expect(postMock).toHaveBeenCalledTimes(1);
 
 		await userEvent.click(screen.getByRole("button", { name: /retry annotation/i }));

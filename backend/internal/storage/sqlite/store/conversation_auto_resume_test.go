@@ -68,6 +68,28 @@ func TestSettleTurnReplayKeepsUsageLimitRefusal(t *testing.T) {
 	}
 }
 
+// A resumed Codex thread replays a turn the dead controller left in progress as
+// interrupted, with no error. Nobody interrupted it, so the failure must stay.
+func TestSettleTurnInterruptedReplayKeepsStoredFailure(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "crashed", "finish this task")
+	if err := s.BindTurnToProvider(ctx, "turn-crashed", "provider-crashed", testNow); err != nil {
+		t.Fatal(err)
+	}
+	const reason = "controller ended before the turn completed"
+	if err := s.SettleTurn(ctx, conversation.ID, "provider-crashed", domain.TurnStateFailed, reason, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleTurn(ctx, conversation.ID, "provider-crashed", domain.TurnStateInterrupted, "", testNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	turn, err := s.TurnByID(ctx, "turn-crashed")
+	if err != nil || turn.State != domain.TurnStateFailed || turn.ErrorMessage != reason {
+		t.Fatalf("interrupted replay replaced the stored failure: %+v, %v", turn, err)
+	}
+}
+
 func TestAppendAutoResumeRetryRequiresDueConsent(t *testing.T) {
 	for _, state := range []string{"due", "future", "cancelled", "changed account", "failed insert"} {
 		t.Run(state, func(t *testing.T) {

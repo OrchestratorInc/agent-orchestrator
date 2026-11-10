@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Copy, Globe, Share } from "lucide-react";
-import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import { Check, Copy, Globe, Share } from "@/components/app-icons";
+import { type CloudShareFile, type CloudShareInspection, type CloudShareLink, type CloudShareLinks, type CloudSharePublishResult, artifactShareUrl } from "../../shared/cloud-share";
+import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
+import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
+import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { Button } from "./ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type Phase =
@@ -19,11 +22,21 @@ type Phase =
 	| { kind: "limit"; limit: number }
 	| { kind: "publish"; inspection: CloudShareInspection; links: CloudShareLinks; changed?: boolean; unpublished?: boolean }
 	| { kind: "uploading"; sent: number; total: number }
-	| { kind: "published"; share: CloudShareLink; outdated?: boolean; unpublishing?: "confirm" | "busy"; error?: string }
+	| { kind: "published"; share: CloudShareLink; outdated?: OutdatedShare; unpublishing?: "confirm" | "busy"; error?: string }
 	| { kind: "error"; message: string };
 
+/**
+ * What a published file holds now that its link does not: what Republish puts
+ * on the link. Changed says the file moved again after this was offered.
+ */
+interface OutdatedShare {
+	inspection: CloudShareInspection;
+	links: CloudShareLinks;
+	changed?: boolean;
+}
+
 /** Videos are not shared yet: there is no partial-file serving for them. */
-const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
+export const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
 const COPIED_MS = 2_000;
 
 /**
@@ -33,6 +46,8 @@ const COPIED_MS = 2_000;
 interface PendingShare {
 	result: Promise<CloudSharePublishResult>;
 	links: CloudShareLinks;
+	/** The active link this publish updates, for a republish. */
+	share?: CloudShareLink;
 	sent: number;
 	total: number;
 }
@@ -93,12 +108,47 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 }
 
 /**
+ * The file an artifact is shared as, or undefined where the person cannot
+ * share it: only the person who started a cloud session publishes its files,
+ * and not once they are shared. A Scratchpad file belongs to the Scratchpad
+ * workspace, as in the session view.
+ */
+export function useArtifactShareFile(artifact: Pick<ArtifactRow, "cloud" | "sessionId" | "path" | "projectId"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
+	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
+	if (!artifact) return undefined;
+	if (artifact.cloud) {
+		const owner = Boolean(cloudUserId) && artifact.cloud.createdByUserId === cloudUserId;
+		if (artifact.cloud.shared || !owner) return undefined;
+		return { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "" };
+	}
+	return { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? STANDALONE_WORKSPACE_ID };
+}
+
+/** The share panel a menu's Share item opens, anchored to the menu's trigger. */
+export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, children }: {
+	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
+	name: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactElement;
+}) {
+	return (
+		<Popover open={open} onOpenChange={onOpenChange}>
+			<PopoverAnchor asChild>{children}</PopoverAnchor>
+			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
+				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} /> : null}
+			</PopoverContent>
+		</Popover>
+	);
+}
+
+/**
  * The Share button beside an open local artifact's other actions. It opens a
  * popover anchored to it: publish the file as a public link, or, once it is
- * published, copy the link or unpublish it. For a video the button
- * is disabled and says why.
+ * published, copy the link, unpublish it, or republish a file that changed
+ * since. For a video the button is disabled and says why.
  */
-export function ShareArtifactButton({ file, name, className }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string }) {
+export function ShareArtifactButton({ file, name, className, iconOnly = false }: { file: Omit<CloudShareFile, "baseUrl" | "shareId">; name: string; className?: string; iconOnly?: boolean }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const available = useShareAvailable();
@@ -107,16 +157,23 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 		<Button
 			aria-label={`${t("artifacts.share.menu")}: ${name}`}
 			// Muted like the header's other actions, bright while hovered, and pressed while open.
-			className={cn("text-muted-foreground hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground dark:data-[state=open]:bg-muted/50", className)}
+			className={className}
 			disabled={video}
-			size="sm"
+			size={iconOnly ? "icon-sm" : "sm"}
 			type="button"
-			variant="ghost"
+			variant="quiet"
 		>
 			<Share aria-hidden="true" className="size-icon-sm" />
-			{t("artifacts.share.menu")}
+			{iconOnly ? null : t("artifacts.share.menu")}
 		</Button>
 	);
+	const popoverTrigger = <PopoverTrigger asChild>{button}</PopoverTrigger>;
+	const trigger = iconOnly ? (
+		<Tooltip>
+			<TooltipTrigger asChild>{popoverTrigger}</TooltipTrigger>
+			<TooltipContent side="bottom">{t("artifacts.share.menu")}</TooltipContent>
+		</Tooltip>
+	) : popoverTrigger;
 	// Not offered where the control plane does not serve share links.
 	if (!available) return null;
 	if (video) {
@@ -132,7 +189,7 @@ export function ShareArtifactButton({ file, name, className }: { file: Omit<Clou
 	// Closing the popover mid-publish keeps the publish going; only Cancel stops it.
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
-			<PopoverTrigger asChild>{button}</PopoverTrigger>
+			{trigger}
 			<PopoverContent align="end" className="w-[min(18.5rem,90vw)] p-3" data-browser-native-overlay="true">
 				{open ? <SharePanel file={file} name={name} onClose={() => setOpen(false)} /> : null}
 			</PopoverContent>
@@ -158,8 +215,9 @@ function SharePanel({
 	const key = pendingKey(baseUrl, file);
 
 	// Shows how a publish ended. Its own refusal is shown as it came, not
-	// worked out again from the link list.
-	const settle = (result: CloudSharePublishResult, links: CloudShareLinks) => {
+	// worked out again from the link list. A republish names its link: a file
+	// that changed under it stays on that link, offering the newer version.
+	const settle = (result: CloudSharePublishResult, links: CloudShareLinks, share?: CloudShareLink) => {
 		switch (result.status) {
 			case "published":
 				return setPhase({ kind: "published", share: result.share });
@@ -168,6 +226,7 @@ function SharePanel({
 			case "limit":
 				return setPhase({ kind: "limit", limit: links.limit });
 			case "changed":
+				if (share) return setPhase({ kind: "published", share, outdated: { inspection: result.inspection, links, changed: true } });
 				return setPhase({ kind: "publish", inspection: result.inspection, links, changed: true });
 			case "unsupported":
 				return setPhase({ kind: "unsupported" });
@@ -190,7 +249,7 @@ function SharePanel({
 		if (pending) {
 			setPhase({ kind: "uploading", sent: pending.sent, total: pending.total });
 			pending.result
-				.then((result) => !cancelled && settle(result, pending.links))
+				.then((result) => !cancelled && settle(result, pending.links, pending.share))
 				.catch((error: unknown) => !cancelled && setPhase({ kind: "error", message: errorMessage(error) }));
 			return () => {
 				cancelled = true;
@@ -206,7 +265,7 @@ function SharePanel({
 				// The file changed since it was published here: the link still
 				// serves what it held then.
 				const outdated = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
-				if (current) return setPhase({ kind: "published", share: current, outdated });
+				if (current) return setPhase({ kind: "published", share: current, outdated: outdated ? { inspection, links } : undefined });
 				// It was published from here, but its link is unpublished now,
 				// usually from somewhere else. Publishing gives it a new link.
 				const unpublished = Boolean(inspection.shareId);
@@ -242,13 +301,20 @@ function SharePanel({
 		return () => clearTimeout(timer);
 	}, [copied]);
 
-	const publish = async (inspection: CloudShareInspection, links: CloudShareLinks) => {
+	// With share, updates that active link in place: same URL, same slot.
+	const publish = async (inspection: CloudShareInspection, links: CloudShareLinks, share?: CloudShareLink) => {
 		setPhase({ kind: "uploading", sent: 0, total: 0 });
 		// The fingerprint ties the publish to what this popover showed.
-		const pending: PendingShare = { result: aoBridge.cloudShare.publish({ ...shareFile, fingerprint: inspection.fingerprint }), links, sent: 0, total: 0 };
+		const pending: PendingShare = {
+			result: aoBridge.cloudShare.publish({ ...shareFile, fingerprint: inspection.fingerprint, shareId: share?.id }),
+			links,
+			share,
+			sent: 0,
+			total: 0,
+		};
 		pendingShares.set(key, pending);
 		try {
-			settle(await pending.result, links);
+			settle(await pending.result, links, share);
 		} catch (error) {
 			setPhase({ kind: "error", message: errorMessage(error) });
 		} finally {
@@ -256,7 +322,7 @@ function SharePanel({
 		}
 	};
 
-	const unpublish = async (share: CloudShareLink, outdated?: boolean) => {
+	const unpublish = async (share: CloudShareLink, outdated?: OutdatedShare) => {
 		setPhase({ kind: "published", share, outdated, unpublishing: "busy" });
 		try {
 			await aoBridge.cloudShare.unpublish(baseUrl, share.id);
@@ -275,11 +341,12 @@ function SharePanel({
 		<p role={role} className={cn("mt-1 text-caption", role === "alert" ? "text-error" : "text-muted-foreground")}>{text}</p>
 	);
 	// Buttons and inputs inherit their font (styles.css), so the row sets the
-	// buttons' size and meta() the smaller secondary text.
+	// buttons' size and meta() the smaller secondary text. Labels too long for
+	// one line, as with three actions in German, wrap with the actions at the right.
 	const footer = (left: React.ReactNode, right: React.ReactNode) => (
-		<div className="mt-3 flex min-h-control-md items-center justify-between gap-2 text-xs">
+		<div className="mt-3 flex min-h-control-md flex-wrap items-center justify-between gap-2 text-xs">
 			<div className="min-w-0 truncate">{left}</div>
-			<div className="flex shrink-0 items-center gap-1.5">{right}</div>
+			<div className="ml-auto flex shrink-0 items-center gap-1.5">{right}</div>
 		</div>
 	);
 	const meta = (text: string) => <span className="text-caption text-muted-foreground tabular-nums">{text}</span>;
@@ -349,7 +416,7 @@ function SharePanel({
 		}
 		case "published": {
 			const { share, outdated } = phase;
-			const link = share.viewerUrl ?? share.contentUrl;
+			const link = artifactShareUrl(share);
 			if (phase.unpublishing === "confirm" || phase.unpublishing === "busy") {
 				const busy = phase.unpublishing === "busy";
 				return (
@@ -362,7 +429,7 @@ function SharePanel({
 								<Button disabled={busy} onClick={() => setPhase({ kind: "published", share, outdated })} size="sm" type="button" variant="ghost">
 									{t("artifacts.share.cancel")}
 								</Button>
-								<Button className="bg-danger-strong hover:bg-danger-strong" disabled={busy} onClick={() => void unpublish(share, outdated)} size="sm" type="button" variant="primary">
+								<Button disabled={busy} onClick={() => void unpublish(share, outdated)} size="sm" type="button" variant="destructive">
 									{t("artifacts.share.unpublish")}
 								</Button>
 							</>,
@@ -386,22 +453,30 @@ function SharePanel({
 							value={link}
 						/>
 					</div>
-					{outdated ? status(t("artifacts.share.outdated"), "status") : null}
+					{outdated ? status(t(outdated.changed ? "artifacts.share.changed" : "artifacts.share.outdated"), "status") : null}
+					{outdated && outdated.inspection.secretFindings.length > 0 ? status(t("artifacts.share.secrets", { kinds: outdated.inspection.secretFindings.join(", ") }), "alert") : null}
 					{phase.error ? status(phase.error, "alert") : null}
 					{footer(
 						<Button
-							className="-ml-2.5 text-error hover:text-error"
+							className="-ml-2.5"
 							onClick={() => setPhase({ kind: "published", share, outdated, unpublishing: "confirm" })}
 							size="sm"
 							type="button"
-							variant="ghost"
+							variant="destructive-ghost"
 						>
 							{t("artifacts.share.unpublish")}
 						</Button>,
-						<Button onClick={() => void aoBridge.clipboard.writeText(link).then(() => setCopied(true))} size="sm" type="button" variant="primary">
-							{copied ? <Check aria-hidden="true" className="size-3" /> : <Copy aria-hidden="true" className="size-3" />}
-							{t(copied ? "artifacts.share.copied" : "artifacts.share.copyLink")}
-						</Button>,
+						<>
+							<Button onClick={() => void aoBridge.clipboard.writeText(link).then(() => setCopied(true))} size="sm" type="button" variant={outdated ? "secondary" : "primary"}>
+								{copied ? <Check aria-hidden="true" className="size-3" /> : <Copy aria-hidden="true" className="size-3" />}
+								{t(copied ? "artifacts.share.copied" : "artifacts.share.copyLink")}
+							</Button>
+							{outdated ? (
+								<Button onClick={() => void publish(outdated.inspection, outdated.links, share)} size="sm" type="button" variant="primary">
+									{t("artifacts.share.republish")}
+								</Button>
+							) : null}
+						</>,
 					)}
 				</>
 			);
