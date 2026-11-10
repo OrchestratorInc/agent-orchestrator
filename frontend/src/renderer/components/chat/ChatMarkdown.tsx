@@ -371,7 +371,11 @@ type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: stri
 
 function MarkdownLink(props: MarkdownLinkProps) {
 	const { href } = props;
-	return href && href.includes("/artifacts/") && !isWebLink(href) && !isAoLink(href)
+	// Safe-origin text links only what it wrote as an ao:// link. Mapping its
+	// file links to artifacts first would hand the safe-origin check a link the
+	// text never wrote, so they stay text there.
+	const safeOriginContent = useContext(SafeOriginContent);
+	return href && !safeOriginContent && href.includes("/artifacts/") && !isWebLink(href) && !isAoLink(href)
 		? <ArtifactFileLink {...props} href={href} />
 		: <MarkdownLinkTarget {...props} />;
 }

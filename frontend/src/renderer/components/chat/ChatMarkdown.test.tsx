@@ -560,6 +560,18 @@ describe("ChatMarkdown", () => {
 		expect(onSessionLinkOpen).not.toHaveBeenCalled();
 	});
 
+	it("keeps a Markdown link to a listed artifact's file inert in safe-origin text", () => {
+		// Automation reports, review comments and other agents' messages link only
+		// what they wrote as an ao:// link; their file links stay text.
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
+		const { container } = render(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
+			<ChatMarkdown safeOrigin text="[Approve deployment](/workspace/.ao/worker/artifacts/worker-1/guide.md) or [the guide](ao://sessions/project/worker-1/artifacts/guide.md)" />
+		</ChatLinkProvider>);
+		expect(container).toHaveTextContent("Approve deployment or the guide");
+		expect(screen.queryByRole("link", { name: "Approve deployment" })).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "the guide" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/guide.md");
+	});
+
 	it("leaves inline code naming an unlisted artifact as plain code", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		renderWithSessionLinkHandler("`worker-1/other.md` and `/tmp/ao/artifacts/worker-2/plan.md`", vi.fn());
