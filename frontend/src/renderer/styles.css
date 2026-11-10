@@ -5004,7 +5004,8 @@ html.sidebar-reordering * {
    Chromium over IPC every frame and make the controls visibly trail the page. */
 .browser-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
-	--browser-popout-inline-inset: var(--size-center-panel-inline-inset);
+	/* Maximized browser uses the window's full width, like maximized files. */
+	--browser-popout-inline-inset: 0px;
 	box-sizing: border-box;
 	position: fixed;
 	inset: var(--browser-popout-top) 0 0;
@@ -5100,15 +5101,6 @@ html[data-shell-windows] body > .files-popout-overlay {
 	background: var(--bg);
 	border-bottom: 1px solid var(--border);
 	pointer-events: none;
-}
-
-.browser-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
-}
-
-/* Maximized files keep the full width on macOS too (see .files-popout-overlay). */
-.files-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: 0px;
 }
 
 .browser-popout-overlay .browser-panel__toolbar,
