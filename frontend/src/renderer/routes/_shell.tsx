@@ -78,6 +78,7 @@ import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
 import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
+import { legacyRemoteProjectAgent } from "../lib/agent-select-options";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
@@ -913,11 +914,17 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		const host = remoteHosts.find((candidate) => candidate.hostId === hostId);
 		if (host?.status !== "connected") throw new Error(`Connect to ${host?.label ?? hostId} before adding a project.`);
 		const client = clientForHost(hostId);
+		// The remote host may run an older AO that still needs a project agent to
+		// start the orchestrator. Name the default one; current daemons strip it.
+		const legacyAgent = legacyRemoteProjectAgent(await client.GET("/api/v1/agents").then(({ data }) => data, () => undefined));
 		const { data, error } = await client.POST("/api/v1/projects", { body: {
 			path: input.path,
 			asWorkspace: input.asWorkspace || undefined,
 			clonePreparationId: input.clonePreparationId,
-			config: createProjectConfig(input),
+			config: {
+				...createProjectConfig(input),
+				...(legacyAgent ? { worker: { agent: legacyAgent }, orchestrator: { agent: legacyAgent } } : {}),
+			},
 		} });
 		let projectId = error ? undefined : data?.project.id;
 		if (input.clonePreparationId && apiErrorCode(error) === "PATH_ALREADY_REGISTERED") {
