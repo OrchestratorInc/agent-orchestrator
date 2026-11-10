@@ -70,7 +70,7 @@ function CloudImageAttachment({ source, attachment }: { source: CloudAttachmentS
 function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSource | undefined; attachment: CloudAttachment }) {
 	const [open, setOpen] = useState(false);
 	const [failed, setFailed] = useState(false);
-	const local = useSentAttachmentPreview(cloudAttachmentReference(attachment)).url;
+	const { url: local, onError: onLocalError } = useSentAttachmentPreview(cloudAttachmentReference(attachment));
 	const bytes = useAttachmentBytes(source, attachment, !local);
 	// The PDF viewer takes ownership of the bytes it is given, so each viewer
 	// gets a copy and the cached bytes stay readable for the next one.
@@ -79,7 +79,8 @@ function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSou
 			try {
 				return new Uint8Array(await (await fetch(local)).arrayBuffer());
 			} catch {
-				// The local copy is gone or blocked: read the control plane's copy below.
+				// The local copy is gone or blocked: let it go, and read the control plane's copy below.
+				onLocalError?.();
 			}
 		}
 		if (bytes.data) return bytes.data.slice();
