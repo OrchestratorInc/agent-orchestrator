@@ -40,7 +40,7 @@ export function isDelimitedTextPath(path: string): boolean {
  */
 export function parseDelimitedText(content: string, path: string): string[][] {
 	const delimiter = /\.tsv$/i.test(path) ? "\t" : ",";
-	const text = content.startsWith("﻿") ? content.slice(1) : content;
+	const text = content.startsWith("\uFEFF") ? content.slice(1) : content;
 	const rows: string[][] = [];
 	let row: string[] = [];
 	let cell = "";
