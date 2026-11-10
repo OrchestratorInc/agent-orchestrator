@@ -405,8 +405,10 @@ type Manager struct {
 	workspace ports.Workspace
 	store     Store
 	// agentReadiness is late-bound by SetAgentReadiness.
-	agentReadiness ports.AgentReadinessProvider
-	importArchive  ImportArchiveRefresher
+	agentReadiness      ports.AgentReadinessProvider
+	backgroundTaskUsage BackgroundTaskUsage
+	usageFlusher        UsageFlusher
+	importArchive       ImportArchiveRefresher
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -648,6 +650,26 @@ func (m *Manager) SetTerminalInputGate(gate TerminalInputGate) {
 // SetAgentReadiness completes daemon wiring before request handling begins.
 func (m *Manager) SetAgentReadiness(provider ports.AgentReadinessProvider) {
 	m.agentReadiness = provider
+}
+
+// BackgroundTaskUsage counts the provider calls AO makes on a session's behalf.
+type BackgroundTaskUsage interface {
+	RecordBackgroundTask(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, workspace string) error
+}
+
+// SetBackgroundTaskUsage completes daemon wiring before request handling begins.
+func (m *Manager) SetBackgroundTaskUsage(usage BackgroundTaskUsage) {
+	m.backgroundTaskUsage = usage
+}
+
+// UsageFlusher stores the usage AO has not read yet.
+type UsageFlusher interface {
+	Flush(ctx context.Context)
+}
+
+// SetUsageFlusher completes daemon wiring before request handling begins.
+func (m *Manager) SetUsageFlusher(flusher UsageFlusher) {
+	m.usageFlusher = flusher
 }
 
 // SetAgentAccounts completes daemon wiring before request handling begins.
@@ -7246,6 +7268,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	metadata := nativeRestoreMetadata(domain.SessionRecord{Metadata: meta})
 	metadata[ports.MetadataKeySessionMode] = string(domain.SessionModeTUI)
+	metadata[ports.MetadataKeyNativeTranscriptPath] = meta.NativeTranscriptPath
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,

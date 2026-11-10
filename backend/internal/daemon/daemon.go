@@ -40,6 +40,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
@@ -143,6 +144,10 @@ func Run(buildVersion string) error {
 	cfg.Telemetry.AppVersion = telemetryAppVersion(cfg.Telemetry.AppVersion, buildVersion)
 	// Children inherit os.Environ(); the export settings stay in cfg only.
 	config.ScrubTelemetryEnv()
+	// A daemon started from an AO shell tab must not pass that tab's marker to
+	// the agents it launches, or none of them would name itself to the daemon.
+	// Shell tabs set it again explicitly.
+	_ = os.Unsetenv(caller.ShellTerminalEnv)
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.StartupWorkingDirectory = cwd
 	}
@@ -429,6 +434,7 @@ func Run(buildVersion string) error {
 				Activities:                       rows.Activities,
 				BranchPoints:                     rows.BranchPoints,
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+				BatchedDeliveries:                rows.BatchedDeliveries,
 			}, nil
 		}),
 		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, conversationID string, beforeSequence, afterSequence, limit int64) (chatsvc.ConversationRows, error) {
@@ -446,6 +452,7 @@ func Run(buildVersion string) error {
 				Activities:                       rows.Activities,
 				BranchPoints:                     rows.BranchPoints,
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+				BatchedDeliveries:                rows.BatchedDeliveries,
 				OldestSequence:                   rows.OldestSequence,
 				HasMoreBefore:                    rows.HasMoreBefore,
 				AfterSequence:                    rows.AfterSequence,
@@ -634,6 +641,8 @@ func Run(buildVersion string) error {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
+	agentAccountSvc.SetLimitLog(store)
+	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
@@ -934,6 +943,13 @@ func Run(buildVersion string) error {
 		usagePipeline = usagepipeline.NewPipeline(store, ingestor, usagePipelineWatchRoots(roots), usagepipeline.CoordinatorConfig{
 			Logger:     log,
 			Initialize: usageCollector.BackfillActive,
+			WatchRoots: func(watchCtx context.Context) ([]string, error) {
+				qwenRoots, err := usageCollector.QwenWatchRoots(watchCtx)
+				if err != nil {
+					return nil, err
+				}
+				return append(usagePipelineWatchRoots(roots), qwenRoots...), nil
+			},
 			Reconcile: func(reconcileCtx context.Context) error {
 				return usageCollector.ReconcileSources(reconcileCtx, 0)
 			},
@@ -959,6 +975,16 @@ func Run(buildVersion string) error {
 			}
 		}()
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
+		if wired, ok := sessMgr.(interface {
+			SetBackgroundTaskUsage(sessionmanager.BackgroundTaskUsage)
+		}); ok {
+			wired.SetBackgroundTaskUsage(usageCollector)
+		}
+		if wired, ok := sessMgr.(interface {
+			SetUsageFlusher(sessionmanager.UsageFlusher)
+		}); ok {
+			wired.SetUsageFlusher(usagePipeline)
+		}
 	}
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, reviewRefresher, log)
 	var prActions prsvc.ActionManager
@@ -1138,7 +1164,7 @@ func Run(buildVersion string) error {
 		Endpoints:          bs,
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
-		AgentAccounts:      agentAccountSvc,
+		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
 		SystemChecks:       systemChecks,
 		Installer:          systemInstall,
 		ComputerUse:        computerUse,
@@ -1172,7 +1198,11 @@ func Run(buildVersion string) error {
 		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
-		UsageSummary:       usagesvc.NewSummaryReader(store),
+		UsageSummary:       freshUsageSummary{usagesvc.NewSummaryReader(store), usagePipeline},
+		UsageReport:        freshUsageReport{usageReportReader(store, usagePricing), usagePipeline},
+		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store),
+		UsageLimitSetting:  store,
+		UsagePrices:        usagePrices(usagePricing),
 		SessionMemory:      memoryReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
@@ -1631,6 +1661,19 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 		roots.CodexSessions,
 		roots.CodexArchived,
 		roots.KimiHome,
+		roots.PiSessions,
+		roots.PiAgentSessions,
+		roots.QwenUsage,
+		roots.OMPSessions,
+		roots.KimchiSessions,
+		roots.PrimeAgentSessions,
+		roots.GooseSessions,
+		roots.OpenCodeData,
+		roots.KiloData,
+		roots.GrokSessions,
+		roots.DeepSeekSessions,
+		roots.AgyCLIConversations,
+		roots.AgyACPConversations,
 	}
 }
 

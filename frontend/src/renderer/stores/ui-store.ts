@@ -167,6 +167,7 @@ export type UiState = {
 	inspectorSessions: Record<string, InspectorSessionState>;
 	isCommandPaletteOpen: boolean;
 	settingsModal: SettingsModal | null;
+	accountLogin: string | null;
 	themePreference: ThemePreference;
 	/** Resolved light/dark for React consumers; may track OS while preference is system. */
 	resolvedTheme: Theme;
@@ -202,12 +203,6 @@ export type UiState = {
 	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
 	 */
 	newSidebarDesign: boolean;
-	/**
-	 * The simplified, floating top bar. Default on. The switch lives in
-	 * Developer mode, and turning it off only takes effect there: read it
-	 * through `isSimplifiedTopbar` (lib/simplified-topbar).
-	 */
-	simplifiedTopbar: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -227,6 +222,10 @@ export type UiState = {
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	// One-shot "open this project's archive" from Cmd+K. The project's board
+	// consumes it when it is (or becomes) the visible page; `at` lets a request
+	// whose board never showed up expire instead of firing on a later visit.
+	archiveOpenRequest: { projectId: string; hostId?: string; nonce: number; at: number } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
@@ -274,12 +273,11 @@ export type UiState = {
 	setRenderMath: (enabled: boolean) => void;
 	setProjectAvatars: (enabled: boolean) => void;
 	setNewSidebarDesign: (enabled: boolean) => void;
-	setSimplifiedTopbar: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -318,6 +316,8 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
+	requestArchiveOpen: (projectId: string, hostId?: string) => void;
+	clearArchiveOpenRequest: (nonce: number) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
@@ -349,7 +349,6 @@ const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 const projectAvatarsStorageKey = "ao.projectAvatars";
 const newSidebarDesignStorageKey = "ao.newSidebarDesign";
-const simplifiedTopbarStorageKey = "ao.simplifiedTopbar";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -446,6 +445,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	inspectorSessions: {},
 	isCommandPaletteOpen: false,
 	settingsModal: null,
+	accountLogin: null,
 	themePreference: initialThemePreference,
 	resolvedTheme: resolveTheme(initialThemePreference),
 	themeStyle: initialThemeStyle,
@@ -462,7 +462,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	projectAvatars: initialProjectAvatars(),
 	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
-	simplifiedTopbar: getLocalStorage()?.getItem(simplifiedTopbarStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -473,6 +472,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	archiveOpenRequest: null,
 	firstRunPromptActive: false,
 	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
@@ -566,10 +566,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(newSidebarDesignStorageKey, String(newSidebarDesign));
 		set({ newSidebarDesign });
 	},
-	setSimplifiedTopbar: (simplifiedTopbar) => {
-		getLocalStorage()?.setItem(simplifiedTopbarStorageKey, String(simplifiedTopbar));
-		set({ simplifiedTopbar });
-	},
 	setChatSendKeyMode: (chatSendKeyMode) => {
 		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
 		set({ chatSendKeyMode });
@@ -578,6 +574,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),
 	openGlobalSettings: (section, options) => set((state) => ({
+		accountLogin: options?.loginAccountId ?? null,
 		settingsModal: {
 			scope: "global",
 			section,
@@ -596,6 +593,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		},
 	})),
 	openProjectSettings: (projectId, options) => set({
+		accountLogin: null,
 		settingsModal: {
 			scope: "project",
 			projectId,
@@ -605,6 +603,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		},
 	}),
 	closeSettings: () => set((state) => ({
+		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
 	})),
 	syncSystemTheme: () => {
@@ -870,6 +869,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
+	requestArchiveOpen: (projectId, hostId) =>
+		set((state) => ({
+			archiveOpenRequest: { projectId, hostId, nonce: (state.archiveOpenRequest?.nonce ?? 0) + 1, at: Date.now() },
+		})),
+	clearArchiveOpenRequest: (nonce) =>
+		set((state) => (state.archiveOpenRequest?.nonce === nonce ? { archiveOpenRequest: null } : state)),
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {

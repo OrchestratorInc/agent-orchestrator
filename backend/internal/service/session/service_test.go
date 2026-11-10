@@ -89,6 +89,7 @@ type fakeStore struct {
 	num                 int
 	conversations       map[domain.SessionID]domain.ConversationRecord
 	activities          []domain.ConversationActivity
+	runningTurns        map[string][]string
 
 	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
 	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
@@ -149,7 +150,11 @@ func (f *fakeStore) ActivityStatusByProviderItem(_ context.Context, conversation
 	return "", false, nil
 }
 
-func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, activity domain.ConversationActivity, now time.Time) error {
+func (f *fakeStore) ListVisibleRunningTurnProviderIDs(_ context.Context, conversationID string) ([]string, error) {
+	return f.runningTurns[conversationID], nil
+}
+
+func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error {
 	if activity.ProviderItemID != "" {
 		for i, existing := range f.activities {
 			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
@@ -172,6 +177,7 @@ func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, 
 		}
 	}
 	activity.ConversationID = conversationID
+	activity.TurnID = providerTurnID
 	activity.Sequence = int64(len(f.activities) + 1)
 	activity.Revision = 1
 	activity.CreatedAt = now
@@ -3903,6 +3909,11 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"chat driver incompatible", fmt.Errorf("spawn: %w", ports.ErrChatDriverIncompatible), apierr.KindConflict, "CHAT_DRIVER_INCOMPATIBLE"},
 		{"chat auth required", fmt.Errorf("spawn: %w", ports.ErrChatAuthRequired), apierr.KindConflict, "CHAT_AUTH_REQUIRED"},
 		{"agent auth required", fmt.Errorf("spawn: %w", ports.ErrAgentAuthRequired), apierr.KindConflict, "AGENT_AUTH_REQUIRED"},
+		{"chat resume refused its login", &sessionmanager.RelaunchError{Step: "chat start", Err: fmt.Errorf(
+			"resume agent mer-1: resume chat: %w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired)},
+			apierr.KindConflict, "AGENT_AUTH_REQUIRED"},
+		{"chat spawn refused its login", fmt.Errorf("spawn: %w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired),
+			apierr.KindConflict, "CHAT_DRIVER_UNAVAILABLE"},
 		{"interface notice not acknowledgeable", fmt.Errorf("acknowledge interface notice: %w", sessionmanager.ErrInterfaceTransitionNoticeNotAcknowledgeable), apierr.KindConflict, "INTERFACE_TRANSITION_NOTICE_NOT_ACKNOWLEDGEABLE"},
 		{"provider history recovery unavailable", fmt.Errorf("recover interface: %w", sessionmanager.ErrInterfaceProviderHistoryRecoveryUnavailable), apierr.KindConflict, "PROVIDER_HISTORY_RECOVERY_UNAVAILABLE"},
 		{"native conversation missing", fmt.Errorf("switch interface: %w", sessionmanager.ErrNativeConversationMissing), apierr.KindConflict, "NATIVE_SESSION_MISSING"},

@@ -932,7 +932,7 @@ export function SessionArtifactsView({
 	}
 
 	return (
-		<div className="@container/session-artifacts flex h-full min-h-0 min-w-0 flex-col" role="tabpanel">
+		<div className="flex h-full min-h-0 min-w-0 flex-col" role="tabpanel">
 			<div className="flex h-8 shrink-0 items-center gap-0.5 pl-3 pr-1 text-sm text-muted-foreground">
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
 				{/* The artifact directory is on this machine only for a local session. */}
@@ -942,7 +942,7 @@ export function SessionArtifactsView({
 			{artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
-				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-1 content-start gap-4 overflow-y-auto px-3 pb-3 pt-1 @[30rem]/session-artifacts:grid-cols-2">
+				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
 					{artifacts.map((artifact) => {
 						const row = artifactRow(artifact);
 						return (
@@ -950,7 +950,8 @@ export function SessionArtifactsView({
 								key={artifact.path}
 								row={row}
 								previewLive={livePreviewPaths.has(artifact.path)}
-								context={session.title ?? ""}
+								// Every card here belongs to this session, so only its time shows.
+								context=""
 								onPreview={() => openArtifact(artifact)}
 								actions={<ArtifactActionsMenu
 									artifact={artifact}

@@ -310,6 +310,7 @@ export function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
+				developerMode,
 			}, t),
 			...buildShortcutCommands(t, { splitPanes }),
 			...buildSettingsCommands(t, { developerMode, diagnostics }),
@@ -532,6 +533,7 @@ export function CommandPalette() {
 		(target: NavigateTarget) => {
 			switch (target.to) {
 				case "/":
+				case "/usage":
 					void navigate({ to: target.to });
 					break;
 				case "/settings":
@@ -765,6 +767,17 @@ export function CommandPalette() {
 					case "open-orchestrator":
 							await openOrchestrator(action.projectId, isCurrentRun);
 							break;
+					case "open-archive": {
+						// The project's board opens its archive once it is on screen.
+						useUiStore.getState().requestArchiveOpen(action.projectId, params.hostId);
+						if (params.hostId) {
+							void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId: params.hostId, projectId: action.projectId } });
+						} else {
+							void navigate({ to: "/projects/$projectId", params: { projectId: action.projectId } });
+						}
+						closePalette();
+						break;
+					}
 				}
 			} catch (err) {
 				if (isCurrentRun()) setError(err instanceof Error ? err.message : t("command.failed"));
@@ -775,7 +788,7 @@ export function CommandPalette() {
 				}
 			}
 		},
-		[findChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[findChatWorkspace, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -1064,6 +1077,7 @@ function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensMo
 		case "open-new-task":
 			return taskOpensModal;
 		case "open-new-project":
+		case "open-archive":
 		case "open-shared-link":
 		case "open-settings-section":
 			return true;
