@@ -22,6 +22,7 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
+	conversationQueryKey,
 	useConversation,
 	ProviderSwitchFailed,
 	useConversationCommands,
@@ -725,6 +726,65 @@ describe("provider catalog controller epochs", () => {
 		await act(async () => mutation);
 
 		expect(queryClient.getQueryData(queryKey)).toBeUndefined();
+	});
+});
+
+describe("a sleeping or waking agent", () => {
+	it("reads a not-ready catalog as a wake, not an error, and reloads the chat state", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		getMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_CONTROLLER_NOT_READY" } });
+		apiErrorCodeMock.mockImplementation((error?: { code?: string }) => error?.code);
+		const Wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: Wrapper });
+
+		await waitFor(() => expect(invalidate).toHaveBeenCalledWith(
+			{ queryKey: conversationQueryKey("ao-1") },
+			{ cancelRefetch: false },
+		));
+		expect(result.current.error).toBeUndefined();
+	});
+
+	it("still shows any other catalog failure", async () => {
+		getMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_CONFIG_FAILED" } });
+		apiErrorCodeMock.mockImplementation((error?: { code?: string }) => error?.code);
+		apiErrorMessageMock.mockReturnValue("agent refused");
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper });
+
+		await waitFor(() => expect(result.current.error).toBe("agent refused"));
+	});
+
+	it("sends a message only after the settings pick before it is written", async () => {
+		const write = deferred<{ data: { options: [] }; error: undefined }>();
+		patchMock.mockReturnValue(write.promise);
+		postMock.mockResolvedValue({ data: { turnId: "turn-after-pick" }, error: undefined });
+		const { result } = renderHook(() => ({
+			commands: useConversationCommands("ao-1"),
+			options: useConversationConfigOptions("ao-1", false),
+		}), { wrapper });
+
+		let picking!: Promise<unknown>;
+		act(() => {
+			picking = result.current.options.setOption("model", { value: "opus" });
+		});
+		await waitFor(() => expect(patchMock).toHaveBeenCalledOnce());
+		let sending!: Promise<unknown>;
+		act(() => {
+			sending = result.current.commands.send("after the pick");
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(postMock).not.toHaveBeenCalled();
+
+		await act(async () => {
+			write.resolve({ data: { options: [] }, error: undefined });
+			await picking;
+			await sending;
+		});
+		expect(postMock).toHaveBeenCalledOnce();
 	});
 });
 

@@ -544,6 +544,25 @@ export function conversationSettled(queryClient: QueryClient, sessionId: string,
 	return state === "ready" || state === "busy";
 }
 
+function refreshConversationState(queryClient: QueryClient, sessionId: string, hostId?: string): void {
+	if (hostId) refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+	else void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) }, { cancelRefetch: false });
+}
+
+const settingsWriteKey = (sessionId: string, hostId?: string) => ["conversation-settings-write", hostId ?? "", sessionId];
+
+function settingsWritesSettled(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
+	const filters = { mutationKey: settingsWriteKey(sessionId, hostId) };
+	if (!queryClient.isMutating(filters)) return Promise.resolve();
+	return new Promise((resolve) => {
+		const stop = queryClient.getMutationCache().subscribe(() => {
+			if (queryClient.isMutating(filters)) return;
+			stop();
+			resolve();
+		});
+	});
+}
+
 export function conversationQueryOptions(sessionId: string, hostId?: string) {
 	return infiniteQueryOptions({
 		queryKey: conversationQueryKey(sessionId, hostId),
@@ -763,6 +782,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			clientMessageId,
 			input,
 		}: ConversationSendMutationInput) => {
+			await settingsWritesSettled(queryClient, targetSessionId, hostId);
 			const { providerSwitch, switchDisplay: _switchDisplay, ...message } = input;
 			if (providerSwitch) {
 				// One request: the daemon switches, then sends, without waiting on a refetch here.
@@ -995,6 +1015,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			} : current,
 		);
 	const chooseSettings = useMutation({
+		mutationKey: settingsWriteKey(sessionId ?? "", hostId),
 		// Shown at once, so the next pick builds on this one rather than on the saved settings.
 		onMutate: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
 			await queryClient.cancelQueries({ queryKey: conversationQueryKey(targetSessionId, hostId) });
@@ -1662,11 +1683,15 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 					params: { path: { sessionId: sessionId as string } },
 				},
 			);
-			if (error) throw error;
+			if (error) {
+				if (apiErrorCode(error) === "CHAT_CONTROLLER_NOT_READY") refreshConversationState(queryClient, sessionId as string, hostId);
+				throw error;
+			}
 			return (data?.options ?? []) as ChatConfigOption[];
 		},
 	});
 	const mutation = useMutation({
+		mutationKey: settingsWriteKey(sessionId ?? "", hostId),
 		// Held across the whole write, paired with the cancel below: `onMutate`
 		// runs before the request and `onSettled` after the result is committed,
 		// so no poll can start or land inside that window.
@@ -1754,13 +1779,14 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		return { controllerEpoch, options };
 	}
 
+	const queryError = apiErrorCode(query.error) === "CHAT_CONTROLLER_NOT_READY" ? null : query.error;
 	return {
 		options: query.data ?? [],
 		loaded: query.isSuccess,
 		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
 			(await mutation.mutateAsync({ optionId, value })).options,
 		pending: mutation.isPending,
-		error: mutation.error || query.error ? apiErrorMessage(mutation.error ?? query.error) : undefined,
+		error: mutation.error || queryError ? apiErrorMessage(mutation.error ?? queryError) : undefined,
 	};
 }
 

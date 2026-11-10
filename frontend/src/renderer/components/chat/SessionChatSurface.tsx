@@ -24,7 +24,7 @@ import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useCh
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
-import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
+import { readChatSkills, rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
@@ -399,7 +399,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hostId,
 	);
 	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
-	const { skills } = useConversationSkills(
+	const { skills: liveSkills } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
@@ -407,9 +407,15 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// A new chat of this agent offers these "/" skills before its own session runs.
 	const skillsHarness = snapshot?.harness;
 	useEffect(() => {
-		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
-		rememberChatSkills(skillsHarness, hostId, skills);
-	}, [hostId, session.kind, skills, skillsHarness]);
+		if (session.kind !== "worker" || !skillsHarness || liveSkills.length === 0) return;
+		rememberChatSkills(skillsHarness, hostId, liveSkills);
+	}, [hostId, session.kind, liveSkills, skillsHarness]);
+	const skills = useMemo(
+		() => liveSkills.length > 0 || controllerCatalogsEnabled || !skillsHarness || session.cloud
+			? liveSkills
+			: readChatSkills(skillsHarness, hostId),
+		[controllerCatalogsEnabled, hostId, liveSkills, session.cloud, skillsHarness],
+	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and

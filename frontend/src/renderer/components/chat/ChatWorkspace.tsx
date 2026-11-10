@@ -905,6 +905,7 @@ function ChatWorkspaceContent({
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
 		latestSettledTurn.hasHumanPrompt
 		? latestSettledTurn : undefined;
+	const wakesQuietly = firstTurnSettled(snapshot);
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
 	// "stopped" snapshot is still part of that wake, not a crashed agent.
@@ -1691,7 +1692,7 @@ function ChatWorkspaceContent({
 								snapshot.controller.state === "connecting" ||
 								snapshot.controller.state === "stopped"
 							)) ||
-							settingsLoading ||
+							(settingsLoading && !wakesQuietly) ||
 							session?.provisionState === "provisioning" ||
 							// A save in flight is not here: the bar holds back what cannot overlap one.
 							controllerTransitioning || newWorkDisabled || settingsLocked
@@ -1728,6 +1729,7 @@ function ChatWorkspaceContent({
 			stableModelReroute,
 			stableSettings,
 			compactsAt,
+			wakesQuietly,
 		],
 	);
 	const composerApproval = useMemo(
