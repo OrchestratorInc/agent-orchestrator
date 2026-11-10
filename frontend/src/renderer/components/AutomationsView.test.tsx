@@ -70,9 +70,10 @@ function renderView(ui: ReactNode = <AutomationsView />) {
 
 /** Opens a blank create form through the page's New automation menu. */
 async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
-	// The page's menu comes first; the empty state repeats the action as a plain button.
-	await user.click(screen.getAllByRole("button", { name: "New automation" })[0]);
-	await user.click(await screen.findByRole("menuitem", { name: "Start from scratch" }));
+	// With automations the toolbar's menu holds the action; the empty state has a single plain button.
+	const trigger = screen.getByRole("button", { name: "New automation" });
+	await user.click(trigger);
+	if (trigger.getAttribute("aria-haspopup") === "menu") await user.click(await screen.findByRole("menuitem", { name: "Start from scratch" }));
 }
 
 describe("AutomationsView", () => {
@@ -82,7 +83,14 @@ describe("AutomationsView", () => {
 		renderView();
 		expect(screen.getByRole("heading", { name: "Automations" })).toBeInTheDocument();
 		expect(screen.getByText("No automations yet")).toBeInTheDocument();
-		expect(screen.getAllByRole("button", { name: /new automation/i })).not.toHaveLength(0);
+		// The empty state owns the only create action; the toolbar waits for a list.
+		expect(screen.getAllByRole("button", { name: "New automation" })).toHaveLength(1);
+		expect(screen.queryByRole("button", { name: "Search automations" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Filter automations" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Sort" })).not.toBeInTheDocument();
+		// Starters lead the page; the empty message sits below them.
+		const starters = screen.getByRole("heading", { name: "Start with a template" });
+		expect(starters.compareDocumentPosition(screen.getByText("No automations yet")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("always shows the page title in the topbar", () => {
@@ -93,10 +101,11 @@ describe("AutomationsView", () => {
 		expect(screen.queryByRole("tab")).not.toBeInTheDocument();
 	});
 
-	it("offers a blank form and every starter from the New automation menu", async () => {
+	it("offers a blank form and every starter from the New automation menu once automations exist", async () => {
 		const user = userEvent.setup();
+		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true }];
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: "New automation" })[0]);
+		await user.click(screen.getByRole("button", { name: "New automation" }));
 		expect(await screen.findByRole("menuitem", { name: "Start from scratch" })).toBeInTheDocument();
 		for (const name of ["PR review inbox", "Daily issue triage", "Weekly release notes"]) {
 			expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
@@ -108,11 +117,12 @@ describe("AutomationsView", () => {
 	it("opens a blank form from the empty state's New automation button", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getAllByRole("button", { name: "New automation" })[1]);
+		await user.click(screen.getByRole("button", { name: "New automation" }));
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 		expect(within(screen.getByRole("dialog")).getByRole("textbox", { name: "Name" })).toHaveValue("");
 	});
 
-	it("introduces the starters under the empty state and leaves them to the menu once automations exist", () => {
+	it("introduces the starters above the empty state and leaves them to the menu once automations exist", () => {
 		const { unmount } = renderView();
 		expect(screen.getByRole("heading", { name: "Start with a template" })).toBeInTheDocument();
 		expect(screen.getByText("Pick a starting point, make it yours, and let your agent take it from there.")).toBeInTheDocument();
