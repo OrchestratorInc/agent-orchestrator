@@ -1880,9 +1880,9 @@ const ProjectItem = memo(function ProjectItem({
 					kind: "item" as const,
 					id: "archive",
 					icon: <Archive aria-hidden="true" />,
-					label: t("shell.archivedSessions"),
+					label: t("shell.archive"),
 					count: archivedCount,
-					ariaLabel: t("command.archivedCount", { count: archivedCount }),
+					ariaLabel: t("shell.archiveSessionsAria", { count: archivedCount }),
 					onSelect: openArchive,
 				}]
 				: []),
