@@ -56,6 +56,7 @@ import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
+import type { ComposerSentToken } from "./sentComposerTokens";
 
 export type ComposerTrigger = {
 	kind: TriggerKind;
@@ -109,6 +110,8 @@ export type ComposerEditorHandle = {
 	 */
 	pruneImages(attached: string[]): void;
 	getSnapshot(): ComposerEditorSnapshot;
+	/** The skill and file chips in the text, so the sent message can draw them again. */
+	getTokens(): ComposerSentToken[];
 };
 
 /** What an inline image chip shows for a staged path; the path itself is the wire text. */
@@ -328,6 +331,17 @@ function $serializeComposer(): string {
 		.getChildren()
 		.map((child) => child.getTextContent())
 		.join("\n");
+}
+
+function $composerTokens(): ComposerSentToken[] {
+	return $getRoot()
+		.getChildren()
+		.flatMap((paragraph) => ($isElementNode(paragraph) ? paragraph.getChildren() : []))
+		.flatMap<ComposerSentToken>((child) =>
+			child instanceof ComposerTokenNode && child.__kind !== "image"
+				? [{ kind: child.__kind, value: child.__value, display: child.__display, wire: child.__wire }]
+				: [],
+		);
 }
 
 function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean {
@@ -675,6 +689,7 @@ const EditorBridge = forwardRef<
 				editor.update(() => $removeImageTokens((candidate) => !attached.includes(candidate)), { discrete: true });
 			},
 			getSnapshot: () => editor.getEditorState().read(editorSnapshot),
+			getTokens: () => editor.getEditorState().read($composerTokens),
 			caretBoundary: () => editor.read(() => $caretBoundary(editor)),
 		}),
 		[attachedImages, editor],

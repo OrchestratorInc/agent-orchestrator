@@ -126,6 +126,7 @@ import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
+import { useComposerTokenRenderer } from "./sentComposerTokens";
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
@@ -1016,6 +1017,8 @@ export function HumanMessage({
 		/>
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
+	// The skills and files it sent as chips, drawn as colored text.
+	const renderTokens = useComposerTokenRenderer(sessionId, body);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
@@ -1097,7 +1100,9 @@ export function HumanMessage({
 											attachments={attachments}
 											sessionId={sessionId}
 											apiBaseUrl={apiBaseUrl}
-											renderText={(text) => <SessionLinkedText text={text} />}
+											renderText={(text) => renderTokens
+												? renderTokens(text, (prose) => <SessionLinkedText text={prose} />)
+												: <SessionLinkedText text={text} />}
 										/>
 									</p>
 								) : null}
@@ -3285,6 +3290,8 @@ export function SteerMessage({
 		: undefined;
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
 	const { body, attachments } = stagedAttachmentParts(visibleText);
+	// Only the person's own steer is marked; a steer from another session is not theirs.
+	const renderTokens = useComposerTokenRenderer(sessionId, body);
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
@@ -3363,7 +3370,7 @@ export function SteerMessage({
 										attachments={attachments}
 										sessionId={sessionId}
 										apiBaseUrl={apiBaseUrl}
-										renderText={(text) => text}
+										renderText={(text) => renderTokens ? renderTokens(text) : text}
 									/>
 								</p>
 							) : null}

@@ -74,6 +74,7 @@ import {
 	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
+import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import {
 	isSupportedImageAttachment,
@@ -1538,6 +1539,15 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.pruneImages(attachedPaths);
 		currentText = textRef.current;
 		body = proseBesideImages(currentText.trim(), attachedPaths);
+		// The message carries only each chip's text; remember the chips so its bubble
+		// can draw them again. A first message sent before its session exists is
+		// found by its text.
+		if (!recoveringDelivery) {
+			const tokens = editor.current?.getTokens() ?? [];
+			if (tokens.length > 0) {
+				recordSentComposerTokens(boundarySessionId ? sessionTokenScope(boundarySessionId) : messageTokenScope(body), tokens);
+			}
+		}
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || contextReferences.length > 0 || Boolean(recoveringDelivery)) &&
