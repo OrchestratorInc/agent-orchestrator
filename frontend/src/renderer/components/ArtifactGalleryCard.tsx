@@ -66,9 +66,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 					aria-describedby={descriptionId}
 					aria-label={selection.label}
 					checked={selection.selected}
-					// Sits on any preview, light or dark: a solid fill, a 2px edge and a
-					// background-coloured halo keep it legible over the thumbnail.
-					className="absolute left-2 top-2 z-[2] size-6 rounded-md border-2 border-foreground/80 bg-background shadow-[0_0_0_2px_var(--background)] hover:border-foreground data-[state=checked]:border-primary [&_svg]:size-4 [&_svg]:stroke-[3]"
+					className="absolute left-3 top-3 z-[2] size-5 rounded-[5px] border-foreground/40 bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] shadow-sm transition-none duration-0 hover:border-foreground/70 data-[state=checked]:border-primary [&_svg]:size-3.5"
 					disabled={Boolean(selection.disabledReason)}
 					onCheckedChange={toggle}
 					title={selection.disabledReason}

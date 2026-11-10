@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -114,6 +115,21 @@ func sentryEnvironment(version string) string {
 	default:
 		return "stable"
 	}
+}
+
+// publishedVersion matches a release-stamped stable (0.14.10) or nightly
+// (0.14.11-nightly.202611100625) version, the same pattern as the desktop app
+// (frontend/src/shared/sentry-config.ts).
+var publishedVersion = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-nightly\.\d{12})?$`)
+
+// publishedSentryDSN keeps Sentry off for any version that is not a published
+// stable or nightly build (an edge, PR, forked or unversioned copy). The
+// desktop app also withholds the DSN from self-built copies.
+func publishedSentryDSN(dsn, version string) string {
+	if publishedVersion.MatchString(strings.TrimSpace(version)) {
+		return dsn
+	}
+	return ""
 }
 
 // Session Manager asserts the terminal input gate's optional capabilities at
@@ -255,6 +271,7 @@ func Run(buildVersion string) error {
 	defer sentryobs.SetPolicyCheck(nil)
 	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
 	configureUsageRecording(cfg, store, telemetryIdentity)
+	recordSlowWriteLocks(store, telemetrySink)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	installID := ""
 	if telemetryIdentity != nil {
@@ -264,7 +281,7 @@ func Run(buildVersion string) error {
 	// restart. The policy gate is checked before every capture. An unavailable
 	// install ID omits the tag without disabling error reporting.
 	if err := sentryobs.Init(sentryobs.Config{
-		DSN:         cfg.Telemetry.SentryDSN,
+		DSN:         publishedSentryDSN(cfg.Telemetry.SentryDSN, cfg.Telemetry.AppVersion),
 		InstallID:   installID,
 		Release:     cfg.Telemetry.AppVersion,
 		Environment: sentryEnvironment(cfg.Telemetry.AppVersion),
@@ -641,6 +658,8 @@ func Run(buildVersion string) error {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
+	agentAccountSvc.SetLimitLog(store)
+	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
@@ -932,6 +951,13 @@ func Run(buildVersion string) error {
 		usagePipeline = usagepipeline.NewPipeline(store, ingestor, usagePipelineWatchRoots(roots), usagepipeline.CoordinatorConfig{
 			Logger:     log,
 			Initialize: usageCollector.BackfillActive,
+			WatchRoots: func(watchCtx context.Context) ([]string, error) {
+				qwenRoots, err := usageCollector.QwenWatchRoots(watchCtx)
+				if err != nil {
+					return nil, err
+				}
+				return append(usagePipelineWatchRoots(roots), qwenRoots...), nil
+			},
 			Reconcile: func(reconcileCtx context.Context) error {
 				return usageCollector.ReconcileSources(reconcileCtx, 0)
 			},
@@ -957,6 +983,16 @@ func Run(buildVersion string) error {
 			}
 		}()
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
+		if wired, ok := sessMgr.(interface {
+			SetBackgroundTaskUsage(sessionmanager.BackgroundTaskUsage)
+		}); ok {
+			wired.SetBackgroundTaskUsage(usageCollector)
+		}
+		if wired, ok := sessMgr.(interface {
+			SetUsageFlusher(sessionmanager.UsageFlusher)
+		}); ok {
+			wired.SetUsageFlusher(usagePipeline)
+		}
 	}
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, reviewRefresher, log)
 	var prActions prsvc.ActionManager
@@ -1136,7 +1172,7 @@ func Run(buildVersion string) error {
 		Endpoints:          bs,
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
-		AgentAccounts:      agentAccountSvc,
+		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
 		SystemChecks:       systemChecks,
 		Installer:          systemInstall,
 		ComputerUse:        computerUse,
@@ -1168,7 +1204,11 @@ func Run(buildVersion string) error {
 		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
-		UsageSummary:       usagesvc.NewSummaryReader(store),
+		UsageSummary:       freshUsageSummary{usagesvc.NewSummaryReader(store), usagePipeline},
+		UsageReport:        freshUsageReport{usageReportReader(store, usagePricing), usagePipeline},
+		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store),
+		UsageLimitSetting:  store,
+		UsagePrices:        usagePrices(usagePricing),
 		SessionMemory:      memoryReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
@@ -1626,6 +1666,19 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 		roots.CodexSessions,
 		roots.CodexArchived,
 		roots.KimiHome,
+		roots.PiSessions,
+		roots.PiAgentSessions,
+		roots.QwenUsage,
+		roots.OMPSessions,
+		roots.KimchiSessions,
+		roots.PrimeAgentSessions,
+		roots.GooseSessions,
+		roots.OpenCodeData,
+		roots.KiloData,
+		roots.GrokSessions,
+		roots.DeepSeekSessions,
+		roots.AgyCLIConversations,
+		roots.AgyACPConversations,
 	}
 }
 

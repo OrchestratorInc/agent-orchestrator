@@ -167,6 +167,7 @@ export type UiState = {
 	inspectorSessions: Record<string, InspectorSessionState>;
 	isCommandPaletteOpen: boolean;
 	settingsModal: SettingsModal | null;
+	accountLogin: string | null;
 	themePreference: ThemePreference;
 	/** Resolved light/dark for React consumers; may track OS while preference is system. */
 	resolvedTheme: Theme;
@@ -276,7 +277,7 @@ export type UiState = {
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -444,6 +445,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	inspectorSessions: {},
 	isCommandPaletteOpen: false,
 	settingsModal: null,
+	accountLogin: null,
 	themePreference: initialThemePreference,
 	resolvedTheme: resolveTheme(initialThemePreference),
 	themeStyle: initialThemeStyle,
@@ -572,6 +574,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),
 	openGlobalSettings: (section, options) => set((state) => ({
+		accountLogin: options?.loginAccountId ?? null,
 		settingsModal: {
 			scope: "global",
 			section,
@@ -590,6 +593,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		},
 	})),
 	openProjectSettings: (projectId, options) => set({
+		accountLogin: null,
 		settingsModal: {
 			scope: "project",
 			projectId,
@@ -599,6 +603,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		},
 	}),
 	closeSettings: () => set((state) => ({
+		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
 	})),
 	syncSystemTheme: () => {

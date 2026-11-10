@@ -1,3 +1,4 @@
+import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { Stack, useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -485,7 +486,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuContextPercent = contextReadout(menuSnapshot?.usage)?.percent;
 	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
 	const menuCompacting = conversation.pendingActions.includes("compact");
-	const menuArtifactCount = "projectName" in session ? undefined : session.artifacts?.length;
+	const menuArtifactCount = "projectName" in session ? undefined : deliverableArtifacts(session.artifacts ?? []).length;
 	const menuHasPullRequest = !("projectName" in session) && Boolean(session.prs?.length || session.pr);
 	const previewReady = useSessionPreview(config, session.id);
 	// Offered only where the agent can carry the conversation on in Terminal UI.

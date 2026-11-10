@@ -99,7 +99,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId, same name). The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit, 409 artifact_share_name_changed for an update with another name. Paid plans have no link limit. */
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. */
         post: operations["createArtifactShareUpload"];
         delete?: never;
         options?: never;
@@ -2133,6 +2133,31 @@ export interface paths {
          *     Requires `worker:connect`.
          *      */
         post: operations["commitWorkerArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Registers the committed files at paths in the worker's own session as
+         *     its deliverables, including the files inside a bundle directory, which
+         *     is what ao artifact add calls, and returns every file the session has
+         *     registered. A path with no committed file registers nothing and is
+         *     absent from the result, so the caller asks again once the worker's sync
+         *     has committed it. Registering a file again changes nothing; a newly
+         *     registered file appends an artifact.changed event and moves its
+         *     updatedAt. Requires `worker:connect`.
+         *      */
+        post: operations["registerWorkerArtifacts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4179,6 +4204,11 @@ export interface components {
          */
         SessionOutputType: "none" | "pr" | "artifact" | "pr_artifact";
         SessionArtifact: {
+            /**
+             * Format: uuid
+             * @description The artifact's identity. It stays the same when the session's agent renames or moves the file, so a client keys anything it keeps about the file, such as its share link, by it. Absent from a control plane that does not track artifacts across renames.
+             */
+            id?: string;
             /** @description Slash-separated path in the session's artifact directory. */
             path: string;
             name: string;
@@ -4190,9 +4220,13 @@ export interface components {
             sha256: string;
             /**
              * Format: date-time
-             * @description When the control plane last committed a new version of the file.
+             * @description When the control plane last committed a new version of the file, or registered it as a deliverable.
              */
             updatedAt: string;
+            /** @description Set on a file the session's agent registered as a deliverable with ao artifact add, or inside a bundle directory it registered. Absent otherwise. A client lists only registered files as the session's artifacts, or the files at the root of its artifact directory when none is registered. */
+            registered?: boolean;
+            /** @description The paths the artifact had before it was renamed, most recent last, so a link naming one still opens it. Absent when it was never renamed. */
+            previousPaths?: string[];
         };
         SessionArtifactResult: {
             artifact: components["schemas"]["SessionArtifact"];
@@ -4313,6 +4347,7 @@ export interface components {
             size: number;
             /** @description The whole file's SHA-256, as the uploader computed it. The control plane records it on the link but does not check it against the bytes; each part is checked against its own SHA-256. */
             sha256: string;
+            /** @description With feature and name, the document the file is. On an update it is optional: when sent, the link follows a file moved to another document, as one moved to another folder. */
             project?: string;
             feature?: string;
             /**
@@ -4377,7 +4412,7 @@ export interface components {
             sha256: string;
             /**
              * Format: uuid
-             * @description An active link of the caller's, for a file of the same name, to point at this file.
+             * @description An active link of the caller's to point at this file, also after the file was renamed.
              */
             shareId?: string;
         };
@@ -4425,6 +4460,19 @@ export interface components {
             files?: components["schemas"]["WorkerArtifactCommitFile"][];
             /** @description Paths this worker previously synced and has since removed. */
             deleted?: string[];
+            /** @description Files this worker previously synced that were renamed or moved: each keeps its artifact, registration and version history at its new path. Moves apply before files, so a file both moved and changed is listed in both, with its new path in files. */
+            moved?: components["schemas"]["WorkerArtifactMove"][];
+        };
+        WorkerArtifactMove: {
+            from: string;
+            to: string;
+        };
+        WorkerArtifactRegistrationInput: {
+            paths: string[];
+        };
+        WorkerArtifactRegistrationResult: {
+            /** @description Every file the session has registered. */
+            registered: string[];
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
@@ -8830,6 +8878,33 @@ export interface operations {
             403: components["responses"]["WorkerScopeRequired"];
             409: components["responses"]["Error"];
             413: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    registerWorkerArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactRegistrationInput"];
+            };
+        };
+        responses: {
+            /** @description The committed files at the paths are registered. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactRegistrationResult"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
             default: components["responses"]["Error"];
         };
     };

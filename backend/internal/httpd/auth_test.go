@@ -522,3 +522,40 @@ func TestIdentityProbeDoesNotCountTowardLockout(t *testing.T) {
 		t.Fatalf("authenticated request after probes got %d, want 200", w.Code)
 	}
 }
+
+func TestLockoutGroupsIPv6SourcesBySlash64(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	for i := range 5 {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, reqFrom(fmt.Sprintf("[2001:db8:1:2::%x]:5555", i+1), "Bearer wrong"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: got %d want 401", i, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, reqFrom("[2001:db8:1:2::ffff]:5555", "Bearer secret12"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("another address in the same /64: got %d want 429", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, reqFrom("[2001:db8:1:3::1]:5555", "Bearer secret12"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("another /64: got %d want 200", w.Code)
+	}
+}
+
+func TestRetiredHashesAreCapped(t *testing.T) {
+	state := &authState{}
+	for i := range maxRetiredHashes + 5 {
+		state.setHash(mobilebridge.HashPassword(fmt.Sprintf("pass%04d", i)))
+	}
+	if got := len(state.hashes.Load().retired); got != maxRetiredHashes {
+		t.Fatalf("retired hashes: got %d want %d", got, maxRetiredHashes)
+	}
+	if !state.retiredPasswordMatches(fmt.Sprintf("pass%04d", maxRetiredHashes+3)) {
+		t.Fatal("the most recent retired password is no longer recognized")
+	}
+	if state.retiredPasswordMatches("pass0000") {
+		t.Fatal("the oldest retired password is still recognized")
+	}
+}

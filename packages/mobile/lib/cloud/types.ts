@@ -319,7 +319,8 @@ export type CloudWorkspaceRevision = {
 
 // ---- Artifacts (the control plane's artifact_handlers.go)
 
-export type CloudArtifact = { path: string; name: string; kind: "html" | "markdown" | "file"; contentType?: string; size: number; sha256?: string; updatedAt: string };
+/** `registered`: the agent listed it as a deliverable (`ao artifact add`), which decides what the gallery shows. */
+export type CloudArtifact = { path: string; name: string; kind: "html" | "markdown" | "file"; contentType?: string; size: number; sha256?: string; updatedAt: string; registered?: boolean };
 
 /**
  * One of the person's public links to a file (contract: ArtifactShare). It

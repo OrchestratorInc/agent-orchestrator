@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
@@ -119,14 +120,118 @@ const (
 	SessionArtifactGeneric  SessionArtifactKind = "file"
 )
 
+// MaxArtifactRegistrationPaths bounds how many paths one ao artifact add sends.
+const MaxArtifactRegistrationPaths = 100
+
 // SessionArtifactFile is one session-owned file discovered inside artifact_dir.
 type SessionArtifactFile struct {
+	// ID is the artifact's identity, kept across renames. It is empty for a
+	// file AO does not track yet.
+	ID        string              `json:"id,omitempty"`
 	Path      string              `json:"path"`
 	Name      string              `json:"name"`
 	Kind      SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
 	ShareURL  string              `json:"shareUrl,omitempty"`
+	// Registered is set on a file the agent registered as a deliverable, or
+	// inside a bundle directory it registered.
+	Registered bool `json:"registered,omitempty"`
+	// PreviousPaths are the paths the artifact had before it was renamed, most
+	// recent last, so a link to one of them still finds it.
+	PreviousPaths []string `json:"previousPaths,omitempty"`
+}
+
+// FileIdentity names a file on disk independently of its path: a rename keeps
+// it, while a copy or a newly written file gets another. Birth is the file's
+// creation time in nanoseconds, zero where the platform does not report it; a
+// file without one is never taken for a renamed file, because an inode number
+// alone is reused once its file is deleted.
+//
+// Linux birth times come from a coarse clock, so a file written right after
+// another is deleted can get both its inode and its birth time. There
+// Generation, the inode's generation number, tells them apart; where the file
+// system has none, ModTime does instead, and a file renamed and then modified
+// before AO next looks counts as a new file.
+type FileIdentity struct {
+	Dev        uint64
+	Ino        uint64
+	Birth      int64
+	Generation uint64
+	ModTime    int64
+}
+
+// SessionArtifactRegistration is a validated deliverable and the file observed
+// at its path, so registration can recognize a rename before the first scan.
+type SessionArtifactRegistration struct {
+	Path string
+	File FileIdentity
+}
+
+// SameFile reports whether f and other name the same file, and both are
+// complete enough to tell.
+func (f FileIdentity) SameFile(other FileIdentity) bool {
+	return f.Ino != 0 && f.Birth != 0 && f == other
+}
+
+// SessionArtifactRecord is the stored identity of one tracked file or bundle
+// directory in a session's artifact directory. Path changes on a rename; ID
+// does not.
+type SessionArtifactRecord struct {
+	ID            string
+	SessionID     SessionID
+	Path          string
+	RegisteredAt  *time.Time
+	File          FileIdentity
+	PreviousPaths []string
+	CreatedAt     time.Time
+	// HasVersions reports that the row's path has kept versions. Only the
+	// listing a scan reads sets it.
+	HasVersions bool
+}
+
+// ErrSessionArtifactsChanged reports artifact changes planned from rows that
+// have changed since; nothing was applied, and the next scan plans again.
+var ErrSessionArtifactsChanged = errors.New("session artifacts changed since they were read")
+
+// SessionArtifactChanges is what one scan of a session's artifact directory
+// changes in its artifact rows.
+type SessionArtifactChanges struct {
+	// Insert adds rows for files seen for the first time.
+	Insert []SessionArtifactRecord
+	// Move gives renamed artifacts their new path, with their version rows.
+	Move []SessionArtifactMove
+	// SetFile records the file now at a row's path: a file replaced in place,
+	// or none for a file that is gone.
+	SetFile []SessionArtifactFileUpdate
+	// Drop removes rows of files that were gone before a renamed artifact took
+	// their path, with their version rows.
+	Drop []SessionArtifactFileUpdate
+	// Forget removes rows of files that are gone and were never registered
+	// nor versioned, such as an editor's temporary files. A row with version
+	// history is kept, with no file, as SetFile would.
+	Forget []SessionArtifactFileUpdate
+}
+
+// Empty reports whether c changes nothing.
+func (c SessionArtifactChanges) Empty() bool {
+	return len(c.Insert) == 0 && len(c.Move) == 0 && len(c.SetFile) == 0 && len(c.Drop) == 0 && len(c.Forget) == 0
+}
+
+// SessionArtifactMove is one renamed artifact.
+type SessionArtifactMove struct {
+	ID            string
+	From          string
+	To            string
+	File          FileIdentity
+	PreviousPaths []string
+}
+
+// SessionArtifactFileUpdate names one artifact row by ID and current path.
+type SessionArtifactFileUpdate struct {
+	ID   string
+	Path string
+	File FileIdentity
 }
 
 // SessionArtifactVersion is one immutable snapshot of a session artifact file.

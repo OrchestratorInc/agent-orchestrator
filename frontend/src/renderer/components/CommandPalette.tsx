@@ -3,7 +3,7 @@ import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstac
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
-import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -95,7 +95,9 @@ function isRowNavigationKey(event: { key: string; ctrlKey: boolean }): boolean {
 		|| (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key));
 }
 
-export function CommandPalette() {
+// Memoized: it takes no props, so the shell's re-renders (several per route
+// change) skip the closed palette.
+export const CommandPalette = memo(function CommandPalette() {
 	const { i18n, t } = useTranslation();
 	const enabled = useCommandPaletteEnabled();
 	const navigate = useNavigate();
@@ -310,6 +312,7 @@ export function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
+				developerMode,
 			}, t),
 			...buildShortcutCommands(t, { splitPanes }),
 			...buildSettingsCommands(t, { developerMode, diagnostics }),
@@ -532,6 +535,7 @@ export function CommandPalette() {
 		(target: NavigateTarget) => {
 			switch (target.to) {
 				case "/":
+				case "/usage":
 					void navigate({ to: target.to });
 					break;
 				case "/settings":
@@ -1067,7 +1071,7 @@ export function CommandPalette() {
 			) : null}
 		</>
 	);
-}
+});
 
 /** Whether a palette action closes the palette into another modal. */
 function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensModal: boolean): boolean {
