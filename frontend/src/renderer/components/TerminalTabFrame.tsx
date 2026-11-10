@@ -8,9 +8,9 @@ type TerminalTabFrameProps = {
 	/** Optional: without one the label starts at the tab's edge. */
 	icon?: ReactNode;
 	label: string;
-	/** Shown on hover or focus: the tab's close button or menu. It takes the icon's slot, or the tab's right edge when there is no icon. */
+	/** Shown on hover or focus: the tab's ⋮ menu, or a running interface switch's status on the session's tab. It takes the icon's slot, or the tab's right edge when there is no icon. */
 	action?: ReactNode;
-	/** Closes the tab; a middle-click runs it, as the slot's close button does. */
+	/** Closes the tab; a middle-click runs it, as the menu's Close tab does. */
 	onClose?: () => void;
 	/** Keep the action showing at rest (unsaved dot, running switch). */
 	actionPinned?: boolean;
@@ -24,7 +24,7 @@ type TerminalTabFrameProps = {
 	trailing?: ReactNode;
 };
 
-/** The control in a tab's icon slot, shared so close buttons and menus match. */
+/** The control in a tab's icon slot, shared so every tab's ⋮ button matches. */
 export const terminalTabActionClassName =
 	"relative grid size-icon-base cursor-pointer place-items-center rounded-sm text-passive before:absolute before:-inset-1.5 before:content-[''] hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground";
 

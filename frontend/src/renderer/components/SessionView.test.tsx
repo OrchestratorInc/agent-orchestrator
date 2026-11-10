@@ -2972,7 +2972,7 @@ describe("SessionView", () => {
 		const view = render(<SessionView sessionId="sess-1" />);
 		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
 		await screen.findByTestId("session-file-workspace");
-		fireEvent.click(screen.getByRole("button", { name: "Close panel.tsx" }));
+		fireEvent.click(screen.getByRole("button", { name: "close file:src/panel.tsx" }));
 		await waitFor(() => expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument());
 
 		view.rerender(<SessionView sessionId="sess-2" />);
@@ -2996,7 +2996,7 @@ describe("SessionView", () => {
 
 		await act(async () => {});
 		expect(screen.getByTestId("session-file-workspace").closest("[inert]")).not.toBeNull();
-		expect(screen.getByRole("button", { name: "Close panel.tsx" })).toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "panel.tsx" })).toBeInTheDocument();
 	});
 
 	it("preserves mixed tab order across session navigation and interface changes", async () => {
@@ -3052,7 +3052,7 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
 		await screen.findByTestId("session-file-workspace");
 		fireEvent.click(screen.getByRole("button", { name: "reorder auxiliary tabs" }));
-		fireEvent.click(screen.getByRole("button", { name: "Close panel.tsx" }));
+		fireEvent.click(screen.getByRole("button", { name: "close file:src/panel.tsx" }));
 
 		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("shell");

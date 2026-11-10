@@ -121,18 +121,18 @@ describe("ShellTerminalTab rename", () => {
 		expect(onSelect).toHaveBeenCalledOnce();
 	});
 
-	it("reveals close in the terminal glyph's slot on hover", () => {
+	it("reveals the tab's ⋮ menu in the terminal glyph's slot on hover", () => {
 		renderTab({ appearance: "connected", isActive: true });
 
-		const closeButton = screen.getByRole("button", { name: "Close terminal ao" });
-		expect(closeButton.parentElement).toHaveClass(
+		const menuButton = screen.getByRole("button", { name: "Tab actions" });
+		expect(menuButton.parentElement).toHaveClass(
 			"absolute",
 			"left-2",
 			"opacity-0",
 			"group-hover:opacity-100",
 		);
-		expect(closeButton).not.toHaveClass("transition-opacity", "transition-[opacity,background,color]");
-		expect(closeButton).not.toHaveClass("w-control-sm");
+		expect(menuButton).not.toHaveClass("transition-opacity", "transition-[opacity,background,color]");
+		expect(menuButton).not.toHaveClass("w-control-sm");
 		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")?.parentElement).toHaveClass("group-hover:opacity-0");
 		expect(screen.getByRole("tab", { name: "ao" })).toHaveAttribute("aria-selected", "true");
 	});
@@ -179,9 +179,20 @@ describe("ShellTerminalTab rename", () => {
 		expect(indicator).toHaveClass("bottom-0", "h-0.5");
 	});
 
-	it("closes from the glyph slot without selecting the tab", () => {
+	it("closes from the ⋮ menu's first row without selecting the tab", () => {
 		const { onClose, onSelect } = renderTab({ appearance: "connected" });
-		fireEvent.click(screen.getByRole("button", { name: "Close terminal ao" }));
+		fireEvent.keyDown(screen.getByRole("button", { name: "Tab actions" }), { key: "Enter" });
+		const rows = screen.getAllByRole("menuitem");
+		expect(rows[0]).toHaveTextContent("Close tab");
+		fireEvent.click(rows[0]!);
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(onSelect).not.toHaveBeenCalled();
+	});
+
+	it("closes on a middle-click", () => {
+		const { onClose, onSelect } = renderTab({ appearance: "connected" });
+		const frame = screen.getByRole("tab", { name: "ao" }).closest("[data-terminal-tab-frame]")!;
+		fireEvent(frame, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
 		expect(onClose).toHaveBeenCalledOnce();
 		expect(onSelect).not.toHaveBeenCalled();
 	});

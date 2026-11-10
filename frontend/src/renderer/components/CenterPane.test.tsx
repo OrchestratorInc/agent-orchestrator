@@ -269,7 +269,7 @@ describe("CenterPane toolbar session label", () => {
 
 		const auxiliaryTab = screen.getByRole("tab", { name: shell.title });
 		expect(auxiliaryTab.parentElement?.querySelector("img")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: `Close terminal ${shell.title}` })).toBeInTheDocument();
+		expect(within(auxiliaryTab.closest("[data-terminal-tab-frame]") as HTMLElement).getByRole("button", { name: "Tab actions" })).toBeInTheDocument();
 		expect(mainTab.querySelector('[title="Working"]')).not.toBeInTheDocument();
 	});
 

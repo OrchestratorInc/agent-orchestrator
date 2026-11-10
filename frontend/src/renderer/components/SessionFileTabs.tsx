@@ -1,4 +1,4 @@
-import { Copy, FolderOpen, Globe, SquareTerminal, X } from "@/components/app-icons";
+import { Copy, FolderOpen, Globe, MoreVertical, SquareTerminal } from "@/components/app-icons";
 import { useContext } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
@@ -10,8 +10,8 @@ import { AppBrowserLinkContext } from "./AppLink";
 import { useChatPathMenuEntries } from "./ChatPathMenu";
 import type { MenuEntry } from "./menu-model";
 import { useCopyToClipboard } from "./SessionContextMenuItems";
-import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
-import { Pressable } from "./ui/pressable";
+import { TabMenuButton } from "./TabContextMenu";
+import { TerminalTabFrame } from "./TerminalTabFrame";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 
 function basename(path: string): string {
@@ -61,21 +61,12 @@ export function SessionFileTab({
 	onClose: () => void;
 	path: string;
 }) {
-	const { t } = useTranslation();
 	const name = `${basename(path)}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
-	// The close button takes the file icon's slot on hover, matching the other
-	// tabs. A dirty file keeps an always-visible dot in that slot; the dot swaps
-	// to the cross on hover.
-	const closeAction = (
-		<Pressable
-			aria-label={t("files.closeTab", { name })}
-			className={terminalTabActionClassName}
-			onClick={(event) => {
-				event.stopPropagation();
-				onClose();
-			}}
-			type="button"
-		>
+	// The tab's ⋮ menu takes the file icon's slot on hover, as on every tab. A
+	// dirty file keeps an always-visible dot in that slot, which swaps to ⋮ on
+	// hover. Outside the session strip (no tab menu) the slot holds nothing.
+	const menuAction = (
+		<TabMenuButton>
 			{dirty ? (
 				<>
 					<span
@@ -83,14 +74,14 @@ export function SessionFileTab({
 						className="size-2 rounded-full bg-foreground group-hover:hidden group-has-[:focus-visible]:hidden"
 						data-testid="unsaved-tab-indicator"
 					/>
-					<X aria-hidden="true" className="hidden size-icon-sm group-hover:block group-has-[:focus-visible]:block" />
+					<MoreVertical aria-hidden="true" className="hidden size-icon-sm group-hover:block group-has-[:focus-visible]:block" />
 				</>
-			) : <X className="size-icon-sm" aria-hidden="true" />}
-		</Pressable>
+			) : undefined}
+		</TabMenuButton>
 	);
 	return (
 		<TerminalTabFrame
-			action={closeAction}
+			action={menuAction}
 			actionPinned={dirty}
 			onClose={onClose}
 			active={active}

@@ -10,7 +10,6 @@ import {
 	type RefObject,
 } from "react";
 import { agentLabel } from "@aoagents/product-ui";
-import { X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { MIN_PANE_PX, ratioVar, type CssDivider } from "../lib/pane-split";
@@ -25,8 +24,7 @@ import { ShellAgentStatus } from "./ShellTerminalTab";
 import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { TabContextMenu, type TabMenuSpec } from "./TabContextMenu";
-import { terminalTabActionClassName } from "./TerminalTabFrame";
+import { TabContextMenu, TabMenuButton, type TabMenuSpec } from "./TabContextMenu";
 
 /**
  * A terminal shown in a split pane. Shell terminals come from the shared
@@ -270,7 +268,7 @@ export function SplitGroupTab({
 						<span
 							className={cn(
 								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-								focused && "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0",
+								focused && "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 [[data-split-focused-member]:has([data-state=open])>button>&]:opacity-0",
 							)}
 						>
 							{member.icon}
@@ -285,25 +283,15 @@ export function SplitGroupTab({
 							<span aria-hidden="true" className="my-2.5 w-px shrink-0 self-stretch bg-border" />
 						) : null}
 						{focused ? (
-							<span className="relative inline-flex min-w-0">
+							<span className="relative inline-flex min-w-0" data-split-focused-member>
 								{segment}
-								{/* Takes the icon's slot on hover, like the close button on other tabs. */}
+								{/* The group's ⋮ menu (Ungroup, then the focused member's rows) takes the icon's slot on hover, as on every tab. */}
 								<span
-									className="pointer-events-none absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
+									className="pointer-events-none absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 									data-terminal-tab-action
+									onPointerDown={(event) => event.stopPropagation()}
 								>
-									<Pressable
-										aria-label={t("splitPane.closePane", { name: member.label })}
-										className={terminalTabActionClassName}
-										onClick={(event) => {
-											event.stopPropagation();
-											member.onClose();
-										}}
-										onPointerDown={(event) => event.stopPropagation()}
-										type="button"
-									>
-										<X aria-hidden="true" className="size-icon-sm" />
-									</Pressable>
+									<TabMenuButton />
 								</span>
 							</span>
 						) : (

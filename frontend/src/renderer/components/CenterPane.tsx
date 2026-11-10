@@ -41,7 +41,7 @@ import { SessionTabsTopbar } from "./PageTopbar";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { SESSION_TAB_KEY } from "../lib/pane-split";
 import { useSplitCloseFocused, useSplitHiddenTabKeys } from "./split-pane-context";
-import { TabContextMenu, TabMenuSpecContext, type TabMenuSpec } from "./TabContextMenu";
+import { TabContextMenu, TabMenuButton, type TabMenuSpec } from "./TabContextMenu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -784,7 +784,13 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			action={!rename.isEditing && tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			action={
+				rename.isEditing ? undefined
+				: tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span>
+				// A reviewer's tab has its menu's ⋮, like every other tab.
+				: !session && tabMenu ? <TabMenuButton />
+				: undefined
+			}
 			actionPinned={tabActionPinned}
 			active={isActive}
 			buttonProps={{
@@ -834,9 +840,5 @@ export function SessionPaneTab({
 			}
 		: { kind: "plain", tabKey };
 	// The ⋮ button in the action slot opens this same spec.
-	return (
-		<TabMenuSpecContext.Provider value={menu}>
-			<TabContextMenu spec={menu}>{tabFrame}</TabContextMenu>
-		</TabMenuSpecContext.Provider>
-	);
+	return <TabContextMenu spec={menu}>{tabFrame}</TabContextMenu>;
 }

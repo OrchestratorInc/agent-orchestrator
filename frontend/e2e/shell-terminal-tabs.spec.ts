@@ -9,14 +9,15 @@ test("opens, selects, and closes standalone shell terminals from the tab strip",
 	await page.goto("/#/projects/ao-demo/sessions/demo-working");
 	await expect(page.getByRole("button", { name: "New terminal" })).toBeVisible();
 
-	const closeButtons = page.getByRole("button", { name: /^Close terminal / });
-	const initialCount = await closeButtons.count();
+	// Every auxiliary tab shows one ⋮ button ("Tab actions"); the session's own is "Session actions".
+	const tabMenus = page.getByRole("button", { name: "Tab actions" });
+	const initialCount = await tabMenus.count();
 
 	// The button at the end of the tab strip opens a shell and makes it the
 	// active pane. It creates a terminal directly — no menu, no session picker.
 	await page.getByRole("button", { name: "New terminal" }).click();
 	await expect(page.getByRole("menu")).toHaveCount(0);
-	await expect(closeButtons).toHaveCount(initialCount + 1);
+	await expect(tabMenus).toHaveCount(initialCount + 1);
 
 	// Selecting the session tab hands the pane back to the agent. Matched by the
 	// session's own title: the tab's accessible name is that title, and its
@@ -28,9 +29,10 @@ test("opens, selects, and closes standalone shell terminals from the tab strip",
 	await sessionTab.click();
 	await expect(sessionTab).toHaveAttribute("aria-selected", "true");
 
-	// Closing a shell removes exactly its own tab. Its close control takes the
-	// glyph's slot on hover, so reach it the way a pointer does.
-	await page.locator("[data-terminal-tab-frame]").filter({ has: closeButtons.last() }).hover();
-	await closeButtons.last().click();
-	await expect(closeButtons).toHaveCount(initialCount);
+	// Closing a shell removes exactly its own tab. Its ⋮ menu takes the glyph's
+	// slot on hover, so reach it the way a pointer does; Close tab leads it.
+	await page.locator("[data-terminal-tab-frame]").filter({ has: tabMenus.last() }).hover();
+	await tabMenus.last().click();
+	await page.getByRole("menuitem", { name: /^Close tab/ }).click();
+	await expect(tabMenus).toHaveCount(initialCount);
 });
