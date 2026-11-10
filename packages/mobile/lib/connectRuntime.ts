@@ -9,6 +9,7 @@
  * until it has been run. See docs for the local end-to-end check.
  */
 import { type ConnectDeps, connectHost, type ConnectResult } from "./connect";
+import { deviceTokenConnectDeps } from "./deviceTokenRuntime";
 import type { ServerConfig } from "./config";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
@@ -184,6 +185,7 @@ export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 		saveEndpoints: updateHostEndpoints,
 		adoptIdentity: adoptHostIdentity,
 		touch: touchHost,
+		...deviceTokenConnectDeps(),
 	};
 }
 

@@ -313,3 +313,38 @@ describe("pairedNotice", () => {
 		}
 	});
 });
+
+describe("pairing for this phone's own token", () => {
+	const token = "aod_" + "a".repeat(64);
+
+	it.each([
+		["a one-time code", "pairing-code" as const, undefined],
+		["the pairing password of an older code", "password" as const, "pw"],
+	])("swaps %s before verifying, and saves the token", async (_name, credential, fallbackToken) => {
+		const pair = vi.fn(async (_config: unknown) => ({ kind: "paired" as const, token, credential }));
+		const d = deps({ pair });
+		const result = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		// The code's secret is presented once, to the machine the race confirmed.
+		expect(pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ host: "192.168.1.42", password: "pw", hostId: "h_paired" }));
+		expect(d.verify).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+		const saved = (d.saveHost.mock.calls as unknown as [{ token: string; fallbackToken?: string }][])[0][0];
+		expect(saved.token).toBe(token);
+		expect(saved.fallbackToken).toBe(fallbackToken);
+		expect(result.ok && result.config.password).toBe(token);
+	});
+
+	it("saves the code's token as it is for a desktop without device tokens", async () => {
+		const d = deps({ pair: vi.fn(async () => ({ kind: "unsupported" as const })) });
+		await pairFromCode(`aomobile://pair#${code}`, d);
+		expect(d.verify).toHaveBeenCalledWith(expect.objectContaining({ password: "pw" }));
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ token: "pw" }));
+	});
+
+	it("reports a used or expired code as a rejected credential and saves nothing", async () => {
+		const d = deps({ pair: vi.fn(async () => ({ kind: "unauthorized" as const })) });
+		await expect(pairFromCode(`aomobile://pair#${code}`, d)).resolves.toEqual({ ok: false, reason: "verify-failed", endpoint: lan, status: 401 });
+		expect(d.verify).not.toHaveBeenCalled();
+		expect(d.saveHost).not.toHaveBeenCalled();
+	});
+});

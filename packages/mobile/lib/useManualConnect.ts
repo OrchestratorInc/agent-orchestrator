@@ -8,6 +8,8 @@ import { classifyConnectionFailure, describeConnectionFailure, isLocalNetworkHos
 import { probeEndpoint, probeIdentity } from "./connectRuntime";
 import { haptics } from "./haptics";
 import { renameHost, saveHost, setActiveHost, type Host } from "./hosts";
+import { isPairingSecret } from "./deviceToken";
+import { pairThisDevice } from "./deviceTokenRuntime";
 import { setLocalNetworkConfirmed } from "./localNetworkStore";
 import { AccountManagedHostError, adoptManualConnection, DifferentMachineError, persistManualHostEdit } from "./manualConnect";
 import { IncompatibleHostVersionError } from "./race";
@@ -73,6 +75,7 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 					ping: pingServer,
 					saveHost,
 					renameHost,
+					pair: (config) => pairThisDevice(config, { fresh: true }),
 				});
 				if (isLocalNetworkHost(target.host)) void setLocalNetworkConfirmed();
 				haptics.success();
@@ -89,19 +92,30 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 			// and the daemon locks a device out for a minute after 5 failed auths,
 			// so a persisted wrong password locks the user out on its own in ~40s,
 			// with no further input from them.
-			await pingServer(target);
+			// What was typed is a one-time pairing code or the pairing password; a
+			// machine with device tokens swaps either for this phone's own token.
+			let connection = target;
+			let fallbackToken: string | undefined;
+			if (isPairingSecret(target.password)) {
+				const paired = await pairThisDevice({ ...target, ...(hostId ? { hostId } : {}) }, { fresh: true });
+				if (paired.kind === "paired") {
+					connection = { ...target, password: paired.token };
+					if (paired.credential === "password") fallbackToken = target.password;
+				}
+			}
+			await pingServer(connection);
 			// Reaching a LAN address proves iOS granted Local Network access, so a
 			// later scan that reaches nothing can say so at once (localNetworkWait).
 			if (isLocalNetworkHost(target.host)) void setLocalNetworkConfirmed();
-			await saveConfig(target);
+			await saveConfig(connection);
 			// Store it as a machine and select it. Writing only the legacy config
 			// left resolution reconnecting the previously active machine on the
 			// next launch, so a manual connection silently did not stick.
-			await adoptManualConnection(target, {
+			await adoptManualConnection(connection, {
 				identity: async () => hostId,
 				saveHost,
 				setActiveHost,
-			}, machineName);
+			}, machineName, fallbackToken);
 			mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual" });
 			haptics.success();
 			onConnected();
@@ -155,7 +169,7 @@ function connectFailure(error: unknown, target: ServerConfig, editing: boolean):
 		platform: Platform.OS,
 	});
 	return {
-		message: editing && kind === "auth" ? "That password was rejected. Check it and try again." : copy.message,
+		message: editing && kind === "auth" ? "That code or password was rejected. Get a new code and try again." : copy.message,
 		field: kind === "auth" ? "password" : "host",
 		showLocalNetworkHint: copy.showLocalNetworkHint,
 	};

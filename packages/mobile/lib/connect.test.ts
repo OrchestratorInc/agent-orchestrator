@@ -161,3 +161,72 @@ describe("connectHost", () => {
 		expect(got.ok).toBe(true);
 	});
 });
+
+describe("connectHost with device tokens", () => {
+	const token = "aod_" + "a".repeat(64);
+	const deps = (saved: Host, over: Record<string, unknown> = {}) => ({
+		findHost: vi.fn(async () => saved),
+		race: vi.fn(async () => ({ ok: true as const, endpoint: lan, hostId: "h_paired" })),
+		refreshEndpoints: vi.fn(async () => [lan, tunnel]),
+		saveEndpoints: vi.fn(async () => {}),
+		adoptIdentity: vi.fn(async () => {}),
+		touch: vi.fn(async () => {}),
+		pair: vi.fn(async (): Promise<import("./deviceToken").PairDeviceResult> => ({ kind: "paired", token, credential: "password" })),
+		checkToken: vi.fn(async (): Promise<"ok" | "revoked" | "refused" | "unknown"> => "ok"),
+		saveToken: vi.fn(async () => {}),
+		...over,
+	});
+
+	it("swaps a saved pairing password for this phone's own token and keeps the password", async () => {
+		const d = deps(host());
+		const got = await connectHost("h_paired", d);
+
+		expect(d.pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: "pw", hostId: "h_paired" }));
+		expect(d.saveToken).toHaveBeenCalledExactlyOnceWith("h_paired", token, "pw");
+		expect(got.ok && got.config.password).toBe(token);
+		// The rest of the connect uses the new token.
+		expect(d.refreshEndpoints).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+	});
+
+	it.each([["unsupported"], ["unauthorized"], ["offline"]] as const)("keeps the password when the swap answers %s", async (kind) => {
+		const d = deps(host(), { pair: vi.fn(async () => ({ kind })) });
+		const got = await connectHost("h_paired", d);
+		expect(d.saveToken).not.toHaveBeenCalled();
+		expect(got.ok && got.config.password).toBe("pw");
+	});
+
+	it("leaves a device token and an account token alone", async () => {
+		for (const saved of [host({ token }), host({ token: "a".repeat(64), accountUserId: "user-a" })]) {
+			const d = deps(saved);
+			const got = await connectHost("h_paired", d);
+			expect(d.pair).not.toHaveBeenCalled();
+			expect(d.saveToken).not.toHaveBeenCalled();
+			expect(got.ok && got.config.password).toBe(saved.token);
+		}
+	});
+
+	it("falls back to the kept password on a machine that no longer knows device tokens", async () => {
+		const d = deps(host({ token, fallbackToken: "pw" }), {
+			checkToken: vi.fn(async () => "refused" as const),
+			// That machine has no pairing route either.
+			pair: vi.fn(async () => ({ kind: "unsupported" as const })),
+		});
+		const got = await connectHost("h_paired", d);
+		expect(d.saveToken).toHaveBeenCalledExactlyOnceWith("h_paired", "pw");
+		expect(got.ok && got.config.password).toBe("pw");
+	});
+
+	it("does not use the kept password when the machine removed this phone", async () => {
+		const d = deps(host({ token, fallbackToken: "pw" }), { checkToken: vi.fn(async () => "revoked" as const) });
+		const got = await connectHost("h_paired", d);
+		expect(d.saveToken).not.toHaveBeenCalled();
+		expect(d.pair).not.toHaveBeenCalled();
+		expect(got.ok && got.config.password).toBe(token);
+	});
+
+	it("checks the token only for a phone that kept a password", async () => {
+		const d = deps(host({ token }));
+		await connectHost("h_paired", d);
+		expect(d.checkToken).not.toHaveBeenCalled();
+	});
+});

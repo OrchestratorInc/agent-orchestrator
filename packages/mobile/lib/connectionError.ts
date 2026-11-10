@@ -201,9 +201,9 @@ export function describeConnectionFailure(
 			// The connection itself worked, so "disconnected" would be wrong here —
 			// and re-scanning is the actual fix, not retrying the same password.
 			return {
-				title: "Your machine rejected the password",
+				title: "Your machine rejected this phone",
 				icon: "monitor-off",
-				message: "That password was rotated. Re-scan the code on that machine.",
+				message: "It was removed from that machine, or the password changed. Scan a new code there.",
 				showLocalNetworkHint: false,
 			};
 		case "rate-limited":

@@ -1,4 +1,5 @@
 import { DEFAULT_CONFIG, type ServerConfig } from "./config";
+import { DEVICE_TOKEN_PREFIX, isPairingSecret, type PairDeviceResult } from "./deviceToken";
 import type { Endpoint } from "./endpoints";
 import { mergeEndpoints } from "./mergeEndpoints";
 import type { Host } from "./hosts";
@@ -40,6 +41,12 @@ export type ConnectDeps = {
 	/** Records the identity a machine reported that had none stored. */
 	adoptIdentity: (oldId: string, hostId: string) => Promise<void>;
 	touch: (hostId: string) => Promise<void>;
+	/** Exchanges the pairing password in config for this phone's own token. */
+	pair?: (config: ServerConfig) => Promise<PairDeviceResult>;
+	/** What the machine says about the device token in config. */
+	checkToken?: (config: ServerConfig) => Promise<"ok" | "revoked" | "refused" | "unknown">;
+	/** Saves a machine's token and the pairing password kept as its fallback. */
+	saveToken?: (hostId: string, token: string, fallbackToken?: string) => Promise<void>;
 };
 
 /**
@@ -59,7 +66,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };
 
 	const hostKeyForConfig = host.id === "" ? outcome.hostId : host.id;
-	const config = configForEndpoint(outcome.endpoint, host.token, hostKeyForConfig);
+	let config = configForEndpoint(outcome.endpoint, host.token, hostKeyForConfig);
 
 	// A machine migrated from the single-server config has no id until it
 	// connects once. This is where it learns one, and it is verified from here on.
@@ -68,6 +75,27 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	}
 
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
+
+	if (deps.saveToken) {
+		let token = host.token;
+		// The machine no longer takes this phone's token. Unless it says the
+		// phone was removed, it is a release without device tokens, as after a
+		// rollback: the pairing password this phone kept works there.
+		if (host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && deps.checkToken && await deps.checkToken(config) === "refused") {
+			token = host.fallbackToken;
+			await deps.saveToken(hostKey, token);
+			config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+		}
+		// Swap a pairing password for this phone's own token, keeping the
+		// password as the fallback.
+		if (deps.pair && isPairingSecret(token)) {
+			const paired = await deps.pair(config);
+			if (paired.kind === "paired") {
+				await deps.saveToken(hostKey, paired.token, paired.credential === "password" ? token : undefined);
+				config = configForEndpoint(outcome.endpoint, paired.token, hostKeyForConfig);
+			}
+		}
+	}
 
 	try {
 		const advertised = await deps.refreshEndpoints(config);
