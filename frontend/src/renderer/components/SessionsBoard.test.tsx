@@ -1051,7 +1051,8 @@ describe("SessionsBoard", () => {
 		const card = within(row!).getByTestId("board-session-card");
 		expect(within(card).getByRole("img", { name: "claude-code" })).toBeInTheDocument();
 		expect(within(card).getByText("ao/dead-worker")).toBeInTheDocument();
-		expect(within(card).getByText("Terminated")).toBeInTheDocument();
+		// Everything here is archived, so the card does not say so.
+		expect(within(card).queryByText("Terminated")).not.toBeInTheDocument();
 		expect(within(card).getByTestId("session-pr-progress")).toHaveTextContent("1 of 2 PRs merged · 1 open");
 		expect(within(card).getByRole("link", { name: "PR #42 merged" })).toHaveAttribute(
 			"href",
@@ -1240,6 +1241,7 @@ describe("SessionsBoard", () => {
 		await userEvent.click(within(archive).getByText("dead worker"));
 
 		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledTimes(1);
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "p1", sessionId: "s-dead" },

@@ -158,6 +158,7 @@ export function ArchivedSessionCardAdapter({
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
 	onDelete,
+	onOpen,
 	isRestoring,
 	restoreAction,
 	restoreError,
@@ -167,6 +168,8 @@ export function ArchivedSessionCardAdapter({
 	isRestoreDisabled: boolean;
 	/** Asks the host to confirm the delete, for a card inside a list that owns its keys. */
 	onDelete?: () => void;
+	/** Opens the session on click, making this a live board card (hover, menu). */
+	onOpen?: () => void;
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
@@ -199,7 +202,8 @@ export function ArchivedSessionCardAdapter({
 				) : undefined
 			}
 			footer={<ArchiveRestoreError message={restoreError} />}
-			interactive={false}
+			interactive={Boolean(onOpen)}
+			onOpen={onOpen}
 			session={session}
 		/>
 	);

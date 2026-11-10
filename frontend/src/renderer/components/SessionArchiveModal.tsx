@@ -186,6 +186,8 @@ export function SessionArchiveModal({
 				onOpenChange={onOpenChange}
 				title={t("shell.archivedSessions")}
 				description={t("archiveModal.searchPlaceholder")}
+				// Wider than the palette so cards sit at least three to a row.
+				className="w-[min(1200px,calc(100vw-4rem))]!"
 				commandProps={{
 					shouldFilter: false,
 					value: selected,
@@ -212,7 +214,7 @@ export function SessionArchiveModal({
 				/>
 				<CommandList
 					onScroll={onListScroll}
-					className="max-h-[min(640px,60vh)] px-[var(--size-command-item-inset)] pt-1 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] [&_[cmdk-list-sizer]]:items-start [&_[cmdk-list-sizer]]:gap-2"
+					className="max-h-[calc(84vh-7rem)] px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:items-start [&_[cmdk-list-sizer]]:gap-2"
 				>
 					<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
 						{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
@@ -223,15 +225,19 @@ export function SessionArchiveModal({
 							value={session.id}
 							onSelect={() => openSession(session)}
 							data-testid="session-archive-card"
-							className="cursor-pointer rounded-lg outline-none data-[selected=true]:[&_[data-testid=board-session-card]]:border-border-strong data-[selected=true]:[&_[data-testid=board-session-card]]:bg-interactive-hover"
+							// The arrow-key selection looks like the board card's own hover.
+							className="rounded-lg outline-none data-[selected=true]:[&_[data-testid=board-session-card]]:bg-interactive-hover"
 						>
-							{/* The card's own buttons and links act alone: a click or key on
-							    them must not also open the session or move the selection. */}
-							<div onClick={keepInsideControl} onKeyDown={keepInsideControl}>
+							{/* The card opens itself on click, so clicks stop here; keys from
+							    its controls and from its menus and dialogs (portals bubble
+							    through React) must not reach the list either. */}
+							<div onClick={(event) => event.stopPropagation()} onKeyDown={keepInsideCard}>
 								<ArchivedSessionCardAdapter
+									hideTerminatedStatus
 									isRestoreDisabled={!restoreAvailable}
 									isRestoring={restoringSessionId === session.id}
 									onDelete={canDelete(session) ? () => setDeleteTarget(session) : undefined}
+									onOpen={() => openSession(session)}
 									restoreAction={(event) => {
 										event.stopPropagation();
 										void restore(session);
@@ -292,6 +298,8 @@ function FooterHint({ keys, label }: { keys: readonly string[]; label: string })
 	);
 }
 
-function keepInsideControl(event: SyntheticEvent) {
-	if (event.target instanceof Element && event.target.closest("a, button")) event.stopPropagation();
+function keepInsideCard(event: SyntheticEvent<HTMLElement>) {
+	const target = event.target;
+	const fromPortal = !(target instanceof Node) || !event.currentTarget.contains(target);
+	if (fromPortal || (target instanceof Element && target.closest("a, button"))) event.stopPropagation();
 }
