@@ -170,6 +170,10 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 		if line.Response.Subtype != "success" {
 			return domain.AgentAccountLimits{}, fmt.Errorf("claude get_usage: %s", strings.TrimSpace(line.Response.Error))
 		}
+		// Claude can return success with null limits when its usage request fails.
+		if line.Response.Response.RateLimits == nil {
+			return domain.AgentAccountLimits{}, fmt.Errorf("Claude %w", domain.ErrUsageUnavailable)
+		}
 		return line.Response.Response.limits(time.Now().UTC()), nil
 	}
 	if err := ctx.Err(); err != nil {

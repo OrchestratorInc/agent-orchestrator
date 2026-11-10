@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,26 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestClaudeLimitsRejectsNullRateLimits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake Claude executable uses a POSIX shell")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+read -r request
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"ao-usage","response":{"rate_limits":null}}}'
+`
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	claude := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
+	limits, err := claude.Limits(context.Background(), dir)
+	if err == nil || err.Error() != "Claude usage is temporarily unavailable" || !limits.FetchedAt.IsZero() {
+		t.Fatalf("null rate limits returned %+v, %v", limits, err)
+	}
+}
 
 func TestClaudeLimitsAutoResumeResetUsesOnlyUnambiguousRollingWindows(t *testing.T) {
 	now := time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)
