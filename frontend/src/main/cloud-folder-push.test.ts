@@ -771,7 +771,7 @@ describe("secret-looking files", () => {
 		await git(folder, "checkout", "--quiet", "main");
 		await fs.writeFile(path.join(folder, "c.txt"), "c");
 		await commitAll(folder, "c");
-		await git(folder, "merge", "--quiet", "--no-ff", "--no-commit", "side");
+		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "merge", "--quiet", "--no-ff", "--no-commit", "side");
 		// Added in the merge commit itself, on neither side.
 		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
 		await git(folder, "add", ".env");
