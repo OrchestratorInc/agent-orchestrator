@@ -2543,12 +2543,12 @@ func TestSessionArtifacts(t *testing.T) {
 		t.Fatalf("new session paths = %v, want none", got)
 	}
 	first := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
-	got, found, err := st.AddSessionArtifacts(ctx, sess.ID, []string{"z.html", "b.md", "z.html"}, first)
+	got, found, err := st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations("z.html", "b.md", "z.html"), first)
 	if err != nil || !found || !slices.Equal(got, []string{"b.md", "z.html"}) {
 		t.Fatalf("add = %v, %v, %v", got, found, err)
 	}
 	// Adding a path again keeps its row, and so its place: oldest first.
-	got, _, err = st.AddSessionArtifacts(ctx, sess.ID, []string{"a.md", "b.md"}, first.Add(time.Minute))
+	got, _, err = st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations("a.md", "b.md"), first.Add(time.Minute))
 	if err != nil || !slices.Equal(got, []string{"b.md", "z.html", "a.md"}) {
 		t.Fatalf("add again = %v, %v", got, err)
 	}
@@ -2564,7 +2564,7 @@ func TestSessionArtifacts(t *testing.T) {
 	if got := read(); len(got) != 0 {
 		t.Fatalf("after clear = %v", got)
 	}
-	if _, found, err := st.AddSessionArtifacts(ctx, "missing", []string{"a.md"}, first); err != nil || found {
+	if _, found, err := st.AddSessionArtifacts(ctx, "missing", artifactRegistrations("a.md"), first); err != nil || found {
 		t.Fatalf("add for an unknown session: found=%v err=%v", found, err)
 	}
 }
@@ -2578,10 +2578,10 @@ func TestSessionArtifactsAreReadPerSessionAndGoWithTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.AddSessionArtifacts(ctx, one.ID, []string{"a.md"}, time.Now()); err != nil {
+	if _, _, err := st.AddSessionArtifacts(ctx, one.ID, artifactRegistrations("a.md"), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.AddSessionArtifacts(ctx, two.ID, []string{"b.md"}, time.Now()); err != nil {
+	if _, _, err := st.AddSessionArtifacts(ctx, two.ID, artifactRegistrations("b.md"), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.ListSessionArtifactsForSessions(ctx, []domain.SessionID{one.ID, two.ID, "missing"})
@@ -2621,7 +2621,7 @@ func TestSessionArtifactsHaveNoSessionLimit(t *testing.T) {
 	for i := range paths {
 		paths[i] = fmt.Sprintf("f%d.md", i)
 	}
-	got, _, err := st.AddSessionArtifacts(ctx, sess.ID, paths, time.Now())
+	got, _, err := st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations(paths...), time.Now())
 	if err != nil || len(got) != len(paths) {
 		t.Fatalf("registered %d of %d, %v", len(got), len(paths), err)
 	}
@@ -2646,7 +2646,7 @@ func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.AddSessionArtifacts(ctx, sess.ID, []string{"a.html"}, now); err != nil {
+	if _, _, err := st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations("a.html"), now); err != nil {
 		t.Fatal(err)
 	}
 	version := func(path, sha string) {
@@ -2809,4 +2809,12 @@ func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	if got.OutputType != domain.SessionOutputArtifact || got.Metadata.ArtifactDir != "/data/artifacts/x" {
 		t.Fatalf("stale UpdateSession clobbered output columns: type=%q dir=%q", got.OutputType, got.Metadata.ArtifactDir)
 	}
+}
+
+func artifactRegistrations(paths ...string) []domain.SessionArtifactRegistration {
+	out := make([]domain.SessionArtifactRegistration, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, domain.SessionArtifactRegistration{Path: path})
+	}
+	return out
 }

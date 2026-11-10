@@ -161,6 +161,13 @@ type FileIdentity struct {
 	ModTime    int64
 }
 
+// SessionArtifactRegistration is a validated deliverable and the file observed
+// at its path, so registration can recognize a rename before the first scan.
+type SessionArtifactRegistration struct {
+	Path string
+	File FileIdentity
+}
+
 // SameFile reports whether f and other name the same file, and both are
 // complete enough to tell.
 func (f FileIdentity) SameFile(other FileIdentity) bool {

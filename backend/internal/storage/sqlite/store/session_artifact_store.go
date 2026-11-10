@@ -14,10 +14,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// AddSessionArtifacts registers paths as the session's deliverables and returns
-// all of its registered paths, oldest first. Registering a path again changes
-// nothing. It returns false for an unknown session.
-func (s *Store) AddSessionArtifacts(ctx context.Context, id domain.SessionID, paths []string, registeredAt time.Time) ([]string, bool, error) {
+// AddSessionArtifacts registers deliverables with their observed file identity
+// and returns all registered paths, oldest first. Registering a path again keeps
+// its ID and registration time. It returns false for an unknown session.
+func (s *Store) AddSessionArtifacts(ctx context.Context, id domain.SessionID, registrations []domain.SessionArtifactRegistration, registeredAt time.Time) ([]string, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	var registered []string
@@ -27,7 +27,8 @@ func (s *Store) AddSessionArtifacts(ctx context.Context, id domain.SessionID, pa
 		if found, err = q.SessionIDExists(ctx, id); err != nil || !found {
 			return err
 		}
-		for _, path := range paths {
+		for _, registration := range registrations {
+			path := registration.Path
 			if err := q.InsertSessionArtifact(ctx, gen.InsertSessionArtifactParams{
 				ID: uuid.NewString(), SessionID: id, Path: path, CreatedAt: registeredAt,
 			}); err != nil {
@@ -35,6 +36,7 @@ func (s *Store) AddSessionArtifacts(ctx context.Context, id domain.SessionID, pa
 			}
 			if err := q.RegisterSessionArtifact(ctx, gen.RegisterSessionArtifactParams{
 				SessionID: id, Path: path, RegisteredAt: sql.NullTime{Time: registeredAt, Valid: true},
+				FileDev: int64(registration.File.Dev), FileIno: int64(registration.File.Ino), FileBirth: registration.File.Birth, FileGeneration: int64(registration.File.Generation), FileMtime: registration.File.ModTime, //nolint:gosec // stored as SQLite's signed integer and read back the same way
 			}); err != nil {
 				return err
 			}
@@ -81,7 +83,9 @@ func (s *Store) ListSessionArtifactsForSessions(ctx context.Context, ids []domai
 		return nil, fmt.Errorf("list session artifacts: %w", err)
 	}
 	for _, row := range rows {
-		out[row.SessionID] = append(out[row.SessionID], sessionArtifactRecord(row))
+		record := sessionArtifactRecord(row.SessionArtifact)
+		record.HasVersions = row.HasVersions != 0
+		out[record.SessionID] = append(out[record.SessionID], record)
 	}
 	return out, nil
 }

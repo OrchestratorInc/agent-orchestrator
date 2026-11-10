@@ -38,7 +38,7 @@ type Store interface {
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
-	AddSessionArtifacts(ctx context.Context, id domain.SessionID, paths []string, registeredAt time.Time) ([]string, bool, error)
+	AddSessionArtifacts(ctx context.Context, id domain.SessionID, registrations []domain.SessionArtifactRegistration, registeredAt time.Time) ([]string, bool, error)
 	ListSessionArtifactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.SessionArtifactRecord, error)
 	RemoveSessionArtifact(ctx context.Context, id domain.SessionID, path string) error
 	ClearSessionArtifacts(ctx context.Context, id domain.SessionID) error

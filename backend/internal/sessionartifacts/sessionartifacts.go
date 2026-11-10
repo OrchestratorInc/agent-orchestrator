@@ -194,35 +194,35 @@ var (
 	ErrNotRegistrable = errors.New("only a file or a bundle directory can be registered")
 )
 
-// Registrable returns reference's path in dir if it is a regular file or a
-// bundle directory that List can reach.
-func Registrable(dir, reference string) (string, error) {
+// Registrable validates reference and observes its file identity, for a regular
+// file or bundle directory that List can reach.
+func Registrable(dir, reference string) (domain.SessionArtifactRegistration, error) {
 	rel, ok := RelPath(dir, reference)
 	if !ok {
-		return "", ErrOutsideDir
+		return domain.SessionArtifactRegistration{}, ErrOutsideDir
 	}
 	if rel == "." || Skips(rel) {
-		return "", ErrNotRegistrable
+		return domain.SessionArtifactRegistration{}, ErrNotRegistrable
 	}
 	root, err := os.OpenRoot(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", ErrNotFound
+		return domain.SessionArtifactRegistration{}, ErrNotFound
 	}
 	if err != nil {
-		return "", err
+		return domain.SessionArtifactRegistration{}, err
 	}
 	defer func() { _ = root.Close() }()
 	info, err := root.Lstat(filepath.FromSlash(rel))
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", ErrNotFound
+		return domain.SessionArtifactRegistration{}, ErrNotFound
 	}
 	if err != nil {
-		return "", ErrNotRegistrable //nolint:nilerr // os.Root refuses a path that leaves dir
+		return domain.SessionArtifactRegistration{}, ErrNotRegistrable //nolint:nilerr // os.Root refuses a path that leaves dir
 	}
 	if info.Mode().IsRegular() || (info.IsDir() && IsBundleDir(info.Name())) {
-		return rel, nil
+		return domain.SessionArtifactRegistration{Path: rel, File: fullIdentity(filepath.Join(dir, filepath.FromSlash(rel)), info)}, nil
 	}
-	return "", ErrNotRegistrable
+	return domain.SessionArtifactRegistration{}, ErrNotRegistrable
 }
 
 // ListRegistered is List with Registered set on each file that a path in
@@ -282,10 +282,11 @@ func missedFiles(ctx context.Context, dir, rel string, seen map[string]bool, qui
 	if seen[rel] {
 		return nil, nil
 	}
-	path, err := Registrable(dir, rel)
+	registration, err := Registrable(dir, rel)
 	if err != nil {
 		return nil, nil //nolint:nilerr // a path that names nothing listable is ignored, not fatal
 	}
+	path := registration.Path
 	full := filepath.Join(dir, filepath.FromSlash(path))
 	info, err := os.Lstat(full)
 	if err != nil {

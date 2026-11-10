@@ -33,14 +33,16 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 	}
 	dir := cmp.Or(rec.Metadata.ArtifactDir, sessionartifacts.Dir(s.dataDir, id))
 	paths := make([]string, 0, len(references))
+	registrations := make([]domain.SessionArtifactRegistration, 0, len(references))
 	for _, reference := range references {
-		path, err := sessionartifacts.Registrable(dir, reference)
+		registration, err := sessionartifacts.Registrable(dir, reference)
 		if err != nil {
 			return ArtifactRegistration{}, registrationError(reference, err)
 		}
-		paths = append(paths, path)
+		paths = append(paths, registration.Path)
+		registrations = append(registrations, registration)
 	}
-	registered, found, err := s.store.AddSessionArtifacts(ctx, id, paths, s.clock())
+	registered, found, err := s.store.AddSessionArtifacts(ctx, id, registrations, s.clock())
 	if err != nil {
 		return ArtifactRegistration{}, err
 	}

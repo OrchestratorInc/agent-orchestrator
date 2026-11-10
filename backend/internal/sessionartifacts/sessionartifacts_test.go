@@ -274,8 +274,8 @@ func TestRegistrable(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Registrable(dir, tc.reference)
-			if !errors.Is(err, tc.err) || got != tc.want {
-				t.Fatalf("Registrable(%q) = %q, %v, want %q, %v", tc.reference, got, err, tc.want, tc.err)
+			if !errors.Is(err, tc.err) || got.Path != tc.want {
+				t.Fatalf("Registrable(%q) = %q, %v, want %q, %v", tc.reference, got.Path, err, tc.want, tc.err)
 			}
 		})
 	}

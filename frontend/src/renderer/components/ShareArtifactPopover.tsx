@@ -151,9 +151,11 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, child
 
 /**
  * Whether the file changed since it was published to a link that is still
- * active: what Republish would put on that link. The local fingerprint is
- * checked first; the link list is asked for only when it differs. Checked
- * again whenever `revision` changes.
+ * active: what Republish would put on that link, its newer content or its new
+ * name. The local fingerprint is checked first, and the link list is asked
+ * for only when it differs, or for a file named by its artifact ID: only such
+ * a file keeps its link through a rename, and only the link says what name it
+ * was published under. Checked again whenever `revision` changes.
  */
 function usePublishedOutdated(file: CloudShareFile | null, revision: string): boolean {
 	const [outdated, setOutdated] = useState(false);
@@ -163,9 +165,12 @@ function usePublishedOutdated(file: CloudShareFile | null, revision: string): bo
 		let cancelled = false;
 		void (async () => {
 			const inspection = await aoBridge.cloudShare.inspect(file);
-			if (!inspection.shareId || !inspection.publishedFingerprint || inspection.publishedFingerprint === inspection.fingerprint) return false;
+			if (!inspection.shareId || !inspection.publishedFingerprint) return false;
+			const changed = inspection.publishedFingerprint !== inspection.fingerprint;
+			if (!changed && !file.artifactId) return false;
 			const links = await aoBridge.cloudShare.list(file.baseUrl);
-			return links.shares.some((share) => share.id === inspection.shareId && !share.revokedAt);
+			const share = links.shares.find((candidate) => candidate.id === inspection.shareId && !candidate.revokedAt);
+			return Boolean(share && (changed || share.name !== inspection.name));
 		})()
 			.catch(() => false)
 			.then((result) => {
@@ -340,9 +345,9 @@ function SharePanel({
 				if (inspection.unsupported) return setPhase({ kind: "unsupported" });
 				// The link this file was published to from here, while it is active.
 				const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
-				// The file changed since it was published here: the link still
-				// serves what it held then.
-				const outdated = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
+				// The link may still have the old content or the old filename.
+				const outdated = Boolean(current && (current.name !== inspection.name ||
+					(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint)));
 				if (current) {
 					// The Republish click, like Publish, needs no second one, unless the newer version looks like it holds a credential.
 					if (publishNow && republishOnOpen && outdated && inspection.secretFindings.length === 0) return void publish(inspection, links, current);

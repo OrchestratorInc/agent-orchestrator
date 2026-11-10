@@ -183,6 +183,21 @@ describe("ShareArtifactButton", () => {
 		expect(screen.queryByRole("button", { name: "Republish: report.html" })).toBeNull();
 	});
 
+	it("says Republish after a pure rename, and one click updates the same link under the new name", async () => {
+		const renamed = { ...file, path: "docs/final.html", artifactId: "art-1" };
+		const { publishSpy } = stub(
+			{ ...inspection, name: "final.html", shareId: SHARE_ID, publishedFingerprint: inspection.fingerprint },
+			{ ...links, shares: [share] },
+			{ status: "published", replaced: true, share: { ...share, name: "final.html" } },
+		);
+		render(<TooltipProvider><ShareArtifactButton file={renamed} name="final.html" /></TooltipProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Republish: final.html" }));
+		await waitFor(() => expect(publishSpy).toHaveBeenCalledExactlyOnceWith({
+			...renamed, baseUrl: "https://cp.test", fingerprint: inspection.fingerprint, shareId: SHARE_ID,
+		}));
+		expect(await screen.findByRole("textbox", { name: "Public link" })).toHaveValue(share.viewerUrl);
+	});
+
 	it("offers Republish beside Unpublish in the panel when the file changed, and it updates the same link", async () => {
 		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "published", replaced: true, share });
 		await openMenuPanel();

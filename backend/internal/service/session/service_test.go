@@ -382,14 +382,15 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	return r, ok, nil
 }
 
-func (f *fakeStore) AddSessionArtifacts(_ context.Context, id domain.SessionID, paths []string, _ time.Time) ([]string, bool, error) {
+func (f *fakeStore) AddSessionArtifacts(_ context.Context, id domain.SessionID, registrations []domain.SessionArtifactRegistration, _ time.Time) ([]string, bool, error) {
 	if _, ok := f.sessions[id]; !ok {
 		return nil, false, nil
 	}
 	if f.artifacts == nil {
 		f.artifacts = map[domain.SessionID][]string{}
 	}
-	for _, path := range paths {
+	for _, registration := range registrations {
+		path := registration.Path
 		if !slices.Contains(f.artifacts[id], path) {
 			f.artifacts[id] = append(f.artifacts[id], path)
 		}

@@ -11,9 +11,14 @@ WHERE a.session_id = sqlc.arg(session_id)
 ORDER BY a.path;
 
 -- name: ListSessionArtifactsForSessions :many
-SELECT * FROM session_artifacts
-WHERE session_id IN (SELECT CAST(j.value AS TEXT) FROM json_each(?) AS j)
-ORDER BY session_id, path;
+SELECT sqlc.embed(a),
+    CAST(EXISTS (
+        SELECT 1 FROM session_artifact_versions AS v
+        WHERE v.session_id = a.session_id AND v.path = a.path
+    ) AS INTEGER) AS has_versions
+FROM session_artifacts AS a
+WHERE a.session_id IN (SELECT CAST(j.value AS TEXT) FROM json_each(?) AS j)
+ORDER BY a.session_id, a.path;
 
 -- name: InsertSessionArtifact :exec
 INSERT INTO session_artifacts (
@@ -24,7 +29,9 @@ ON CONFLICT (session_id, path) DO NOTHING;
 
 -- name: RegisterSessionArtifact :exec
 UPDATE session_artifacts
-SET registered_at = COALESCE(registered_at, sqlc.arg(registered_at))
+SET registered_at = COALESCE(registered_at, sqlc.arg(registered_at)),
+    file_dev = sqlc.arg(file_dev), file_ino = sqlc.arg(file_ino), file_birth = sqlc.arg(file_birth),
+    file_generation = sqlc.arg(file_generation), file_mtime = sqlc.arg(file_mtime)
 WHERE session_id = sqlc.arg(session_id) AND path = sqlc.arg(path);
 
 -- name: ListRegisteredSessionArtifactPaths :many
