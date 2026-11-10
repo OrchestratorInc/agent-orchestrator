@@ -386,7 +386,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				open={archiveOpen}
 				resetKey={scopeKey}
 				sessions={archived}
-				showProject={!projectId}
 			/>
 			{showStartup ? <DaemonStartupLoader /> : null}
 		</div>

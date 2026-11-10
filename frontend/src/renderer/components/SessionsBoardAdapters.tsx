@@ -157,6 +157,7 @@ export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSessi
 export function ArchivedSessionCardAdapter({
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
+	onDelete,
 	isRestoring,
 	restoreAction,
 	restoreError,
@@ -164,6 +165,8 @@ export function ArchivedSessionCardAdapter({
 }: {
 	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
+	/** Asks the host to confirm the delete, for a card inside a list that owns its keys. */
+	onDelete?: () => void;
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
@@ -183,7 +186,7 @@ export function ArchivedSessionCardAdapter({
 						onClick={restoreAction}
 					/>
 					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
-					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} session={session} />}
+					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} onRequest={onDelete} session={session} />}
 				</div>
 			}
 			branchAction={
@@ -701,7 +704,16 @@ function toResourcePresentation(
  * up first the way session cleanup does it, never forced: uncommitted work
  * refuses the delete, and the dialog says why.
  */
-function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; session: WorkspaceSession }) {
+function ArchiveDeleteButton({
+	isDisabled,
+	onRequest,
+	session,
+}: {
+	isDisabled: boolean;
+	/** When set, the host shows the confirm instead of this button. */
+	onRequest?: () => void;
+	session: WorkspaceSession;
+}) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	return (
@@ -717,7 +729,8 @@ function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; ses
 							disabled={isDisabled}
 							onClick={(event) => {
 								event.stopPropagation();
-								setOpen(true);
+								if (onRequest) onRequest();
+								else setOpen(true);
 							}}
 							type="button"
 						>
@@ -727,7 +740,7 @@ function ArchiveDeleteButton({ isDisabled, session }: { isDisabled: boolean; ses
 				</TooltipTrigger>
 				<TooltipContent side="top">{t("shell.deleteSession")}</TooltipContent>
 			</Tooltip>
-			<DeleteArchivedSessionDialog onOpenChange={setOpen} open={open} session={session} />
+			{onRequest ? null : <DeleteArchivedSessionDialog onOpenChange={setOpen} open={open} session={session} />}
 		</>
 	);
 }

@@ -1016,7 +1016,7 @@ describe("SessionsBoard", () => {
 		expect(p2Lane).toHaveTextContent("p2 active");
 	});
 
-	it("opens the archive as a searchable modal of compact rows", async () => {
+	it("opens the archive as a searchable modal of session cards", async () => {
 		const archivedSession = terminatedSession();
 		const mergedPr = archivedSession.prs[0];
 		if (!mergedPr) throw new Error("Archived-session fixture requires a pull request");
@@ -1048,14 +1048,22 @@ describe("SessionsBoard", () => {
 		expect(search).toHaveFocus();
 		const row = within(archive).getByText("dead worker").closest<HTMLElement>("[cmdk-item]");
 		expect(row).not.toBeNull();
-		expect(row).not.toHaveAttribute("data-testid", "board-session-card");
-		expect(within(row!).getByRole("img", { name: "claude-code" })).toBeInTheDocument();
-		expect(within(row!).getByText("ao/dead-worker")).toBeInTheDocument();
-		expect(within(row!).getByText("merged")).toHaveClass("sr-only");
-		expect(within(row!).getByText("open")).toHaveClass("sr-only");
-		expect(within(row!).queryByText("Terminated")).not.toBeInTheDocument();
-		expect(within(row!).getByRole("button", { name: "Restore dead worker" })).toBeInTheDocument();
-		expect(within(row!).getByRole("button", { name: "Delete dead worker permanently" })).toBeInTheDocument();
+		const card = within(row!).getByTestId("board-session-card");
+		expect(within(card).getByRole("img", { name: "claude-code" })).toBeInTheDocument();
+		expect(within(card).getByText("ao/dead-worker")).toBeInTheDocument();
+		expect(within(card).getByText("Terminated")).toBeInTheDocument();
+		expect(within(card).getByTestId("session-pr-progress")).toHaveTextContent("1 of 2 PRs merged · 1 open");
+		expect(within(card).getByRole("link", { name: "PR #42 merged" })).toHaveAttribute(
+			"href",
+			"https://github.com/example/radic/pull/42",
+		);
+		expect(within(card).getByRole("button", { name: "Copy branch ao/dead-worker" })).toBeInTheDocument();
+		expect(within(card).getByRole("button", { name: "Restore dead worker" })).toBeInTheDocument();
+		expect(within(card).getByRole("button", { name: "Delete dead worker permanently" })).toBeInTheDocument();
+
+		// The card's own controls act alone; they never open the session.
+		await userEvent.click(within(card).getByRole("button", { name: "Copy branch ao/dead-worker" }));
+		expect(navigateMock).not.toHaveBeenCalled();
 
 		await userEvent.type(search, "#41");
 		await waitFor(() => expect(within(archive).queryByText("other worker")).not.toBeInTheDocument());

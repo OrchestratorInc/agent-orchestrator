@@ -1,65 +1,30 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type UIEvent } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent, type SyntheticEvent, type UIEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import {
-	GitMerge,
-	GitPullRequest,
-	GitPullRequestClosed,
-	GitPullRequestDraft,
-	LoaderCircle,
-	RotateCcw,
-	Trash2,
-} from "@/components/app-icons";
-import type { PRState, WorkspaceSession } from "../types/workspace";
+import { Command as CommandPrimitive } from "cmdk";
+import type { WorkspaceSession } from "../types/workspace";
 import { agentLabel } from "../lib/agent-options";
-import { formatTimeCompact } from "../lib/format-time";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { isMacPlatform } from "../lib/platform";
-import { cn } from "../lib/utils";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { AgentAvatar } from "./AgentAvatar";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
-import { DeleteArchivedSessionDialog } from "./SessionsBoardAdapters";
-import { Button } from "./ui/button";
+import { ArchivedSessionCardAdapter, DeleteArchivedSessionDialog } from "./SessionsBoardAdapters";
 import {
 	CommandDialog,
 	CommandEmpty,
 	CommandFooter,
 	CommandInput,
-	CommandItem,
 	CommandList,
 	CommandShortcut,
 } from "./ui/command";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const isMac = isMacPlatform();
 const MOD_KEY = isMac ? "⌘" : "Ctrl";
-/** Rows mounted at a time; scrolling or arrowing near the end mounts the next page. */
-const PAGE_SIZE = 60;
-
-const PR_STATE_ICON = {
-	closed: GitPullRequestClosed,
-	draft: GitPullRequestDraft,
-	merged: GitMerge,
-	open: GitPullRequest,
-} as const satisfies Record<PRState, unknown>;
-
-const PR_STATE_LABEL = {
-	closed: "pr.state.closed",
-	draft: "pr.state.draft",
-	merged: "pr.state.merged",
-	open: "pr.state.open",
-} as const satisfies Record<PRState, string>;
-
-const PR_STATE_CLASS: Record<PRState, string> = {
-	closed: "text-error!",
-	draft: "text-passive!",
-	merged: "text-status-merged!",
-	open: "text-success!",
-};
+/** Cards mounted at a time; scrolling or arrowing near the end mounts the next page. */
+const PAGE_SIZE = 24;
 
 /** Everything a search can match, lowercased once per session. */
 function searchText(session: WorkspaceSession): string {
@@ -77,7 +42,7 @@ function searchText(session: WorkspaceSession): string {
 }
 
 /**
- * The board's archive: a searchable list of ended sessions in the Cmd+K
+ * The board's archive: a searchable grid of ended-session cards in the Cmd+K
  * surface. Sessions arrive newest first. Restore state lives here, and
  * in-flight restores are dropped when the board scope changes or this
  * unmounts so a late completion cannot navigate after the user left.
@@ -90,7 +55,6 @@ export function SessionArchiveModal({
 	open,
 	resetKey,
 	sessions,
-	showProject,
 }: {
 	connected: boolean;
 	hostId?: string;
@@ -100,8 +64,6 @@ export function SessionArchiveModal({
 	/** The board scope; a change drops restore state. */
 	resetKey: string;
 	sessions: WorkspaceSession[];
-	/** Name each row's project, for a board that spans projects. */
-	showProject: boolean;
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -248,21 +210,37 @@ export function SessionArchiveModal({
 					onKeyDown={onInputKeyDown}
 					placeholder={t("archiveModal.searchPlaceholder")}
 				/>
-				<CommandList onScroll={onListScroll}>
-					<CommandEmpty>{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}</CommandEmpty>
+				<CommandList
+					onScroll={onListScroll}
+					className="max-h-[min(640px,60vh)] px-[var(--size-command-item-inset)] pt-1 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] [&_[cmdk-list-sizer]]:items-start [&_[cmdk-list-sizer]]:gap-2"
+				>
+					<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
+						{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
+					</CommandEmpty>
 					{shown.map((session) => (
-						<ArchiveRow
+						<CommandPrimitive.Item
 							key={session.id}
-							canDelete={canDelete(session)}
-							canRestore={restoreAvailable}
-							error={restoreErrors[session.id]}
-							onDelete={() => setDeleteTarget(session)}
-							onOpen={() => openSession(session)}
-							onRestore={() => void restore(session)}
-							restoring={restoringSessionId === session.id}
-							session={session}
-							showProject={showProject}
-						/>
+							value={session.id}
+							onSelect={() => openSession(session)}
+							data-testid="session-archive-card"
+							className="cursor-pointer rounded-lg outline-none data-[selected=true]:[&_[data-testid=board-session-card]]:border-border-strong data-[selected=true]:[&_[data-testid=board-session-card]]:bg-interactive-hover"
+						>
+							{/* The card's own buttons and links act alone: a click or key on
+							    them must not also open the session or move the selection. */}
+							<div onClick={keepInsideControl} onKeyDown={keepInsideControl}>
+								<ArchivedSessionCardAdapter
+									isRestoreDisabled={!restoreAvailable}
+									isRestoring={restoringSessionId === session.id}
+									onDelete={canDelete(session) ? () => setDeleteTarget(session) : undefined}
+									restoreAction={(event) => {
+										event.stopPropagation();
+										void restore(session);
+									}}
+									restoreError={restoreErrors[session.id]}
+									session={session}
+								/>
+							</div>
+						</CommandPrimitive.Item>
 					))}
 				</CommandList>
 				<CommandFooter aria-hidden="true">
@@ -314,142 +292,6 @@ function FooterHint({ keys, label }: { keys: readonly string[]; label: string })
 	);
 }
 
-/**
- * One archived session: harness, title, a quiet line with branch, PRs and
- * project, and the time it ended. Restore and delete show on hover or when the
- * row is selected; the keyboard reaches them through ⌘↵ and ⌘⌫.
- */
-function ArchiveRow({
-	canDelete,
-	canRestore,
-	error,
-	onDelete,
-	onOpen,
-	onRestore,
-	restoring,
-	session,
-	showProject,
-}: {
-	canDelete: boolean;
-	canRestore: boolean;
-	error?: string;
-	onDelete: () => void;
-	onOpen: () => void;
-	onRestore: () => void;
-	restoring: boolean;
-	session: WorkspaceSession;
-	showProject: boolean;
-}) {
-	const { t } = useTranslation();
-	const branch = sessionBranchPresentation(session).branch;
-	const meta = branch || session.prs.length > 0 || showProject;
-	return (
-		<CommandItem value={session.id} onSelect={onOpen} data-testid="session-archive-row">
-			<AgentAvatar provider={session.provider} className="size-icon-base" />
-			<span className="flex min-w-0 flex-1 flex-col">
-				<span className="truncate">{session.title}</span>
-				{error ? (
-					<span className="truncate text-caption text-destructive" role="alert">{error}</span>
-				) : meta ? (
-					<span className="flex min-w-0 items-center gap-2 text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">
-						{branch ? <span className="min-w-0 truncate font-mono">{branch}</span> : null}
-						{session.prs.map((pr) => {
-							const Icon = PR_STATE_ICON[pr.state];
-							return (
-								<span key={pr.url || pr.number} className="inline-flex shrink-0 items-center gap-1 tabular-nums">
-									<Icon className={cn("size-icon-2xs!", PR_STATE_CLASS[pr.state])} aria-hidden="true" />
-									#{pr.number}
-									<span className="sr-only">{t(PR_STATE_LABEL[pr.state])}</span>
-								</span>
-							);
-						})}
-						{showProject ? <span className="min-w-0 shrink truncate">{session.workspaceName}</span> : null}
-					</span>
-				) : null}
-			</span>
-			<span
-				className={cn(
-					"flex shrink-0 items-center gap-0.5",
-					restoring
-						? "opacity-100"
-						: "opacity-0 group-hover/command-item:opacity-100 group-data-[selected=true]/command-item:opacity-100",
-				)}
-			>
-				<RowAction
-					disabled={!canRestore}
-					label={t("shell.restoreNamed", { title: session.title })}
-					onClick={onRestore}
-					shortcut="Meta+Enter"
-					tooltip={restoring ? t("shell.restoringSession") : t("shell.restoreSession")}
-					variant="quiet"
-				>
-					{restoring ? (
-						<LoaderCircle className="size-icon-md! animate-spin text-current!" aria-hidden="true" />
-					) : (
-						<RotateCcw className="size-icon-md! text-current!" aria-hidden="true" />
-					)}
-				</RowAction>
-				{session.cloud ? null : (
-					<RowAction
-						disabled={!canDelete}
-						label={t("shell.deleteSessionNamed", { title: session.title })}
-						onClick={onDelete}
-						shortcut="Meta+Backspace"
-						tooltip={t("shell.deleteSession")}
-						variant="destructive-ghost"
-					>
-						<Trash2 className="size-icon-md! text-current!" aria-hidden="true" />
-					</RowAction>
-				)}
-			</span>
-			<span className="min-w-14 shrink-0 text-right text-caption tabular-nums text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">
-				{formatTimeCompact(session.updatedAt)}
-			</span>
-		</CommandItem>
-	);
-}
-
-function RowAction({
-	children,
-	disabled,
-	label,
-	onClick,
-	shortcut,
-	tooltip,
-	variant,
-}: {
-	children: ReactNode;
-	disabled: boolean;
-	label: string;
-	onClick: () => void;
-	shortcut: string;
-	tooltip: string;
-	variant: "quiet" | "destructive-ghost";
-}) {
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<span className="inline-flex">
-					<Button
-						aria-keyshortcuts={shortcut}
-						aria-label={label}
-						disabled={disabled}
-						// The search field keeps focus; the row's keys reach these actions.
-						tabIndex={-1}
-						onClick={(event) => {
-							// The row opens the session on click; this action is not that.
-							event.stopPropagation();
-							onClick();
-						}}
-						size="icon-xs"
-						type="button"
-						variant={variant}
-					>
-						{children}
-					</Button>
-				</span>
-			</TooltipTrigger>
-			<TooltipContent side="top">{tooltip}</TooltipContent>
-		</Tooltip>
-	);
+function keepInsideControl(event: SyntheticEvent) {
+	if (event.target instanceof Element && event.target.closest("a, button")) event.stopPropagation();
 }
