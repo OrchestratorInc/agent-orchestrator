@@ -28,7 +28,7 @@ import {
 	LoaderCircle,
 	Download,
 	LayoutGrid,
-	File,
+	Package,
 	Folder,
 	FolderOpen,
 	LogIn,
@@ -1162,7 +1162,7 @@ export function Sidebar({
 					<SidebarMenuItem>
 						<SidebarTopNavRow
 							active={selection.isArtifacts}
-							icon={<File aria-hidden="true" />}
+							icon={<Package aria-hidden="true" />}
 							label={t("artifacts.title")}
 							onClick={selection.goArtifacts}
 							tooltip={isCollapsed ? t("artifacts.title") : undefined}

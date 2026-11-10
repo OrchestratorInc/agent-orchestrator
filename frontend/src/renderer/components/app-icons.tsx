@@ -145,6 +145,8 @@ import {
 	Zap as MynaZap,
 	Chat as MynaChat,
 	Package as MynaPackage,
+	Filter as MynaFilter,
+	SelectMultiple as MynaSelectMultiple,
 } from "@mynaui/icons-react";
 import {
 	Bot as LucideBot,
@@ -336,6 +338,7 @@ export const FilePen = fromLucide(LucideFilePen, "file-pen");
 export const FilePlus = fromMyna(MynaFilePlus, "file-plus");
 export const FileSearch = fromLucide(LucideFileSearch, "file-search");
 export const FileText = fromMyna(MynaFileText, "file-text");
+export const Filter = fromMyna(MynaFilter, "filter");
 export const FlaskConical = fromMyna(MynaFlaskConical, "flask-conical");
 export const Folder = fromMyna(MynaFolder, "folder");
 export const FolderClosed = fromMyna(MynaFolder, "folder-closed");
@@ -432,6 +435,7 @@ export const Save = fromMyna(MynaSave, "save");
 export const ScanSearch = fromLucide(LucideScanSearch, "scan-search");
 export const ScrollText = fromLucide(LucideScrollText, "scroll-text");
 export const Search = fromMyna(MynaSearch, "search");
+export const SelectMultiple = fromMyna(MynaSelectMultiple, "select-multiple");
 export const SearchCheck = fromMyna(MynaSearchCheck, "search-check");
 export const SearchX = fromMyna(MynaSearchX, "search-x");
 export const Send = fromMyna(MynaSend, "send");
