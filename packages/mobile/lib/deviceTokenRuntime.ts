@@ -1,7 +1,7 @@
 import * as Device from "expo-device";
 import type { ConnectDeps } from "./connect";
 import type { ServerConfig } from "./config";
-import { checkDeviceToken, pairDevice, type PairDeviceResult } from "./deviceToken";
+import { pairDevice, type PairDeviceResult } from "./deviceToken";
 import { updateHostToken } from "./hosts";
 
 // Machines that answered they have no device tokens, and when to ask again.
@@ -25,10 +25,9 @@ export async function pairThisDevice(config: ServerConfig, options: { fresh?: bo
 }
 
 /** The device-token part of the production dependency set for connectHost. */
-export function deviceTokenConnectDeps(): Pick<ConnectDeps, "pair" | "checkToken" | "saveToken"> {
+export function deviceTokenConnectDeps(): Pick<ConnectDeps, "pair" | "saveToken"> {
 	return {
 		pair: (config) => pairThisDevice(config),
-		checkToken: (config) => checkDeviceToken(config),
 		saveToken: (hostId, token, fallbackToken) => updateHostToken(hostId, token, fallbackToken),
 	};
 }

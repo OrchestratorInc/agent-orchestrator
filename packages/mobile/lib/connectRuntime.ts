@@ -134,6 +134,15 @@ export async function rejectedEndpointNeedsRace(cfg: ServerConfig, status: numbe
  */
 export const ENDPOINT_REFRESH_TIMEOUT_MS = 5_000;
 
+/** The daemon answered the endpoint refresh with an HTTP error. code is the
+ * daemon's error code, such as DEVICE_REVOKED, when it sent one. */
+export class EndpointRefreshError extends Error {
+	constructor(readonly status: number, readonly code?: string) {
+		super(`endpoint refresh returned ${status}`);
+		this.name = "EndpointRefreshError";
+	}
+}
+
 /**
  * Re-reads what the daemon advertises now.
  *
@@ -153,7 +162,10 @@ export async function fetchAdvertisedEndpoints(config: ServerConfig): Promise<En
 			},
 			signal: controller.signal,
 		});
-		if (!res.ok) throw new Error(`endpoint refresh returned ${res.status}`);
+		if (!res.ok) {
+			const body = (await res.json().catch(() => null)) as { code?: unknown } | null;
+			throw new EndpointRefreshError(res.status, typeof body?.code === "string" ? body.code : undefined);
+		}
 		const body = (await res.json()) as { endpoints?: Endpoint[] };
 		return body.endpoints ?? [];
 	} finally {

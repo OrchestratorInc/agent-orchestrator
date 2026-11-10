@@ -70,24 +70,3 @@ export async function pairDevice(
 		clearTimeout(timeout);
 	}
 }
-
-/**
- * What the machine says about the token in config. "revoked" means it removed
- * this phone. "refused" is any other 401: a machine that does not know device
- * tokens, as after a rollback to an older release.
- */
-export async function checkDeviceToken(config: ServerConfig, fetchImpl: typeof fetch = fetch): Promise<"ok" | "revoked" | "refused" | "unknown"> {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), PAIR_DEVICE_TIMEOUT_MS);
-	try {
-		const response = await fetchImpl(`${base(config)}/api/v1/endpoints`, { headers: headers(config), signal: controller.signal });
-		if (response.ok) return "ok";
-		if (response.status !== 401) return "unknown";
-		const body = (await response.json().catch(() => ({}))) as { code?: unknown };
-		return body.code === "DEVICE_REVOKED" ? "revoked" : "refused";
-	} catch {
-		return "unknown";
-	} finally {
-		clearTimeout(timeout);
-	}
-}

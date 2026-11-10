@@ -35,7 +35,8 @@ export type ConnectResult =
 export type ConnectDeps = {
 	findHost: (id: string) => Promise<Host | null>;
 	race: (host: Host) => Promise<RaceOutcome>;
-	/** Asks the daemon what it advertises now, over the endpoint that just won. */
+	/** Asks the daemon what it advertises now, over the endpoint that just won.
+	 * An HTTP error rejects with its `status` and the daemon's error `code`. */
 	refreshEndpoints: (config: ServerConfig) => Promise<Endpoint[]>;
 	saveEndpoints: (hostId: string, endpoints: Endpoint[]) => Promise<void>;
 	/** Records the identity a machine reported that had none stored. */
@@ -43,8 +44,6 @@ export type ConnectDeps = {
 	touch: (hostId: string) => Promise<void>;
 	/** Exchanges the pairing password in config for this phone's own token. */
 	pair?: (config: ServerConfig) => Promise<PairDeviceResult>;
-	/** What the machine says about the device token in config. */
-	checkToken?: (config: ServerConfig) => Promise<"ok" | "revoked" | "refused" | "unknown">;
 	/** Saves a machine's token and the pairing password kept as its fallback. */
 	saveToken?: (hostId: string, token: string, fallbackToken?: string) => Promise<void>;
 };
@@ -76,42 +75,50 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
 
-	if (deps.saveToken) {
-		let token = host.token;
-		// The machine no longer takes this phone's token. Unless it says the
-		// phone was removed, it is a release without device tokens, as after a
-		// rollback: the pairing password this phone kept works there.
-		if (host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && deps.checkToken && await deps.checkToken(config) === "refused") {
-			token = host.fallbackToken;
-			await deps.saveToken(hostKey, token);
-			config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
-		}
-		// Swap a pairing password for this phone's own token, keeping the
-		// password as the fallback.
-		if (deps.pair && isPairingSecret(token)) {
-			const paired = await deps.pair(config);
-			if (paired.kind === "paired") {
-				await deps.saveToken(hostKey, paired.token, paired.credential === "password" ? token : undefined);
-				config = configForEndpoint(outcome.endpoint, paired.token, hostKeyForConfig);
-			}
-		}
-	}
-
-	try {
+	let token = host.token;
+	// Swap a pairing password for this phone's own token, keeping the password
+	// as the fallback.
+	const swapPairingPassword = async () => {
+		if (!deps.saveToken || !deps.pair || !isPairingSecret(token)) return;
+		const paired = await deps.pair(config);
+		if (paired.kind !== "paired") return;
+		await deps.saveToken(hostKey, paired.token, paired.credential === "password" ? token : undefined);
+		token = paired.token;
+		config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+	};
+	const refreshEndpoints = async () => {
 		const advertised = await deps.refreshEndpoints(config);
 		// The daemon cannot advertise a client-side NAT or proxy address that just worked.
 		const refreshed = advertised.some((e) => e.kind === outcome.endpoint.kind) &&
 			!advertised.some((e) => e.kind === outcome.endpoint.kind && e.host === outcome.endpoint.host && e.port === outcome.endpoint.port && e.secure === outcome.endpoint.secure)
 			? [...advertised, outcome.endpoint] : advertised;
-		// Merged, not replaced: a kind the daemon omits — a tunnel mid-restart,
-		// above all — is unknown rather than gone. See mergeEndpoints.
+		// Merged, not replaced: a kind the daemon omits, a tunnel mid-restart
+		// above all, is unknown rather than gone. See mergeEndpoints.
 		await deps.saveEndpoints(
 			hostKey,
 			mergeEndpoints(host.endpoints, refreshed),
 		);
-	} catch {
+	};
+
+	await swapPairingPassword();
+	try {
+		await refreshEndpoints();
+	} catch (error) {
 		// A failed refresh must not cost us a working connection: the endpoints
 		// already stored are what got us here and remain good enough.
+		//
+		// One failure is acted on. The machine answered 401 to this phone's own
+		// token without saying the phone was removed: it is a release without
+		// device tokens, as after a rollback, and the pairing password this phone
+		// kept works there.
+		const { status, code } = (typeof error === "object" && error !== null ? error : {}) as { status?: unknown; code?: unknown };
+		if (deps.saveToken && host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && status === 401 && code !== "DEVICE_REVOKED") {
+			token = host.fallbackToken;
+			await deps.saveToken(hostKey, token);
+			config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+			await swapPairingPassword();
+			await refreshEndpoints().catch(() => {});
+		}
 	}
 	await deps.touch(hostKey);
 

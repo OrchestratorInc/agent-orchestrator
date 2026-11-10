@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ServerConfig } from "./config";
-import { checkDeviceToken, isPairingSecret, pairDevice } from "./deviceToken";
+import { isPairingSecret, pairDevice } from "./deviceToken";
 
 const config: ServerConfig = { host: "192.168.1.42", httpPort: "3011", muxPort: "14801", secure: false, password: "Code1234", hostId: "h_paired" };
 const device = { name: "Test phone", platform: "ios" };
@@ -48,15 +48,5 @@ describe("pairDevice", () => {
 		await expect(pairDevice(config, device, answer(200, { hostId: "h_other", token }))).resolves.toEqual({ kind: "offline" });
 		await expect(pairDevice(config, device, answer(200, { hostId: "h_paired", token: "b".repeat(64) }))).resolves.toEqual({ kind: "offline" });
 		await expect(pairDevice(config, device, unreachable)).resolves.toEqual({ kind: "offline" });
-	});
-});
-
-describe("checkDeviceToken", () => {
-	it("tells a removed phone from a machine that does not know device tokens", async () => {
-		await expect(checkDeviceToken(config, answer(200, { endpoints: [] }))).resolves.toBe("ok");
-		await expect(checkDeviceToken(config, answer(401, { code: "DEVICE_REVOKED" }))).resolves.toBe("revoked");
-		await expect(checkDeviceToken(config, answer(401, { code: "BAD_PASSWORD" }))).resolves.toBe("refused");
-		await expect(checkDeviceToken(config, answer(503))).resolves.toBe("unknown");
-		await expect(checkDeviceToken(config, unreachable)).resolves.toBe("unknown");
 	});
 });
