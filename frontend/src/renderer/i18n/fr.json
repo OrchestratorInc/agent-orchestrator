@@ -1588,6 +1588,7 @@
 	"settings.project.general": "Général",
 	"settings.project.agent": "Agent",
 	"settings.project.agents": "Agents",
+	"settings.project.agentsRequired": "Les agents worker et orchestrateur sont obligatoires.",
 	"settings.project.childReposEmpty": "Aucun dépôt enfant n'est enregistré.",
 	"settings.project.default": "Paramètre du projet",
 	"settings.project.defaultBranch": "Branche par défaut",
