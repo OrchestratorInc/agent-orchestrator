@@ -19,11 +19,6 @@ func (u freshUsageSummary) ListCompact(ctx context.Context, projectID domain.Pro
 	return u.SummaryReader.ListCompact(ctx, projectID)
 }
 
-func (u freshUsageSummary) Get(ctx context.Context, sessionID domain.SessionID) (domain.SessionUsageSummary, error) {
-	u.pipeline.Flush(ctx)
-	return u.SummaryReader.Get(ctx, sessionID)
-}
-
 type freshUsageReport struct {
 	*usagesvc.ReportReader
 	pipeline *usagepipeline.Pipeline

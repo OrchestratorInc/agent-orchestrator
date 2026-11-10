@@ -20,7 +20,6 @@ import (
 // UsageSummaryService is the controller-facing compact usage read contract.
 type UsageSummaryService interface {
 	ListCompact(context.Context, domain.ProjectID) ([]domain.CompactSessionUsage, error)
-	Get(context.Context, domain.SessionID) (domain.SessionUsageSummary, error)
 }
 
 // UsageReportService builds the usage page's report.
@@ -91,7 +90,6 @@ func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
 	r.Get("/usage/memory/pressure", c.getPressure)
-	r.Get("/usage/sessions/{sessionId}", c.getSession)
 }
 
 func (c *UsageController) setLimitHistory(w http.ResponseWriter, r *http.Request) {
@@ -371,49 +369,6 @@ func sessionMemoryResponse(item domain.SessionMemory) SessionMemoryResponse {
 	return SessionMemoryResponse{
 		SessionID: item.SessionID, RSSBytes: item.RSSBytes, ProcessCount: item.ProcessCount, CPUPercent: item.CPUPercent,
 		SampledAt: item.SampledAt, Processes: procs,
-	}
-}
-
-func (c *UsageController) getSession(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/sessions/{sessionId}")
-		return
-	}
-	summary, err := c.Svc.Get(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")))
-	if err != nil {
-		c.Log.WarnContext(r.Context(), "failed to get session usage", "error", err)
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, sessionUsageResponse(summary))
-}
-
-func sessionUsageResponse(summary domain.SessionUsageSummary) SessionUsageResponse {
-	harnesses := make([]UsageHarnessResponse, 0, len(summary.Harnesses))
-	for _, harness := range summary.Harnesses {
-		models := make([]UsageModelResponse, 0, len(harness.Models))
-		for _, model := range harness.Models {
-			models = append(models, UsageModelResponse{
-				ModelID: model.ModelID, Totals: usageTotalsResponse(model.Totals),
-			})
-		}
-		harnesses = append(harnesses, UsageHarnessResponse{
-			Harness: string(harness.Harness), Totals: usageTotalsResponse(harness.Totals), Models: models,
-		})
-	}
-	return SessionUsageResponse{
-		SessionID: summary.SessionID, Incomplete: summary.Incomplete,
-		Totals: usageTotalsResponse(summary.Totals), Harnesses: harnesses,
-	}
-}
-
-func usageTotalsResponse(totals domain.UsageMetricTotals) UsageTotalsResponse {
-	return UsageTotalsResponse{
-		InputTokens: totals.InputTokens, CachedInputTokens: totals.CachedInputTokens,
-		UncachedInputTokens: totals.UncachedInputTokens,
-		OutputTokens:        totals.OutputTokens, ProcessedTokens: totals.ProcessedTokens,
-		CacheReadTokens: totals.CachedInputTokens,
-		EstimatedCost:   estimatedCostResponse(totals.EstimatedCost),
 	}
 }
 

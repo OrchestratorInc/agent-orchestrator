@@ -13853,45 +13853,6 @@ paths:
       summary: List compact token and estimated cost usage for session cards
       tags:
       - usage
-  /api/v1/usage/sessions/{sessionId}:
-    get:
-      operationId: getSessionUsage
-      parameters:
-      - description: Session identifier, e.g. project-1.
-        in: path
-        name: sessionId
-        required: true
-        schema:
-          description: Session identifier, e.g. project-1.
-          type: string
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SessionUsageResponse'
-          description: OK
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Get detailed token and estimated cost usage for one session
-      tags:
-      - usage
   /api/v1/usage/sessions/memory:
     get:
       operationId: listSessionMemory
@@ -21422,24 +21383,6 @@ components:
       - startedAt
       - failed
       type: object
-    SessionUsageResponse:
-      properties:
-        harnesses:
-          items:
-            $ref: '#/components/schemas/UsageHarnessResponse'
-          type: array
-        incomplete:
-          type: boolean
-        sessionId:
-          type: string
-        totals:
-          $ref: '#/components/schemas/UsageTotalsResponse'
-      required:
-      - sessionId
-      - incomplete
-      - totals
-      - harnesses
-      type: object
     SessionWait:
       properties:
         reason:
@@ -23221,21 +23164,6 @@ components:
       - content
       - expectedFileFingerprint
       type: object
-    UsageHarnessResponse:
-      properties:
-        harness:
-          type: string
-        models:
-          items:
-            $ref: '#/components/schemas/UsageModelResponse'
-          type: array
-        totals:
-          $ref: '#/components/schemas/UsageTotalsResponse'
-      required:
-      - harness
-      - totals
-      - models
-      type: object
     UsageHookMetadata:
       properties:
         harness:
@@ -23382,16 +23310,6 @@ components:
       - since
       - until
       - logins
-      type: object
-    UsageModelResponse:
-      properties:
-        modelId:
-          type: string
-        totals:
-          $ref: '#/components/schemas/UsageTotalsResponse'
-      required:
-      - modelId
-      - totals
       type: object
     UsagePriceOverride:
       properties:
@@ -23593,62 +23511,6 @@ components:
       - tokens
       - costNanos
       - lastUsedAt
-      type: object
-    UsageTotalsResponse:
-      properties:
-        cacheReadTokens:
-          description: Deprecated compatibility alias for cachedInputTokens.
-          minimum: 0
-          type:
-          - "null"
-          - integer
-        cachedInputTokens:
-          description: Input read from an existing provider cache. Cache hit percentage
-            uses cachedInputTokens divided by inclusive inputTokens.
-          minimum: 0
-          type:
-          - "null"
-          - integer
-        estimatedCost:
-          anyOf:
-          - type: "null"
-          - $ref: '#/components/schemas/EstimatedCostResponse'
-            type: object
-        inputTokens:
-          description: Total input, including cached and uncached input.
-          minimum: 0
-          type:
-          - "null"
-          - integer
-        outputTokens:
-          description: Total output, including provider-specific subsets such as reasoning
-            output.
-          minimum: 0
-          type:
-          - "null"
-          - integer
-        processedTokens:
-          description: Canonical input plus output. Null when either component is
-            unknown.
-          minimum: 0
-          type:
-          - "null"
-          - integer
-        uncachedInputTokens:
-          description: Input not read from an existing provider cache. Includes cache
-            writes.
-          minimum: 0
-          type:
-          - "null"
-          - integer
-      required:
-      - inputTokens
-      - cachedInputTokens
-      - uncachedInputTokens
-      - outputTokens
-      - processedTokens
-      - cacheReadTokens
-      - estimatedCost
       type: object
     VerifyAgentAccountLoginResponse:
       properties:

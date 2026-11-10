@@ -737,11 +737,6 @@ WHERE ub.session_id = ?
 GROUP BY ub.harness, mue.model_id
 ORDER BY SUM(mue.input_tokens + mue.output_tokens) DESC, ub.harness, mue.model_id;
 
--- name: GetUsageSessionIncomplete :one
-SELECT CAST(COALESCE((
-    SELECT incomplete FROM usage_session_integrity WHERE session_id = ?
-), 0) AS INTEGER);
-
 -- name: ListCompactSessionUsage :many
 SELECT
     ub.session_id,

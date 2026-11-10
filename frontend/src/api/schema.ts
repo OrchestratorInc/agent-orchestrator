@@ -4639,23 +4639,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/usage/sessions/{sessionId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get detailed token and estimated cost usage for one session */
-        get: operations["getSessionUsage"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/usage/sessions/memory": {
         parameters: {
             query?: never;
@@ -7535,12 +7518,6 @@ export interface components {
             startedAt: string;
             tool: string;
         };
-        SessionUsageResponse: {
-            harnesses: components["schemas"]["UsageHarnessResponse"][];
-            incomplete: boolean;
-            sessionId: string;
-            totals: components["schemas"]["UsageTotalsResponse"];
-        };
         SessionWait: {
             /** @enum {string} */
             reason: "working" | "command" | "approval" | "starting" | "reviewer" | "resume";
@@ -8242,11 +8219,6 @@ export interface components {
             expectedFileFingerprint: string;
             path: string;
         };
-        UsageHarnessResponse: {
-            harness: string;
-            models: components["schemas"]["UsageModelResponse"][];
-            totals: components["schemas"]["UsageTotalsResponse"];
-        };
         UsageHookMetadata: {
             /** @enum {string} */
             harness: "claude-code" | "codex";
@@ -8304,10 +8276,6 @@ export interface components {
             since: string;
             /** Format: date-time */
             until: string;
-        };
-        UsageModelResponse: {
-            modelId: string;
-            totals: components["schemas"]["UsageTotalsResponse"];
         };
         UsagePriceOverride: {
             /** @description Decimal USD per million cache-read tokens. Defaults to the input price. */
@@ -8402,21 +8370,6 @@ export interface components {
             title: string;
             /** Format: int64 */
             tokens: number;
-        };
-        UsageTotalsResponse: {
-            /** @description Deprecated compatibility alias for cachedInputTokens. */
-            cacheReadTokens: null | number;
-            /** @description Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens. */
-            cachedInputTokens: null | number;
-            estimatedCost: null | components["schemas"]["EstimatedCostResponse"];
-            /** @description Total input, including cached and uncached input. */
-            inputTokens: null | number;
-            /** @description Total output, including provider-specific subsets such as reasoning output. */
-            outputTokens: null | number;
-            /** @description Canonical input plus output. Null when either component is unknown. */
-            processedTokens: null | number;
-            /** @description Input not read from an existing provider cache. Includes cache writes. */
-            uncachedInputTokens: null | number;
         };
         VerifyAgentAccountLoginResponse: {
             account?: components["schemas"]["AgentAccountResponse"];
@@ -25636,56 +25589,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListCompactSessionUsageResponse"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    getSessionUsage: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Session identifier, e.g. project-1. */
-                sessionId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionUsageResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

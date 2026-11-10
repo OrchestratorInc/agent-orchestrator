@@ -400,40 +400,6 @@ type CompactSessionUsage struct {
 	EstimatedCost   *EstimatedCost
 }
 
-// UsageMetricTotals is the aggregate metric block used by session, harness,
-// and model summaries.
-type UsageMetricTotals struct {
-	InputTokens         *int64
-	CachedInputTokens   *int64
-	UncachedInputTokens *int64
-	OutputTokens        *int64
-	ProcessedTokens     *int64
-	EstimatedCost       *EstimatedCost
-}
-
-// ModelUsageSummary is a per-model aggregate. The billing provider stays a
-// pricing input: every event was costed against its own provider's rates before
-// it reached this sum, so the total is exact without splitting the model apart.
-type ModelUsageSummary struct {
-	ModelID string
-	Totals  UsageMetricTotals
-}
-
-// HarnessUsageSummary groups model summaries by AO harness.
-type HarnessUsageSummary struct {
-	Harness AgentHarness
-	Totals  UsageMetricTotals
-	Models  []ModelUsageSummary
-}
-
-// SessionUsageSummary is the read model returned by the session usage service.
-type SessionUsageSummary struct {
-	SessionID  SessionID
-	Incomplete bool
-	Totals     UsageMetricTotals
-	Harnesses  []HarnessUsageSummary
-}
-
 // SourceCursorState is the durable source state to commit after parsing a
 // chunk. ApplyUsageChunk writes it atomically with the emitted events.
 type SourceCursorState struct {
