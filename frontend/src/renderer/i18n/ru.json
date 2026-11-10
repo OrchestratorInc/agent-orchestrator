@@ -1936,6 +1936,7 @@
 	"settings.project.general": "Общие",
 	"settings.project.agent": "Агент",
 	"settings.project.agents": "Агенты",
+	"settings.project.agentsRequired": "Требуются воркер-агент и агент-оркестратор.",
 	"settings.project.childReposEmpty": "Дочерние репозитории не зарегистрированы.",
 	"settings.project.default": "Настройка проекта",
 	"settings.project.defaultBranch": "Ветка по умолчанию",

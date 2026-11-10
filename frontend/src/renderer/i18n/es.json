@@ -1585,6 +1585,7 @@
 	"settings.project.general": "General",
 	"settings.project.agent": "Agente",
 	"settings.project.agents": "Agentes",
+	"settings.project.agentsRequired": "Se requieren agentes de trabajo y orquestador.",
 	"settings.project.childReposEmpty": "No hay repositorios secundarios registrados.",
 	"settings.project.default": "Configuración del proyecto",
 	"settings.project.defaultBranch": "Rama predeterminada",

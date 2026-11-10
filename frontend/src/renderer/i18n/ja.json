@@ -1558,6 +1558,7 @@
 	"settings.project.general": "一般",
 	"settings.project.agent": "エージェント",
 	"settings.project.agents": "エージェント",
+	"settings.project.agentsRequired": "ワーカーとオーケストレーターのエージェントは必須です。",
 	"settings.project.childReposEmpty": "子リポジトリは登録されていません。",
 	"settings.project.default": "プロジェクト設定",
 	"settings.project.defaultBranch": "デフォルトブランチ",
