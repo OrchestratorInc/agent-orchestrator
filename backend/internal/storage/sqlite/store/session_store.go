@@ -594,10 +594,14 @@ func (s *Store) UpdateSessionFromActivitySignal(
 func (s *Store) RecordSessionLatestUserPrompt(ctx context.Context, id domain.SessionID, prompt string, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.RecordSessionLatestUserPrompt(ctx, gen.RecordSessionLatestUserPromptParams{
-		LatestUserPrompt: prompt,
-		UpdatedAt:        timeToNullTime(updatedAt),
-		ID:               id,
+	var rows int64
+	err := s.inTxDB(ctx, "record latest user prompt", func(q *gen.Queries, db gen.DBTX) error {
+		if err := normalizeSessionGuardTimes(ctx, db, id); err != nil {
+			return err
+		}
+		var err error
+		rows, err = q.RecordSessionLatestUserPrompt(ctx, gen.RecordSessionLatestUserPromptParams{LatestUserPrompt: prompt, UpdatedAt: timeToNullTime(updatedAt), ID: id})
+		return err
 	})
 	if err != nil {
 		return false, fmt.Errorf("record latest user prompt for session %s: %w", id, err)
@@ -835,7 +839,7 @@ func (s *Store) DeleteSession(ctx context.Context, id domain.SessionID) (bool, e
 		return false, fmt.Errorf("begin delete seed session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 
 	isSeed, err := q.SessionIsSeed(ctx, id)
 	if err != nil {
@@ -951,7 +955,7 @@ INSERT INTO session_num_floors (id_prefix, max_num) VALUES (?, ?)
 ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`, prefix, num); err != nil {
 		return false, fmt.Errorf("delete session %s: record number floor: %w", id, err)
 	}
-	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
+	if err := foldDeletedSessionAccountUsage(ctx, s.txQueries(tx), id); err != nil {
 		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -1478,7 +1482,8 @@ func timeToNullTime(t time.Time) sql.NullTime {
 	if t.IsZero() {
 		return sql.NullTime{}
 	}
-	return sql.NullTime{Time: t, Valid: true}
+	// Also used by handwritten SQL that does not go through utcTimes.
+	return sql.NullTime{Time: t.UTC(), Valid: true}
 }
 
 func nullTimeToTimePtr(t sql.NullTime) *time.Time {

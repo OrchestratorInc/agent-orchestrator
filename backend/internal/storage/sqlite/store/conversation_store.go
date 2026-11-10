@@ -726,7 +726,7 @@ func (s *Store) commitChatSpawn(
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.inTx(ctx, "commit Chat spawn", func(q *gen.Queries) error {
+	return s.inTxDB(ctx, "commit Chat spawn", func(q *gen.Queries, db gen.DBTX) error {
 		owner, err := q.GetSession(ctx, rec.ID)
 		if err != nil {
 			return fmt.Errorf("select Chat session %s: %w", rec.ID, err)
@@ -814,7 +814,7 @@ func (s *Store) commitChatSpawn(
 			if rows != 1 {
 				return fmt.Errorf("stage Chat controller generation: Chat session %s not found", rec.ID)
 			}
-			txCtx := context.WithValue(ctx, conversationProjectionTxKey{}, q)
+			txCtx := projectionContext(ctx, q, db)
 			if err := prepare(txCtx); err != nil {
 				return fmt.Errorf("project native provider history: %w", err)
 			}
@@ -1379,7 +1379,10 @@ func (s *Store) appendUserMessage(
 		}
 	}
 
-	err = s.inTx(ctx, "append user message", func(q *gen.Queries) error {
+	err = s.inTxDB(ctx, "append user message", func(q *gen.Queries, db gen.DBTX) error {
+		if err := normalizeSessionGuardTimes(ctx, db, session); err != nil {
+			return err
+		}
 		if autoResume {
 			source, err := q.SelectConversationTurnByID(ctx, retryOfTurnID)
 			if err != nil {
@@ -1463,7 +1466,7 @@ func (s *Store) appendUserMessage(
 			interactionAt = now
 		}
 		if msg.SenderSessionID != "" {
-			if err := recordSessionInteraction(ctx, q, session, msg.SenderSessionID, interactionAt); err != nil {
+			if err := s.recordSessionInteraction(ctx, q, db, session, msg.SenderSessionID, interactionAt); err != nil {
 				return err
 			}
 		}
@@ -2249,7 +2252,7 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 			return nil, err
 		}
 		defer func() { _ = tx.Rollback() }()
-		account, err := s.ReconcileConversationAuthentication(context.WithValue(ctx, conversationProjectionTxKey{}, s.qw.WithTx(tx)), conversationID, generation, providerTurnID, now)
+		account, err := s.ReconcileConversationAuthentication(projectionContext(ctx, s.txQueries(tx), utcTimes{tx}), conversationID, generation, providerTurnID, now)
 		if err != nil {
 			return nil, err
 		}
@@ -2327,7 +2330,7 @@ func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID str
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	cleared := false
-	err := s.inTx(ctx, "confirm conversation login", func(q *gen.Queries) error {
+	err := s.inTxDB(ctx, "confirm conversation login", func(q *gen.Queries, db gen.DBTX) error {
 		row, err := q.SelectConversationByID(ctx, conversationID)
 		if err != nil {
 			return err
@@ -2338,7 +2341,7 @@ func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID str
 		}
 		markAuthenticated(account, at)
 		cleared = true
-		return s.RecordAccount(context.WithValue(ctx, conversationProjectionTxKey{}, q), conversationID, *account, now)
+		return s.RecordAccount(projectionContext(ctx, q, db), conversationID, *account, now)
 	})
 	return cleared && err == nil, err
 }
@@ -2826,7 +2829,7 @@ func (s *Store) CompleteQueuedTurnPromotion(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.inTx(ctx, "complete queued turn promotion", func(q *gen.Queries) error {
+	return s.inTxDB(ctx, "complete queued turn promotion", func(q *gen.Queries, db gen.DBTX) error {
 		target, err := q.SelectConversationTurnByProviderID(ctx,
 			gen.SelectConversationTurnByProviderIDParams{
 				ConversationID: conversationID, ProviderTurnID: providerTurnID,
@@ -2834,7 +2837,7 @@ func (s *Store) CompleteQueuedTurnPromotion(
 		if err != nil {
 			return fmt.Errorf("select promotion target %s: %w", providerTurnID, err)
 		}
-		txCtx := context.WithValue(ctx, conversationProjectionTxKey{}, q)
+		txCtx := projectionContext(ctx, q, db)
 		if err := s.UpsertActivity(txCtx, conversationID, providerTurnID, activity, now); err != nil {
 			return err
 		}
@@ -2974,7 +2977,7 @@ func (s *Store) ReorderQueuedTurns(
 		return fmt.Errorf("begin queued turn reorder: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	for i, turnID := range turnIDs {
 		rows, err := q.UpdateQueuedConversationTurnRequestedAt(ctx,
 			gen.UpdateQueuedConversationTurnRequestedAtParams{
@@ -3322,7 +3325,7 @@ func (s *Store) UpsertActivity(
 	}
 
 	turnID := s.turnIDFor(ctx, conversationID, providerTurnID)
-	return s.inTx(ctx, "insert activity", func(q *gen.Queries) error {
+	return s.inTxDB(ctx, "insert activity", func(q *gen.Queries, db gen.DBTX) error {
 		sequence, seqErr := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
 			UpdatedAt: now,
 			ID:        conversationID,
@@ -3330,7 +3333,7 @@ func (s *Store) UpsertActivity(
 		if seqErr != nil {
 			return fmt.Errorf("allocate sequence: %w", seqErr)
 		}
-		if err := recordSteerInteraction(ctx, q, conversationID, activity, now); err != nil {
+		if err := s.recordSteerInteraction(ctx, q, db, conversationID, activity, now); err != nil {
 			return err
 		}
 		return q.InsertConversationActivity(ctx, gen.InsertConversationActivityParams{
@@ -3535,8 +3538,12 @@ func (s *Store) projectProviderEvent(
 	project func(context.Context) error,
 ) (bool, error) {
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
+		db, ok := ctx.Value(conversationProjectionDBKey{}).(gen.DBTX)
+		if !ok {
+			return false, errors.New("projection transaction database is missing")
+		}
 		return projectProviderEventTx(
-			ctx, q, conversationID, session, reviewID, generation,
+			ctx, q, db, conversationID, session, reviewID, generation,
 			providerEventID, method, payloadJSON, now, project,
 		)
 	}
@@ -3548,9 +3555,9 @@ func (s *Store) projectProviderEvent(
 		return false, fmt.Errorf("begin provider event projection: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	projected, err := projectProviderEventTx(
-		ctx, q, conversationID, session, reviewID, generation,
+		ctx, q, utcTimes{tx}, conversationID, session, reviewID, generation,
 		providerEventID, method, payloadJSON, now, project,
 	)
 	if err != nil {
@@ -3565,6 +3572,7 @@ func (s *Store) projectProviderEvent(
 func projectProviderEventTx(
 	ctx context.Context,
 	q *gen.Queries,
+	db gen.DBTX,
 	conversationID string,
 	session domain.SessionID,
 	reviewID, generation, providerEventID, method, payloadJSON string,
@@ -3602,7 +3610,7 @@ func projectProviderEventTx(
 	if inserted == 0 {
 		return false, nil
 	}
-	txCtx := context.WithValue(ctx, conversationProjectionTxKey{}, q)
+	txCtx := projectionContext(ctx, q, db)
 	if err := project(txCtx); err != nil {
 		return false, fmt.Errorf("project provider event %s: %w", method, err)
 	}
@@ -5360,7 +5368,7 @@ func (s *Store) CompleteSteerBatchDelivery(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.inTx(ctx, "complete steer delivery", func(q *gen.Queries) error {
+	return s.inTxDB(ctx, "complete steer delivery", func(q *gen.Queries, db gen.DBTX) error {
 		if len(turnIDs) > 0 {
 			target, err := q.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
 				ConversationID: conversationID, ProviderTurnID: providerTurnID,
@@ -5381,7 +5389,7 @@ func (s *Store) CompleteSteerBatchDelivery(
 				}
 			}
 		}
-		txCtx := context.WithValue(ctx, conversationProjectionTxKey{}, q)
+		txCtx := projectionContext(ctx, q, db)
 		if err := s.UpsertActivity(txCtx, conversationID, providerTurnID, activity, now); err != nil {
 			return err
 		}
