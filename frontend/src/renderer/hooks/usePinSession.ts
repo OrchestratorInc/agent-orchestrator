@@ -88,7 +88,7 @@ export function useUnpinSession() {
 			// offline, or no longer linked: the row leaves Pinned now and the host
 			// is told whenever it answers.
 			const hostId = remoteHostOf(session);
-			if (hostId) return unpinRemoteSession(queryClient, hostId, session.id);
+			if (hostId) return unpinRemoteSession(queryClient, hostId, session.id, session.pinnedAt);
 			const { error, response } = await (session.hostId ? clientForSessionHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}/pin", {
 				params: { path: { sessionId: session.id } },
 			});

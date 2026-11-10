@@ -3015,17 +3015,15 @@ const SessionActions = memo(function SessionActions({
 							size="icon-xs"
 							variant="quiet"
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-							className={cn(
-								SESSION_ACTION_CLASS,
-								session.isPinned && "text-foreground",
-							)}
+							className={SESSION_ACTION_CLASS}
 							onClick={(event) => {
 								event.stopPropagation();
 								session.isPinned ? unpinSession(session) : pinSession(session);
 							}}
 							type="button"
 						>
-							{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+							{/* The same pin as a pinned project's unpin button. */}
+							<Pin aria-hidden="true" />
 						</Button>}
 				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
 				{session.cloud?.shared ? null : (

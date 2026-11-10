@@ -35,8 +35,8 @@ function tellHost(queryClient: QueryClient, unpin: RemoteUnpin): void {
 }
 
 /** Unpins a session that another host owns, without needing that host to answer. */
-export function unpinRemoteSession(queryClient: QueryClient, hostId: string, sessionId: string): void {
-	useRemoteUnpinStore.getState().add(hostId, sessionId);
+export function unpinRemoteSession(queryClient: QueryClient, hostId: string, sessionId: string, pinnedAt?: string): void {
+	useRemoteUnpinStore.getState().add(hostId, sessionId, pinnedAt);
 	const unpin = useRemoteUnpinStore.getState().unpins[sessionUiKey(sessionId, hostId)];
 	lastAttempt.delete(sessionUiKey(sessionId, hostId));
 	if (unpin) tellHost(queryClient, unpin);

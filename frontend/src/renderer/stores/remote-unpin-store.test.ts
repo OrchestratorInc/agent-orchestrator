@@ -25,11 +25,13 @@ describe("remote unpins", () => {
 		expect(withRemoteUnpins(workspace, useRemoteUnpinStore.getState().unpins)).toBe(workspace);
 	});
 
-	it("lets a later pin from the other computer win", () => {
-		const unpin = { hostId: "box-a", sessionId: "s-1", at: Date.parse("2026-11-01T00:00:00Z") };
-		expect(isUnpinnedHere(unpin, "2026-10-31T00:00:00Z")).toBe(true);
+	it("lets a later pin from the other computer win, whatever this computer's clock says", () => {
+		// The host's clock runs a day ahead of this computer's.
+		const unpin = { hostId: "box-a", sessionId: "s-1", at: Date.parse("2026-10-31T00:00:00Z"), pinnedAt: "2026-11-01T00:00:00Z" };
+		expect(isUnpinnedHere(unpin, "2026-11-01T00:00:00Z")).toBe(true);
 		expect(isUnpinnedHere(unpin, "2026-11-02T00:00:00Z")).toBe(false);
 		expect(isUnpinnedHere(unpin, undefined)).toBe(true);
+		expect(isUnpinnedHere({ ...unpin, pinnedAt: undefined }, "2026-11-02T00:00:00Z")).toBe(true);
 	});
 
 	it("drops removals for hosts that are no longer saved", () => {

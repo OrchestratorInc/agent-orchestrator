@@ -8,9 +8,10 @@ export const REMOTE_UNPINS_STORAGE_KEY = "ao.sidebar.remote-unpins";
  * A pin removed on this computer from a session that another host owns. The
  * pin itself lives in that host's daemon, which may be asleep, offline, or no
  * longer linked, so the removal is kept here until the host's own list agrees.
- * `at` is when it was removed, in epoch milliseconds.
+ * `at` is when it was removed, in this computer's epoch milliseconds;
+ * `pinnedAt` is the host's time of the pin that was removed.
  */
-export type RemoteUnpin = { hostId: string; sessionId: string; at: number };
+export type RemoteUnpin = { hostId: string; sessionId: string; at: number; pinnedAt?: string };
 
 type RemoteUnpins = Record<string, RemoteUnpin>;
 
@@ -37,7 +38,7 @@ function store(unpins: RemoteUnpins) {
 type RemoteUnpinState = {
 	/** Keyed by `sessionUiKey(sessionId, hostId)`. */
 	unpins: RemoteUnpins;
-	add: (hostId: string, sessionId: string) => void;
+	add: (hostId: string, sessionId: string, pinnedAt?: string) => void;
 	remove: (keys: readonly string[]) => void;
 	/** Drops removals for hosts that are no longer saved: their sessions are gone from this computer. */
 	keepHosts: (hostIds: readonly string[]) => void;
@@ -50,8 +51,8 @@ export const useRemoteUnpinStore = create<RemoteUnpinState>((set, get) => {
 	};
 	return {
 		unpins: readStored(),
-		add: (hostId, sessionId) => {
-			replace({ ...get().unpins, [sessionUiKey(sessionId, hostId)]: { hostId, sessionId, at: Date.now() } });
+		add: (hostId, sessionId, pinnedAt) => {
+			replace({ ...get().unpins, [sessionUiKey(sessionId, hostId)]: { hostId, sessionId, at: Date.now(), ...(pinnedAt ? { pinnedAt } : {}) } });
 		},
 		remove: (keys) => {
 			const { unpins } = get();
@@ -69,12 +70,15 @@ export const useRemoteUnpinStore = create<RemoteUnpinState>((set, get) => {
 	};
 });
 
-/** Whether a pin was removed here after the host last set it. A pin set later,
- *  from the other computer, wins. */
+/** Whether the host's pin is the one removed here. A pin set again later, from
+ *  the other computer, wins. Both times are the host's, so its clock being off
+ *  from this computer's cannot hide a removal. */
 export function isUnpinnedHere(unpin: RemoteUnpin | undefined, pinnedAt: string | null | undefined): boolean {
 	if (!unpin) return false;
-	const pinned = pinnedAt ? Date.parse(pinnedAt) : Number.NaN;
-	return !(Number.isFinite(pinned) && pinned > unpin.at);
+	if (!pinnedAt || !unpin.pinnedAt) return true;
+	const pinned = Date.parse(pinnedAt);
+	const removed = Date.parse(unpin.pinnedAt);
+	return !(Number.isFinite(pinned) && Number.isFinite(removed) && pinned > removed);
 }
 
 /** A remote host's workspace as this computer shows it: sessions unpinned here read as unpinned. */
