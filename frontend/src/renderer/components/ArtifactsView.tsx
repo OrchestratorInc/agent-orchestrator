@@ -1,8 +1,8 @@
 import { artifactFileIcon } from "./artifact-file-icon";
-import { ChevronDown, Clock, Cloud, File, Filter, Folder, List, Loader2, Package, Pin, Plus, Search, SelectMultiple, Trash2, X } from "@/components/app-icons";
+import { ChevronDown, Clock, Cloud, File, Filter, Folder, List, Loader2, Package, Pin, Plus, SelectMultiple, Trash2 } from "@/components/app-icons";
 import { ScrollArea } from "radix-ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useTranslation } from "react-i18next";
@@ -37,6 +37,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Checkbox } from "./ui/checkbox";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { FilterChip, ToolbarSearch } from "./PageToolbar";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,
@@ -48,7 +49,6 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import { Input } from "./ui/input";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useEdgeFadeRef } from "../hooks/useEdgeFade";
@@ -265,7 +265,7 @@ export function ArtifactsView() {
 					<div className="ms-auto flex shrink-0 items-center gap-0.5">
 						{hasArtifacts ? (
 							<>
-								<ArtifactSearch query={query} onQueryChange={setQuery} />
+								<ToolbarSearch label={t("artifacts.search")} query={query} onQueryChange={setQuery} />
 								<DropdownMenu>
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -355,11 +355,12 @@ export function ArtifactsView() {
 							<FilterChip
 								label={t("artifacts.filterProject")}
 								value={projectName(selectedProject)}
+								removeLabel={t("artifacts.removeFilter", { filter: `${t("artifacts.filterProject")}: ${projectName(selectedProject)}` })}
 								onRemove={() => setProjectId("")}
 							/>
 						) : null}
 						{type ? (
-							<FilterChip label={t("artifacts.filterType")} value={t(`artifacts.type.${type}`)} onRemove={() => setType(undefined)} />
+							<FilterChip label={t("artifacts.filterType")} value={t(`artifacts.type.${type}`)} removeLabel={t("artifacts.removeFilter", { filter: `${t("artifacts.filterType")}: ${t(`artifacts.type.${type}`)}` })} onRemove={() => setType(undefined)} />
 						) : null}
 					</div>
 				) : null}
@@ -440,68 +441,6 @@ export function ArtifactsView() {
 				</ul>
 			</ConfirmDialog>
 		</div>
-	);
-}
-
-/** Search behind an icon; the field shows while focused or holding a query. */
-function ArtifactSearch({ query, onQueryChange }: { query: string; onQueryChange: (query: string) => void }) {
-	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	const toggleRef = useRef<HTMLButtonElement>(null);
-	if (open || query) {
-		return (
-			<label className="relative me-1 block w-56 min-w-0 shrink">
-				<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
-				<Input
-					aria-label={t("artifacts.search")}
-					autoFocus
-					className="inspector-field-input ps-8 [&::-webkit-search-cancel-button]:appearance-none"
-					onBlur={() => setOpen(false)}
-					onChange={(event) => onQueryChange(event.target.value)}
-					onKeyDown={(event) => {
-						if (event.key !== "Escape") return;
-						// Escape clears search first; a second one leaves selection mode.
-						event.preventDefault();
-						onQueryChange("");
-						setOpen(false);
-						requestAnimationFrame(() => toggleRef.current?.focus());
-					}}
-					placeholder={t("artifacts.search")}
-					type="search"
-					value={query}
-				/>
-			</label>
-		);
-	}
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button ref={toggleRef} type="button" size="icon-sm" variant="quiet" aria-label={t("artifacts.search")} onClick={() => setOpen(true)}>
-					<Search aria-hidden="true" className="size-icon-sm" />
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">{t("artifacts.search")}</TooltipContent>
-		</Tooltip>
-	);
-}
-
-/** One active filter from the Filter menu, removable in place. */
-function FilterChip({ label, value, onRemove }: { label: string; value: string; onRemove: () => void }) {
-	const { t } = useTranslation();
-	return (
-		<Button
-			type="button"
-			size="xs"
-			variant="secondary"
-			shape="pill"
-			className="max-w-64 ps-2.5 pe-1.5"
-			aria-label={t("artifacts.removeFilter", { filter: `${label}: ${value}` })}
-			onClick={onRemove}
-		>
-			<span className="text-muted-foreground">{label}:</span>
-			<span className="truncate">{value}</span>
-			<X aria-hidden="true" className="size-icon-xs text-muted-foreground" />
-		</Button>
 	);
 }
 
