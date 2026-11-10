@@ -4075,6 +4075,8 @@
 	"cloudWorkspace.uploadsCheckedOutCommit": "Uploads the checked-out commit and its history, not uncommitted changes",
 	"cloudWorkspace.addingToWorkspace": "Adding to the workspace",
 	"cloudWorkspace.uploadedNotSaved": "{{name}} was uploaded, but adding it to the workspace failed. Save to add it.",
+	"cloudWorkspace.checkingFolder": "Checking {{folder}}",
+	"cloudWorkspace.emptyRepositoryLeft": "{{name}} is on GitHub but still empty. Try again to upload into it. If you don't, it stays on GitHub empty: delete it there, or add {{folder}} again under the same name to upload into it later.",
 	"cloudWorkspace.pushError.invalidRequest": "Orchestrator could not upload {{folder}}.",
 	"cloudWorkspace.pushError.signedOut": "Your Orchestrator Cloud session expired. Sign in again, then try again.",
 	"cloudWorkspace.pushError.folderUnavailable": "{{folder}} cannot be uploaded.",

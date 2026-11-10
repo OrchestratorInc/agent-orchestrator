@@ -168,6 +168,21 @@ export function createdRepositoryUrl(created: CreatedFolderRepository): string {
 }
 
 /**
+ * What became of a folder's repository when its upload failed after the
+ * control plane made it: it is on GitHub, empty. The control plane cannot
+ * delete it, but it answers a request for an empty private repository of
+ * that name with the same one, so a retry, or adding the folder again under
+ * that name, uploads into it.
+ */
+export function emptyRepositoryNotice(t: TFunction, created: CreatedFolderRepository, folder: string): string {
+	return t("cloudWorkspace.emptyRepositoryLeft", {
+		defaultValue: "{{name}} is on GitHub but still empty. Try again to upload into it. If you don't, it stays on GitHub empty: delete it there, or add {{folder}} again under the same name to upload into it later.",
+		name: created.repository.fullName,
+		folder: folderLabel(folder),
+	});
+}
+
+/**
  * The translated reason for each code the main process answers a failed
  * upload with. A code it adds later falls back to push_failed's.
  */

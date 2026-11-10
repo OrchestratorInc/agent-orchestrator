@@ -4181,6 +4181,8 @@
 	"cloudWorkspace.uploadsCheckedOutCommit": "Sube el commit actual y su historial, no los cambios sin confirmar",
 	"cloudWorkspace.addingToWorkspace": "Añadiendo al espacio de trabajo",
 	"cloudWorkspace.uploadedNotSaved": "{{name}} se subió, pero no se pudo añadir al espacio de trabajo. Guarda para añadirlo.",
+	"cloudWorkspace.checkingFolder": "Comprobando {{folder}}",
+	"cloudWorkspace.emptyRepositoryLeft": "{{name}} está en GitHub, pero sigue vacío. Inténtalo de nuevo para subir los archivos. Si no, seguirá vacío en GitHub: elimínalo allí o vuelve a añadir {{folder}} con el mismo nombre para subirlo más tarde.",
 	"cloudWorkspace.pushError.invalidRequest": "Orchestrator no pudo subir {{folder}}.",
 	"cloudWorkspace.pushError.signedOut": "Tu sesión de Orchestrator Cloud ha caducado. Vuelve a iniciar sesión e inténtalo de nuevo.",
 	"cloudWorkspace.pushError.folderUnavailable": "{{folder}} no se puede subir.",

@@ -4075,6 +4075,8 @@
 	"cloudWorkspace.uploadsCheckedOutCommit": "上传当前检出的提交及其历史，不包括未提交的更改",
 	"cloudWorkspace.addingToWorkspace": "正在添加到工作区",
 	"cloudWorkspace.uploadedNotSaved": "{{name}} 已上传，但添加到工作区失败。保存即可添加。",
+	"cloudWorkspace.checkingFolder": "正在检查 {{folder}}",
+	"cloudWorkspace.emptyRepositoryLeft": "{{name}} 已在 GitHub 上，但仍为空。重试即可上传到其中。否则它会以空仓库留在 GitHub 上：请在 GitHub 上删除它，或稍后以相同名称再次添加 {{folder}} 以上传到其中。",
 	"cloudWorkspace.pushError.invalidRequest": "Orchestrator 无法上传 {{folder}}。",
 	"cloudWorkspace.pushError.signedOut": "你的 Orchestrator Cloud 会话已过期。请重新登录后再试。",
 	"cloudWorkspace.pushError.folderUnavailable": "无法上传 {{folder}}。",

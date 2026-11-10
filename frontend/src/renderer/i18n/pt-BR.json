@@ -4181,6 +4181,8 @@
 	"cloudWorkspace.uploadsCheckedOutCommit": "Envia o commit atual e seu histórico, não as alterações sem commit",
 	"cloudWorkspace.addingToWorkspace": "Adicionando ao workspace",
 	"cloudWorkspace.uploadedNotSaved": "{{name}} foi enviado, mas não foi possível adicioná-lo ao workspace. Salve para adicioná-lo.",
+	"cloudWorkspace.checkingFolder": "Verificando {{folder}}",
+	"cloudWorkspace.emptyRepositoryLeft": "{{name}} está no GitHub, mas ainda vazio. Tente novamente para enviar os arquivos. Caso contrário, ele continua vazio no GitHub: exclua-o lá ou adicione {{folder}} novamente com o mesmo nome para enviá-lo depois.",
 	"cloudWorkspace.pushError.invalidRequest": "O Orchestrator não conseguiu enviar {{folder}}.",
 	"cloudWorkspace.pushError.signedOut": "Sua sessão do Orchestrator Cloud expirou. Entre novamente e tente outra vez.",
 	"cloudWorkspace.pushError.folderUnavailable": "{{folder}} não pode ser enviado.",

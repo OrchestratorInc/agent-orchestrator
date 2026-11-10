@@ -4093,6 +4093,8 @@
 	"cloudWorkspace.uploadsCheckedOutCommit": "チェックアウト中のコミットとその履歴をアップロードします（未コミットの変更は含みません）",
 	"cloudWorkspace.addingToWorkspace": "ワークスペースに追加中",
 	"cloudWorkspace.uploadedNotSaved": "{{name}} はアップロードされましたが、ワークスペースへの追加に失敗しました。保存すると追加されます。",
+	"cloudWorkspace.checkingFolder": "{{folder}} を確認しています",
+	"cloudWorkspace.emptyRepositoryLeft": "{{name}} は GitHub 上にありますが、まだ空です。もう一度試すとアップロードします。試さない場合は空のまま GitHub に残ります。GitHub で削除するか、後で同じ名前で {{folder}} をもう一度追加するとアップロードされます。",
 	"cloudWorkspace.pushError.invalidRequest": "Orchestrator は {{folder}} をアップロードできませんでした。",
 	"cloudWorkspace.pushError.signedOut": "Orchestrator Cloud のセッションが期限切れです。もう一度サインインしてから再試行してください。",
 	"cloudWorkspace.pushError.folderUnavailable": "{{folder}} はアップロードできません。",

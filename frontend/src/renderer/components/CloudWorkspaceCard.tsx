@@ -20,6 +20,7 @@ import {
 	createdRepositoryUrl,
 	createFolderRepository,
 	describeLocalFolder,
+	emptyRepositoryNotice,
 	folderLabel,
 	FolderPushError,
 	committedUploadHint,
@@ -148,6 +149,8 @@ export function CloudWorkspaceCard({
 
 	const [name, setName] = useState("");
 	const [members, setMembers] = useState<WorkspaceMember[]>([]);
+	// Folders picked whose checks (describeLocalFolder) are still running.
+	const [checking, setChecking] = useState<string[]>([]);
 	const [progress, setProgress] = useState<Record<string, MemberProgress>>({});
 	const [pickingRepository, setPickingRepository] = useState(false);
 	const [chosenOwner, setChosenOwner] = useState("");
@@ -189,54 +192,68 @@ export function CloudWorkspaceCard({
 	// more than one needs one; a role the app does not know leaves it to the server.
 	const memberRoleBlocks = org?.role !== undefined && !canManageBilling(org) && members.length > 1;
 	const atLimit = members.length >= MAX_WORKSPACE_REPOSITORIES;
-	const createBlocked = nameInvalid || members.length === 0 || problem !== undefined || badName !== undefined || mixedOwners || ownerMissing || memberRoleBlocks || coderSetup.workspaceNamePrefixInvalid;
+	// A folder still being checked would be left out of a workspace created now.
+	const createBlocked = nameInvalid || members.length === 0 || checking.length > 0 || problem !== undefined || badName !== undefined || mixedOwners || ownerMissing || memberRoleBlocks || coderSetup.workspaceNamePrefixInvalid;
 
-	const update = (next: WorkspaceMember[]) => {
-		setMembers(next);
+	// Every change applies to the list as it is when it lands: a folder's
+	// checks can end after other members joined, left, or were renamed.
+	const update = (change: (current: WorkspaceMember[]) => WorkspaceMember[]) => {
+		setMembers(change);
 		setSubmitError(null);
 	};
+	const sameMember = (a: WorkspaceMember, b: WorkspaceMember) => a.kind === "repository"
+		? b.kind === "repository" && a.githubRepositoryId === b.githubRepositoryId
+		: b.kind === "folder" && a.path === b.path;
+	const append = (member: WorkspaceMember) => update((current) => (current.some((item) => sameMember(item, member)) ? current : [...current, member]));
 	const addRepository = (githubRepositoryId: string) => {
 		setPickingRepository(false);
 		const repo = granted.find((candidate) => candidate.githubRepositoryId === githubRepositoryId);
-		if (!repo || members.some((member) => member.kind === "repository" && member.githubRepositoryId === githubRepositoryId)) return;
-		update([...members, { id: memberId(), kind: "repository", githubRepositoryId, fullName: repo.fullName }]);
+		if (!repo) return;
+		append({ id: memberId(), kind: "repository", githubRepositoryId, fullName: repo.fullName });
 	};
 	const addFolder = async () => {
 		setAddError(null);
 		const path = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
 		if (!path) return;
-		if (members.some((member) => member.kind === "folder" && member.path === path)) {
+		if (members.some((member) => member.kind === "folder" && member.path === path) || checking.includes(path)) {
 			setAddError({ message: t("cloudWorkspace.folderAlreadyAdded", { defaultValue: "{{folder}} is already in this workspace.", folder: folderLabel(path) }) });
 			return;
 		}
 		// A git repository whose origin the org already grants joins as that
 		// repository instead of being uploaded again.
-		const { remote, committed, leftOut, refusal } = await describeLocalFolder(path);
+		setChecking((current) => [...current, path]);
+		let described: Awaited<ReturnType<typeof describeLocalFolder>>;
+		try {
+			described = await describeLocalFolder(path);
+		} finally {
+			setChecking((current) => current.filter((item) => item !== path));
+		}
+		const { remote, committed, leftOut, refusal } = described;
 		const existing = grantedRepositoryForRemote(remote, granted);
 		if (existing) {
 			if (members.some((member) => member.kind === "repository" && member.githubRepositoryId === existing.githubRepositoryId)) {
 				setAddError({ message: t("cloudWorkspace.repositoryAlreadyAdded", { defaultValue: "{{name}} is already in this workspace.", name: existing.fullName }) });
 				return;
 			}
-			update([...members, { id: memberId(), kind: "repository", githubRepositoryId: existing.githubRepositoryId, fullName: existing.fullName, fromFolder: path }]);
+			append({ id: memberId(), kind: "repository", githubRepositoryId: existing.githubRepositoryId, fullName: existing.fullName, fromFolder: path });
 			return;
 		}
-		// A folder that cannot be uploaded at all (its history holds
-		// secret-looking files) is refused now, not after its repository is made.
+		// A folder that cannot be uploaded at all (the upload would refuse it)
+		// is refused now, not after its repository is made.
 		if (refusal) {
 			setAddError(folderPushErrorText(t, refusal, path));
 			return;
 		}
-		update([...members, { id: memberId(), kind: "folder", path, name: gitHubRepositoryNameFromFolder(folderLabel(path)), ...(committed ? { committed } : {}), ...(leftOut?.length ? { leftOut } : {}) }]);
+		append({ id: memberId(), kind: "folder", path, name: gitHubRepositoryNameFromFolder(folderLabel(path)), ...(committed ? { committed } : {}), ...(leftOut?.length ? { leftOut } : {}) });
 	};
 	const remove = (id: string) => {
-		update(members.filter((member) => member.id !== id));
+		update((current) => current.filter((member) => member.id !== id));
 		setProgress((current) => {
 			const { [id]: _removed, ...rest } = current;
 			return rest;
 		});
 	};
-	const rename = (id: string, value: string) => update(members.map((member) => (member.id === id && member.kind === "folder" ? { ...member, name: value } : member)));
+	const rename = (id: string, value: string) => update((current) => current.map((member) => (member.id === id && member.kind === "folder" ? { ...member, name: value } : member)));
 
 	const create = async (selection: { workerAgent: string; orchestratorAgent: string }) => {
 		if (isCreating || org === undefined || createBlocked || coderSetup.templateMissing) return;
@@ -247,7 +264,7 @@ export function CloudWorkspaceCard({
 		const working = [...members];
 		const save = (index: number, member: WorkspaceMember) => {
 			working[index] = member;
-			setMembers([...working]);
+			setMembers((current) => current.map((item) => (item.id === member.id ? member : item)));
 		};
 		const mark = (id: string, value: MemberProgress) => setProgress((current) => ({ ...current, [id]: value }));
 		let current: { id: string; path: string } | undefined;
@@ -363,6 +380,12 @@ export function CloudWorkspaceCard({
 							))}
 						</ul>
 					) : null}
+					{checking.map((path) => (
+						<p key={path} className={cn(onboardingFieldHintClass, "flex items-center gap-2")} role="status">
+							<LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" />
+							{t("cloudWorkspace.checkingFolder", { defaultValue: "Checking {{folder}}", folder: folderLabel(path) })}
+						</p>
+					))}
 
 					{pickingRepository ? (
 						<SearchablePicker
@@ -502,6 +525,9 @@ function WorkspaceMemberRow({ member, owner, progress, disabled, onRename, onRem
 				) : null}
 				{progress?.phase === "failed" && progress.detail ? (
 					<span className="block whitespace-pre-line text-pretty text-[12px] leading-5 text-muted-foreground">{progress.detail}</span>
+				) : null}
+				{progress?.phase === "failed" && member.kind === "folder" && member.created && !member.pushed ? (
+					<span className="block text-pretty text-[12px] leading-5 text-muted-foreground [overflow-wrap:anywhere]">{emptyRepositoryNotice(t, member.created, member.path)}</span>
 				) : null}
 			</span>
 			{member.kind === "folder" && !member.created ? (

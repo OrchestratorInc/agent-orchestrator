@@ -437,4 +437,76 @@ describe("CloudWorkspaceCard", () => {
 		const list = screen.getByRole("list");
 		expect(within(list).getAllByRole("listitem")).toHaveLength(2);
 	});
+
+	it("keeps what joined while a folder was being checked", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		let finishPreview: (value: unknown) => void = () => undefined;
+		mocks.chooseDirectory.mockResolvedValueOnce("/Users/me/slow").mockResolvedValueOnce("/Users/me/fast");
+		mocks.previewFolderUpload.mockImplementationOnce(() => new Promise((resolve) => { finishPreview = resolve; }));
+
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await waitFor(() => expect(mocks.previewFolderUpload).toHaveBeenCalledWith({ folder: "/Users/me/slow" }));
+		// While slow is checked, a repository and another folder join.
+		await addRepository(user, "acme/api");
+		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
+		expect(await screen.findByLabelText("Repository name for fast")).toBeInTheDocument();
+
+		finishPreview({ status: "ok", source: "import", leftOut: [] });
+
+		expect(await screen.findByLabelText("Repository name for slow")).toBeInTheDocument();
+		expect(screen.getByLabelText("Repository name for fast")).toBeInTheDocument();
+		expect(screen.getByText("acme/api")).toBeInTheDocument();
+		expect(within(screen.getByRole("list")).getAllByRole("listitem")).toHaveLength(3);
+	});
+
+	it("waits for a folder being checked before it creates, so the folder is not left out", async () => {
+		const user = userEvent.setup();
+		const onCreated = renderCard();
+		let finishPreview: (value: unknown) => void = () => undefined;
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.previewFolderUpload.mockImplementationOnce(() => new Promise((resolve) => { finishPreview = resolve; }));
+
+		await user.type(screen.getByLabelText("Workspace name"), "Platform");
+		await addRepository(user, "acme/api");
+		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
+		expect(await screen.findByText("Checking notes")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+
+		finishPreview({ status: "ok", source: "import", leftOut: [] });
+		expect(await screen.findByLabelText("Repository name for notes")).toBeInTheDocument();
+		expect(screen.queryByText("Checking notes")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Create" }));
+
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("ws-1"));
+		expect(mocks.createGitHubProject.mock.calls[0]?.[1].config.repos).toEqual([{ url: "https://github.com/acme/notes" }]);
+	});
+
+	it("says a folder's repository is on GitHub and still empty when its upload fails", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.pushFolderToRepository.mockResolvedValueOnce({ status: "error", code: "push_failed", message: "Could not upload notes: remote hung up" });
+
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+
+		const text = "acme/notes is on GitHub but still empty. Try again to upload into it. If you don't, it stays on GitHub empty: delete it there, or add notes again under the same name to upload into it later.";
+		expect(await screen.findByText(text)).toBeInTheDocument();
+	});
+
+	it("does not call a repository empty when making it failed", async () => {
+		const user = userEvent.setup();
+		renderCard();
+		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		mocks.createGitHubRepository.mockRejectedValueOnce(new CloudCpError("GitHub could not be reached.", { status: 502, code: "SCM_BROKER_FAILED" }));
+
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+
+		expect((await screen.findAllByText("GitHub could not be reached.")).length).toBeGreaterThan(0);
+		expect(screen.queryByText(/still empty/)).not.toBeInTheDocument();
+	});
 });

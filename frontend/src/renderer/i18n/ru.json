@@ -4262,6 +4262,8 @@
 	"cloudWorkspace.uploadsCheckedOutCommit": "Загружает текущий коммит и его историю, но не незакоммиченные изменения",
 	"cloudWorkspace.addingToWorkspace": "Добавление в рабочее пространство",
 	"cloudWorkspace.uploadedNotSaved": "{{name}} загружен, но добавить его в рабочее пространство не удалось. Сохраните, чтобы добавить.",
+	"cloudWorkspace.checkingFolder": "Проверка {{folder}}",
+	"cloudWorkspace.emptyRepositoryLeft": "{{name}} есть на GitHub, но пока пуст. Повторите попытку, чтобы загрузить в него файлы. Иначе он останется пустым на GitHub: удалите его там или позже снова добавьте {{folder}} под тем же именем, чтобы загрузить в него.",
 	"cloudWorkspace.pushError.invalidRequest": "Orchestrator не удалось загрузить {{folder}}.",
 	"cloudWorkspace.pushError.signedOut": "Сеанс Orchestrator Cloud истёк. Войдите снова и повторите попытку.",
 	"cloudWorkspace.pushError.folderUnavailable": "{{folder}} нельзя загрузить.",

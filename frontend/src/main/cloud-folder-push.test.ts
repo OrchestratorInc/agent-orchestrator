@@ -23,6 +23,7 @@ import {
 	previewFolderUpload,
 	pushFolderToRepository,
 	type PushFolderDeps,
+	type PushFolderErrorCode,
 	registerCloudFolderPushIpc,
 	rememberChosenFolder,
 	resolvePushUrl,
@@ -373,6 +374,108 @@ describe("pushFolderToRepository", () => {
 		for (const key of ["GIT_SSL_NO_VERIFY", "GIT_TRACE", "GIT_TRACE_CURL", "GIT_CURL_VERBOSE"]) expect(push.env[key]).toBeUndefined();
 		const config = Object.entries(push.env).filter(([key]) => key.startsWith("GIT_CONFIG_KEY_")).map(([key, value]) => `${value}=${push.env[key.replace("KEY", "VALUE")]}`);
 		expect(config).toContain(`http.${CP}${PUSH_PATH}.sslVerify=true`);
+	});
+});
+
+async function commitAll(dir: string, message = "commit"): Promise<void> {
+	await git(dir, "add", "-A");
+	await git(dir, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", message);
+}
+
+describe("previewFolderUpload", () => {
+	// Each folder an upload refuses, set up in the test's folder; setup returns
+	// the dependencies both the preview and the upload run with.
+	const refused: Array<[string, () => Promise<Partial<PushFolderDeps>>, PushFolderErrorCode]> = [
+		["a shallow clone", async () => {
+			const source = path.join(root, "source");
+			await fs.mkdir(source);
+			await git(source, "init", "--quiet", "--initial-branch=main");
+			for (const n of [1, 2]) {
+				await fs.writeFile(path.join(source, "a.txt"), String(n));
+				await commitAll(source, `c${n}`);
+			}
+			await fs.rm(folder, { recursive: true });
+			await git(root, "clone", "--quiet", "--depth", "1", `file://${source}`, folder);
+			return {};
+		}, "shallow_repository"],
+		["a repository whose commit holds a submodule", async () => {
+			await git(folder, "init", "--quiet", "--initial-branch=main");
+			await fs.writeFile(path.join(folder, "a.txt"), "a");
+			await git(folder, "add", ".");
+			await git(folder, "update-index", "--add", "--cacheinfo", `160000,${"1".repeat(40)},vendor/lib`);
+			await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", "first");
+			return {};
+		}, "folder_has_repositories"],
+		["a repository using Git LFS", async () => {
+			await git(folder, "init", "--quiet", "--initial-branch=main");
+			await fs.writeFile(path.join(folder, ".gitattributes"), "*.psd filter=lfs diff=lfs merge=lfs -text\n");
+			await commitAll(folder);
+			return {};
+		}, "lfs_unsupported"],
+		["a repository whose commit holds a file over GitHub's limit", async () => {
+			await git(folder, "init", "--quiet", "--initial-branch=main");
+			await fs.writeFile(path.join(folder, "big.bin"), Buffer.alloc(2048));
+			await commitAll(folder);
+			return { maxFileBytes: 1024 };
+		}, "file_too_large"],
+		["a folder using Git LFS", async () => {
+			await fs.mkdir(path.join(folder, "art"));
+			await fs.writeFile(path.join(folder, "art", ".gitattributes"), "*.psd filter=lfs -text\n");
+			return {};
+		}, "lfs_unsupported"],
+		["a folder holding a file over GitHub's limit", async () => {
+			await fs.writeFile(path.join(folder, "big.bin"), Buffer.alloc(2048));
+			return { maxFileBytes: 1024 };
+		}, "file_too_large"],
+		["a folder holding a repository of its own", async () => {
+			const nested = path.join(folder, "lib");
+			await fs.mkdir(nested);
+			await git(nested, "init", "--quiet");
+			await fs.writeFile(path.join(nested, "index.js"), "1");
+			await commitAll(nested);
+			await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+			return {};
+		}, "folder_has_repositories"],
+		["a folder holding an empty repository of its own", async () => {
+			await fs.mkdir(path.join(folder, "scratch"));
+			await git(path.join(folder, "scratch"), "init", "--quiet");
+			await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+			return {};
+		}, "folder_has_repositories"],
+		["a folder over the import limit", async () => {
+			await fs.writeFile(path.join(folder, "big.bin"), Buffer.alloc(2048));
+			return { maxImportBytes: 1024 };
+		}, "folder_too_large"],
+		["any folder, with a git too old to upload it", async () => {
+			await fs.writeFile(path.join(folder, "a.txt"), "a");
+			const oldGit: GitRunner = async (args, options) => {
+				if (args[0] === "--version") return { stdout: "git version 2.30.2\n", stderr: "" };
+				const { stdout, stderr } = await execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "utf8" });
+				return { stdout, stderr };
+			};
+			return { git: oldGit };
+		}, "git_unavailable"],
+	];
+
+	it.each(refused)("refuses %s, as the upload does, before any repository is made", async (_name, setup, code) => {
+		const overrides = await setup();
+
+		const preview = await previewFolderUpload({ folder }, deps(overrides));
+		const upload = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps(overrides));
+
+		expect(preview).toMatchObject({ status: "error", code });
+		expect(upload).toMatchObject({ status: "error", code });
+		expect(await git(remote, "branch", "--list")).toBe("");
+		expect(await fs.readdir(tmpRoot).catch(() => [])).toEqual([]);
+	});
+
+	it("passes a folder and a repository the upload takes", async () => {
+		await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "import", leftOut: [] });
+
+		await git(folder, "init", "--quiet");
+		await commitAll(folder);
+		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "head", leftOut: [] });
 	});
 });
 

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -45,6 +45,7 @@ import {
 	createdRepositoryUrl,
 	createFolderRepository,
 	describeLocalFolder,
+	emptyRepositoryNotice,
 	folderLabel,
 	FolderPushError,
 	folderPushErrorText,
@@ -194,6 +195,21 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		const branch = storedRepos.find((repo) => sameRepository(repo.url, url))?.branch;
 		return branch ? { url, branch } : { url };
 	});
+	// What the server last saved, read by a save when it runs rather than when
+	// it was started: a folder upload's save starts when the upload does, and
+	// the page may have saved other changes (a repository removed) meanwhile.
+	const savedRef = useRef(saved);
+	const commitSaved = (next: typeof saved) => {
+		savedRef.current = next;
+		setSaved(next);
+	};
+	// Saves run one at a time, each on top of what the one before it saved.
+	const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+	const queueSave = <T,>(save: () => Promise<T>): Promise<T> => {
+		const run = saveQueue.current.then(save);
+		saveQueue.current = run.catch(() => undefined);
+		return run;
+	};
 	const addToDraft = (url: string) => setExtras((current) => current.some((item) => sameRepository(item, url)) ? current : [...current.filter((item) => item !== ""), url]);
 	// What the saved workspace and the draft would make of one more
 	// repository; checked before a folder's repository is made.
@@ -205,39 +221,45 @@ function RepositoriesForm({ project, readOnly, onSaveState }: LoadedProps) {
 		return undefined;
 	};
 	// An uploaded folder's repository is saved into the workspace at once, on
-	// top of what is saved (the draft's other edits stay a draft).
-	const saveUploadedRepository = async (url: string) => {
-		if (sameRepository(project.repositoryUrl, url) || saved.extras.some((item) => sameRepository(item, url))) {
+	// top of what is saved when its save runs (the draft's other edits stay a
+	// draft).
+	const saveUploadedRepository = (url: string) => queueSave(async () => {
+		const latest = savedRef.current;
+		if (sameRepository(project.repositoryUrl, url) || latest.extras.some((item) => sameRepository(item, url))) {
 			addToDraft(url);
 			return;
 		}
+		const extras = [...latest.extras, url];
 		try {
-			await mutation.mutateAsync({ config: { repos: savedRepos([...saved.extras, url]) } });
+			await mutation.mutateAsync({ config: { repos: savedRepos(extras) } });
 		} catch (err) {
 			// Left in the draft, so Save tries again.
 			addToDraft(url);
 			edited();
 			throw err;
 		}
-		setSaved((current) => ({ ...current, extras: [...current.extras, url] }));
+		commitSaved({ ...savedRef.current, extras });
 		addToDraft(url);
-	};
+	});
 	const submit = () => {
 		if (reposInvalid || workingDirectoryInvalid) return;
-		const config: NonNullable<CloudCpProjectSettingsRequest["config"]> = {};
-		if (reposChanged) {
-			// Keep a stored branch for a repository that stays.
-			config.repos = savedRepos(filledExtras);
-		}
-		if (!workspace && startsIn !== saved.startsIn) config.agentStartsIn = startsIn;
-		// Saved as the control plane stores it, so the field shows what was saved.
-		const normalizedDirectory = normalizeWorkingDirectory(workingDirectory);
-		if (normalizedDirectory !== saved.workingDirectory) config.workingDirectory = normalizedDirectory;
-		mutation.mutate({ config }, {
-			onSuccess: () => {
-				setWorkingDirectory(normalizedDirectory);
-				setSaved({ extras: filledExtras, startsIn, workingDirectory: normalizedDirectory });
-			},
+		// The draft as it is now, saved against what is saved when the save runs.
+		const draft = { extras: filledExtras, startsIn, workingDirectory: normalizeWorkingDirectory(workingDirectory) };
+		void queueSave(async () => {
+			const latest = savedRef.current;
+			const config: NonNullable<CloudCpProjectSettingsRequest["config"]> = {};
+			if (JSON.stringify(draft.extras) !== JSON.stringify(latest.extras)) {
+				// Keep a stored branch for a repository that stays.
+				config.repos = savedRepos(draft.extras);
+			}
+			if (!workspace && draft.startsIn !== latest.startsIn) config.agentStartsIn = draft.startsIn;
+			// Saved as the control plane stores it, so the field shows what was saved.
+			if (draft.workingDirectory !== latest.workingDirectory) config.workingDirectory = draft.workingDirectory;
+			await mutation.mutateAsync({ config });
+			setWorkingDirectory(draft.workingDirectory);
+			commitSaved(draft);
+		}).catch(() => {
+			// The footer shows the mutation's error.
 		});
 	};
 	return <form id="project-settings-form" className="flex min-h-full shrink-0 flex-col gap-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
@@ -361,16 +383,20 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 	const [pending, setPending] = useState<{ folder: string; name: string; committed?: { branch?: string }; leftOut?: string[] } | null>(null);
 	// Kept across a failed upload, so a retry pushes to the repository already made.
 	const [created, setCreated] = useState<{ folder: string; repository: CreatedFolderRepository } | null>(null);
-	const [error, setError] = useState<{ message: string; detail?: string } | null>(null);
+	// note: what became of a repository made for the folder (emptyRepositoryNotice).
+	const [error, setError] = useState<{ message: string; detail?: string; note?: string } | null>(null);
 	const busy = phase !== "idle";
 	useReportBusy(busy, onBusyChange);
 	const owner = repositoryOwner(gitHubFullName(project.repositoryUrl) ?? "");
+	// The folder picked last; an earlier pick whose checks end after it is dropped.
+	const latestPick = useRef(0);
 	const choose = async () => {
 		setError(null);
 		const folder = await aoBridge.app.chooseDirectory({ title: t("cloudWorkspace.chooseFolder", { defaultValue: "Choose a folder for the workspace" }) });
 		if (!folder || !mounted.current) return;
+		const pick = ++latestPick.current;
 		const { remote, committed, leftOut, refusal } = await describeLocalFolder(folder);
-		if (!mounted.current) return;
+		if (!mounted.current || pick !== latestPick.current) return;
 		const existing = grantedRepositoryForRemote(remote, repos.data ?? []);
 		if (existing) {
 			onAddExisting(canonicalGitHubUrl(existing.fullName));
@@ -406,9 +432,12 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 		} catch (caught) {
 			if ((caught instanceof CloudCpError && caught.status === 401) || (caught instanceof FolderPushError && caught.code === "signed_out")) void aoBridge.cloud.signIn();
 			if (mounted.current) {
-				setError(caught instanceof FolderPushError
-					? folderPushErrorText(t, caught, pending.folder)
-					: { message: caught instanceof Error ? caught.message : t("settings.project.saveFailed") });
+				setError({
+					...(caught instanceof FolderPushError
+						? folderPushErrorText(t, caught, pending.folder)
+						: { message: caught instanceof Error ? caught.message : t("settings.project.saveFailed") }),
+					...(repository ? { note: emptyRepositoryNotice(t, repository, pending.folder) } : {}),
+				});
 				setPhase("idle");
 			}
 			return;
@@ -482,6 +511,7 @@ function AddLocalFolder({ project, disabled, atLimit, folderProblem, onAddExisti
 		{error ? <div role="alert" className="text-xs">
 			<p className="text-error">{error.message}</p>
 			{error.detail ? <p className="whitespace-pre-line text-settings-muted">{error.detail}</p> : null}
+			{error.note ? <p className="text-pretty text-settings-muted [overflow-wrap:anywhere]">{error.note}</p> : null}
 		</div> : null}
 	</div>;
 }

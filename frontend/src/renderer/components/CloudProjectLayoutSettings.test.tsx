@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { appI18n } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
@@ -403,4 +403,115 @@ it("asks to sign in again when an upload finds the session expired", async () =>
 	expect(mocks.patch).not.toHaveBeenCalled();
 	push.mockRestore();
 	signIn.mockRestore();
+});
+
+/** A workspace holding 11x and voice-calling-ai, whose next folder upload waits for finish. */
+function slowUploadSetup() {
+	workspacePatches();
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/voice-calling-ai" }] }) });
+	mocks.createRepository.mockReset().mockResolvedValue({ repository: repository("9", "notes"), created: true, pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git" });
+	const spies = [
+		vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes"),
+		vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] }),
+	];
+	const upload = { finish: (): void => undefined };
+	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockImplementation(() => new Promise((resolve) => {
+		upload.finish = () => resolve({ status: "pushed", branch: "main", commit: "abc", source: "import", leftOut: [] });
+	}));
+	onTestFinished(() => [...spies, push].forEach((spy) => spy.mockRestore()));
+	return { upload, push };
+}
+
+it("keeps a repository removed and saved during an upload out of the workspace when the upload saves", async () => {
+	const { upload, push } = slowUploadSetup();
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
+	await waitFor(() => expect(push).toHaveBeenCalledOnce());
+
+	// While it uploads, 11x is removed and saved.
+	await userEvent.click(screen.getByRole("button", { name: "Remove acme/11x" }));
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+	expect(mocks.patch.mock.calls[0][2]).toEqual({ config: { repos: [{ url: "https://github.com/acme/voice-calling-ai" }] } });
+	await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
+
+	upload.finish();
+
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledTimes(2));
+	expect(mocks.patch.mock.calls[1][2]).toEqual({
+		config: { repos: [{ url: "https://github.com/acme/voice-calling-ai" }, { url: "https://github.com/acme/notes" }] },
+	});
+	expect(await screen.findByText("../notes")).toBeInTheDocument();
+	expect(screen.queryByText("../11x")).not.toBeInTheDocument();
+});
+
+it("saves an uploaded folder after a save in flight, on top of what it saved", async () => {
+	const { upload, push } = slowUploadSetup();
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
+	await waitFor(() => expect(push).toHaveBeenCalledOnce());
+
+	let finishSave: () => void = () => undefined;
+	mocks.patch.mockImplementationOnce((_org: string, _id: string, body: { config: Record<string, unknown> }) => new Promise((resolve) => {
+		finishSave = () => resolve({ project: project({ layout: "workspace", ...body.config }) });
+	}));
+	await userEvent.click(screen.getByRole("button", { name: "Remove acme/11x" }));
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
+
+	// The upload ends while that save is still in flight.
+	upload.finish();
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(mocks.patch).toHaveBeenCalledOnce();
+	finishSave();
+
+	await waitFor(() => expect(mocks.patch).toHaveBeenCalledTimes(2));
+	expect(mocks.patch.mock.calls[1][2]).toEqual({
+		config: { repos: [{ url: "https://github.com/acme/voice-calling-ai" }, { url: "https://github.com/acme/notes" }] },
+	});
+	expect(await screen.findByText("../notes")).toBeInTheDocument();
+	expect(screen.queryByText("../11x")).not.toBeInTheDocument();
+	await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled());
+});
+
+it("offers the folder picked last when an earlier folder's check ends after it", async () => {
+	workspacePatches();
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
+	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValueOnce("/Users/me/slow").mockResolvedValueOnce("/Users/me/fast");
+	const scan = vi.spyOn(aoBridge.app, "scanImportFolder").mockImplementation(async ({ path }) => ({ path, repos: [] }));
+	let finishSlow: () => void = () => undefined;
+	const preview = vi.spyOn(aoBridge.cloud, "previewFolderUpload")
+		.mockImplementationOnce(() => new Promise((resolve) => { finishSlow = () => resolve({ status: "ok", source: "import", leftOut: [] }); }))
+		.mockResolvedValueOnce({ status: "ok", source: "import", leftOut: [] });
+	onTestFinished(() => [choose, scan, preview].forEach((spy) => spy.mockRestore()));
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	await waitFor(() => expect(preview).toHaveBeenCalledOnce());
+	await userEvent.click(screen.getByRole("button", { name: "Add a local folder" }));
+	expect(await screen.findByLabelText("Repository name for /Users/me/fast")).toBeInTheDocument();
+
+	finishSlow();
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(screen.getByLabelText("Repository name for /Users/me/fast")).toBeInTheDocument();
+	expect(screen.queryByLabelText("Repository name for /Users/me/slow")).not.toBeInTheDocument();
+});
+
+it("says a folder's repository is on GitHub and still empty when its upload fails", async () => {
+	workspacePatches();
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace" }) });
+	mocks.createRepository.mockReset().mockResolvedValue({ repository: repository("9", "notes"), created: true, pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git" });
+	const choose = vi.spyOn(aoBridge.app, "chooseDirectory").mockResolvedValue("/Users/me/notes");
+	const scan = vi.spyOn(aoBridge.app, "scanImportFolder").mockResolvedValue({ path: "/Users/me/notes", repos: [] });
+	const push = vi.spyOn(aoBridge.cloud, "pushFolderToRepository").mockResolvedValue({ status: "error", code: "push_failed", message: "Could not upload notes: remote hung up" });
+	onTestFinished(() => [choose, scan, push].forEach((spy) => spy.mockRestore()));
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+
+	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
+
+	expect(await screen.findByText("Could not upload notes.")).toBeInTheDocument();
+	expect(screen.getByText("acme/notes is on GitHub but still empty. Try again to upload into it. If you don't, it stays on GitHub empty: delete it there, or add notes again under the same name to upload into it later.")).toBeInTheDocument();
 });

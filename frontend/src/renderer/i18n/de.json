@@ -4093,6 +4093,8 @@
 	"cloudWorkspace.uploadsCheckedOutCommit": "Lädt den ausgecheckten Commit und seinen Verlauf hoch, keine nicht committeten Änderungen",
 	"cloudWorkspace.addingToWorkspace": "Wird zum Workspace hinzugefügt",
 	"cloudWorkspace.uploadedNotSaved": "{{name}} wurde hochgeladen, aber das Hinzufügen zum Workspace ist fehlgeschlagen. Speichere, um es hinzuzufügen.",
+	"cloudWorkspace.checkingFolder": "{{folder}} wird geprüft",
+	"cloudWorkspace.emptyRepositoryLeft": "{{name}} ist auf GitHub, aber noch leer. Versuche es erneut, um hineinzuladen. Andernfalls bleibt es leer auf GitHub: Lösche es dort oder füge {{folder}} später unter demselben Namen erneut hinzu, um hineinzuladen.",
 	"cloudWorkspace.pushError.invalidRequest": "Orchestrator konnte {{folder}} nicht hochladen.",
 	"cloudWorkspace.pushError.signedOut": "Deine AO-Cloud-Sitzung ist abgelaufen. Melde dich erneut an und versuche es dann noch einmal.",
 	"cloudWorkspace.pushError.folderUnavailable": "{{folder}} kann nicht hochgeladen werden.",
