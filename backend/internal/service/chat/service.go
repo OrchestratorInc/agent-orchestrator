@@ -1389,6 +1389,9 @@ func (s *Service) Send(
 				if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
 					return domain.ConversationTurn{}, domain.ErrClientMessageConflict
 				}
+				if err := validateSnapshotRetry(msg, existing); err != nil {
+					return domain.ConversationTurn{}, err
+				}
 				msg.ClientPayloadHash = existing.ClientPayloadHash
 				return controller.Send(ctx, msg)
 			}
@@ -1488,9 +1491,19 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 			if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
 				return domain.ConversationTurn{}, domain.ErrClientMessageConflict
 			}
+			if err := validateSnapshotRetry(msg, existing); err != nil {
+				return domain.ConversationTurn{}, err
+			}
 			msg.ClientPayloadHash = existing.ClientPayloadHash
 			return controller.Send(ctx, msg)
 		}
+	}
+	if hasExcerptSnapshots(msg.Excerpts) {
+		hash, err := clientPayloadHash(msg)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		msg.ClientPayloadHash = hash
 	}
 	if err := hydrateExcerptReferences(ctx, controller, &msg); err != nil {
 		return domain.ConversationTurn{}, err
@@ -1504,6 +1517,20 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 	}
 	if err := validateExcerptReferences(msg.Excerpts, controller.conversation.ID); err != nil {
 		return err
+	}
+	if hasExcerptSnapshots(msg.Excerpts) {
+		var legacy []ports.ChatExcerptReference
+		for _, ref := range msg.Excerpts {
+			if ref.Snapshot != nil {
+				msg.Content = append(msg.Content, snapshotExcerptContent(ref))
+			} else {
+				legacy = append(legacy, ref)
+			}
+		}
+		msg.Excerpts = legacy
+		if len(legacy) == 0 {
+			return nil
+		}
 	}
 	messages, err := controller.store.ConversationMessages(ctx, controller.conversation.ID)
 	if err != nil {
@@ -1575,13 +1602,22 @@ func validateExcerptReferences(excerpts []ports.ChatExcerptReference, conversati
 	if len(excerpts) > maxExcerptReferences {
 		return fmt.Errorf("%w: at most %d excerpts may be attached", ErrExcerptInvalid, maxExcerptReferences)
 	}
-	total := 0
+	total, rawTotal := 0, 0
 	for _, excerpt := range excerpts {
 		text := strings.TrimSpace(excerpt.Text)
-		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || text == "" || excerpt.Revision < 0 {
+		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || (text == "" && !isFlowchartOnlySnapshot(excerpt.Snapshot)) || excerpt.Revision < 0 {
 			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
 		}
-		total += len(text)
+		if excerpt.Snapshot != nil {
+			if err := validateExcerptSnapshot(excerpt.Snapshot); err != nil {
+				return err
+			}
+			rawTotal += len(excerpt.Snapshot.RawText)
+			if rawTotal > maxExcerptTextBytes {
+				return fmt.Errorf("%w: raw excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
+			}
+		}
+		total += len(excerpt.Text)
 		if total > maxExcerptTextBytes {
 			return fmt.Errorf("%w: attached excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
 		}

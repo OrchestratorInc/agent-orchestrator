@@ -26,9 +26,9 @@ var (
 	reconcileInterval = 3 * time.Second
 	// minWriteInterval limits one terminal's durable writes, however often its
 	// program changes its title. The newest title is written when it elapses.
-	minWriteInterval = 2 * time.Second
-	watchRetryMin    = 500 * time.Millisecond
-	watchRetryMax    = 30 * time.Second
+	minWriteInterval       = 2 * time.Second
+	initialWatchRetryDelay = 500 * time.Millisecond
+	watchRetryMax          = 30 * time.Second
 )
 
 const flushTimeout = 5 * time.Second
@@ -152,7 +152,7 @@ func (m *Manager) reconcile(ctx context.Context) {
 // reports its own title on reconnect, which clears the previous program's.
 func (m *Manager) follow(ctx context.Context, w *watch) {
 	handle := ports.RuntimeHandle{ID: w.handle}
-	for backoff := watchRetryMin; ; backoff = min(backoff*2, watchRetryMax) {
+	for backoff := initialWatchRetryDelay; ; backoff = min(backoff*2, watchRetryMax) {
 		err := m.rt.WatchTerminalTitle(ctx, handle, func(title string) { m.observe(ctx, w, title) })
 		if ctx.Err() != nil {
 			return

@@ -5279,6 +5279,40 @@ export interface components {
             agent: string;
             modes: string[];
         };
+        ChatExcerptRange: {
+            end: number;
+            /** @enum {string} */
+            offsetUnit: "utf-16";
+            start: number;
+        };
+        ChatExcerptSnapshot: {
+            badgeOnly?: boolean;
+            /** @enum {string} */
+            captureMode: "exact" | "block" | "legacy";
+            containsFlowchart?: boolean;
+            contextOmitted?: boolean;
+            diagramRange?: components["schemas"]["ChatExcerptRange"];
+            prefix?: string;
+            rawText: string;
+            /** @enum {string} */
+            referenceFormat?: "numbered-v1";
+            renderedRange?: components["schemas"]["ChatExcerptRange"];
+            sourceRange?: components["schemas"]["ChatExcerptRange"];
+            sourceTurnId?: string;
+            suffix?: string;
+            turn?: components["schemas"]["ChatExcerptTurnSnapshot"];
+            version: number;
+        };
+        ChatExcerptTurnMessage: {
+            /** @enum {string} */
+            role: "user" | "assistant";
+            text: string;
+        };
+        ChatExcerptTurnSnapshot: {
+            id: string;
+            messages: components["schemas"]["ChatExcerptTurnMessage"][];
+            truncated?: boolean;
+        };
         ChatFileReferenceLine: {
             /** @enum {string} */
             kind: "context" | "add" | "del";
@@ -5878,10 +5912,10 @@ export interface components {
             fileReference?: components["schemas"]["ConversationFileReferenceRequest"];
             mimeType?: string;
             name?: string;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             sourceConversationId?: string;
             sourceMessageId?: string;
-            /** Format: int64 */
-            sourceRevision?: number;
+            sourceRevision?: null | number;
             text?: string;
             type: string;
             uri?: string;
@@ -5903,6 +5937,7 @@ export interface components {
             order?: number;
             /** Format: int64 */
             revision: number;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             text: string;
         };
         ConversationFileReferenceRequest: {
@@ -5919,6 +5954,8 @@ export interface components {
             order?: number;
             path: string;
             previousPath?: string;
+            /** @enum {string} */
+            referenceFormat?: "numbered-v1";
             scope?: string;
             sessionId: string;
             /** @enum {string} */
@@ -6312,10 +6349,14 @@ export interface components {
         };
         DomainSideReference: {
             conversationId: string;
+            id?: string;
             messageId: string;
+            /** Format: int64 */
+            order?: number;
             /** Format: int64 */
             revision: number;
             selection: string;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             sourceRole: string;
         };
         EditConversationMessageRequest: {
