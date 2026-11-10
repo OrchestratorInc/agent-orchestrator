@@ -286,6 +286,12 @@ func TestDelegateEndpointDoesNotDependOnCodexDeviceReconciliation(t *testing.T) 
 	if status != http.StatusAccepted {
 		t.Fatalf("delegate = %d, want 202 while device reconciliation is unavailable; body=%s", status, body)
 	}
+	// The desktop's delegate starts the Terminal in the background.
+	waitCtx, cancelWait := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelWait()
+	if err := manager.WaitBackgroundWorkers(waitCtx); err != nil {
+		t.Fatalf("background start: %v", err)
+	}
 	if runtime.created != 1 {
 		t.Fatalf("runtime Create calls = %d, want 1", runtime.created)
 	}
