@@ -1,5 +1,5 @@
-import type { QueryClient } from "@tanstack/react-query";
-import { remoteSessionsQueryKey, remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import type { QueryClient, QueryState } from "@tanstack/react-query";
+import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { isUnpinnedHere, type RemoteUnpin, useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { clientForHost, connectedHost } from "./host-clients";
 import { sessionUiKey } from "./hosts";
@@ -52,9 +52,8 @@ export function forgetRemoteUnpin(hostId: string, sessionId: string): void {
  * session the host no longer lists or no longer pins is done, as is one pinned
  * again later from elsewhere. One the host still pins is sent again.
  */
-function reconcile(queryClient: QueryClient, hostId: string): void {
-	const state = queryClient.getQueryState<RemoteSessionPin[]>(remoteSessionsQueryKey(hostId));
-	if (!state?.data) return;
+function reconcile(queryClient: QueryClient, hostId: string, state: QueryState<RemoteSessionPin[] | undefined>): void {
+	if (!state.data) return;
 	const { unpins, remove } = useRemoteUnpinStore.getState();
 	const settled: string[] = [];
 	for (const [key, unpin] of Object.entries(unpins)) {
@@ -72,6 +71,8 @@ export function watchRemoteUnpins(queryClient: QueryClient): () => void {
 	return queryClient.getQueryCache().subscribe((event) => {
 		if (event.type !== "updated" || event.action.type !== "success") return;
 		const [scope, hostId, list] = event.query.queryKey;
-		if (scope === "remote-workspaces" && typeof hostId === "string" && list === "sessions") reconcile(queryClient, hostId);
+		if (scope === "remote-workspaces" && typeof hostId === "string" && list === "sessions") {
+			reconcile(queryClient, hostId, event.query.state as QueryState<RemoteSessionPin[] | undefined>);
+		}
 	});
 }
