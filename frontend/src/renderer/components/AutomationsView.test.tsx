@@ -137,7 +137,7 @@ describe("AutomationsView", () => {
 		expect(screen.getByRole("button", { name: "PR review inbox" })).toBeInTheDocument();
 		// Starters stay first; the list and its toolbar follow them.
 		expect(starters.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(starters.compareDocumentPosition(screen.getByRole("button", { name: "Filter automations" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(starters.compareDocumentPosition(screen.getByRole("group", { name: "Status" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.queryByText("No automations yet")).not.toBeInTheDocument();
 	});
 
@@ -716,12 +716,35 @@ describe("AutomationsView", () => {
 		renderView();
 		expect(screen.getAllByText("Demo")).toHaveLength(2);
 		expect(screen.getAllByText("Every Friday at 9:30 AM")).toHaveLength(2);
-		await userEvent.click(screen.getByRole("button", { name: "Filter automations" }));
-		await userEvent.click(await screen.findByRole("menuitemradio", { name: /Paused/ }));
+		const status = screen.getByRole("group", { name: "Status" });
+		expect(within(status).getByRole("button", { name: "All 2" })).toHaveAttribute("aria-pressed", "true");
+		await userEvent.click(within(status).getByRole("button", { name: "Paused 1" }));
+		expect(within(status).getByRole("button", { name: "Paused 1" })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.queryByRole("heading", { name: "Friday review" })).not.toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Paused review" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Remove filter Status: Paused" }));
+		// The pressed pill is the status cue, so no status chip repeats it.
+		expect(screen.queryByRole("button", { name: /Remove filter Status/ })).not.toBeInTheDocument();
+		await userEvent.click(within(status).getByRole("button", { name: "Enabled 1" }));
 		expect(screen.getByRole("heading", { name: "Friday review" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "Paused review" })).not.toBeInTheDocument();
+	});
+
+	it("offers a project filter only when automations span more than one project", async () => {
+		const user = userEvent.setup();
+		const base = { prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true };
+		mocks.automations = [{ ...base, id: "a", projectId: "demo", displayName: "Demo triage" }];
+		const { unmount } = renderView();
+		expect(screen.queryByRole("button", { name: "Filter automations" })).not.toBeInTheDocument();
+		unmount();
+		mocks.automations = [{ ...base, id: "a", projectId: "demo", displayName: "Demo triage" }, { ...base, id: "b", projectId: "other", displayName: "Other triage" }];
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Filter automations" }));
+		expect(screen.queryByRole("menuitemradio", { name: /Paused/ })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitemradio", { name: "Demo" }));
+		expect(screen.getByRole("heading", { name: "Demo triage" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "Other triage" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Remove filter Project: Demo" }));
+		expect(screen.getByRole("heading", { name: "Other triage" })).toBeInTheDocument();
 	});
 
 	it("sorts by next run with paused automations last, or by name", async () => {

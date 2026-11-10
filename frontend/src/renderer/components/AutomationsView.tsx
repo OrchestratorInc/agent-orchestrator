@@ -179,7 +179,7 @@ export function AutomationsView() {
 		setStatus("all");
 		setProjectId("");
 	};
-	const statusLabel = t(`automations.filter.${status}`);
+	const statusCounts: Record<StatusFilter, number> = { all: automations.length, enabled: automations.filter((item) => item.enabled).length, paused: automations.filter((item) => !item.enabled).length };
 	const filterLabel = t("automations.filter.label");
 
 	return (
@@ -210,41 +210,37 @@ export function AutomationsView() {
 						<section aria-label={t("automations.title")} className="mt-6 border-t border-border pt-3">
 							<div className="mb-2">
 								<div className="flex min-h-control-md items-center gap-2">
+									<div role="group" aria-label={t("automations.filter.status")} className="flex min-w-0 items-center gap-1">
+										{STATUS_FILTERS.map((value) => (
+											<Button key={value} type="button" size="sm" variant="ghost" aria-pressed={status === value} onClick={() => setStatus(value)} className="gap-1.5">
+												{t(`automations.filter.${value}`)}{" "}
+												<span className="text-caption tabular-nums text-passive">{statusCounts[value]}</span>
+											</Button>
+										))}
+									</div>
 									<div className="ms-auto flex shrink-0 items-center gap-0.5">
 										<ToolbarSearch label={t("automations.search")} query={search} onQueryChange={setSearch} />
-										<DropdownMenu>
-											<Tooltip>
-												<TooltipTrigger asChild>
-													<DropdownMenuTrigger asChild>
-														<Button type="button" size="icon-sm" variant="quiet" aria-label={filterLabel} data-active={status !== "all" || projectId ? "true" : undefined}>
-															<Filter aria-hidden="true" className="size-icon-sm" />
-														</Button>
-													</DropdownMenuTrigger>
-												</TooltipTrigger>
-												<TooltipContent side="bottom">{filterLabel}</TooltipContent>
-											</Tooltip>
-											<DropdownMenuContent align="end" className="max-h-96 min-w-52 overflow-y-auto" data-browser-native-overlay="true">
-												<DropdownMenuLabel>{t("automations.filter.status")}</DropdownMenuLabel>
-												<DropdownMenuRadioGroup value={status} onValueChange={(value) => setStatus(value as StatusFilter)}>
-													{STATUS_FILTERS.map((value) => (
-														<DropdownMenuRadioItem key={value} value={value}>
-															<span className="flex-1">{t(`automations.filter.${value}`)}</span>
-															<span className="text-caption tabular-nums text-passive">{value === "all" ? automations.length : automations.filter((item) => value === "enabled" ? item.enabled : !item.enabled).length}</span>
-														</DropdownMenuRadioItem>
-													))}
-												</DropdownMenuRadioGroup>
-												{projectOptions.length > 1 ? (
-													<>
-														<DropdownMenuSeparator />
-														<DropdownMenuLabel>{t("automations.filter.project")}</DropdownMenuLabel>
-														<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
-															<DropdownMenuRadioItem value="">{t("automations.filter.allProjects")}</DropdownMenuRadioItem>
-															{projectOptions.map((option) => <DropdownMenuRadioItem key={option.id} value={option.id}><span className="truncate">{option.name}</span></DropdownMenuRadioItem>)}
-														</DropdownMenuRadioGroup>
-													</>
-												) : null}
-											</DropdownMenuContent>
-										</DropdownMenu>
+										{projectOptions.length > 1 ? (
+											<DropdownMenu>
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<DropdownMenuTrigger asChild>
+															<Button type="button" size="icon-sm" variant="quiet" aria-label={filterLabel} data-active={projectId ? "true" : undefined}>
+																<Filter aria-hidden="true" className="size-icon-sm" />
+															</Button>
+														</DropdownMenuTrigger>
+													</TooltipTrigger>
+													<TooltipContent side="bottom">{filterLabel}</TooltipContent>
+												</Tooltip>
+												<DropdownMenuContent align="end" className="max-h-96 min-w-52 overflow-y-auto" data-browser-native-overlay="true">
+													<DropdownMenuLabel>{t("automations.filter.project")}</DropdownMenuLabel>
+													<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
+														<DropdownMenuRadioItem value="">{t("automations.filter.allProjects")}</DropdownMenuRadioItem>
+														{projectOptions.map((option) => <DropdownMenuRadioItem key={option.id} value={option.id}><span className="truncate">{option.name}</span></DropdownMenuRadioItem>)}
+													</DropdownMenuRadioGroup>
+												</DropdownMenuContent>
+											</DropdownMenu>
+										) : null}
 										<DropdownMenu>
 											<Tooltip>
 												<TooltipTrigger asChild>
@@ -265,24 +261,14 @@ export function AutomationsView() {
 										<NewAutomationMenu onCreate={openCreate} />
 									</div>
 								</div>
-								{status !== "all" || projectId ? (
+								{projectId ? (
 									<div className="mt-2 flex flex-wrap items-center gap-1.5">
-										{status !== "all" ? (
-											<FilterChip
-												label={t("automations.filter.status")}
-												value={statusLabel}
-												removeLabel={t("automations.filter.remove", { filter: `${t("automations.filter.status")}: ${statusLabel}` })}
-												onRemove={() => setStatus("all")}
-											/>
-										) : null}
-										{projectId ? (
-											<FilterChip
-												label={t("automations.filter.project")}
-												value={projectName(projectId)}
-												removeLabel={t("automations.filter.remove", { filter: `${t("automations.filter.project")}: ${projectName(projectId)}` })}
-												onRemove={() => setProjectId("")}
-											/>
-										) : null}
+										<FilterChip
+											label={t("automations.filter.project")}
+											value={projectName(projectId)}
+											removeLabel={t("automations.filter.remove", { filter: `${t("automations.filter.project")}: ${projectName(projectId)}` })}
+											onRemove={() => setProjectId("")}
+										/>
 									</div>
 								) : null}
 							</div>
