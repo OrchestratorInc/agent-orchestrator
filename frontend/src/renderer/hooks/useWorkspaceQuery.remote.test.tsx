@@ -263,14 +263,23 @@ it("applies and lifts an unpin made here while the host's lists stay the same", 
 	}
 });
 
-it("marks a remote session terminated while its kill is in flight, and lifts it when the kill is cleared", () => {
-	const { result } = renderCachedHost([{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] }]);
+it("marks a remote session terminated while its kill is in flight, and rolls it back when the kill fails", () => {
+	const live = { id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] };
+	const { client, result } = renderCachedHost([live]);
+	const sessionsKey = ["remote-workspaces", "box-a", "sessions"];
 	expect(result.current.data[0]?.sessions[0]?.isTerminated).not.toBe(true);
 	try {
 		act(() => trackOptimisticSessionKill("session-1", "box-a"));
 		expect(result.current.data[0]?.sessions[0]?.isTerminated).toBe(true);
+
+		// A poll lands mid-kill: the mapped lists now hold the terminated row.
+		act(() => client.setQueryData(sessionsKey, [{ ...live }]));
+		expect(result.current.data[0]?.sessions[0]?.isTerminated).toBe(true);
 	} finally {
+		// The kill fails. Nothing touches this host's raw lists on rollback.
+		const rawSessions = client.getQueryData(sessionsKey);
 		act(() => clearOptimisticSessionKill("session-1", "box-a"));
+		expect(client.getQueryData(sessionsKey)).toBe(rawSessions);
 	}
 	expect(result.current.data[0]?.sessions[0]?.isTerminated).not.toBe(true);
 });
@@ -281,6 +290,7 @@ it("renames a remote Scratchpad when the language changes", async () => {
 	try {
 		await act(() => appI18n.changeLanguage("de"));
 		expect(result.current.data.map((project) => project.name)).toEqual(["Notizblock"]);
+		expect(result.current.data[0]?.sessions[0]?.workspaceName).toBe("Notizblock");
 	} finally {
 		await act(() => appI18n.changeLanguage("en"));
 	}
