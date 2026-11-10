@@ -461,7 +461,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	rec, promptBytes, systemPromptBytes, err := s.spawnWithTelemetry(ctx, cfg, project)
 	if err != nil {
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
-		apiErr := toSpawnAPIError(err)
+		apiErr := withSpawnClassification(toSpawnAPIError(err), err)
 		s.recordSpawnOutcome(ctx, cfg, domain.SessionRecord{}, actionStatusForError(err), apiErr)
 		return domain.Session{}, 0, 0, apiErr
 	}
@@ -484,6 +484,9 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		cfg.KeepDisplayName = cfg.DisplayName != ""
 	}
 	start := s.monoNow()
+	// The manager records step timings and the launch it chose here; the
+	// outcome event reads them, from the background for an async Chat start.
+	ctx, _ = sessionmanager.WithSpawnTrace(ctx)
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
@@ -496,7 +499,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
 	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
-	err = sessionmanager.RelabelSpawnTimeout(err, ctx)
+	err = sessionmanager.ClassifySpawnError(ctx, sessionmanager.RelabelSpawnTimeout(err, ctx))
 	answeredMs := s.monoNow().Sub(start).Milliseconds()
 	if err != nil {
 		if acc.deferred {
@@ -509,7 +512,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		s.firstSession.finish(s.milestones, firstSession, false)
 		elapsed := answeredMs
-		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, requestID: reqid.FromContext(ctx)}, err, elapsed, elapsed)
+		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, mode: cfg.RequestedMode, facts: s.spawnFactsFromRequest(ctx, createdBy, false)}, err, elapsed, elapsed)
 		return domain.SessionRecord{}, 0, 0, err
 	}
 	s.recordCreatedBy(ctx, rec.ID, createdBy)
@@ -652,6 +655,7 @@ func (s *Service) emitSpawned(rec domain.SessionRecord, durationMs, spawnDuratio
 	if facts.githubActor != "" {
 		payload["github_actor"] = facts.githubActor
 	}
+	addSpawnLaunchProps(payload, facts.trace.Facts(), rec.Mode, rec.Metadata.Model)
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
@@ -713,7 +717,11 @@ type spawnFailure struct {
 	kind      domain.SessionKind
 	harness   domain.AgentHarness
 	projectID domain.ProjectID
-	requestID string
+	// mode is the requested mode, used when the start failed before the
+	// manager chose one.
+	mode  domain.SessionMode
+	model string
+	facts spawnFacts
 }
 
 // emitSpawnFailed reports one failed start attempt. durationMs keeps its
@@ -741,13 +749,29 @@ func (s *Service) emitSpawnFailed(f spawnFailure, err error, durationMs, spawnDu
 	if errorCode != "" {
 		payload["error_code"] = errorCode
 	}
+	if f.facts.createdBy.Valid() {
+		payload["created_by"] = string(f.facts.createdBy)
+	}
+	if f.facts.surface != "" {
+		payload["surface"] = string(f.facts.surface)
+	}
+	trace := f.facts.trace.Facts()
+	addSpawnLaunchProps(payload, trace, f.mode, f.model)
+	payload["failed_step"], payload["cause"] = sessionmanager.ClassifySpawnFailure(err, trace)
+	// A start cancelled on purpose (the client left, the session was killed
+	// mid-start, the daemon shut down) is not a launch failure: it reports
+	// separately so it cannot inflate a harness's failure rate.
+	name, level := "ao.sessions.spawn_failed", ports.TelemetryLevelError
+	if errorCode == "SPAWN_CANCELLED" {
+		name, level = "ao.sessions.spawn_cancelled", ports.TelemetryLevelInfo
+	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.sessions.spawn_failed",
+		Name:       name,
 		Source:     "session_service",
 		OccurredAt: s.now(),
-		Level:      ports.TelemetryLevelError,
+		Level:      level,
 		ProjectID:  &projectID,
-		RequestID:  f.requestID,
+		RequestID:  f.facts.requestID,
 		Payload:    payload,
 	})
 }

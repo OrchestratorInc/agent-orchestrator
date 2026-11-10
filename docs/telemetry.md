@@ -404,8 +404,9 @@ New (`historical: false`) PR outcomes add:
 
 | Event | When it is sent | Properties |
 | --- | --- | --- |
-| `ao.sessions.spawned` | A session becomes usable: a synchronous start returns, or an asynchronous Chat start finishes its worktree, Setup, controller start and opening prompt | `kind`, `harness`, `spawn_duration_ms`, `duration_ms`, `created_by` and, for sessions a request started, `surface` |
-| `ao.sessions.spawn_failed` | A start attempt fails, including an asynchronous Chat start that fails in the background | `kind`, `harness`, `spawn_duration_ms`, `duration_ms`, `error_kind`, `error_code` |
+| `ao.sessions.spawned` | A session becomes usable: a synchronous start returns, or an asynchronous Chat start finishes its worktree, Setup, controller start and opening prompt | `kind`, `harness`, `spawn_duration_ms`, `duration_ms`, `created_by`, `mode`, `async`, `model`, the step timings below and, for sessions a request started, `surface` |
+| `ao.sessions.spawn_failed` | A start attempt fails, including an asynchronous Chat start that fails in the background | `kind`, `harness`, `spawn_duration_ms`, `duration_ms`, `error_kind`, `error_code`, `failed_step`, `cause`, `created_by`, `surface`, `mode`, `async`, `model` and the step timings below |
+| `ao.sessions.spawn_cancelled` | A start attempt is cancelled on purpose (`SPAWN_CANCELLED`: the client left, the session was killed while starting, or the daemon shut down) | The same properties as `ao.sessions.spawn_failed` |
 | `ao.sessions.ended` | A session is killed, replaced, torn down after its pull requests merged or its issue closed, or its runtime dies | `kind` (`standalone`, `worker`, or `orchestrator`), `harness`, `outcome`, `duration_ms`, `had_pr`, `waiting_input_count`, `created_by`, `session_telemetry_id`, and for project sessions `project_telemetry_id`. Project sessions use the same grouping IDs as the usage counts; a standalone session's `session_telemetry_id` is a one-way hash of its session ID salted with the installation identifier |
 
 - `spawn_duration_ms` is the whole launch: from the session service accepting
@@ -417,9 +418,32 @@ New (`historical: false`) PR outcomes add:
   usable. A retry of a failed start is its own attempt, timed from the retry,
   without `duration_ms`. Each attempt reports one outcome. A start cancelled on
   purpose (the session is killed while starting, or the daemon shuts down)
-  reports neither event, so it does not count as a launch failure; a start
-  that runs out of its time budget reports `ao.sessions.spawn_failed`. A start
-  interrupted by a daemon restart reports neither event.
+  reports `ao.sessions.spawn_cancelled`, so it does not count as a launch
+  failure; a start that runs out of its time budget reports
+  `ao.sessions.spawn_failed` with `error_code: SPAWN_TIMEOUT` and
+  `cause: timeout`, whatever error the step that was running returned (a git
+  or agent process killed by the deadline reports "signal: killed" or "peer
+  disconnected"). A start interrupted by a daemon restart reports no event.
+- Step timings, in milliseconds, are sent only for the steps that ran:
+  `model_check_ms` (validating the model and effort against the saved
+  catalog), `branch_fetch_ms` (refreshing the default branch),
+  `worktree_ms` (creating the git worktree), `setup_ms` (the project's Setup
+  steps) and `agent_start_ms` (starting the terminal agent or the Chat
+  controller).
+- `failed_step` is `model_check`, `branch_fetch`, `worktree`, `setup`,
+  `agent_start`, `prompt` or `other`.
+- `cause` is a fixed value, never error text: `timeout`; for git and worktree
+  failures `branch_exists`, `path_exists`, `locked`, `permission`,
+  `path_too_long`, `not_a_repo`, `killed` or `other`, classified from git's
+  stderr inside the daemon; for agent and Chat starts `exited`,
+  `no_response`, `not_logged_in`, `killed` or `other`. Sentry spawn errors
+  carry `failed_step` and `cause` as tags.
+- `mode` is `chat` or `terminal` (absent when the start failed before a mode
+  was chosen), `async` is whether the start went on in the background after
+  the request was answered, and `model` is the resolved model ID (absent when
+  the harness default was used without naming one). Like every daemon event
+  they also carry `$os`, `platform` and `arch`, whichever client launched the
+  daemon.
 - `surface` is `desktop`, `mobile`, or `cli`, as above.
 - `created_by` is `user`, `orchestrator` (an orchestrator ran `ao spawn`),
   `scheduled` (an automation's schedule), or `automation` (issue intake, or a

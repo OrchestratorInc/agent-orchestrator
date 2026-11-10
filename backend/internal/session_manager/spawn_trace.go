@@ -2,10 +2,13 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // Spawn steps reported by spawn telemetry. The vocabulary is closed: it names
@@ -52,9 +55,9 @@ func carrySpawnTrace(from, to context.Context) context.Context {
 	return to
 }
 
-// beginSpawnStep times one step. The returned func records its duration and,
+// BeginSpawnStep times one step. The returned func records its duration and,
 // on the first failing step, which step failed. Safe without a trace.
-func beginSpawnStep(ctx context.Context, step string) func(error) {
+func BeginSpawnStep(ctx context.Context, step string) func(error) {
 	trace := spawnTraceFrom(ctx)
 	if trace == nil {
 		return func(error) {}
@@ -70,7 +73,7 @@ func beginSpawnStep(ctx context.Context, step string) func(error) {
 	}
 }
 
-func noteSpawnLaunch(ctx context.Context, mode domain.SessionMode, model string, async bool) {
+func NoteSpawnLaunch(ctx context.Context, mode domain.SessionMode, model string, async bool) {
 	trace := spawnTraceFrom(ctx)
 	if trace == nil {
 		return
@@ -108,4 +111,101 @@ func (t *SpawnTrace) Facts() SpawnTraceFacts {
 		steps[step+"_ms"] = ms
 	}
 	return SpawnTraceFacts{StepMs: steps, FailedStep: t.failedStep, Model: t.model, Mode: t.mode, Async: t.async}
+}
+
+// SpawnTraceFrom returns the trace ctx carries, or nil.
+func SpawnTraceFrom(ctx context.Context) *SpawnTrace { return spawnTraceFrom(ctx) }
+
+// ClassifySpawnFailure names the step a spawn failed in and why, from closed
+// vocabularies only: failed_step is a SpawnStep* value, "prompt" or "other";
+// cause is timeout, a git cause (branch_exists, path_exists, locked,
+// permission, path_too_long, not_a_repo, killed), an agent cause (exited,
+// no_response, not_logged_in, killed) or other. Error text is read here and
+// never leaves the daemon.
+func ClassifySpawnFailure(err error, facts SpawnTraceFacts) (step, cause string) {
+	step = facts.FailedStep
+	if step == "" {
+		switch {
+		case errors.Is(err, ErrSpawnPrompt), errors.Is(err, ErrSpawnPromptDelivery), errors.Is(err, ErrSpawnDeliverPrompt):
+			step = "prompt"
+		case errors.Is(err, ErrWorkspaceCreate):
+			step = SpawnStepWorktree
+		case errors.Is(err, ErrWorkspaceProvision):
+			step = SpawnStepSetup
+		case errors.Is(err, ErrRuntimeCreate), errors.Is(err, ErrChatController):
+			step = SpawnStepAgentStart
+		case errors.Is(err, ErrUnsupportedModel), errors.Is(err, ports.ErrUnsupportedEffort), errors.Is(err, ports.ErrModelCapabilitiesUnavailable):
+			step = SpawnStepModelCheck
+		default:
+			step = "other"
+		}
+	}
+	var timedOut *SpawnTimeoutError
+	if errors.As(err, &timedOut) || errors.Is(err, context.DeadlineExceeded) {
+		return step, "timeout"
+	}
+	switch step {
+	case SpawnStepBranchFetch, SpawnStepWorktree:
+		var git interface{ FailureCause() string }
+		if errors.As(err, &git) {
+			return step, git.FailureCause()
+		}
+	case SpawnStepAgentStart:
+		return step, agentStartCause(err)
+	}
+	return step, "other"
+}
+
+func agentStartCause(err error) string {
+	if errors.Is(err, ports.ErrChatAuthRequired) {
+		return "not_logged_in"
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "signal: killed"):
+		return "killed"
+	case strings.Contains(text, "not logged in"), strings.Contains(text, "please run /login"), strings.Contains(text, "authentication required"):
+		return "not_logged_in"
+	case errors.Is(err, ports.ErrChatHostNotRunning), strings.Contains(text, "peer disconnected"),
+		strings.Contains(text, "exit status"), strings.Contains(text, "exited"),
+		strings.Contains(text, "broken pipe"), strings.Contains(text, "closed pipe"):
+		return "exited"
+	case strings.Contains(text, "timed out"), strings.Contains(text, "timeout"), strings.Contains(text, "no response"), strings.Contains(text, "did not respond"):
+		return "no_response"
+	}
+	return "other"
+}
+
+// ClassifiedSpawnError carries a spawn failure's step and cause to Sentry as
+// tags while reading exactly like the error it wraps.
+type ClassifiedSpawnError struct {
+	Err         error
+	Step, Cause string
+}
+
+func (e *ClassifiedSpawnError) Error() string {
+	if e.Err == nil {
+		return "spawn failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *ClassifiedSpawnError) Unwrap() error { return e.Err }
+
+// SentryTags implements the sentryobs tagged-error hook.
+func (e *ClassifiedSpawnError) SentryTags() map[string]string {
+	return map[string]string{"failed_step": e.Step, "cause": e.Cause}
+}
+
+// ClassifySpawnError wraps err with its step and cause from ctx's trace.
+func ClassifySpawnError(ctx context.Context, err error) error { return classifySpawnError(ctx, err) }
+
+// classifySpawnError wraps err with its step and cause from ctx's trace.
+func classifySpawnError(ctx context.Context, err error) error {
+	var already *ClassifiedSpawnError
+	if err == nil || errors.As(err, &already) {
+		return err
+	}
+	step, cause := ClassifySpawnFailure(err, spawnTraceFrom(ctx).Facts())
+	return &ClassifiedSpawnError{Err: err, Step: step, Cause: cause}
 }

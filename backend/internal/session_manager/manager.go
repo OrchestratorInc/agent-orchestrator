@@ -1147,7 +1147,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 			mode = domain.SessionModeTUI
 		}
 		if mode == domain.SessionModeChat {
-			checked := beginSpawnStep(ctx, SpawnStepModelCheck)
+			checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 			resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
 			checked(err)
 			if err != nil {
@@ -1158,7 +1158,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 		}
 	}
 	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
-		checked := beginSpawnStep(ctx, SpawnStepModelCheck)
+		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		checked(err)
 		if err != nil {
@@ -1169,7 +1169,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 		agentConfig = resolved
 	}
 	cfg.RequestedMode = mode
-	noteSpawnLaunch(ctx, mode, cfg.AgentConfig.Model, cfg.Async && mode == domain.SessionModeChat)
+	NoteSpawnLaunch(ctx, mode, cfg.AgentConfig.Model, cfg.Async && mode == domain.SessionModeChat)
 
 	// Adapters whose model picker is an agent-owned mode list (e.g. Amp) keep
 	// their selectable values in AgentConfig.Mode. Normalize a copy for the
@@ -1391,7 +1391,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 	var ws ports.WorkspaceInfo
 	var workspaceProject *ports.WorkspaceProjectInfo
 	if prep != nil {
-		prepared := beginSpawnStep(ctx, SpawnStepWorktree)
+		prepared := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.awaitTaskPreparation(ctx, prep)
 		prepared(err)
 		if err != nil && ctx.Err() != nil {
@@ -1403,10 +1403,10 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 		}
 	}
 	if ws.Path == "" {
-		fetched := beginSpawnStep(ctx, SpawnStepBranchFetch)
+		fetched := BeginSpawnStep(ctx, SpawnStepBranchFetch)
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, project)
 		fetched(nil)
-		created := beginSpawnStep(ctx, SpawnStepWorktree)
+		created := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
 		created(err)
 	}
@@ -1422,7 +1422,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 	}
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
-	provisioned := beginSpawnStep(ctx, SpawnStepSetup)
+	provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
 	err = m.provisionWorkspace(ctx, project, ws.Path)
 	provisioned(err)
 	if err != nil {
@@ -1452,7 +1452,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 	// provisioning, attachments. From here the two modes launch different
 	// controllers, and exactly one of them runs.
 	if mode == domain.SessionModeChat {
-		started := beginSpawnStep(ctx, SpawnStepAgentStart)
+		started := BeginSpawnStep(ctx, SpawnStepAgentStart)
 		rec, err = m.launchChatController(ctx, chatSpawn{
 			cfg:              cfg,
 			project:          project,
@@ -1591,7 +1591,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
 	}
 	defer releaseCodexAdmission()
-	started := beginSpawnStep(ctx, SpawnStepAgentStart)
+	started := BeginSpawnStep(ctx, SpawnStepAgentStart)
 	handle, err := m.runtime.Create(ctx, ports.RuntimeConfig{
 		SessionID:     id,
 		WorkspacePath: ws.Path,

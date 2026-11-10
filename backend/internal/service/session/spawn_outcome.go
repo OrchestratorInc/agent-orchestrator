@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -78,6 +77,8 @@ type spawnFacts struct {
 	surface     domain.RequestSurface
 	githubActor string
 	requestID   string
+	// trace is the start's step timings and launch facts; nil for a retry.
+	trace *sessionmanager.SpawnTrace
 }
 
 type asyncSpawnAttempt struct {
@@ -103,7 +104,7 @@ type provisionObserverSetter interface {
 // path does that, after the session launched. Asynchronous starts leave it to
 // the exporter, which stamps the login the daemon already resolved.
 func (s *Service) spawnFactsFromRequest(ctx context.Context, createdBy domain.SessionCreator, withActor bool) spawnFacts {
-	facts := spawnFacts{createdBy: createdBy, requestID: reqid.FromContext(ctx)}
+	facts := spawnFacts{createdBy: createdBy, requestID: reqid.FromContext(ctx), trace: sessionmanager.SpawnTraceFrom(ctx)}
 	if surface, ok := telemetrymeta.SurfaceFromContext(ctx); ok {
 		facts.surface = surface
 	}
@@ -193,15 +194,12 @@ func (s *Service) settleAsyncSpawn(rec domain.SessionRecord, attempt *asyncSpawn
 	// The first_for_install claim is taken only by a start that became usable.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, attempt.firstEligible, ready)
 	// A start cancelled on purpose (the session was killed mid-start, or the
-	// daemon shut down) is not a launch failure: it reports nothing, so it
-	// cannot inflate a harness's failure rate. A start that ran out of its
-	// time budget (context.DeadlineExceeded) still reports as failed.
-	if !ready && errors.Is(cause, context.Canceled) {
-		return
-	}
+	// daemon shut down) reports ao.sessions.spawn_cancelled, not a failure
+	// (emitSpawnFailed). A start that ran out of its time budget
+	// (context.DeadlineExceeded) still reports as failed.
 	report := func(answered int64) {
 		if !ready {
-			s.emitSpawnFailed(spawnFailure{kind: rec.Kind, harness: rec.Harness, projectID: rec.ProjectID, requestID: attempt.facts.requestID}, cause, answered, elapsed)
+			s.emitSpawnFailed(spawnFailure{kind: rec.Kind, harness: rec.Harness, projectID: rec.ProjectID, mode: rec.Mode, model: rec.Metadata.Model, facts: attempt.facts}, cause, answered, elapsed)
 			return
 		}
 		s.emitSpawned(rec, answered, elapsed, firstForInstall, firstKnown, attempt.facts)

@@ -109,7 +109,7 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 		}
 	}
 	fingerprint := telemetrymeta.Fingerprint("background", component, operation, errorType, code, tags["agent"], tags["reason"])
-	captureAsync(ctx, tags, fingerprint, telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, operation)
+	captureAsync(ctx, withErrorTags(tags, err), fingerprint, telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, operation)
 }
 
 // captureAsync shares bounded admission across HTTP and background reports.

@@ -81,7 +81,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	bg, cancel := context.WithTimeout(m.backgroundContext, postCreateBudget(asyncChatSpawnBudget, in.project.Config.PostCreate))
 	// The outcome event reads this start's steps from the request's trace.
 	bg = carrySpawnTrace(ctx, bg)
-	noteSpawnLaunch(ctx, domain.SessionModeChat, "", true)
+	NoteSpawnLaunch(ctx, domain.SessionModeChat, "", true)
 	run := &asyncChatSpawnRun{cancel: cancel, done: make(chan struct{})}
 	m.asyncChatSpawnsMu.Lock()
 	m.asyncChatSpawns[id] = run
@@ -159,7 +159,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		}
 	}
 	if in.preparation != nil {
-		prepared := beginSpawnStep(ctx, SpawnStepWorktree)
+		prepared := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.awaitTaskPreparation(ctx, in.preparation)
 		prepared(err)
 		if err != nil && ctx.Err() != nil {
@@ -180,13 +180,13 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 	defer releaseWorkspaceGate()
 	if ws.Path == "" {
-		fetched := beginSpawnStep(ctx, SpawnStepBranchFetch)
+		fetched := BeginSpawnStep(ctx, SpawnStepBranchFetch)
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
 		fetched(nil)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
 		progress.complete(ctx, domain.SessionProvisionStepFetch)
 		stageStarted = time.Now()
-		created := beginSpawnStep(ctx, SpawnStepWorktree)
+		created := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, in.project, in.cfg, id, in.branch, baseRefs)
 		created(err)
 	} else {
@@ -209,7 +209,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
-		provisioned := beginSpawnStep(ctx, SpawnStepSetup)
+		provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
 		err := m.provisionWorkspace(ctx, in.project, ws.Path)
 		provisioned(err)
 		if err != nil {
@@ -269,7 +269,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	stageStarted = time.Now()
-	started := beginSpawnStep(ctx, SpawnStepAgentStart)
+	started := BeginSpawnStep(ctx, SpawnStepAgentStart)
 	if _, err := m.launchChatController(ctx, chatSpawn{
 		cfg:              in.cfg,
 		project:          in.project,
@@ -402,7 +402,7 @@ func (m *Manager) logAsyncChatSpawnStage(id domain.SessionID, stage string, star
 // failAsyncChatSpawn preserves the visible row and queue for retry.
 func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, cause error) {
 	// ctx is the start's own budget: a stage it killed is a timeout.
-	cause = RelabelSpawnTimeout(cause, ctx)
+	cause = classifySpawnError(ctx, RelabelSpawnTimeout(cause, ctx))
 	m.logger.Error("spawn: asynchronous chat start failed", "sessionID", id, "error", cause)
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()

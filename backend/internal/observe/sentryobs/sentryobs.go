@@ -52,7 +52,7 @@ const (
 	// ponytail: in memory, so a daemon restart refills it; persist under the
 	// data dir if restart loops turn out to matter.
 	maxErrorsPerFingerprintDay = 10
-	maxErrorFingerprintsPerDay    = 1024
+	maxErrorFingerprintsPerDay = 1024
 )
 
 type errorBudgetGroup struct {
@@ -454,7 +454,27 @@ func ShouldCaptureStatus(status int) bool {
 // CaptureError captures a reportable daemon error with safe tags and the
 // caller's stable fingerprint. No-op when disabled or canceled.
 func CaptureError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
-	captureErrorFor(ctx, err, tags, fingerprint, route, site, tags["operation"])
+	captureErrorFor(ctx, err, withErrorTags(tags, err), fingerprint, route, site, tags["operation"])
+}
+
+// withErrorTags adds the tags an error in err's chain declares through
+// SentryTags (a classified spawn failure's failed_step and cause). They pass
+// the same safeSentryTag filter as every other tag; tags is never modified.
+func withErrorTags(tags map[string]string, err error) map[string]string {
+	var tagged interface{ SentryTags() map[string]string }
+	if err == nil || !errors.As(err, &tagged) {
+		return tags
+	}
+	out := make(map[string]string, len(tags)+2)
+	for k, v := range tags {
+		out[k] = v
+	}
+	for k, v := range tagged.SentryTags() {
+		if _, taken := out[k]; !taken {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // CaptureErrorAsync reports HTTP faults without waiting for Sentry transport.
@@ -463,7 +483,7 @@ func CaptureErrorAsync(ctx context.Context, err error, tags map[string]string, f
 	if err == nil || errors.Is(err, context.Canceled) {
 		return
 	}
-	captureAsync(ctx, tags, fingerprint, route, site, tags["operation"])
+	captureAsync(ctx, withErrorTags(tags, err), fingerprint, route, site, tags["operation"])
 }
 
 func captureErrorFor(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
