@@ -67,6 +67,36 @@ has_message() {
 	' "$1"
 }
 
+# insert_trailer adds trailer $2 to message file $1 with none of the person's
+# trailer.* config: no separators, placement, or trailer.<token>.cmd that
+# could rewrite or duplicate it. git runs outside any repository with the
+# global and system config switched off; only the comment string carries over,
+# so comment lines and a `commit -v` scissors line are still recognised.
+# --no-divider: a "---" line in the body is not a patch divider here.
+insert_trailer() {
+	case "$1" in /*) file=$1 ;; *) file=$PWD/$1 ;; esac
+	trailer=$2
+	comment=$(git config --get core.commentString 2>/dev/null) ||
+		comment=$(git config --get core.commentChar 2>/dev/null) || comment=
+	(
+		unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX \
+			GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+		GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_CEILING_DIRECTORIES=$(dirname "$here")
+		export GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM GIT_CEILING_DIRECTORIES
+		cd "$here" || exit 0
+		set --
+		if [ -n "$comment" ] && [ "$comment" != auto ]; then
+			if [ "${#comment}" -eq 1 ]; then
+				set -- -c "core.commentChar=$comment"
+			else
+				set -- -c "core.commentString=$comment"
+			fi
+		fi
+		git "$@" interpret-trailers --in-place --no-divider --where end \
+			--if-exists addIfDifferent --if-missing add --trailer "$trailer" "$file"
+	) 2>/dev/null || true
+}
+
 # add_trailer adds the trailer to the message file in $1. $2 is the commit
 # source git passes to prepare-commit-msg (empty for commit-msg).
 add_trailer() {
@@ -87,12 +117,7 @@ add_trailer() {
 	elif ! grep -q '[^[:space:]]' "$msg"; then
 		return 0
 	fi
-	# The person's trailer.* config must not change our trailer: the separator,
-	# placement and duplicate handling are pinned. --no-divider: a "---" line in
-	# the body is not a patch divider here.
-	git -c trailer.separators=: interpret-trailers --in-place --no-divider \
-		--where end --if-exists addIfDifferent --if-missing add \
-		--trailer "Co-authored-by: $coauthor" "$msg" 2>/dev/null || true
+	insert_trailer "$msg" "Co-authored-by: $coauthor"
 }
 
 original=$(original_hook)

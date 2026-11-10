@@ -128,6 +128,28 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 	}
 }
 
+// refreshAttributionHooks rescans the configured worktrees of a session for
+// on-demand repository hooks (reference-transaction and the like) after project
+// setup ran, so a hook setup installed still runs. Without the dispatcher for
+// its name git would skip it, since core.hooksPath points at Orchestrator's dir.
+func (m *Manager) refreshAttributionHooks(ctx context.Context, project domain.ProjectRecord, workspacePath string) {
+	hooksDir := attribution.HooksDir(m.dataDir)
+	if workspacePath == "" || len(project.Config.PostCreate) == 0 {
+		return
+	}
+	if _, err := os.Stat(hooksDir); err != nil {
+		return
+	}
+	for _, worktree := range m.sessionGitWorktrees(ctx, project, workspacePath) {
+		if !attribution.ConfiguredFor(ctx, worktree, hooksDir) {
+			continue
+		}
+		if err := attribution.RefreshRepositoryHooks(ctx, worktree, hooksDir); err != nil {
+			m.logger.Warn("attribution: refresh repository hooks", "path", worktree, "error", err)
+		}
+	}
+}
+
 // sessionGitWorktrees lists the linked git worktrees of a session workspace:
 // the workspace itself, plus each child repository's worktree for a workspace
 // project. Only linked worktrees (a .git file, not a directory) are listed, so

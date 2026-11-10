@@ -292,3 +292,32 @@ func TestPRFooterPromptForWorkspaceChildRemotes(t *testing.T) {
 		})
 	}
 }
+
+func TestProvisionWorkspaceDispatchesHookInstalledBySetup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix git hook scripts")
+	}
+	ctx := context.Background()
+	root := t.TempDir()
+	wt := filepath.Join(root, "session", "s-1")
+	attributionRepo(t, filepath.Join(root, "repo"), wt, "orchestrator/s-1/root")
+	beta := true
+	m, _ := attributionManager(t, root, &beta)
+	// Project setup installs a reference-transaction hook, an on-demand name.
+	install := `hooks="$(git rev-parse --path-format=absolute --git-common-dir)/hooks" && mkdir -p "$hooks" && ` +
+		`printf '#!/bin/sh\ncat >/dev/null\necho ran >> "$(git rev-parse --path-format=absolute --git-common-dir)/ref-tx.log"\n' > "$hooks/reference-transaction" && ` +
+		`chmod +x "$hooks/reference-transaction"`
+	project := domain.ProjectRecord{ID: "p", Path: filepath.Join(root, "repo"), Config: domain.ProjectConfig{PostCreate: []string{install}}}
+	if err := m.provisionWorkspace(ctx, project, wt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(attribution.HooksDir(m.dataDir), "reference-transaction")); err != nil {
+		t.Fatalf("no dispatcher for the hook setup installed: %v", err)
+	}
+	if msg := commitMessage(t, wt); !strings.Contains(msg, attribution.Bot.Trailer()) {
+		t.Fatalf("no trailer:\n%s", msg)
+	}
+	if _, err := os.Stat(filepath.Join(root, "repo", ".git", "ref-tx.log")); err != nil {
+		t.Fatalf("the hook setup installed did not run: %v", err)
+	}
+}

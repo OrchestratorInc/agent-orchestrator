@@ -97,6 +97,18 @@ func installHook(dir, name string) error {
 	return nil
 }
 
+// RefreshRepositoryHooks repeats ConfigureWorktree's scan for on-demand hooks
+// in a worktree it configured, for a hook that project setup installed after
+// that.
+func RefreshRepositoryHooks(ctx context.Context, worktree, hooksDir string) error {
+	git := func(args ...string) (string, error) {
+		cmd := aoprocess.CommandContext(ctx, "git", append([]string{"-C", worktree}, args...)...)
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	return installRepositoryHooks(worktree, hooksDir, git)
+}
+
 // installRepositoryHooks adds a dispatcher for each on-demand hook that one of
 // the worktree's own hook directories holds, so the repository's hook still
 // runs. The directories are the ones the dispatcher hands off to.

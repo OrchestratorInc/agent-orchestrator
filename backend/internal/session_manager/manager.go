@@ -6622,7 +6622,12 @@ func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.Pro
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
-	return runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env)
+	if err := runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env); err != nil {
+		return err
+	}
+	// Setup may have installed a repository hook that needs a dispatcher.
+	m.refreshAttributionHooks(ctx, project, workspacePath)
+	return nil
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that
