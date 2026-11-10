@@ -1,7 +1,7 @@
 import { markFileMenuPainted, markFileViewerPerformance } from "../../lib/file-viewer-performance";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { GitBranch, GitPullRequest } from "lucide-react";
+import { GitBranch, GitPullRequest } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { formatTimeCompact } from "../../lib/format-time";
 import { useTruncatedText } from "../../hooks/useTruncatedText";

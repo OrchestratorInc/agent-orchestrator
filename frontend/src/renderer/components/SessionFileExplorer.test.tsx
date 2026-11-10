@@ -507,17 +507,17 @@ describe("SessionFileExplorer", () => {
 		renderWithQuery(<SessionFileExplorer sessionId="sess-explorer-collapse" />);
 		expect(await screen.findByTestId("review-pane")).toBeInTheDocument();
 
-		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-down-up");
+		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("icon-list-chevrons-down-up");
 		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("collapse:1");
 
 		// Once the review reports every file collapsed, the menu offers the way back.
 		await userEvent.click(screen.getByRole("button", { name: "Report all collapsed" }));
-		expect(screen.getByRole("button", { name: "Expand all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-up-down");
+		expect(screen.getByRole("button", { name: "Expand all files" }).querySelector("svg")).toHaveClass("icon-list-chevrons-up-down");
 		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
 		expect(screen.getByTestId("review-collapse")).toHaveTextContent("expand:2");
 		await userEvent.click(screen.getByRole("button", { name: "Report an expanded file" }));
-		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("lucide-list-chevrons-down-up");
+		expect(screen.getByRole("button", { name: "Collapse all files" }).querySelector("svg")).toHaveClass("icon-list-chevrons-down-up");
 	});
 
 	it("opens the maximize tooltip on hover or keyboard focus, not when focus is handed back", async () => {

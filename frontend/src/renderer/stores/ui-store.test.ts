@@ -66,8 +66,8 @@ describe("global settings deep links", () => {
 			focusAgentId: "codex",
 		});
 
-		useUiStore.getState().openGlobalSettings("agents");
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "agents" });
+		useUiStore.getState().openGlobalSettings("mobile");
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "mobile" });
 	});
 
 	it("preserves project settings only for explicit recovery navigation", () => {
@@ -86,6 +86,17 @@ describe("global settings deep links", () => {
 		});
 		useUiStore.getState().closeSettings();
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "project-1" });
+	});
+
+	it("drops a pending account sign-in when settings close or project settings open", () => {
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code", loginAccountId: "acct-b" });
+		expect(useUiStore.getState().accountLogin).toBe("acct-b");
+		useUiStore.getState().closeSettings();
+		expect(useUiStore.getState().accountLogin).toBeNull();
+
+		useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "claude-code", loginAccountId: "acct-b" });
+		useUiStore.getState().openProjectSettings("project-1");
+		expect(useUiStore.getState().accountLogin).toBeNull();
 	});
 });
 

@@ -5,6 +5,7 @@ import { SettingsPane, SettingsProvider, useSettingsPage } from "./SettingsDialo
 import { SettingsSidebarNav } from "./Sidebar";
 import { SidebarProvider } from "./ui/sidebar";
 import { TooltipProvider } from "./ui/tooltip";
+import { Pressable } from "./ui/pressable";
 
 function Nav() {
 	const { t } = useTranslation();
@@ -14,7 +15,7 @@ function Nav() {
 		<>
 			<SettingsSidebarNav layer={layer} />
 			{/* Mirrors the sidebar footer's Back row. */}
-			<button disabled={layer.cueBusy} onClick={layer.close} type="button">{t("settings.back")}</button>
+			<Pressable disabled={layer.cueBusy} onClick={layer.close}>{t("settings.back")}</Pressable>
 		</>
 	);
 }

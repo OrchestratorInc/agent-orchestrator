@@ -415,33 +415,40 @@ func qwenWorkerRemoteInputCommand(qwenCmd []string, cfg ports.LaunchConfig) ([]s
 	dir := filepath.Join(cfg.DataDir, "agent-runtime", "qwen", sessionKey)
 	inputPath := filepath.Join(dir, sessionKey+".input.jsonl")
 	outputPath := filepath.Join(dir, sessionKey+".output.jsonl")
+	submitPath := filepath.Join(dir, sessionKey+".submit.jsonl")
 
 	submit, err := json.Marshal(qwenSubmitCommand{Type: "submit", Text: cfg.Prompt})
 	if err != nil {
 		submit = []byte(`{"type":"submit","text":""}`)
+	}
+	// Stage the task in a file: escaped into the script, a 100 KiB task passes
+	// Linux's 128 KiB per-argument exec limit. The wrapper renames it into the
+	// input file, so Qwen never reads a partly written line.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("qwen: create remote input dir: %w", err)
+	}
+	if err := os.WriteFile(submitPath, append(submit, '\n'), 0o600); err != nil {
+		return nil, fmt.Errorf("qwen: stage remote input task: %w", err)
 	}
 
 	args := append([]string{}, qwenCmd...)
 	args = append(args, "--json-file", outputPath, "--input-file", inputPath)
 
 	var script strings.Builder
-	script.WriteString("umask 077; ")
-	script.WriteString("mkdir -p ")
-	script.WriteString(qwenShellQuote(dir))
-	script.WriteString("; : > ")
+	script.WriteString("umask 077; : > ")
 	script.WriteString(qwenShellQuote(inputPath))
 	script.WriteString("; : > ")
 	script.WriteString(qwenShellQuote(outputPath))
 	script.WriteString("; ( for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do ")
 	script.WriteString("if grep -q '\"session_start\"' ")
 	script.WriteString(qwenShellQuote(outputPath))
-	script.WriteString("; then printf '%s\\n' ")
-	script.WriteString(qwenShellQuote(string(submit)))
-	script.WriteString(" >> ")
+	script.WriteString("; then mv -f ")
+	script.WriteString(qwenShellQuote(submitPath))
+	script.WriteString(" ")
 	script.WriteString(qwenShellQuote(inputPath))
-	script.WriteString("; exit 0; fi; sleep 0.25; done; printf '%s\\n' ")
-	script.WriteString(qwenShellQuote(string(submit)))
-	script.WriteString(" >> ")
+	script.WriteString("; exit 0; fi; sleep 0.25; done; mv -f ")
+	script.WriteString(qwenShellQuote(submitPath))
+	script.WriteString(" ")
 	script.WriteString(qwenShellQuote(inputPath))
 	script.WriteString(" ) & exec")
 	for _, arg := range args {

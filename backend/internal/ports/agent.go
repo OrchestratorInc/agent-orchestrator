@@ -180,6 +180,13 @@ type AgentRuntimeCredentialEnv interface {
 	RuntimeCredentialEnv(dataDir string) map[string]string
 }
 
+// AgentAuthCacheInvalidator is implemented by an adapter that remembers what its
+// own authentication checks found, so a recheck after a login sees the login
+// instead of the answer from before it.
+type AgentAuthCacheInvalidator interface {
+	InvalidateAuthCache()
+}
+
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
 // Manager needs to launch, restore, and read back a native agent session.
@@ -724,12 +731,11 @@ type ActiveTurnSteerer interface {
 	SteersActiveTurn() bool
 }
 
-// MetadataKeyAgentSessionID is the SessionRef.Metadata key that carries an
-// agent's native session id. It matches the json tag on
-// domain.SessionMetadata.AgentSessionID and the key the adapters read, so the
-// Session Manager can bridge its typed metadata onto a SessionRef without
-// either side hard-coding the other's vocabulary.
-const MetadataKeyAgentSessionID = "agentSessionId"
+// MetadataKeyAgentSessionID and MetadataKeyNativeTranscriptPath bridge typed session metadata onto SessionRef without adapters hard-coding domain JSON vocabulary.
+const (
+	MetadataKeyAgentSessionID       = "agentSessionId"
+	MetadataKeyNativeTranscriptPath = "nativeTranscriptPath"
+)
 
 // MetadataKeySessionMode is the SessionRef.Metadata key that carries the
 // current session mode (e.g. "chat" or "tui").
@@ -818,6 +824,11 @@ type WorkspaceHookConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Restore fields are empty for fresh launches. NativeSessionID is the exact
+	// selected identity after imported-session preparation, never a guessed id;
+	// ImportConfigDir is set only while that identity is an import's.
+	NativeSessionID string
+	ImportConfigDir string
 }
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.

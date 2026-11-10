@@ -527,7 +527,7 @@ describe("ProjectSettingsForm", () => {
 		});
 		renderSettings("proj-1", undefined, "agents");
 		const worker = await screen.findByRole("button", { name: "Worker approval" });
-		const orchestrator = screen.getByRole("button", { name: "Orchestrator approval" });
+		const orchestrator = screen.getByRole("button", { name: "Orchestrator agent approval" });
 		expect(worker).toHaveTextContent("Bypass permissions");
 		expect(orchestrator).toHaveTextContent("Use Claude permissions");
 		await userEvent.click(worker);
@@ -754,7 +754,7 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", undefined, "general");
 
-		const toggle = await screen.findByRole("switch", { name: "Workers request AO review" });
+		const toggle = await screen.findByRole("switch", { name: "Workers request a built-in review" });
 		expect(toggle).not.toBeChecked();
 
 		await userEvent.click(toggle);

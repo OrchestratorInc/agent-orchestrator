@@ -247,13 +247,13 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetCodewhale:
 		plans = []Plan{manualPlan(
 			target,
-			"AO does not automatically install Codewhale. Follow the upstream installation instructions, then refresh harness status.",
+			"Orchestrator does not automatically install Codewhale. Follow the upstream installation instructions, then refresh harness status.",
 			agentDocumentationURLs[target],
 		)}
 	case TargetUnreal:
 		plans = []Plan{{
 			Target: target, Unsupported: true, Method: "manual",
-			Reason: "Unreal Agent is built into AO; update AO to update the harness.",
+			Reason: "Unreal Agent is built into Orchestrator; update Orchestrator to update the harness.",
 		}}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
@@ -794,7 +794,7 @@ func bindKimiInstallerUpdate(goos string, plan Plan, binaryPath, home, pathList 
 	root, ok := kimiInstallRoot(goos, binaryPath, home)
 	if !ok {
 		plan.Unsupported = true
-		plan.Reason = fmt.Sprintf("AO updates Kimi Code only in its default ~/.kimi-code installation; %q is managed elsewhere, so update it manually.", binaryPath)
+		plan.Reason = fmt.Sprintf("Orchestrator updates Kimi Code only in its default ~/.kimi-code installation; %q is managed elsewhere, so update it manually.", binaryPath)
 		return plan
 	}
 	env := []string{"KIMI_INSTALL_DIR=" + root, "KIMI_NO_MODIFY_PATH=1"}
@@ -864,7 +864,7 @@ func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath strin
 		uncAbsolute := strings.HasPrefix(slashed, "//") && len(strings.Split(strings.TrimPrefix(slashed, "//"), "/")) >= 3
 		if !driveAbsolute && !uncAbsolute {
 			plan.Unsupported = true
-			plan.Reason = "AO could not preserve the confirmed Grok installation directory; update it manually."
+			plan.Reason = "Orchestrator could not preserve the confirmed Grok installation directory; update it manually."
 			return plan
 		}
 		end := strings.LastIndex(slashed, "/")
@@ -926,7 +926,7 @@ func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, planne
 			writable, _ = s.pathWritable.PathWritable(ctx, plan.PackagePrefix)
 		}
 		if !writable {
-			return reject(fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; AO will not use sudo.", plan.PackagePrefix, plan.Target))
+			return reject(fmt.Sprintf("The npm prefix %s that holds the %s sessions run is not writable by the current user. Update it manually; Orchestrator will not use sudo.", plan.PackagePrefix, plan.Target))
 		}
 	}
 	if len(plan.Command) > 1 && plan.Command[0] != "npm" {
@@ -935,7 +935,7 @@ func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, planne
 		node, nodeOK := s.toolVersion(ctx, plan.Command[0], "--version")
 		_, npmOK := s.toolVersion(ctx, plan.Command[0], plan.Command[1], "--version")
 		if !nodeOK || !npmOK {
-			return reject(fmt.Sprintf("AO could not validate the Node.js and npm in %s that update %s.", plan.PackagePrefix, plan.Target))
+			return reject(fmt.Sprintf("Orchestrator could not validate the Node.js and npm in %s that update %s.", plan.PackagePrefix, plan.Target))
 		}
 		if !versionAtLeast(node, minimum) {
 			return reject(fmt.Sprintf("Node.js %s+ is required to update %s with the Node in %s; found %s.", formatToolVersion(minimum), plan.Target, plan.PackagePrefix, formatToolVersion(node)))

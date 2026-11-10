@@ -6,7 +6,7 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, TriangleAlert, X, type LucideIcon } from "lucide-react";
+import { ChevronLeft, TriangleAlert, X, type AppIcon } from "@/components/app-icons";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { components } from "../../api/schema";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
@@ -245,7 +245,7 @@ export function CreateProjectAgentSheet({
 							displayedOnBack.current ? (
 								<Button
 									type="button"
-									variant="outline"
+									variant="secondary"
 									size="icon"
 									aria-label={t("createProject.cloneBackToDetails")}
 									disabled={isBusy}
@@ -275,7 +275,6 @@ export function CreateProjectAgentSheet({
 									agents={selectableAgents}
 									disabled={isLoadingAgents}
 									labelClassName="agents-sheet-label"
-									triggerClassName="agents-sheet-control"
 									contentClassName="agents-sheet-menu"
 									hostId={hostId}
 									onChange={(value) => {
@@ -293,7 +292,6 @@ export function CreateProjectAgentSheet({
 									agents={selectableAgents}
 									disabled={isLoadingAgents}
 									labelClassName="agents-sheet-label"
-									triggerClassName="agents-sheet-control"
 									contentClassName="agents-sheet-menu"
 									hostId={hostId}
 									onChange={(value) => {
@@ -340,8 +338,6 @@ export function CreateProjectAgentSheet({
 								/>
 							) : null
 						}
-						isBusy={isBusy}
-						onCancel={() => onOpenChange(false)}
 						onSubmit={() =>
 							void onSubmit({ workerAgent, orchestratorAgent, trackerIntake: intakeVisible ? buildIntake(intake) : undefined })
 						}
@@ -350,25 +346,33 @@ export function CreateProjectAgentSheet({
 								? { message: t("createProject.gitSetupNotice"), warning: repositorySetupWarning }
 								: null
 						}
-						submitLabel={
-							preparedClonePath && error && !isBusy ? t("createProject.cloneRetrySetup") : isInitializing
-								? t("createProject.settingUp")
-								: isCreating
-									? action === "clone"
-										? t("createProject.cloning")
-										: t("createProject.creating")
-									: action === "clone"
-										? t("createProject.clone")
-										: kind === "workspace"
-											? t("createProject.createWorkspaceAndStart")
-											: t("createProject.createAndStart")
+						actions={
+							<Button
+								type="submit"
+								variant="primary"
+								disabled={!canSubmit}
+								className={cn(
+									"gap-2",
+									(isCreating || isInitializing) && "before:size-3.5 before:shrink-0 before:animate-spin before:rounded-full before:border-2 before:border-current before:border-r-transparent before:content-['']",
+								)}
+							>
+								{
+									preparedClonePath && error && !isBusy ? t("createProject.cloneRetrySetup") : isInitializing
+										? t("createProject.settingUp")
+										: isCreating
+											? action === "clone"
+												? t("createProject.cloning")
+												: t("createProject.creating")
+											: action === "clone"
+												? t("createProject.clone")
+												: kind === "workspace"
+													? t("createProject.createWorkspaceAndStart")
+													: t("createProject.createAndStart")
+								}
+							</Button>
 						}
-						submitClassName={cn(
-							"inline-flex h-control-form items-center gap-2 rounded-md bg-primary px-3 text-sm text-primary-foreground hover:bg-primary/80",
-							(isCreating || isInitializing) && "before:size-3.5 before:shrink-0 before:animate-spin before:rounded-full before:border-2 before:border-current before:border-r-transparent before:content-['']",
-						)}
 					/>
-					{onKeepCheckout ? <div className="px-4 pb-4"><Button type="button" variant="outline" disabled={isBusy} onClick={onKeepCheckout}>{t("createProject.cloneKeepCheckout")}</Button></div> : null}
+					{onKeepCheckout ? <div className="px-4 pb-4"><Button type="button" variant="secondary" disabled={isBusy} onClick={onKeepCheckout}>{t("createProject.cloneKeepCheckout")}</Button></div> : null}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
@@ -386,14 +390,9 @@ function ProjectSheetCloseButton({
 }) {
 	return (
 		<Dialog.Close asChild>
-			<button
-				type="button"
-				className="settings-close-button"
-				aria-label={ariaLabel}
-				disabled={disabled}
-			>
+			<Button type="button" variant="quiet" size="icon" aria-label={ariaLabel} disabled={disabled}>
 				{children}
-			</button>
+			</Button>
 		</Dialog.Close>
 	);
 }
@@ -422,7 +421,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	disabled?: boolean;
 	/** Caption beside the label, e.g. naming where a preselected default came from. */
 	hint?: string;
-	icon?: LucideIcon;
+	icon?: AppIcon;
 	id: string;
 	invalid?: boolean;
 	label: string;

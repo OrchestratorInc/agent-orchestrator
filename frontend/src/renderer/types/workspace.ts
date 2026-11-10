@@ -96,7 +96,7 @@ export type SessionProvisionStep = {
 };
 
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
-export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
+export type SessionBranchState = { commits: number; remoteBranch?: string; remoteHead?: string; unpushed: number };
 
 /** The session's current launch still runs a harness release an update has replaced. */
 export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };
@@ -173,6 +173,11 @@ export type WorkspaceSession = {
 	 * "running" on a failed session is the step that failed.
 	 */
 	provisionSteps?: SessionProvisionStep[];
+	/**
+	 * The daemon has a recorded workspace for this session, so workspace reads
+	 * can succeed. Absent from older daemons, which is treated as published.
+	 */
+	workspacePublished?: boolean;
 	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
 	branchState?: SessionBranchState;
 	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
@@ -184,6 +189,8 @@ export type WorkspaceSession = {
 	/** Whether the cloud worker has a current control-plane connection. */
 	runtimeConnected?: boolean;
 	chatProviderPreserved?: boolean;
+	/** An imported chat not opened yet: it has no AO workspace until it resumes. */
+	needsResume?: boolean;
 	/** User preference to tear down this session when its PR set completes through a merge. */
 	terminateOnPrMerge?: boolean;
 	/** Whether SCM review feedback is automatically injected into the worker. */
@@ -241,6 +248,8 @@ export type WorkspaceSession = {
 		orgId: string;
 		/** Reached through a share link: what this person may do comes from its grant. */
 		shared?: boolean;
+		/** The team a shared session reaches this person through, when it isn't shared with them directly. */
+		sharedVia?: string;
 		/** The guest the session was started for, when someone the project was shared with asked for it. */
 		requestedBy?: { userId: string; name: string };
 		/** The control-plane user who started the session; only they share its files as public links. */
@@ -319,10 +328,12 @@ export function primaryPR(session: WorkspaceSession): PullRequestFacts | undefin
 	return sortedPRs(session)[0];
 }
 
-/** Artifact files to show in the Summary panel, for sessions whose output includes artifacts. */
+/** Artifact files to show in the Summary panel, newest first, for sessions whose output includes artifacts. */
 export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
 	if (session.outputType !== "artifact" && session.outputType !== "pr_artifact") return [];
-	return session.artifactFiles ?? [];
+	return [...(session.artifactFiles ?? [])].sort(
+		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+	);
 }
 
 export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "kind">): boolean {
@@ -378,6 +389,7 @@ function sessionLastMessageTimestamp(session: WorkspaceSession): number {
 	return (
 		validTimestamp(session.lastInteractionAt) ??
 		validTimestamp(session.lastUserMessageAt) ??
+		(session.needsResume ? validTimestamp(session.activity?.lastActivityAt) : undefined) ??
 		validTimestamp(session.createdAt) ??
 		0
 	);
@@ -397,11 +409,22 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 	return sessions.filter((s) => !isOrchestratorSession(s));
 }
 
-/** Worker sessions ordered by the user's latest message (else creation), newest first. */
+/** Worker sessions ordered by the user's latest message (else an unopened import's source activity, else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
 	return workerSessions(sessions).sort((a, b) =>
 		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
 	);
+}
+
+/**
+ * Whether workspace reads can succeed. The daemon reports whether it has a
+ * recorded workspace: an asynchronous start publishes one partway through, a
+ * failed start can keep one, and an agent-only retry reuses it. Until then
+ * every workspace read answers 404 SESSION_WORKSPACE_NOT_FOUND. An older
+ * daemon does not report it, so its sessions are treated as published.
+ */
+export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "workspacePublished">): boolean {
+	return session.workspacePublished !== false;
 }
 
 export function sessionIsActive(session: WorkspaceSession): boolean {
@@ -414,13 +437,13 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
  * Not `sessionIsActive`, which reports row liveness and calls this state alive.
  */
 export function sessionAgentExited(session: WorkspaceSession | undefined): boolean {
-	return Boolean(session && session.activity?.state === "exited" && sessionIsActive(session));
+	return Boolean(session && !session.needsResume && session.activity?.state === "exited" && sessionIsActive(session));
 }
 
 /** Whether a session can accept a Cue from its topbar. The daemon makes the
  * final decision, including whether a command Cue's worktree still exists. */
 export function sessionCueTargetAvailable(session: WorkspaceSession | undefined): boolean {
-	return Boolean(session && sessionIsActive(session) && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
+	return Boolean(session && sessionIsActive(session) && !session.needsResume && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
 }
 
 export function sessionNeedsAttention(session: WorkspaceSession): boolean {
@@ -430,6 +453,25 @@ export function sessionNeedsAttention(session: WorkspaceSession): boolean {
 export { attentionZone, attentionZoneLabel, attentionZoneOrder } from "../lib/session-presentation";
 export type { AttentionZone } from "../lib/session-presentation";
 
+/**
+ * How one thing reached the person: who shared it and, for a team share,
+ * which team. `source` is how: a link they opened themselves, a direct
+ * share, or a team (absent from a control plane from before teams, which
+ * had only links).
+ */
+export type WorkspaceShareSource = { byName?: string; viaTeamName?: string; grantId?: string; source?: "link" | "direct" | "team" };
+
+/**
+ * A cloud project someone in another organization shared with this person:
+ * who shared the project itself (when they did), and each session shared on
+ * its own. Roles come from each session's live state.
+ */
+export type WorkspaceShare = WorkspaceShareSource & {
+	/** Set when the whole project is shared, not only some of its sessions. */
+	wholeProject?: WorkspaceShareSource;
+	sessions?: Record<string, WorkspaceShareSource>;
+};
+
 export type WorkspaceSummary = {
 	id: string;
 	cloudOrgId?: string;
@@ -438,7 +480,7 @@ export type WorkspaceSummary = {
 	 * person. It carries no role: each shared session has its own grant, which
 	 * the session's live state reports.
 	 */
-	shared?: { byName?: string };
+	shared?: WorkspaceShare;
 	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
 	hostId?: string;
 	name: string;

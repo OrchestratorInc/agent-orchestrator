@@ -179,6 +179,112 @@ func TestDeleteTerminatedSessionRefusesSharedConversationHistory(t *testing.T) {
 	}
 }
 
+func openRawDB(t *testing.T, dir string) *sql.DB {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "ao.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	return raw
+}
+
+func countRows(t *testing.T, raw *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := raw.QueryRow(query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestDeleteTerminatedSessionWithEditedAndRetriedTurns(t *testing.T) {
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	seedProject(t, s, "del")
+	sess := terminalSession(t, s, "del", 0)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: sess.ID, WorkspaceDisposition: domain.DispositionRemoved})
+	now := time.Now().UTC()
+	if _, err := s.CreateConversation(ctx, "conv-edited", domain.ConversationScopeSession, "del", sess.ID, now); err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	raw := openRawDB(t, dir)
+	for _, q := range []string{
+		`INSERT INTO conversation_turns (id, conversation_id, handled_by_session_id, state, requested_at) VALUES ('turn-1', 'conv-edited', ?1, 'failed', ?2)`,
+		`INSERT INTO conversation_turns (id, conversation_id, handled_by_session_id, state, requested_at, retry_of_turn_id) VALUES ('turn-2', 'conv-edited', ?1, 'completed', ?2, 'turn-1')`,
+		`INSERT INTO conversation_branches (id, conversation_id, session_id, created_at) VALUES ('branch-1', 'conv-edited', ?1, ?2)`,
+		`INSERT INTO conversation_branches (id, conversation_id, session_id, parent_branch_id, fork_after_turn_id, replaced_turn_id, created_at) VALUES ('branch-2', 'conv-edited', ?1, 'branch-1', 'turn-1', 'turn-2', ?2)`,
+		`INSERT INTO conversation_branches (id, conversation_id, session_id, parent_branch_id, created_at) VALUES ('branch-3', 'conv-edited', ?1, 'branch-2', ?2)`,
+	} {
+		if _, err := raw.ExecContext(ctx, q, sess.ID, now); err != nil {
+			t.Fatalf("seed %q: %v", q, err)
+		}
+	}
+
+	deleted, err := s.DeleteTerminatedSession(ctx, sess.ID)
+	if err != nil || !deleted {
+		t.Fatalf("delete = %v, %v; want deleted", deleted, err)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_branches WHERE conversation_id = 'conv-edited'`); n != 0 {
+		t.Fatalf("%d branches left, want none", n)
+	}
+}
+
+func TestDeleteTerminatedSessionClearsHistoryInBatches(t *testing.T) {
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	seedProject(t, s, "del")
+	sess := terminalSession(t, s, "del", 0)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: sess.ID, WorkspaceDisposition: domain.DispositionRemoved})
+	live, err := s.CreateSession(ctx, sampleRecord("del"))
+	mustNoError(t, err)
+	now := time.Now().UTC()
+	raw := openRawDB(t, dir)
+	seed := func(id domain.SessionID, conversation string, events, activities int) {
+		t.Helper()
+		if _, err := s.CreateConversation(ctx, conversation, domain.ConversationScopeSession, "del", id, now); err != nil {
+			t.Fatalf("create conversation: %v", err)
+		}
+		if _, err := raw.ExecContext(ctx, `
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+INSERT INTO conversation_provider_events (conversation_id, session_id, method, payload_json, received_at)
+SELECT ?1, ?2, 'message.delta', '{}', ?4 FROM n`, conversation, id, events, now); err != nil {
+			t.Fatalf("seed provider events: %v", err)
+		}
+		if _, err := raw.ExecContext(ctx, `
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+INSERT INTO conversation_activities (id, conversation_id, sequence, kind, status, created_at, updated_at)
+SELECT ?1 || '-activity-' || i, ?1, i, 'command', 'completed', ?3, ?3 FROM n`, conversation, activities, now); err != nil {
+			t.Fatalf("seed activities: %v", err)
+		}
+	}
+	seed(sess.ID, "conv-archived", 2501, 1001)
+	seed(live.ID, "conv-live", 30, 20)
+
+	if deleted, err := s.DeleteTerminatedSession(ctx, live.ID); err != nil || deleted {
+		t.Fatalf("delete live = %v, %v; want refused", deleted, err)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_provider_events WHERE session_id = ?`, live.ID); n != 30 {
+		t.Fatalf("refused delete left %d provider events, want 30", n)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_activities WHERE conversation_id = 'conv-live'`); n != 20 {
+		t.Fatalf("refused delete left %d activities, want 20", n)
+	}
+
+	deleted, err := s.DeleteTerminatedSession(ctx, sess.ID)
+	if err != nil || !deleted {
+		t.Fatalf("delete = %v, %v; want deleted", deleted, err)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_provider_events WHERE session_id = ?`, sess.ID); n != 0 {
+		t.Fatalf("%d provider events left, want none", n)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_activities WHERE conversation_id = 'conv-archived'`); n != 0 {
+		t.Fatalf("%d activities left, want none", n)
+	}
+}
+
 // terminated_at follows is_terminated however the row is written. Retention
 // lists only archived sessions with nothing left on disk, each with when it was
 // archived, or its last update for a row archived before terminated_at existed.

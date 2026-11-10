@@ -312,3 +312,18 @@ type SCMMergeabilityObservation struct {
 	// Blockers lists normalized reasons preventing merge.
 	Blockers []string
 }
+
+// GitHubRepository is GitHub's current identity for a repository. ID survives
+// renames and transfers; FullName is the current owner/name. OwnerAvatarURL
+// is the owner's id-based avatar on avatars.githubusercontent.com, or "".
+type GitHubRepository struct {
+	ID             int64
+	FullName       string
+	OwnerAvatarURL string
+}
+
+// GitHubRepositoryResolver looks up a github.com repository by owner/name,
+// following renames and transfers to its current identity.
+type GitHubRepositoryResolver interface {
+	ResolveGitHubRepository(ctx context.Context, owner, name string) (GitHubRepository, error)
+}

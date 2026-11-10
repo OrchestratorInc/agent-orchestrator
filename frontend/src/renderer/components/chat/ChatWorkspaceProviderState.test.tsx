@@ -374,7 +374,7 @@ describe("model reroute", () => {
 		expect(trigger.getAttribute("title")).toMatch(
 			/answered with gpt-5\.6-terra-mini instead of gpt-5\.6-terra/,
 		);
-		expect(screen.getByLabelText(/Substituted for gpt-5\.6-terra$/)).toBeInTheDocument();
+		expect(screen.queryByLabelText(/Substituted for/)).not.toBeInTheDocument();
 	});
 
 	it("carries the provider's own reason", () => {

@@ -22,6 +22,16 @@ vi.mock("../hooks/useSettings", async (importOriginal) => {
 		},
 	};
 });
+vi.mock("../hooks/useCloudOffering", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../hooks/useCloudOffering")>();
+	return {
+		...actual,
+		useCloudOffering: () => {
+			const offering = actual.useCloudOffering();
+			return mocks.cloudArtifacts === undefined ? offering : { ...offering, artifacts: mocks.cloudArtifacts };
+		},
+	};
+});
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 const mocks = vi.hoisted(() => ({
@@ -29,11 +39,15 @@ const mocks = vi.hoisted(() => ({
 	agents: [] as Array<Record<string, unknown>>,
 	navigate: vi.fn(),
 	post: vi.fn(),
+	del: vi.fn(),
 	get: vi.fn(),
 	capture: vi.fn(),
 	deleteCloudArtifact: vi.fn(),
 	refreshCloudAccess: vi.fn(),
+	artifactFileChanges: vi.fn(),
 	hideShellTopbar: true,
+	/** Overrides whether the control plane keeps artifacts; undefined keeps the real hook's answer. */
+	cloudArtifacts: undefined as boolean | undefined,
 }));
 
 vi.mock("./PdfPreview", () => ({
@@ -66,10 +80,11 @@ vi.mock("./CloudArtifactFrame", () => ({
 vi.mock("./ArtifactFileView", () => ({
 	ArtifactFileView: ({ cloud, path, rawUrl, readOnly }: { cloud?: boolean; path: string; rawUrl?: string; readOnly?: boolean }) => <div data-testid="artifact-file-preview" data-cloud={cloud} data-path={path} data-raw-url={rawUrl} data-read-only={readOnly} />,
 }));
+vi.mock("../hooks/useArtifactFileChanges", () => ({ useArtifactFileChanges: mocks.artifactFileChanges }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/api-client")>(),
-	apiClient: { POST: mocks.post, GET: mocks.get },
+	apiClient: { POST: mocks.post, GET: mocks.get, DELETE: mocks.del },
 }));
 vi.mock("../lib/telemetry", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/telemetry")>(),
@@ -138,15 +153,25 @@ const withoutArtifacts: WorkspaceSummary[] = [
 	{ id: STANDALONE_WORKSPACE_ID, name: "Standalone", path: "", sessions: [] },
 ];
 
+/** Search sits behind its icon until opened. */
+async function openSearch(user: ReturnType<typeof userEvent.setup>) {
+	await user.click(screen.getByRole("button", { name: "Search artifacts" }));
+	return screen.getByRole("searchbox", { name: "Search artifacts" });
+}
+
 function renderView() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(
+	const tree = () => (
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
 				<ArtifactsView />
 			</TooltipProvider>
-		</QueryClientProvider>,
+		</QueryClientProvider>
 	);
+	const view = render(tree());
+	/** Renders again, as a workspace refresh does. */
+	const refresh = () => view.rerender(tree());
+	return { ...view, refresh };
 }
 
 describe("ArtifactsView", () => {
@@ -167,11 +192,14 @@ describe("ArtifactsView", () => {
 		mocks.workspaces = withArtifacts;
 		mocks.agents = [codexReady];
 		mocks.hideShellTopbar = true;
+		mocks.cloudArtifacts = undefined;
 		mocks.navigate.mockReset();
 		mocks.post.mockReset();
+		mocks.del.mockReset().mockResolvedValue({ data: undefined, error: undefined });
 		mocks.get.mockReset();
 		mocks.capture.mockReset();
 		mocks.deleteCloudArtifact.mockReset().mockResolvedValue(undefined);
+		mocks.artifactFileChanges.mockReset();
 		useUiStore.setState({ settingsModal: null });
 		useUiStore.getState().clearGlobalToast();
 	});
@@ -197,25 +225,100 @@ describe("ArtifactsView", () => {
 	it("filters project sections and recents together, then clears both filters", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getByRole("button", { name: "Filter by project" }));
+		await user.click(screen.getByRole("button", { name: "Filter" }));
 		await user.click(screen.getByRole("menuitemradio", { name: "Scratchpad" }));
 		expect(screen.queryByRole("region", { name: "agent-orchestrator" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("region", { name: "Recent" })).not.toBeInTheDocument();
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 		expect(screen.getByRole("heading", { level: 2, name: "Scratchpad" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Scratchpad" })).not.toBeInTheDocument();
-		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "no such thing");
+		expect(screen.getByRole("button", { name: "Filter" })).toHaveAttribute("data-active", "true");
+		expect(screen.getByRole("button", { name: "Remove filter Project: Scratchpad" })).toBeInTheDocument();
+		await user.type(await openSearch(user), "no such thing");
 		await user.click(screen.getByRole("button", { name: "Clear filters" }));
-		expect(screen.getByRole("searchbox", { name: "Search artifacts" })).toHaveValue("");
+		expect(screen.queryByRole("searchbox", { name: "Search artifacts" })).not.toBeInTheDocument();
 		expect(screen.getByRole("region", { name: "agent-orchestrator" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Filter by project" })).toHaveTextContent("All projects");
+		expect(screen.queryByRole("button", { name: /^Remove filter/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Filter" })).not.toHaveAttribute("data-active");
+	});
+
+	it("filters by file type from the Filter menu and removes it from its chip", async () => {
+		const user = userEvent.setup();
+		mocks.workspaces = [{
+			id: "ao",
+			name: "agent-orchestrator",
+			path: "/code/ao",
+			sessions: [session("ao-1", "Launch", [
+				{ name: "launch.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" },
+				{ name: "hero.png", kind: "file", updatedAt: "2026-10-10T10:00:00Z" },
+				{ name: "demo.mp4", kind: "file", updatedAt: "2026-10-09T10:00:00Z" },
+			])],
+		}];
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Filter" }));
+		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual([
+			"All projects", "agent-orchestrator", "All types", "All images", "All videos", "All documents",
+		]);
+		await user.click(screen.getByRole("menuitemradio", { name: "All videos" }));
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.getByText("demo.mp4")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Remove filter Type: All videos" }));
+		await user.click(screen.getByRole("button", { name: "Filter" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "All documents" }));
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.getByText("launch.html")).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Remove filter Type: All documents" }));
+		expect(screen.getAllByRole("listitem")).toHaveLength(3);
+	});
+
+	it("filters by location, offering Cloud only where the control plane keeps artifacts", async () => {
+		const user = userEvent.setup();
+		mocks.cloudArtifacts = false;
+		const { unmount } = renderView();
+		const location = within(screen.getByRole("group", { name: "Artifact location" }));
+		expect(location.getAllByRole("button").map((button) => button.textContent)).toEqual(["All", "On this machine"]);
+		expect(location.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+		unmount();
+
+		mocks.cloudArtifacts = true;
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "cloud-notes.md", updatedAt: "2026-10-12T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1" };
+		mocks.workspaces = [...withArtifacts, { id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
+		renderView();
+		const withCloud = within(screen.getByRole("group", { name: "Artifact location" }));
+		await user.click(withCloud.getByRole("button", { name: "Cloud" }));
+		expect(withCloud.getByRole("button", { name: "Cloud" })).toHaveAttribute("aria-pressed", "true");
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
+		expect(screen.getByText("cloud-notes.md")).toBeInTheDocument();
+		// The project menu lists only projects with artifacts in that location.
+		await user.click(screen.getByRole("button", { name: "Filter" }));
+		expect(screen.getAllByRole("menuitemradio").slice(0, 2).map((item) => item.textContent)).toEqual(["All projects", "Cloud project"]);
+		await user.keyboard("{Escape}");
+
+		await user.click(withCloud.getByRole("button", { name: "On this machine" }));
+		expect(screen.queryByText("cloud-notes.md")).not.toBeInTheDocument();
+		expect(screen.getAllByText("pricing.md").length).toBeGreaterThan(0);
+	});
+
+	it("opens search from its icon and closes it with Escape, clearing the query", async () => {
+		const user = userEvent.setup();
+		renderView();
+		const search = await openSearch(user);
+		expect(search).toHaveFocus();
+		await user.type(search, "pricing");
+		expect(screen.queryByText("artifacts-user-flow.html")).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.getAllByRole("listitem")).toHaveLength(6);
 	});
 
 	it("searches by file name and session title, then clears filters", async () => {
 		const user = userEvent.setup();
 		renderView();
 
-		await user.type(screen.getByRole("searchbox", { name: "Search artifacts" }), "pricing");
+		await user.type(await openSearch(user), "pricing");
 		expect(screen.getAllByText("pricing.md")).toHaveLength(1);
 		expect(screen.queryByText("artifacts-user-flow.html")).not.toBeInTheDocument();
 		expect(screen.queryByText("Scratchpad")).not.toBeInTheDocument();
@@ -225,7 +328,7 @@ describe("ArtifactsView", () => {
 		expect(screen.getByText("No matches")).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Clear filters" }));
-		expect(screen.getByRole("searchbox", { name: "Search artifacts" })).toHaveValue("");
+		expect(screen.queryByRole("searchbox", { name: "Search artifacts" })).not.toBeInTheDocument();
 		expect(screen.getAllByRole("listitem")).toHaveLength(6);
 	});
 
@@ -233,7 +336,7 @@ describe("ArtifactsView", () => {
 		const user = userEvent.setup();
 		renderView();
 
-		const search = screen.getByRole("searchbox", { name: "Search artifacts" });
+		const search = await openSearch(user);
 		await user.type(search, "agent-orchestrator");
 		expect(screen.getByRole("region", { name: "agent-orchestrator" })).toBeInTheDocument();
 		expect(screen.queryByRole("region", { name: "Scratchpad" })).not.toBeInTheDocument();
@@ -260,6 +363,169 @@ describe("ArtifactsView", () => {
 		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
 		expect(screen.getByRole("heading", { level: 2, name: "agent-orchestrator" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "agent-orchestrator" })).not.toBeInTheDocument();
+	});
+
+	it("selects artifacts one by one and deletes them together after confirming", async () => {
+		const user = userEvent.setup();
+		useArtifactsViewStore.setState({ pinnedArtifactIds: [JSON.stringify(["ao-2", "pricing.md"])] });
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByText("0 selected")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+		// Selecting hides each card's own actions and stops the card from opening a preview.
+		expect(screen.queryByRole("button", { name: /^More actions/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "New artifact" })).not.toBeInTheDocument();
+
+		// The same file shows in Pinned, Recent and its project; one checkbox is checked in all of them.
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		for (const box of screen.getAllByRole("checkbox", { name: "Select pricing.md" })) expect(box).toBeChecked();
+		await user.click(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]!);
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		const dialog = screen.getByRole("dialog", { name: "Delete 2 artifacts?" });
+		expect(within(dialog).getByRole("list", { name: "Selected artifacts" })).toHaveTextContent("pricing.mdcaching-options.md");
+		await user.click(within(dialog).getByRole("button", { name: "Delete 2 artifacts" }));
+
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(mocks.del).toHaveBeenCalledTimes(2);
+		expect(mocks.del).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/artifact-files", { params: { path: { sessionId: "ao-2" }, query: { path: "pricing.md" } } });
+		expect(mocks.del).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/artifact-files", { params: { path: { sessionId: "standalone-1" }, query: { path: "caching-options.md" } } });
+		expect(useArtifactsViewStore.getState().pinnedArtifactIds).toEqual([]);
+		expect(screen.getByRole("button", { name: "Select" })).toBeInTheDocument();
+		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+	});
+
+	it("selects every visible artifact, then leaves selection with Cancel or Escape", async () => {
+		const user = userEvent.setup();
+		useArtifactsViewStore.setState({ view: "list" });
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getByRole("button", { name: "Select all" }));
+		expect(screen.getByText("3 selected")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Deselect all" }));
+		expect(screen.getByText("0 selected")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		await user.keyboard("{Escape}");
+		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByText("0 selected")).toBeInTheDocument();
+	});
+
+	it("drops a selected artifact deleted elsewhere, so a new file at its path starts unselected", async () => {
+		const user = userEvent.setup();
+		const { refresh } = renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		await user.click(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]!);
+		// The selection outlives the filters.
+		const search = await openSearch(user);
+		await user.type(search, "caching");
+		await user.clear(search);
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+
+		const [project, scratchpad] = withArtifacts;
+		mocks.workspaces = [{ ...project!, sessions: [project!.sessions[0]!, session("ao-2", "Review pricing", [])] }, scratchpad!];
+		refresh();
+		await waitFor(() => expect(screen.getByText("1 selected")).toBeInTheDocument());
+
+		mocks.workspaces = withArtifacts;
+		refresh();
+		for (const box of screen.getAllByRole("checkbox", { name: "Select pricing.md" })) expect(box).not.toBeChecked();
+		expect(screen.getByText("1 selected")).toBeInTheDocument();
+		expect(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]).toBeChecked();
+	});
+
+	it.each(["gallery", "list"] as const)("describes each %s checkbox with its project, session and path", async (view) => {
+		const user = userEvent.setup();
+		useArtifactsViewStore.setState({ view });
+		mocks.workspaces = [{
+			id: "ao",
+			name: "agent-orchestrator",
+			path: "/code/ao",
+			sessions: [
+				session("ao-1", "Draft the report", [{ name: "report.md", updatedAt: "2026-10-11T10:00:00Z" }]),
+				session("ao-2", "Review the report", [{ name: "report.md", updatedAt: "2026-10-10T10:00:00Z" }]),
+			],
+		}];
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		const boxes = screen.getAllByRole("checkbox", { name: "Select report.md" });
+		expect(boxes).toHaveLength(2);
+		expect(boxes[0]).toHaveAccessibleDescription("agent-orchestrator · Draft the report · report.md");
+		expect(boxes[1]).toHaveAccessibleDescription("agent-orchestrator · Review the report · report.md");
+	});
+
+	it("keeps the artifacts that failed to delete selected and says why", async () => {
+		const user = userEvent.setup();
+		mocks.del.mockImplementation(async (_path: string, { params }: { params: { path: { sessionId: string } } }) => (
+			params.path.sessionId === "ao-2" ? { error: { error: { code: "internal", message: "disk is read-only" } } } : { data: undefined }
+		));
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		await user.click(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]!);
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete 2 artifacts" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "Delete 1 artifact?" });
+		expect(within(dialog).getByText(/^Couldn't delete 1 of 2: /)).toBeInTheDocument();
+		expect(within(dialog).getByRole("list", { name: "Selected artifacts" })).toHaveTextContent("pricing.md");
+	});
+
+	it("does not let another member's cloud artifacts be selected", async () => {
+		const user = userEvent.setup();
+		const mine = session("cloud-1", "My notes", [{ name: "mine.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		mine.cloud = { orgId: "org-1", createdByUserId: "me-1" };
+		const theirs = session("cloud-2", "Their notes", [{ name: "theirs.md", updatedAt: "2026-10-10T10:00:00Z" }]);
+		theirs.cloud = { orgId: "org-1", createdByUserId: "someone-else" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [mine, theirs] }];
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByRole("checkbox", { name: "Select theirs.md" })).toBeDisabled();
+		await user.click(screen.getByRole("button", { name: "Select all" }));
+		expect(screen.getByText("1 selected")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete 1 artifact" }));
+		await waitFor(() => expect(mocks.deleteCloudArtifact).toHaveBeenCalledTimes(1));
+		expect(mocks.deleteCloudArtifact).toHaveBeenCalledWith("org-1", "cloud-1", "mine.md");
+	});
+
+	it("keeps search and the Filter menu while selecting, and Escape in search keeps the selection", async () => {
+		const user = userEvent.setup();
+		renderView();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
+		expect(screen.getByRole("button", { name: "Filter" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "List view" })).not.toBeInTheDocument();
+
+		const search = await openSearch(user);
+		await user.type(search, "caching");
+		await user.click(screen.getByRole("button", { name: "Select all" }));
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+		await user.click(search);
+		await user.keyboard("{Escape}");
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+
+		// Focus returns to the Search icon, whose tooltip takes the next Escape.
+		expect(screen.getByRole("button", { name: "Search artifacts" })).toHaveFocus();
+		await user.keyboard("{Escape}");
+		expect(screen.getByText("2 selected")).toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
 	});
 
 	it("keeps gallery cloud actions on the cloud session, showing its files in a folder under ~/.ao", async () => {
@@ -308,6 +574,13 @@ describe("ArtifactsView", () => {
 		const dialog = await screen.findByRole("dialog", { name: "notes.md" });
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(within(dialog).queryByRole("button", { name: "Share: notes.md" })).toBeNull();
+	});
+
+	it("offers Share on a Scratchpad file, which belongs to the Scratchpad workspace", async () => {
+		renderView();
+		await userEvent.click(within(screen.getByRole("region", { name: "Scratchpad" })).getByRole("button", { name: /^caching-options\.md/ }));
+		const dialog = screen.getByRole("dialog", { name: "caching-options.md" });
+		expect(await within(dialog).findByRole("button", { name: "Share: caching-options.md" })).toBeInTheDocument();
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
@@ -518,6 +791,43 @@ describe("ArtifactsView", () => {
 		});
 	});
 
+	it("reloads an open local page when its agent rewrites it", async () => {
+		const user = userEvent.setup();
+		const page = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		page.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		page.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		vi.stubGlobal("fetch", vi.fn(async () => new Response("<h1>Design review</h1>")));
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [page] }];
+		const { refresh } = renderView();
+
+		await user.click(within(screen.getByRole("region", { name: "AO" })).getByRole("button", { name: /^page\.html/ }));
+		const dialog = screen.getByRole("dialog", { name: "page.html" });
+		const opened = dialog.querySelector("iframe");
+		expect(opened).toHaveAttribute("src", page.artifactFiles![0].inlineUrl);
+		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith({ id: "ao-html", cloud: undefined }, true);
+
+		const rewritten = structuredClone(page);
+		rewritten.artifactFiles![0].updatedAt = "2026-10-11T10:05:00Z";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [rewritten] }];
+		refresh();
+
+		const reloaded = screen.getByRole("dialog", { name: "page.html" }).querySelector("iframe");
+		expect(reloaded).toHaveAttribute("src", page.artifactFiles![0].inlineUrl);
+		expect(reloaded).not.toBe(opened);
+	});
+
+	it("follows a cloud preview's changes through its cloud session", async () => {
+		const user = userEvent.setup();
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1" } as WorkspaceSession["cloud"];
+		mocks.workspaces = [{ id: "cloud", name: "Cloud", path: "", kind: CLOUD_PROJECT_KIND, sessions: [cloud] }];
+		renderView();
+
+		await user.click(within(screen.getByRole("region", { name: "Cloud" })).getByRole("button", { name: /^notes\.md/ }));
+		expect(screen.getByRole("dialog", { name: "notes.md" })).toBeInTheDocument();
+		expect(mocks.artifactFileChanges).toHaveBeenLastCalledWith({ id: "cloud-1", cloud: { orgId: "org-1" } }, true);
+	});
+
 	it("opens a Scratchpad artifact on the standalone session route", async () => {
 		const user = userEvent.setup();
 		renderView();
@@ -560,9 +870,9 @@ describe("ArtifactsView", () => {
 		const modal = within(screen.getByRole("dialog", { name: "pricing.md" }));
 		expect(modal.queryByRole("button", { name: "Pin artifact: pricing.md" })).not.toBeInTheDocument();
 		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
-		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toHaveTextContent("Share");
+		expect(await modal.findByRole("button", { name: "Share: pricing.md" })).toBeInTheDocument();
 		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
-		expect(screen.queryByRole("menuitem", { name: /share/i })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Share" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitem", { name: "Pin artifact" }));
@@ -708,6 +1018,6 @@ describe("ArtifactsView", () => {
 		expect(screen.getByRole("heading", { name: "No agent is ready" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Create artifact" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Open agent settings" }));
-		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "agents" });
+		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness" });
 	});
 });
