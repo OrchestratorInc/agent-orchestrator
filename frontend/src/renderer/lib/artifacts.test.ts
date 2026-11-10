@@ -6,7 +6,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactChangeError, artifactCount, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { artifactChangeError, artifactCount, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -112,19 +112,53 @@ describe("filterArtifactGroups", () => {
 			session("ao-2", [artifact("notes.md", "2026-10-10T10:00:00Z")], { title: "Review pricing" }),
 		]),
 		workspace("px0", "px0", [session("px0-1", [artifact("metrics.html", "2026-10-11T12:00:00Z", "html")])]),
+		workspace("cloud", "cloud-project", [
+			session("c-1", [artifact("report.pdf", "2026-10-09T10:00:00Z", "file"), artifact("chart.png", "2026-10-09T09:00:00Z", "file"), artifact("demo.mp4", "2026-10-09T08:00:00Z", "file")], { cloud: { orgId: "org-1" } }),
+		], { kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1" }),
 	]);
+	const names = (filtered: ReturnType<typeof filterArtifactGroups>) => filtered.flatMap((group) => group.rows.map((row) => row.name));
 
 	it("matches the file name or the session title, case-insensitively", () => {
-		expect(filterArtifactGroups(groups, "USER-FLOW", "").flatMap((group) => group.rows.map((row) => row.name))).toEqual(["artifacts-user-flow.html"]);
-		expect(filterArtifactGroups(groups, "pricing", "").flatMap((group) => group.rows.map((row) => row.name))).toEqual(["notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "USER-FLOW", projectId: "" }))).toEqual(["artifacts-user-flow.html"]);
+		expect(names(filterArtifactGroups(groups, { query: "pricing", projectId: "" }))).toEqual(["notes.md"]);
 	});
 
 	it("keeps only the chosen project's group", () => {
-		expect(filterArtifactGroups(groups, "", "px0").map((group) => group.id)).toEqual(["px0"]);
+		expect(filterArtifactGroups(groups, { query: "", projectId: "px0" }).map((group) => group.id)).toEqual(["px0"]);
+	});
+
+	it("keeps only artifacts on this machine or only cloud ones", () => {
+		expect(filterArtifactGroups(groups, { query: "", projectId: "", location: "local" }).map((group) => group.id)).toEqual(["px0", "ao"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", location: "cloud" }))).toEqual(["report.pdf", "chart.png", "demo.mp4"]);
+	});
+
+	it("keeps only the chosen file type, together with the other filters", () => {
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", type: "document" }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md", "report.pdf"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "ao", type: "document" }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", type: "image" }))).toEqual(["chart.png"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", location: "cloud", type: "video" }))).toEqual(["demo.mp4"]);
+		expect(filterArtifactGroups(groups, { query: "", projectId: "", location: "local", type: "video" })).toEqual([]);
+	});
+
+	it("keeps a project's rows of the chosen type when the query names the project", () => {
+		expect(names(filterArtifactGroups(groups, { query: "agent-orch", projectId: "", type: "document" }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
 	});
 
 	it("returns nothing when no row matches", () => {
-		expect(filterArtifactGroups(groups, "pricing", "px0")).toEqual([]);
+		expect(filterArtifactGroups(groups, { query: "pricing", projectId: "px0" })).toEqual([]);
+	});
+});
+
+describe("artifactType", () => {
+	it("sorts images and videos by extension, and everything else into documents", () => {
+		expect(artifactType({ path: "a.png" })).toBe("image");
+		expect(artifactType({ path: "a.svg" })).toBe("image");
+		expect(artifactType({ path: "a.MP4" })).toBe("video");
+		expect(artifactType({ path: "a.webm" })).toBe("video");
+		expect(artifactType({ path: "a.html" })).toBe("document");
+		expect(artifactType({ path: "a.md" })).toBe("document");
+		expect(artifactType({ path: "a.pdf" })).toBe("document");
+		expect(artifactType({ path: "a.csv" })).toBe("document");
 	});
 });
 

@@ -256,6 +256,13 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	useEnsureAgentReadiness: vi.fn(),
 }));
 
+// ao.setup.checked reads the startup checks' react-query cache; these
+// shortcut tests render the shell without a QueryClient.
+vi.mock("../hooks/useAgentInventoryTelemetry", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useAgentInventoryTelemetry")>()),
+	useSetupCheckedTelemetry: () => undefined,
+}));
+
 vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null, NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
 vi.mock("../components/SessionTopbarActions", () => ({ SessionTopbarActions: () => null }));

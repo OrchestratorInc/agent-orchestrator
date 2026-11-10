@@ -29,7 +29,9 @@ type ShellTerminal struct {
 	SessionID  domain.SessionID `json:"sessionId,omitempty"`
 	WorkingDir string           `json:"workingDir"`
 	Title      string           `json:"title"`
-	CreatedAt  time.Time        `json:"createdAt"`
+	// TerminalTitle is present only when the program's title should label the tab.
+	TerminalTitle string    `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // OpenShellTerminalInput is the request to open a new shell pane. An empty

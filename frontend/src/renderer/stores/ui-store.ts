@@ -180,6 +180,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
+	/** Home offers the session import once: until the user imports or dismisses it. */
+	sessionImportOfferClosed: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
@@ -200,12 +202,6 @@ export type UiState = {
 	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
 	 */
 	newSidebarDesign: boolean;
-	/**
-	 * The simplified, floating top bar. Default on. The switch lives in
-	 * Developer mode, and turning it off only takes effect there: read it
-	 * through `isSimplifiedTopbar` (lib/simplified-topbar).
-	 */
-	simplifiedTopbar: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -225,6 +221,10 @@ export type UiState = {
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	// One-shot "open this project's archive" from Cmd+K. The project's board
+	// consumes it when it is (or becomes) the visible page; `at` lets a request
+	// whose board never showed up expire instead of firing on a later visit.
+	archiveOpenRequest: { projectId: string; hostId?: string; nonce: number; at: number } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
@@ -263,6 +263,7 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
+	closeSessionImportOffer: () => void;
 	setSplitPanes: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
@@ -271,7 +272,6 @@ export type UiState = {
 	setRenderMath: (enabled: boolean) => void;
 	setProjectAvatars: (enabled: boolean) => void;
 	setNewSidebarDesign: (enabled: boolean) => void;
-	setSimplifiedTopbar: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -315,6 +315,8 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
+	requestArchiveOpen: (projectId: string, hostId?: string) => void;
+	clearArchiveOpenRequest: (nonce: number) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
@@ -338,6 +340,7 @@ const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
+const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
 const splitPanesStorageKey = "ao.splitPanes";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
@@ -345,7 +348,6 @@ const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 const projectAvatarsStorageKey = "ao.projectAvatars";
 const newSidebarDesignStorageKey = "ao.newSidebarDesign";
-const simplifiedTopbarStorageKey = "ao.simplifiedTopbar";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -371,6 +373,14 @@ function initialDiagnostics() {
 
 function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
+}
+
+function initialSessionImportOfferClosed() {
+	try {
+		return getLocalStorage()?.getItem(sessionImportOfferClosedStorageKey) === "true";
+	} catch {
+		return false;
+	}
 }
 
 function initialTerminalCopyOnSelect() {
@@ -441,6 +451,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
+	sessionImportOfferClosed: initialSessionImportOfferClosed(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
@@ -449,7 +460,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	projectAvatars: initialProjectAvatars(),
 	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
-	simplifiedTopbar: getLocalStorage()?.getItem(simplifiedTopbarStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -460,6 +470,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	archiveOpenRequest: null,
 	firstRunPromptActive: false,
 	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
@@ -517,6 +528,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
 	},
+	closeSessionImportOffer: () => {
+		try {
+			getLocalStorage()?.setItem(sessionImportOfferClosedStorageKey, "true");
+		} catch {
+			// The offer comes back next launch; the agent page still has the import.
+		}
+		set({ sessionImportOfferClosed: true });
+	},
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
 		set({ splitPanes });
@@ -544,10 +563,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setNewSidebarDesign: (newSidebarDesign) => {
 		getLocalStorage()?.setItem(newSidebarDesignStorageKey, String(newSidebarDesign));
 		set({ newSidebarDesign });
-	},
-	setSimplifiedTopbar: (simplifiedTopbar) => {
-		getLocalStorage()?.setItem(simplifiedTopbarStorageKey, String(simplifiedTopbar));
-		set({ simplifiedTopbar });
 	},
 	setChatSendKeyMode: (chatSendKeyMode) => {
 		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
@@ -849,6 +864,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
+	requestArchiveOpen: (projectId, hostId) =>
+		set((state) => ({
+			archiveOpenRequest: { projectId, hostId, nonce: (state.archiveOpenRequest?.nonce ?? 0) + 1, at: Date.now() },
+		})),
+	clearArchiveOpenRequest: (nonce) =>
+		set((state) => (state.archiveOpenRequest?.nonce === nonce ? { archiveOpenRequest: null } : state)),
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {

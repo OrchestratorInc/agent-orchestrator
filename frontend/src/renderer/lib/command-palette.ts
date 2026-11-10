@@ -22,6 +22,7 @@ import {
 	type PRReviewState,
 } from "./session-reviews";
 import { appI18n, type MessageKey } from "../i18n";
+import { isArchivedSession } from "./standalone-archive";
 import type { components } from "../../api/schema";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import type { GlobalSettingsSection } from "../stores/ui-store";
@@ -59,6 +60,7 @@ export type CommandAction =
 	| { kind: "open-new-task"; projectId: string }
 	| { kind: "open-new-project" }
 	| { kind: "open-orchestrator"; projectId: string }
+	| { kind: "open-archive"; projectId: string }
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
 	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
@@ -409,6 +411,18 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				disabledReason: isProjectRestarting ? t("command.orchestratorRestarting") : undefined,
 				action: { kind: "open-orchestrator", projectId: currentProject.id },
 			});
+			const archivedCount = workerSessions(currentProject.sessions).filter(isArchivedSession).length;
+			if (archivedCount > 0) {
+				items.push({
+					id: "current-open-archive",
+					group: "current",
+					title: t("command.openArchive"),
+					emphasis: currentProject.name,
+					subtitle: t("command.archivedCount", { count: archivedCount }),
+					keywords: ["archive", "archived", "ended", "terminated", "restore", "history", currentProject.name],
+					action: { kind: "open-archive", projectId: currentProject.id },
+				});
+			}
 			items.push({
 				id: "current-project-settings",
 				group: "current",

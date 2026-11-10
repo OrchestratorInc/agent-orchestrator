@@ -486,6 +486,12 @@ func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata d
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
 	rec.FirstSignalAt = time.Now()
 	rec.Metadata = preserveCheckpointOnFakeMarkSpawned(rec.Metadata, metadata)
+	if metadata.RuntimeHandleID == "" {
+		rec.Metadata.RuntimeHandleID = l.store.sessions[id].Metadata.RuntimeHandleID
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && metadata.ControllerGeneration != "" {
+		rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID = "", ""
+	}
 	l.store.sessions[id] = rec
 	return nil
 }
@@ -12236,4 +12242,22 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime" {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
 	}
+}
+
+func (f *fakeStore) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	return f.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
+}
+
+func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.IsTerminated || !rec.NeedsImportResume() || *rec.Metadata.ImportSource != *expected || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != workspace.WorkspacePath {
+		return false, nil
+	}
+	copied := *next
+	rec.Metadata.ImportSource = &copied
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = workspace.Branch, workspace.WorkspacePath, workspace.WorkspaceRepoPath
+	rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef = workspace.DiffBaseSHA, workspace.DiffBaseRef
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
 }

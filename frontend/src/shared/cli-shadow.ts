@@ -63,6 +63,13 @@ export type CliShadowReplaceResult =
 
 const CLI_NAME = "ao";
 
+// A dev build runs a daemon from its checkout and an isolated profile (its own
+// AO_DATA_DIR or AO_RUN_FILE) is a side-by-side instance, so the ao on PATH
+// differs from theirs by design. Only the user's real install can be shadowed.
+export function cliShadowEnabled(env: Record<string, string | undefined>, isPackaged: boolean): boolean {
+	return isPackaged && !env.AO_DATA_DIR?.trim() && !env.AO_RUN_FILE?.trim();
+}
+
 // `ao version` prints "0.14.9-nightly.1 commit abc built ...", and older or
 // third-party builds may word it differently, so take the first valid token.
 function parseVersion(line: string): string | null {

@@ -14,9 +14,10 @@ require (
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.18.5
+	github.com/klauspost/compress v1.19.1
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pressly/goose/v3 v3.27.1
+	github.com/rivo/uniseg v0.4.7
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/pflag v1.0.9
 	github.com/stretchr/testify v1.11.1
@@ -58,7 +59,6 @@ require (
 	github.com/oapi-codegen/runtime v1.6.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	github.com/swaggest/refl v1.4.0 // indirect
 	github.com/teambition/rrule-go v1.8.2 // indirect

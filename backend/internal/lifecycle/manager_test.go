@@ -2207,7 +2207,7 @@ func TestActivity_WaitingInputEntryAndExitEmitTelemetry(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want waiting_input entered/exited", sink.events)
 	}
-	if sink.events[0].Name != "ao.session.waiting_input_entered" || sink.events[1].Name != "ao.session.waiting_input_exited" {
+	if sink.events[0].Name != "ao.sessions.input_wait_started" || sink.events[1].Name != "ao.sessions.input_wait_ended" {
 		t.Fatalf("event names = %#v", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	if got := sink.events[1].Payload["dwell_ms"]; got != int64(3000) {
@@ -3951,7 +3951,7 @@ func TestActivity_BlockedEntryAndExitEmitTelemetry(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want entered/exited", sink.events)
 	}
-	if sink.events[0].Name != "ao.session.waiting_input_entered" || sink.events[1].Name != "ao.session.waiting_input_exited" {
+	if sink.events[0].Name != "ao.sessions.input_wait_started" || sink.events[1].Name != "ao.sessions.input_wait_ended" {
 		t.Fatalf("event names = %#v (family events keep the waiting_input_* names)", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	if got := sink.events[0].Payload["state"]; got != "blocked" {
@@ -4778,8 +4778,10 @@ func TestMarkChatSpawnedKeepsPreviousOwnerWhenAtomicBoundaryCommitFails(t *testi
 func TestMarkChatSpawnedCommitsReservedBoundaryWithLifecycleOwner(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeStore()
+	source := domain.SessionImportSource{NativeID: "thread-fresh", ConfigDir: "/provider", Prepared: true}
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeChat, IsTerminated: true,
+		Metadata: domain.SessionMetadata{ImportSource: &source},
 	}
 	m := New(st, nil)
 	boundary := domain.ConversationBranch{
@@ -4788,9 +4790,12 @@ func TestMarkChatSpawnedCommitsReservedBoundaryWithLifecycleOwner(t *testing.T) 
 		ProviderScopeID: "fresh-provider-boundary", CreatedAt: time.Unix(2, 0),
 	}
 
+	adopted := source
+	adopted.Adopted = true
 	if err := m.MarkChatSpawned(ctx, "mer-1", domain.SessionMetadata{
 		ProviderConversationID: "thread-fresh",
 		ControllerGeneration:   "generation-fresh",
+		ImportSource:           &adopted,
 	}, boundary); err != nil {
 		t.Fatalf("MarkChatSpawned: %v", err)
 	}
@@ -4800,8 +4805,15 @@ func TestMarkChatSpawnedCommitsReservedBoundaryWithLifecycleOwner(t *testing.T) 
 	got := st.sessions["mer-1"]
 	if got.IsTerminated || got.Activity.State != domain.ActivityIdle ||
 		got.Metadata.ProviderConversationID != "thread-fresh" ||
-		got.Metadata.ControllerGeneration != "generation-fresh" {
+		got.Metadata.ControllerGeneration != "generation-fresh" ||
+		got.NeedsImportResume() || source.Adopted {
 		t.Fatalf("committed Chat owner = %+v", got)
+	}
+	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{WorkspacePath: "/workspace"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"]; got.Metadata.ImportSource == nil || got.NeedsImportResume() {
+		t.Fatal("ordinary relaunch lost imported session adoption")
 	}
 }
 
