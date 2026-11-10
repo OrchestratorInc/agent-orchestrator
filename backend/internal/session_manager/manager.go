@@ -1014,15 +1014,14 @@ func New(d Deps) *Manager {
 // workspace and runtime, then reports completion to the LCM. If workspace
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
-func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result domain.SessionRecord, promptSize, systemPromptSize int, resultErr error) {
 	// The Setup-extended budget is a child of ctx that expires just before it,
 	// so a stage killed by that deadline returns while ctx itself is still live.
+	requestCtx := ctx
 	var budget context.Context
-	rec, promptBytes, systemPromptBytes, err := m.spawn(ctx, cfg, &budget)
-	return rec, promptBytes, systemPromptBytes, RelabelSpawnTimeout(err, ctx, budget)
-}
-
-func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *context.Context) (domain.SessionRecord, int, int, error) {
+	defer func() {
+		resultErr = RelabelSpawnTimeout(resultErr, requestCtx, budget)
+	}()
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1042,7 +1041,7 @@ func (m *Manager) spawn(ctx context.Context, cfg ports.SpawnConfig, budget *cont
 	}
 	ctx, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancelBudget()
-	*budget = ctx
+	budget = ctx
 	standalone := cfg.ProjectID == ""
 	projectKind := project.Kind.WithDefault()
 	if standalone {
