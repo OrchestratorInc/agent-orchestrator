@@ -146,12 +146,24 @@ describe("native runtime resources", () => {
 		expect(extraResourcesForPlatform("win32")).not.toContain("cloudflared");
 	});
 
+	it("fails packaging when the Liquid Glass icon catalog was not copied into Resources", async () => {
+		const resources = join(fixtureDir, "AO.app", "Contents", "Resources");
+		mkdirSync(join(resources, "update-helper"), { recursive: true });
+		mkdirSync(join(resources, "wake-helper"), { recursive: true });
+		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
+		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		const hook = config.hooks?.postPackage;
+		if (typeof hook !== "function") throw new Error("postPackage hook missing");
+		await expect(hook(config, { platform: "darwin", arch: "arm64", outputPaths: [fixtureDir] })).rejects.toThrow("packaged macOS app icon catalog missing");
+	});
+
 	it("fails packaging when cloudflared was not copied into Resources", async () => {
 		const resources = join(fixtureDir, "AO.app", "Contents", "Resources");
 		mkdirSync(join(resources, "update-helper"), { recursive: true });
 		mkdirSync(join(resources, "wake-helper"), { recursive: true });
 		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
 		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		writeFileSync(join(resources, "Assets.car"), "");
 		const dictationHelper = join(resources, "dictation-helper", "Orchestrator.app", "Contents", "MacOS");
 		mkdirSync(dictationHelper, { recursive: true });
 		writeFileSync(join(dictationHelper, "Orchestrator"), "");
