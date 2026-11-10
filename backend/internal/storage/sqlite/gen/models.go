@@ -425,6 +425,8 @@ type ConversationTurn struct {
 	BatchedInput          int64
 	ProviderInputText     string
 	FailureCode           string
+	BatchDeliveryKind     string
+	BatchDeliverySteerID  string
 }
 
 type Cue struct {

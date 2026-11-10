@@ -1205,7 +1205,9 @@ SET state = 'completed',
     completed_at = sqlc.arg(completed_at),
     promotion_started_at = NULL,
     promoted_to_turn_id = sqlc.arg(promoted_to_turn_id),
-    batched_input = 1
+    batched_input = 1,
+    batch_delivery_kind = sqlc.arg(batch_delivery_kind),
+    batch_delivery_steer_id = sqlc.arg(batch_delivery_steer_id)
 WHERE id = sqlc.arg(id)
   AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'queued'
@@ -1729,7 +1731,8 @@ SELECT conversation_activities.* FROM conversation_activities
 JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
-  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+  -- An AO action outlives its turn: rolling back does not undo a spawn or a kill.
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.kind = 'ao_action' OR conversation_activities.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
@@ -1764,7 +1767,8 @@ JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND conversation_activities.sequence < sqlc.arg(before_sequence)
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
-  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+  -- An AO action outlives its turn: rolling back does not undo a spawn or a kill.
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.kind = 'ao_action' OR conversation_activities.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
@@ -2145,3 +2149,36 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   ))
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
 LIMIT 1;
+
+-- The queued turns AO batched into another turn's provider input, and how: a
+-- queue drain or a steer. The snapshot turn queries leave them out, so the
+-- client reads the delivery link here. Turns batched before the kind was
+-- recorded are left out.
+-- name: ListConversationBatchedTurns :many
+SELECT id, promoted_to_turn_id, batch_delivery_kind, batch_delivery_steer_id
+FROM conversation_turns
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND batched_input = 1
+  AND promoted_to_turn_id IS NOT NULL
+  AND batch_delivery_kind != '';
+
+-- The batched turns a page needs: every member of a batch with a message in
+-- [from_sequence, before_sequence), so a drain can still find its siblings'
+-- human message. Bounded by the page rather than by the whole history.
+-- name: ListConversationBatchedTurnsInRange :many
+SELECT member.id, member.promoted_to_turn_id, member.batch_delivery_kind, member.batch_delivery_steer_id
+FROM conversation_turns AS member
+WHERE member.conversation_id = sqlc.arg(conversation_id)
+  AND member.batched_input = 1
+  AND member.batch_delivery_kind != ''
+  AND member.promoted_to_turn_id IN (
+      SELECT loaded.promoted_to_turn_id
+      FROM conversation_messages AS message
+      JOIN conversation_turns AS loaded ON loaded.id = message.turn_id
+      WHERE message.conversation_id = sqlc.arg(conversation_id)
+        AND message.sequence >= sqlc.arg(from_sequence)
+        AND message.sequence < sqlc.arg(before_sequence)
+        AND loaded.batched_input = 1
+        AND loaded.promoted_to_turn_id IS NOT NULL
+        AND loaded.batch_delivery_kind != ''
+  );
