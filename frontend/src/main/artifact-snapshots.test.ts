@@ -63,7 +63,7 @@ describe("artifact snapshot store", () => {
 		expect(render).toHaveBeenCalledTimes(1);
 	});
 
-	it("renders at most `concurrency` previews at a time", async () => {
+	it("renders one preview at a time", async () => {
 		let active = 0;
 		let peak = 0;
 		const render = vi.fn(async () => {
@@ -73,10 +73,10 @@ describe("artifact snapshot store", () => {
 			active -= 1;
 			return Buffer.from("x");
 		});
-		const store = createArtifactSnapshotStore({ directory, render, concurrency: 2 });
+		const store = createArtifactSnapshotStore({ directory, render });
 		await Promise.all([1, 2, 3, 4, 5].map((n) => store.request(job({ path: `f${n}.html` }))));
 		expect(render).toHaveBeenCalledTimes(5);
-		expect(peak).toBe(2);
+		expect(peak).toBe(1);
 	});
 
 	it("does not retry a failed render until the retry delay has passed", async () => {

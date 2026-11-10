@@ -2,7 +2,7 @@
  * The disk cache of artifact preview images, and the queue that fills it.
  *
  * `get` answers from disk; `request` renders what is missing, at most
- * `concurrency` at a time, and each artifact once however many cards ask.
+ * one at a time, and each artifact once however many cards ask.
  * Files live under the app data dir and are pruned oldest-read first, so the
  * cache stays bounded.
  */
@@ -37,19 +37,19 @@ export function artifactSnapshotKey(job: ArtifactSnapshotJob): string {
 export function createArtifactSnapshotStore(options: {
 	directory: string;
 	render: SnapshotRenderer;
-	concurrency?: number;
 	gapMs?: number;
 	now?: () => number;
 }) {
 	const { directory, render } = options;
-	const concurrency = options.concurrency ?? 1;
 	const now = options.now ?? Date.now;
 	const gapMs = options.gapMs ?? SNAPSHOT_GAP_MS;
 	const fileFor = (key: string) => path.join(directory, `${key}.webp`);
 	const inFlight = new Map<string, Promise<Buffer | null>>();
 	const failedAt = new Map<string, number>();
 	const waiting: Array<{ key: string; start: () => void; drop: () => void }> = [];
-	let running = 0;
+	// One render at a time: every job shares the renderer's single window, and starting a job
+	// unmounts the previous one's preview, so two at once would wipe each other mid-render.
+	let running = false;
 	let writes = 0;
 	let pruning: Promise<void> | undefined;
 
@@ -111,7 +111,7 @@ export function createArtifactSnapshotStore(options: {
 
 	function pump(): void {
 		// The newest request first: the cards being looked at are the ones that asked last.
-		while (running < concurrency && waiting.length > 0) waiting.pop()?.start();
+		if (!running) waiting.pop()?.start();
 	}
 
 	function enqueue(key: string, job: ArtifactSnapshotJob): Promise<Buffer | null> {
@@ -121,7 +121,7 @@ export function createArtifactSnapshotStore(options: {
 				key,
 				drop: () => finish(null),
 				start: () => {
-					running += 1;
+					running = true;
 					void (async () => {
 						try {
 							const bytes = await render(job);
@@ -133,7 +133,7 @@ export function createArtifactSnapshotStore(options: {
 							finish(null);
 						} finally {
 							if (gapMs > 0) await new Promise((resolve) => setTimeout(resolve, gapMs));
-							running -= 1;
+							running = false;
 							pump();
 						}
 					})();
