@@ -3,7 +3,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
-import { useUiStore } from "../../stores/ui-store";
 
 const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
