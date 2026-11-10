@@ -1,4 +1,5 @@
 import { autoUpdater as stockAutoUpdater } from "electron-updater";
+import { StableGitHubProvider } from "./stable-github-provider";
 import { MacDifferentialV2Updater } from "./mac-differential-v2-updater";
 import macV2TrustedKeys from "../../scripts/mac-differential-v2-trust.json";
 import macDifferentialRollout from "../../scripts/mac-differential-rollout.json";
@@ -8,7 +9,7 @@ import { startMacUpdateProgress } from "./mac-update-progress";
 import { markUpdateRelaunch } from "./update-relaunch-flag";
 import { createUpdateDiagnostics } from "./update-diagnostics";
 import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, readdirSync, statfsSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import semver from "semver";
@@ -164,10 +165,8 @@ async function reconcileAndPersist(
 }
 
 // configureFeed sets the update channel on electron-updater. The repo/owner
-// are loaded automatically from app-update.yml (written by forge.config.ts's
-// postPackage hook into the app's Resources dir at build time). No runtime env
-// or setFeedURL call is needed; electron-updater reads the bundled yml on first
-// checkForUpdates.
+// come from app-update.yml, written by forge.config.ts at build time. Stable
+// uses the same GitHub download discovery with an exact-tag release-notes lookup.
 //
 // When settings.feature is set, the feed tracks the pr<N> prerelease channel
 // (e.g. "pr2270") with allowPrerelease enabled. Otherwise it uses the home
@@ -176,6 +175,12 @@ async function reconcileAndPersist(
 export function configureFeed(
   settings: Pick<UpdateSettings, "channel" | "feature">,
 ): void {
+  const coordinates = readAppUpdateYml();
+  if (coordinates) {
+    autoUpdater.setFeedURL(settings.channel === "latest" && !settings.feature
+      ? { provider: "custom", updateProvider: StableGitHubProvider, ...coordinates }
+      : { provider: "github", ...coordinates });
+  }
   if (settings.feature !== null && settings.feature !== undefined) {
     // Feature build: pin to the pr<N> semver prerelease identifier channel.
     autoUpdater.channel = `pr${settings.feature.pr}`;
@@ -859,12 +864,10 @@ function broadcastCompletedCheck(
 // (see issue #2270 for why this path must not broadcast errors).
 
 /** Owner/repo from the bundled app-update.yml; undefined in dev or on any failure. */
-async function readAppUpdateYml(): Promise<
-  { owner: string; repo: string } | undefined
-> {
+function readAppUpdateYml(): { owner: string; repo: string } | undefined {
   if (!app.isPackaged) return undefined;
   try {
-    const yml = await readFile(
+    const yml = readFileSync(
       path.join(process.resourcesPath, "app-update.yml"),
       "utf8",
     );
@@ -2522,8 +2525,7 @@ async function runAutomaticUpdateCheck(
         staleStaged || (hasStagedBuild() && !isNativeInstallReady()) ||
         (settings.enabled && !hasStagedBuild() && !automaticRecoveryExhausted()));
       applyInstallOnQuitPolicy();
-      // Only prerelease channels resolve a direct feed. Skipping the await on
-      // stable keeps that check's event ordering exactly as it was.
+      // Stable configuration is synchronous so check events retain their ordering.
       const restoreFeed = directPrereleaseChannel(settings)
         ? await configureDirectPrereleaseFeed(settings)
         : undefined;

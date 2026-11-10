@@ -715,6 +715,40 @@ describe("startAutoUpdates", () => {
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["manual", "automatic"])("uses exact-tag stable notes for %s checks", async (trigger) => {
+    const original = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    const resourcesPath = mkdtempSync(nodePath.join(os.tmpdir(), "ao-stable-feed-"));
+    writeFileSync(nodePath.join(resourcesPath, "app-update.yml"),
+      "provider: github\nowner: OrchestratorInc\nrepo: agent-orchestrator\n");
+    Object.defineProperty(process, "resourcesPath", { configurable: true, value: resourcesPath });
+    try {
+      const { module, autoUpdater } = await importAutoUpdater();
+      if (trigger === "manual") await module.checkForUpdatesNow(stateDir);
+      else await module.startAutoUpdates(stateDir);
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+        provider: "custom", updateProvider: expect.any(Function),
+        owner: "OrchestratorInc", repo: "agent-orchestrator",
+      });
+      expect(autoUpdater.setFeedURL).toHaveBeenCalledTimes(1);
+      expect(autoUpdater.allowPrerelease).toBe(false);
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+      for (const settings of [
+        { channel: "nightly", feature: null },
+        { channel: "latest", feature: { pr: 123 } },
+      ] satisfies Pick<UpdateSettings, "channel" | "feature">[]) {
+        module.configureFeed(settings);
+        expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
+          provider: "github", owner: "OrchestratorInc", repo: "agent-orchestrator",
+        });
+        expect(autoUpdater.allowPrerelease).toBe(true);
+      }
+    } finally {
+      if (original) Object.defineProperty(process, "resourcesPath", original);
+      else Reflect.deleteProperty(process, "resourcesPath");
+      rmSync(resourcesPath, { recursive: true, force: true });
+    }
+  });
+
   it("manual nightly checks resolve the newest completed release without the Atom feed", async () => {
     const platformManifest =
       process.platform === "darwin"
@@ -778,14 +812,14 @@ describe("startAutoUpdates", () => {
         "https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases?per_page=100",
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
         provider: "generic",
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.1-nightly.202608231517",
         channel: "nightly",
         useMultipleRangeRequest: false,
       });
       expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, {
         provider: "github",
         owner: "Untrivial-ai",
         repo: "agent-orchestrator",
@@ -930,7 +964,7 @@ describe("startAutoUpdates", () => {
         "https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases?per_page=100",
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
         provider: "generic",
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.1-nightly.202608231517",
         channel: "nightly",
@@ -942,7 +976,7 @@ describe("startAutoUpdates", () => {
         expect.any(String),
         expect.objectContaining({ headers: expect.objectContaining({ "If-None-Match": '"release-v1"' }) }),
       );
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(5, expect.objectContaining({
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.1-nightly.202608231517",
       }));
       fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([{
@@ -950,11 +984,11 @@ describe("startAutoUpdates", () => {
         assets: [{ name: platformManifest }],
       }]), { status: 200, headers: { etag: '"release-v2"' } }));
       await module.checkForUpdatesNow(stateDir);
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(5, expect.objectContaining({
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(8, expect.objectContaining({
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.2-nightly.202608241000",
       }));
       expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(3);
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, {
         provider: "github",
         owner: "Untrivial-ai",
         repo: "agent-orchestrator",
@@ -1087,7 +1121,7 @@ describe("startAutoUpdates", () => {
 
       await module.startAutoUpdates(stateDir);
 
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
         provider: "generic",
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.1-nightly.202608231517",
         channel: "nightly",
@@ -1095,7 +1129,7 @@ describe("startAutoUpdates", () => {
       });
       expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
       // Later background checks start from the normal provider again.
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, {
         provider: "github",
         owner: "Untrivial-ai",
         repo: "agent-orchestrator",
@@ -1169,14 +1203,14 @@ describe("startAutoUpdates", () => {
 
       await module.startAutoUpdates(stateDir);
 
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
         provider: "generic",
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.0-pr4473.202608271542",
         channel: "pr4473",
         useMultipleRangeRequest: false,
       });
       expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, {
         provider: "github",
         owner: "Untrivial-ai",
         repo: "agent-orchestrator",
