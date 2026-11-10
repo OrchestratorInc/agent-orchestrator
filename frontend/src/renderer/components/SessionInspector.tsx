@@ -332,6 +332,7 @@ export const SessionInspector = memo(function SessionInspector({
 						<SummaryView
 							canOpenReviews={reviewsAvailable}
 							hostId={hostId}
+							inspectorVisible={isInspectorVisible}
 							key={sessionUiKey(session.id, hostId)}
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
@@ -369,6 +370,7 @@ const SummaryView = memo(function SummaryView({
 	canOpenReviews,
 	onOpenArtifact,
 	hostId,
+	inspectorVisible,
 	onOpenFiles,
 	onOpenReviews,
 	orchestrator,
@@ -377,6 +379,8 @@ const SummaryView = memo(function SummaryView({
 	canOpenReviews: boolean;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	hostId?: string;
+	/** The Summary stays mounted while the inspector is closed. */
+	inspectorVisible: boolean;
 	onOpenFiles: () => void;
 	onOpenReviews: () => void;
 	orchestrator: boolean;
@@ -446,7 +450,7 @@ const SummaryView = memo(function SummaryView({
 			}
 			activityTitle={t("inspector.activity")}
 			artifactCards={
-				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} session={session} /> : undefined
+				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
 			branch={orchestrator ? undefined : (
@@ -1059,10 +1063,13 @@ const ARTIFACT_ROWS_COLLAPSED = 3;
 function ArtifactSummaryList({
 	artifacts,
 	onOpenArtifact,
+	previewLive,
 	session,
 }: {
 	artifacts: SessionArtifact[];
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	/** Off while the inspector is closed, so hidden pages and PDFs unload. */
+	previewLive: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
@@ -1089,9 +1096,9 @@ function ArtifactSummaryList({
 	const rows = expanded ? rest : rest.slice(0, ARTIFACT_ROWS_COLLAPSED);
 	return (
 		<div className="flex min-w-0 flex-col" ref={container}>
-			<div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+			<div className="grid" style={{ gap: ARTIFACT_PREVIEW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
 				{previews.map((artifact) => (
-					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} session={session} />
+					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} />
 				))}
 			</div>
 			{rest.length > 0 ? (
@@ -1122,10 +1129,12 @@ function ArtifactSummaryList({
 function ArtifactPreviewTile({
 	artifact,
 	onOpenArtifact,
+	previewLive,
 	session,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	previewLive: boolean;
 	session: WorkspaceSession;
 }) {
 	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
@@ -1136,7 +1145,7 @@ function ArtifactPreviewTile({
 			title={artifact.path}
 		>
 			<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
-				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={ARTIFACT_PREVIEW_PAGE_HEIGHT} row={row} />
+				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={ARTIFACT_PREVIEW_PAGE_HEIGHT} previewLive={previewLive} row={row} />
 			</span>
 			<span className="flex min-w-0 flex-col">
 				<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
