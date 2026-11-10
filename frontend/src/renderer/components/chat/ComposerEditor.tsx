@@ -852,8 +852,11 @@ const EditorBridge = forwardRef<
 		}, COMMAND_PRIORITY_LOW);
 		const removeBackspace = editor.registerCommand(KEY_BACKSPACE_COMMAND, (event) => {
 			if (!plainKey(event) || event.shiftKey) return false;
+			// A marker always ends in a space or tab; skip reading the draft on every other Backspace.
+			const selection = $getSelection();
+			if (!$isRangeSelection(selection) || !/[ \t]/.test(selection.anchor.getNode().getTextContent()[selection.anchor.offset - 1] ?? "")) return false;
 			const caret = $caretLine();
-			const edit = caret && listBackspace(caret.line, caret.column);
+			const edit = caret && listBackspace(caret.line, caret.column, caret.previous);
 			return Boolean(caret && edit && $applyLinePrefixEdit(caret.node, caret.column, edit)) && handled(event);
 		}, COMMAND_PRIORITY_LOW);
 		return () => {

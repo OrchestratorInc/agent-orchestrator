@@ -12,7 +12,8 @@ type ListItem = {
 	bullet?: string;
 	number?: number;
 	delimiter?: string;
-	task: boolean;
+	/** The item's own box, `[ ]` or `[x]`, when it is a task. */
+	task?: string;
 	/** Where the item's text starts, not counting a task box: nested items line up there. */
 	textColumn: number;
 	/** Everything before the item's text: indent, marker, spacing and task box. */
@@ -23,13 +24,26 @@ function parseListItem(line: string): ListItem | undefined {
 	const match = LIST_ITEM.exec(line);
 	if (!match) return undefined;
 	const [prefix, indent, marker, number, delimiter, spacing, task] = match;
-	const shared = { indent, task: Boolean(task), textColumn: indent.length + marker.length + spacing.length, prefix };
+	const shared = { indent, task: task?.trimEnd(), textColumn: indent.length + marker.length + spacing.length, prefix };
 	return number === undefined ? { ...shared, bullet: marker } : { ...shared, number: Number(number), delimiter };
 }
 
-function itemPrefix(item: ListItem, indent: string, number = item.number): string {
+/** The item's marker at `indent`. A new item gets an empty box; a moved one keeps its own. */
+function itemPrefix(item: ListItem, indent: string, number: number | undefined, box: "new" | "keep"): string {
 	const marker = item.bullet ?? `${number}${item.delimiter}`;
-	return `${indent}${marker} ${item.task ? "[ ] " : ""}`;
+	return `${indent}${marker} ${item.task ? `${box === "new" ? "[ ]" : item.task} ` : ""}`;
+}
+
+/** True when the line after `previous` is inside an open ``` or ~~~ fence, where list keys must not touch code. */
+function insideFence(previous: string[]): boolean {
+	let open: string | undefined;
+	for (const line of previous) {
+		const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+		if (!fence) continue;
+		if (open === undefined) open = fence;
+		else if (fence[0] === open[0] && fence.length >= open.length) open = undefined;
+	}
+	return open !== undefined;
 }
 
 /** Replace the first `remove` characters of the line with `insert`. */
@@ -48,20 +62,20 @@ export type ListEnter =
  */
 export function listEnter(line: string, column: number, previous: string[]): ListEnter | undefined {
 	const item = parseListItem(line);
-	if (!item || column < item.prefix.length) return undefined;
+	if (!item || column < item.prefix.length || insideFence(previous)) return undefined;
 	if (line.length === item.prefix.length) {
 		const above = previous.at(-1);
 		return above !== undefined && parseListItem(above)
 			? { kind: "exit", edit: { remove: line.length, insert: "" } }
 			: undefined;
 	}
-	return { kind: "continue", text: `\n${itemPrefix(item, item.indent, item.number === undefined ? undefined : item.number + 1)}` };
+	return { kind: "continue", text: `\n${itemPrefix(item, item.indent, item.number === undefined ? undefined : item.number + 1, "new")}` };
 }
 
 /** Backspace right after an item's marker removes the marker and keeps the text (and its indent). */
-export function listBackspace(line: string, column: number): LinePrefixEdit | undefined {
+export function listBackspace(line: string, column: number, previous: string[]): LinePrefixEdit | undefined {
 	const item = parseListItem(line);
-	if (!item || column !== item.prefix.length) return undefined;
+	if (!item || column !== item.prefix.length || insideFence(previous)) return undefined;
 	return { remove: item.prefix.length, insert: item.indent };
 }
 
@@ -89,7 +103,7 @@ function numberAt(previous: string[], indent: number): number {
  */
 export function listIndent(line: string, previous: string[], outdent: boolean): LinePrefixEdit | undefined {
 	const item = parseListItem(line);
-	if (!item) return undefined;
+	if (!item || insideFence(previous)) return undefined;
 	const current = item.indent.length;
 	let target: string | undefined;
 	for (let index = previous.length - 1; index >= 0; index--) {
@@ -113,5 +127,5 @@ export function listIndent(line: string, previous: string[], outdent: boolean): 
 	} else if (target === undefined || target.length <= current) {
 		return undefined;
 	}
-	return { remove: item.prefix.length, insert: itemPrefix(item, target, item.number === undefined ? undefined : numberAt(previous, target.length)) };
+	return { remove: item.prefix.length, insert: itemPrefix(item, target, item.number === undefined ? undefined : numberAt(previous, target.length), "keep") };
 }
