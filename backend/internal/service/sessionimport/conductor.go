@@ -20,9 +20,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// conductorSource reads Claude Code chats that Conductor keeps in conductor.db
-// and has no Claude Code transcript for on this Mac, such as workspaces moved
-// from Conductor Cloud. Its chats import as Claude Code chats.
+// conductorSource offers every Claude Code and Codex chat in conductor.db. A
+// chat reads from its agent's own history when this Mac has it; a Claude chat
+// without one is rebuilt from conductor.db as a new Claude Code transcript.
 const conductorSource domain.AgentHarness = "conductor"
 
 var errClaudeHasConversation = errors.New("claude code already holds this conversation; scan again")
@@ -44,22 +44,31 @@ func conductorDB(root string) (*sql.DB, error) {
 		}
 		return nil, err
 	}
-	return sql.Open("sqlite", opencode.ReadOnlyDSN(path, 2000))
+	dsn := opencode.ReadOnlyDSN(path, 2000)
+	if _, err := os.Stat(path + "-wal"); errors.Is(err, os.ErrNotExist) {
+		// A mode=ro open of a closed WAL database creates -wal and -shm files
+		// in Conductor's folder; with no -wal file every commit is in the main
+		// file, so read it as immutable instead.
+		// ponytail: a checkpoint by a Conductor that starts during the read can
+		// tear it; copy the file first if that is ever seen.
+		dsn += "&immutable=1"
+	}
+	return sql.Open("sqlite", dsn)
 }
 
 type conductorChat struct {
-	id, nativeID, title, cwd string
-	updated                  time.Time
-	count                    int64
+	id, agent, nativeID, title, cwd, checkout string
+	updated                                   time.Time
+	count                                     int64
 }
 
 func conductorColumns(ctx context.Context, db *sql.DB) (map[string]map[string]bool, error) {
-	rows, err := db.QueryContext(ctx, `SELECT t.name, c.name FROM sqlite_master t JOIN pragma_table_info(t.name) c WHERE t.type = 'table' AND t.name IN ('sessions', 'workspaces', 'session_messages', 'repos')`)
+	rows, err := db.QueryContext(ctx, `SELECT t.name, c.name FROM sqlite_master t JOIN pragma_table_info(t.name) c WHERE t.type = 'table' AND t.name IN ('sessions', 'workspaces', 'session_messages', 'session_events', 'repos')`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	cols := map[string]map[string]bool{"sessions": {}, "workspaces": {}, "session_messages": {}, "repos": {}}
+	cols := map[string]map[string]bool{"sessions": {}, "workspaces": {}, "session_messages": {}, "session_events": {}, "repos": {}}
 	for rows.Next() {
 		var table, column string
 		if err := rows.Scan(&table, &column); err != nil {
@@ -70,54 +79,54 @@ func conductorColumns(ctx context.Context, db *sql.DB) (map[string]map[string]bo
 	return cols, rows.Err()
 }
 
-// conductorChats lists live Claude chats with sent messages, newest first.
-// Conductor adds columns over time, so optional ones are checked first.
+// conductorEvents reports the session_events log Conductor 0.94 writes.
+func conductorEvents(cols map[string]map[string]bool) bool {
+	e := cols["session_events"]
+	return e["session_id"] && e["session_index"] && e["event_type"] && e["content"] && e["received_at"] && e["reverted_at"]
+}
+
+// conductorChats lists Claude and Codex chats with sent messages, newest
+// first, in every workspace including archived ones. Deleted chats are left out.
 func conductorChats(ctx context.Context, db *sql.DB, sessionID string) ([]conductorChat, error) {
 	cols, err := conductorColumns(ctx, db)
 	if err != nil {
 		return nil, err
 	}
-	s, w, m := cols["sessions"], cols["workspaces"], cols["session_messages"]
-	if !s["id"] || !s["workspace_id"] || !s["title"] || !s["updated_at"] || !w["id"] || !w["workspace_path"] || !m["session_id"] || !m["role"] || !m["content"] || !m["created_at"] || !m["sent_at"] {
-		return nil, errors.New("conductor.db has an unknown layout")
+	need := map[string][]string{
+		"sessions":         {"id", "workspace_id", "agent_type", "claude_session_id", "title", "is_hidden", "updated_at"},
+		"workspaces":       {"id", "local_id", "repository_id", "directory_name", "workspace_path"},
+		"repos":            {"id", "name", "root_path", "storage_version"},
+		"session_messages": {"session_id", "role", "content", "created_at", "sent_at"},
 	}
-	nativeID, join := "s.id", "w.id"
-	if s["claude_session_id"] {
-		nativeID = "COALESCE(NULLIF(s.claude_session_id, ''), s.id)"
-	}
-	if w["local_id"] {
-		join = "w.local_id, w.id"
-	}
-	where := []string{"1 = 1"}
-	for _, filter := range []struct {
-		has  bool
-		test string
-	}{
-		{s["agent_type"], "COALESCE(s.agent_type, 'claude') = 'claude'"},
-		{s["is_hidden"], "COALESCE(s.is_hidden, 0) = 0"},
-		{w["state"], "COALESCE(w.state, '') NOT IN ('archived', 'archiving')"},
-		{w["DEPRECATED_archived"], "COALESCE(w.DEPRECATED_archived, 0) = 0"},
-		{w["remote_archived_at"], "w.remote_archived_at IS NULL"},
-	} {
-		if filter.has {
-			where = append(where, filter.test)
+	for table, names := range need {
+		for _, name := range names {
+			if !cols[table][name] {
+				return nil, errors.New("conductor.db has an unknown layout")
+			}
 		}
 	}
-	var args []any
-	if sessionID != "" {
-		where, args = append(where, "s.id = ?"), append(args, sessionID)
+	nativeID, count := "COALESCE(NULLIF(s.claude_session_id, ''), s.id)", "(SELECT COUNT(*) FROM session_messages m WHERE m.session_id = s.id AND m.sent_at IS NOT NULL)"
+	if conductorEvents(cols) {
+		// The newest agent event names the conversation: Codex's thread or the
+		// Claude Code session it resumes.
+		nativeID = `COALESCE((SELECT id FROM (
+			SELECT CASE WHEN json_valid(e.content) THEN COALESCE(json_extract(e.content, '$.rawPayload.thread_id'), json_extract(e.content, '$.rawPayload.session_id')) END AS id, e.session_index
+			FROM session_events e WHERE e.session_id = s.id AND e.event_type = 'agent' AND e.reverted_at IS NULL)
+			WHERE id IS NOT NULL ORDER BY session_index DESC LIMIT 1), ` + strings.TrimPrefix(nativeID, "COALESCE(")
+		count += " + (SELECT COUNT(*) FROM session_events e WHERE e.session_id = s.id AND e.reverted_at IS NULL AND e.event_type IN ('userMessage', 'agent'))"
 	}
-	repo, from := "'', '', 0, ''", "sessions s JOIN workspaces w ON s.workspace_id IN ("+join+")"
-	if r := cols["repos"]; r["id"] && r["root_path"] && r["name"] && r["storage_version"] && w["repository_id"] && w["directory_name"] {
-		repo = "COALESCE(r.root_path, ''), COALESCE(r.name, ''), COALESCE(r.storage_version, 0), COALESCE(w.directory_name, '')"
-		from += " LEFT JOIN repos r ON r.id = w.repository_id"
+	where, args := "COALESCE(s.agent_type, 'claude') IN ('claude', 'codex') AND COALESCE(s.is_hidden, 0) = 0", []any{}
+	if sessionID != "" {
+		where, args = where+" AND s.id = ?", append(args, sessionID)
 	}
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT s.id, %s, COALESCE(s.title, ''), COALESCE(w.workspace_path, ''), %s, s.updated_at,
-		       (SELECT COUNT(*) FROM session_messages m WHERE m.session_id = s.id AND m.sent_at IS NOT NULL)
-		FROM %s
+		SELECT s.id, COALESCE(s.agent_type, 'claude'), %s, COALESCE(s.title, ''), COALESCE(w.workspace_path, ''),
+		       COALESCE(r.root_path, ''), COALESCE(r.name, ''), COALESCE(r.storage_version, 1), COALESCE(w.directory_name, ''), s.updated_at, %s
+		FROM sessions s
+		JOIN workspaces w ON s.workspace_id IN (w.local_id, w.id)
+		LEFT JOIN repos r ON r.id = w.repository_id
 		WHERE %s
-		ORDER BY s.updated_at DESC`, nativeID, repo, from, strings.Join(where, " AND ")), args...)
+		ORDER BY s.updated_at DESC`, nativeID, count, where), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -127,13 +136,19 @@ func conductorChats(ctx context.Context, db *sql.DB, sessionID string) ([]conduc
 	for rows.Next() {
 		var chat conductorChat
 		var updated any
-		var checkout, repoName, dir string
+		var repoName, dir string
 		var version int64
-		if err := rows.Scan(&chat.id, &chat.nativeID, &chat.title, &chat.cwd, &checkout, &repoName, &version, &dir, &updated, &chat.count); err != nil {
+		if err := rows.Scan(&chat.id, &chat.agent, &chat.nativeID, &chat.title, &chat.cwd, &chat.checkout, &repoName, &version, &dir, &updated, &chat.count); err != nil {
 			return nil, err
 		}
 		if chat.cwd == "" {
-			chat.cwd = conductorWorkspacePath(version, checkout, filepath.Join(workspaces, repoName), dir)
+			chat.cwd = conductorWorkspacePath(version, chat.checkout, filepath.Join(workspaces, repoName), dir)
+		}
+		if version == 1 && chat.checkout != "" {
+			chat.checkout = filepath.Join(chat.checkout, ".main")
+		}
+		if !filepath.IsAbs(chat.checkout) {
+			chat.checkout = ""
 		}
 		if chat.count > 0 && nativeIDPattern.MatchString(chat.nativeID) {
 			chat.updated = conductorTime(updated)
@@ -199,9 +214,9 @@ func conductorTime(value any) time.Time {
 	return time.Time{}
 }
 
-// claudeTranscriptIDs names every conversation Claude Code holds under root.
-func claudeTranscriptIDs(root string) map[string]bool {
-	ids := map[string]bool{}
+// claudeTranscripts finds every conversation Claude Code holds under root.
+func claudeTranscripts(root string) map[string]string {
+	ids := map[string]string{}
 	dirs, _ := os.ReadDir(filepath.Join(root, "projects"))
 	for _, dir := range dirs {
 		if !dir.IsDir() {
@@ -210,7 +225,7 @@ func claudeTranscriptIDs(root string) map[string]bool {
 		files, _ := os.ReadDir(filepath.Join(root, "projects", dir.Name()))
 		for _, file := range files {
 			if id, ok := strings.CutSuffix(file.Name(), ".jsonl"); ok {
-				ids[id] = true
+				ids[id] = filepath.Join(root, "projects", dir.Name(), file.Name())
 			}
 		}
 	}
@@ -222,6 +237,11 @@ func conductorClaudeRoot() string {
 	return canonical(claudeRoot(home))
 }
 
+func conductorCodexRoot() string {
+	home, _ := os.UserHomeDir()
+	return canonical(codexRoot(home))
+}
+
 func discoverConductor(ctx context.Context, root string) ([]sourceFiles, error) {
 	db, err := conductorDB(root)
 	if err != nil || db == nil {
@@ -229,15 +249,31 @@ func discoverConductor(ctx context.Context, root string) ([]sourceFiles, error) 
 	}
 	defer func() { _ = db.Close() }()
 	chats, err := conductorChats(ctx, db, "")
-	if err != nil || len(chats) == 0 {
+	if err != nil {
 		return nil, err
 	}
-	known := claudeTranscriptIDs(conductorClaudeRoot())
-	var out []sourceFiles
+	// paths[0] is Conductor's session; the rest is the agent's own history,
+	// whose size and time then key the scan cache.
+	claude := claudeTranscripts(conductorClaudeRoot())
+	codex, err := walkSources(domain.HarnessCodex, "sessions", codexKey)(ctx, conductorCodexRoot())
+	if err != nil {
+		return nil, err
+	}
+	rollouts := make(map[string]sourceFiles, len(codex))
+	for _, rollout := range codex {
+		rollouts[rollout.key] = rollout
+	}
+	out := make([]sourceFiles, 0, len(chats))
 	for _, chat := range chats {
-		if !known[chat.nativeID] {
-			out = append(out, sourceFiles{harness: conductorSource, root: root, key: chat.nativeID, paths: []string{chat.id}, modTime: chat.updated, size: chat.count})
+		file := sourceFiles{harness: conductorSource, root: root, key: chat.nativeID, paths: []string{chat.id}, modTime: chat.updated, size: chat.count}
+		if rollout, ok := rollouts[chat.nativeID]; ok && chat.agent == "codex" {
+			file.paths, file.modTime, file.size = append(file.paths, rollout.paths...), rollout.modTime, rollout.size
+		} else if path := claude[chat.nativeID]; path != "" && chat.agent == "claude" {
+			if info, err := os.Stat(path); err == nil {
+				file.paths, file.modTime, file.size = append(file.paths, path), info.ModTime(), info.Size()
+			}
 		}
+		out = append(out, file)
 	}
 	return out, nil
 }
@@ -251,23 +287,58 @@ type conductorRecord struct {
 	at      time.Time
 }
 
-// eachConductorRecord reads a chat in Amp's order. Assistant rows and tool
-// results hold Claude Agent SDK stream JSON; a typed prompt can be plain text.
-// Subagent messages and SDK status records are not part of the conversation.
+// eachConductorRecord reads a chat in Conductor's order: session_messages
+// rows, then the session_events log that replaced them. A typed prompt is
+// plain text; agent output is Claude Agent SDK stream JSON. Subagent messages
+// and SDK status records are not part of the conversation.
 func eachConductorRecord(ctx context.Context, db *sql.DB, sessionID string, fn func(conductorRecord) error) (version string, err error) {
-	rows, err := db.QueryContext(ctx, `SELECT role, content, created_at FROM session_messages WHERE session_id = ? AND sent_at IS NOT NULL ORDER BY sent_at, rowid`, sessionID)
+	cols, err := conductorColumns(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	query, args := `SELECT 0, role, content, created_at, sent_at, rowid FROM session_messages WHERE session_id = ? AND sent_at IS NOT NULL`, []any{sessionID}
+	if conductorEvents(cols) {
+		query += ` UNION ALL SELECT 1, event_type, content, received_at, '', session_index FROM session_events WHERE session_id = ? AND reverted_at IS NULL AND event_type IN ('userMessage', 'agent')`
+		args = append(args, sessionID)
+	}
+	rows, err := db.QueryContext(ctx, query+` ORDER BY 1, 5, 6`, args...)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = rows.Close() }()
+	prompts := map[string]bool{}
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
+		var event int
 		var role, content sql.NullString
-		var created any
-		if err := rows.Scan(&role, &content, &created); err != nil {
+		var created, sent, seq any
+		if err := rows.Scan(&event, &role, &content, &created, &sent, &seq); err != nil {
 			return "", err
+		}
+		if event == 1 {
+			var e struct {
+				ID, Message, State string
+				RawPayload         json.RawMessage `json:"rawPayload"`
+			}
+			if json.Unmarshal([]byte(content.String), &e) != nil {
+				continue
+			}
+			switch {
+			case role.String == "agent":
+				content.String = string(e.RawPayload)
+			case e.State == "sent" && !prompts[e.ID]:
+				prompts[e.ID] = true
+				text, _ := json.Marshal(e.Message)
+				rec := conductorRecord{role: "user", message: map[string]json.RawMessage{"role": json.RawMessage(`"user"`), "content": text}, at: conductorTime(created)}
+				if err := fn(rec); err != nil {
+					return "", err
+				}
+				continue
+			default:
+				continue
+			}
 		}
 		var sdk struct {
 			Type      string                     `json:"type"`
@@ -311,7 +382,8 @@ func rawString(raw json.RawMessage) string {
 	return s
 }
 
-// readConductorTranscript reads one chat; paths[0] is Conductor's session id.
+// readConductorTranscript reads one chat; paths[0] is Conductor's session id
+// and any further paths are the agent's own history of it.
 func readConductorTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: conductorSource, root: root, paths: paths}
 	if len(paths) == 0 {
@@ -327,10 +399,25 @@ func readConductorTranscript(ctx context.Context, root string, paths ...string) 
 		return t, errors.Join(errNoReadableConversation, err)
 	}
 	chat := chats[0]
-	t.nativeID, t.cwd, t.path = chat.nativeID, chat.cwd, paths[0]
-	if chat.title != "Untitled" {
-		t.title = chat.title
+	named := func(t transcript, err error) (transcript, error) {
+		if chat.title != "Untitled" && chat.title != "" {
+			t.title = importTitle(chat.title)
+		}
+		t.placeAt = chat.checkout
+		return t, err
 	}
+	switch native := paths[1:]; {
+	case chat.agent == "codex" && len(native) > 0:
+		return named(readCodexTranscript(ctx, conductorCodexRoot(), native...))
+	case chat.agent == "codex":
+		// ponytail: AO writes no Codex rollout, so a Codex chat continues only
+		// from the rollout this Mac holds; write one from session_events if
+		// Cloud chats turn up without it.
+		return t, errNoReadableConversation
+	case len(native) > 0:
+		return named(readClaudeTranscript(ctx, conductorClaudeRoot(), native...))
+	}
+	t.nativeID, t.cwd, t.path = chat.nativeID, chat.cwd, paths[0]
 	var items []tagged
 	prompted, visible := false, 0
 	_, err = eachConductorRecord(ctx, db, chat.id, func(r conductorRecord) error {
@@ -376,7 +463,7 @@ func readConductorTranscript(ctx context.Context, root string, paths ...string) 
 		return t, errNoReadableConversation
 	}
 	err = finishTranscript(&t)
-	return t, err
+	return named(t, err)
 }
 
 type claudeLine struct {
@@ -397,7 +484,7 @@ type claudeLine struct {
 // without its call, is left out: the Claude API rejects either one.
 func writeConductorTranscript(ctx context.Context, t transcript) (transcript, error) {
 	root := conductorClaudeRoot()
-	if claudeTranscriptIDs(root)[t.nativeID] {
+	if claudeTranscripts(root)[t.nativeID] != "" {
 		return t, errClaudeHasConversation
 	}
 	db, err := conductorDB(t.root)
