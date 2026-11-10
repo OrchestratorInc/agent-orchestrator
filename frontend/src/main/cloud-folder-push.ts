@@ -10,15 +10,17 @@
 // state, with the folder as its work tree (so its .gitignore files apply),
 // pushed, and the git directory removed.
 //
-// Files that usually hold credentials (isSecretLookingPath) never reach
-// GitHub: an import leaves them out of its commit and reports which, and a
-// repository folder whose history holds any is refused, since its commits
+// Files that hold credentials (secretPathKind, contentHoldsSecret) never
+// reach GitHub: an import leaves them out of its commit and reports which, and
+// a repository folder whose history holds any is refused, since its commits
 // cannot be uploaded without them.
 //
 // previewFolderUpload runs before the control plane makes the repository, and
 // makes every check the upload makes before sending anything (planFolderUpload,
 // shared by both), so a folder the upload would refuse is refused before an
-// empty repository exists for it.
+// empty repository exists for it. A repository folder's history checks are
+// remembered for the commit they passed on (checkedCommits), so the upload
+// right after a preview does not walk the whole history again.
 //
 // The token goes only to the configured control plane: the push path is joined
 // with the configured control plane here, never with a URL the renderer names,
@@ -26,7 +28,7 @@
 // environment (never on the command line), scoped to that URL, with redirects
 // off and every credential prompt disabled.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -81,7 +83,7 @@ export type PushFolderErrorCode =
 	| "secret_files";
 
 export type PushFolderResult =
-	/** leftOut: the secret-looking files an import did not upload (isSecretLookingPath). */
+	/** leftOut: the files with credentials an import did not upload (secretPathKind, contentHoldsSecret). */
 	| { status: "pushed"; branch: string; commit: string; source: "head" | "import"; leftOut: string[] }
 	| PushFolderFailure;
 
@@ -94,7 +96,8 @@ export type PushFolderFailure = { status: "error"; code: PushFolderErrorCode; me
  * A repository whose history holds secret-looking files is a secret_files error.
  */
 export type PushFolderPreview =
-	| { status: "ok"; source: "head" | "import"; leftOut: string[] }
+	/** branch: for a repository folder ("head"), its checked-out branch; absent when HEAD is detached. */
+	| { status: "ok"; source: "head" | "import"; branch?: string; leftOut: string[] }
 	| PushFolderFailure;
 
 export interface GitRunOptions {
@@ -104,6 +107,9 @@ export interface GitRunOptions {
 }
 
 export type GitRunner = (args: string[], options: GitRunOptions) => Promise<{ stdout: string; stderr: string }>;
+
+/** Runs git, handing its output to onChunk as it arrives rather than holding all of it. */
+export type GitStreamRunner = (args: string[], options: GitRunOptions, onChunk: (chunk: string) => void) => Promise<void>;
 
 export interface PushFolderDeps {
 	/** The configured control plane, the only server the token is sent to. */
@@ -121,6 +127,10 @@ export interface PushFolderDeps {
 	 */
 	appStateDirs?: () => string[];
 	git?: GitRunner;
+	/** Runs git commands whose output can be larger than memory allows (a whole history). */
+	gitStream?: GitStreamRunner;
+	/** The clock checkedCommits expire by. */
+	now?: () => number;
 	/**
 	 * The remote git pushes to for the resolved push URL. Tests point it at a
 	 * local bare repository; the app always pushes to the URL itself.
@@ -148,6 +158,43 @@ const defaultGit: GitRunner = (args, options) =>
 				return;
 			}
 			resolve({ stdout, stderr });
+		});
+	});
+
+const defaultGitStream: GitStreamRunner = (args, options, onChunk) =>
+	new Promise((resolve, reject) => {
+		const child = spawn("git", args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
+		let stderr = "";
+		let killed = false;
+		let failed: unknown;
+		const timer = setTimeout(() => {
+			killed = true;
+			child.kill();
+		}, options.timeout);
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => {
+			if (failed !== undefined) return;
+			try {
+				onChunk(chunk);
+			} catch (error) {
+				failed = error;
+				child.kill();
+			}
+		});
+		child.stderr.setEncoding("utf8");
+		// Only the last lines are shown (gitMessage); keep a bounded amount.
+		child.stderr.on("data", (chunk: string) => {
+			stderr = (stderr + chunk).slice(-64 * 1024);
+		});
+		child.on("error", (error) => {
+			clearTimeout(timer);
+			reject(Object.assign(error, { stderr }));
+		});
+		child.on("close", (code, signal) => {
+			clearTimeout(timer);
+			if (failed !== undefined) reject(failed);
+			else if (code === 0) resolve();
+			else reject(Object.assign(new Error(`git exited with ${code ?? signal}`), { stderr, killed, code }));
 		});
 	});
 
@@ -280,32 +327,99 @@ export function pathWithin(child: string, parent: string, caseInsensitive = CASE
 }
 
 /**
- * Files a folder upload never puts on GitHub, because they usually hold
- * credentials. Matched on each file's path inside the folder, at any depth,
- * ignoring case:
+ * Files a folder upload never puts on GitHub, because they hold credentials.
+ * Matched on each file's path inside the folder, at any depth, ignoring case.
+ * Always ("secret"):
  * - environment files: .env and .env.*, except .env.example, .env.sample and
  *   .env.template, which hold names, not values;
- * - private keys and certificate bundles: *.pem, *.key, *.p12, *.pfx, and the
- *   SSH keys id_rsa, id_dsa, id_ecdsa and id_ed25519 (their .pub halves are kept);
- * - tool credentials: .npmrc, .netrc, .pypirc, .git-credentials;
+ * - key stores, which hold private keys by design: *.p12, *.pfx, and the SSH
+ *   keys id_rsa, id_dsa, id_ecdsa and id_ed25519 (their .pub halves are kept);
+ * - tool credentials: .netrc, .pypirc, .git-credentials;
  * - cloud credentials: credentials.json, client_secret*.json, service-account*.json;
  * - anything inside a .ssh, .aws or .gnupg folder.
+ * Depending on what they hold ("content", contentHoldsSecret), since they are
+ * as often committed on purpose without any credential:
+ * - .npmrc, which projects commit for registry and engine settings, and for
+ *   CI's "//registry/:_authToken=${NPM_TOKEN}";
+ * - *.pem and *.key, which hold public certificates (test fixtures, CA
+ *   bundles) as often as private keys.
  */
-const SECRET_FILE_NAMES = new Set([".env", ".npmrc", ".netrc", ".pypirc", ".git-credentials", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials.json"]);
-const SECRET_FILE_EXTENSIONS = [".pem", ".key", ".p12", ".pfx"];
+const SECRET_FILE_NAMES = new Set([".env", ".netrc", ".pypirc", ".git-credentials", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials.json"]);
+const SECRET_FILE_EXTENSIONS = [".p12", ".pfx"];
+const CONTENT_FILE_NAMES = new Set([".npmrc"]);
+const CONTENT_FILE_EXTENSIONS = [".pem", ".key"];
 const KEPT_ENV_FILES = new Set([".env.example", ".env.sample", ".env.template"]);
 const SECRET_FOLDERS = new Set([".ssh", ".aws", ".gnupg"]);
 
-export function isSecretLookingPath(relativePath: string): boolean {
+/** Whether a file is left out of an upload always, never, or by what it holds (contentHoldsSecret). */
+export type SecretPathKind = "secret" | "content" | "none";
+
+export function secretPathKind(relativePath: string): SecretPathKind {
 	const segments = relativePath.replace(/\\/g, "/").split("/").filter((segment) => segment !== "").map((segment) => segment.toLowerCase());
 	const name = segments[segments.length - 1];
-	if (name === undefined) return false;
-	if (segments.slice(0, -1).some((segment) => SECRET_FOLDERS.has(segment))) return true;
-	if (/[\\/]$/.test(relativePath)) return SECRET_FOLDERS.has(name);
-	if (SECRET_FILE_NAMES.has(name)) return true;
-	if (name.startsWith(".env.")) return !KEPT_ENV_FILES.has(name);
-	if (SECRET_FILE_EXTENSIONS.some((extension) => name.endsWith(extension))) return true;
-	return /^(?:client_secret.*|service-account.*)\.json$/.test(name);
+	if (name === undefined) return "none";
+	if (segments.slice(0, -1).some((segment) => SECRET_FOLDERS.has(segment))) return "secret";
+	if (/[\\/]$/.test(relativePath)) return SECRET_FOLDERS.has(name) ? "secret" : "none";
+	if (SECRET_FILE_NAMES.has(name)) return "secret";
+	if (name.startsWith(".env.")) return KEPT_ENV_FILES.has(name) ? "none" : "secret";
+	if (SECRET_FILE_EXTENSIONS.some((extension) => name.endsWith(extension))) return "secret";
+	if (/^(?:client_secret.*|service-account.*)\.json$/.test(name)) return "secret";
+	if (CONTENT_FILE_NAMES.has(name) || CONTENT_FILE_EXTENSIONS.some((extension) => name.endsWith(extension))) return "content";
+	return "none";
+}
+
+/** A file whose content decides is read up to this size; a larger one is taken as holding a secret. */
+const MAX_SECRET_CHECK_BYTES = 1024 * 1024;
+
+/**
+ * An .npmrc line setting a credential: _authToken, _auth or _password, alone
+ * or for one registry ("//registry.npmjs.org/:_authToken=...").
+ */
+const NPMRC_CREDENTIAL = /^\s*(?:\/\/[^\s=]*:)?(?:_authToken|_auth|_password)\s*=(.*)$/gim;
+
+/** A value naming an environment variable npm substitutes, not a credential itself. */
+const NPMRC_ENV_REFERENCE = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
+
+/** A PEM block holding a private key: "PRIVATE KEY", "RSA PRIVATE KEY", "OPENSSH PRIVATE KEY", "PGP PRIVATE KEY BLOCK"... */
+const PEM_PRIVATE_BLOCK = /-----BEGIN [^\r\n-]*PRIVATE[^\r\n-]*-----/;
+
+/** PEM blocks of public material: certificates, public keys, certificate requests and revocation lists. */
+const PEM_PUBLIC_BLOCK = /-----BEGIN (?:CERTIFICATE|TRUSTED CERTIFICATE|X509 CRL|PUBLIC KEY|RSA PUBLIC KEY|CERTIFICATE REQUEST|NEW CERTIFICATE REQUEST)-----/;
+
+/**
+ * Whether a file of secretPathKind "content" holds a credential:
+ * - an .npmrc setting _authToken, _auth or _password to a value, unless that
+ *   value only names an environment variable (${NPM_TOKEN}), which npm fills
+ *   in where it runs;
+ * - a .pem or .key file holding a private key, or anything but PEM blocks of
+ *   public material (a binary key, a key without its PEM header).
+ * A private key counts wherever it sits, test fixture folders included: its
+ * path does not say whether it is a real one.
+ */
+export function contentHoldsSecret(relativePath: string, content: string): boolean {
+	const name = relativePath.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+	if (CONTENT_FILE_NAMES.has(name)) {
+		for (const match of content.matchAll(NPMRC_CREDENTIAL)) {
+			const value = (match[1] ?? "").trim().replace(/^(["'])(.*)\1$/, "$2").trim();
+			if (value !== "" && !NPMRC_ENV_REFERENCE.test(value)) return true;
+		}
+		return false;
+	}
+	if (PEM_PRIVATE_BLOCK.test(content)) return true;
+	return !PEM_PUBLIC_BLOCK.test(content);
+}
+
+/** Whether a file in the folder whose content decides (secretPathKind "content") holds a credential. */
+async function folderFileHoldsSecret(folder: string, file: string): Promise<boolean> {
+	try {
+		const full = path.join(folder, file);
+		const stat = await fs.lstat(full);
+		// A link or anything but a plain file is left out, as every such name was before.
+		if (!stat.isFile() || stat.size > MAX_SECRET_CHECK_BYTES) return true;
+		return contentHoldsSecret(file, await fs.readFile(full, "utf8"));
+	} catch {
+		return true;
+	}
 }
 
 function shownFiles(files: readonly string[]): string {
@@ -340,17 +454,49 @@ async function resolveFolder(folder: string, homeDir: string | undefined, appSta
 	return real;
 }
 
-/** The folder's checked-out commit when the folder is the top of its own repository. */
-async function ownRepositoryHead(folder: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+function unreadableRepositoryError(folder: string, error: unknown): PushFolderError {
+	return new PushFolderError("import_failed", `git could not read ${path.basename(folder)} as a repository, so Orchestrator cannot tell whether to upload its commits or its files: ${gitMessage(error)}`);
+}
+
+/**
+ * The folder's checked-out commit, and its branch (absent when HEAD is
+ * detached), when the folder is the top of its own repository with a commit.
+ * Without a .git at its top a folder is imported on its own, even inside
+ * another repository; a repository without a commit is imported too. A .git
+ * git cannot read (for one, "detected dubious ownership") is refused, never
+ * imported: the files would go where the person expects the commits.
+ */
+async function ownRepositoryHead(folder: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<{ commit: string; branch?: string } | undefined> {
 	try {
-		const top = (await git(["-C", folder, "rev-parse", "--show-toplevel"], { env, timeout: 15_000 })).stdout.trim();
-		// A folder inside another repository is imported on its own, not as that repository.
-		const realTop = await fs.realpath(top);
-		if (!samePath(realTop, folder)) return undefined;
-		return (await git(["-C", folder, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { env, timeout: 15_000 })).stdout.trim() || undefined;
+		await fs.lstat(path.join(folder, ".git"));
 	} catch {
 		return undefined;
 	}
+	let top: string;
+	try {
+		top = (await git(["-C", folder, "rev-parse", "--show-toplevel"], { env, timeout: 15_000 })).stdout.trim();
+	} catch (error) {
+		throw unreadableRepositoryError(folder, error);
+	}
+	const realTop = await fs.realpath(top).catch(() => top);
+	if (!samePath(realTop, folder)) return undefined;
+	let commit: string;
+	try {
+		commit = (await git(["-C", folder, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { env, timeout: 15_000 })).stdout.trim();
+	} catch (error) {
+		// --quiet: no commit yet exits 1 without a word.
+		const { code, stderr } = error as { code?: unknown; stderr?: unknown };
+		if (code === 1 && (typeof stderr !== "string" || stderr.trim() === "")) return undefined;
+		throw unreadableRepositoryError(folder, error);
+	}
+	if (commit === "") return undefined;
+	let branch: string | undefined;
+	try {
+		branch = (await git(["-C", folder, "symbolic-ref", "--quiet", "--short", "HEAD"], { env, timeout: 15_000 })).stdout.trim() || undefined;
+	} catch {
+		// Detached.
+	}
+	return { commit, ...(branch ? { branch } : {}) };
 }
 
 /** Whether a .gitattributes file stores paths in Git LFS, which this push cannot carry. */
@@ -366,19 +512,23 @@ function lfsError(folderName: string): PushFolderError {
 	return new PushFolderError("lfs_unsupported", `${folderName} stores files in Git LFS, which Orchestrator cannot upload yet. Push it to GitHub yourself, then add its repository from GitHub.`);
 }
 
-/**
- * Refuses a repository folder whose commit GitHub would refuse or that would
- * arrive incomplete: a shallow clone (no history to push), submodules (only
- * links would arrive), Git LFS (only pointers would arrive), a file over
- * GitHub's limit, or more than the control plane takes.
- */
-async function checkRepositoryHead(folder: string, git: GitRunner, env: NodeJS.ProcessEnv, maxFileBytes: number): Promise<void> {
-	const name = path.basename(folder);
+/** Refuses a shallow clone: it has no history to push. */
+async function checkNotShallow(folder: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<void> {
 	const shallow = (await git(["-C", folder, "rev-parse", "--is-shallow-repository"], { env, timeout: 15_000 })).stdout.trim();
 	if (shallow === "true") {
-		throw new PushFolderError("shallow_repository", `${name} is a shallow clone, so its history cannot be uploaded. Run "git fetch --unshallow" in it, then try again.`);
+		throw new PushFolderError("shallow_repository", `${path.basename(folder)} is a shallow clone, so its history cannot be uploaded. Run "git fetch --unshallow" in it, then try again.`);
 	}
-	const { stdout } = await git(["-C", folder, "ls-tree", "-r", "-l", "-z", "HEAD"], { env, timeout: GIT_STEP_TIMEOUT_MS });
+}
+
+/**
+ * Refuses a repository folder's commit when GitHub would refuse it or it would
+ * arrive incomplete: submodules (only links would arrive), Git LFS (only
+ * pointers would arrive), a file over GitHub's limit, or more than the control
+ * plane takes. Everything here follows from the commit alone.
+ */
+async function checkRepositoryCommit(folder: string, commit: string, git: GitRunner, env: NodeJS.ProcessEnv, maxFileBytes: number): Promise<void> {
+	const name = path.basename(folder);
+	const { stdout } = await git(["-C", folder, "ls-tree", "-r", "-l", "-z", commit], { env, timeout: GIT_STEP_TIMEOUT_MS });
 	const submodules: string[] = [];
 	for (const entry of stdout.split("\0")) {
 		const tab = entry.indexOf("\t");
@@ -400,7 +550,7 @@ async function checkRepositoryHead(folder: string, git: GitRunner, env: NodeJS.P
 	}
 	try {
 		// git 2.38+; older git just skips this check.
-		const usage = Number((await git(["-C", folder, "rev-list", "--objects", "--disk-usage", "HEAD"], { env, timeout: GIT_STEP_TIMEOUT_MS })).stdout.trim());
+		const usage = Number((await git(["-C", folder, "rev-list", "--objects", "--disk-usage", commit], { env, timeout: GIT_STEP_TIMEOUT_MS })).stdout.trim());
 		if (usage > MAX_PUSH_BYTES) {
 			throw new PushFolderError("folder_too_large", `${name}'s history is larger than the 2 GB Orchestrator Cloud uploads. Add its repository from GitHub instead.`);
 		}
@@ -409,10 +559,120 @@ async function checkRepositoryHead(folder: string, git: GitRunner, env: NodeJS.P
 	}
 }
 
-/** The secret-looking files anywhere in the history a repository folder would upload. */
-async function committedSecretFiles(folder: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<string[]> {
-	const { stdout } = await git(["-C", folder, "log", "--format=", "--name-only", "--no-renames", "-z", "HEAD"], { env, timeout: GIT_STEP_TIMEOUT_MS });
-	return [...new Set(stdout.split(/[\0\n]/).filter((file) => file !== "" && isSecretLookingPath(file)))].sort();
+/** Whether a committed blob of a file whose content decides (secretPathKind "content") holds a credential. */
+async function committedBlobHoldsSecret(folder: string, file: string, blob: string, git: GitRunner, env: NodeJS.ProcessEnv): Promise<boolean> {
+	try {
+		const size = Number((await git(["-C", folder, "cat-file", "-s", blob], { env, timeout: 15_000 })).stdout.trim());
+		if (!(size <= MAX_SECRET_CHECK_BYTES)) return true;
+		return contentHoldsSecret(file, (await git(["-C", folder, "cat-file", "blob", blob], { env, timeout: 15_000 })).stdout);
+	} catch {
+		return true;
+	}
+}
+
+/**
+ * The files holding credentials anywhere in the history a repository folder
+ * would upload. Every path a commit holds was added by some commit (renames
+ * are read as a delete and an add), so the additions are enough for names; a
+ * file whose content decides is read in every version added or changed. -m
+ * reads a merge against each parent, so a file only a merge brought in is
+ * seen too. The history streams through: a long one never has to fit in memory.
+ */
+async function committedSecretFiles(folder: string, commit: string, git: GitRunner, gitStream: GitStreamRunner, env: NodeJS.ProcessEnv): Promise<string[]> {
+	const secrets = new Set<string>();
+	// Blobs whose content decides, with the paths they were committed at.
+	const toRead = new Map<string, Set<string>>();
+	// Each change is ":<old mode> <new mode> <old blob> <new blob> <status>" then its path, NUL-separated.
+	let change: string | undefined;
+	const take = (token: string) => {
+		if (change === undefined) {
+			const trimmed = token.replace(/^\n+/, "");
+			if (trimmed.startsWith(":")) change = trimmed;
+			return;
+		}
+		const [, mode, , blob, status] = change.slice(1).split(" ");
+		change = undefined;
+		const kind = secretPathKind(token);
+		if (kind === "secret" && status === "A") secrets.add(token);
+		// A link's blob is the path it points at; a submodule's is a commit.
+		if (kind === "content" && mode !== "120000" && mode !== "160000" && blob && !/^0+$/.test(blob)) {
+			const paths = toRead.get(blob) ?? new Set<string>();
+			paths.add(token);
+			toRead.set(blob, paths);
+		}
+	};
+	let rest = "";
+	await gitStream(["-C", folder, "log", "--format=", "--raw", "--no-abbrev", "--no-renames", "-m", "--diff-filter=AMT", "-z", commit], { env, timeout: GIT_STEP_TIMEOUT_MS }, (chunk) => {
+		const tokens = (rest + chunk).split("\0");
+		rest = tokens.pop() ?? "";
+		for (const token of tokens) if (token !== "") take(token);
+	});
+	if (rest !== "") take(rest);
+	for (const [blob, paths] of toRead) {
+		const unflagged = [...paths].filter((file) => !secrets.has(file));
+		if (unflagged.length === 0) continue;
+		if (await committedBlobHoldsSecret(folder, unflagged[0] as string, blob, git, env)) for (const file of unflagged) secrets.add(file);
+	}
+	return [...secrets].sort();
+}
+
+/** How long a commit's passed history checks are trusted before they run again. */
+const CHECKED_COMMIT_TTL_MS = 10 * 60_000;
+const MAX_CHECKED_COMMITS = 32;
+
+/**
+ * Repository commits that passed checkRepositoryCommit and
+ * committedSecretFiles, by folder, commit and file limit, with when. Those
+ * checks follow from the commit alone, which cannot change, so the upload
+ * after a preview skips them for the same commit; a folder that has moved to
+ * another commit since is checked again in full.
+ */
+const checkedCommits = new Map<string, number>();
+
+function checkedCommitKey(folder: string, commit: string, maxFileBytes: number): string {
+	return `${folder}\0${commit}\0${maxFileBytes}`;
+}
+
+function commitRecentlyChecked(key: string, now: number): boolean {
+	const at = checkedCommits.get(key);
+	if (at === undefined) return false;
+	if (now >= at && now - at <= CHECKED_COMMIT_TTL_MS) return true;
+	checkedCommits.delete(key);
+	return false;
+}
+
+function rememberCheckedCommit(key: string, now: number): void {
+	checkedCommits.delete(key);
+	checkedCommits.set(key, now);
+	while (checkedCommits.size > MAX_CHECKED_COMMITS) {
+		const oldest = checkedCommits.keys().next().value;
+		if (oldest === undefined) break;
+		checkedCommits.delete(oldest);
+	}
+}
+
+/** At most this many files of an import are looked at once. */
+const FILE_CHECK_CONCURRENCY = 32;
+
+/**
+ * Runs work over items, at most limit at once. Takes no new item once one has
+ * thrown (rethrowing it) or stop() says enough.
+ */
+async function forEachLimited<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>, stop: () => boolean = () => false): Promise<void> {
+	let next = 0;
+	let failed = false;
+	const worker = async () => {
+		while (!failed && !stop() && next < items.length) {
+			const item = items[next++] as T;
+			try {
+				await work(item);
+			} catch (error) {
+				failed = true;
+				throw error;
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
 /** The files an import would consider: everything in the folder git does not ignore. */
@@ -428,25 +688,28 @@ interface ImportScan {
 	newestMs: number;
 }
 
-/** Looks over the files an import commits, refusing what GitHub would refuse. */
+/**
+ * Looks over the files an import commits, refusing what GitHub would refuse;
+ * FILE_CHECK_CONCURRENCY files at a time. Stops adding up once past limit.
+ */
 async function scanImport(folder: string, files: readonly string[], limit: number, maxFileBytes: number): Promise<ImportScan> {
 	const name = path.basename(folder);
 	const scan: ImportScan = { size: 0, newestMs: (await fs.stat(folder)).mtimeMs };
-	for (const file of files) {
+	await forEachLimited(files, FILE_CHECK_CONCURRENCY, async (file) => {
 		const full = path.join(folder, file);
+		let stat: Awaited<ReturnType<typeof fs.lstat>>;
 		try {
-			const stat = await fs.lstat(full);
-			if (stat.size > maxFileBytes) throw largeFileError(name, file);
-			scan.size += stat.size;
-			scan.newestMs = Math.max(scan.newestMs, stat.mtimeMs);
-		} catch (error) {
-			if (error instanceof PushFolderError) throw error;
+			stat = await fs.lstat(full);
+		} catch {
 			// Gone since it was listed: git add skips it too.
+			return;
 		}
-		if (scan.size > limit) return scan;
+		if (stat.size > maxFileBytes) throw largeFileError(name, file);
+		scan.size += stat.size;
+		scan.newestMs = Math.max(scan.newestMs, stat.mtimeMs);
 		// Checked before git add, which would run the LFS filter and keep only pointers.
 		if (path.basename(file) === ".gitattributes" && usesLfs(await fs.readFile(full, "utf8").catch(() => ""))) throw lfsError(name);
-	}
+	}, () => scan.size > limit);
 	return scan;
 }
 
@@ -481,8 +744,8 @@ async function requireUploadingGit(git: GitRunner, env: NodeJS.ProcessEnv): Prom
 
 /** What an upload sends, once every check that can refuse it before sending has passed. */
 type FolderUploadPlan =
-	/** A repository folder: its checked-out commit. */
-	| { realFolder: string; source: "head"; commit: string; leftOut: string[] }
+	/** A repository folder: its checked-out commit, and branch unless HEAD is detached. */
+	| { realFolder: string; source: "head"; commit: string; branch?: string; leftOut: string[] }
 	/**
 	 * Any other folder: kept, the files to commit in gitDir (an empty bare git
 	 * directory); leftOut, the secret-looking files left out; newestMs, the
@@ -494,29 +757,47 @@ type FolderUploadPlan =
  * Every check an upload makes before it sends anything, shared by the preview
  * and the upload so they cannot drift: a folder that may not be uploaded, a
  * missing or too old git, a repository folder GitHub would refuse or receive
- * incomplete (checkRepositoryHead) or whose history holds secret-looking
- * files, and an import holding repositories of its own, Git LFS, a file over
- * GitHub's limit, or more than the import limit. An import lists its files
- * with a new git directory at the path makeGitDir gives; the caller removes it.
+ * incomplete (checkNotShallow, checkRepositoryCommit) or whose history holds
+ * files with credentials, and an import holding repositories of its own, Git
+ * LFS, a file over GitHub's limit, or more than the import limit. A commit
+ * that passed its checks a moment ago (checkedCommits) skips the ones that
+ * follow from the commit alone. An import lists its files with a new git
+ * directory at the path makeGitDir gives; the caller removes it.
  */
 async function planFolderUpload(folder: string, deps: PushFolderDeps, git: GitRunner, env: NodeJS.ProcessEnv, makeGitDir: () => Promise<string>): Promise<FolderUploadPlan> {
 	const realFolder = await resolveFolder(folder, deps.homeDir ?? os.homedir(), appStateDirs(deps));
 	await requireUploadingGit(git, env);
 	const name = path.basename(realFolder);
 	const maxFileBytes = deps.maxFileBytes ?? MAX_GITHUB_FILE_BYTES;
+	const now = deps.now ?? Date.now;
 	try {
-		const commit = await ownRepositoryHead(realFolder, git, env);
-		if (commit) {
-			await checkRepositoryHead(realFolder, git, env, maxFileBytes);
-			const secrets = await committedSecretFiles(realFolder, git, env);
-			if (secrets.length > 0) throw secretFilesError(name, secrets);
-			return { realFolder, source: "head", commit, leftOut: [] };
+		const head = await ownRepositoryHead(realFolder, git, env);
+		if (head) {
+			const { commit, branch } = head;
+			// Whether a repository is shallow is not the commit's to say.
+			await checkNotShallow(realFolder, git, env);
+			const key = checkedCommitKey(realFolder, commit, maxFileBytes);
+			if (!commitRecentlyChecked(key, now())) {
+				await checkRepositoryCommit(realFolder, commit, git, env, maxFileBytes);
+				const secrets = await committedSecretFiles(realFolder, commit, git, deps.gitStream ?? defaultGitStream, env);
+				if (secrets.length > 0) throw secretFilesError(name, secrets);
+				rememberCheckedCommit(key, now());
+			}
+			return { realFolder, source: "head", commit, ...(branch ? { branch } : {}), leftOut: [] };
 		}
 		const gitDir = await makeGitDir();
 		await git(["init", "--quiet", "--bare", gitDir], { env, timeout: GIT_STEP_TIMEOUT_MS });
 		const listed = await listImportFiles(realFolder, gitDir, git, env);
-		const leftOut = listed.filter(isSecretLookingPath);
-		const kept = listed.filter((file) => !isSecretLookingPath(file));
+		const decided = new Map<string, boolean>();
+		await forEachLimited(listed.filter((file) => secretPathKind(file) === "content"), FILE_CHECK_CONCURRENCY, async (file) => {
+			decided.set(file, await folderFileHoldsSecret(realFolder, file));
+		});
+		const holdsSecret = (file: string) => {
+			const kind = secretPathKind(file);
+			return kind === "secret" || (kind === "content" && decided.get(file) !== false);
+		};
+		const leftOut = listed.filter(holdsSecret);
+		const kept = listed.filter((file) => !holdsSecret(file));
 		// git lists a repository inside the folder as its folder ("lib/"), not its files.
 		const nested = kept.filter((file) => file.endsWith("/")).map((file) => file.slice(0, -1));
 		if (nested.length > 0) throw embeddedRepositoriesError(name, nested);
@@ -556,6 +837,14 @@ async function commitImport(plan: Extract<FolderUploadPlan, { source: "import" }
 		const pathspecs = path.join(gitDir, "ao-import-paths");
 		await fs.writeFile(pathspecs, `${kept.join("\0")}\0`);
 		await git([...scoped, "add", `--pathspec-from-file=${pathspecs}`, "--pathspec-file-nul"], { env: { ...env, GIT_LITERAL_PATHSPECS: "1" }, timeout: GIT_STEP_TIMEOUT_MS });
+		// A file kept for what it held is read again as added: it may have
+		// changed since it was checked.
+		for (const file of kept.filter((candidate) => secretPathKind(candidate) === "content")) {
+			const staged = (await git(["--git-dir", gitDir, "cat-file", "blob", `:${file}`], { env, timeout: 15_000 })).stdout;
+			if (contentHoldsSecret(file, staged)) {
+				throw new PushFolderError("import_failed", `${file} in ${path.basename(folder)} changed while it was being uploaded and now holds a credential, so nothing was uploaded. Try again.`);
+			}
+		}
 	}
 	// planFolderUpload refuses a folder holding repositories; this keeps a link
 	// to one (a repository made since) out of the commit all the same.
@@ -610,7 +899,12 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 			pushArgs.push("--git-dir", plan.gitDir);
 		}
 
-		token = await deps.getToken();
+		try {
+			token = await deps.getToken();
+		} catch {
+			// The session could not be read or refreshed: signing in again is the way on.
+			throw new PushFolderError("signed_out", "Your Orchestrator Cloud session could not be read. Sign in again, then try again.");
+		}
 		if (token === null || token === "") throw new PushFolderError("signed_out", "No Orchestrator Cloud session is available. Sign in and try again.");
 		const remote = deps.remoteFor?.(remoteUrl) ?? remoteUrl;
 		const pushEnv = withGitConfig(env, [
@@ -619,7 +913,7 @@ export async function pushFolderToRepository(input: unknown, deps: PushFolderDep
 			// which would send a second Authorization header.
 			[`http.${remoteUrl}.extraHeader`, ""],
 			[`http.${remoteUrl}.extraHeader`, `Authorization: Bearer ${token}`],
-			["http.followRedirects", "false"],
+			[`http.${remoteUrl}.followRedirects`, "false"],
 			[`http.${remoteUrl}.sslVerify`, "true"],
 			["credential.helper", ""],
 			["core.askPass", ""],
@@ -660,7 +954,7 @@ export async function previewFolderUpload(input: unknown, deps: PushFolderDeps):
 			gitDir = path.join(deps.tmpRoot(), `preview-${randomUUID()}`);
 			return gitDir;
 		});
-		return { status: "ok", source: plan.source, leftOut: plan.leftOut };
+		return { status: "ok", source: plan.source, ...(plan.source === "head" && plan.branch ? { branch: plan.branch } : {}), leftOut: plan.leftOut };
 	} catch (error) {
 		if (error instanceof PushFolderError) return failure(error);
 		return { status: "error", code: "import_failed", message: error instanceof Error ? error.message : String(error) };

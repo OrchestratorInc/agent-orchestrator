@@ -11,13 +11,14 @@ vi.mock("./cloud-auth", () => ({ getCloudAccessToken: vi.fn(async () => "token-1
 
 import {
 	clearFolderImports,
+	contentHoldsSecret,
 	CLOUD_PREVIEW_FOLDER_CHANNEL,
 	CLOUD_PUSH_FOLDER_CHANNEL,
 	FALLBACK_COMMIT_EMAIL,
 	gitSupportsConfigEnv,
 	type GitRunner,
+	type GitStreamRunner,
 	isChosenFolder,
-	isSecretLookingPath,
 	isValidPushBranch,
 	pathWithin,
 	previewFolderUpload,
@@ -27,6 +28,7 @@ import {
 	registerCloudFolderPushIpc,
 	rememberChosenFolder,
 	resolvePushUrl,
+	secretPathKind,
 } from "./cloud-folder-push";
 
 const execFileAsync = promisify(execFile);
@@ -144,9 +146,11 @@ describe("pushFolderToRepository", () => {
 		const config = Object.fromEntries(Array.from({ length: Number(push?.env.GIT_CONFIG_COUNT) }, (_, i) => [push?.env[`GIT_CONFIG_KEY_${i}`], push?.env[`GIT_CONFIG_VALUE_${i}`]]));
 		expect(config).toMatchObject({
 			[`http.${CP}${PUSH_PATH}.extraHeader`]: "Authorization: Bearer token-1",
-			"http.followRedirects": "false",
+			// Scoped to the push URL like the header, so no other config can turn redirects back on for it.
+			[`http.${CP}${PUSH_PATH}.followRedirects`]: "false",
 			"credential.helper": "",
 		});
+		expect(config).not.toHaveProperty(["http.followRedirects"]);
 		expect(push?.env.GIT_TERMINAL_PROMPT).toBe("0");
 		// Only the push step ever sees the token.
 		expect(d.calls.filter((call) => JSON.stringify(call.env).includes("token-1"))).toHaveLength(1);
@@ -297,6 +301,15 @@ describe("pushFolderToRepository", () => {
 		await fs.writeFile(path.join(folder, "a.txt"), "a");
 		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps({ getToken: async () => null }));
 		expect(result).toMatchObject({ status: "error", code: "signed_out" });
+		expect(await fs.readdir(tmpRoot)).toEqual([]);
+	});
+
+	it("reports a session that cannot be read or refreshed as signed out", async () => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		const d = deps({ getToken: async () => { throw new Error("refresh failed: invalid_grant"); } });
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, d);
+		expect(result).toMatchObject({ status: "error", code: "signed_out", message: expect.stringMatching(/Sign in again/) });
+		expect(d.calls.some((call) => call.args.includes("push"))).toBe(false);
 		expect(await fs.readdir(tmpRoot)).toEqual([]);
 	});
 
@@ -469,13 +482,137 @@ describe("previewFolderUpload", () => {
 		expect(await fs.readdir(tmpRoot).catch(() => [])).toEqual([]);
 	});
 
-	it("passes a folder and a repository the upload takes", async () => {
+	it("passes a folder and a repository the upload takes, naming the branch a repository uploads", async () => {
 		await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
 		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "import", leftOut: [] });
 
-		await git(folder, "init", "--quiet");
+		await git(folder, "init", "--quiet", "--initial-branch=draft");
 		await commitAll(folder);
+		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "head", branch: "draft", leftOut: [] });
+		await git(folder, "checkout", "--quiet", "--detach");
 		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "head", leftOut: [] });
+	});
+
+	it("imports a repository without commits and a folder inside another repository", async () => {
+		await git(folder, "init", "--quiet");
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "ok", source: "import" });
+
+		await commitAll(folder);
+		const inner = path.join(folder, "inner");
+		await fs.mkdir(inner);
+		await fs.writeFile(path.join(inner, "b.txt"), "b");
+		expect(await previewFolderUpload({ folder: inner }, deps())).toMatchObject({ status: "ok", source: "import" });
+	});
+
+	it("refuses a repository git cannot read instead of importing its files", async () => {
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		// A .git git cannot use, as with "detected dubious ownership".
+		await fs.writeFile(path.join(folder, ".git"), `gitdir: ${path.join(root, "missing.git")}\n`);
+		const preview = await previewFolderUpload({ folder }, deps());
+		const upload = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+		for (const result of [preview, upload]) {
+			expect(result).toMatchObject({ status: "error", code: "import_failed", message: expect.stringMatching(/could not read notes as a repository/) });
+		}
+		expect(await git(remote, "branch", "--list")).toBe("");
+
+		// git's own refusal reaches the person.
+		const dubious: GitRunner = async (args, options) => {
+			if (args.includes("--show-toplevel")) throw Object.assign(new Error("exit 128"), { code: 128, stderr: "fatal: detected dubious ownership in repository at '/x'\n" });
+			return deps().git!(args, options);
+		};
+		await fs.rm(path.join(folder, ".git"));
+		await git(folder, "init", "--quiet");
+		expect(await previewFolderUpload({ folder }, deps({ git: dubious }))).toMatchObject({ status: "error", code: "import_failed", message: expect.stringContaining("dubious ownership") });
+	});
+});
+
+describe("checks the upload repeats after its preview", () => {
+	/** A history walk that counts how often it runs. */
+	function countingStream(): GitStreamRunner & { walks: number } {
+		const stream = Object.assign(async (args: string[], options: { cwd?: string; env: NodeJS.ProcessEnv }, onChunk: (chunk: string) => void) => {
+			stream.walks += 1;
+			const { stdout } = await execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+			onChunk(stdout);
+		}, { walks: 0 });
+		return stream;
+	}
+
+	beforeEach(async () => {
+		await git(folder, "init", "--quiet", "-b", "main");
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		await commitAll(folder);
+	});
+
+	it("skips a commit's history checks on the upload right after its preview", async () => {
+		const gitStream = countingStream();
+		expect(await previewFolderUpload({ folder }, deps({ gitStream }))).toMatchObject({ status: "ok", source: "head" });
+		expect(gitStream.walks).toBe(1);
+
+		const upload = deps({ gitStream });
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, upload)).toMatchObject({ status: "pushed", source: "head" });
+
+		expect(gitStream.walks).toBe(1);
+		expect(upload.calls.some((call) => call.args.includes("ls-tree"))).toBe(false);
+		// Whether the repository is shallow is not the commit's to say: asked every time.
+		expect(upload.calls.some((call) => call.args.includes("--is-shallow-repository"))).toBe(true);
+	});
+
+	it("checks a commit made since the preview in full, refusing a secret it brought", async () => {
+		const gitStream = countingStream();
+		expect(await previewFolderUpload({ folder }, deps({ gitStream }))).toMatchObject({ status: "ok" });
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		await commitAll(folder, "env");
+
+		const upload = deps({ gitStream });
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, upload)).toMatchObject({ status: "error", code: "secret_files", files: [".env"] });
+		expect(gitStream.walks).toBe(2);
+		expect(await git(remote, "branch", "--list")).toBe("");
+	});
+
+	it("checks again once the preview's checks are old, or with another file limit", async () => {
+		const gitStream = countingStream();
+		const start = Date.now();
+		expect(await previewFolderUpload({ folder }, deps({ gitStream, now: () => start }))).toMatchObject({ status: "ok" });
+		expect(await previewFolderUpload({ folder }, deps({ gitStream, now: () => start + 60_000 }))).toMatchObject({ status: "ok" });
+		expect(gitStream.walks).toBe(1);
+		expect(await previewFolderUpload({ folder }, deps({ gitStream, now: () => start + 11 * 60_000 }))).toMatchObject({ status: "ok" });
+		expect(gitStream.walks).toBe(2);
+		expect(await previewFolderUpload({ folder }, deps({ gitStream, now: () => start + 11 * 60_000, maxFileBytes: 0 }))).toMatchObject({ status: "error", code: "file_too_large" });
+	});
+
+	it("never remembers a commit that was refused", async () => {
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		await commitAll(folder, "env");
+		const gitStream = countingStream();
+		for (let i = 0; i < 2; i++) expect(await previewFolderUpload({ folder }, deps({ gitStream }))).toMatchObject({ status: "error", code: "secret_files" });
+		expect(gitStream.walks).toBe(2);
+	});
+});
+
+describe("import scan", () => {
+	it("looks at a bounded number of files at once", async () => {
+		await Promise.all(Array.from({ length: 120 }, (_, i) => fs.writeFile(path.join(folder, `f${i}.txt`), String(i))));
+		const lstat = fs.lstat.bind(fs);
+		let inFlight = 0;
+		let most = 0;
+		const spy = vi.spyOn(fs, "lstat").mockImplementation((async (file: Parameters<typeof fs.lstat>[0]) => {
+			inFlight += 1;
+			most = Math.max(most, inFlight);
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 2));
+				return await lstat(file);
+			} finally {
+				inFlight -= 1;
+			}
+		}) as typeof fs.lstat);
+		try {
+			expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "ok", source: "import" });
+		} finally {
+			spy.mockRestore();
+		}
+		expect(most).toBeGreaterThan(1);
+		expect(most).toBeLessThanOrEqual(32);
 	});
 });
 
@@ -523,16 +660,147 @@ async function pushedContents(ref: string): Promise<Map<string, { mode: string; 
 const FAKE = "FAKE_TEST_VALUE";
 
 describe("secret-looking files", () => {
-	it("names the files a folder upload leaves out", () => {
-		for (const file of [".env", ".env.local", "config/.env.production", "certs/server.pem", "tls.key", "a/b/store.p12", "x.pfx", "id_rsa", "keys/id_ed25519",
-			".npmrc", ".netrc", ".pypirc", ".git-credentials", "credentials.json", "client_secret_123.apps.json", "service-account-prod.json",
-			".ssh/config", "home/.aws/credentials", ".gnupg/pubring.kbx", ".ENV", "ID_RSA"]) {
-			expect(isSecretLookingPath(file), file).toBe(true);
+	it("names the files a folder upload leaves out, always or by what they hold", () => {
+		for (const file of [".env", ".env.local", "config/.env.production", "a/b/store.p12", "x.pfx", "id_rsa", "keys/id_ed25519",
+			".netrc", ".pypirc", ".git-credentials", "credentials.json", "client_secret_123.apps.json", "service-account-prod.json",
+			".ssh/config", "home/.aws/credentials", ".gnupg/pubring.kbx", ".ENV", "ID_RSA", ".ssh/", "test/.ssh/known.pem"]) {
+			expect(secretPathKind(file), file).toBe("secret");
+		}
+		for (const file of [".npmrc", "packages/a/.npmrc", "certs/server.pem", "tls.key", "TLS.KEY", "test/fixtures/ca.pem"]) {
+			expect(secretPathKind(file), file).toBe("content");
 		}
 		for (const file of [".env.example", ".env.sample", "app/.env.template", "id_rsa.pub", "keys/id_ed25519.pub", "README.md", "src/env.ts", "environment.md",
-			"keyboard.ts", "monkey.json", "credentials.md", "docs/ssh.md", "aws/handler.ts"]) {
-			expect(isSecretLookingPath(file), file).toBe(false);
+			"keyboard.ts", "monkey.json", "credentials.md", "docs/ssh.md", "aws/handler.ts", "lib/", "certs.pem/"]) {
+			expect(secretPathKind(file), file).toBe("none");
 		}
+	});
+
+	it("tells an .npmrc holding a credential from one that only configures npm", () => {
+		for (const content of [
+			`//registry.npmjs.org/:_authToken=${FAKE}\n`,
+			`registry=https://npm.example.com\n//npm.example.com/:_auth = ${FAKE}\n`,
+			`_password="${FAKE}"\n`,
+			`; a comment\n_authToken=${FAKE}\n`,
+		]) expect(contentHoldsSecret(".npmrc", content), content).toBe(true);
+		for (const content of [
+			"engine-strict=true\nsave-exact=true\n",
+			"@acme:registry=https://npm.pkg.github.com\n",
+			"//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n",
+			"//npm.pkg.github.com/:_authToken=\"${GITHUB_TOKEN}\"\n",
+			`# _authToken=${FAKE}\n; //registry.npmjs.org/:_authToken=${FAKE}\n`,
+			"_authToken=\n",
+		]) expect(contentHoldsSecret("config/.npmrc", content), content).toBe(false);
+	});
+
+	it("tells a private key from public certificates in .pem and .key files", () => {
+		const cert = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+		expect(contentHoldsSecret("certs/ca.pem", cert)).toBe(false);
+		expect(contentHoldsSecret("certs/ca.pem", `${cert}-----BEGIN PUBLIC KEY-----\nMIIB\n-----END PUBLIC KEY-----\n`)).toBe(false);
+		for (const header of ["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK"]) {
+			expect(contentHoldsSecret("test/fixtures/server.key", `-----BEGIN ${header}-----\n${FAKE}\n-----END ${header}-----\n`), header).toBe(true);
+		}
+		// A certificate bundled with its key, a binary key, and a key without its PEM header.
+		expect(contentHoldsSecret("server.pem", `${cert}-----BEGIN PRIVATE KEY-----\n${FAKE}\n-----END PRIVATE KEY-----\n`)).toBe(true);
+		expect(contentHoldsSecret("server.key", "\u0030\u0082\u0004\u00a4")).toBe(true);
+		expect(contentHoldsSecret("server.key", FAKE)).toBe(true);
+	});
+
+	it("uploads an .npmrc and certificates without credentials, and leaves out the ones holding them", async () => {
+		await fs.mkdir(path.join(folder, "certs"));
+		await fs.mkdir(path.join(folder, "app"));
+		await fs.writeFile(path.join(folder, ".npmrc"), "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\nengine-strict=true\n");
+		await fs.writeFile(path.join(folder, "app", ".npmrc"), `//registry.npmjs.org/:_authToken=${FAKE}\n`);
+		await fs.writeFile(path.join(folder, "certs", "ca.pem"), "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n");
+		await fs.writeFile(path.join(folder, "certs", "server.key"), `-----BEGIN PRIVATE KEY-----\n${FAKE}\n-----END PRIVATE KEY-----\n`);
+		expect(await previewFolderUpload({ folder }, deps())).toEqual({ status: "ok", source: "import", leftOut: ["app/.npmrc", "certs/server.key"] });
+
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
+
+		expect(result).toMatchObject({ status: "pushed", source: "import", leftOut: ["app/.npmrc", "certs/server.key"] });
+		const pushed = await pushedContents("main");
+		expect([...pushed.keys()].sort()).toEqual([".npmrc", "certs/ca.pem"]);
+		for (const { content } of pushed.values()) expect(content).not.toContain(FAKE);
+	});
+
+	it("reads a kept .npmrc again as added, refusing it if a credential arrived since it was checked", async () => {
+		await fs.writeFile(path.join(folder, ".npmrc"), "engine-strict=true\n");
+		const base = deps();
+		const racing: GitRunner = async (args, options) => {
+			if (args.includes("add")) await fs.writeFile(path.join(folder, ".npmrc"), `//registry.npmjs.org/:_authToken=${FAKE}\n`);
+			return base.git!(args, options);
+		};
+
+		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, { ...base, git: racing });
+
+		expect(result).toMatchObject({ status: "error", code: "import_failed", message: expect.stringContaining(".npmrc") });
+		expect(await git(remote, "branch", "--list")).toBe("");
+	});
+
+	it("uploads a repository whose history holds only an .npmrc and certificates without credentials", async () => {
+		await git(folder, "init", "--quiet", "-b", "main");
+		await fs.writeFile(path.join(folder, ".npmrc"), "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n");
+		await fs.mkdir(path.join(folder, "testdata"));
+		await fs.writeFile(path.join(folder, "testdata", "ca.pem"), "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n");
+		await commitAll(folder);
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps())).toMatchObject({ status: "pushed", source: "head" });
+	});
+
+	it("refuses a repository whose .npmrc held a credential in any version, or that holds a private key", async () => {
+		await git(folder, "init", "--quiet", "-b", "main");
+		await fs.writeFile(path.join(folder, ".npmrc"), `//registry.npmjs.org/:_authToken=${FAKE}\n`);
+		await commitAll(folder, "with token");
+		await fs.writeFile(path.join(folder, ".npmrc"), "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n");
+		await commitAll(folder, "env reference");
+		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "error", code: "secret_files", files: [".npmrc"] });
+
+		const other = path.join(root, "other");
+		await fs.mkdir(path.join(other, "test", "fixtures"), { recursive: true });
+		await git(other, "init", "--quiet", "-b", "main");
+		await fs.writeFile(path.join(other, "test", "fixtures", "server.key"), `-----BEGIN RSA PRIVATE KEY-----\n${FAKE}\n-----END RSA PRIVATE KEY-----\n`);
+		await commitAll(other);
+		expect(await previewFolderUpload({ folder: other }, deps())).toMatchObject({ status: "error", code: "secret_files", files: ["test/fixtures/server.key"] });
+	});
+
+	it("finds a secret file only a merge brought in", async () => {
+		await git(folder, "init", "--quiet", "-b", "main");
+		await fs.writeFile(path.join(folder, "a.txt"), "a");
+		await commitAll(folder, "a");
+		await git(folder, "checkout", "--quiet", "-b", "side");
+		await fs.writeFile(path.join(folder, "b.txt"), "b");
+		await commitAll(folder, "b");
+		await git(folder, "checkout", "--quiet", "main");
+		await fs.writeFile(path.join(folder, "c.txt"), "c");
+		await commitAll(folder, "c");
+		await git(folder, "merge", "--quiet", "--no-ff", "--no-commit", "side");
+		// Added in the merge commit itself, on neither side.
+		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
+		await git(folder, "add", ".env");
+		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", "merge");
+
+		const d = deps();
+		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, d)).toMatchObject({ status: "error", code: "secret_files", files: [".env"] });
+		// The history streams through its own runner, never buffered whole.
+		expect(d.calls.some((call) => call.args.includes("log"))).toBe(false);
+		expect(await git(remote, "branch", "--list")).toBe("");
+	});
+
+	it("reads the history however git splits its output", async () => {
+		await git(folder, "init", "--quiet", "-b", "main");
+		await fs.mkdir(path.join(folder, "config"));
+		await fs.writeFile(path.join(folder, "README.md"), "# notes\n");
+		await fs.writeFile(path.join(folder, "config", ".env.production"), `${FAKE}=${FAKE}\n`);
+		await commitAll(folder);
+		await git(folder, "rm", "--quiet", "config/.env.production");
+		await commitAll(folder, "drop");
+		// Three characters at a time, so names and changes are cut anywhere.
+		const gitStream: GitStreamRunner = async (args, options, onChunk) => {
+			const { stdout } = await execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+			for (let i = 0; i < stdout.length; i += 3) onChunk(stdout.slice(i, i + 3));
+		};
+		expect(await previewFolderUpload({ folder }, deps({ gitStream }))).toMatchObject({ status: "error", code: "secret_files", files: ["config/.env.production"] });
+		// A history git fails to read is a failure, not a pass.
+		const failing: GitStreamRunner = async () => { throw Object.assign(new Error("exit 128"), { stderr: "fatal: bad object HEAD" }); };
+		expect(await previewFolderUpload({ folder }, deps({ gitStream: failing }))).toMatchObject({ status: "error", code: "import_failed", message: expect.stringContaining("bad object") });
 	});
 
 	it("leaves secret-looking files out of an import, nested ones too, and reports them", async () => {
