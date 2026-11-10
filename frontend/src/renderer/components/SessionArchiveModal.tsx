@@ -192,9 +192,8 @@ export function SessionArchiveModal({
 				onOpenChange={onOpenChange}
 				title={t("shell.archivedSessions")}
 				description={t("archiveModal.searchPlaceholder")}
-				// Wider than the palette so cards sit at least three to a row, on the
-				// board's own background so the cards read exactly as they do there.
-				className="w-[min(1200px,calc(100vw-4rem))]! bg-background!"
+				// Wider than the palette so cards sit at least three to a row.
+				className="w-[min(1200px,calc(100vw-4rem))]!"
 				commandProps={{
 					shouldFilter: false,
 					value: selected,
