@@ -13,6 +13,7 @@ import (
 //
 // Deliberately left out: WORKSPACE_PROVISION_FAILED and
 // WORKSPACE_CLEANUP_FAILED (the user's own setup or cleanup script),
+// CODEX_ACCOUNT_SETUP_INCOMPLETE (the user has not finished Codex sign-in),
 // GIT_CLONE_FAILED and network codes (remote or connectivity), and anything
 // auth related (the user is signed out).
 var faultCodes = map[string]struct{}{
@@ -40,7 +41,6 @@ var faultCodes = map[string]struct{}{
 	"CLONE_CLEANUP_FAILED":              {},
 	"CLONE_PREPARATION_FAILED":          {},
 	// Codex account staging and Computer Use (503).
-	"CODEX_ACCOUNT_SETUP_INCOMPLETE":              {},
 	"CODEX_ACCOUNT_SWITCH_ACTIVATION_UNCONFIRMED": {},
 	"COMPUTER_USE_DAEMON_START_FAILED":            {},
 }

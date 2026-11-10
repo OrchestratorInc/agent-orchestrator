@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
@@ -172,6 +172,14 @@ function renderView() {
 	/** Renders again, as a workspace refresh does. */
 	const refresh = () => view.rerender(tree());
 	return { ...view, refresh };
+}
+
+
+/** The open menu's items by accessible name; a project's letter tile is decoration, not part of it. */
+function expectMenuItems(names: string[]) {
+	const items = screen.getAllByRole("menuitem");
+	expect(items).toHaveLength(names.length);
+	items.forEach((item, index) => expect(item).toHaveAccessibleName(names[index]));
 }
 
 describe("ArtifactsView", () => {
@@ -604,6 +612,45 @@ describe("ArtifactsView", () => {
 		expect(await within(dialog).findByRole("button", { name: "Publish: caching-options.md" })).toBeInTheDocument();
 	});
 
+	it.each(["{Enter}", "[Space]"])("opens a card's menu with %s before the pointer has visited the card, and Escape returns focus", async (key) => {
+		const user = userEvent.setup();
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		// The card draws stand-in buttons until focus or the pointer reaches it; focus moves to the menu's own.
+		act(() => project.getByRole("button", { name: "More actions: pricing.md" }).focus());
+		expect(project.getByRole("button", { name: "More actions: pricing.md" })).toHaveFocus();
+		await user.keyboard(key);
+		expect(await screen.findByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Delete artifact" })).not.toBeInTheDocument());
+		expect(project.getByRole("button", { name: "More actions: pricing.md" })).toHaveFocus();
+	});
+
+	it("starts a pin tooltip from the one pointer move that reached the card", async () => {
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		// The pointer comes to rest on Pin: that move lands on the stand-in, before the tooltip trigger exists.
+		fireEvent.pointerMove(project.getByRole("button", { name: "Pin artifact: pricing.md" }), { pointerType: "mouse" });
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pin artifact");
+	});
+
+	it("pins from a first tap on a card the pointer has not moved over", async () => {
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		const pin = project.getByRole("button", { name: "Pin artifact: pricing.md" });
+		// A browser sends the click only to the button pressed, and only while it is still in the page.
+		fireEvent.pointerDown(pin, { button: 0, pointerType: "touch", isPrimary: true });
+		act(() => pin.focus());
+		await act(async () => {});
+		fireEvent.pointerUp(pin, { button: 0, pointerType: "touch", isPrimary: true });
+		expect(pin).toBeInTheDocument();
+		fireEvent.click(pin);
+		expect(within(screen.getByRole("region", { name: "Pinned" })).getByText("pricing.md")).toBeInTheDocument();
+		// A pressed tooltip trigger stays quiet when focus lands on it, as it does without the stand-in.
+		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+	});
+
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
 		const user = userEvent.setup();
 		const { unmount } = renderView();
@@ -952,7 +999,7 @@ describe("ArtifactsView", () => {
 		renderView();
 
 		await user.click(screen.getByRole("button", { name: "New artifact" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Scratchpad", "agent-orchestrator"]);
+		expectMenuItems(["Scratchpad", "agent-orchestrator"]);
 		await user.click(screen.getByRole("menuitem", { name: "Scratchpad" }));
 
 		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-7" } }));
@@ -978,7 +1025,21 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Create artifact" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Scratchpad", "agent-orchestrator", "px0"]);
+		expectMenuItems(["Scratchpad", "agent-orchestrator", "px0"]);
+	});
+
+	it("gives each project the sidebar's icon, in its section and in the New artifact menu", async () => {
+		const user = userEvent.setup();
+		renderView();
+		// The letter tile is decoration beside the project's name, as in the sidebar.
+		const section = screen.getByRole("region", { name: "agent-orchestrator" });
+		const sectionTile = within(section).getByRole("heading", { name: "agent-orchestrator" }).querySelector('[aria-hidden="true"]');
+		expect(sectionTile?.textContent).toBe("A");
+		await user.click(screen.getByRole("button", { name: "New artifact" }));
+		const item = screen.getByRole("menuitem", { name: "agent-orchestrator" });
+		expect(item.querySelector('[aria-hidden="true"]')?.textContent).toBe("A");
+		// Scratchpad keeps its file icon: it is not a project.
+		expect(screen.getByRole("menuitem", { name: "Scratchpad" }).textContent).toBe("Scratchpad");
 	});
 
 	it("starts a Scratchpad artifact session without a project id and opens it", async () => {

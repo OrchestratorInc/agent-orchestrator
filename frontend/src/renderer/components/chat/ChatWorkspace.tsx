@@ -4973,14 +4973,14 @@ export function Timeline({
 									editPending={inlineEditPending}
 									editSendBlocked={inlineEditSendBlocked}
 									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
-									editBusy={Boolean(editBusy || newWorkDisabled)}
+									editBusy={turnEditing(group, messageEdit) && Boolean(editBusy || newWorkDisabled)}
 									editError={translateDraft(editError ??
 										draftPersistenceError ??
 										inlineEditRecoveryNotice ??
 										inlineEditOutcomeNotice)}
 									branchPoints={branchPoints}
 									editableTurns={editableTurns}
-									newHumanMessageIds={newHumanMessageIds}
+									newHumanMessageIds={turnNewHumanMessageIds(group, newHumanMessageIds)}
 									onActivateBranch={canActivateBranch ? activateBranch : undefined}
 									activateBranchPending={activateBranchPending}
 									activateBranchError={activateBranchError}
@@ -4989,7 +4989,7 @@ export function Timeline({
 									// rather than hiding rows the agent still remembers.
 									canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
 									rollbackDisabled={rollbackDisabled}
-									busy={busy}
+									busy={turnShowsApproval(group) ? busy : undefined}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
 								</BatchedReportsContext.Provider>
@@ -6362,6 +6362,24 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
+
+/**
+ * What a turn reads of the timeline-wide flags, so a send or steer redraws only
+ * the turns it changes. A turn uses the new-message ids only for its own human
+ * messages' entrance, `editBusy` only in the message being edited, and `busy`
+ * only on an approval card; other turns get the same value every time and keep
+ * their memoized render.
+ */
+const NO_NEW_HUMAN_MESSAGES: ReadonlySet<string> = new Set();
+function turnNewHumanMessageIds(group: TimelineGroup, ids: ReadonlySet<string>): ReadonlySet<string> {
+	return ids.size > 0 && group.items.some((item) => ids.has(itemKey(item))) ? ids : NO_NEW_HUMAN_MESSAGES;
+}
+function turnEditing(group: TimelineGroup, edit: MessageEditDraft | undefined): boolean {
+	return Boolean(edit && group.items.some((item) => item.kind === "message" && item.turnId === edit.turnId));
+}
+function turnShowsApproval(group: TimelineGroup): boolean {
+	return group.items.some((item) => item.kind === "activity" && item.activityKind === "approval");
+}
 
 const detachedActions = new WeakMap<ConversationItem, ConversationItem>();
 

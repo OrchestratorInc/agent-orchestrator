@@ -2350,14 +2350,6 @@ textarea,
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
 }
 
-.ao-mascot-eyes {
-	fill: transparent;
-}
-
-:root[data-theme="light"] .ao-mascot-eyes {
-	fill: #000;
-}
-
 /* Startup requirements checklist — each row fades/slides in on its own
  * staggered delay (set inline per-row via animation-delay). `both` holds the "from" state
  * (invisible) for the duration of that delay instead of flashing in early. */

@@ -5539,6 +5539,52 @@ describe("ChatWorkspace message actions", () => {
 		expect(composer).toHaveTextContent("unsent composer draft");
 	});
 
+	it("disables an open edit of an earlier turn as soon as new work is fenced off", async () => {
+		const user = userEvent.setup();
+		const props = { snapshot: idleSnapshot(), onEditMessage: vi.fn(async () => undefined) };
+		const view = render(<ChatWorkspace {...props} />);
+		await user.click(screen.getAllByRole("button", { name: "Edit user message" })[0]!);
+		await user.type(screen.getByRole("textbox", { name: "Edit message" }), " Include staged files.");
+		expect(screen.getByRole("button", { name: "Send edited message" })).toBeEnabled();
+		// Only the turn being edited reads the flag, so that turn has to redraw when it flips.
+		view.rerender(<ChatWorkspace {...props} newWorkDisabled />);
+		expect(screen.getByRole("button", { name: "Send edited message" })).toBeDisabled();
+		expect(screen.getByText("Stop the current turn before branching")).toBeInTheDocument();
+		view.rerender(<ChatWorkspace {...props} />);
+		expect(screen.getByRole("button", { name: "Send edited message" })).toBeEnabled();
+	});
+
+	it("plays the entrance on the newest human message only, send after send", () => {
+		const base = idleSnapshot();
+		const at = "2026-08-11T10:05:00Z";
+		const send = (snapshot: ConversationSnapshot, turnId: string, text: string): ConversationSnapshot => {
+			const sequence = snapshot.latestSequence + 1;
+			return {
+				...snapshot,
+				latestSequence: sequence,
+				turns: [...snapshot.turns, { id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: at }],
+				items: [...snapshot.items, {
+					kind: "message", id: `prompt-${turnId}`, turnId, sequence, revision: 0,
+					role: "user", origin: "human", text, streaming: false, createdAt: at,
+				}],
+			};
+		};
+		const entering = () => [...document.querySelectorAll(".chat-human-message-enter")];
+		const view = render(<ChatWorkspace snapshot={base} />);
+		expect(entering()).toHaveLength(0);
+		const first = send(base, "turn-3", "Now run the tests");
+		view.rerender(<ChatWorkspace snapshot={first} />);
+		expect(entering().length).toBeGreaterThan(0);
+		for (const node of entering()) expect(node).toHaveTextContent("Now run the tests");
+		// Each turn gets the new ids only while it holds one, so the previous turn redraws without them.
+		view.rerender(<ChatWorkspace snapshot={send(first, "turn-4", "Then open a PR")} />);
+		expect(entering().length).toBeGreaterThan(0);
+		for (const node of entering()) {
+			expect(node).toHaveTextContent("Then open a PR");
+			expect(node).not.toHaveTextContent("Now run the tests");
+		}
+	});
+
 	it("hides editing while another turn is active", () => {
 		render(<ChatWorkspace snapshot={chatFixture} onEditMessage={vi.fn(async () => undefined)} />);
 

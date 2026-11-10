@@ -27,7 +27,6 @@ var backgroundComponents = map[string]struct{}{
 	"scm":             {},
 	"systeminstall":   {},
 	"trackerintake":   {},
-	"agent_catalog":   {},
 }
 
 var backgroundOperationLabels = map[string]string{
@@ -46,7 +45,6 @@ var backgroundOperationLabels = map[string]string{
 	"scm_persist":          "SCM observer write failed",
 	"agent_install":        "Agent install job failed",
 	"tracker_spawn":        "Tracker auto-spawn failed",
-	"model_discovery":      "Model discovery failed",
 }
 
 // safeAgentID matches AO's fixed harness identifiers (claude-code, codex,
@@ -115,7 +113,7 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 // captureAsync shares bounded admission across HTTP and background reports.
 // Admission pins consent; only owned metadata crosses the goroutine boundary.
 func captureAsync(ctx context.Context, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
-	if ctx.Err() != nil || !enterCapture(ctx) {
+	if ctx.Err() != nil || !sampled.Load() || !enterCapture(ctx) {
 		return
 	}
 	select {
