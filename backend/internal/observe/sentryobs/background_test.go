@@ -185,14 +185,14 @@ func TestErrorBudgetOverflowIsPerOperation(t *testing.T) {
 	})
 	// Exhaust one operation's overflow bucket; a different operation still gets through.
 	for i := range maxErrorsPerFingerprintMinute {
-		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), "reaper_tick", when) {
+		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), "reaper_tick", when, false) {
 			t.Fatalf("overflow event %d was dropped", i)
 		}
 	}
-	if allowErrorFingerprintFor("eeeeeeeeeeeeeeee", "reaper_tick", when) {
+	if allowErrorFingerprintFor("eeeeeeeeeeeeeeee", "reaper_tick", when, false) {
 		t.Fatal("reaper_tick overflow admitted a sixth event in the minute")
 	}
-	if !allowErrorFingerprintFor("dddddddddddddddd", "chat_spawn", when) {
+	if !allowErrorFingerprintFor("dddddddddddddddd", "chat_spawn", when, false) {
 		t.Fatal("a noisy operation starved a different operation's new failure")
 	}
 }

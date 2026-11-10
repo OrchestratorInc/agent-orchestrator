@@ -45,15 +45,17 @@ function readErrorBudget(file: string): ErrorBudgetState {
 	return { day: "", total: 0, fingerprints: {} };
 }
 
-export function createErrorBudget(file: string): (fingerprint: readonly string[], now?: number) => boolean {
+// A crash (alwaysSent) is exempt from the install total, so ordinary errors
+// cannot hide it, but still counts per fingerprint to stop a crash loop.
+export function createErrorBudget(file: string): (fingerprint: readonly string[], now?: number, alwaysSent?: boolean) => boolean {
 	let state = readErrorBudget(file);
-	return (fingerprint, now = Date.now()) => {
+	return (fingerprint, now = Date.now(), alwaysSent = false) => {
 		const day = new Date(now).toISOString().slice(0, 10);
 		if (state.day !== day) state = { day, total: 0, fingerprints: {} };
 		const key = fingerprint.join("|");
 		const count = state.fingerprints[key] ?? 0;
-		if (state.total >= ERRORS_PER_INSTALL_PER_DAY || count >= ERRORS_PER_FINGERPRINT_PER_DAY) return false;
-		state = { day, total: state.total + 1, fingerprints: { ...state.fingerprints, [key]: count + 1 } };
+		if ((!alwaysSent && state.total >= ERRORS_PER_INSTALL_PER_DAY) || count >= ERRORS_PER_FINGERPRINT_PER_DAY) return false;
+		state = { day, total: state.total + (alwaysSent ? 0 : 1), fingerprints: { ...state.fingerprints, [key]: count + 1 } };
 		try {
 			const temporary = `${file}.${process.pid}.tmp`;
 			writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 });
@@ -63,11 +65,11 @@ export function createErrorBudget(file: string): (fingerprint: readonly string[]
 	};
 }
 
-function admitMainSentryEvent(event: Sentry.ErrorEvent | null, sampled: boolean, budget: (fingerprint: readonly string[]) => boolean): Sentry.ErrorEvent | null {
+function admitMainSentryEvent(event: Sentry.ErrorEvent | null, sampled: boolean, budget: (fingerprint: readonly string[], now?: number, alwaysSent?: boolean) => boolean): Sentry.ErrorEvent | null {
 	if (!event) return null;
 	const alwaysSent = ALWAYS_SENT_KINDS.has(String(event.tags?.kind));
 	if (!alwaysSent && !sampled) return null;
-	if (!budget(event.fingerprint ?? [])) return null;
+	if (!budget(event.fingerprint ?? [], Date.now(), alwaysSent)) return null;
 	return { ...event, tags: { ...event.tags, sample_rate: alwaysSent ? "1" : ERROR_SAMPLE_RATE } };
 }
 
@@ -195,6 +197,13 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		: undefined;
 	const topFunction = topFrame?.function === "renderer_frame" ? rendererLocation ?? "renderer_frame"
 		: topFrame?.function === "main_frame" ? mainLocation ?? "main_frame" : topFrame?.function ?? "unknown";
+	// Minified line and column move on every build, so a location-only frame
+	// groups by its hash-stripped chunk; the title keeps line and column.
+	const groupFunction = topFrame?.function === "renderer_frame"
+		? topFrame && "filename" in topFrame && typeof topFrame.filename === "string" ? topFrame.filename.replace(/-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/, "") : "renderer_frame"
+		// Main is a single bundle, so a chunk would merge every main failure;
+		// it keeps its numeric location and splits per build instead.
+		: topFrame?.function === "main_frame" ? mainLocation ?? "main_frame" : topFrame?.function ?? "unknown";
 	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
 	const debugImages = frames?.length ? safeDebugImages(event, renderer) : [];
 	const title = renderer
@@ -209,7 +218,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: title,
-		fingerprint: ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main"],
+		fingerprint: ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, groupFunction, renderer ? "renderer" : "electron-main"],
 		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}) } : {}), ...(processReason ? { reason: processReason } : {}) },
 		user: { id: installId },
 		release: version,
@@ -301,8 +310,10 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 	childProcessHookInstalled = true;
 	Sentry.setUser({ id: installId });
 	return {
+		// Renderer and handled main events are never always-sent, so an install
+		// outside the sample drops them before any SDK work.
 		capture(request) {
-			if (!accepting) return;
+			if (!accepting || !sampled) return;
 			const safe = sanitizeRendererCapture(request);
 			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable" || EXPECTED_NOISE.test(safe.message)) return;
 			const category = safe.tags?.category;
@@ -326,7 +337,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 			});
 		},
 		captureMain(request: MainErrorCapture) {
-			if (!accepting) return;
+			if (!accepting || !sampled) return;
 			const safe = sanitizeMainErrorCapture(request);
 			if (!safe) return;
 			Sentry.captureEvent({

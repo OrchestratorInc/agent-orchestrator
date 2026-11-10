@@ -1594,7 +1594,9 @@ export async function captureRendererException(error: unknown, properties?: Reco
 	if (isDeniedEvent("$exception")) return;
 	// The main-owned policy gate decides whether this reaches Sentry, and
 	// Electron main samples and budgets it per install on the final scrubbed
-	// fingerprint. Renderer exceptions no longer enter the PostHog path.
+	// fingerprint. This shared limit (five a minute, 200 a day) only bounds
+	// IPC traffic from an error loop. Renderer exceptions no longer enter PostHog.
+	if (!reserveCapture("$exception")) return;
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
 	captureExceptionToSentry(normalizeException(error), {
 		category: source === "react-error-boundary" ? "render_crash" : undefined,

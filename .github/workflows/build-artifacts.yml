@@ -123,6 +123,17 @@ jobs:
           # The maps are left out of the package and uploaded below.
           AO_PUBLISHED_BUILD: "1"
         run: npm run make
+      - name: Verify baked published-build marker
+        # Electron main initializes Sentry only when vite.main.config.ts baked
+        # AO_PUBLISHED_BUILD=1 into the bundle. If the define stopped reaching
+        # it, every release would silently send nothing to Sentry.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q 'process\.env\.AO_PUBLISHED_BUILD' .vite/build/main.js; then
+            echo "::error::.vite/build/main.js still reads process.env.AO_PUBLISHED_BUILD; the published-build define did not apply" >&2
+            exit 1
+          fi
       - name: Verify baked update feed repo
         # app-update.yml is what electron-updater reads at runtime to build the
         # feed URL; forge's prePackage hook writes it to the working dir and
@@ -237,9 +248,10 @@ jobs:
           path: frontend/dist-artifact/agent-orchestrator-${{ matrix.platform }}.*
           retention-days: 1
           if-no-files-found: error
-      # The conductor uploads these to the ao-electron Sentry project with
-      # `sentry-cli sourcemaps upload`; debug IDs match them to the shipped
-      # bundles. This workflow holds no Sentry token.
+      # The conductor uploads all four platforms' artifacts to the ao-electron
+      # Sentry project with `sentry-cli sourcemaps upload`: debug IDs come from
+      # bundle contents, so a platform whose bundle differs needs its own maps.
+      # This workflow holds no Sentry token.
       - name: Upload Sentry source maps
         uses: actions/upload-artifact@v4
         with:

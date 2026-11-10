@@ -122,7 +122,7 @@ func captureAsync(ctx context.Context, tags map[string]string, fingerprint strin
 		leaveCapture()
 		return
 	}
-	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC()) {
+	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC(), false) {
 		<-backgroundSends
 		leaveCapture()
 		return

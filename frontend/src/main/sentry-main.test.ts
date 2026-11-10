@@ -351,7 +351,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo/);
 	});
 
-	it("groups minified renderer functions by app chunk, line, and column while retaining source map filenames", async () => {
+	it("groups minified renderer functions by hash-stripped chunk and titles them by line and column", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (filename: string, lineno: number, colno: number, functionName: string) => {
@@ -360,14 +360,18 @@ describe("Electron main Sentry configuration", () => {
 		};
 		const first = capture("assets/_shell-A1B2C3D4.js", 42, 7, "a");
 		const same = capture("assets/_shell-Z9Y8X7W6.js", 42, 7, "b");
-		const otherColumn = capture("assets/_shell-A1B2C3D4.js", 42, 138_000, "a");
+		// A new build moves line and column; the issue must survive it.
+		const nextBuild = capture("assets/_shell-Q1W2E3R4.js", 40, 138_000, "a");
+		const otherChunk = capture("assets/index-A1B2C3D4.js", 42, 7, "a");
 		expect(first.message).toBe("Renderer TypeError in assets/_shell:42:7 (unknown)");
+		expect(nextBuild.message).toBe("Renderer TypeError in assets/_shell:40:138000 (unknown)");
 		expect(first.fingerprint).toEqual(same.fingerprint);
-		expect(otherColumn.fingerprint).not.toEqual(first.fingerprint);
+		expect(nextBuild.fingerprint).toEqual(first.fingerprint);
+		expect(otherChunk.fingerprint).not.toEqual(first.fingerprint);
 		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", abs_path: "app://renderer/assets/_shell-A1B2C3D4.js", lineno: 42, colno: 7, in_app: true }]);
 	});
 
-	it("separates dev renderer sites by line when no packaged asset name exists", async () => {
+	it("groups dev renderer frames without a packaged asset name and titles them by line", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (functionName: string, lineno: number) => {
@@ -376,7 +380,7 @@ describe("Electron main Sentry configuration", () => {
 		};
 		const first = capture("openSessionPanel", 3);
 		expect(capture("otherUnknownFunction", 3).fingerprint).toEqual(first.fingerprint);
-		expect(capture("renderUsageChart", 6).fingerprint).not.toEqual(first.fingerprint);
+		expect(capture("renderUsageChart", 6).fingerprint).toEqual(first.fingerprint);
 		expect(first.message).toBe("Renderer TypeError in renderer:3 (unknown)");
 		expect(JSON.stringify(first)).not.toContain("openSessionPanel");
 	});
@@ -568,6 +572,23 @@ describe("Electron main error sampling and budget", () => {
 		expect(budget(["electron", "a"], day)).toBe(false);
 		expect(budget(["electron", "b"], day)).toBe(true);
 		expect(budget(["electron", "a"], Date.UTC(2026, 10, 11, 0))).toBe(true);
+	});
+
+	it("lets a crash past a spent install total but caps a crash loop per fingerprint", () => {
+		const budget = createErrorBudget(path.join(dataDir, ERROR_BUDGET_FILE));
+		const day = Date.UTC(2026, 10, 10, 12);
+		for (let i = 0; i < 25; i++) budget(["electron", String(i)], day);
+		expect(budget(["electron", "ordinary"], day)).toBe(false);
+		for (let i = 0; i < 3; i++) expect(budget(["electron", "process_exit"], day, true)).toBe(true);
+		expect(budget(["electron", "process_exit"], day, true)).toBe(false);
+	});
+
+	it("drops renderer and handled events from an unsampled install before the SDK", async () => {
+		installId.value = "ins_unsampled_0";
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [] } });
+		transport.captureMain?.({ category: "daemon", reason: "spawn_failed", error: new Error("private") });
+		expect(sdk.captureEvent).not.toHaveBeenCalled();
 	});
 
 	it("caps an install at 25 events per UTC day across fingerprints", () => {

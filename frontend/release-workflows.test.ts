@@ -179,6 +179,8 @@ run: |
     expect(contents).toContain('AO_PUBLISHED_BUILD: "1"');
     expect(contents).toContain("name: sentry-sourcemaps-${{ matrix.platform }}");
     expect(contents).toContain("frontend/.vite/renderer/main_window/assets/*.js.map");
+    // A lost define would silently turn Sentry off in every release.
+    expect(contents).toContain("grep -q 'process\\.env\\.AO_PUBLISHED_BUILD' .vite/build/main.js");
   });
 
   it("takes Teams for stable builds only from the VITE_AO_TEAMS repository variable", async () => {

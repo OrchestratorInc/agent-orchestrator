@@ -489,18 +489,20 @@ func captureErrorFor(ctx context.Context, err error, tags map[string]string, fin
 		return
 	}
 	defer leaveCapture()
-	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC()) {
+	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC(), false) {
 		return
 	}
 	capture(sentry.LevelError, tags, fingerprint, route, site, false)
 }
 
 // allowErrorFingerprintFor applies the per-fingerprint budget and the
-// per-install daily total (maxErrorsPerInstallDay). Once a day has
+// per-install daily total (maxErrorsPerInstallDay). A panic (fatal) is exempt
+// from the total, so ordinary errors cannot hide it, but keeps the
+// per-fingerprint budget so a panic loop stays bounded. Once a day has
 // seen maxErrorFingerprintsPerDay distinct fingerprints, a new one shares an
 // overflow bucket for its operation rather than one bucket for the whole
 // daemon, so a noisy day cannot hide a new failure in a different operation.
-func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool {
+func allowErrorFingerprintFor(fingerprint, operation string, now time.Time, fatal bool) bool {
 	overflow := "unknown"
 	if _, ok := operationLabels[operation]; ok {
 		overflow = "overflow:" + operation
@@ -516,7 +518,7 @@ func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool
 		errorBudget.total = 0
 		errorBudget.groups = make(map[string]errorBudgetGroup)
 	}
-	if errorBudget.total >= maxErrorsPerInstallDay {
+	if !fatal && errorBudget.total >= maxErrorsPerInstallDay {
 		return false
 	}
 	group, known := errorBudget.groups[fingerprint]
@@ -534,7 +536,9 @@ func allowErrorFingerprintFor(fingerprint, operation string, now time.Time) bool
 	}
 	group.minuteCount++
 	group.dayCount++
-	errorBudget.total++
+	if !fatal {
+		errorBudget.total++
+	}
 	errorBudget.groups[fingerprint] = group
 	return true
 }
@@ -545,6 +549,13 @@ func CapturePanic(ctx context.Context, tags map[string]string, fingerprint strin
 		return
 	}
 	defer leaveCapture()
+	operation := ""
+	if tags != nil {
+		operation = tags["operation"]
+	}
+	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC(), true) {
+		return
+	}
 	capture(sentry.LevelFatal, tags, fingerprint, route, site, true)
 }
 

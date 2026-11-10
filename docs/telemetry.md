@@ -148,11 +148,20 @@ sampled by install rather than by event:
   keyed on its final Sentry fingerprint: at most 3 events per fingerprint and 25
   events in total per install per UTC day. The counters are saved in
   `telemetry_sentry_budget.json` in the AO data directory, so a renderer reload,
-  a new window or an app restart does not reset them. The renderer has no
-  exception budget of its own.
+  a new window or an app restart does not reset them. Crashes and uncaught
+  exceptions do not count toward the 25 and still send after it is spent, but
+  keep the 3-per-fingerprint cap so a crash loop stays bounded. On an install
+  outside the sample, renderer and handled main-process errors are dropped
+  before the Sentry SDK sees them. The renderer forwards at most five exceptions
+  a minute and 200 a day to Electron main, which only bounds IPC traffic from
+  an error loop.
+- A renderer frame without an allowlisted function name groups by its bundle
+  chunk with the content hash removed (for example `assets/_shell`), so an
+  issue survives a new build. Its title still shows the line and column.
 - The daemon caps non-fatal errors at 25 per install per UTC day across all
   fingerprints, on top of its per-fingerprint budget below. This counter is in
-  memory and resets when the daemon restarts.
+  memory and resets when the daemon restarts. Panics skip the total but keep
+  the per-fingerprint budget.
 
 ## What Orchestrator.inc sends
 

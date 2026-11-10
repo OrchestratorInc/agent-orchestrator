@@ -45,17 +45,17 @@ func TestErrorFingerprintBudgetKeepsFirstEventsAndResets(t *testing.T) {
 	when := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 	fingerprint := "9999999999999999"
 	for i := 0; i < 5; i++ {
-		if !allowErrorFingerprintFor(fingerprint, "", when) {
+		if !allowErrorFingerprintFor(fingerprint, "", when, false) {
 			t.Fatalf("event %d was dropped", i)
 		}
 	}
-	if allowErrorFingerprintFor(fingerprint, "", when) {
+	if allowErrorFingerprintFor(fingerprint, "", when, false) {
 		t.Fatal("sixth event in a minute was accepted")
 	}
-	if !allowErrorFingerprintFor(fingerprint, "", when.Add(time.Minute)) {
+	if !allowErrorFingerprintFor(fingerprint, "", when.Add(time.Minute), false) {
 		t.Fatal("new minute did not admit a new event")
 	}
-	if !allowErrorFingerprintFor(fingerprint, "", when.Add(24*time.Hour)) {
+	if !allowErrorFingerprintFor(fingerprint, "", when.Add(24*time.Hour), false) {
 		t.Fatal("new day did not reset the budget")
 	}
 }
@@ -63,14 +63,14 @@ func TestErrorFingerprintBudgetKeepsFirstEventsAndResets(t *testing.T) {
 func TestErrorBudgetCapsInstallTotalPerDay(t *testing.T) {
 	when := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 	for i := range maxErrorsPerInstallDay {
-		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", 0xa000+i), "", when) {
+		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", 0xa000+i), "", when, false) {
 			t.Fatalf("event %d under the install total was dropped", i)
 		}
 	}
-	if allowErrorFingerprintFor("bbbbbbbbbbbbbbbb", "", when) {
+	if allowErrorFingerprintFor("bbbbbbbbbbbbbbbb", "", when, false) {
 		t.Fatal("a new fingerprint passed the per-install daily total")
 	}
-	if !allowErrorFingerprintFor("bbbbbbbbbbbbbbbb", "", when.Add(24*time.Hour)) {
+	if !allowErrorFingerprintFor("bbbbbbbbbbbbbbbb", "", when.Add(24*time.Hour), false) {
 		t.Fatal("new UTC day did not reset the install total")
 	}
 }
@@ -91,11 +91,11 @@ func TestErrorFingerprintBudgetCapsOverflowBucket(t *testing.T) {
 		errorBudget.Unlock()
 	})
 	for i := range maxErrorsPerFingerprintMinute {
-		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), "", when) {
+		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), "", when, false) {
 			t.Fatalf("overflow event %d was dropped", i)
 		}
 	}
-	if allowErrorFingerprintFor("ffffffffffffffff", "", when) {
+	if allowErrorFingerprintFor("ffffffffffffffff", "", when, false) {
 		t.Fatal("overflow bucket admitted a sixth event in the minute")
 	}
 	errorBudget.Lock()
@@ -652,3 +652,21 @@ func (t *blockingTransport) SendEvent(*sentry.Event) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestPanicsSkipInstallTotalButKeepFingerprintCap(t *testing.T) {
+	when := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	for i := range maxErrorsPerInstallDay {
+		allowErrorFingerprintFor(fmt.Sprintf("%016x", 0xc000+i), "", when, false)
+	}
+	if allowErrorFingerprintFor("cccccccccccccccc", "", when, false) {
+		t.Fatal("an ordinary error passed the spent install total")
+	}
+	for i := range maxErrorsPerFingerprintMinute {
+		if !allowErrorFingerprintFor("dddddddddddddddd", "", when, true) {
+			t.Fatalf("panic %d was hidden by the install total", i)
+		}
+	}
+	if allowErrorFingerprintFor("dddddddddddddddd", "", when, true) {
+		t.Fatal("a panic loop passed its per-fingerprint cap")
+	}
+}
