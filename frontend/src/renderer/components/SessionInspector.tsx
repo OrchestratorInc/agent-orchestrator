@@ -2931,6 +2931,8 @@ function BrowserView({
 	// second BrowserPanelView — it would fight the overlay over the shared native
 	// view slot). Exit is via the overlay's own minimize button.
 	const { t } = useTranslation();
+	// Stable, so the memoized panel skips this view's unrelated renders.
+	const togglePopOut = useCallback((next: boolean) => onTogglePopOut?.(next), [onTogglePopOut]);
 	if (browserPoppedOut) {
 		return (
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
@@ -2953,7 +2955,7 @@ function BrowserView({
 			active={isActive}
 			annotationQueue={browserAnnotationQueue}
 			browserView={browserView}
-			onTogglePopOut={(next) => onTogglePopOut?.(next)}
+			onTogglePopOut={togglePopOut}
 			poppedOut={false}
 			session={session}
 			topbarHost={topbarHost}
