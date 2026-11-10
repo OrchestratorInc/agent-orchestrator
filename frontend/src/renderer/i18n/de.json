@@ -4171,6 +4171,7 @@
 	"automations.templates.setup": "Benötigt GitHub-Lesezugriff für das gewählte Projekt.",
 	"automations.templates.title": "Mit einer Vorlage starten",
 	"automations.templates.description": "Wähle einen Ausgangspunkt, passe ihn an und überlasse den Rest deinem Agenten.",
+	"automations.templates.use": "Vorlage verwenden",
 	"automations.templates.label": "Vorlagen",
 	"automations.filter.status": "Status",
 	"automations.filter.project": "Projekt",

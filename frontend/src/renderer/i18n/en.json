@@ -4154,6 +4154,7 @@
 	"automations.templates.setup": "Requires GitHub read access for the selected project.",
 	"automations.templates.title": "Start with a template",
 	"automations.templates.description": "Pick a starting point, make it yours, and let your agent take it from there.",
+	"automations.templates.use": "Use template",
 	"automations.templates.label": "Templates",
 	"automations.filter.status": "Status",
 	"automations.filter.project": "Project",

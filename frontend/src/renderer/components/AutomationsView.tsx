@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
+import { ArrowDownUp, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Trash2, WandSparkles, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -472,7 +472,8 @@ function AutomationFormDialog({
 	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
-	const templateId = automation?.templateId ?? initialTemplateId;
+	const [draftTemplateId, setDraftTemplateId] = useState<AutomationTemplateID>(initialTemplateId);
+	const templateId = automation?.templateId ?? draftTemplateId;
 	const template = AUTOMATION_TEMPLATES.find((item) => item.id === templateId);
 	const [harness, setHarness] = useState("");
 	const [model, setModel] = useState("");
@@ -503,6 +504,16 @@ function AutomationFormDialog({
 		});
 	}
 
+	function applyTemplate(id: StarterTemplateID) {
+		const starter = AUTOMATION_TEMPLATES.find((item) => item.id === id);
+		if (!starter) return;
+		setDraftTemplateId(id);
+		setName(t(`automations.template.${id}`));
+		setPrompt(starter.prompt);
+		setSchedule(scheduleFieldsFromRRule(starter.rrule));
+		setValidationErrors({});
+	}
+
 	useEffect(() => {
 		if (!open) return;
 		if (!automation) void captureRendererEvent("ao.automations.create_opened");
@@ -528,14 +539,11 @@ function AutomationFormDialog({
 					minute: defaultMinute,
 					legacyRaw: null,
 				};
-		const starter = !automation ? AUTOMATION_TEMPLATES.find((item) => item.id === initialTemplateId) : undefined;
-		if (starter) {
-			setName(t(`automations.template.${starter.id}`));
-			setPrompt(starter.prompt);
-		}
 		setInitialSchedule(nextSchedule);
-		setSchedule(starter ? scheduleFieldsFromRRule(starter.rrule) : nextSchedule);
+		setSchedule(nextSchedule);
 		setValidationErrors({});
+		setDraftTemplateId("custom");
+		if (!automation && initialTemplateId !== "custom") applyTemplate(initialTemplateId);
 	// Language changes must not discard edits to an open form.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open, automation, initialTemplateId]);
@@ -651,28 +659,50 @@ function AutomationFormDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent showCloseButton={false} className={centeredOnboardingDialogClass}>
-				<DialogClose asChild>
-					<CloseButton floating disabled={busy} aria-label={t("automations.create.close")} />
-				</DialogClose>
-
-				<DialogTitle className="settings-dialog-title px-4 pr-12 pt-3">
-					{t(editing ? "automations.edit" : "automations.create")}
-				</DialogTitle>
-				<DialogDescription className="px-4 pr-12 pt-1 text-[13px] leading-5 text-muted-foreground">
-					{t(editing ? "automations.edit.description" : "automations.create.description")}
-				</DialogDescription>
+			<DialogContent showCloseButton={false} className={cn(centeredOnboardingDialogClass, "h-[min(720px,calc(100svh-24px))] max-h-none w-[min(960px,calc(100vw-24px))] rounded-panel")}>
+				<div className="flex shrink-0 items-center gap-2 border-b border-border py-2 ps-4 pe-2">
+					<DialogTitle className="settings-dialog-title min-w-0 flex-1 truncate">
+						{t(editing ? "automations.edit" : "automations.create")}
+					</DialogTitle>
+					<DialogDescription className="sr-only">
+						{t(editing ? "automations.edit.description" : "automations.create.description")}
+					</DialogDescription>
+					{editing ? null : <TemplateMenu disabled={busy} onSelect={applyTemplate} />}
+					<DialogClose asChild>
+						<CloseButton disabled={busy} aria-label={t("automations.create.close")} />
+					</DialogClose>
+				</div>
 				<form className="flex min-h-0 flex-1 flex-col" noValidate onSubmit={(event) => void submit(event)}>
-					<div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-1 pt-4">
+					<div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[minmax(0,1fr)_320px] md:overflow-hidden">
+					<div className="flex min-h-0 flex-col gap-4 p-6 md:overflow-y-auto">
 						{Object.keys(validationErrors).length > 0 ? (
 							<div role="alert" className={cn(onboardingAlertErrorClass, "flex items-start gap-2")}>
 								<TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
 								<span>{t("automations.validation.summary")}</span>
 							</div>
 						) : null}
-						<Field label={t("automations.field.name")} id={AUTOMATION_FIELD_IDS.name} error={validationErrors.name}>
-							<Input id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }} />
-						</Field>
+						<div className="flex flex-col gap-1">
+							<input id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} placeholder={t("automations.field.name")} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }}
+								className="w-full rounded-md bg-transparent text-2xl font-semibold text-foreground outline-none placeholder:text-passive focus-visible:ring-2 focus-visible:ring-ring/30" />
+							<label htmlFor={AUTOMATION_FIELD_IDS.name} className={onboardingFieldHintClass}>{t("automations.field.name")}</label>
+							{validationErrors.name ? <p id={`${AUTOMATION_FIELD_IDS.name}-error`} className={onboardingFieldErrorClass}>{validationErrors.name}</p> : null}
+						</div>
+						<div className="flex min-h-48 flex-1 flex-col gap-2 rounded-lg border border-border bg-input/50 px-4 py-3 focus-within:border-ring has-aria-invalid:border-destructive">
+							<label htmlFor={AUTOMATION_FIELD_IDS.prompt} className={onboardingFormLabelClass}>{t("automations.field.prompt")}</label>
+							<textarea
+								id={AUTOMATION_FIELD_IDS.prompt}
+								required
+								maxLength={4096}
+								value={prompt}
+								aria-invalid={Boolean(validationErrors.prompt) || undefined}
+								aria-describedby={validationErrors.prompt ? `${AUTOMATION_FIELD_IDS.prompt}-error` : undefined}
+								onChange={(event) => { setPrompt(event.target.value); if (event.target.value.trim()) clearValidationError("prompt"); }}
+								className="min-h-0 w-full flex-1 resize-none bg-transparent text-[13px] leading-5 outline-none"
+							/>
+						</div>
+						{validationErrors.prompt ? <p id={`${AUTOMATION_FIELD_IDS.prompt}-error`} className={onboardingFieldErrorClass}>{validationErrors.prompt}</p> : null}
+					</div>
+					<div className="flex min-h-0 flex-col gap-4 border-t border-border p-4 md:overflow-y-auto md:border-t-0 md:border-s">
 						<Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId}>
 							<AutomationSelect
 								id={AUTOMATION_FIELD_IDS.projectId}
@@ -688,19 +718,6 @@ function AutomationFormDialog({
 							/>
 						</Field>
 
-						<Field label={t("automations.field.prompt")} id={AUTOMATION_FIELD_IDS.prompt} error={validationErrors.prompt}>
-							<textarea
-								id={AUTOMATION_FIELD_IDS.prompt}
-								required
-								maxLength={4096}
-								value={prompt}
-								aria-invalid={Boolean(validationErrors.prompt) || undefined}
-								aria-describedby={validationErrors.prompt ? `${AUTOMATION_FIELD_IDS.prompt}-error` : undefined}
-								onChange={(event) => { setPrompt(event.target.value); if (event.target.value.trim()) clearValidationError("prompt"); }}
-								className="min-h-28 w-full resize-y rounded-md border border-transparent bg-input/50 px-3 py-2 text-[13px] leading-5 outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 aria-invalid:border-destructive"
-							/>
-						</Field>
-						<div className="grid grid-cols-2 gap-3">
 							<RequiredAgentField
 								id="automation-agent"
 								label={t("automations.agent")}
@@ -715,7 +732,7 @@ function AutomationFormDialog({
 								}}
 							/>
 							{open ? (
-								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
+								<div className="flex min-w-0 flex-col gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
 										role="worker"
@@ -732,6 +749,7 @@ function AutomationFormDialog({
 									/>
 								</div>
 							) : null}
+						<div className="grid grid-cols-2 gap-3">
 							<Field label={t("automations.field.schedule")}>
 								<AutomationSelect
 									label={t("automations.field.schedule")}
@@ -883,8 +901,9 @@ function AutomationFormDialog({
 						{templateId !== "custom" ? <p className="text-xs leading-5 text-muted-foreground">{t("automations.templates.setup")}</p> : null}
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
 					</div>
+					</div>
 
-					<div className={cn(onboardingFooterActionsEndClass, "px-4 pb-4")}>
+					<div className={cn(onboardingFooterActionsEndClass, "shrink-0 border-t border-border px-4 py-3")}>
 						<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
@@ -895,6 +914,31 @@ function AutomationFormDialog({
 				</form>
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+/** Fills the create form from a bundled starter; nothing is created until submit. */
+function TemplateMenu({ disabled, onSelect }: { disabled: boolean; onSelect: (id: StarterTemplateID) => void }) {
+	const { t } = useTranslation();
+	const scheduleLabel = useScheduleLabel();
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button type="button" size="sm" variant="quiet" disabled={disabled}>
+					<WandSparkles aria-hidden="true" className="size-icon-sm" />
+					{t("automations.templates.use")}
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" className="w-80" data-browser-native-overlay="true">
+				{AUTOMATION_TEMPLATES.map((template) => (
+					<DropdownMenuItem key={template.id} onSelect={() => onSelect(template.id)} className="flex-col items-start gap-0.5 py-2">
+						<span className="text-caption text-passive">{scheduleLabel(template.rrule)}</span>
+						<span className="font-medium text-foreground">{t(`automations.template.${template.id}`)}</span>
+						<span className="text-pretty text-xs leading-5 text-muted-foreground">{t(`automations.template.${template.id}.description`)}</span>
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 
