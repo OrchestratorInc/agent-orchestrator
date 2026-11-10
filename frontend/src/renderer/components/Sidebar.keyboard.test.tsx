@@ -10,7 +10,7 @@ import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 // Real DndContext (Sidebar.test.tsx mocks it): proves session rows are wired to
 // dnd-kit's KeyboardSensor with Space only, leaving Enter and F2 to the row.
 
-const { getMock, navigateMock } = vi.hoisted(() => ({ getMock: vi.fn(), navigateMock: vi.fn() }));
+const { getMock, postMock, navigateMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn(), navigateMock: vi.fn() }));
 
 vi.mock("motion/react", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("motion/react")>();
@@ -24,7 +24,7 @@ vi.mock("../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: { trackerIntakeEnabled: true }, isLoading: false, error: undefined }),
 }));
 vi.mock("../lib/api-client", () => ({
-	apiClient: { GET: getMock, POST: vi.fn() },
+	apiClient: { GET: getMock, POST: postMock },
 	hasTrustedApiBaseUrl: () => false,
 	apiErrorMessage: () => "Request failed",
 }));
@@ -63,10 +63,11 @@ const workspace: WorkspaceSummary = {
 beforeEach(() => {
 	navigateMock.mockReset();
 	getMock.mockReset().mockResolvedValue({ data: undefined, error: undefined });
+	postMock.mockReset();
 	window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify([workspace.id]));
 });
 
-function renderSidebar() {
+function renderSidebar(project = workspace) {
 	const noop = () => vi.fn().mockResolvedValue(undefined);
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
@@ -74,7 +75,7 @@ function renderSidebar() {
 			<TooltipProvider>
 				<SidebarProvider>
 					<Sidebar
-						workspaces={[workspace]}
+						workspaces={[project]}
 						onCloneProject={noop()}
 						onCreateProject={noop()}
 						onInitializeProject={noop()}
@@ -89,6 +90,20 @@ function renderSidebar() {
 }
 
 describe("Sidebar session rows with the real DndContext", () => {
+	it("已有主编排器时显示独立会话，并通过菜单创建新会话", async () => {
+		const user = userEvent.setup();
+		const primary = { ...session("proj-1-primary", "Orchestrator"), kind: "orchestrator" as const };
+		const independent = { ...primary, id: "proj-1-independent", independentOrchestrator: true };
+		postMock.mockResolvedValue({ data: { orchestrator: { id: "proj-1-new" } } });
+		renderSidebar({ ...workspace, sessions: [primary, independent, ...workspace.sessions] });
+		expect(screen.getByLabelText("Open Orchestrator · proj-1-independent")).toBeInTheDocument();
+		expect(screen.getByLabelText("Open Project One orchestrator")).toBeInTheDocument();
+		await user.click(screen.getByLabelText("Project actions for Project One"));
+		await user.click(screen.getByRole("menuitem", { name: "New orchestrator session" }));
+		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "proj-1-new" } })));
+		expect(postMock).toHaveBeenCalledWith("/api/v1/orchestrators", { body: { projectId: "proj-1", clean: false, newSession: true } });
+	});
+
 	it("starts a keyboard drag on Space and cancels on Escape without opening the session", async () => {
 		const user = userEvent.setup();
 		renderSidebar();

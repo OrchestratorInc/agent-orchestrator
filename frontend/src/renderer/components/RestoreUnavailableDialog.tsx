@@ -47,7 +47,9 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 		setBusy(true);
 		setError(undefined);
 		try {
-			const id = hostId
+			const id = session.independentOrchestrator
+				? await spawnOrchestrator(session.workspaceId, "restore_dialog", false, undefined, undefined, hostId, { newSession: true })
+				: hostId
 				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, true, "restore_dialog")
 				: await spawnOrchestrator(session.workspaceId, "restore_dialog", true);
 			onOpenChange(false);

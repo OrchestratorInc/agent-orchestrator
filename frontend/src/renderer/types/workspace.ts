@@ -128,6 +128,8 @@ export type WorkspaceSession = {
 	/** Whether the daemon may automatically review this session after it becomes idle. */
 	autoReviewEnabled?: boolean;
 	kind?: SessionKind;
+	/** 独立管理的编排器，不参与项目主入口的选择。 */
+	independentOrchestrator?: boolean;
 	/**
 	 * Which controller is currently committed for this session. The session
 	 * surface renders from THIS value, never from the current creation default.
@@ -327,6 +329,16 @@ export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "ki
 	return session.kind === "orchestrator" || session.id.endsWith("-orchestrator");
 }
 
+/** 未带独立标记的旧会话仍作为项目主编排器。 */
+export function isPrimaryOrchestratorSession(session: Pick<WorkspaceSession, "id" | "kind" | "independentOrchestrator">): boolean {
+	return isOrchestratorSession(session) && !session.independentOrchestrator;
+}
+
+/** 同名独立会话保留稳定 ID，便于用户区分。 */
+export function sessionDisplayTitle(session: Pick<WorkspaceSession, "id" | "title" | "independentOrchestrator">): string {
+	return session.independentOrchestrator ? `${session.title} · ${session.id}` : session.title;
+}
+
 /**
  * The project's LIVE orchestrator, if any. Terminated orchestrator rows stay in
  * the session list (the daemon returns all sessions, ordered by spawn number),
@@ -343,8 +355,9 @@ export function findProjectOrchestrator(
 	return newestActiveOrchestrator(workspace?.sessions ?? []);
 }
 
+/** 主入口始终只选择主编排器，不受独立会话创建时间影响。 */
 export function newestActiveOrchestrator(sessions: WorkspaceSession[]): WorkspaceSession | undefined {
-	const active = sessions.filter((session) => isOrchestratorSession(session) && sessionIsActive(session));
+	const active = sessions.filter((session) => isPrimaryOrchestratorSession(session) && sessionIsActive(session));
 	return active.reduce<WorkspaceSession | undefined>(
 		(newest, session) => (!newest || sessionNewer(session, newest) ? session : newest),
 		undefined,
@@ -398,6 +411,13 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 /** Worker sessions ordered by the user's latest message (else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
 	return workerSessions(sessions).sort((a, b) =>
+		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
+	);
+}
+
+/** 侧栏同时展示普通任务和独立编排器，主编排器保留项目入口。 */
+export function sortedProjectSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
+	return sessions.filter((session) => !isPrimaryOrchestratorSession(session)).sort((a, b) =>
 		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
 	);
 }
@@ -486,7 +506,7 @@ export function orchestratorHealth(workspace: WorkspaceSummary, restarting = fal
 			message: "Restarting orchestrator. New tasks wait until the replacement is ready.",
 		};
 	}
-	const active = workspace.sessions.filter((session) => isOrchestratorSession(session) && sessionIsActive(session));
+	const active = workspace.sessions.filter((session) => isPrimaryOrchestratorSession(session) && sessionIsActive(session));
 	if (active.length > 1) {
 		return {
 			state: "duplicates",
@@ -519,8 +539,8 @@ export type NextSessionNavigation =
 /**
  * Resolves where to navigate after an active session is killed.
  * Prioritizes:
- * 1. Adjacent remaining worker session (previous if available, else first remaining).
- * 2. Active non-terminated orchestrator if no worker sessions remain.
+ * 1. Adjacent remaining sidebar session (previous if available, else first remaining).
+ * 2. Active primary orchestrator if no sidebar sessions remain.
  * 3. Project board if no alive sessions remain.
  */
 export function resolveNextNavigationAfterSessionKill(
@@ -530,11 +550,11 @@ export function resolveNextNavigationAfterSessionKill(
 ): NextSessionNavigation {
 	if (!workspace) return { target: "project" };
 
-	const workerList = (sessionsInDisplayOrder ?? sortedWorkerSessions(workspace.sessions)).filter(
+	const sessionList = (sessionsInDisplayOrder ?? sortedProjectSessions(workspace.sessions)).filter(
 		(s) => s.isTerminated !== true,
 	);
-	const currentIndex = workerList.findIndex((s) => s.id === killedSessionId);
-	const remaining = workerList.filter((s) => s.id !== killedSessionId);
+	const currentIndex = sessionList.findIndex((s) => s.id === killedSessionId);
+	const remaining = sessionList.filter((s) => s.id !== killedSessionId);
 
 	if (remaining.length > 0) {
 		const nextIndex = currentIndex > 0 ? currentIndex - 1 : 0;

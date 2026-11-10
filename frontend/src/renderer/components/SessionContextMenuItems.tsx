@@ -11,7 +11,7 @@ import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
-import { isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, isPrimaryOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
 import { TargetIcon } from "./TopbarOpenEditorButton";
 import {
 	ContextMenuItem,
@@ -66,6 +66,7 @@ export function SessionContextMenuItems({
 	// plane for a Cloud session. A session shared from another organization is
 	// the sharer's to name and lists outside this sidebar's pins.
 	const canRenameAndPin = !session.cloud?.shared;
+	const canRename = canRenameAndPin && !isPrimaryOrchestratorSession(session);
 
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
@@ -90,10 +91,10 @@ export function SessionContextMenuItems({
 			{hasLocalWorkspace ? <SessionWorkspaceMenuItems session={session} /> : null}
 			{canRenameAndPin ? (
 				<>
-					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
+					{canRename ? <ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
 						<Pencil aria-hidden="true" />
 						{t("shell.rename")}
-					</ContextMenuItem>
+					</ContextMenuItem> : null}
 					<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
 						{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
 						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
@@ -125,7 +126,7 @@ export function SessionContextMenuItems({
 					{t("command.copyBranch")}
 				</ContextMenuItem>
 			) : null}
-			{onArchive ? (
+			{onArchive && !isPrimaryOrchestratorSession(session) ? (
 				<>
 					{hasManageItems || hasLinkItems ? <ContextMenuSeparator /> : null}
 					<ContextMenuItem onSelect={onArchive}>

@@ -9,6 +9,12 @@ Start each task as its own worker session. Git projects receive separate worktre
 
 Choose a project, open a new task, pick the worker agent at the top of the model menu, and send its brief. Repeat for each independent task. The sidebar and sessions board update from the daemon's event stream without a reload.
 
+### 同一项目运行多个编排器
+
+本地项目的 `…` 菜单提供 **新建编排器会话**。每次新建都会创建独立的聊天记录和工作区，并在项目下方显示，可切换、重命名和归档。项目行右侧的编排器图标仍打开原来的项目主编排器。
+
+独立编排器通过 `ao spawn` 派发的任务会保留归属，报告只投递给对应编排器。归档后未投递的报告会保留，等待该会话恢复；不会转交其他编排器。没有独立归属的任务仍由项目主编排器接收。Cloud 项目不提供这个入口。
+
 ## Start sessions from the CLI
 
 ```bash

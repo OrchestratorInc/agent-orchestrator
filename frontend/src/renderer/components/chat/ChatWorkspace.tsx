@@ -103,7 +103,8 @@ import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
 import type { TerminalTarget } from "../../types/terminal";
 import {
-	isOrchestratorSession,
+	isPrimaryOrchestratorSession,
+	sessionDisplayTitle,
 	type SessionKind,
 	type WorkspaceSession,
 	type SessionProvisionStep,
@@ -2362,11 +2363,11 @@ function ChatHeader({
 }) {
 	const { t } = useTranslation();
 	const sessionIsOrchestrator = session
-		? isOrchestratorSession(session)
+		? isPrimaryOrchestratorSession(session)
 		: sessionRole === "orchestrator";
 	const label = sessionIsOrchestrator
 		? t("shell.orchestrator")
-		: (sessionTitle || session?.title || snapshot.title || snapshot.sessionId);
+		: (session?.independentOrchestrator ? sessionDisplayTitle(session) : sessionTitle || session?.title || snapshot.title || snapshot.sessionId);
 	const tabScrollWatch = `${session?.id ?? ""}|${orderedAuxiliaryTabs.map((tab) => tab.key).join("|")}`;
 	const {
 		scrollRef: tabsOverflowRef,

@@ -18,9 +18,9 @@ import {
 	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	isOrchestratorSession,
+	isPrimaryOrchestratorSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
-	workerSessions,
 	hasConfiguredOrchestratorAgent,
 } from "../types/workspace";
 import {
@@ -114,7 +114,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
-	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions));
+	const liveSessions = workspaces.flatMap((workspace) => workspace.sessions.filter((session) => !isPrimaryOrchestratorSession(session)));
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
 	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
 		? demoBoardSessions(demoWorkspaceId)
@@ -260,7 +260,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		return <OrchestratorStartingChat
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
 			freestyle={startsInPlace || autoStartPending}
-			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
+			coderWorkspaceUrl={newestActiveOrchestrator(workspace?.sessions ?? [])?.cloud?.coderWorkspaceUrl}
 		/>;
 	}
 

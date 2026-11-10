@@ -182,14 +182,14 @@ export function SessionTopbarActions({
 			) : null}
 			{/* Local worker actions share one tight control group. Navigation
 			    remains a separate visual target in the outer top-bar row. */}
-			{!isOrchestrator &&
+			{(!isOrchestrator || session?.independentOrchestrator) &&
 				(sessionAction || (session && !session.cloud && sessionIsActive(session))) ? (
 				<div
 					className="inline-flex shrink-0 items-center gap-(--gap-topbar-control)"
 					data-testid="session-local-actions"
 					style={noDragStyle}
 				>
-					{sessionAction ? <div className="inline-flex shrink-0 items-center">{sessionAction}</div> : null}
+					{!isOrchestrator && sessionAction ? <div className="inline-flex shrink-0 items-center">{sessionAction}</div> : null}
 					{session && !session.cloud && sessionIsActive(session) ? (
 						<TopbarArchiveButton
 							key={session.id}

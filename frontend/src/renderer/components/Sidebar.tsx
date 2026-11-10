@@ -69,9 +69,11 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 	sortedWorkerSessions,
+	sortedProjectSessions,
 	isOrchestratorSession,
+	isPrimaryOrchestratorSession,
+	sessionDisplayTitle,
 	resolveNextNavigationAfterSessionKill,
-	workerSessions,
 	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -88,6 +90,7 @@ import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConv
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator";
+import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
@@ -931,7 +934,7 @@ export function Sidebar({
 
 	const pinnedSessions = useMemo(
 		() => [...workspaces, ...remoteWorkspaces]
-			.flatMap((w) => workerSessions(w.sessions))
+			.flatMap((w) => sortedProjectSessions(w.sessions))
 			.filter((s) => s.isPinned && s.isTerminated !== true)
 			.sort((a, b) => {
 				const aTime = a.pinnedAt ? new Date(a.pinnedAt).getTime() : 0;
@@ -1479,7 +1482,7 @@ const ProjectItem = memo(function ProjectItem({
 	const orchestratorActive =
 		activeProjectMatches &&
 		workspace.sessions.some(
-			(session) => session.id === selection.activeSessionId && session.kind === "orchestrator",
+			(session) => session.id === selection.activeSessionId && isPrimaryOrchestratorSession(session),
 		);
 
 	const queryClient = useQueryClient();
@@ -1487,6 +1490,14 @@ const ProjectItem = memo(function ProjectItem({
 	const [isRemoving, setIsRemoving] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [isSpawning, setIsSpawning] = useState(false);
+	const newOrchestrator = useProjectOrchestratorAction({
+		projectId: !isStandalone && !workspace.shared && workspace.kind !== CLOUD_PROJECT_KIND ? workspace.id : undefined,
+		project: workspace,
+		source: "sidebar",
+		sessionId: selection.activeSessionId,
+		hostId: workspace.hostId,
+		newSession: true,
+	});
 	// Skip enter animation on first mount — sessions arrive async and we don't
 	// want them to slide in on every sidebar load. Only animate on subsequent
 	// expand/collapse toggles.
@@ -1512,7 +1523,7 @@ const ProjectItem = memo(function ProjectItem({
 	const visibleSessions = useMemo(
 		() => (workspace.shared
 			? [...workspace.sessions].sort((a, b) => Number(isOrchestratorSession(b)) - Number(isOrchestratorSession(a)))
-			: sortedWorkerSessions(workspace.sessions)
+			: sortedProjectSessions(workspace.sessions)
 		).filter((session) => session.isTerminated !== true),
 		[workspace.sessions, workspace.shared],
 	);
@@ -1570,7 +1581,8 @@ const ProjectItem = memo(function ProjectItem({
 	// Stable row handlers: selection changes on every session switch, and a new
 	// handler would re-render every row (with its menus, tooltips, and dialogs).
 	const openSession = useLatestCallback((sessionId: string) => {
-		recordManualWorkerOpen(sessionId);
+		const target = workspace.sessions.find((session) => session.id === sessionId);
+		if (target && !isOrchestratorSession(target)) recordManualWorkerOpen(sessionId, workspace.hostId);
 		selection.goSession(workspace.id, sessionId);
 	});
 	const handleSessionKilled = useLatestCallback((killedSession: WorkspaceSession) => {
@@ -1591,6 +1603,11 @@ const ProjectItem = memo(function ProjectItem({
 	const toggleDisclosure = () => {
 		hasInteractedWithDisclosure.current = true;
 		onToggle(workspace.id);
+	};
+	/** 新建或改用终端重试时展开项目，让新会话始终可见。 */
+	const createOrchestrator = (mode?: "tui") => {
+		if (!expanded) toggleDisclosure();
+		newOrchestrator.openOrchestrator(mode);
 	};
 
 	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
@@ -1918,6 +1935,15 @@ const ProjectItem = memo(function ProjectItem({
 													<Plus aria-hidden="true" />
 													{t("shell.newTask")}
 												</DropdownMenuItem>
+												{workspace.kind !== CLOUD_PROJECT_KIND && !isStandalone ? (
+													<DropdownMenuItem
+														disabled={newOrchestrator.isSpawning || isSpawning || isProjectRestarting || isProjectProvisioning}
+														onSelect={() => createOrchestrator()}
+													>
+														<OrchestratorIcon aria-hidden="true" />
+														{t("shell.newOrchestratorSession")}
+													</DropdownMenuItem>
+												) : null}
 								<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 													<Settings aria-hidden="true" />
 													{t("shell.projectSettings")}
@@ -1947,7 +1973,19 @@ const ProjectItem = memo(function ProjectItem({
 							{removeError}
 						</div>
 					) : null}
-					{/* project-sidebar__sessions: indented under the project parent so worker
+					{newOrchestrator.isSpawning ? (
+						<div className="sidebar-expanded-chrome px-5 py-1 text-2xs text-muted-foreground" role="status">{t("shell.spawningDots")}</div>
+					) : newOrchestrator.spawnError ? (
+						<div className="sidebar-expanded-chrome px-5 py-1 text-2xs text-destructive" role="alert">
+							{newOrchestrator.spawnError}
+							{newOrchestrator.canCreateAsTui ? (
+								<button className="mt-1 block underline focus-visible:outline-2" type="button" onClick={() => createOrchestrator("tui")}>
+									{t("newTask.createAsTui")}
+								</button>
+							) : null}
+						</div>
+					) : null}
+					{/* project-sidebar__sessions: indented under the project parent so
           sessions read as children without adding a persistent guide rail. */}
 		<AnimatePresence initial={false}>
 			{expanded && sessions.length > 0 && (
@@ -2046,6 +2084,15 @@ const ProjectItem = memo(function ProjectItem({
 					>
 						<OrchestratorIcon aria-hidden="true" />
 						{orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower")}
+					</ContextMenuItem>
+				) : null}
+				{!isStandalone && !workspace.shared && workspace.kind !== CLOUD_PROJECT_KIND ? (
+					<ContextMenuItem
+						disabled={newOrchestrator.isSpawning || isSpawning || isProjectRestarting || isProjectProvisioning}
+						onSelect={() => createOrchestrator()}
+					>
+						<OrchestratorIcon aria-hidden="true" />
+						{t("shell.newOrchestratorSession")}
 					</ContextMenuItem>
 				) : null}
 				{!isStandalone ? (
@@ -2507,7 +2554,7 @@ const SessionRow = memo(function SessionRow({
 			});
 	};
 	// A session shared from another organization is the sharer's to name.
-	const renamable = !session.cloud?.shared;
+	const renamable = !session.cloud?.shared && !isPrimaryOrchestratorSession(session);
 	const beginRename = useCallback(() => {
 		if (renamable) rename.begin();
 	}, [rename.begin, renamable]);
@@ -2584,7 +2631,7 @@ const SessionRow = memo(function SessionRow({
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
-							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
+							aria-label={t("shell.openSession", { title: hostLabel ? `${sessionDisplayTitle(session)} · ${hostLabel}` : sessionDisplayTitle(session) })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
@@ -2644,7 +2691,7 @@ const SessionRow = memo(function SessionRow({
 										lastTouchAtRef.current = now;
 									}}
 								>
-									{session.title}
+									{sessionDisplayTitle(session)}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 shrink-0 px-1.5 text-2xs">{hostLabel}</Badge> : null}
 							</span>

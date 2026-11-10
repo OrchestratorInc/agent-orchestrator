@@ -105,6 +105,7 @@ export function toWorkspaceSession(
 			: undefined,
 		autoReviewEnabled: session.autoReviewEnabled ?? false,
 		kind: session.kind === "orchestrator" ? "orchestrator" : session.kind === "worker" ? "worker" : undefined,
+		independentOrchestrator: session.independentOrchestrator,
 		mode: session.mode === "chat" ? "chat" : "tui",
 		branch: session.branch || undefined,
 		status,
@@ -211,6 +212,7 @@ function toLocalWorkspaceSession(
 			: undefined,
 		autoReviewEnabled: session.autoReviewEnabled ?? false,
 		kind: session.kind === "orchestrator" ? "orchestrator" : session.kind === "worker" ? "worker" : undefined,
+		independentOrchestrator: session.independentOrchestrator,
 		// Carried through verbatim: the session surface must render from
 		// the mode this session was created with, not from the current default.
 		mode: session.mode === "chat" ? "chat" : "tui",

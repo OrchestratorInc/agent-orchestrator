@@ -124,6 +124,17 @@ HarnessCapabilitySnapshot
 
 **证据等级：** `provider_handshake/confirmed_runtime` 可支撑具体 Session 的功能门禁；`local_probe` 只能证明可执行文件/配置存在；`static` 仅用于展示候选功能，不能启用危险动作。过期结果或探测失败统一返回 `unknown`，保留错误 `reasonCode`，不变造布尔 `false`。
 
+**启动准入按模式读取不同证据（`domain.AuthorizeLaunch`，唯一实现）：**
+
+| 模式 | 需要的证据 | 不需要的 |
+| --- | --- | --- |
+| `chat` | `provider_handshake`/`confirmed_runtime` + 观测到的 `surfaces` 含 `chat` | — |
+| `tui` | `local_probe` 及以上 + 已安装且凭据可用（`authorized`/`not_applicable`） | Chat 握手与 `surfaces` |
+
+原因：终端启动运行 provider 自己的 CLI，不打开任何 chat controller，因此没有探针会报出 `tui` 表面；此前把 Chat 表面当作 TUI 启动前提，使每一次 TUI 启动都被拒绝（`spawn: create: capability evidence is insufficient…`）。`local_probe` 级别的 TUI 观测**不写回** harness 证据行，避免用一次窄化观测覆盖已有握手结论。
+
+拒绝原因通过 `domain.CapabilityRefusal{Code, ObservedReasonCode}` 透出（如 `surface_not_observed`、`capability_auth_unverified`），API 映射为 409 `CAPABILITY_EVIDENCE_INSUFFICIENT`，`details.reason` 给出机器可读原因，`details.observedReason` 保留探针自己的 `reasonCode`；`errors.Is(err, domain.ErrCapabilityEvidenceInsufficient)` 仍成立。
+
 ### 3.2 首发矩阵与运行时规则
 
 | Harness | 传输/驱动 | 特殊风险 | 验证要求 |

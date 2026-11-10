@@ -54,6 +54,10 @@ The choice belongs to the selected computer. A model a project, task, or session
 
 The Models tab also shows each model's context window in tokens when the harness catalog reports it.
 
+**Refresh models** runs the harness's own discovery again and replaces the list with what it currently reports, including providers it newly finds configured. It does not change which models are switched on. Opening the tab already refreshes in the background; use the button when a model was added or a provider credential changed while the tab stayed open.
+
+OMP lists only the providers this machine is set up for: the ones in its `models.yml` and the logins in its own credential store. Its cached model catalog covers every provider the OMP build ships, so those unconfigured providers are left out of the list instead of appearing as hundreds of models you cannot run.
+
 ## Start an orchestrator or worker
 
 The desktop provides dedicated new-session and orchestrator flows. From the CLI:

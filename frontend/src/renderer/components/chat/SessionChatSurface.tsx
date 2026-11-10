@@ -627,11 +627,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Keep the project marked as starting until its controller is ready, so
 	// sidebar actions cannot launch a duplicate orchestrator.
 	useEffect(() => {
-		if (session.kind !== "orchestrator" || session.provisionState === "provisioning") return;
+		if (session.kind !== "orchestrator" || session.independentOrchestrator || session.provisionState === "provisioning") return;
 		if (isLoading && !renderShellFallback) return;
 		if (session.provisionState !== "failed" && !targetChatControllerReady && !renderShellFallback && !error && !unavailable) return;
 		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
-	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
+	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.independentOrchestrator, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
 
 	// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
 	// none saved yet it waits, so defaults never pass for the chat's own.

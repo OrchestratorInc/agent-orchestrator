@@ -1,8 +1,7 @@
 import {
 	attentionZone,
 	sessionNeedsAttention,
-	sortedWorkerSessions,
-	workerSessions,
+	sortedProjectSessions,
 	STANDALONE_PROJECT_KIND,
 	type WorkspaceSession,
 	type WorkspaceSummary,
@@ -47,12 +46,12 @@ export type SidebarOrderInput = {
 	sessionOrders?: Readonly<Record<string, readonly string[]>>;
 };
 
-/** Sessions the sidebar lists for one project: workers only, terminated ones dropped. */
+/** 快捷键遍历与侧栏一致的会话，包含独立编排器并排除已归档会话。 */
 function listedSessions(
 	workspace: WorkspaceSummary,
 	sessionOrders: SidebarOrderInput["sessionOrders"],
 ): WorkspaceSession[] {
-	const visible = sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true);
+	const visible = sortedProjectSessions(workspace.sessions).filter((session) => session.isTerminated !== true);
 	return applyOrder(visible, (session) => session.id, sessionOrders?.[sessionUiKey(workspace.id, workspace.hostId)] ?? [], "start");
 }
 
@@ -84,7 +83,7 @@ export function buildSidebarSessionOrder({
 	};
 
 	const pinned = [...workspaces, ...remoteWorkspaces]
-		.flatMap((workspace) => workerSessions(workspace.sessions).map((session) => ({ workspace, session })))
+		.flatMap((workspace) => sortedProjectSessions(workspace.sessions).map((session) => ({ workspace, session })))
 		.filter(({ session }) => session.isPinned && session.isTerminated !== true)
 		.sort((a, b) => pinnedTime(b.session) - pinnedTime(a.session));
 	for (const { workspace, session } of pinned) add(session, workspace);

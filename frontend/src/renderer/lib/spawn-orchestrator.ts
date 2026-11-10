@@ -56,7 +56,8 @@ export function isChatPreflightError(error: unknown): error is OrchestratorSpawn
 
 /** Spawn the project's orchestrator session via the daemon API. When clean is
  *  true the daemon first tears down any active orchestrator for the project, then
- *  re-spawns one on the canonical branch (reattaching the existing branch). */
+ *  re-spawns one on the canonical branch (reattaching the existing branch).
+ *  newSession 创建独立会话，不替换项目主编排器。 */
 export async function spawnOrchestrator(
 	projectId: string,
 	source: OrchestratorSpawnSource,
@@ -64,10 +65,12 @@ export async function spawnOrchestrator(
 	mode?: SessionMode,
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
 	hostId?: string,
+	options?: { newSession?: boolean },
 ): Promise<string> {
 	try {
+		if (clean && options?.newSession) throw new Error("Cannot combine clean with newSession");
 		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
-			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
+			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}), ...(options?.newSession ? { newSession: true } : {}) },
 		});
 
 		if (error || !data?.orchestrator?.id) {

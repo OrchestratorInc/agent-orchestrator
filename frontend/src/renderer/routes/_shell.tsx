@@ -594,7 +594,7 @@ function ShellLayout() {
 	);
 	const startingWorkspace = workspaces.find((workspace) => workspace.id === routeParams.projectId);
 	const startingOrchestratorSession = openingOrchestrator
-		? startingWorkspace?.sessions.find((session) => session.kind === "orchestrator")
+		? newestActiveOrchestrator(startingWorkspace?.sessions ?? [])
 		: undefined;
 	const startingSteps = startingOrchestratorSession?.provisionSteps;
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);

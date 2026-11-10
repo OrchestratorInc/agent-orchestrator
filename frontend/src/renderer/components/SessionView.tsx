@@ -758,11 +758,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudReconnecting = cloudReconnectRequested && expectsTerminal;
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
 	useEffect(() => {
-		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
+		if (session?.kind !== "orchestrator" || session.independentOrchestrator || session.cloud || session.mode === "chat") return;
 		if (terminalAttached || session.provisionState === "failed") {
 			useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
 		}
-	}, [hostId, session?.kind, session?.cloud, session?.mode, session?.provisionState, session?.workspaceId, terminalAttached]);
+	}, [hostId, session?.kind, session?.independentOrchestrator, session?.cloud, session?.mode, session?.provisionState, session?.workspaceId, terminalAttached]);
 	const connectedSessionRef = useRef("");
 	if (sessionReady) connectedSessionRef.current = sessionId;
 	const hasConnectedOnce = connectedSessionRef.current === sessionId;

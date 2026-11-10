@@ -27,6 +27,7 @@ function isCachedFreestyleSession(queryClient: QueryClient, sessionId: string): 
 		.some(([, sessions]) => sessions?.some((session) => session.id === sessionId && session.sandboxProvider === FREESTYLE_PROVIDER));
 }
 
+/** 复用主编排器或显式新建独立会话，共用启动检查与导航处理。 */
 export function useProjectOrchestratorAction({
 	projectId,
 	project,
@@ -34,6 +35,7 @@ export function useProjectOrchestratorAction({
 	source,
 	sessionId,
 	hostId,
+	newSession = false,
 }: {
 	projectId?: string;
 	project?: WorkspaceScope["project"];
@@ -41,13 +43,15 @@ export function useProjectOrchestratorAction({
 	source: OrchestratorSpawnSource;
 	sessionId?: string;
 	hostId?: string;
+	newSession?: boolean;
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const connectedHosts = useConnectedHosts();
 	const hostConnected = !hostId || connectedHosts.includes(hostId);
-	const mutationKey = hostId ? ["project-orchestrator-open", hostId, projectId] : ["project-orchestrator-open", projectId];
+	const operation = newSession ? "project-orchestrator-create" : "project-orchestrator-open";
+	const mutationKey = hostId ? [operation, hostId, projectId] : [operation, projectId];
 	const routeKey = `${hostId ?? "local"}/${projectId ?? ""}/${sessionId ?? ""}`;
 	const activeRoute = useRef<string | null>(routeKey);
 	activeRoute.current = routeKey;
@@ -58,31 +62,31 @@ export function useProjectOrchestratorAction({
 	const projectKey = projectId ? sessionUiKey(projectId, hostId) : undefined;
 	const isProjectRestarting = useUiStore((state) => projectKey ? state.restartingProjectIds.has(projectKey) : false);
 	const isProvisioning = useUiStore((state) => projectKey ? state.provisioningProjectIds.has(projectKey) : false);
-	const canResumeOrchestrator = useCanResumeAgent(orchestrator, hostId);
-	const startupError = useUiStore((state) => projectKey ? state.orchestratorStartupErrors[projectKey] : undefined);
+	const canResumeOrchestrator = useCanResumeAgent(newSession ? undefined : orchestrator, hostId);
+	const startupError = useUiStore((state) => !newSession && projectKey ? state.orchestratorStartupErrors[projectKey] : undefined);
 	const setStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const previousProject = useRef({ projectId, hostId });
 	useEffect(() => {
 		const previous = previousProject.current;
-		if (previous.projectId && (previous.projectId !== projectId || previous.hostId !== hostId)) {
+		if (!newSession && previous.projectId && (previous.projectId !== projectId || previous.hostId !== hostId)) {
 			setStartupError(previous.projectId, null, previous.hostId);
 		}
 		previousProject.current = { projectId, hostId };
-	}, [hostId, projectId, setStartupError]);
+	}, [hostId, newSession, projectId, setStartupError]);
 	useEffect(() => {
-		if (projectId && orchestrator && startupError) setStartupError(projectId, null, hostId);
-	}, [hostId, projectId, orchestrator, startupError, setStartupError]);
+		if (!newSession && projectId && orchestrator && startupError) setStartupError(projectId, null, hostId);
+	}, [hostId, newSession, projectId, orchestrator, startupError, setStartupError]);
 	const mutations = useMutationState({
 		filters: { mutationKey, exact: true },
 		select: (mutation) => ({ status: mutation.state.status, error: mutation.state.error }),
 	});
 	const isSpawning = mutations.some((mutation) => mutation.status === "pending");
 	const resumableOrchestrator =
-		orchestrator && canResumeOrchestrator && project?.kind !== CLOUD_PROJECT_KIND
+		!newSession && orchestrator && canResumeOrchestrator && project?.kind !== CLOUD_PROJECT_KIND
 			? orchestrator
 			: undefined;
 	const latest = mutations.at(-1);
-	const error = (!orchestrator || resumableOrchestrator) && !isSpawning && latest?.status === "error" ? latest.error : null;
+	const error = (newSession || !orchestrator || resumableOrchestrator) && !isSpawning && latest?.status === "error" ? latest.error : null;
 	const spawnError = formatOrchestratorStartupError(
 		error ? (error instanceof Error ? error.message : t("shell.couldNotSpawn")) : startupError ?? "",
 	);
@@ -90,14 +94,16 @@ export function useProjectOrchestratorAction({
 		mutationKey,
 		mutationFn: async (mode?: "tui") => {
 			if (!projectId) return;
-			setStartupError(projectId, null, hostId);
+			if (!newSession) setStartupError(projectId, null, hostId);
 			// A known orchestrator opens at once; its composer shows the startup
 			// shimmer while the resume runs, instead of the click waiting for it.
 			const earlyResume = !hostId && resumableOrchestrator ? resumeOrchestrator(resumableOrchestrator.id) : undefined;
 			if (earlyResume && resumableOrchestrator && activeRoute.current === routeKey) {
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
 			}
-			const openedSessionId = hostId
+			const openedSessionId = newSession
+				? await spawnOrchestrator(projectId, source, false, mode, undefined, hostId, { newSession: true })
+				: hostId
 				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
 				: resumableOrchestrator
 				? (await earlyResume, resumableOrchestrator.id)
@@ -107,7 +113,7 @@ export function useProjectOrchestratorAction({
 			await queryClient.invalidateQueries({
 				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId),
 			});
-			setStartupError(projectId, null, hostId);
+			if (!newSession) setStartupError(projectId, null, hostId);
 			// A completed request belongs to its original route, even if this
 			// component survived a project or session change while it was pending.
 			if (!earlyResume && activeRoute.current === routeKey) {
@@ -127,6 +133,7 @@ export function useProjectOrchestratorAction({
 	});
 	const openOrchestrator = (mode?: "tui") => {
 		if (!projectId || !hostConnected || isProjectRestarting || isProvisioning) return;
+		if (newSession && project?.kind === CLOUD_PROJECT_KIND) return;
 		// Read the cache synchronously as well as disabling both rendered copies.
 		// Two clicks in the same render must still produce just one request.
 		if (queryClient.isMutating({ mutationKey, exact: true })) return;
@@ -138,7 +145,7 @@ export function useProjectOrchestratorAction({
 			useUiStore.getState().openProjectSettings(projectId, hostId);
 		} else if (resumableOrchestrator) {
 			mutation.mutate(mode);
-		} else if (orchestrator) {
+		} else if (orchestrator && !newSession) {
 			void navigate(sessionNavigateTarget(projectId, orchestrator.id, hostId));
 		} else if (project?.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
 			if (project) useUiStore.getState().openProjectSettings(projectId, hostId);
