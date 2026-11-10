@@ -2731,7 +2731,7 @@ func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
 
 // A move onto a gone registered artifact's path takes its registration, and a
 // gone file is forgotten only when it was never registered nor versioned.
-func TestApplySessionArtifactChangesCarriesRegistrationAndForgets(t *testing.T) {
+func TestApplySessionArtifactChangesMovesOntoADroppedPathAndForgets(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, st, "p1")
@@ -2748,9 +2748,6 @@ func TestApplySessionArtifactChangesCarriesRegistrationAndForgets(t *testing.T) 
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.AddSessionArtifacts(ctx, sess.ID, []string{"report.html"}, now); err != nil {
-		t.Fatal(err)
-	}
 	if _, _, err := st.AppendSessionArtifactVersion(ctx, domain.SessionArtifactVersion{
 		SessionID: sess.ID, Path: "kept.md", SHA256: "sha-kept", ContentType: "text/markdown", ModTime: now, CreatedAt: now,
 	}, 50); err != nil {
@@ -2758,7 +2755,7 @@ func TestApplySessionArtifactChangesCarriesRegistrationAndForgets(t *testing.T) 
 	}
 	if _, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
 		Drop:   []domain.SessionArtifactFileUpdate{{ID: "id-report", Path: "report.html"}},
-		Move:   []domain.SessionArtifactMove{{ID: "id-draft", From: "draft.html", To: "report.html", PreviousPaths: []string{"draft.html"}, RegisteredAt: &now}},
+		Move:   []domain.SessionArtifactMove{{ID: "id-draft", From: "draft.html", To: "report.html", PreviousPaths: []string{"draft.html"}}},
 		Forget: []domain.SessionArtifactFileUpdate{{ID: "id-tmp", Path: "page.tmp"}, {ID: "id-kept", Path: "kept.md"}},
 	}); err != nil {
 		t.Fatal(err)
@@ -2771,14 +2768,15 @@ func TestApplySessionArtifactChangesCarriesRegistrationAndForgets(t *testing.T) 
 	for _, row := range rows {
 		byPath[row.Path] = row
 	}
-	if report := byPath["report.html"]; report.ID != "id-draft" || report.RegisteredAt == nil {
-		t.Fatalf("report.html = %+v, want draft's artifact, registered", report)
+	if report := byPath["report.html"]; report.ID != "id-draft" || report.RegisteredAt != nil || report.HasVersions {
+		t.Fatalf("report.html = %+v, want draft's artifact, unregistered and with no history", report)
 	}
 	if _, ok := byPath["page.tmp"]; ok {
 		t.Fatal("an unregistered file with no history was kept")
 	}
-	if kept, ok := byPath["kept.md"]; !ok || kept.ID != "id-kept" {
-		t.Fatalf("a file with history was forgotten: %+v", rows)
+	// A scan reads which rows have history, so it can keep them at their path.
+	if kept, ok := byPath["kept.md"]; !ok || kept.ID != "id-kept" || !kept.HasVersions {
+		t.Fatalf("a file with history was forgotten or not marked: %+v", rows)
 	}
 }
 

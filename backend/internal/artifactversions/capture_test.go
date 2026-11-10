@@ -393,7 +393,8 @@ func TestCaptureSession_RenamedFileKeepsItsHistory(t *testing.T) {
 
 // A read that drops a version does not remove its blob while a capture is
 // running, since the capture may be about to record a version of the same
-// content; the next capture removes it.
+// content; the next capture removes it. Versions left at a path with no
+// artifact are dropped when a renamed file takes that path.
 func TestTrackLeavesBlobCleanupToTheCaptureLock(t *testing.T) {
 	h := newHarness(t)
 	h.write("a.html", "<p>a</p>")
@@ -403,9 +404,6 @@ func TestTrackLeavesBlobCleanupToTheCaptureLock(t *testing.T) {
 	gone := h.versions("b.html")
 	if len(gone) != 1 {
 		t.Fatalf("b.html versions = %+v", gone)
-	}
-	if _, _, err := h.store.AddSessionArtifacts(h.ctx, h.sess.ID, []string{"b.html"}, time.Now()); err != nil {
-		t.Fatal(err)
 	}
 	track := func() {
 		t.Helper()
@@ -420,7 +418,10 @@ func TestTrackLeavesBlobCleanupToTheCaptureLock(t *testing.T) {
 	if err := os.Remove(filepath.Join(h.dir, "b.html")); err != nil {
 		t.Fatal(err)
 	}
-	track()
+	// Its row goes and its versions stay, belonging to no artifact.
+	if err := h.store.RemoveSessionArtifact(h.ctx, h.sess.ID, "b.html"); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Rename(filepath.Join(h.dir, "a.html"), filepath.Join(h.dir, "b.html")); err != nil {
 		t.Fatal(err)
 	}

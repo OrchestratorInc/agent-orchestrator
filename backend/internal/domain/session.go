@@ -178,6 +178,9 @@ type SessionArtifactRecord struct {
 	File          FileIdentity
 	PreviousPaths []string
 	CreatedAt     time.Time
+	// HasVersions reports that the row's path has kept versions. Only the
+	// listing a scan reads sets it.
+	HasVersions bool
 }
 
 // ErrSessionArtifactsChanged reports artifact changes planned from rows that
@@ -215,9 +218,6 @@ type SessionArtifactMove struct {
 	To            string
 	File          FileIdentity
 	PreviousPaths []string
-	// RegisteredAt carries the registration of a gone artifact the move
-	// replaces at To, so a deliverable written there again stays registered.
-	RegisteredAt *time.Time
 }
 
 // SessionArtifactFileUpdate names one artifact row by ID and current path.

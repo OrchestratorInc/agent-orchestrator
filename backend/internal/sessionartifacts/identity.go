@@ -64,11 +64,15 @@ func observeBundles(dir string, files []domain.SessionArtifactFile, quick map[st
 // renamed artifact and moves there with its version history. Anything else at
 // a path is a new artifact, or the same one written again in place.
 //
-// A rename never takes a path from an artifact whose file is still there: a
-// file moved over another replaces its content, so the artifact at that path
-// keeps its identity. It does take the path of an artifact whose file was gone
-// before, whose row and history are dropped; a registration there carries over
-// to the renamed artifact, so the path stays a deliverable.
+// A rename never takes a path from an artifact that is kept there: one whose
+// file is still there, or whose file is gone but which is registered or has
+// version history. A file moved over another replaces its content, so the
+// artifact at that path keeps its identity, its history and its share link,
+// and the renamed artifact's own row goes as a gone file's does. Whether a
+// scan ran while the path was empty must not change that: a script that
+// removes report.html, writes report.tmp.html and moves it onto report.html
+// keeps the report either way. Only a row with none of these, which nothing
+// would miss, gives its path to the renamed artifact.
 //
 // A gone file's row stays, with no file, so the same artifact comes back if a
 // file is written there again; a gone file that was never registered is
@@ -125,7 +129,7 @@ func (o Observation) Changes(rows []domain.SessionArtifactRecord, now time.Time,
 			moving[source.ID] = true
 		}
 		for path := range matches {
-			if row, ok := byPath[path]; ok && row.File.Ino != 0 && !moving[row.ID] {
+			if row, ok := byPath[path]; ok && keepsItsPath(row) && !moving[row.ID] {
 				delete(matches, path)
 				changed = true
 			}
@@ -144,9 +148,6 @@ func (o Observation) Changes(rows []domain.SessionArtifactRecord, now time.Time,
 		move := domain.SessionArtifactMove{
 			ID: source.ID, From: source.Path, To: path, File: full[path],
 			PreviousPaths: previousPaths(source.PreviousPaths, source.Path, path),
-		}
-		if replaced, ok := byPath[path]; ok && !moved[replaced.ID] && source.RegisteredAt == nil {
-			move.RegisteredAt = replaced.RegisteredAt
 		}
 		changes.Move = append(changes.Move, move)
 	}
@@ -170,6 +171,13 @@ func (o Observation) Changes(rows []domain.SessionArtifactRecord, now time.Time,
 		}
 	}
 	return changes
+}
+
+// keepsItsPath reports whether the artifact at row's path stays there when
+// another artifact's file is moved onto it: its file is there, or it is
+// registered, or it has version history.
+func keepsItsPath(row domain.SessionArtifactRecord) bool {
+	return row.File.Ino != 0 || row.RegisteredAt != nil || row.HasVersions
 }
 
 // forgetOrClear records that row's file is gone: a registered row keeps its

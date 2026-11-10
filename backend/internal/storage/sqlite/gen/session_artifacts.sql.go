@@ -147,32 +147,45 @@ func (q *Queries) ListRegisteredSessionArtifactPaths(ctx context.Context, sessio
 }
 
 const listSessionArtifacts = `-- name: ListSessionArtifacts :many
-SELECT id, session_id, path, registered_at, file_dev, file_ino, file_birth, file_generation, file_mtime, previous_paths, created_at FROM session_artifacts
-WHERE session_id = ?1
-ORDER BY path
+SELECT a.id, a.session_id, a.path, a.registered_at, a.file_dev, a.file_ino, a.file_birth, a.file_generation, a.file_mtime, a.previous_paths, a.created_at,
+    CAST(EXISTS (
+        SELECT 1 FROM session_artifact_versions AS v
+        WHERE v.session_id = a.session_id AND v.path = a.path
+    ) AS INTEGER) AS has_versions
+FROM session_artifacts AS a
+WHERE a.session_id = ?1
+ORDER BY a.path
 `
 
-func (q *Queries) ListSessionArtifacts(ctx context.Context, sessionID domain.SessionID) ([]SessionArtifact, error) {
+type ListSessionArtifactsRow struct {
+	SessionArtifact SessionArtifact
+	HasVersions     int64
+}
+
+// has_versions tells a scan which rows have kept versions: a file moved onto
+// such a row's path joins that artifact instead of replacing it.
+func (q *Queries) ListSessionArtifacts(ctx context.Context, sessionID domain.SessionID) ([]ListSessionArtifactsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listSessionArtifacts, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []SessionArtifact{}
+	items := []ListSessionArtifactsRow{}
 	for rows.Next() {
-		var i SessionArtifact
+		var i ListSessionArtifactsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.SessionID,
-			&i.Path,
-			&i.RegisteredAt,
-			&i.FileDev,
-			&i.FileIno,
-			&i.FileBirth,
-			&i.FileGeneration,
-			&i.FileMtime,
-			&i.PreviousPaths,
-			&i.CreatedAt,
+			&i.SessionArtifact.ID,
+			&i.SessionArtifact.SessionID,
+			&i.SessionArtifact.Path,
+			&i.SessionArtifact.RegisteredAt,
+			&i.SessionArtifact.FileDev,
+			&i.SessionArtifact.FileIno,
+			&i.SessionArtifact.FileBirth,
+			&i.SessionArtifact.FileGeneration,
+			&i.SessionArtifact.FileMtime,
+			&i.SessionArtifact.PreviousPaths,
+			&i.SessionArtifact.CreatedAt,
+			&i.HasVersions,
 		); err != nil {
 			return nil, err
 		}
@@ -231,16 +244,14 @@ func (q *Queries) ListSessionArtifactsForSessions(ctx context.Context, jsonEach 
 const moveSessionArtifact = `-- name: MoveSessionArtifact :execrows
 UPDATE session_artifacts
 SET path = ?1, previous_paths = ?2,
-    registered_at = COALESCE(registered_at, ?3),
-    file_dev = ?4, file_ino = ?5, file_birth = ?6,
-    file_generation = ?7, file_mtime = ?8
-WHERE id = ?9 AND path = ?10
+    file_dev = ?3, file_ino = ?4, file_birth = ?5,
+    file_generation = ?6, file_mtime = ?7
+WHERE id = ?8 AND path = ?9
 `
 
 type MoveSessionArtifactParams struct {
 	ToPath         string
 	PreviousPaths  string
-	RegisteredAt   sql.NullTime
 	FileDev        int64
 	FileIno        int64
 	FileBirth      int64
@@ -254,7 +265,6 @@ func (q *Queries) MoveSessionArtifact(ctx context.Context, arg MoveSessionArtifa
 	result, err := q.db.ExecContext(ctx, moveSessionArtifact,
 		arg.ToPath,
 		arg.PreviousPaths,
-		arg.RegisteredAt,
 		arg.FileDev,
 		arg.FileIno,
 		arg.FileBirth,

@@ -85,16 +85,18 @@ func (d *identityDir) scan() (domain.SessionArtifactChanges, []domain.SessionArt
 	for _, drop := range changes.Drop {
 		dropped[drop.ID] = true
 	}
-	// The harness keeps no versions, so a forgotten row always goes.
+	// As in the store, a forgotten row goes unless it has history, which keeps
+	// it with no file.
 	for _, forget := range changes.Forget {
+		if d.rows[byID[forget.ID]].HasVersions {
+			d.rows[byID[forget.ID]].File = domain.FileIdentity{}
+			continue
+		}
 		dropped[forget.ID] = true
 	}
 	for _, move := range changes.Move {
 		row := &d.rows[byID[move.ID]]
 		row.Path, row.File, row.PreviousPaths = move.To, move.File, move.PreviousPaths
-		if row.RegisteredAt == nil {
-			row.RegisteredAt = move.RegisteredAt
-		}
 	}
 	for _, update := range changes.SetFile {
 		d.rows[byID[update.ID]].File = update.File
@@ -120,6 +122,21 @@ func (d *identityDir) register(path string) {
 		}
 	}
 	d.t.Fatalf("no row at %s", path)
+}
+
+// setHistory marks whether the row at path has kept versions.
+func (d *identityDir) setHistory(path string, has bool) {
+	for i := range d.rows {
+		if d.rows[i].Path == path {
+			d.rows[i].HasVersions = has
+			return
+		}
+	}
+	d.t.Fatalf("no row at %s", path)
+}
+
+func (d *identityDir) hasRow(path string) bool {
+	return slices.ContainsFunc(d.rows, func(row domain.SessionArtifactRecord) bool { return row.Path == path })
 }
 
 func (d *identityDir) idAt(path string) string {
@@ -226,19 +243,104 @@ func TestRenameOverAnotherFileKeepsTheDestination(t *testing.T) {
 	}
 }
 
-func TestRenameOntoAGoneFileTakesItsPath(t *testing.T) {
+// A registered artifact whose file is gone keeps its path when another file
+// is moved onto it, as it would if its file were still there: it keeps its
+// identity, its history and its share link. The moved file's own row goes as
+// a gone file's does.
+func TestRenameOntoAGoneRegisteredFileKeepsTheDestination(t *testing.T) {
 	d := newIdentityDir(t)
 	d.write("a.html", "a")
 	d.write("b.html", "b")
 	d.scan()
-	a, b := d.idAt("a.html"), d.idAt("b.html")
+	b := d.idAt("b.html")
 	d.register("b.html")
 	d.remove("b.html")
 	d.scan()
 	d.rename("a.html", "b.html")
+	changes, files := d.scan()
+	if len(changes.Move) != 0 || len(changes.Drop) != 0 || d.idAt("b.html") != b || d.hasRow("a.html") {
+		t.Fatalf("rename onto a gone registered file = %+v, want b.html to keep its artifact", changes)
+	}
+	if file, ok := fileAt(files, "b.html"); !ok || file.ID != b || !file.Registered {
+		t.Fatalf("b.html = %+v, want its own artifact, registered", file)
+	}
+}
+
+func TestRenameOntoAGoneFileWithHistoryKeepsTheDestination(t *testing.T) {
+	d := newIdentityDir(t)
+	d.write("report.html", "old")
+	d.write("draft.html", "new")
+	d.scan()
+	report := d.idAt("report.html")
+	d.setHistory("report.html", true)
+	d.remove("report.html")
+	d.scan()
+	d.rename("draft.html", "report.html")
 	changes, _ := d.scan()
-	if len(changes.Move) != 1 || len(changes.Drop) != 1 || changes.Drop[0].ID != b || d.idAt("b.html") != a {
-		t.Fatalf("rename onto a gone file = %+v", changes)
+	if len(changes.Move) != 0 || len(changes.Drop) != 0 || d.idAt("report.html") != report {
+		t.Fatalf("rename onto a gone file with history = %+v, want report.html to keep its artifact", changes)
+	}
+}
+
+// Only a row that nothing would miss, neither registered nor with history,
+// gives its path to the renamed artifact.
+func TestRenameOntoAGoneFileWithNothingToKeepTakesItsPath(t *testing.T) {
+	d := newIdentityDir(t)
+	d.write("report.html", "old")
+	d.write("draft.html", "new")
+	d.scan()
+	report, draft := d.idAt("report.html"), d.idAt("draft.html")
+	d.setHistory("report.html", true)
+	d.remove("report.html")
+	d.scan()
+	// Its history went since, so the row holds nothing worth keeping.
+	d.setHistory("report.html", false)
+	d.rename("draft.html", "report.html")
+	changes, _ := d.scan()
+	if len(changes.Move) != 1 || len(changes.Drop) != 1 || changes.Drop[0].ID != report || d.idAt("report.html") != draft {
+		t.Fatalf("rename onto a gone file with nothing to keep = %+v", changes)
+	}
+}
+
+// Replacing a deliverable through a temporary file keeps the deliverable
+// however the scans fall between the steps: scans run on every session read
+// and poll, so their timing must not decide which artifact survives.
+func TestReplacingThroughATempFileKeepsTheArtifactWhateverTheScanTiming(t *testing.T) {
+	for _, timing := range []struct {
+		name                    string
+		afterRemove, afterWrite bool
+	}{
+		{"no scan between", false, false},
+		{"scan after rm", true, false},
+		{"scan after writing the temp file", false, true},
+		{"scans after both", true, true},
+	} {
+		t.Run(timing.name, func(t *testing.T) {
+			d := newIdentityDir(t)
+			d.write("report.html", "v1")
+			d.scan()
+			report := d.idAt("report.html")
+			d.register("report.html")
+			d.setHistory("report.html", true)
+
+			d.remove("report.html")
+			if timing.afterRemove {
+				d.scan()
+			}
+			d.write("report.tmp.html", "v2")
+			if timing.afterWrite {
+				d.scan()
+			}
+			d.rename("report.tmp.html", "report.html")
+			_, files := d.scan()
+
+			if d.idAt("report.html") != report || d.hasRow("report.tmp.html") {
+				t.Fatalf("rows = %+v, want report.html to keep its artifact and no temp row", d.rows)
+			}
+			if file, ok := fileAt(files, "report.html"); !ok || file.ID != report || !file.Registered {
+				t.Fatalf("report.html = %+v, want its own artifact, registered", file)
+			}
+		})
 	}
 }
 
@@ -310,26 +412,6 @@ func TestRenamedAndEditedFileKeepsItsIdentity(t *testing.T) {
 
 // A rename onto the path of a registered file that is gone keeps the path a
 // deliverable: the renamed artifact takes its registration.
-func TestRenameOntoAGoneRegisteredFileKeepsTheRegistration(t *testing.T) {
-	d := newIdentityDir(t)
-	d.write("report.html", "old")
-	d.write("draft.html", "new")
-	d.scan()
-	d.register("report.html")
-	d.remove("report.html")
-	d.scan()
-	draft := d.idAt("draft.html")
-	d.rename("draft.html", "report.html")
-	changes, _ := d.scan()
-	if len(changes.Move) != 1 || changes.Move[0].RegisteredAt == nil || len(changes.Drop) != 1 {
-		t.Fatalf("rename onto a gone registered file = %+v", changes)
-	}
-	// Registered rows are read back for the listing, as the store does.
-	files := observeFiles(d)
-	if file, ok := fileAt(files, "report.html"); !ok || file.ID != draft || !file.Registered {
-		t.Fatalf("report.html = %+v, want draft's artifact, registered", file)
-	}
-}
 
 // A gone file that was never registered is forgotten, so transient files such
 // as an editor's do not leave rows behind; a registered one is kept.

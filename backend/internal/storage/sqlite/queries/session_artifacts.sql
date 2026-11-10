@@ -1,7 +1,14 @@
 -- name: ListSessionArtifacts :many
-SELECT * FROM session_artifacts
-WHERE session_id = sqlc.arg(session_id)
-ORDER BY path;
+-- has_versions tells a scan which rows have kept versions: a file moved onto
+-- such a row's path joins that artifact instead of replacing it.
+SELECT sqlc.embed(a),
+    CAST(EXISTS (
+        SELECT 1 FROM session_artifact_versions AS v
+        WHERE v.session_id = a.session_id AND v.path = a.path
+    ) AS INTEGER) AS has_versions
+FROM session_artifacts AS a
+WHERE a.session_id = sqlc.arg(session_id)
+ORDER BY a.path;
 
 -- name: ListSessionArtifactsForSessions :many
 SELECT * FROM session_artifacts
@@ -34,7 +41,6 @@ WHERE id = sqlc.arg(id) AND path = sqlc.arg(path);
 -- name: MoveSessionArtifact :execrows
 UPDATE session_artifacts
 SET path = sqlc.arg(to_path), previous_paths = sqlc.arg(previous_paths),
-    registered_at = COALESCE(registered_at, sqlc.narg(registered_at)),
     file_dev = sqlc.arg(file_dev), file_ino = sqlc.arg(file_ino), file_birth = sqlc.arg(file_birth),
     file_generation = sqlc.arg(file_generation), file_mtime = sqlc.arg(file_mtime)
 WHERE id = sqlc.arg(id) AND path = sqlc.arg(from_path);
