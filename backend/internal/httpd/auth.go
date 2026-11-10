@@ -10,12 +10,21 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
 // authState keeps previously valid hashes so a client retrying an old password
 // after rotation cannot lock out a newly paired client behind the same address.
-type authState struct{ hashes atomic.Pointer[authHashes] }
+type authState struct {
+	hashes atomic.Pointer[authHashes]
+	// devices and codes are set once, before the listener starts. Both may be
+	// nil, and the listener then accepts only the shared credentials.
+	devices *mobilebridge.AccessDevices
+	codes   *mobilebridge.PairingCodes
+	// passwordOff makes the listener refuse the pairing password.
+	passwordOff atomic.Bool
+}
 type authHashes struct {
 	current string
 	account string
@@ -71,6 +80,46 @@ func (a *authState) currentHash() string {
 		return hashes.current
 	}
 	return ""
+}
+
+// authenticate names the credential tok is. A pairing code counts only on
+// the pairing route. passwordRefused means tok is the pairing password and
+// the listener no longer accepts it.
+func (a *authState) authenticate(tok string, pairing bool) (credential requestscope.Credential, ok, passwordRefused bool) {
+	if mobilebridge.PasswordMatches(a.currentHash(), tok) {
+		if a.passwordOff.Load() {
+			return requestscope.Credential{}, false, true
+		}
+		return requestscope.Credential{Kind: requestscope.CredentialPassword}, true, false
+	}
+	if mobilebridge.PasswordMatches(a.accountHash(), tok) {
+		return requestscope.Credential{Kind: requestscope.CredentialAccount}, true, false
+	}
+	if a.devices != nil {
+		if device, found := a.devices.Match(tok); found {
+			return requestscope.Credential{Kind: requestscope.CredentialDevice, DeviceID: device.ID}, true, false
+		}
+	}
+	if pairing && a.codes != nil && a.codes.Valid(tok) {
+		return requestscope.Credential{Kind: requestscope.CredentialPairingCode}, true, false
+	}
+	return requestscope.Credential{}, false, false
+}
+
+// noteUse records when a credential last authenticated a request.
+func (a *authState) noteUse(credential requestscope.Credential, now time.Time) {
+	if a.devices == nil {
+		return
+	}
+	switch credential.Kind {
+	case requestscope.CredentialDevice:
+		a.devices.Touch(credential.DeviceID, now)
+	case requestscope.CredentialPassword:
+		a.devices.TouchShared(mobilebridge.SharedPassword, now)
+	case requestscope.CredentialAccount:
+		a.devices.TouchShared(mobilebridge.SharedAccount, now)
+	case requestscope.CredentialPairingCode:
+	}
 }
 
 func (a *authState) retiredPasswordMatches(token string) bool {
@@ -284,6 +333,14 @@ func isIdentityProbe(r *http.Request) bool {
 	return r.Method == http.MethodGet && r.URL.Path == identityProbePath
 }
 
+// devicePairPath is where a new device exchanges a pairing code for its own
+// token, and where a device that still holds the pairing password swaps it.
+const devicePairPath = "/api/v1/remote-host/devices"
+
+func isDevicePairing(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == devicePairPath
+}
+
 // lanBearerContextKey is set only by the authenticated listener after a
 // successful bearer check. Preview-scoped cookies never confer API authority.
 type lanBearerContextKey struct{}
@@ -315,8 +372,7 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				conn.owner.mu.Lock()
 			}
 			// Record auth atomically with rotation's connection close.
-			authenticated := mobilebridge.PasswordMatches(state.currentHash(), tok) ||
-				mobilebridge.PasswordMatches(state.accountHash(), tok)
+			credential, authenticated, passwordRefused := state.authenticate(tok, isDevicePairing(r))
 			if conn != nil {
 				if authenticated {
 					conn.tokenHash = mobilebridge.HashPassword(tok)
@@ -326,13 +382,31 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 			if authenticated {
 				lock.reset(src)
 				connected.report(remoteSrc)
+				state.noteUse(credential, lock.now())
 				maybeSetPreviewAuthCookie(w, r, tok)
+				ctx := requestscope.WithCredential(r.Context(), credential)
 				if bearerToken(r) != "" {
-					r = r.WithContext(context.WithValue(r.Context(), lanBearerContextKey{}, true))
+					ctx = context.WithValue(ctx, lanBearerContextKey{}, true)
 				} else {
-					r = r.WithContext(context.WithValue(r.Context(), lanPreviewCookieContextKey{}, true))
+					ctx = context.WithValue(ctx, lanPreviewCookieContextKey{}, true)
 				}
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			if passwordRefused {
+				// A paired device that has not swapped its password yet: not a guess,
+				// so it does not count toward the lockout.
+				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_CREDENTIAL_REQUIRED",
+					"this host no longer accepts the pairing password; pair this device again", nil)
+				return
+			}
+			if strings.HasPrefix(tok, mobilebridge.DeviceTokenPrefix) {
+				// A device token this host does not hold: the device was removed.
+				// Saying so stops a device that kept the pairing password from
+				// falling back to it. Not counted toward the lockout: the token is
+				// 256 random bits, and a removed device retries on a timer.
+				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_REVOKED",
+					"this device was removed from the host; pair it again", nil)
 				return
 			}
 			// Only a presented password is a guess. A request with none (a

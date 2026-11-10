@@ -29,12 +29,42 @@ type LiveSet interface {
 	LastSeen(installID string) (time.Time, bool)
 }
 
-// MobileDevicesController owns the desktop-only roster routes. They are mounted
-// under /api/v1/mobile, which lanControlBlock 404s on the LAN listener, so a
-// paired phone can neither enumerate nor remove the household's devices.
+// DeviceAccess is the access side of the device list, satisfied by
+// *BridgeService: the devices that hold their own token, and the account's
+// shared token.
+type DeviceAccess interface {
+	AccessDevices() []mobilebridge.AccessDevice
+	// ConnectedCredentials reports, by SHA-256, the credentials with an open
+	// connection.
+	ConnectedCredentials() map[string]bool
+	// AccountDevices reports the account token's SHA-256, empty when no
+	// account is linked, and when it was last used.
+	AccountDevices() (tokenHash string, lastUsed time.Time)
+	// RevokeDevice removes a device's token and returns its push-registry row.
+	RevokeDevice(id string) (installID string, found bool, err error)
+	UnlinkAccount() error
+}
+
+// AccountDevicesID is the list row for every device signed in to the linked
+// account. They share one token, so they are revoked together.
+const AccountDevicesID = "account"
+
+// The kinds of row in the device list.
+const (
+	deviceKindDevice   = "device"
+	deviceKindPassword = "password"
+	deviceKindAccount  = "account"
+)
+
+// MobileDevicesController owns the desktop-only device list routes. They are
+// mounted under /api/v1/mobile, which lanControlBlock 404s on the LAN listener,
+// so a paired device can neither enumerate nor remove the others.
 type MobileDevicesController struct {
 	Registry DeviceRoster
 	Presence LiveSet
+	// Access adds the devices that hold their own token and the account row.
+	// Nil lists push registrations only.
+	Access DeviceAccess
 }
 
 // writeRegistryUnavailable answers a request with 503 DEVICE_REGISTRY_UNAVAILABLE.
@@ -49,28 +79,73 @@ func writeRegistryUnavailable(w http.ResponseWriter, r *http.Request) {
 
 // List handles GET /api/v1/mobile/devices.
 func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
-	if c.Registry == nil {
+	if c.Registry == nil && c.Access == nil {
 		writeRegistryUnavailable(w, r)
 		return
 	}
-	devices := c.Registry.List()
+	var devices []mobilebridge.PushDevice
+	if c.Registry != nil {
+		devices = c.Registry.List()
+	}
 	live := map[string]bool{}
 	if c.Presence != nil {
 		live = c.Presence.Live()
 	}
-	out := make([]MobileDeviceResponse, 0, len(devices))
-	for _, d := range devices {
-		// Prefer presence's timestamp: it advances on every request, whereas the
-		// stored one only moves on register/announce. Presence is in-memory, so
-		// after a daemon restart it has nothing and the stored value — the last
-		// registration — is the best we have.
-		lastSeen := d.LastSeenAt
+	// Prefer presence's timestamp: it advances on every request, whereas the
+	// stored one only moves on register/announce. Presence is in-memory, so
+	// after a daemon restart it has nothing and the stored value, the last
+	// registration, is the best we have.
+	lastSeen := func(d mobilebridge.PushDevice) time.Time {
+		seen := d.LastSeenAt
 		if c.Presence != nil {
-			if at, ok := c.Presence.LastSeen(d.InstallID); ok && at.After(lastSeen) {
-				lastSeen = at
+			if at, ok := c.Presence.LastSeen(d.InstallID); ok && at.After(seen) {
+				seen = at
 			}
 		}
+		return seen
+	}
+	out := make([]MobileDeviceResponse, 0, len(devices)+1)
+	// A phone's push registration belongs to the row of the token that made it.
+	owned := map[string]bool{}
+	if c.Access != nil {
+		push := make(map[string]mobilebridge.PushDevice, len(devices))
+		for _, d := range devices {
+			push[d.InstallID] = d
+		}
+		connected := c.Access.ConnectedCredentials()
+		for _, d := range c.Access.AccessDevices() {
+			row := MobileDeviceResponse{
+				ID: d.ID, Kind: deviceKindDevice, InstallID: d.InstallID, Platform: d.Platform, DeviceName: d.Name,
+				Live: connected[d.TokenHash], CreatedAt: d.CreatedAt, LastSeenAt: d.LastSeenAt,
+			}
+			if registration, ok := push[d.InstallID]; ok && d.InstallID != "" {
+				owned[d.InstallID] = true
+				row.Token = registration.Token
+				row.NotificationsEnabled = registration.Token != ""
+				row.Live = row.Live || live[d.InstallID]
+				if row.DeviceName == "" {
+					row.DeviceName = registration.DeviceName
+				}
+				if row.Platform == "" {
+					row.Platform = registration.Platform
+				}
+				if seen := lastSeen(registration); seen.After(row.LastSeenAt) {
+					row.LastSeenAt = seen
+				}
+			}
+			out = append(out, row)
+		}
+		if hash, used := c.Access.AccountDevices(); hash != "" {
+			out = append(out, MobileDeviceResponse{ID: AccountDevicesID, Kind: deviceKindAccount, Live: connected[hash], LastSeenAt: used})
+		}
+	}
+	for _, d := range devices {
+		if owned[d.InstallID] {
+			continue
+		}
 		out = append(out, MobileDeviceResponse{
+			ID:                   d.InstallID,
+			Kind:                 deviceKindPassword,
 			InstallID:            d.InstallID,
 			Token:                d.Token,
 			Platform:             d.Platform,
@@ -78,7 +153,7 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 			Live:                 live[d.InstallID],
 			NotificationsEnabled: d.Token != "",
 			CreatedAt:            d.CreatedAt,
-			LastSeenAt:           lastSeen,
+			LastSeenAt:           lastSeen(d),
 		})
 	}
 	// Live devices first, then most-recently-seen, so the phone you are holding
@@ -92,13 +167,41 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, MobileDevicesResponse{Devices: out})
 }
 
-// Remove handles DELETE /api/v1/mobile/devices/{installId}.
+// Remove handles DELETE /api/v1/mobile/devices/{id}. A device with its own
+// token loses access and its notifications. The account row unlinks the
+// account. A phone that still uses the pairing password only loses its
+// notifications: the password it holds keeps working.
 func (c *MobileDevicesController) Remove(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if c.Access != nil {
+		if id == AccountDevicesID {
+			if err := c.Access.UnlinkAccount(); err != nil {
+				envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "DEVICE_DELETE_FAILED", "Could not remove device", nil)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		installID, found, err := c.Access.RevokeDevice(id)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "DEVICE_DELETE_FAILED", "Could not remove device", nil)
+			return
+		}
+		if found {
+			// The token is revoked either way; a push row that outlives it only
+			// costs a notification to a device that can no longer connect.
+			if installID != "" && c.Registry != nil {
+				_ = c.Registry.Delete(installID)
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
 	if c.Registry == nil {
 		writeRegistryUnavailable(w, r)
 		return
 	}
-	if err := c.Registry.Delete(chi.URLParam(r, "installId")); err != nil {
+	if err := c.Registry.Delete(id); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "DEVICE_DELETE_FAILED", "Could not remove device", nil)
 		return
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
@@ -197,6 +198,58 @@ func (m *LANManager) SetAccountTokenHash(hash string) {
 	if ln != nil && previous != "" {
 		_ = ln.closeConnections(previous)
 	}
+}
+
+// UseDeviceCredentials gives the listener the device registry and the pairing
+// codes, so it accepts device tokens and, on the pairing route, one-time
+// codes. Call it before Start.
+func (m *LANManager) UseDeviceCredentials(devices *mobilebridge.AccessDevices, codes *mobilebridge.PairingCodes) {
+	m.state.devices, m.state.codes = devices, codes
+}
+
+// SetPasswordLoginDisabled makes the listener refuse the pairing password.
+// Turning it on closes the connections that password authenticated.
+func (m *LANManager) SetPasswordLoginDisabled(off bool) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	if m.state.passwordOff.Swap(off) == off || !off {
+		return
+	}
+	m.DisconnectCredential(m.state.currentHash())
+}
+
+// DisconnectCredential closes the connections a credential authenticated,
+// such as a revoked device's. hash is the credential's SHA-256.
+func (m *LANManager) DisconnectCredential(hash string) {
+	if hash == "" {
+		return // closeConnections("") would close every connection
+	}
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	if ln != nil {
+		_ = ln.closeConnections(hash)
+	}
+}
+
+// ConnectedCredentials reports, by SHA-256, the credentials that have an open
+// connection.
+func (m *LANManager) ConnectedCredentials() map[string]bool {
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	connected := map[string]bool{}
+	if ln == nil {
+		return connected
+	}
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+	for conn := range ln.conns {
+		if conn.tokenHash != "" {
+			connected[conn.tokenHash] = true
+		}
+	}
+	return connected
 }
 
 // AccountTokenHash returns the currently accepted account credential digest.

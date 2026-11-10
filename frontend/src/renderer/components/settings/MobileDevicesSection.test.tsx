@@ -19,12 +19,12 @@ const twoDevices = {
 	data: {
 		devices: [
 			{
-				installId: "i1", token: "ExponentPushToken[a]", deviceName: "iPhone", platform: "ios",
+				id: "i1", kind: "device", installId: "i1", token: "ExponentPushToken[a]", deviceName: "iPhone", platform: "ios",
 				live: true, notificationsEnabled: true,
 				createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
 			},
 			{
-				installId: "i2", token: "ExponentPushToken[b]", deviceName: "M31s", platform: "android",
+				id: "i2", kind: "device", installId: "i2", token: "ExponentPushToken[b]", deviceName: "M31s", platform: "android",
 				live: false, notificationsEnabled: true, createdAt: new Date().toISOString(),
 				lastSeenAt: new Date(Date.now() - 7200_000).toISOString(),
 			},
@@ -83,7 +83,7 @@ describe("MobileDevicesSection", () => {
 			vi.advanceTimersByTime(REMOVE_UNDO_MS);
 		});
 		await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
-		expect(del.mock.calls[0][1]).toMatchObject({ params: { path: { installId: "i1" } } });
+		expect(del.mock.calls[0][1]).toMatchObject({ params: { path: { id: "i1" } } });
 		await waitFor(() => expect(screen.queryByText("iPhone removed")).not.toBeInTheDocument());
 		expect(screen.queryByText("iPhone")).not.toBeInTheDocument();
 		expect(screen.getByText("M31s")).toBeInTheDocument();
@@ -237,7 +237,7 @@ describe("MobileDevicesSection", () => {
 	it("keeps row order stable across polls instead of following server re-sorts", async () => {
 		// The server sorts live-first then LastSeenAt descending, which can flip
 		// on every 3s poll when 2+ devices are live. Rendering must sort on a
-		// stable field (installId) so rows never reorder under the user.
+		// stable field (id) so rows never reorder under the user.
 		const reordered = {
 			data: {
 				devices: [twoDevices.data.devices[1], twoDevices.data.devices[0]],
@@ -256,7 +256,7 @@ describe("MobileDevicesSection", () => {
 			data: {
 				devices: [
 					{
-						installId: "i3", deviceName: "Pixel Announce", platform: "android",
+						id: "i3", kind: "device", installId: "i3", deviceName: "Pixel Announce", platform: "android",
 						live: true, notificationsEnabled: false,
 						createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
 					},
@@ -279,6 +279,34 @@ describe("MobileDevicesSection", () => {
 			vi.advanceTimersByTime(REMOVE_UNDO_MS);
 		});
 		await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+	});
+
+	it("lists a computer, a phone still on the pairing password, and the account's shared row last", async () => {
+		const now = new Date().toISOString();
+		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { devices: [
+			{ id: "account", kind: "account", installId: "", live: false, notificationsEnabled: false, createdAt: now, lastSeenAt: now },
+			{ id: "dev_2", kind: "device", installId: "", deviceName: "Work MacBook", platform: "darwin", live: true, notificationsEnabled: false, createdAt: now, lastSeenAt: now },
+			{ id: "i9", kind: "password", installId: "i9", deviceName: "Old phone", platform: "ios", live: false, notificationsEnabled: true, createdAt: now, lastSeenAt: now },
+		] } } as never);
+		const del = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		renderSection();
+
+		expect(await screen.findByText("Work MacBook")).toBeInTheDocument();
+		const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
+		expect(rows).toHaveLength(3);
+		expect(rows[2]).toContain("Account devices (shared)");
+		// A device with its own token needs no explanation; the other two do not simply revoke one device.
+		expect(screen.getByText("Work MacBook").closest(".settings-row-bar")?.textContent).toBe("Work MacBook");
+		expect(screen.getByText("Uses the pairing password. Removing it only stops its notifications.")).toBeInTheDocument();
+		expect(screen.getByText("Every device signed in to your account. Removing this unlinks the account.")).toBeInTheDocument();
+
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		fireEvent.click(screen.getByRole("button", { name: /remove Account devices/i }));
+		await act(async () => {
+			vi.advanceTimersByTime(REMOVE_UNDO_MS);
+		});
+		await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+		expect(del.mock.calls[0][1]).toMatchObject({ params: { path: { id: "account" } } });
 	});
 
 });

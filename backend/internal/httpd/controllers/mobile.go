@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
@@ -61,13 +62,113 @@ func (c *MobileController) IssueAccountToken(w http.ResponseWriter, r *http.Requ
 	}
 	password := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	accountID := strings.TrimSpace(r.Header.Get("X-AO-Account-ID"))
-	result, err := issuer.IssueAccountToken(password, accountID)
+	var result RemoteHostAccountTokenResponse
+	var err error
+	// A device the remote listener authenticated by its own token holds no
+	// pairing password to present; its token is the proof.
+	if device, ok := c.Bridge.(interface {
+		IssueAccountTokenForDevice(string) (RemoteHostAccountTokenResponse, error)
+	}); ok && requestscope.CredentialFrom(r.Context()).Kind == requestscope.CredentialDevice {
+		result, err = device.IssueAccountTokenForDevice(accountID)
+	} else {
+		result, err = issuer.IssueAccountToken(password, accountID)
+	}
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "REMOTE_HOST_ACCOUNT_TOKEN", "connection password required", nil)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+// NewPairingCode handles POST /api/v1/mobile/pairing-code. The route is
+// loopback-only, so only this machine can let a new device in.
+func (c *MobileController) NewPairingCode(w http.ResponseWriter, r *http.Request) {
+	pairing, ok := c.Bridge.(interface {
+		NewPairingCode() (PairingCodeResponse, error)
+	})
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "DEVICE_PAIRING", "device pairing is unavailable", nil)
+		return
+	}
+	result, err := pairing.NewPairingCode()
+	if errors.Is(err, errRemoteAccessOff) {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REMOTE_ACCESS_OFF", err.Error(), nil)
+		return
+	}
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "DEVICE_PAIRING", err.Error(), nil)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+// PairDevice handles POST /api/v1/remote-host/devices: a device presents a
+// one-time pairing code, or the pairing password it already holds, as its
+// bearer and receives its own token.
+func (c *MobileController) PairDevice(w http.ResponseWriter, r *http.Request) {
+	pairing, ok := c.Bridge.(interface {
+		PairDevice(code, name, platform string) (PairDeviceResponse, error)
+	})
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "DEVICE_PAIRING", "device pairing is unavailable", nil)
+		return
+	}
+	// The remote listener checked the bearer. A loopback request carries no
+	// credential, and the account token and a device token do not pair.
+	credential := requestscope.CredentialFrom(r.Context())
+	if credential.Kind != requestscope.CredentialPairingCode && credential.Kind != requestscope.CredentialPassword {
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "DEVICE_PAIRING", "a pairing code is required", nil)
+		return
+	}
+	var req PairDeviceRequest
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+			return
+		}
+	}
+	code := ""
+	if credential.Kind == requestscope.CredentialPairingCode {
+		code = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	}
+	result, err := pairing.PairDevice(code, req.Name, req.Platform)
+	switch {
+	case errors.Is(err, errPairingCodeUsed):
+		envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "PAIRING_CODE_USED", err.Error(), nil)
+		return
+	case errors.Is(err, mobilebridge.ErrTooManyDevices):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "TOO_MANY_DEVICES", err.Error(), nil)
+		return
+	case err != nil:
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "DEVICE_PAIRING", "could not pair the device", nil)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+// RequireDeviceCredentials handles POST /api/v1/mobile/require-device-credentials.
+func (c *MobileController) RequireDeviceCredentials(w http.ResponseWriter, r *http.Request) {
+	setter, ok := c.Bridge.(interface {
+		SetRequireDeviceCredentials(bool) (MobileStatusResponse, error)
+	})
+	if !ok {
+		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "DEVICE_PAIRING", "device pairing is unavailable", nil)
+		return
+	}
+	var req SetRequireDeviceCredentialsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	res, err := setter.SetRequireDeviceCredentials(req.Enabled)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "MOBILE_REQUIRE_DEVICE_CREDENTIALS", err.Error(), nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, withWarning(res))
 }
 
 // withWarning stamps the constant unencrypted-LAN warning onto any bridge
@@ -283,6 +384,12 @@ type BridgeService struct {
 	// macOS), which Status reports as unsupported.
 	KeepAwake KeepAwakeController
 
+	// Devices is the registry of device tokens and Codes the one-time pairing
+	// codes; the LAN listener holds the same two. Nil where pairing is not
+	// wired, as in tests of the other bridge behavior.
+	Devices *mobilebridge.AccessDevices
+	Codes   *mobilebridge.PairingCodes
+
 	// OnBrowserRemoteAccessDisabled synchronously revokes live streams when the
 	// desktop turns the additional browser-access gate off. It is nil until the
 	// browser-live service is wired.
@@ -404,8 +511,14 @@ func (b *BridgeService) Status() MobileStatusResponse {
 			Port:           b.LAN.BoundPort(),
 			Tunnel:         b.tunnelEndpoint(),
 		}),
-		Tunnel: b.tunnelStatus(),
-		HostID: b.HostID,
+		Tunnel:                   b.tunnelStatus(),
+		HostID:                   b.HostID,
+		RequireDeviceCredentials: st.RequireDeviceCredentials,
+	}
+	if b.Devices != nil {
+		if used := b.Devices.SharedLastUsed(mobilebridge.SharedPassword); !used.IsZero() {
+			res.PasswordLastUsedAt = &used
+		}
 	}
 	// Only surface the password while the bridge is actually enabled. This route
 	// is reachable only on the loopback listener (the LAN listener 404s
@@ -770,6 +883,15 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 	wasRunning := b.LAN.Running()
 	prevSt, _ := mobilebridge.Load(b.ConfigPath)
 
+	// A new password revokes everything paired before it: device tokens and
+	// unused pairing codes go with it, as the account token does below.
+	if prevSt.Password != "" && prevSt.Password != pw {
+		if err := b.revokeAllDevices(); err != nil {
+			return MobileStatusResponse{}, err
+		}
+	}
+	b.applyPasswordLogin(prevSt)
+
 	// A fresh listener must be armed before binding. For an already-running
 	// listener, wait until persistence succeeds before rotating the hash: a
 	// failed save must not disconnect currently authenticated clients.
@@ -804,7 +926,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		accountToken = ""
 		accountTokenOwner = ""
 	}
-	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, AccountToken: accountToken, AccountTokenOwner: accountTokenOwner, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, KeepAwakeLid: prevSt.KeepAwakeLid, BrowserRemoteAccess: prevSt.BrowserRemoteAccess, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
+	nextSt := mobilebridge.State{Enabled: true, Password: pw, LastPort: port, RetiredPasswordHash: retired, AccountTokenHash: accountTokenHash, AccountToken: accountToken, AccountTokenOwner: accountTokenOwner, RequireDeviceCredentials: prevSt.RequireDeviceCredentials, SecurePairing: prevSt.SecurePairing, ServeCleanupPending: prevSt.ServeCleanupPending, KeepAwake: prevSt.KeepAwake, KeepAwakeLid: prevSt.KeepAwakeLid, BrowserRemoteAccess: prevSt.BrowserRemoteAccess, NoPublicTunnel: noPublicTunnel, LoopbackOnly: loopbackOnly}
 	if err := mobilebridge.Save(b.ConfigPath, nextSt); err != nil {
 		// Persist failed after the listener came up. A running listener still
 		// serves the old hash; a fresh enable must tear the listener back down.
@@ -894,6 +1016,7 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
 		setter.SetAccountTokenHash(state.AccountTokenHash)
 	}
+	b.applyPasswordLogin(state)
 	start := b.LAN.Start
 	if state.LoopbackOnly {
 		start = b.LAN.StartLoopback
@@ -925,6 +1048,16 @@ func (b *BridgeService) hostPublicKey() string {
 // account, or replaces it after the caller proves the original pairing
 // password while linking a different account.
 func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHostAccountTokenResponse, error) {
+	return b.issueAccountToken(password, false, accountID)
+}
+
+// IssueAccountTokenForDevice issues the account credential to a device the
+// remote listener authenticated by its own token.
+func (b *BridgeService) IssueAccountTokenForDevice(accountID string) (RemoteHostAccountTokenResponse, error) {
+	return b.issueAccountToken("", true, accountID)
+}
+
+func (b *BridgeService) issueAccountToken(password string, device bool, accountID string) (RemoteHostAccountTokenResponse, error) {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()
 	state, err := mobilebridge.Load(b.ConfigPath)
@@ -939,7 +1072,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	if state.AccountToken != "" && mobilebridge.PasswordMatches(state.AccountTokenHash, password) {
 		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
-	if !mobilebridge.PasswordMatches(mobilebridge.HashPassword(state.Password), password) {
+	if !device && !mobilebridge.PasswordMatches(mobilebridge.HashPassword(state.Password), password) {
 		return RemoteHostAccountTokenResponse{}, errors.New("connection password required")
 	}
 	accountID = strings.TrimSpace(accountID)
@@ -974,6 +1107,156 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// Cloud's refusal as a link on its way and keeps serving.
 	b.nudgeTunnel()
 	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token, HostKey: b.hostPublicKey()}, nil
+}
+
+var (
+	errRemoteAccessOff = errors.New("remote access is off; turn it on before pairing a device")
+	errPairingCodeUsed = errors.New("the pairing code is used or expired; make a new one")
+)
+
+// applyPasswordLogin tells the listener whether it still accepts the pairing
+// password.
+func (b *BridgeService) applyPasswordLogin(st mobilebridge.State) {
+	if setter, ok := b.LAN.(interface{ SetPasswordLoginDisabled(bool) }); ok {
+		setter.SetPasswordLoginDisabled(st.RequireDeviceCredentials)
+	}
+}
+
+// revokeAllDevices removes every device token and unused pairing code. The
+// caller rotates the password, which closes the listener's connections.
+func (b *BridgeService) revokeAllDevices() error {
+	if b.Codes != nil {
+		b.Codes.Clear()
+	}
+	if b.Devices == nil {
+		return nil
+	}
+	return b.Devices.RevokeAll()
+}
+
+// NewPairingCode makes a one-time code for a new device.
+func (b *BridgeService) NewPairingCode() (PairingCodeResponse, error) {
+	if b.Codes == nil || b.Devices == nil {
+		return PairingCodeResponse{}, errors.New("device pairing is unavailable")
+	}
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil {
+		return PairingCodeResponse{}, err
+	}
+	if !st.Enabled || !b.LAN.Running() {
+		return PairingCodeResponse{}, errRemoteAccessOff
+	}
+	code, expiresAt, err := b.Codes.Issue()
+	if err != nil {
+		return PairingCodeResponse{}, err
+	}
+	return PairingCodeResponse{Code: code, ExpiresAt: expiresAt.UTC()}, nil
+}
+
+// PairDevice gives a device its own token. code is the pairing code it
+// presented, used up here, or empty when it presented the pairing password.
+func (b *BridgeService) PairDevice(code, name, platform string) (PairDeviceResponse, error) {
+	if b.Codes == nil || b.Devices == nil {
+		return PairDeviceResponse{}, errors.New("device pairing is unavailable")
+	}
+	credential := string(requestscope.CredentialPassword)
+	if code != "" {
+		if !b.Codes.Consume(code) {
+			return PairDeviceResponse{}, errPairingCodeUsed
+		}
+		credential = string(requestscope.CredentialPairingCode)
+	}
+	device, token, err := b.Devices.Issue(name, platform, time.Now())
+	if err != nil {
+		return PairDeviceResponse{}, err
+	}
+	return PairDeviceResponse{HostID: b.HostID, DeviceID: device.ID, Token: token, Credential: credential}, nil
+}
+
+// SetRequireDeviceCredentials makes the remote listener refuse, or accept
+// again, the pairing password.
+func (b *BridgeService) SetRequireDeviceCredentials(on bool) (MobileStatusResponse, error) {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil {
+		return MobileStatusResponse{}, err
+	}
+	if st.RequireDeviceCredentials != on {
+		st.RequireDeviceCredentials = on
+		if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
+			return MobileStatusResponse{}, err
+		}
+	}
+	b.applyPasswordLogin(st)
+	return b.Status(), nil
+}
+
+// AccessDevices lists the devices that hold their own token.
+func (b *BridgeService) AccessDevices() []mobilebridge.AccessDevice {
+	if b.Devices == nil {
+		return nil
+	}
+	return b.Devices.List()
+}
+
+// ConnectedCredentials reports, by SHA-256, the credentials with an open
+// connection to the remote listener.
+func (b *BridgeService) ConnectedCredentials() map[string]bool {
+	if lan, ok := b.LAN.(interface{ ConnectedCredentials() map[string]bool }); ok {
+		return lan.ConnectedCredentials()
+	}
+	return map[string]bool{}
+}
+
+// AccountDevices reports the account's shared token: its SHA-256, empty when
+// no account is linked, and when it last authenticated a request.
+func (b *BridgeService) AccountDevices() (tokenHash string, lastUsed time.Time) {
+	st, _ := mobilebridge.Load(b.ConfigPath)
+	if st.AccountTokenHash == "" || b.Devices == nil {
+		return st.AccountTokenHash, time.Time{}
+	}
+	return st.AccountTokenHash, b.Devices.SharedLastUsed(mobilebridge.SharedAccount)
+}
+
+// RevokeDevice removes a device's token and closes its connections. It
+// returns the device's push-registry row, if it has one.
+func (b *BridgeService) RevokeDevice(id string) (installID string, found bool, err error) {
+	if b.Devices == nil {
+		return "", false, nil
+	}
+	device, found, err := b.Devices.Revoke(id)
+	if err != nil || !found {
+		return "", found, err
+	}
+	if lan, ok := b.LAN.(interface{ DisconnectCredential(string) }); ok {
+		lan.DisconnectCredential(device.TokenHash)
+	}
+	return device.InstallID, true, nil
+}
+
+// UnlinkAccount revokes the account's shared token, cutting off every device
+// that reaches this machine through the linked account until it is linked
+// again.
+func (b *BridgeService) UnlinkAccount() error {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil {
+		return err
+	}
+	if st.AccountTokenHash == "" {
+		return nil
+	}
+	st.AccountTokenHash, st.AccountToken, st.AccountTokenOwner = "", "", ""
+	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
+		return err
+	}
+	if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
+		setter.SetAccountTokenHash("")
+	}
+	b.nudgeTunnel()
+	return nil
 }
 
 // nudgeTunnel has a running connector ask AO Cloud for its address now: the
@@ -1141,8 +1424,9 @@ func (b *BridgeService) ConnectorInstalled() {
 	}
 }
 
-// Regenerate rotates the connection password on the running listener, which
-// drops the currently paired phone (it authenticates against the new hash).
+// Regenerate revokes every device: it rotates the pairing password, which
+// removes all device tokens, unlinks the account and closes the listener's
+// connections. Each device pairs again.
 func (b *BridgeService) Regenerate() (MobileStatusResponse, error) {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()

@@ -2769,6 +2769,40 @@ type MobileStatusResponse struct {
 	Warning       string              `json:"warning"`
 	SecurePairing SecurePairingStatus `json:"securePairing"`
 	KeepAwake     KeepAwakeStatus     `json:"keepAwake"`
+	// RequireDeviceCredentials means the remote listener refuses the pairing
+	// password: a device needs its own token or the account token.
+	RequireDeviceCredentials bool `json:"requireDeviceCredentials"`
+	// PasswordLastUsedAt is when the pairing password last authenticated a
+	// remote request. Absent when it never has.
+	PasswordLastUsedAt *time.Time `json:"passwordLastUsedAt,omitempty"`
+}
+
+// PairingCodeResponse is a one-time code a new device exchanges for its own
+// token.
+type PairingCodeResponse struct {
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// PairDeviceRequest names the device being paired. Both fields are optional.
+type PairDeviceRequest struct {
+	Name     string `json:"name,omitempty" description:"Name shown in the host's device list."`
+	Platform string `json:"platform,omitempty" description:"The device's platform, such as ios, android, darwin, win32 or linux."`
+}
+
+// PairDeviceResponse carries the device's own token, which is shown once.
+type PairDeviceResponse struct {
+	HostID   string `json:"hostId"`
+	DeviceID string `json:"deviceId"`
+	Token    string `json:"token"`
+	// Credential is what the device presented. A pairing code is used up; the
+	// pairing password still works, so a device may keep it as a fallback.
+	Credential string `json:"credential" enum:"pairing-code,password"`
+}
+
+// SetRequireDeviceCredentialsRequest turns the pairing password off or on.
+type SetRequireDeviceCredentialsRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 // KeepAwakeStatus describes the macOS-only option that stops the machine from
@@ -3861,14 +3895,17 @@ type RequestRereviewResponse struct {
 	OK bool `json:"ok"`
 }
 
-// MobileDeviceResponse is one row of the desktop's mobile-device roster: the
-// stored registration plus whether that phone is running the app right now.
+// MobileDeviceResponse is one row of the host's device list: a device with its
+// own token, a phone that still uses the pairing password, or the account's
+// devices, which share one token.
 type MobileDeviceResponse struct {
-	InstallID            string    `json:"installId"`
+	ID                   string    `json:"id" description:"What DELETE /api/v1/mobile/devices/{id} takes."`
+	Kind                 string    `json:"kind" enum:"device,password,account" description:"device: holds its own token. password: a phone that still uses the pairing password, so removing it only stops its notifications. account: every device signed in to the linked account; they share one token."`
+	InstallID            string    `json:"installId" description:"The phone's install id, or empty for a device that never registered for notifications."`
 	Token                string    `json:"token,omitempty"`
-	Platform             string    `json:"platform,omitempty" enum:"ios,android"`
+	Platform             string    `json:"platform,omitempty"`
 	DeviceName           string    `json:"deviceName,omitempty"`
-	Live                 bool      `json:"live" description:"True when the phone's app is open and polling."`
+	Live                 bool      `json:"live" description:"True when the device is connected, or the phone's app is open and polling."`
 	NotificationsEnabled bool      `json:"notificationsEnabled" description:"True when this device has a push token registered."`
 	CreatedAt            time.Time `json:"createdAt"`
 	LastSeenAt           time.Time `json:"lastSeenAt"`
@@ -3879,10 +3916,9 @@ type MobileDevicesResponse struct {
 	Devices []MobileDeviceResponse `json:"devices"`
 }
 
-// InstallIDParam is the {installId} path parameter for mobile-device roster
-// routes.
-type InstallIDParam struct {
-	InstallID string `path:"installId" description:"The device's stable install id."`
+// MobileDeviceIDParam is the {id} path parameter for the device list routes.
+type MobileDeviceIDParam struct {
+	ID string `path:"id" description:"The row's id from the device list."`
 }
 
 // CreateConversationSideChatRequest opens an independent launch-scoped side chat.
