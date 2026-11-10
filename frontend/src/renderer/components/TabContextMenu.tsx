@@ -242,7 +242,7 @@ export function TabDropdownMenu({ spec, label }: { spec: TabMenuSpec; label: str
 				{/* A native title: a Radix tooltip would reopen when the menu hands focus back. */}
 				<Pressable
 					aria-label={label}
-					className={cn(terminalTabActionClassName, "data-[state=open]:bg-interactive-hover data-[state=open]:text-foreground")}
+					className={cn(terminalTabActionClassName, "data-[state=open]:text-foreground")}
 					data-session-actions-trigger
 					title={label}
 					type="button"

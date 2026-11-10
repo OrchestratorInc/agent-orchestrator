@@ -706,7 +706,8 @@ export function CenterPane({
 // 28px status with a cancel button). In the tab's icon slot it is resized to
 // match the close and menu controls: a 16px box, 13px glyph, 28px hit area.
 const sessionTabActionClassName = cn(
-	"grid place-items-center [&_svg]:size-icon-sm",
+	// Ghost like the other tab controls: no fill on hover, focus or open, the quiet switch button included.
+	"grid place-items-center [&_svg]:size-icon-sm [&_button]:bg-transparent!",
 	"[&_[data-interface-switch]]:relative [&_[data-interface-switch]]:size-icon-base [&_[data-interface-switch]]:rounded-sm [&_[data-interface-switch]]:after:absolute [&_[data-interface-switch]]:after:-inset-1.5 [&_[data-interface-switch]]:after:content-['']",
 	"[&_[role=status]]:size-icon-base [&_[role=status]_button]:rounded-sm [&_[role=status]_button]:before:absolute [&_[role=status]_button]:before:-inset-1.5 [&_[role=status]_button]:before:content-['']",
 );

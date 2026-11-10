@@ -29,9 +29,9 @@ type TerminalTabFrameProps = {
 	editingValue?: string;
 };
 
-/** The control in a tab's icon slot, shared so close buttons and menus match. */
+/** A tab's close button or menu, shared so they match. A pure ghost: hover only brightens the glyph, never a fill. */
 export const terminalTabActionClassName =
-	"relative grid size-icon-base cursor-pointer place-items-center rounded-sm text-passive before:absolute before:-inset-1.5 before:content-[''] hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground";
+	"relative grid size-icon-base cursor-pointer place-items-center text-passive before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground focus-visible:text-foreground";
 
 // Laid over the label's own box, growing outward by its padding so the text
 // stays exactly where the label drew it. The ring takes no layout space.
