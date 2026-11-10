@@ -70,7 +70,8 @@ function renderView(ui: ReactNode = <AutomationsView />) {
 
 /** Opens a blank create form through the page's New automation menu. */
 async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
-	await user.click(screen.getByRole("button", { name: "New automation" }));
+	// The page's menu comes first; the empty state repeats the action as a plain button.
+	await user.click(screen.getAllByRole("button", { name: "New automation" })[0]);
 	await user.click(await screen.findByRole("menuitem", { name: "Start from scratch" }));
 }
 
@@ -89,14 +90,13 @@ describe("AutomationsView", () => {
 		const title = screen.getByRole("heading", { name: "Automations" });
 		expect(title).not.toHaveClass("sr-only");
 		expect(title.closest("header")).toHaveClass("workspace-topbar-container");
-		expect(screen.getByRole("tab", { name: "Yours" })).toHaveAttribute("aria-selected", "true");
-		expect(screen.getByRole("button", { name: "PR review inbox" })).toHaveTextContent("Weekdays at 9:00 AM");
+		expect(screen.queryByRole("tab")).not.toBeInTheDocument();
 	});
 
 	it("offers a blank form and every starter from the New automation menu", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await user.click(screen.getByRole("button", { name: "New automation" }));
+		await user.click(screen.getAllByRole("button", { name: "New automation" })[0]);
 		expect(await screen.findByRole("menuitem", { name: "Start from scratch" })).toBeInTheDocument();
 		for (const name of ["PR review inbox", "Daily issue triage", "Weekly release notes"]) {
 			expect(screen.getByRole("menuitem", { name })).toBeInTheDocument();
@@ -105,17 +105,26 @@ describe("AutomationsView", () => {
 		expect(within(screen.getByRole("dialog")).getByRole("textbox", { name: "Name" })).toHaveValue("Weekly release notes");
 	});
 
-	it("lists every starter on the Templates tab with its schedule", async () => {
+	it("opens a blank form from the empty state's New automation button", async () => {
 		const user = userEvent.setup();
-		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true }];
 		renderView();
-		// With automations saved, Yours shows the list and leaves the starters to Templates.
-		expect(screen.queryByRole("button", { name: "PR review inbox" })).not.toBeInTheDocument();
-		await user.click(screen.getByRole("tab", { name: "Templates" }));
-		expect(screen.getByRole("tab", { name: "Templates" })).toHaveAttribute("aria-selected", "true");
-		expect(screen.queryByRole("heading", { name: "Morning triage" })).not.toBeInTheDocument();
+		await user.click(screen.getAllByRole("button", { name: "New automation" })[1]);
+		expect(within(screen.getByRole("dialog")).getByRole("textbox", { name: "Name" })).toHaveValue("");
+	});
+
+	it("introduces the starters under the empty state and leaves them to the menu once automations exist", () => {
+		const { unmount } = renderView();
+		expect(screen.getByRole("heading", { name: "Start with a template" })).toBeInTheDocument();
+		expect(screen.getByText("Pick a starting point, make it yours, and let your agent take it from there.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "PR review inbox" })).toHaveTextContent("Weekdays at 9:00 AM");
 		expect(screen.getByRole("button", { name: "Daily issue triage" })).toHaveTextContent("Daily at 9:15 AM");
 		expect(screen.getByRole("button", { name: "Weekly release notes" })).toHaveTextContent("Every Friday at 4:00 PM");
+		unmount();
+		mocks.automations = [{ id: "a1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true }];
+		renderView();
+		expect(screen.getByRole("heading", { name: "Morning triage" })).toBeInTheDocument();
+		expect(screen.queryByRole("heading", { name: "Start with a template" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "PR review inbox" })).not.toBeInTheDocument();
 	});
 
 	it("preselects the project's resolved default worker like New Task", async () => {

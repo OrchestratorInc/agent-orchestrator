@@ -78,7 +78,6 @@ import { AUTOMATION_TEMPLATES, type AutomationTemplateID, type AutomationUseCase
 import { automationPromptLengthBucket, captureRendererEvent } from "../lib/telemetry";
 import { cn } from "../lib/utils";
 
-type AutomationsTab = "yours" | "templates";
 type StatusFilter = "all" | "enabled" | "paused";
 type SortOrder = "nextRun" | "name" | "created";
 type StarterTemplateID = Exclude<AutomationTemplateID, "custom">;
@@ -148,7 +147,6 @@ export function AutomationsView() {
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
 	const remove = useDeleteAutomation();
-	const [tab, setTab] = useState<AutomationsTab>("yours");
 	const [createOpen, setCreateOpen] = useState(false);
 	const [starter, setStarter] = useState<AutomationTemplateID>("custom");
 	const [search, setSearch] = useState("");
@@ -176,7 +174,7 @@ export function AutomationsView() {
 		sort,
 	);
 	const hasAutomations = automations.length > 0;
-	const showListTools = tab === "yours" && hasAutomations;
+	const showListTools = hasAutomations;
 	const clearFilters = () => {
 		setSearch("");
 		setStatus("all");
@@ -190,24 +188,6 @@ export function AutomationsView() {
 			<PageTopbar lead={<PageTopbarTitle as="h1" icon={<CalendarClock className="size-icon-md" aria-hidden="true" />}>{t("automations.title")}</PageTopbarTitle>} />
 			<div className="shrink-0 pt-3 pr-4 pl-(--space-4_5)">
 				<div className="flex min-h-control-md items-center gap-2">
-					<div role="tablist" aria-label={t("automations.tabs.label")} className="flex min-w-0 items-center gap-1">
-						{(["yours", "templates"] as const).map((value) => (
-							<Button
-								key={value}
-								id={`automations-tab-${value}`}
-								type="button"
-								size="sm"
-								variant="ghost"
-								role="tab"
-								aria-selected={tab === value}
-								aria-controls="automations-panel"
-								data-active={tab === value ? "true" : undefined}
-								onClick={() => setTab(value)}
-							>
-								{t(`automations.tabs.${value}`)}
-							</Button>
-						))}
-					</div>
 					<div className="ms-auto flex shrink-0 items-center gap-0.5">
 						{showListTools ? (
 							<>
@@ -291,10 +271,7 @@ export function AutomationsView() {
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 			<main className="relative min-h-0 flex-1 overflow-hidden">
 				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
-				<div id="automations-panel" role="tabpanel" aria-labelledby={`automations-tab-${tab}`} className="@container pt-4 pr-4 pb-4 pl-(--space-4_5)">
-				{tab === "templates" ? (
-					<TemplateGrid onSelect={openCreate} />
-				) : <>
+				<div className="@container pt-4 pr-4 pb-4 pl-(--space-4_5)">
 					{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 					{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
 					{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
@@ -303,11 +280,13 @@ export function AutomationsView() {
 							<div className="flex flex-col items-center gap-3 py-16 text-center">
 								<Clock aria-hidden="true" className="size-5 text-passive" />
 								<p className="text-control text-muted-foreground">{t("automations.empty.title")}</p>
-								<Button type="button" size="sm" variant="secondary" onClick={() => openCreate()}>{t("automations.empty.action")}</Button>
+								<Button type="button" size="sm" variant="secondary" onClick={() => openCreate()}>{t("automations.new")}</Button>
 							</div>
-							<div className="border-t border-border pt-6">
+							<section aria-labelledby="automation-templates" className="border-t border-border pt-6">
+								<h2 id="automation-templates" className="text-control font-medium text-foreground">{t("automations.templates.title")}</h2>
+								<p className="mt-1 mb-3 text-xs text-muted-foreground">{t("automations.templates.description")}</p>
 								<TemplateGrid onSelect={openCreate} />
-							</div>
+							</section>
 						</>
 					) : null}
 					{hasAutomations ? (
@@ -324,7 +303,6 @@ export function AutomationsView() {
 							</div>
 						)
 					) : null}
-				</>}
 				</div>
 				</ScrollArea.Viewport>
 				<ScrollArea.Scrollbar orientation="vertical" className="z-10 flex w-2 touch-none select-none p-0.5">
@@ -356,7 +334,7 @@ function NewAutomationMenu({ onCreate }: { onCreate: (template?: AutomationTempl
 					{t("automations.new.scratch")}
 				</DropdownMenuItem>
 				<DropdownMenuSeparator />
-				<DropdownMenuLabel>{t("automations.tabs.templates")}</DropdownMenuLabel>
+				<DropdownMenuLabel>{t("automations.templates.label")}</DropdownMenuLabel>
 				{AUTOMATION_TEMPLATES.map((template) => {
 					const Icon = TEMPLATE_ICONS[template.id];
 					return (
@@ -373,7 +351,7 @@ function NewAutomationMenu({ onCreate }: { onCreate: (template?: AutomationTempl
 
 function TemplateGrid({ onSelect }: { onSelect: (template: StarterTemplateID) => void }) {
 	return (
-		<div className="grid grid-cols-1 gap-1 @2xl:grid-cols-2">
+		<div className="grid grid-cols-1 gap-3 @lg:grid-cols-2 @3xl:grid-cols-3">
 			{AUTOMATION_TEMPLATES.map((template) => <TemplateTile key={template.id} id={template.id} rrule={template.rrule} onSelect={() => onSelect(template.id)} />)}
 		</div>
 	);
@@ -385,15 +363,13 @@ function TemplateTile({ id, rrule, onSelect }: { id: StarterTemplateID; rrule: s
 	const Icon = TEMPLATE_ICONS[id];
 	return (
 		<Pressable aria-label={t(`automations.template.${id}`)} onClick={onSelect}
-			className="flex min-w-0 items-start gap-3 rounded-lg p-3 text-start hover:bg-interactive-hover">
-			<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-interactive-hover">
-				<Icon aria-hidden="true" className="size-icon-md text-muted-foreground" />
-			</span>
-			<span className="flex min-w-0 flex-col gap-1">
-				<span className="text-control font-medium text-foreground">{t(`automations.template.${id}`)}</span>
-				<span className="text-sm leading-5 text-muted-foreground">{t(`automations.template.${id}.description`)}</span>
-				<span className="flex items-center gap-1.5 text-sm text-passive">
-					<Clock aria-hidden="true" className="size-icon-sm shrink-0" />
+			className="group flex min-w-0 flex-col items-start gap-4 rounded-lg bg-interactive-hover p-4 text-start hover:bg-interactive-active">
+			<Icon aria-hidden="true" className="size-5 shrink-0 text-muted-foreground group-hover:text-foreground" />
+			<span className="flex min-w-0 flex-col">
+				<span className="text-sm font-medium text-foreground">{t(`automations.template.${id}`)}</span>
+				<span className="mt-1 text-pretty text-xs leading-5 text-muted-foreground">{t(`automations.template.${id}.description`)}</span>
+				<span className="mt-3 flex items-center gap-1.5 text-caption tabular-nums text-passive">
+					<Clock aria-hidden="true" className="size-icon-xs shrink-0" />
 					{scheduleLabel(rrule)}
 				</span>
 			</span>
