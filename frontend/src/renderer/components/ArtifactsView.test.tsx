@@ -615,6 +615,20 @@ describe("ArtifactsView", () => {
 		expect(await screen.findByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
 	});
 
+	it("pins from a first tap on a card the pointer has not moved over", async () => {
+		renderView();
+		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
+		const pin = project.getByRole("button", { name: "Pin artifact: pricing.md" });
+		// A browser sends the click only to the button pressed, and only while it is still in the page.
+		fireEvent.pointerDown(pin, { button: 0, pointerType: "touch", isPrimary: true });
+		act(() => pin.focus());
+		await act(async () => {});
+		fireEvent.pointerUp(pin, { button: 0, pointerType: "touch", isPrimary: true });
+		expect(pin).toBeInTheDocument();
+		fireEvent.click(pin);
+		expect(within(screen.getByRole("region", { name: "Pinned" })).getByText("pricing.md")).toBeInTheDocument();
+	});
+
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
 		const user = userEvent.setup();
 		const { unmount } = renderView();

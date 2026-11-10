@@ -441,7 +441,8 @@ type ArtifactActionsMenuProps = Parameters<typeof ArtifactActionsMenu>[0];
  *
  * Focus on a replaced button moves to its replacement before the next paint,
  * and a press that still reaches a replaced button, as a touch or a scripted
- * click can, is passed on to its replacement.
+ * click can, is passed on to its replacement. A press on Pin or Open in
+ * session that starts first keeps them in place until its click lands.
  */
 export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 	const { t } = useTranslation();
@@ -461,26 +462,71 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 	useCloudArtifactAccess(session, Boolean(session.cloud) && !props.downloadUrl);
 
 	useEffect(() => {
-		const stand = [pinRef.current, openRef.current, menuRef.current].filter((button): button is HTMLButtonElement => Boolean(button));
+		const clickers = [pinRef.current, openRef.current].filter((button): button is HTMLButtonElement => Boolean(button));
+		const stand = [...clickers, menuRef.current].filter((button): button is HTMLButtonElement => Boolean(button));
 		const card = menuRef.current?.closest("li") ?? menuRef.current?.parentElement?.parentElement ?? null;
 		if (!card) return;
 		cardRef.current = card;
 		let activated = false;
-		const activate = (event: Event) => {
+		// A press on Pin or Open in session that began before the menu replaced
+		// them. Both act on click, which the browser sends only to the button
+		// pressed while it is still in the page, so the swap waits for the press.
+		let held: HTMLButtonElement | null = null;
+		let heldUp = false;
+		let wanted = false;
+		const activate = () => {
 			if (activated) return;
+			if (held) {
+				wanted = true;
+				return;
+			}
 			activated = true;
 			const buttons = [...card.querySelectorAll("button")];
 			for (const button of stand) places.current.set(button, buttons.indexOf(button));
-			const target = event.target instanceof HTMLButtonElement ? places.current.get(event.target) : undefined;
-			if (event.type === "focusin" && target !== undefined) replay.current.focus = target;
+			const focused = document.activeElement instanceof HTMLButtonElement ? places.current.get(document.activeElement) : undefined;
+			if (focused !== undefined) replay.current.focus = focused;
 			card.removeEventListener("pointermove", activate);
 			card.removeEventListener("focusin", activate);
 			setActive(true);
 		};
+		const release = () => {
+			if (!held) return;
+			held = null;
+			window.removeEventListener("pointerup", onPointerUp, true);
+			window.removeEventListener("pointercancel", release, true);
+			window.removeEventListener("pointerdown", afterPress, true);
+			window.removeEventListener("pointermove", afterPress, true);
+			window.removeEventListener("contextmenu", release, true);
+			if (wanted) activate();
+		};
+		// Released over the button, a click follows; released elsewhere, none will.
+		const onPointerUp = (event: PointerEvent) => {
+			if (held && event.target instanceof Node && held.contains(event.target)) heldUp = true;
+			else release();
+		};
+		// Once the press is over, the next pointer event means no click came.
+		const afterPress = () => {
+			if (heldUp) release();
+		};
+		const hold = (event: PointerEvent) => {
+			const button = event.currentTarget as HTMLButtonElement;
+			if (activated || held || event.button !== 0) {
+				pass(event);
+				return;
+			}
+			held = button;
+			heldUp = false;
+			window.addEventListener("pointerup", onPointerUp, true);
+			window.addEventListener("pointercancel", release, true);
+			window.addEventListener("pointerdown", afterPress, true);
+			window.addEventListener("pointermove", afterPress, true);
+			window.addEventListener("contextmenu", release, true);
+		};
 		const pass = (event: Event) => {
 			const button = event.currentTarget as HTMLButtonElement;
 			const press: Press = event.type === "click" ? "click" : event as PointerEvent;
-			activate(event);
+			if (held === button && press === "click") release();
+			activate();
 			const place = places.current.get(button) ?? -1;
 			// Still in the page, the menu has yet to replace it: repeat the press once it has.
 			if (button.isConnected) replay.current.presses.push([place, press]);
@@ -489,13 +535,17 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 		card.addEventListener("pointermove", activate);
 		card.addEventListener("focusin", activate);
 		for (const button of stand) {
-			button.addEventListener("pointerdown", pass);
+			if (clickers.includes(button)) button.addEventListener("pointerdown", hold);
+			else button.addEventListener("pointerdown", pass);
 			button.addEventListener("click", pass);
 		}
 		return () => {
+			wanted = false;
+			release();
 			card.removeEventListener("pointermove", activate);
 			card.removeEventListener("focusin", activate);
 			for (const button of stand) {
+				button.removeEventListener("pointerdown", hold);
 				button.removeEventListener("pointerdown", pass);
 				button.removeEventListener("click", pass);
 			}
