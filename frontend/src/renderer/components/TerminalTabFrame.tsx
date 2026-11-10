@@ -23,8 +23,6 @@ type TerminalTabFrameProps = {
 	editingContent?: ReactNode;
 	/** The text being edited; it sizes the field so the tab does not jump. */
 	editingValue?: string;
-	/** A status glyph after the label, e.g. the live state of an agent in a shell. */
-	trailing?: ReactNode;
 };
 
 /** The control in a tab's trailing slot, shared so every tab's ⋮ button matches. */
@@ -51,7 +49,6 @@ export function TerminalTabFrame({
 	buttonProps,
 	editingContent,
 	editingValue,
-	trailing,
 }: TerminalTabFrameProps) {
 	return (
 		<span
@@ -84,7 +81,6 @@ export function TerminalTabFrame({
 						<span aria-hidden="true" className="invisible min-w-0 truncate whitespace-pre">{editingValue || "\u200b"}</span>
 						{editingContent}
 					</span>
-					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</span>
 			) : (
 				<Pressable
@@ -94,7 +90,6 @@ export function TerminalTabFrame({
 				>
 					{icon ? <span className="pointer-events-none grid size-icon-base shrink-0 place-items-center">{icon}</span> : null}
 					<span className="truncate">{label}</span>
-					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</Pressable>
 			)}
 			{/* The trailing slot, the same on every tab and always reserved, so a

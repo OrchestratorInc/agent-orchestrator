@@ -1,5 +1,5 @@
 import { agentLabel } from "@aoagents/product-ui";
-import { CircleAlert, LoaderCircle, SquareTerminal, X } from "@/components/app-icons";
+import { SquareTerminal, X } from "@/components/app-icons";
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
@@ -189,13 +189,12 @@ export function ShellTerminalTab({
 					editingValue={draft}
 					icon={
 						agent ? (
-							<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
+							<ShellAgentIcon agent={agent} done={unseenDone && !isActive} />
 						) : (
 							<SquareTerminal aria-hidden="true" className="size-icon-sm" />
 						)
 					}
 					label={title}
-					trailing={agent ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
 				/>
 			</TabContextMenu>
 		);
@@ -262,26 +261,31 @@ export function ShellTerminalTab({
 	);
 }
 
-const AGENT_STATUS = {
-	working: {
-		label: "terminal.agentWorking",
-		icon: <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none" />,
-	},
-	waiting: { label: "terminal.agentWaiting", icon: <CircleAlert aria-hidden="true" className="size-3 text-destructive" /> },
-	done: { label: "terminal.agentDone", icon: <span aria-hidden="true" className="size-2 rounded-full bg-muted-foreground/60" /> },
+// The agent's state as a dot on its logo, the sidebar's vocabulary: pulsing
+// while it works, red while it waits on the user, muted for a finished turn
+// not yet seen. It sits on the icon, so it never moves the title.
+const AGENT_BADGE = {
+	working: { label: "terminal.agentWorking", className: "bg-foreground animate-pulse motion-reduce:animate-none" },
+	waiting: { label: "terminal.agentWaiting", className: "bg-destructive" },
+	done: { label: "terminal.agentDone", className: "bg-muted-foreground" },
 } as const;
 
-// The sidebar's status vocabulary: a spinner while the agent works, the red
-// alert while it waits on the user, and a dot for a finished turn not yet seen.
-export function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
+/** A shell's agent logo, with its state as a badge on the logo's corner. */
+export function ShellAgentIcon({ agent, done }: { agent: ShellAgent; done: boolean }) {
 	const { t } = useTranslation();
 	const state = agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
-	if (!state) return null;
-	const label = t(AGENT_STATUS[state].label, { agent: agentLabel(agent.harness) });
 	return (
-		<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state={state} title={label}>
-			{AGENT_STATUS[state].icon}
-			<span className="sr-only">{label}</span>
+		<span className="relative grid size-icon-base place-items-center" data-shell-agent-state={state}>
+			<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
+			{state ? (
+				<>
+					<span
+						aria-hidden="true"
+						className={cn("absolute -bottom-px -right-px size-1.5 rounded-full ring-1 ring-background", AGENT_BADGE[state].className)}
+					/>
+					<span className="sr-only">{t(AGENT_BADGE[state].label, { agent: agentLabel(agent.harness) })}</span>
+				</>
+			) : null}
 		</span>
 	);
 }

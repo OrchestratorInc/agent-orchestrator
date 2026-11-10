@@ -19,8 +19,7 @@ import type { Theme } from "../stores/ui-store";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
-import { AgentAvatar } from "./AgentAvatar";
-import { ShellAgentStatus } from "./ShellTerminalTab";
+import { ShellAgentIcon } from "./ShellTerminalTab";
 import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -218,7 +217,7 @@ export function SplitGroupTab({
 		if (!agent) return { ...member, agent };
 		// A default-named shell ("Terminal 3") reads as its agent.
 		const label = /^Terminal \d+$/.test(member.label) ? agentLabel(agent.harness) : member.label;
-		return { ...member, agent, label, icon: <AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} /> };
+		return { ...member, agent, label, icon: <ShellAgentIcon agent={agent} done={false} /> };
 	});
 	const frame = (
 		<span
@@ -267,7 +266,6 @@ export function SplitGroupTab({
 					>
 						<span className="pointer-events-none grid size-icon-base shrink-0 place-items-center">{member.icon}</span>
 						{focused ? <span className="truncate">{member.label}</span> : null}
-						{focused && member.agent ? <ShellAgentStatus agent={member.agent} done={false} /> : null}
 					</Pressable>
 				);
 				return (
