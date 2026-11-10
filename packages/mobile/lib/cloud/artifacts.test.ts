@@ -1,5 +1,8 @@
+import { createElement } from "react";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearCloudArtifactAccess, cloudArtifactAccess, cloudArtifactsBackend } from "./artifacts";
+import { forgetCloudAccountCaches } from "./accountCaches";
+import { clearCloudArtifactAccess, cloudArtifactAccess, cloudArtifactsBackend, useCloudArtifactAccess } from "./artifacts";
 import type { CloudClient } from "./client";
 import { CloudError } from "./errors";
 
@@ -35,6 +38,48 @@ describe("a cloud session's artifact access", () => {
 		expect((await cloudArtifactAccess(cloud, "org", "s1")).root).toContain("/new/");
 		expect((await cloudArtifactAccess(cloud, "org", "s1", { renew: true })).root).toContain("/new/");
 		expect(cloud.createArtifactAccess).toHaveBeenCalledTimes(3);
+	});
+
+	// The client is the same for every account, so the key can't tell accounts apart.
+	it("forgets access when the Cloud account changes", async () => {
+		const cloud = client();
+		await cloudArtifactAccess(cloud, "org", "s1");
+		forgetCloudAccountCaches();
+		expect((await cloudArtifactAccess(cloud, "org", "s1")).root).toContain("/t2/");
+		expect(cloud.createArtifactAccess).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps nothing that arrives after the account changed, and asks again under the new one", async () => {
+		let answerOld!: (value: { filesPrefix: string; expiresAt: string }) => void;
+		const cloud = client({ createArtifactAccess: vi.fn()
+			.mockReturnValueOnce(new Promise((resolve) => { answerOld = resolve; }))
+			.mockResolvedValue({ filesPrefix: "/api/cloud/v1/artifact-files/new-account/", expiresAt: inMinutes(10) }) });
+		const asked = cloudArtifactAccess(cloud, "org", "s1");
+		forgetCloudAccountCaches();
+		answerOld({ filesPrefix: "/api/cloud/v1/artifact-files/old-account/", expiresAt: inMinutes(10) });
+		expect((await asked).root).toContain("/new-account/");
+		expect((await cloudArtifactAccess(cloud, "org", "s1")).root).toContain("/new-account/");
+		expect(cloud.createArtifactAccess).toHaveBeenCalledTimes(2);
+	});
+
+	it("leaves a screen without access when its earlier request comes back after the organization changed", async () => {
+		let answer!: (value: { filesPrefix: string; expiresAt: string }) => void;
+		const cloud = client({ createArtifactAccess: vi.fn().mockReturnValueOnce(new Promise((resolve) => { answer = resolve; })) });
+		let seen: ReturnType<typeof useCloudArtifactAccess> | undefined;
+		function Probe({ orgId }: { orgId?: string }) {
+			seen = useCloudArtifactAccess(cloud, orgId, "s1", true);
+			return null;
+		}
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(createElement(Probe, { orgId: "org" })); });
+		// An account switch clears the organization until the next one resolves.
+		act(() => renderer.update(createElement(Probe, {})));
+		await act(async () => {
+			answer({ filesPrefix: "/api/cloud/v1/artifact-files/old-account/", expiresAt: inMinutes(10) });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		expect(seen?.root).toBeUndefined();
+		act(() => renderer.unmount());
 	});
 });
 

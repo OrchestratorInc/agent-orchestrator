@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ArtifactAssetLoader } from "../artifactPageInliner";
 import { resolveArtifactReference } from "../artifactPageInliner";
 import { isSafeArtifactPath, parseArtifacts, sortArtifacts } from "../artifacts";
 import type { ArtifactsBackend, ArtifactSource } from "../artifactsBackend";
 import { parseVersion, parseVersionSummaries } from "../artifactVersions";
+import { forgetOnCloudAccountChange } from "./accountCaches";
 import type { CloudClient } from "./client";
 import type { CloudArtifact, CloudArtifactShare } from "./types";
 import { cloudErrorMessage } from "./errors";
@@ -15,8 +16,11 @@ import { cloudErrorMessage } from "./errors";
 // and lets the page's own links work.
 
 type Access = { root: string; expiresAt: number };
-type Entry = { access?: Access; pending?: Promise<Access>; listeners: Set<() => void>; renewedAt?: number };
+type Entry = { key: string; access?: Access; pending?: Promise<Access>; listeners: Set<() => void>; renewedAt?: number };
 
+// Keyed by API, organization and session but not account: the client is the
+// same for every account. So the whole map is forgotten when the account
+// changes, and an answer that arrives after that is not kept.
 const entries = new Map<string, Entry>();
 /** Access this close to expiry is renewed before a new load uses it. */
 const RENEW_MARGIN_MS = 30_000;
@@ -27,20 +31,26 @@ function entryFor(client: CloudClient, orgId: string, sessionId: string): Entry 
 	const key = JSON.stringify([client.baseUrl, orgId, sessionId]);
 	let entry = entries.get(key);
 	if (!entry) {
-		entry = { listeners: new Set() };
+		entry = { key, listeners: new Set() };
 		entries.set(key, entry);
 	}
 	return entry;
+}
+
+/** False once the account changed after the entry was made. */
+function current(entry: Entry): boolean {
+	return entries.get(entry.key) === entry;
 }
 
 function usable(access: Access | undefined): Access | undefined {
 	return access && access.expiresAt - Date.now() > RENEW_MARGIN_MS ? access : undefined;
 }
 
-/** Forget every session's access; for tests and sign-out. */
+/** Forget every session's access: on sign-out and an account switch, and in tests. */
 export function clearCloudArtifactAccess() {
 	entries.clear();
 }
+forgetOnCloudAccountChange(clearCloudArtifactAccess);
 
 /**
  * The session's signed files prefix: the one held while it is good, else a
@@ -55,6 +65,9 @@ export async function cloudArtifactAccess(client: CloudClient, orgId: string, se
 	}
 	if (entry.pending) return entry.pending;
 	const pending = client.createArtifactAccess(orgId, sessionId).then((answer) => {
+		// Asked under an account that has since changed: keep none of it, and
+		// answer with access asked under the current one.
+		if (!current(entry)) return cloudArtifactAccess(client, orgId, sessionId);
 		const expiresAt = Date.parse(answer.expiresAt);
 		const access = { root: `${client.baseUrl}${answer.filesPrefix.endsWith("/") ? answer.filesPrefix : `${answer.filesPrefix}/`}`, expiresAt: Number.isFinite(expiresAt) ? expiresAt : Date.now() + 9 * 60_000 };
 		entry.access = access;
@@ -63,6 +76,7 @@ export async function cloudArtifactAccess(client: CloudClient, orgId: string, se
 		return access;
 	}, (cause: unknown) => {
 		entry.pending = undefined;
+		if (!current(entry)) return cloudArtifactAccess(client, orgId, sessionId);
 		throw cause;
 	});
 	entry.pending = pending;
@@ -78,20 +92,21 @@ export async function cloudArtifactAccess(client: CloudClient, orgId: string, se
 export function useCloudArtifactAccess(client: CloudClient, orgId: string | undefined, sessionId: string, enabled: boolean): { root?: string; error?: string; renew(): void } {
 	const [root, setRoot] = useState<string>();
 	const [error, setError] = useState<string>();
-	const live = useRef(true);
-	useEffect(() => {
-		live.current = true;
-		return () => { live.current = false; };
-	}, []);
 	useEffect(() => {
 		setRoot(undefined);
 		setError(undefined);
 		if (!enabled || !orgId || !sessionId) return;
+		// An answer for an earlier organization, session or account, or one that
+		// lands after the screen closed, is dropped.
+		let wanted = true;
 		const entry = entryFor(client, orgId, sessionId);
-		const take = () => { if (live.current && entry.access) setRoot(entry.access.root); };
+		const take = () => { if (wanted && entry.access) setRoot(entry.access.root); };
 		entry.listeners.add(take);
-		cloudArtifactAccess(client, orgId, sessionId).then((access) => { if (live.current) setRoot(access.root); }, (cause: unknown) => { if (live.current) setError(cloudErrorMessage(cause)); });
-		return () => { entry.listeners.delete(take); };
+		cloudArtifactAccess(client, orgId, sessionId).then((access) => { if (wanted) setRoot(access.root); }, (cause: unknown) => { if (wanted) setError(cloudErrorMessage(cause)); });
+		return () => {
+			wanted = false;
+			entry.listeners.delete(take);
+		};
 	}, [client, enabled, orgId, sessionId]);
 	const renew = useCallback(() => {
 		if (!orgId || !sessionId) return;
