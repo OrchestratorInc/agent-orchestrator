@@ -10,6 +10,19 @@ import { useUiStore } from "../stores/ui-store";
 type Project = components["schemas"]["Project"];
 type AgentConfig = { model?: string; effort?: string };
 type Catalog = Parameters<typeof staleSavedTuning>[0];
+type TuningConfig = { agentConfig?: AgentConfig; worker?: { agentConfig?: AgentConfig } };
+
+function effectiveSavedTuning(config?: TuningConfig) {
+	const worker = config?.worker?.agentConfig;
+	const modelSlot = worker?.model ? "worker" : "project";
+	const effortSlot = worker?.effort ? "worker" : "project";
+	return {
+		model: worker?.model || config?.agentConfig?.model || "",
+		effort: worker?.effort || config?.agentConfig?.effort || "",
+		modelSlot,
+		effortSlot,
+	};
+}
 
 /**
  * Resets a project's saved worker (or project-wide) model or effort that the
@@ -23,22 +36,18 @@ export function useResetStaleProjectTuning(args: {
 	agent: string;
 	agentLabel: string;
 	projectAgent: string;
-	config?: { agentConfig?: AgentConfig; worker?: { agentConfig?: AgentConfig } };
+	config?: TuningConfig;
 	catalog: Catalog;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const attempted = useRef(new Set<string>());
 	const { projectId, hostId, agent, agentLabel, projectAgent, config, catalog } = args;
-	const roleConfig = config?.worker?.agentConfig;
-	const slot: "worker" | "project" = roleConfig?.model || roleConfig?.effort ? "worker" : "project";
-	const saved = (slot === "worker" ? roleConfig : config?.agentConfig) ?? {};
-	const model = saved.model ?? "";
-	const effort = saved.effort ?? "";
+	const { model, effort, modelSlot, effortSlot } = effectiveSavedTuning(config);
 	const stale = agent !== "" && agent === projectAgent ? staleSavedTuning(catalog, model, effort) : undefined;
 	useEffect(() => {
 		if (!projectId || !stale) return;
-		const key = `${hostId ?? ""}|${projectId}|${slot}|${model}|${effort}`;
+		const key = `${hostId ?? ""}|${projectId}|${modelSlot}|${model}|${effortSlot}|${effort}`;
 		if (attempted.current.has(key)) return;
 		attempted.current.add(key);
 		void (async () => {
@@ -48,10 +57,13 @@ export function useResetStaleProjectTuning(args: {
 			if (current.error || current.data?.status !== "ok" || !current.data.project) return;
 			const project = current.data.project as Project;
 			const next = structuredClone(project.config ?? {}) as NonNullable<Project["config"]>;
-			const target = slot === "worker" ? next.worker?.agentConfig : next.agentConfig;
-			if (!target || (target.model ?? "") !== model || (target.effort ?? "") !== effort) return;
-			if (stale.model) delete target.model;
-			if (stale.effort) delete target.effort;
+			const currentTuning = effectiveSavedTuning(next);
+			if (currentTuning.model !== model || currentTuning.effort !== effort
+				|| currentTuning.modelSlot !== modelSlot || currentTuning.effortSlot !== effortSlot) return;
+			const modelTarget = modelSlot === "worker" ? next.worker?.agentConfig : next.agentConfig;
+			const effortTarget = effortSlot === "worker" ? next.worker?.agentConfig : next.agentConfig;
+			if (stale.model && modelTarget) delete modelTarget.model;
+			if (stale.effort && effortTarget) delete effortTarget.effort;
 			const { error } = await client.PUT("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },
 				body: { displayName: project.name, config: next },
@@ -74,5 +86,5 @@ export function useResetStaleProjectTuning(args: {
 				{ tone: "info", durationMs: 12_000 },
 			);
 		})();
-	}, [agentLabel, effort, hostId, model, projectId, queryClient, slot, stale, t]);
+	}, [agentLabel, effort, effortSlot, hostId, model, modelSlot, projectId, queryClient, stale, t]);
 }

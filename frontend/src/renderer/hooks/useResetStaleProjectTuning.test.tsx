@@ -39,6 +39,66 @@ describe("useResetStaleProjectTuning", () => {
 		expect(putMock).toHaveBeenCalledTimes(1);
 	});
 
+	it.each([
+		{
+			name: "removed project model with worker effort",
+			saved: { agentConfig: { model: "claude-gone-4", effort: "max" }, worker: { agentConfig: { effort: "high" } } },
+			expected: { agentConfig: { effort: "max" }, worker: { agentConfig: {} } },
+		},
+		{
+			name: "unsupported project effort with worker model",
+			saved: { agentConfig: { effort: "max" }, worker: { agentConfig: { model: "claude-sonnet-5-5" } } },
+			expected: { agentConfig: {}, worker: { agentConfig: { model: "claude-sonnet-5-5" } } },
+		},
+		{
+			name: "unsupported worker effort with project model",
+			saved: { agentConfig: { model: "claude-sonnet-5-5" }, worker: { agentConfig: { effort: "max" } } },
+			expected: { agentConfig: { model: "claude-sonnet-5-5" }, worker: { agentConfig: {} } },
+		},
+		{
+			name: "removed worker model with project effort",
+			saved: { agentConfig: { effort: "high" }, worker: { agentConfig: { model: "claude-gone-4" } } },
+			expected: { agentConfig: {}, worker: { agentConfig: {} } },
+		},
+	])("resets each effective field in its owning slot: $name", async ({ saved, expected }) => {
+		const savedConfig = { env: { KEEP: "1" }, ...saved };
+		getMock.mockResolvedValue({ data: { status: "ok", project: { id: "mer", name: "Mer", config: savedConfig } } });
+		renderHook(() => useResetStaleProjectTuning({
+			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
+			config: savedConfig, catalog,
+		}), { wrapper });
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
+			params: { path: { id: "mer" } },
+			body: { displayName: "Mer", config: { env: { KEEP: "1" }, ...expected } },
+		});
+	});
+
+	it("keeps overridden project settings when the effective worker pair is valid", async () => {
+		renderHook(() => useResetStaleProjectTuning({
+			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
+			config: { agentConfig: { model: "claude-gone-4", effort: "max" }, worker: { agentConfig: { model: "claude-sonnet-5-5", effort: "high" } } },
+			catalog,
+		}), { wrapper });
+		expect(getMock).not.toHaveBeenCalled();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ agentConfig: { model: "claude-gone-4", effort: "high" }, worker: { agentConfig: { model: "claude-gone-4" } } },
+		{ agentConfig: { model: "claude-gone-4", effort: "high" }, worker: { agentConfig: { effort: "high" } } },
+		{ agentConfig: { model: "claude-sonnet-5-5", effort: "high" } },
+		{ agentConfig: { model: "claude-gone-4", effort: "max" } },
+	])("does not write when an effective value or source changed before the re-read (%#)", async (currentConfig) => {
+		getMock.mockResolvedValue({ data: { status: "ok", project: { id: "mer", name: "Mer", config: currentConfig } } });
+		renderHook(() => useResetStaleProjectTuning({
+			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
+			config: { agentConfig: { model: "claude-gone-4", effort: "high" } }, catalog,
+		}), { wrapper });
+		await waitFor(() => expect(getMock).toHaveBeenCalledOnce());
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
 	it("leaves valid settings and other agents alone", async () => {
 		renderHook(() => useResetStaleProjectTuning({
 			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
