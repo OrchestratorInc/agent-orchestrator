@@ -428,12 +428,3 @@ func TestGoneUnregisteredFileIsForgotten(t *testing.T) {
 		t.Fatalf("gone files = %+v, want the temporary file forgotten and report.html kept", changes)
 	}
 }
-
-func observeFiles(d *identityDir) []domain.SessionArtifactFile {
-	d.t.Helper()
-	observation, err := Observe(context.Background(), d.dir, RegisteredPaths(d.rows))
-	if err != nil {
-		d.t.Fatal(err)
-	}
-	return observation.Apply(d.rows)
-}
