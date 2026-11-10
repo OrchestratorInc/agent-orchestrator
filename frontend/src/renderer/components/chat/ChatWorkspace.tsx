@@ -1130,9 +1130,10 @@ function ChatWorkspaceContent({
 		],
 		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerStartedAt],
 	);
-	// A steer sent from the composer shows in its turn at once, as a send's echo does,
-	// placed where it was sent so output that streams after it stays below it. The
-	// daemon's own row, matched by its client id, replaces it.
+	// A steer sent from the composer shows in its turn at once, as a send's echo does.
+	// The daemon places its row when the agent accepts the steer, so until then the echo
+	// stays last, and from then on it keeps the place it had, with later output below it.
+	// The daemon's own row, matched by its client id, replaces it.
 	const pendingSteerEchoes = useMemo(
 		() => turn?.state === "running"
 			? steerEchoes.filter((echo) => echo.turnId === turn.id && !snapshot.items.some((item) => steerEchoArrived(item, echo)))
@@ -1150,7 +1151,7 @@ function ChatWorkspaceContent({
 		if (turn?.state !== "running" || (steering.length === 0 && pendingSteerEchoes.length === 0)) return snapshot;
 		const items = [...snapshot.items];
 		pendingSteerEchoes.forEach((echo, index) => {
-			const sequence = echo.afterSequence + 0.4 + index / 1000;
+			const sequence = (echo.acceptedAfterSequence ?? snapshot.latestSequence) + 0.4 + index / 1000;
 			const at = items.findIndex((item) => item.sequence > sequence);
 			items.splice(at < 0 ? items.length : at, 0, {
 				kind: "activity",
@@ -1362,7 +1363,8 @@ function ChatWorkspaceContent({
 		[stablePromoteQueuedTurn],
 	);
 	const steerEchoTarget = useStableCallback(() =>
-		turn?.state === "running" ? { turnId: turn.id, afterSequence: snapshot.latestSequence } : undefined);
+		turn?.state === "running" ? { turnId: turn.id, sentAfterSequence: snapshot.latestSequence } : undefined);
+	const latestSequence = useStableCallback(() => snapshot.latestSequence);
 	const steer = useCallback(
 		async (
 			text: string,
@@ -1384,13 +1386,18 @@ function ChatWorkspaceContent({
 				const outcome = await stableSteer(text, attachments, id, recoverOnly);
 				// A refused steer stays in the composer, so its echo goes.
 				if (outcome?.status === "not-accepted") dropEcho();
+				else {
+					const acceptedAfterSequence = latestSequence() ?? 0;
+					setSteerEchoes((current) => current.map((echo) =>
+						echo.clientMessageId === id && echo.acceptedAfterSequence === undefined ? { ...echo, acceptedAfterSequence } : echo));
+				}
 				return outcome;
 			} catch (error) {
 				dropEcho();
 				throw error;
 			}
 		},
-		[stableSteer, steerEchoTarget],
+		[latestSequence, stableSteer, steerEchoTarget],
 	);
 	const acceptedClientMessageIds = useMemo(
 		() =>
@@ -5883,15 +5890,19 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 	);
 }
 
-/** A steer the composer sent that the daemon has not yet recorded. */
-type SteerEcho = { clientMessageId: string; text: string; createdAt: string; turnId: string; afterSequence: number };
+/**
+ * A steer the composer sent that the daemon has not yet recorded. `sentAfterSequence`
+ * is the newest row when it was sent; `acceptedAfterSequence`, the newest when the
+ * daemon accepted it, which is where the daemon's own row lands.
+ */
+type SteerEcho = { clientMessageId: string; text: string; createdAt: string; turnId: string; sentAfterSequence: number; acceptedAfterSequence?: number };
 
 /** Whether this row is the daemon's record of the steer. */
 function steerEchoArrived(item: ConversationItem, echo: SteerEcho): boolean {
 	if (item.kind !== "activity" || item.detail?.event !== "steer") return false;
 	return item.detail.clientMessageId
 		? item.detail.clientMessageId === echo.clientMessageId
-		: item.sequence > echo.afterSequence && (item.detail.text ?? item.summary) === echo.text;
+		: item.sequence > echo.sentAfterSequence && (item.detail.text ?? item.summary) === echo.text;
 }
 
 /**
