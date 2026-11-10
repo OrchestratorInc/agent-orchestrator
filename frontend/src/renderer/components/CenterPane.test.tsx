@@ -255,7 +255,7 @@ describe("CenterPane toolbar session label", () => {
 
 		const mainTab = screen.getByRole("tab", { name: /^do the thing/ });
 		const mainContainer = mainTab.closest("[data-terminal-tab-frame]");
-		expect(mainContainer).toHaveClass("self-stretch", "min-w-shell-tab-min", "max-w-shell-tab-max");
+		expect(mainContainer).toHaveClass("self-stretch", "min-w-shell-tab-min", "max-w-session-tab-max");
 		expect(mainContainer).not.toHaveClass("bg-surface");
 		expect(mainContainer).not.toHaveClass("session-primary-tab");
 		expect(mainContainer).not.toHaveClass("rounded-md");
