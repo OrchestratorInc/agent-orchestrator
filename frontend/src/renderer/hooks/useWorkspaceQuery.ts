@@ -891,13 +891,16 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 	const live = (predicate: (index: number) => boolean) => hostIds.filter((hostId, index) => connected.includes(hostId) && predicate(index));
 	// Every render of the shell would otherwise hand out new lists, which
 	// re-renders the sidebar and its rows even with no remote hosts. Rebuild
-	// them only when a host's data or a pending unpin changed.
-	const dataInputs = useStableArray([hostIds, unpins, ...projects.map((query) => query.data), ...sessions.map((query) => query.data)]);
+	// them only when a host's data, a pending unpin or Developer Mode changed:
+	// session titles show the terminal title only in Developer Mode.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const dataInputs = useStableArray([hostIds, unpins, developerMode, ...projects.map((query) => query.data), ...sessions.map((query) => query.data)]);
 	const data = useMemo(
 		() => hostIds.flatMap((hostId, index) => projects[index]?.data
 			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []).map((workspace) => withRemoteUnpins(workspace, unpins))
 			: []),
-		// dataInputs holds every value read here.
+		// dataInputs holds every value read here, including Developer Mode,
+		// which the session mapping reads from the store.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[dataInputs],
 	);
