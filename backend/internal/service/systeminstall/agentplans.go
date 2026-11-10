@@ -51,6 +51,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
+	TargetZCode:       "https://github.com/zai-org/ZCode",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -284,6 +285,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetZCode:
+		// The official CLI ships as the @zcode/cli npm package; the binary the
+		// adapter resolves is `zcode` from that install (docs/harnesses/zcode.md).
+		plans = []Plan{s.planNPM(target, "@zcode/cli")}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}

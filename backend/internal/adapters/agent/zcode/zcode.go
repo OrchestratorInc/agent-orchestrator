@@ -274,6 +274,12 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 // cannot guarantee the same conversation a restart would need to reselect.
 func (*Plugin) SupportsTerminalVersionRefresh() bool { return false }
 
+// ResolveBinary resolves the executable path for the plugin, so readiness
+// install checks and the agent pickers see ZCode like any other harness.
+func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
+	return p.zcodeBinary(ctx)
+}
+
 var zcodeBinarySpec = binaryutil.BinarySpec{
 	Label:     "zcode",
 	Names:     []string{"zcode"},
