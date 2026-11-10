@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { formatFileAnnotationMessage } from "../../shared/files/file-annotations";
 import {
+	artifactCacheName,
 	artifactCommentTarget,
 	artifactExtensionLabel,
+	artifactFormatLabel,
 	artifactFilePath,
 	artifactMenuActions,
 	artifactPageAt,
@@ -16,7 +18,6 @@ import {
 	isTextArtifact,
 	MAX_SHOWN_TEXT_CHARS,
 	shownText,
-	showsInWebView,
 	looksBinary,
 	parseArtifacts,
 	sortArtifacts,
@@ -85,9 +86,29 @@ describe("artifactViewKind", () => {
 		expect(artifactViewKind({ path: "notes.md", kind: "markdown" })).toBe("markdown");
 		expect(artifactViewKind({ path: "README.markdown", kind: "file" })).toBe("markdown");
 		expect(artifactViewKind({ path: "chart.PNG", kind: "file" })).toBe("image");
-		expect(artifactViewKind({ path: "logo.svg", kind: "file" })).toBe("web-media");
-		expect(artifactViewKind({ path: "demo.mp4", kind: "file" })).toBe("web-media");
-		expect(artifactViewKind({ path: "data.csv", kind: "file" })).toBe("text");
+		expect(artifactViewKind({ path: "logo.svg", kind: "file" })).toBe("svg");
+		expect(artifactViewKind({ path: "demo.mp4", kind: "file" })).toBe("video");
+		expect(artifactViewKind({ path: "data.csv", kind: "file" })).toBe("table");
+		expect(artifactViewKind({ path: "src/app.tsx", kind: "file" })).toBe("text");
+	});
+
+	it("previews the formats the desktop previews", () => {
+		for (const path of ["a.apng", "a.avif", "a.bmp", "a.gif", "a.ico", "a.jpg", "a.JPEG", "a.png", "a.webp"]) expect(artifactViewKind({ path, kind: "file" })).toBe("image");
+		for (const path of ["clip.m4v", "clip.mov", "clip.MP4", "clip.ogv", "clip.webm"]) expect(artifactViewKind({ path, kind: "file" })).toBe("video");
+		for (const path of ["a.aac", "a.flac", "a.m4a", "a.mp3", "a.oga", "a.ogg", "a.opus", "a.wav"]) expect(artifactViewKind({ path, kind: "file" })).toBe("audio");
+		expect(artifactViewKind({ path: "spec.PDF", kind: "file" })).toBe("pdf");
+		expect(artifactViewKind({ path: "rows.tsv", kind: "file" })).toBe("table");
+		expect(artifactViewKind({ path: "flow.mmd", kind: "file" })).toBe("diagram");
+		expect(artifactViewKind({ path: "flow.mermaid", kind: "file" })).toBe("diagram");
+	});
+
+	it("draws an iPhone photo, which the phone decodes and the desktop does not", () => {
+		expect(artifactViewKind({ path: "IMG_0001.HEIC", kind: "file" })).toBe("image");
+		expect(artifactViewKind({ path: "photo.heif", kind: "file" })).toBe("image");
+	});
+
+	it("says a known binary format has no preview instead of reading it", () => {
+		for (const path of ["bundle.zip", "report.docx", "sheet.xlsx", "app.sqlite", "font.woff2"]) expect(artifactViewKind({ path, kind: "file" })).toBe("binary");
 	});
 
 	it("offers Copy only for files whose contents are text", () => {
@@ -108,10 +129,38 @@ describe("artifactViewKind", () => {
 		}
 	});
 
-	it("does not draw a PDF in an Android WebView, which has no PDF renderer", () => {
-		expect(showsInWebView("spec.pdf", "android")).toBe(false);
-		expect(showsInWebView("spec.PDF", "ios")).toBe(true);
-		expect(showsInWebView("demo.mp4", "android")).toBe(true);
+	it("takes an SVG, a table and a diagram as text, and media as not", () => {
+		for (const path of ["logo.svg", "rows.csv", "rows.tsv", "flow.mmd"]) {
+			expect(isTextArtifact({ path, kind: "file" })).toBe(true);
+			expect(canCopyArtifact({ path, kind: "file" })).toBe(true);
+		}
+		for (const path of ["clip.mp4", "song.mp3", "spec.pdf", "IMG_1.heic"]) expect(isTextArtifact({ path, kind: "file" })).toBe(false);
+	});
+});
+
+describe("artifactFormatLabel", () => {
+	it("names the format and size of a file the viewer cannot draw", () => {
+		expect(artifactFormatLabel({ path: "out/bundle.zip", size: 2.4 * 1024 * 1024 })).toBe("ZIP file · 2.4 MB");
+		expect(artifactFormatLabel({ path: "LICENSE", size: 300 })).toBe("File · 300 B");
+	});
+
+	it("leaves out a size that is not known", () => {
+		expect(artifactFormatLabel({ path: "clip.webm", size: 0 })).toBe("WEBM file");
+	});
+});
+
+describe("artifactCacheName", () => {
+	it("is stable for one version of a file and keeps its extension", () => {
+		const name = artifactCacheName("ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z");
+		expect(name).toBe(artifactCacheName("ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z"));
+		expect(name).toMatch(/^[a-z0-9]+-[a-z0-9]+\.pdf$/);
+	});
+
+	it("changes with the session, the path and the version", () => {
+		const name = artifactCacheName("ao-1", "spec.pdf", "v1");
+		expect(artifactCacheName("ao-2", "spec.pdf", "v1")).not.toBe(name);
+		expect(artifactCacheName("ao-1", "other.pdf", "v1")).not.toBe(name);
+		expect(artifactCacheName("ao-1", "spec.pdf", "v2")).not.toBe(name);
 	});
 });
 

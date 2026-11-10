@@ -19,7 +19,8 @@ const MARKDOWN_SCALE = 0.5;
 /** Whether a card can show a peek at the file's contents (images have their own). */
 export function hasContentThumbnail(artifact: Pick<SessionArtifact, "path" | "kind" | "size">): boolean {
 	const kind = artifactViewKind(artifact);
-	return kind === "html" || ((kind === "markdown" || kind === "text") && isTextArtifact(artifact) && artifact.size <= MAX_THUMBNAIL_TEXT_BYTES);
+	// A table or diagram file peeks at its source, as a code file does.
+	return kind === "html" || ((kind === "markdown" || kind === "text" || kind === "table" || kind === "diagram") && isTextArtifact(artifact) && artifact.size <= MAX_THUMBNAIL_TEXT_BYTES);
 }
 
 /**
@@ -50,8 +51,8 @@ export function ArtifactThumbnail({ backend, sessionId, artifact, visible, versi
 	const kind = artifactViewKind(artifact);
 	return (
 		<View pointerEvents="none" style={styles.fill} onLayout={onLayout} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-			{width > 0 && kind === "html" ? <PageThumbnail backend={backend} sessionId={sessionId} artifact={artifact} visible={visible} width={width} height={height} onFailed={onFailed} />
-				: width > 0 && (kind === "markdown" || kind === "text") ? <TextThumbnail backend={backend} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} versionOf={versionOf} onFailed={onFailed} />
+			{width > 0 && kind === "html" ? <PageThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} height={height} onFailed={onFailed} />
+				: width > 0 && (kind === "markdown" || kind === "text" || kind === "table" || kind === "diagram") ? <TextThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} versionOf={versionOf} onFailed={onFailed} />
 				: null}
 		</View>
 	);

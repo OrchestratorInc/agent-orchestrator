@@ -6,6 +6,7 @@
 
 import { deliverableArtifacts, type ArtifactFacts } from "../../shared/artifacts/deliverables";
 import type { FileAnnotationTarget } from "../../shared/files/file-annotations";
+import { fileMediaKind, isDelimitedTextPath, isMermaidPath, isRasterImagePath, isSvgPath } from "../../shared/files/file-formats";
 
 /** The daemon's classification of an artifact file. */
 export type ArtifactKind = "html" | "markdown" | "file";
@@ -24,8 +25,13 @@ export type SessionArtifact = {
 	registered?: boolean;
 };
 
-/** How the viewer draws a file. */
-export type ArtifactViewKind = "html" | "markdown" | "image" | "web-media" | "text";
+/**
+ * How the viewer draws a file: the same formats the desktop previews (see
+ * shared/files/file-formats), plus HEIC photos, which the phone decodes.
+ * `binary` is a format known to have no preview, which the viewer says
+ * instead of reading it.
+ */
+export type ArtifactViewKind = "html" | "markdown" | "image" | "svg" | "video" | "audio" | "pdf" | "table" | "diagram" | "binary" | "text";
 
 /**
  * The daemon's reserved prefix that routes a preview-file request to the
@@ -46,9 +52,8 @@ export const MAX_ARTIFACT_TEXT_BYTES = 1 << 20;
  */
 export const MAX_SHOWN_TEXT_CHARS = 200_000;
 
-const RASTER_IMAGE = /\.(apng|avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i;
-// Formats React Native's Image cannot draw, or players it does not have.
-const WEB_MEDIA = /\.(svg|m4v|mov|mp4|ogv|webm|aac|flac|m4a|mp3|oga|ogg|opus|wav|pdf)$/i;
+// iPhone photos: the desktop does not preview them, the phone's image decoder does.
+const PHONE_IMAGE = /\.(heic|heif)$/i;
 const MARKDOWN = /\.(md|markdown)$/i;
 // Files known to be binary: archives, packages, office documents, databases,
 // data and model formats, fonts. They have no text to copy and no versions.
@@ -102,36 +107,35 @@ export function isSafeArtifactPath(path: string): boolean {
 }
 
 export function artifactViewKind(artifact: Pick<SessionArtifact, "path" | "kind">): ArtifactViewKind {
+	const { path } = artifact;
 	if (artifact.kind === "html") return "html";
-	if (artifact.kind === "markdown" || MARKDOWN.test(artifact.path)) return "markdown";
-	if (RASTER_IMAGE.test(artifact.path)) return "image";
-	if (WEB_MEDIA.test(artifact.path)) return "web-media";
+	if (artifact.kind === "markdown" || MARKDOWN.test(path)) return "markdown";
+	if (isRasterImagePath(path) || PHONE_IMAGE.test(path)) return "image";
+	if (isSvgPath(path)) return "svg";
+	const media = fileMediaKind(path);
+	if (media === "video" || media === "audio" || media === "pdf") return media;
+	if (isDelimitedTextPath(path)) return "table";
+	if (isMermaidPath(path)) return "diagram";
+	if (BINARY_EXTENSION.test(path)) return "binary";
 	return "text";
 }
 
+/** Kinds whose file is text: an SVG, a table and a diagram are drawn from their source. */
+const TEXT_KINDS: ReadonlySet<ArtifactViewKind> = new Set(["html", "markdown", "svg", "table", "diagram", "text"]);
+
 /**
  * Whether the file is taken as text, for Copy, Version history and a card's
- * preview: a page, a document, or any file without a known binary extension
- * (an archive, an office document, a database). The viewer still reads an
- * unknown file and decides by its contents.
+ * preview: a page, a document, an SVG, a table, a diagram, or any file without
+ * a known media or binary extension (an archive, an office document, a
+ * database). The viewer still reads an unknown file and decides by its contents.
  */
 export function isTextArtifact(artifact: Pick<SessionArtifact, "path" | "kind">): boolean {
-	const kind = artifactViewKind(artifact);
-	if (kind === "html" || kind === "markdown") return true;
-	return kind === "text" && !BINARY_EXTENSION.test(artifact.path);
+	return TEXT_KINDS.has(artifactViewKind(artifact));
 }
 
 /** Whether the file's contents can be copied as text. */
 export function canCopyArtifact(artifact: Pick<SessionArtifact, "path" | "kind">): boolean {
 	return isTextArtifact(artifact);
-}
-
-/**
- * Whether the viewer can draw a web-media file in a WebView on `os`. Android's
- * WebView has no PDF renderer: it shows nothing, or starts a download.
- */
-export function showsInWebView(path: string, os: string): boolean {
-	return !(os === "android" && /\.pdf$/i.test(path));
 }
 
 /** The start of a long text, cut at a line break, for the viewer to lay out. */
@@ -257,6 +261,33 @@ export function formatArtifactSize(bytes: number): string {
 export function artifactExtensionLabel(path: string): string {
 	const ext = /\.([a-z0-9]{1,6})$/i.exec(path)?.[1];
 	return ext ? ext.toUpperCase() : "FILE";
+}
+
+/** What a file is, for a viewer that cannot draw it: "ZIP file · 2.4 MB" (without a size when it is not known). */
+export function artifactFormatLabel(artifact: Pick<SessionArtifact, "path" | "size">): string {
+	const ext = artifactExtensionLabel(artifact.path);
+	const format = ext === "FILE" ? "File" : `${ext} file`;
+	return artifact.size > 0 ? `${format} · ${formatArtifactSize(artifact.size)}` : format;
+}
+
+/**
+ * How much of a file too large to load as text the viewer reads to tell text
+ * from binary, as the desktop decides from the start of the file.
+ */
+export const ARTIFACT_PROBE_BYTES = 64 * 1024;
+
+/**
+ * The cache file name a downloaded artifact is kept under: one per file and
+ * version, so a rewritten file downloads again and an unchanged one does not.
+ */
+export function artifactCacheName(sessionId: string, path: string, version: string): string {
+	let hash = 0x811c9dc5;
+	for (const char of `${sessionId}\n${path}\n${version}`) {
+		hash ^= char.charCodeAt(0);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	const ext = /\.([a-z0-9]{1,6})$/i.exec(path)?.[1]?.toLowerCase() ?? "bin";
+	return `${(hash >>> 0).toString(36)}-${path.length.toString(36)}.${ext}`;
 }
 
 function timeOf(value: string): number {
