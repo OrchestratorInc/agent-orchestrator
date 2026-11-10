@@ -10,6 +10,7 @@ import {
 	isActiveInstallJob,
 	upsertInstallJob,
 } from "../../hooks/useHarnessUpdates";
+import type { AgentReadinessSnapshot } from "../../hooks/useAgentReadinessQuery";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { ManualCommand } from "../InstallDependencyDialog";
@@ -30,6 +31,19 @@ type InstallPlan = components["schemas"]["AgentInstallPlan"];
 
 const POLL_MS = 1_000;
 const ENDED = new Set<InstallJob["status"]>(["failed", "interrupted", "unsupported"]);
+
+export type AgentRowState = "ready" | "signin" | "missing" | "checking";
+
+/** Where an agent stands on the page: ready, needs signing in, still being checked, or not installed. */
+export function agentRowState(agent: AgentReadinessSnapshot): AgentRowState {
+	if (agent.effectiveReadiness === "ready") return "ready";
+	if (agent.installation.state === "not_installed") return "missing";
+	// A check still running: wait for it.
+	if (agent.installation.state === "unknown" || agent.authentication.freshness === "checking") return "checking";
+	// Installed but not ready: signed out, or AO couldn't tell (an inconclusive
+	// check, common right after an install). Signing in settles it either way.
+	return "signin";
+}
 
 /** What a row shows about its install. */
 export type InstallView = {
@@ -110,15 +124,16 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 
 	const view = (agentId: string): InstallView => {
 		const job = jobFor(agentId);
-		const mine = attempted.has(agentId);
-		const ended = mine && Boolean(job && ENDED.has(job.status));
 		const error = errors[agentId];
 		if (!job && !error && !pending.has(agentId)) return IDLE;
+		const busy = pending.has(agentId) || isActiveInstallJob(job);
+		// A retry in flight hides the last failure until the daemon answers.
+		const ended = !busy && attempted.has(agentId) && Boolean(job && ENDED.has(job.status));
 		return {
-			busy: pending.has(agentId) || isActiveInstallJob(job),
+			busy,
 			job,
-			ended: ended || Boolean(error),
-			problem: error ?? (ended ? job?.error || t("firstRun.installDidNotFinish") : undefined),
+			ended: ended || (!busy && Boolean(error)),
+			problem: busy ? undefined : error ?? (ended ? job?.error || t("firstRun.installDidNotFinish") : undefined),
 		};
 	};
 
@@ -135,6 +150,18 @@ export function useGhInstall(onInstalled: () => void) {
 	const onInstalledRef = useRef(onInstalled);
 	onInstalledRef.current = onInstalled;
 	useEffect(() => () => window.clearInterval(timer.current), []);
+	// Ask first whether it can be installed here at all: where it can't (Linux
+	// needs an administrator password, which AO can't ask for) the row shows
+	// the command to run instead of an Install that is bound to fail.
+	useEffect(() => {
+		let current = true;
+		void apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } })
+			.then(({ data }) => {
+				if (current && data?.status === "unsupported") setJob((existing) => existing ?? data);
+			})
+			.catch(() => undefined);
+		return () => { current = false; };
+	}, []);
 
 	const settle = useCallback((next: InstallJob) => {
 		setJob(next);
@@ -168,12 +195,14 @@ export function useGhInstall(onInstalled: () => void) {
 		}
 	};
 
-	const ended = Boolean(job && ENDED.has(job.status));
+	const busy = pending || isActiveInstallJob(job);
+	// A retry in flight hides the last failure until the daemon answers.
+	const ended = !busy && Boolean(job && ENDED.has(job.status));
 	const view: InstallView = !job && !error && !pending ? IDLE : {
-		busy: pending || isActiveInstallJob(job),
+		busy,
 		job,
-		ended: ended || Boolean(error),
-		problem: error ?? (ended ? job?.error || t("firstRun.installDidNotFinish") : undefined),
+		ended: ended || (!busy && Boolean(error)),
+		problem: busy ? undefined : error ?? (ended ? job?.error || t("firstRun.installDidNotFinish") : undefined),
 	};
 	return { start, view };
 }

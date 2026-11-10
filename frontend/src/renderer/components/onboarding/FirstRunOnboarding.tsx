@@ -24,7 +24,6 @@ import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
 	useAgentReadinessQuery,
-	type AgentReadinessSnapshot,
 } from "../../hooks/useAgentReadinessQuery";
 import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
@@ -56,7 +55,7 @@ import { dragStyle } from "../PageTopbar";
 import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button } from "../ui/button";
 import { startGuidedTour } from "./GuidedTour";
-import { InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall } from "./ToolInstalls";
+import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
@@ -841,14 +840,7 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 
 // ── 2. Your tools: GitHub CLI and coding agents ─────────────────────────────
 
-type AgentRowState = "ready" | "signin" | "missing" | "checking";
 
-function agentRowState(agent: AgentReadinessSnapshot): AgentRowState {
-	if (agent.effectiveReadiness === "ready") return "ready";
-	if (agent.installation.state === "not_installed") return "missing";
-	if (agent.authentication.state === "unauthorized") return "signin";
-	return "checking";
-}
 
 const AGENT_STATE_ORDER: Record<AgentRowState, number> = { ready: 0, signin: 1, checking: 2, missing: 3 };
 
@@ -979,6 +971,7 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 								label={t("firstRun.githubTitle")}
 								detail={ghInstalled && !ghSignedIn ? t("firstRun.ghSignInHint") : undefined}
 								trailing={ghView.busy ? <RowSpinner />
+									: !ghInstalled && ghView.job?.status === "unsupported" ? null
 									: !ghInstalled ? (
 										<Button size="sm" variant="secondary" onClick={() => void ghInstall.start()}>
 											{ghView.ended ? t("startup.installTryAgain") : t("firstRun.install")}
@@ -1023,7 +1016,7 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 											)
 											: manual && plan?.documentationUrl ? <InstallDocsLink url={plan.documentationUrl} label={t("firstRun.installHowTo")} />
 											: missing ? <RowState>{t("firstRun.agentMissing")}</RowState>
-											: null}
+											: <RowSpinner />}
 										below={view.busy && missing ? <InstallProgress job={view.job} label={agent.label} />
 											: view.ended && missing ? <InstallProblem view={view} docsUrl={plan?.documentationUrl} />
 											: undefined}
