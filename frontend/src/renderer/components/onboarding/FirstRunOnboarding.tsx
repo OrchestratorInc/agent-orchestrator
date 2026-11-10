@@ -20,6 +20,7 @@ import { Trans, useTranslation } from "react-i18next";
 import type { MessageKey } from "../../i18n";
 import { useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
 import {
+	agentReadinessQueryKey,
 	cacheAgentReadiness,
 	ensureAgentReadiness,
 	useAgentReadinessQuery,
@@ -29,6 +30,7 @@ import { useCloudGate } from "../../hooks/useCloudGate";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useMigrationOffer } from "../../hooks/useMigrationOffer";
 import {
+	githubAuthRequirementQueryOptions,
 	systemRequirementsQueryKey,
 	useGitHubAuthRequirement,
 	useSystemRequirementsGate,
@@ -36,6 +38,7 @@ import {
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../lib/agent-options";
 import { DEFAULT_AGENT_PRIORITY_RANK } from "../../lib/agent-select-options";
+import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
 import { useOnboardingStep } from "../../lib/onboarding-telemetry";
@@ -135,6 +138,7 @@ export function FirstRunOnboarding() {
 	const workspaceQuery = useWorkspaceQuery();
 	const migrationOffer = useMigrationOffer();
 	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const [status, setStatus] = useState<"loading" | "pending" | "seen">("loading");
 	const [open, setOpen] = useState(false);
 	const setOnboardingOpen = useUiStore((state) => state.setFirstRunOnboardingOpen);
@@ -177,10 +181,26 @@ export function FirstRunOnboarding() {
 	// whatever the first-run flag and the projects say.
 	const replayRequest = useUiStore((state) => state.onboardingReplayRequest);
 	const handledReplay = useRef(replayRequest);
+	const replaySimulated = useRef(false);
+	// Drop what was read before, so every check is asked again under the new answers.
+	const resetToolChecks = () => {
+		for (const queryKey of [systemRequirementsQueryKey, agentReadinessQueryKey, githubAuthRequirementQueryOptions.queryKey]) {
+			void queryClient.resetQueries({ queryKey });
+		}
+	};
 	useEffect(() => {
 		if (replayRequest === handledReplay.current) return;
 		handledReplay.current = replayRequest;
 		storeStep(null);
+		// A replay walks the flow as a new machine (dev builds only), so the
+		// Tools page shows its installs instead of being skipped on a machine
+		// that already has everything. It ends with the replay, unless the
+		// Simulate a new machine switch was already on.
+		if (!freshMachineSimActive()) {
+			setFreshMachineSim(true, { gitInstalled: true });
+			replaySimulated.current = freshMachineSimActive();
+			resetToolChecks();
+		}
 		setOpen(true);
 	}, [replayRequest]);
 
@@ -190,6 +210,11 @@ export function FirstRunOnboarding() {
 			onFinish={() => {
 				setOpen(false);
 				markSeen();
+				if (replaySimulated.current) {
+					replaySimulated.current = false;
+					setFreshMachineSim(false);
+					resetToolChecks();
+				}
 				// The tour starts on Home, where projects are added, once it's
 				// showing (not on whatever page was behind the onboarding).
 				void navigate({ to: "/" }).then(startGuidedTour);

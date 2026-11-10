@@ -1076,6 +1076,8 @@ function ComposerToolbar({
 
 /** Reveals text word by word over `duration`, after `delay` (seconds). */
 function useStreamedText(text: string, delay: number, duration: number, enabled: boolean): string {
+	// The visible length, already cut to whole words, so the state (and the
+	// render) changes once per word rather than on every animation frame.
 	const [shown, setShown] = useState(enabled ? 0 : text.length);
 	useEffect(() => {
 		if (!enabled) {
@@ -1087,16 +1089,21 @@ function useStreamedText(text: string, delay: number, duration: number, enabled:
 		const start = performance.now() + delay * 1000;
 		const tick = (now: number) => {
 			const progress = Math.min(1, Math.max(0, (now - start) / (duration * 1000)));
-			setShown(Math.round(progress * text.length));
+			setShown(wholeWords(text, Math.round(progress * text.length)));
 			if (progress < 1) frame = requestAnimationFrame(tick);
 		};
 		frame = requestAnimationFrame(tick);
 		return () => cancelAnimationFrame(frame);
 	}, [text, delay, duration, enabled]);
-	if (shown >= text.length) return text;
-	// Whole words only, as a streaming reply arrives.
-	const cut = text.lastIndexOf(" ", shown);
-	return cut > 0 ? text.slice(0, cut) : "";
+	return shown >= text.length ? text : text.slice(0, shown);
+}
+
+/** How much of `text` shows at `chars` characters in: whole words only, as a
+ * streaming reply arrives. */
+function wholeWords(text: string, chars: number): number {
+	if (chars >= text.length) return text.length;
+	const cut = text.lastIndexOf(" ", chars);
+	return cut > 0 ? cut : 0;
 }
 
 /** The person's message in the human bubble, rising into the timeline, then

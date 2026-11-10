@@ -284,10 +284,15 @@ function StatusGlyph({ status, className }: { status: PreviewCard["status"] | Ph
 	return (
 		<span aria-hidden="true" className={cn("relative grid size-3 shrink-0 place-items-center", TEXT, className)}>
 			{lane === "working" ? (
-				<svg viewBox="0 0 12 12" className="size-3 motion-safe:animate-spin [animation-duration:1.4s]">
-					<circle cx="6" cy="6" r="4.5" fill="none" stroke="var(--schematic-line)" strokeWidth="1" />
-					<path d="M6 1.5a4.5 4.5 0 0 1 4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-				</svg>
+				// The turn is on an HTML wrapper, not the svg: Chromium runs transform
+				// animations on SVG elements on the main thread (a style recalc every
+				// frame), but composites them on HTML elements.
+				<span className="grid size-3 place-items-center will-change-transform motion-safe:animate-spin [animation-duration:1.4s]">
+					<svg viewBox="0 0 12 12" className="size-3">
+						<circle cx="6" cy="6" r="4.5" fill="none" stroke="var(--schematic-line)" strokeWidth="1" />
+						<path d="M6 1.5a4.5 4.5 0 0 1 4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+					</svg>
+				</span>
 			) : lane === "action" ? (
 				<>
 					<span className="absolute size-3 rounded-full border border-current opacity-60" />
@@ -1059,12 +1064,14 @@ function GitHubSkeleton({ shown, visit }: { shown: boolean; visit: GitHubVisit |
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		if (!visit) return;
-		const timer = window.setInterval(() => setNow(Date.now()), 100);
-		const stop = window.setTimeout(() => window.clearInterval(timer), (ROUND_TRIP_S + 0.8) * 1000);
-		return () => {
-			window.clearInterval(timer);
-			window.clearTimeout(stop);
-		};
+		// Re-render only when a check changes state (checkState's thresholds),
+		// not on a fast tick: the labels have four moments per round trip.
+		const moments = [ROUND_TRIP_TIMES[1]! * ROUND_TRIP_S, CI_DONE_S, REVIEW_DONE_S, ROUND_TRIP_S + 0.6];
+		const timers = moments.map((at) =>
+			window.setTimeout(() => setNow(Date.now()), Math.max(0, visit.at + at * 1000 - Date.now()) + 20),
+		);
+		setNow(Date.now());
+		return () => timers.forEach((timer) => window.clearTimeout(timer));
 	}, [visit]);
 	const elapsed = visit ? (now - visit.at) / 1000 : null;
 	const ci = checkState(elapsed, CI_DONE_S);

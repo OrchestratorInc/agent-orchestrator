@@ -2,6 +2,7 @@ import { Bell, CircleCheckBig, GitPullRequest, ListFilter, Loader, Menu, Message
 import { type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { statusColor, type MobileTheme } from "../../lib/mobile-theme";
+import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 
 // The mobile app's Workers tab (packages/mobile/app/(tabs)/index.tsx) as it
@@ -159,13 +160,10 @@ function WorkerRow({ worker, project, theme }: { worker: PhoneWorker; project: s
 				<span className="min-w-0 flex-1 truncate" style={{ ...caption, color: theme.textSecondary }}>
 					{project}
 				</span>
-				<Glyph
-					aria-hidden="true"
-					className={worker.status === "working" ? "motion-safe:animate-spin" : undefined}
-					size={12}
-					strokeWidth={2}
-					color={color}
-				/>
+				{/* Turned on an HTML wrapper so the spin is composited (see StatusGlyph). */}
+				<span aria-hidden="true" className={cn("grid size-3 shrink-0 place-items-center", worker.status === "working" && "will-change-transform motion-safe:animate-spin")}>
+					<Glyph size={12} strokeWidth={2} color={color} />
+				</span>
 				<span className="shrink-0 tabular-nums" style={{ ...caption, color }}>
 					{label}
 				</span>
