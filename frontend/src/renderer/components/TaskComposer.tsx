@@ -31,7 +31,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
-import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope, defaultCloudAgent } from "../lib/cloud-agents";
+import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { createCloudSession } from "../lib/cloud-session-create";
 import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
@@ -423,15 +423,22 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// The composer preselects the agent and model a spawn would actually use
 	// instead of parking the controls on a "default" label the user has to
 	// remember. Both resolved values remain directly editable.
-	// A project pins no agent or model, so neither seeds the composer; only its
-	// approval policy is read. A cloud project's config lives in the control-plane
-	// projects list, since the local projectQuery is disabled for it.
+	// A cloud project is unknown to the local daemon, so the local projectQuery
+	// above is disabled for it; its config lives in the control-plane projects
+	// list (already fetched as cloudProjects). Reading the worker defaults from
+	// the disabled local query is what made a cloud worker ignore
+	// config.worker.agent and fall back to claude-code.
 	const projectConfig = (isCloudProject ? cloudProject?.config : projectQuery.data?.config) as
 		| {
-				worker?: { agentConfig?: { permissions?: string } };
-				agentConfig?: { permissions?: string };
+				worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string } };
+				agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
 		  }
 		| undefined;
+	// A local project no longer pins an agent or model; the daemon's own default
+	// agent is not a user choice either, so neither seeds the composer. Cloud
+	// projects still carry both until they move off role pins.
+	const roleDefaults = isCloudProject ? projectConfig : undefined;
+	const configuredProjectAgent = roleDefaults?.worker?.agent ?? "";
 	const agentCatalog = agentsQuery.data;
 	// Cloud projects support the control-plane agents listed in CLOUD_AGENT_PROVIDERS
 	// (the single source), with readiness derived from the user's provider connections.
@@ -442,11 +449,15 @@ export function useTaskLaunch({ projectId, hostId }: {
 		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 		fallbackAgents: [],
 	}).find(isReadyAgent)?.id ?? "" : "";
-	// A cloud task starts with the first agent this account has connected, shown
-	// in the picker, never one picked out of sight.
-	const configuredDefaultAgent = isCloudProject
-		? cloudConnectionsQuery.isSuccess ? defaultCloudAgent(cloudConnectionsQuery.data) : ""
-		: readyFallbackAgent;
+	// A Cloud project without an agent of its own starts with the first agent this
+	// account has connected, shown in the picker, never one picked out of sight.
+	const readyCloudAgent = isCloudProject && cloudConnectionsQuery.isSuccess ? buildRankedAgentOptions({
+		agents: cloudAgents,
+		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
+		fallbackAgents: [],
+	}).find(isReadyAgent)?.id ?? "" : "";
+	const configuredDefaultAgent = isStandalone ? readyFallbackAgent
+		: configuredProjectAgent || (isCloudProject ? readyCloudAgent : readyFallbackAgent);
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 	const rememberedAgentIsAvailable = Boolean(
@@ -471,6 +482,17 @@ export function useTaskLaunch({ projectId, hostId }: {
 		}
 		return "";
 	}, [isCloudProject, selectedAgent, cloudConnectionsQuery.data]);
+	const defaultWorkerModel =
+		roleDefaults?.worker?.agentConfig?.model ?? roleDefaults?.agentConfig?.model ?? "";
+	const defaultWorkerMode = roleDefaults?.worker?.agentConfig?.mode ?? roleDefaults?.agentConfig?.mode ?? "";
+	const defaultWorkerEffort =
+		roleDefaults?.worker?.agentConfig?.effort ?? roleDefaults?.agentConfig?.effort ?? "";
+	const projectModelForSelectedAgent = selectedAgent === configuredProjectAgent
+		? defaultWorkerModel
+		: "";
+	const projectModeForSelectedAgent = selectedAgent === configuredProjectAgent
+		? defaultWorkerMode
+		: "";
 	const rememberedConfigForSelectedAgent = agentDrafts[selectedAgent];
 	const rememberedModel = rememberedConfigForSelectedAgent?.model ?? "";
 	const rememberedMode = rememberedConfigForSelectedAgent?.mode ?? "";
@@ -589,7 +611,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// tasks too: a switched-off model is left out of the Cloud catalog as well.
 	const { models: localOfferedModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
 		hostId,
-		keep: [model, mode],
+		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
 	});
 	// Named as the Cloud chat names them, from the catalog alone: Claude's "haiku" is
 	// the model its description names, which the worker's CLI runs.
@@ -601,7 +623,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		defaultEffort: item.defaultEffort,
 	})), [cloudCatalog, selectedAgent]);
 	const { models: offeredCloudModels } = useOfferedModels(selectedAgent, listedCloudModels, {
-		keep: [model, mode, rememberedModel],
+		keep: [model, mode, projectModelForSelectedAgent, rememberedModel],
 		skip: !isCloudProject,
 	});
 	// The daemon marks models this computer's agent CLI is too old for. A cloud task
@@ -624,7 +646,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// No catalog default is a cloud task's: Default sends no model, so the
 	// project's or the agent's own applies. A configured or remembered model the
 	// catalog does not list stays selectable, with a warning that it may not run.
-	const keptCloudModels = [rememberedModel].filter(isConcreteModelID).join("\n");
+	const keptCloudModels = [projectModelForSelectedAgent, rememberedModel].filter(isConcreteModelID).join("\n");
 	const cloudModels = useMemo((): AgentModelOption[] => {
 		if (cloudCatalog) {
 			const listed = offeredCloudModels;
@@ -683,17 +705,20 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const catalogPick = isCloudProject ? "" : catalogDefaultOption || selectableModels[0]?.id || "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
+		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption ||
 		(catalogUsesModes ? "" : catalogPick);
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
+		(isConcreteModelID(projectModeForSelectedAgent) && !isCloudProject ? projectModeForSelectedAgent : "") ||
 		(catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? catalogPick : "");
 	const selectedModel = model || (modelTouched ? (catalogUsesModes ? "" : catalogPick) : defaultModelForSelectedAgent);
 	const selectedMode = mode || (modelTouched ? (catalogUsesModes ? catalogPick : "") : defaultModeForSelectedAgent);
 	const selectedModelOrMode = (selectedModel || selectedMode).trim();
+	const projectModelOrMode = projectModelForSelectedAgent || projectModeForSelectedAgent;
 	const requestedModel = isCloudProject
 		// A cloud task sends the model shown; Default sends none.
 		? (isConcreteModelID(selectedModelOrMode) ? selectedModelOrMode : undefined)
@@ -702,15 +727,19 @@ export function useTaskLaunch({ projectId, hostId }: {
 		// concrete catalog default, send it explicitly; otherwise the native agent
 		// may launch with a different harness-owned default than the one displayed.
 		? (isConcreteModelID(selectedModelOrMode) ? selectedModelOrMode : undefined)
-		: selectedModelOrMode && (selectedModelOrMode !== catalogDefaultOption || !catalogUsesModes)
-			? selectedModelOrMode : undefined;
+		: selectedModelOrMode && selectedModelOrMode !== projectModelOrMode && (
+				selectedModelOrMode !== catalogDefaultOption || isConcreteModelID(projectModelOrMode) ||
+				(!catalogUsesModes && !projectModelOrMode)
+			) ? selectedModelOrMode : undefined;
 	const rememberedEffortIsExplicit = Boolean(
 		rememberedConfigForSelectedAgent &&
 			Object.prototype.hasOwnProperty.call(rememberedConfigForSelectedAgent, "effort"),
 	);
 	const defaultEffortForSelectedAgent = rememberedEffortIsExplicit
 		? (rememberedConfigForSelectedAgent?.effort ?? "")
-		: "";
+		: selectedAgent === configuredProjectAgent
+			? defaultWorkerEffort
+			: "";
 	// A model Cloud's catalog lists takes only the levels it reports: Claude
 	// refuses a turn whose effort its model does not offer (Haiku offers none).
 	// Any other model that reports no levels, such as one the catalog does not
@@ -729,7 +758,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		? []
 		: effortModel?.efforts?.filter((option) => option && option.toLowerCase() !== "default") ?? [];
 	const cloudDefaultEffort = isCloudProject && effortOptions.includes("medium") ? "medium" : "";
-	const implicitEffort = effortModel?.defaultEffort || "";
+	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
+	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = availableAgents?.find((item) => item.id === selectedAgent)?.label || selectedAgent;
 	// A cloud project's Chat-capable harnesses come from the control plane, as a
 	// local project's come from the daemon.
@@ -1227,7 +1257,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				// cloud model Cloud's catalog does not list may still take it. The
 				// cloud default shows no effort, so it starts from the project's.
 				if (isCloudProject && value === "") {
-					setEffort("");
+					setEffort(inheritedEffort);
 					return;
 				}
 				const listed = cloudCatalog?.models.find((item) => item.id === value);
@@ -1275,13 +1305,13 @@ export function useTaskLaunch({ projectId, hostId }: {
 		catalogProjectId,
 		switchAgent,
 		renderAgentControl: (control: TaskComposerAgentControl) => <DesktopAgentControl {...control} hostId={hostId} manageView={isCloudProject ? "cloud" : "local"} />,
-		renderEffortControl: (control: TaskComposerEffortControl) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
+		renderEffortControl: (control: TaskComposerEffortControl) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : inheritedEffort || effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
 			footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />,
 		renderModelControl: (control: TaskComposerModelControl) => <TaskModelPicker {...control}
 			onRefresh={isCloudProject && !cloudCatalogAgent ? undefined : refreshSelectedModels}
 			allowNativeSelection={isCloudProject}
 			footer={cloudModelSource}
-			showFollowAgentAction />,
+			showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />,
 	};
 }
 

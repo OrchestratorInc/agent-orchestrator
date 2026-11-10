@@ -1,8 +1,22 @@
+export type SpawnModelDefaults = {
+	selectedAgent: string;
+	projectWorkerAgent?: string;
+	projectWorkerModel?: string;
+};
+
 export type SpawnModelSource = { projectId: string | null; agentId: string };
 
-/** `rankedAgents` is already in the default order (see rankAgents), so the first one wins. */
-export function resolveSpawnAgent(rankedAgents: readonly string[]): string {
-	return rankedAgents[0] ?? "";
+export type SpawnAgentDefaults = {
+	projectWorkerAgent?: string;
+	projectAgent?: string;
+	availableAgents: readonly string[];
+};
+
+export function resolveSpawnAgent(input: SpawnAgentDefaults): string {
+	for (const candidate of [input.projectWorkerAgent, input.projectAgent]) {
+		if (candidate && input.availableAgents.includes(candidate)) return candidate;
+	}
+	return input.availableAgents[0] ?? "";
 }
 
 export function spawnModelSourceChanged(current: SpawnModelSource, next: SpawnModelSource): boolean {
@@ -10,9 +24,24 @@ export function spawnModelSourceChanged(current: SpawnModelSource, next: SpawnMo
 }
 
 /**
+ * The model the project pins for the agent about to be spawned, or "" for none.
+ *
+ * Only the project's own configuration counts. The catalog's `isDefault` entry is
+ * deliberately **not** consulted: it is a claim about which model the provider
+ * will choose, and it is not always true. Codex advertises `gpt-6-astra` as its
+ * default while a fresh thread comes up on `gpt-5.6-sol`, so the spawn sheet
+ * named Astra and the chat named Sol. Nothing on this side can know what a
+ * provider will really pick, so nothing here pretends to.
+ */
+export function resolveSpawnModel(input: SpawnModelDefaults): string {
+	if (input.selectedAgent !== input.projectWorkerAgent) return "";
+	return (input.projectWorkerModel ?? "").trim();
+}
+
+/**
  * What to send as the model.
  *
- * A picked value is sent even when the catalog marks it as default. The old rule
+ * A picked value is sent even when the project pins the same one. The old rule
  * dropped it as redundant, so choosing the model the sheet had *shown* as the
  * default sent no model at all: the session recorded nothing, and the chat had no
  * way to know what was asked for, so it displayed whatever the thread happened to

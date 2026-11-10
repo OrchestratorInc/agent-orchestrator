@@ -61,8 +61,8 @@ beforeEach(() => {
 	project = {
 		id: "project", orgId: "org", displayName: "Cloud project", repositoryUrl: "https://github.com/owner/repo", defaultBranch: "main", createdAt: "now", updatedAt: "now",
 		config: {
-			worker: { agentConfig: { permissions: "auto" } },
-			orchestrator: { agentConfig: { permissions: "auto" } },
+			worker: { agent: "codex", agentConfig: { model: "worker-model", effort: "max" } },
+			orchestrator: { agent: "claude-code", agentConfig: { model: "orchestrator-model" } },
 			reviewers: [{ harness: "claude-code", agentConfig: { model: "reviewer-model", effort: "high", permissions: "auto" } }],
 			coder: { templateId: "preserve" },
 		},
@@ -74,7 +74,9 @@ beforeEach(() => {
 			const update = patch.config?.[role];
 			if (update === undefined) return previous;
 			if (update === null) return undefined;
-			return { ...previous, ...update, agentConfig: { ...previous?.agentConfig, ...update.agentConfig } };
+			const agent = update.agent ?? previous?.agent;
+			if (!agent) throw new Error("Role agent is required");
+			return { agent, agentConfig: { ...previous?.agentConfig, ...update.agentConfig } };
 		};
 		const coder = patch.config?.coder ? { ...(project.config.coder as object | undefined), ...patch.config.coder } : project.config.coder;
 		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, coder, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } as CloudCpProject["config"] };
@@ -85,59 +87,83 @@ beforeEach(() => {
 });
 
 describe("Cloud project settings", () => {
-	it.each([["worker", "Worker"], ["orchestrator", "Orchestrator"]] as const)("shows only the approval row for the %s and patches only its permissions", async (role, label) => {
-		mount();
-		expect(await screen.findByRole("button", { name: `${label} approval` })).toHaveTextContent("Auto");
-		expect(screen.queryByRole("button", { name: `${label} agent` })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: `${label} model` })).not.toBeInTheDocument();
-		await choose(`${label} approval`, "Bypass permissions");
-		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { [role]: { agentConfig: { permissions: "bypass-permissions" } } } }));
-		expect(project.config[role]).toEqual({ agentConfig: { permissions: "bypass-permissions" } });
-	});
-
-	it.each([["codex"], ["claude-code"]] as const)("edits the reviewer's model, effort and approval with %s", async (agent) => {
-		project.config.reviewers = [{ harness: agent, agentConfig: { effort: "high", permissions: "auto" } }];
+	it.each([
+		["worker", "Worker", "codex"], ["worker", "Worker", "claude-code"],
+		["orchestrator", "Orchestrator", "codex"], ["orchestrator", "Orchestrator", "claude-code"],
+		["reviewer", "Reviewer", "codex"], ["reviewer", "Reviewer", "claude-code"],
+	] as const)("edits the %s agent's model, effort and approval for %s with %s", async (role, label, agent) => {
+		const agentConfig = { effort: "high" as const, permissions: "auto" as const };
+		if (role === "reviewer") project.config.reviewers = [{ harness: agent, agentConfig }];
+		else project.config[role] = { agent, agentConfig };
 		mocks.localGet.mockResolvedValue({ data: { selectionMode: "catalog", allowCustom: true, models: [
 			{ id: "local-default", label: "Local default", isDefault: true, efforts: ["low", "high", "max"], defaultEffort: "low" },
 			{ id: "other-model", label: "Other model", efforts: ["low", "high", "max"] },
 		] } });
 		const view = mount();
-		expect(await screen.findByRole("button", { name: "Reviewer agent" })).toBeEnabled();
-		const model = await screen.findByRole("button", { name: "Reviewer model" });
+		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeEnabled();
+		const model = await screen.findByRole("button", { name: `${label} model` });
 		// An unset model names the agent's real default instead of a placeholder.
 		await waitFor(() => expect(model).toHaveTextContent("Local default · High"));
 		expect(model).not.toHaveTextContent("Agent default");
-		expect(screen.getByRole("button", { name: "Reviewer approval" })).toBeEnabled();
-		const expectedPatch = (config: { model: string; effort: string; permissions: string }) => ({ config: { reviewers: [{ harness: agent, agentConfig: { ...config, mode: "" } }] } });
-		await choose("Reviewer approval", "Bypass permissions");
+		expect(model).toBeEnabled();
+		expect(screen.getByRole("button", { name: `${label} approval` })).toBeEnabled();
+		const expectedPatch = (config: { model: string; effort: string; permissions: string }) => {
+			const agentConfig = { ...config, mode: "" };
+			return { config: role === "reviewer" ? { reviewers: [{ harness: agent, agentConfig }] } : { [role]: { agent, agentConfig } } };
+		};
+		await choose(`${label} approval`, "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "", effort: "high", permissions: "bypass-permissions" })));
-		await choose("Reviewer model", "Other model");
+		await choose(`${label} model`, "Other model");
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "low", permissions: "bypass-permissions" })));
 		view.unmount();
 		mount();
-		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("Other model · Low"));
-		expect(screen.getByRole("button", { name: "Reviewer approval" })).toHaveTextContent("Bypass permissions");
-		expect(screen.getByRole("button", { name: "Reviewer agent" })).toHaveTextContent(agent === "codex" ? "Codex" : "Claude Code");
+		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low"));
+		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
+		expect(screen.getByRole("button", { name: `${label} agent` })).toHaveTextContent(agent === "codex" ? "Codex" : "Claude Code");
 	});
 
-	it("ignores an agent pinned on a worker or orchestrator and never writes it back", async () => {
-		project.config = { worker: { agent: "opencode" }, orchestrator: { agent: "cursor" } } as CloudCpProject["config"];
+	it("shows the agent each role runs with and lets each change, as local projects do", async () => {
+		project.config = { worker: { agent: "opencode" }, orchestrator: { agent: "cursor" } };
 		mount();
-		expect(await screen.findByRole("button", { name: "Worker approval" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Worker agent" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Orchestrator agent" })).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Reviewer agent" }));
-		expect(await screen.findByRole("menuitem", { name: "Session agent" })).toBeInTheDocument();
-		await userEvent.keyboard("{Escape}");
+		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("OpenCode");
+		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Cursor");
+		// Without a project reviewer, the worker agent's default reviewer runs:
+		// OpenCode's is not one Cloud runs, so Claude Code reviews.
+		expect(screen.getByRole("button", { name: "Reviewer agent" })).toHaveTextContent("Claude Code");
+		for (const role of ["Worker", "Orchestrator", "Reviewer"]) {
+			expect(screen.getByRole("button", { name: `${role} agent` })).toBeEnabled();
+		}
+		await screen.findByRole("button", { name: "Worker model" });
+		expect(screen.queryByText("Agent default")).not.toBeInTheDocument();
+		expect(mocks.patch).not.toHaveBeenCalled();
+		await choose("Worker agent", "Codex");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { worker: { agent: "codex", agentConfig: { model: "", mode: "", effort: "", permissions: "" } } },
+		}));
+	});
+
+	it("names Claude Code for a role without an agent and offers no empty choice for it", async () => {
+		project.config = {};
+		mount();
+		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("Claude Code");
+		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Claude Code");
+		await userEvent.click(screen.getByRole("button", { name: "Worker agent" }));
+		expect(await screen.findByRole("menuitem", { name: "Codex" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Session selection" })).not.toBeInTheDocument();
 		expect(mocks.patch).not.toHaveBeenCalled();
 	});
 
-	it("shows a neutral reviewer when none is set instead of following a worker agent", async () => {
+	it("pins the inherited reviewer to the worker agent when its settings change", async () => {
 		delete project.config.reviewers;
 		mount();
-		expect(await screen.findByRole("button", { name: "Reviewer agent" })).toHaveTextContent("Session agent");
-		expect(mocks.patch).not.toHaveBeenCalled();
+		const reviewer = await screen.findByRole("button", { name: "Reviewer agent" });
+		expect(reviewer).toHaveTextContent("Codex");
+		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model · Max"));
+		await choose("Reviewer approval", "Bypass permissions");
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
+			config: { reviewers: [{ harness: "codex", agentConfig: { model: "worker-model", mode: "", effort: "max", permissions: "bypass-permissions" } }] },
+		}));
 	});
 
 	it("shows repository and edits session prefix without replacing other settings", async () => {
@@ -155,8 +181,12 @@ describe("Cloud project settings", () => {
 		expect(await screen.findByText("review")).toBeInTheDocument();
 	});
 
-	it("saves only changed identity fields", async () => {
+	it("normalizes legacy roles and saves only changed identity fields", async () => {
 		project.config = { workerAgent: "codex", orchestratorAgent: "claude-code", sessionPrefix: "legacy", trackerIntake: { enabled: true, assignee: "octo" } };
+		const view = mount();
+		expect(await screen.findByRole("button", { name: "Worker agent" })).toHaveTextContent("Codex");
+		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Claude Code");
+		view.unmount();
 		mount("general");
 		await userEvent.click(await screen.findByRole("button", { name: "Edit Project name" }));
 		const name = screen.getByRole("textbox", { name: "Project name" });

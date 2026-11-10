@@ -4496,35 +4496,12 @@ components:
     ProjectRoleConfig:
       type: object
       additionalProperties: false
-      description: Role settings. Only agentConfig.permissions is meaningful; the agent and the role model, mode and effort are deprecated and ignored by new clients.
+      required: [agent]
       properties:
         agent:
-          deprecated: true
-          description: Deprecated and ignored. A session owns its agent.
           $ref: "#/components/schemas/CloudAgentHarness"
         agentConfig:
-          type: object
-          additionalProperties: false
-          properties:
-            model:
-              type: string
-              maxLength: 500
-              deprecated: true
-              description: Deprecated and ignored. A session owns its model.
-            mode:
-              type: string
-              enum: ["", plan, ask]
-              deprecated: true
-              description: Deprecated and ignored. A session owns its mode.
-            effort:
-              type: string
-              enum: ["", low, medium, high, xhigh, max]
-              deprecated: true
-              description: Deprecated and ignored. A session owns its effort.
-            permissions:
-              type: string
-              enum: ["", default, auto, accept-edits, bypass-permissions]
-              description: Native approval policy. OpenCode does not accept accept-edits. Empty uses the session execution policy.
+          $ref: "#/components/schemas/ProjectAgentConfig"
     ProjectRoleConfigPatch:
       type: object
       additionalProperties: false
@@ -4545,7 +4522,7 @@ components:
     ProjectConfig:
       type: object
       additionalProperties: true
-      description: Canonical nested role settings. Role agents and role model settings are deprecated and ignored by new clients; role permissions still apply. Legacy workerAgent and orchestratorAgent are still tolerated on reads and removed on the next settings write.
+      description: Canonical nested role settings. Legacy workerAgent and orchestratorAgent are normalized on reads and removed on the next settings write. Nested agents take precedence.
       properties:
         sessionPrefix:
           type: string

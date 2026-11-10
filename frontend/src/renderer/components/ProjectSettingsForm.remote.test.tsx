@@ -86,7 +86,7 @@ beforeEach(() => {
 		const project = projects.get(hostId);
 		if (!project) throw new Error(`Unknown host ${hostId}`);
 		if (path === "/api/v1/projects/{id}") return { data: { status: "ok", project } };
-		if (path === "/api/v1/projects") return { data: { projects: [{ id: project.id, name: project.name, path: project.path, kind: project.kind }] } };
+		if (path === "/api/v1/projects") return { data: { projects: [{ id: project.id, name: project.name, path: project.path, kind: project.kind, orchestratorAgent: project.config.orchestrator.agent }] } };
 		if (path === "/api/v1/sessions") return { data: { sessions: [] } };
 		if (path === "/api/v1/agents/readiness") return { data: agents };
 		if (path === "/api/v1/agents/{agent}/models") return { data: { agentId: "codex", selectionMode: "text", models: [], source: "manual", fetchedAt: "2026-09-28T00:00:00Z", stale: false } };

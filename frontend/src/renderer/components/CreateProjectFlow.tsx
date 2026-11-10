@@ -68,7 +68,7 @@ import {
 } from "../lib/onboarding-ui";
 import { cn } from "../lib/utils";
 import type { ProjectKind } from "../types/workspace";
-import { CreateProjectAgentSheet, type CreateProjectAgentSelection } from "./CreateProjectAgentSheet";
+import { CreateProjectAgentSheet, RequiredAgentField, type CreateProjectAgentSelection } from "./CreateProjectAgentSheet";
 import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 import { GitHubSetupPanel, WithGitHubState } from "./FirstRunSteps";
 import { GitHubIcon } from "./GitHubIcon";
@@ -1360,8 +1360,11 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
 // (client.createGitHubProject) instead of the daemon POST the local flow uses;
 // the repository is cloned in a cloud sandbox, so no folder picker.
 
-/** Second half of cloud project creation: the Create button, plus a nudge
- * when no cloud harness is logged in. A session chooses its own agent. */
+/** Second half of cloud project creation: which agent runs the worker and
+ * which plans as orchestrator. Reuses the exact field local's own agent
+ * sheet uses (RequiredAgentField) against cloud provider-connection state
+ * instead of daemon agent readiness — same component, different source of
+ * truth, per the onboarding design. */
 function CloudAgentSetupStep({
 	onBack,
 	onCreate,
@@ -1371,7 +1374,7 @@ function CloudAgentSetupStep({
 	createBlocked = false,
 }: {
 	onBack: () => void;
-	onCreate: () => void;
+	onCreate: (selection: { workerAgent: string; orchestratorAgent: string }) => void;
 	isCreating: boolean;
 	createError: string | null;
 	templateMissing: boolean;
@@ -1382,9 +1385,21 @@ function CloudAgentSetupStep({
 	const connections = useProviderConnections();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const cloudAgents = useMemo(() => cloudAgentInfos(connections.data), [connections.data]);
+	const readyAgentId = cloudAgents.find((agent) => agent.authentication.state === "authorized")?.id ?? "";
+	const [workerAgent, setWorkerAgent] = useState(readyAgentId);
+	const [orchestratorAgent, setOrchestratorAgent] = useState(readyAgentId);
+
+	// A login made from Harness settings (opened by the nudge below) lands here
+	// once the connections list refetches — fill the still-empty selects with it
+	// rather than forcing the user to reopen this step.
+	useEffect(() => {
+		if (readyAgentId === "") return;
+		setWorkerAgent((current) => (current === "" ? readyAgentId : current));
+		setOrchestratorAgent((current) => (current === "" ? readyAgentId : current));
+	}, [readyAgentId]);
 
 	const anyAgentReady = cloudAgents.some((agent) => agent.authentication.state === "authorized");
-	const canCreate = !isCreating && !templateMissing && !createBlocked;
+	const canCreate = !isCreating && workerAgent !== "" && orchestratorAgent !== "" && !templateMissing && !createBlocked;
 
 	return (
 		<div className="flex flex-col gap-5">
@@ -1393,6 +1408,28 @@ function CloudAgentSetupStep({
 					{createError}
 				</div>
 			) : null}
+			{/* Only harnesses connected for cloud are offered; the menu links to
+			    Harness settings' Cloud view to connect more. */}
+			<div className="grid grid-cols-2 gap-3">
+				<RequiredAgentField
+					id="cloudWorkerAgent"
+					manageView="cloud"
+					label={t("createProject.workerAgent", { defaultValue: "Worker" })}
+					placeholder={t("createProject.chooseAgent", { defaultValue: "Choose an agent" })}
+					agents={cloudAgents}
+					value={workerAgent}
+					onChange={setWorkerAgent}
+				/>
+				<RequiredAgentField
+					id="cloudOrchestratorAgent"
+					manageView="cloud"
+					label={t("createProject.orchestratorAgent", { defaultValue: "Orchestrator" })}
+					placeholder={t("createProject.chooseAgent", { defaultValue: "Choose an agent" })}
+					agents={cloudAgents}
+					value={orchestratorAgent}
+					onChange={setOrchestratorAgent}
+				/>
+			</div>
 			{/* Harness login lives only in Harness settings; project creation just
 			    points there when no cloud harness is logged in yet. */}
 			{connections.isSuccess && !anyAgentReady ? (
@@ -1426,7 +1463,7 @@ function CloudAgentSetupStep({
 					type="button"
 					variant="primary"
 					disabled={!canCreate}
-					onClick={onCreate}
+					onClick={() => onCreate({ workerAgent, orchestratorAgent })}
 				>
 					{isCreating ? t("createProject.creating") : t("createProject.create")}
 				</Button>
@@ -1691,7 +1728,7 @@ function CloudProjectCard({
 		setGithubOAuthBusy(false);
 	};
 
-	const createProject = async () => {
+	const createProject = async (selection: { workerAgent: string; orchestratorAgent: string }) => {
 		if (isCreating || org === undefined || (!standalone && selectedRepo === undefined)) return;
 		setSubmitError(null);
 		setIsCreating(true);
@@ -1712,6 +1749,8 @@ function CloudProjectCard({
 			}
 			const additionalRepos = standalone ? [] : extraRepoUrls.filter((url) => url !== "");
 			const config = {
+				worker: { agent: selection.workerAgent },
+				orchestrator: { agent: selection.orchestratorAgent },
 				...(coder ? { coder } : {}),
 				...(offersSandboxChoice && effectiveSandboxProvider ? { sandboxProvider: effectiveSandboxProvider } : {}),
 				// Every session clones these beside the main repository.
@@ -2038,7 +2077,7 @@ function CloudProjectCard({
 				{(standalone || selectedRepo !== undefined) && org !== undefined ? (
 					<CloudAgentSetupStep
 						onBack={onBack}
-						onCreate={() => void createProject()}
+						onCreate={(selection) => void createProject(selection)}
 						isCreating={isCreating}
 						createError={submitError}
 						templateMissing={coderTemplateMissing}

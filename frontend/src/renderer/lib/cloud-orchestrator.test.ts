@@ -7,6 +7,7 @@ import { selectCloudOrchestratorHarness, spawnCloudOrchestrator } from "./cloud-
 const cloudMocks = vi.hoisted(() => ({
 	me: vi.fn(),
 	listUserProviderConnections: vi.fn(),
+	listProjects: vi.fn(),
 	createSession: vi.fn(),
 }));
 
@@ -14,6 +15,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 	createRendererCloudCpClient: () => ({
 		me: cloudMocks.me,
 		listUserProviderConnections: cloudMocks.listUserProviderConnections,
+		listProjects: cloudMocks.listProjects,
 		createSession: cloudMocks.createSession,
 	}),
 }));
@@ -35,10 +37,8 @@ describe("selectCloudOrchestratorHarness", () => {
 		expect(selectCloudOrchestratorHarness([connection("claude-code")])).toBe("claude-code");
 	});
 
-	it("prefers claude-code, then codex, then cursor, then opencode", () => {
+	it("preserves Codex as the preference when several supported agents are connected", () => {
 		expect(selectCloudOrchestratorHarness([connection("cursor"), connection("codex")])).toBe("codex");
-		expect(selectCloudOrchestratorHarness([connection("codex"), connection("claude-code")])).toBe("claude-code");
-		expect(selectCloudOrchestratorHarness([connection("opencode"), connection("cursor")])).toBe("cursor");
 	});
 
 	it("ignores invalid, non-default, and non-agent provider connections", () => {
@@ -52,6 +52,7 @@ describe("spawnCloudOrchestrator", () => {
 	beforeEach(() => {
 		cloudMocks.me.mockReset();
 		cloudMocks.listUserProviderConnections.mockReset();
+		cloudMocks.listProjects.mockReset();
 		cloudMocks.createSession.mockReset();
 	});
 
@@ -62,6 +63,7 @@ describe("spawnCloudOrchestrator", () => {
 		} as Settings);
 		cloudMocks.me.mockResolvedValue({ organizations: [{ id: "org-1" }], sandboxProviders: { available: ["docker"], default: "docker" } });
 		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [] });
+		cloudMocks.listProjects.mockResolvedValue({ items: project ? [project] : [] });
 		cloudMocks.createSession.mockResolvedValue({ session: { id: "session-1" } });
 		return queryClient;
 	}
@@ -109,19 +111,39 @@ describe("spawnCloudOrchestrator", () => {
 		expect(cloudMocks.createSession.mock.calls[0]?.[1]).not.toHaveProperty("provider");
 	});
 
-	it("ignores an agent pinned in an old project config", async () => {
+	it("honors the project's configured orchestrator agent over the Codex-first fallback", async () => {
+		// The project picked Claude Code, but Codex is also connected (e.g. a
+		// ChatGPT login). The configured choice must win instead of Codex-first.
 		const queryClient = primeClient({
 			id: "project-1",
-			config: { orchestrator: { agent: "cursor" } },
+			config: { orchestrator: { agent: "claude-code" } },
 		});
 		cloudMocks.listUserProviderConnections.mockResolvedValue({
-			providerConnections: [connection("cursor"), connection("codex")],
+			providerConnections: [connection("codex"), connection("claude-code")],
 		});
 
 		await expect(spawnCloudOrchestrator(queryClient, "project-1")).resolves.toBe("session-1");
 		expect(cloudMocks.createSession).toHaveBeenCalledWith(
 			"org-1",
-			expect.objectContaining({ harness: "codex", kind: "orchestrator" }),
+			expect.objectContaining({ harness: "claude-code", kind: "orchestrator" }),
+		);
+	});
+
+	it("falls back to the connected-credential priority when the configured agent is not connected", async () => {
+		// Project configured Cursor, but only Codex is connected: fall back rather
+		// than block the spawn on an unusable choice.
+		const queryClient = primeClient({
+			id: "project-1",
+			config: { orchestrator: { agent: "cursor" } },
+		});
+		cloudMocks.listUserProviderConnections.mockResolvedValue({
+			providerConnections: [connection("codex")],
+		});
+
+		await expect(spawnCloudOrchestrator(queryClient, "project-1")).resolves.toBe("session-1");
+		expect(cloudMocks.createSession).toHaveBeenCalledWith(
+			"org-1",
+			expect.objectContaining({ harness: "codex" }),
 		);
 	});
 });

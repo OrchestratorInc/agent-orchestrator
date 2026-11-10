@@ -159,7 +159,10 @@ export type ProjectInfo = {
 };
 
 export type ProjectDetail = ProjectInfo & {
+	agent?: string;
 	config?: {
+		agentConfig?: { model?: string };
+		worker?: { agent?: string; agentConfig?: { model?: string } };
 		reviewers?: { harness?: string }[];
 	};
 };
@@ -1362,8 +1365,8 @@ export async function spawnSession(
 			projectId: opts.projectId,
 			prompt: opts.prompt,
 			issueId: opts.issueId,
-			// A session owns its agent: the spawn screen sends the user's pick, or
-			// the first usable agent in the ranked default order.
+			// The daemon needs an agent harness unless the project configures a
+			// default worker.agent; the spawn screen lets the user pick one.
 			harness: opts.harness || undefined,
 			model: opts.model || undefined,
 			// Mobile is Chat-first. Callers may deliberately request TUI for a harness
