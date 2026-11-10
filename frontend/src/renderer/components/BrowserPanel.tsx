@@ -6,6 +6,7 @@ import {
 	useEffect,
 	useId,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 	type FocusEvent,
@@ -364,16 +365,19 @@ export function useBrowserAnnotationQueue({
 		drainAnnotationQueue();
 	}, [drainAnnotationQueue]);
 
-	return {
-		status: state.status,
-		error: state.error,
-		queuedCount: state.queuedCount,
-		beginPicking,
-		cancelPicking,
-		enqueue,
-		failPicking,
-		retryQueued,
-	};
+	return useMemo(
+		() => ({
+			status: state.status,
+			error: state.error,
+			queuedCount: state.queuedCount,
+			beginPicking,
+			cancelPicking,
+			enqueue,
+			failPicking,
+			retryQueued,
+		}),
+		[state.status, state.error, state.queuedCount, beginPicking, cancelPicking, enqueue, failPicking, retryQueued],
+	);
 }
 
 export function BrowserPanel({
@@ -409,7 +413,11 @@ export function BrowserPanel({
 	);
 }
 
-export function BrowserPanelView({
+// Memoized: SessionView renders several times per session switch for reasons
+// that never reach this panel, and each pass re-rendered every toolbar
+// tooltip and tab. Its props (the browser model included) are stable objects
+// that change only when what the panel shows changes.
+export const BrowserPanelView = memo(function BrowserPanelView({
 	session,
 	active,
 	poppedOut,
@@ -1807,7 +1815,7 @@ export function BrowserPanelView({
 			</div>
 		</div>
 	);
-}
+});
 
 function BrowserControlTooltip({
 	children,
