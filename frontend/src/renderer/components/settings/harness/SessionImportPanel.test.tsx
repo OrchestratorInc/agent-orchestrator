@@ -160,33 +160,24 @@ it("reports new, existing and failed imports separately", async () => {
 	expect(useUiStore.getState().sessionImportOfferClosed).toBe(false);
 });
 
-it("adds a new folder as a project, scans again and imports its chat there", async () => {
-	const fresh = { ...chat, id: "new", title: "Add login", harness: "codex" };
-	api.GET.mockResolvedValueOnce({ data: { candidates: [{ ...fresh, folder: "/Users/me/code/widgets" }] } })
-		.mockResolvedValueOnce({ data: { candidates: [{ ...fresh, projectId: "widgets" }] } });
-	api.POST.mockImplementation(async (path: string) =>
-		path === "/api/v1/projects"
-			? { data: { project: { id: "widgets" } } }
-			: { data: { results: [{ id: "new", status: "created", sessionId: "widgets-1" }] } });
+it("leaves out chats from Git folders that are not projects and adds no project", async () => {
+	api.GET.mockResolvedValue({
+		data: {
+			candidates: [
+				{ ...chat, id: "recent", title: "Fix parser", projectId: "project", harness: "codex" },
+				{ ...chat, id: "home", title: "Home chat", harness: "codex" },
+				{ ...chat, id: "new", title: "Add login", harness: "codex", folder: "/Users/me/code/widgets" },
+			],
+		},
+	});
+	api.POST.mockResolvedValue({ data: { results: [{ id: "recent", status: "created", sessionId: "project-1" }, { id: "home", status: "created", sessionId: "standalone-1" }] } });
 	renderPanel("codex");
-	expect(await screen.findByText(/widgets \(new project\)/)).toBeInTheDocument();
-	expect(screen.getByText("Adds 1 folder as a project: widgets")).toBeInTheDocument();
-	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
-	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
-	expect(api.POST.mock.calls).toEqual([
-		["/api/v1/projects", { body: { path: "/Users/me/code/widgets" } }],
-		["/api/v1/session-import", { body: { ids: ["new"] } }],
-	]);
-	expect(api.GET).toHaveBeenCalledTimes(2);
-});
-
-it("stops before importing when a folder cannot be added", async () => {
-	api.GET.mockResolvedValue({ data: { candidates: [{ ...chat, id: "new", title: "Add login", harness: "codex", folder: "/Users/me/code/widgets" }] } });
-	api.POST.mockResolvedValue({ error: { code: "NOT_A_GIT_REPO" } });
-	renderPanel("codex");
-	fireEvent.click(await screen.findByRole("button", { name: "Import 1 conversation" }));
-	expect(await screen.findByRole("alert")).toHaveTextContent("Import failed");
-	await waitFor(() => expect(api.POST).toHaveBeenCalledTimes(1));
+	expect(await screen.findByText("Fix parser")).toBeInTheDocument();
+	expect(screen.getByText("Home chat")).toBeInTheDocument();
+	expect(screen.queryByText("Add login")).not.toBeInTheDocument();
+	fireEvent.click(screen.getByRole("button", { name: "Import 2 conversations" }));
+	expect(await screen.findByText("2 conversations imported.")).toBeInTheDocument();
+	expect(api.POST.mock.calls).toEqual([["/api/v1/session-import", { body: { ids: ["recent", "home"] } }]]);
 });
 
 it("imports only selected Copilot chats through the existing import flow", async () => {
