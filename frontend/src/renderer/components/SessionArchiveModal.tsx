@@ -223,7 +223,7 @@ export function SessionArchiveModal({
 					onPointerMove={() => {
 						if (keyboardSelecting) setKeyboardSelecting(false);
 					}}
-					className="max-h-[calc(84vh-7rem)] px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:items-start [&_[cmdk-list-sizer]]:gap-2"
+					className="max-h-[calc(84vh-7rem)] px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
 				>
 					<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
 						{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
@@ -235,15 +235,17 @@ export function SessionArchiveModal({
 							onSelect={() => openSession(session)}
 							data-testid="session-archive-card"
 							// The arrow-key selection looks like the board card's own hover.
+							// Every row is as tall as the tallest card: each card fills its
+							// cell, with its time line pinned to the bottom.
 							className={cn(
-								"rounded-lg outline-none",
+								"rounded-lg outline-none [&>div>div]:h-full [&_[data-testid=board-session-card]]:flex [&_[data-testid=board-session-card]]:h-full [&_[data-testid=board-session-card]]:flex-col [&_[data-testid=board-session-card]>div.grid]:mt-auto",
 								keyboardSelecting && "data-[selected=true]:[&_[data-testid=board-session-card]]:bg-interactive-hover",
 							)}
 						>
 							{/* The card opens itself on click, so clicks stop here; keys from
 							    its controls and from its menus and dialogs (portals bubble
 							    through React) must not reach the list either. */}
-							<div onClick={(event) => event.stopPropagation()} onKeyDown={keepInsideCard}>
+							<div className="h-full" onClick={(event) => event.stopPropagation()} onKeyDown={keepInsideCard}>
 								<ArchivedSessionCardAdapter
 									hidePullRequestProgress
 									hideTerminatedStatus
