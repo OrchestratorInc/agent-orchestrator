@@ -862,6 +862,33 @@ describe("ChatWorkspace steering", () => {
 		expect(sentFirst.compareDocumentPosition(sentSecond) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it("keeps a carried row above a steer sent right after the steer that carried it", async () => {
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		render(
+			<ChatWorkspace
+				onSteer={vi.fn(() => new Promise<void>(() => {}))}
+				snapshot={{
+					...chatFixture,
+					latestSequence: 13,
+					turns: [{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) }],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the review comments", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "review", turnId: "carried", sequence: 11, revision: 0, role: "user", origin: "automation", text: "Rename the pairing helper.", streaming: false, createdAt: at(1) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "Write the explainer", detail: { event: "steer", origin: "human", text: "Write the explainer", clientMessageId: "steer-1" }, createdAt: at(3) },
+					],
+					batchedDeliveries: [{ turnId: "carried", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+				}}
+			/>,
+		);
+		const field = screen.getByRole("combobox");
+		await typeInLexicalEditor(field, "Then update the docs");
+		act(() => {
+			fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+		});
+		const echo = await screen.findByText("Then update the docs", { selector: ":not([contenteditable] *)" });
+		expect(screen.getByText(/Rename the pairing helper/).compareDocumentPosition(echo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("keeps each steer's carried rows before the next row when many steers carry turns", () => {
 		const at = "2026-08-11T10:00:00Z";
 		const message = (id: string, turnId: string, sequence: number, text: string, role: "user" | "assistant" = "user") =>
