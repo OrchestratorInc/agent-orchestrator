@@ -49,7 +49,7 @@ describe("sidebarUpdateAction", () => {
 			releaseNotes: "notes",
 			staged: { version: "1.0.0", stagedAt: 1, escalated: false },
 		};
-		expect(sidebarUpdateAction(status)).toEqual({ kind: "download", version: "1.1.0", releaseNotes: "notes" });
+		expect(sidebarUpdateAction(status)).toEqual({ kind: "download", version: "1.1.0" });
 		expect(sidebarUpdateAction({ ...status, version: "1.0.0" })).toEqual({ kind: "install", version: "1.0.0" });
 	});
 

@@ -3834,12 +3834,13 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const availableRow = await screen.findByTestId("sidebar-update-available");
-		expect(availableRow).toHaveTextContent(/^There's a new version/);
-		const pill = within(availableRow).getByRole("button", { name: "Download update v9.9.9" });
-		expect(pill).toHaveTextContent("Update");
-		expect(pill).toHaveClass("rounded-full", "bg-logo-accent/16");
-		// One action and no dismiss control.
-		expect(within(availableRow).getAllByRole("button")).toHaveLength(1);
+		expect(availableRow).toHaveTextContent(/^Update available/);
+		// The whole row is the one action, and its label names the version.
+		const pill = availableRow;
+		expect(pill).toHaveRole("button");
+		expect(pill).toHaveAccessibleName("Download update v9.9.9");
+		// No dismiss control or second button inside it.
+		expect(within(availableRow).queryAllByRole("button")).toHaveLength(0);
 		// Nothing is staged yet, so the restart action must not be offered.
 		expect(screen.queryByLabelText(/Restart to install update/)).not.toBeInTheDocument();
 
@@ -3847,37 +3848,19 @@ describe("Sidebar", () => {
 		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("shows what's new from the dotted word", async () => {
-		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9", releaseNotes: "Faster boot" });
+	it("says \"Update available\" in plain text with the dimmed base version beside it", async () => {
+		updateStatusMock.mockResolvedValue({ state: "available", version: "0.12.11-nightly.202609021713", releaseNotes: "Faster boot" });
 		renderSidebar();
 
 		const availableRow = await screen.findByTestId("sidebar-update-available");
-		const word = within(availableRow).getByText("new", { exact: true });
-		expect(word).toHaveClass("decoration-dotted");
+		const word = within(availableRow).getByText(/^Update available/);
+		expect(word).not.toHaveClass("decoration-dotted");
+		// The nightly's base version, one "v", no build stamp.
+		expect(within(availableRow).getByText("v0.12.11", { exact: true })).toHaveClass("text-passive");
+		expect(availableRow).not.toHaveTextContent(/Nightly|202609021713/);
 		await userEvent.hover(word);
-		expect(await screen.findByText("What's new in 9.9.9")).toBeVisible();
-		expect(screen.getByText("Faster boot")).toBeVisible();
-	});
-
-	it("names the version in the hover card when the feed has no release notes", async () => {
-		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9" });
-		renderSidebar();
-
-		const availableRow = await screen.findByTestId("sidebar-update-available");
-		expect(availableRow).not.toHaveTextContent("9.9.9");
-		await userEvent.hover(within(availableRow).getByText("new", { exact: true }));
-		expect(await screen.findByText("Version 9.9.9")).toBeVisible();
-	});
-
-	it("keeps a nightly's base version and build date for the hover card", async () => {
-		updateStatusMock.mockResolvedValue({ state: "available", version: "0.12.11-nightly.202609021713" });
-		renderSidebar();
-
-		const availableRow = await screen.findByTestId("sidebar-update-available");
-		expect(within(availableRow).queryByText(/Nightly|0\.12\.11/)).not.toBeInTheDocument();
-		await userEvent.hover(within(availableRow).getByText("new", { exact: true }));
-		expect(await screen.findByText("Version 0.12.11")).toBeVisible();
-		expect(screen.getByText(/^Nightly · Sep [23]$/)).toBeVisible();
+		expect(screen.queryByText("Faster boot")).not.toBeInTheDocument();
+		expect(document.querySelector('[data-slot="hover-card-content"]')).toBeNull();
 	});
 
 	it("shows download progress as a bar, not a percentage", async () => {
@@ -3926,9 +3909,9 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const failedRow = await screen.findByTestId("sidebar-update-failed");
-		expect(within(failedRow).getByText("Update failed")).toBeVisible();
-		expect(within(failedRow).getByText("Couldn't download")).toBeVisible();
-		await userEvent.click(within(failedRow).getByRole("button", { name: "Retry update" }));
+		// One row: the reason is in the row's tooltip and screen-reader text.
+		expect(failedRow).toHaveTextContent("Update failed · Couldn't download");
+		await userEvent.click(failedRow);
 		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -3942,8 +3925,8 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const failedRow = await screen.findByTestId("sidebar-update-failed");
-		expect(within(failedRow).getByText("Couldn't install")).toBeVisible();
-		await userEvent.click(within(failedRow).getByRole("button", { name: "Retry update" }));
+		expect(failedRow).toHaveTextContent("Update failed · Couldn't install");
+		await userEvent.click(failedRow);
 		expect(useUiStore.getState().updateInstallPromptOpen).toBe(true);
 		expect(downloadUpdateMock).not.toHaveBeenCalled();
 	});
@@ -3957,7 +3940,7 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const failedRow = await screen.findByTestId("sidebar-update-failed");
-		await userEvent.click(within(failedRow).getByRole("button", { name: "Retry update" }));
+		await userEvent.click(failedRow);
 		expect(checkUpdateMock).toHaveBeenCalledTimes(1);
 		expect(useUiStore.getState().updateInstallPromptOpen).toBe(false);
 		expect(downloadUpdateMock).not.toHaveBeenCalled();
@@ -4000,12 +3983,10 @@ describe("Sidebar", () => {
 
 		const readyRow = await screen.findByTestId("sidebar-update-ready");
 		expect(within(readyRow).getByText("Ready to install")).toBeVisible();
-		expect(within(readyRow).getByText("Restart to finish")).toBeVisible();
-		const pill = within(readyRow).getByRole("button", { name: "Restart to install update v9.9.9" });
-		expect(pill).toHaveTextContent("Restart");
-		// Escalation does not change the treatment: one quiet pill style throughout.
-		expect(pill).toHaveClass("rounded-full", "bg-logo-accent/16");
-		expect(pill).not.toHaveClass("bg-logo-accent", "text-success");
+		expect(readyRow).not.toHaveTextContent("Restart to finish");
+		const pill = readyRow;
+		expect(pill).toHaveRole("button");
+		expect(pill).toHaveAccessibleName("Restart to install update v9.9.9");
 		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
 		// Sits above the account and Settings rows, not overlaid on them.
 		const settings = screen.getAllByRole("button", { name: "Settings" })[0];

@@ -1,16 +1,12 @@
 import { useState } from "react";
-import { ArrowUp, RotateCw } from "@/components/app-icons";
-import { Trans, useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
+import { ArrowDown, ArrowUp, RotateCcw, RotateCw } from "@/components/app-icons";
+import { useTranslation } from "react-i18next";
 import type { UpdateStatus } from "../../main/update-settings";
 import { parseNightlyVersion } from "../lib/build-channel";
 import { requestUpdateDownload } from "../hooks/useUpdateStatus";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
-import { DesktopReleaseNotes } from "./DesktopReleaseNotes";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
-import { Button } from "./ui/button";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -45,7 +41,7 @@ export type UpdateRecovery = "install" | "check" | "download";
  */
 export type SidebarUpdateAction =
 	| { kind: "downloading"; percent?: number }
-	| { kind: "download"; version?: string; releaseNotes?: string }
+	| { kind: "download"; version?: string }
 	| { kind: "install"; version?: string }
 	| { kind: "failed"; phase: FailedPhase; recovery: UpdateRecovery }
 	| null;
@@ -70,7 +66,7 @@ export function sidebarUpdateAction(status: UpdateStatus, failedPhase: FailedPha
 	// action; the main process reports a re-discovered staged build as
 	// "downloaded", so an "available" here is genuinely a different version.
 	if (status.state === "available" && status.version !== staged?.version) {
-		return { kind: "download", version: status.version, releaseNotes: status.releaseNotes };
+		return { kind: "download", version: status.version };
 	}
 	if (staged) return { kind: "install", version: staged.version };
 	return null;
@@ -123,29 +119,29 @@ function displayVersion(version: string | undefined): string | undefined {
 	return parseNightlyVersion(version)?.base ?? version;
 }
 
-function nightlyCaption(version: string | undefined, t: TFunction, locale: string): string | null {
-	const nightly = version ? parseNightlyVersion(version) : null;
-	if (!nightly) return null;
-	return t("shell.updateNightlyBuilt", {
-		date: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(nightly.builtAt),
-	});
+/** "v0.15.0" for the row: one "v" whatever the feed sent, no nightly stamp. */
+function shortVersion(version: string | undefined): string | null {
+	const bare = displayVersion(version?.replace(/^v/i, ""));
+	return bare ? `v${bare}` : null;
 }
 
 function ProgressRing({ percent, className }: { percent?: number; className?: string }) {
-	const radius = 6.25;
+	// A hairline ring, about as heavy as the 1.25px icon strokes beside it.
+	const radius = 6.75;
 	const circumference = 2 * Math.PI * radius;
 	return (
 		<svg aria-hidden="true" className={cn("-rotate-90", className)} viewBox="0 0 16 16">
-			<circle cx="8" cy="8" r={radius} fill="none" stroke="currentColor" strokeOpacity={0.25} strokeWidth={2} />
+			<circle cx="8" cy="8" r={radius} fill="none" stroke="currentColor" strokeOpacity={0.25} strokeWidth={1.25} />
 			<circle
 				cx="8"
 				cy="8"
 				r={radius}
 				fill="none"
 				stroke="currentColor"
-				strokeDasharray={`${(circumference * (percent ?? 0)) / 100} ${circumference}`}
+				className="transition-[stroke-dasharray] duration-normal ease-out motion-reduce:transition-none"
 				strokeLinecap="round"
-				strokeWidth={2}
+				strokeWidth={1.25}
+				style={{ strokeDasharray: `${(circumference * (percent ?? 0)) / 100} ${circumference}` }}
 			/>
 		</svg>
 	);
@@ -157,95 +153,50 @@ function recover(recovery: UpdateRecovery, onRequestInstall: () => void): void {
 	else void requestUpdateDownload();
 }
 
-function UpdatePill({ children, ...props }: React.ComponentProps<typeof Button>) {
-	return (
-		<Button shape="pill" size="xs" type="button" variant="accent-soft" {...props}>
-			{children}
-		</Button>
-	);
-}
-
-/** Marks a failed update; the other states keep the slot empty. */
-function FailedDot() {
-	return <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />;
-}
-
-/** "There's a new version" as plain text, for tooltips and the title attribute. */
-function newVersionText(t: TFunction): string {
-	return t("shell.updateNewVersion").replace(/<\/?new>/g, "");
-}
-
-/** The dotted word in "There's a new version" and the card it opens. */
-function NewVersionHoverCard({
-	children,
-	nightly,
-	notes,
-	tabIndex,
-	version,
-}: {
-	children?: React.ReactNode;
-	nightly: string | null;
-	notes?: string;
-	tabIndex: number;
-	version: string;
-}) {
-	const { t } = useTranslation();
-	return (
-		<HoverCard>
-			<HoverCardTrigger asChild>
-				<span
-					className="cursor-default underline decoration-passive decoration-dotted underline-offset-[3px] outline-none focus-visible:rounded-xs focus-visible:ring-2 focus-visible:ring-ring"
-					tabIndex={tabIndex}
-				>
-					{children}
-				</span>
-			</HoverCardTrigger>
-			<HoverCardContent className="max-h-80 w-max max-w-80 overflow-y-auto p-3" side="top">
-				<p className="text-sm font-medium text-foreground">
-					{notes ? t("shell.updateWhatsNewVersion", { version }) : t("shell.updateVersionLabel", { version })}
-				</p>
-				{nightly ? <p className="mt-0.5 text-xs text-passive">{nightly}</p> : null}
-				{notes ? (
-					<div className="mt-2">
-						<DesktopReleaseNotes notes={notes} textClassName="text-sm text-muted-foreground" />
-					</div>
-				) : null}
-			</HoverCardContent>
-		</HoverCard>
-	);
-}
-
 /**
- * "There's a new version" with "new" underlined in dots. Hovering or focusing
- * it shows which version, and what's new in it when the feed says.
+ * The update icon. Available and downloading draw an arrow in a ring, and while
+ * a download runs the ring is its progress, filling as the bytes arrive. Once
+ * there is nothing left to fill (ready, or failed) the circle is solid with the
+ * icon cut out of it, so a circular icon such as restart never sits inside a
+ * second circle.
  */
-function AvailableTitle({
-	nightly,
-	notes,
-	tabIndex,
-	version,
+function UpdateGlyph({
+	icon,
+	percent,
+	solid,
 }: {
-	nightly: string | null;
-	notes?: string;
-	tabIndex: number;
-	version?: string;
+	icon: React.ReactNode;
+	percent?: number;
+	/** Solid disc: brand blue when ready, the destructive red when failed. */
+	solid?: "ready" | "failed";
 }) {
-	const { t } = useTranslation();
-	if (!version) return <>{newVersionText(t)}</>;
+	const iconClass = "[&_svg]:size-3 [&_svg]:stroke-[2.5]";
+	if (solid) {
+		return (
+			<span
+				className={cn(
+					"grid size-5 place-items-center rounded-full",
+					solid === "ready" ? "bg-logo-accent text-logo-accent-foreground" : "bg-[var(--color-danger-strong)] text-white",
+					iconClass,
+				)}
+			>
+				{icon}
+			</span>
+		);
+	}
 	return (
-		<Trans
-			t={t}
-			i18nKey="shell.updateNewVersion"
-			// Trans fills the component's children with the translated word.
-			components={{ new: <NewVersionHoverCard nightly={nightly} notes={notes} tabIndex={tabIndex} version={version} /> }}
-		/>
+		<span className="relative grid size-5 place-items-center text-logo-accent">
+			<ProgressRing className="absolute inset-0 size-5" percent={percent} />
+			<span className={cn("grid place-items-center", iconClass)}>{icon}</span>
+		</span>
 	);
 }
 
 /**
- * The expanded footer's update row: one line saying what is happening, a
- * caption, and a single tinted pill that does the next thing. It renders
- * nothing while AO is up to date.
+ * The expanded footer's update strip: one 36px row saying what is happening,
+ * with the update icon at its end doing the next thing. Once a download starts
+ * the icon's circle fills with its progress. It renders nothing while AO is up
+ * to date.
  */
 export function SidebarUpdateRow({
 	onRequestInstall,
@@ -257,92 +208,55 @@ export function SidebarUpdateRow({
 	status: UpdateStatus;
 	tabIndex: number;
 }) {
-	const { t, i18n } = useTranslation();
-	const locale = i18n.resolvedLanguage ?? i18n.language;
+	const { t } = useTranslation();
 	const action = useSidebarUpdateAction(status);
 	if (action === null) return null;
 
-	// Empty for the calm states, so every title still lines up with Settings.
-	let lead: React.ReactNode = null;
 	let title: string;
-	let titleContent: React.ReactNode = null;
-	let caption: React.ReactNode = null;
-	let pill: React.ReactNode = null;
-	const rowProps: React.HTMLAttributes<HTMLDivElement> = {};
+	// Dimmed after the title: which version "Update available" means.
+	let versionNote: string | null = null;
+	// Why it failed: one row has no room for a second line, so it is the tooltip.
+	let detail: string | null = null;
+	let glyph: React.ReactNode;
+	// The whole row is the button; a download in progress has nothing to press.
+	let press: { label: string; onClick: () => void } | null = null;
 
 	if (action.kind === "download") {
-		const version = displayVersion(action.version);
-		title = newVersionText(t);
-		titleContent = (
-			<AvailableTitle
-				nightly={nightlyCaption(action.version, t, locale)}
-				notes={action.releaseNotes}
-				tabIndex={tabIndex}
-				version={version}
-			/>
-		);
-		pill = (
-			<UpdatePill
-				aria-label={
-					action.version
-						? t("shell.downloadUpdateVersion", { version: action.version })
-						: t("shell.downloadUpdate")
-				}
-				onClick={() => void requestUpdateDownload()}
-				tabIndex={tabIndex}
-			>
-				{t("shell.updateAction")}
-			</UpdatePill>
-		);
+		title = t("shell.updateAvailable");
+		versionNote = shortVersion(action.version);
+		glyph = <UpdateGlyph icon={<ArrowDown aria-hidden="true" />} percent={100} />;
+		press = {
+			label: action.version ? t("shell.downloadUpdateVersion", { version: action.version }) : t("shell.downloadUpdate"),
+			onClick: () => void requestUpdateDownload(),
+		};
 	} else if (action.kind === "downloading") {
 		title = t("shell.updateDownloading");
-		lead = <ProgressRing className="size-3.5 text-logo-accent" percent={action.percent} />;
-		Object.assign(rowProps, { "aria-live": "polite", role: "status" });
-		caption = (
+		// The icon stays where it was; its circle is now the progress.
+		glyph = (
 			<span
 				aria-label={t("shell.updateDownloading")}
 				aria-valuemax={100}
 				aria-valuemin={0}
 				aria-valuenow={action.percent === undefined ? undefined : Math.round(action.percent)}
-				className="mt-1 mb-0.5 block h-0.75 overflow-hidden rounded-full bg-foreground/10"
 				role="progressbar"
 			>
-				<span
-					className="block h-full rounded-full bg-logo-accent transition-[width] duration-normal ease-out motion-reduce:transition-none"
-					style={{ width: `${action.percent ?? 0}%` }}
-				/>
+				<UpdateGlyph icon={<ArrowDown aria-hidden="true" />} percent={action.percent} />
 			</span>
 		);
 	} else if (action.kind === "install") {
 		const version = displayVersion(action.version);
 		title = t("shell.updateReadyToInstall");
-		caption = t("shell.updateRestartToFinish");
-		pill = (
-			<UpdatePill
-				aria-label={
-					version
-						? t("shell.restartInstallUpdateVersion", { version })
-						: t("shell.restartInstallUpdate")
-				}
-				onClick={onRequestInstall}
-				tabIndex={tabIndex}
-			>
-				{t("shell.updateRestart")}
-			</UpdatePill>
-		);
+		glyph = <UpdateGlyph icon={<RotateCw aria-hidden="true" />} solid="ready" />;
+		press = {
+			label: version ? t("shell.restartInstallUpdateVersion", { version }) : t("shell.restartInstallUpdate"),
+			onClick: onRequestInstall,
+		};
 	} else {
 		title = t("shell.updateFailed");
-		caption = action.phase === "install" ? t("shell.updateInstallFailed") : t("shell.updateDownloadFailed");
-		lead = <FailedDot />;
-		pill = (
-			<UpdatePill
-				aria-label={t("shell.retryUpdate")}
-				onClick={() => recover(action.recovery, onRequestInstall)}
-				tabIndex={tabIndex}
-			>
-				{t("shell.updateRetry")}
-			</UpdatePill>
-		);
+		detail = action.phase === "install" ? t("shell.updateInstallFailed") : t("shell.updateDownloadFailed");
+		glyph = <UpdateGlyph icon={<RotateCcw aria-hidden="true" />} solid="failed" />;
+		const { recovery } = action;
+		press = { label: t("shell.retryUpdate"), onClick: () => recover(recovery, onRequestInstall) };
 	}
 
 	const testId = {
@@ -352,31 +266,46 @@ export function SidebarUpdateRow({
 		failed: "sidebar-update-failed",
 	}[action.kind];
 
-	return (
-		<div
-			className="mb-0.5 flex min-h-9 w-full items-center py-1.5 pr-1 pl-2.5"
-			data-testid={testId}
-			{...rowProps}
-		>
-			{/* Only a downloading or failed update has a marker, centred on a one-line
-			    row and pinned to the title on a two-line one. The calm states start at
-			    the icon column so the whole sentence fits the default width. */}
-			{lead ? (
-				<span className={cn("mr-2 grid size-4 shrink-0 place-items-center", caption && "self-start mt-0.5")}>{lead}</span>
-			) : null}
-			<span className="mr-2 flex min-w-0 flex-1 flex-col gap-0.5">
-				{/* No native tooltip over the version's hover card. */}
-				<span className="truncate text-[length:var(--font-size-base)] font-medium tracking-tight text-foreground" title={titleContent ? undefined : title}>
-					{titleContent ?? title}
-				</span>
-				{caption ? (
-					<span className="truncate text-xs text-passive" title={typeof caption === "string" ? caption : undefined}>
-						{caption}
-					</span>
+	const content = (
+		<>
+			<span className="relative z-[1] min-w-0 flex-1 truncate text-[length:var(--font-size-base)] font-medium tracking-tight text-foreground">
+				{title}
+				{versionNote ? (
+					<span className="ml-1.5 text-xs font-normal tabular-nums text-passive">{versionNote}</span>
 				) : null}
+				{detail ? <span className="sr-only">{` · ${detail}`}</span> : null}
 			</span>
-			{pill}
-		</div>
+			<span className="relative z-[1] grid size-control-md shrink-0 place-items-center">{glyph}</span>
+		</>
+	);
+	// A filled strip with no outline or shadow (DESIGN.md: grouped content), as
+	// tall as the footer rows below it.
+	const rowClass = "flex min-h-9 w-full items-center gap-2 rounded-lg bg-[var(--color-bg-secondary)] py-1 pr-1 pl-3 text-left";
+
+	if (!press) {
+		return (
+			<div aria-live="polite" className={rowClass} data-testid={testId} role="status">
+				{content}
+			</div>
+		);
+	}
+	return (
+		<Pressable
+			aria-label={press.label}
+			title={detail ? `${title} · ${detail}` : undefined}
+			// The strip is already filled, so hover steps the fill up a shade
+			// instead of growing the nav-row pill inside it.
+			className={cn(
+				rowClass,
+				"hover:bg-[var(--color-bg-tertiary)] focus-visible:bg-[var(--color-bg-tertiary)]",
+			)}
+			data-testid={testId}
+			onClick={press.onClick}
+			tabIndex={tabIndex}
+			type="button"
+		>
+			{content}
+		</Pressable>
 	);
 }
 
@@ -420,17 +349,17 @@ export function SidebarUpdateRail({
 	let failed = false;
 	if (action.kind === "download") {
 		label = action.version ? t("shell.downloadUpdateVersion", { version: action.version }) : t("shell.downloadUpdate");
-		tooltip = `${newVersionText(t)} · ${t("shell.updateAction")}`;
+		tooltip = t("shell.updateAvailable");
 		onClick = () => void requestUpdateDownload();
 	} else if (action.kind === "install") {
 		const version = displayVersion(action.version);
 		label = version ? t("shell.restartInstallUpdateVersion", { version }) : t("shell.restartInstallUpdate");
-		tooltip = `${t("shell.updateReadyToInstall")} · ${t("shell.updateRestart")}`;
+		tooltip = t("shell.updateReadyToInstall");
 		onClick = onRequestInstall;
 	} else {
 		failed = true;
 		label = t("shell.retryUpdate");
-		tooltip = `${t("shell.updateFailed")} · ${t("shell.updateRetry")}`;
+		tooltip = t("shell.updateFailed");
 		const { recovery } = action;
 		onClick = () => recover(recovery, onRequestInstall);
 	}
