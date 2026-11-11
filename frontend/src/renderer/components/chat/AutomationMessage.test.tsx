@@ -252,6 +252,48 @@ describe("drawing AO's automation messages", () => {
 		expect(event).not.toHaveTextContent("Thread ID");
 	});
 
+	it("draws a review comment's HTML the way GitHub does, without remote images", async () => {
+		const body = [
+			"<!-- coderabbit-ai-generated:v1 -->",
+			"",
+			'**<picture><img src="https://storage.googleapis.com/a/amber-16.svg" width="16" height="16" alt=""></picture> Minor** · **Quick win**',
+			"",
+			"Inserting the path into `'<root>'` breaks the query.",
+			"",
+			"<details>",
+			'<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/a/bot-dark.svg"><img src="https://storage.googleapis.com/a/bot.svg" alt=""></picture> Prompt for AI Agents</summary>',
+			"<dl>",
+			"<dd>",
+			"",
+			"```",
+			"Bind the root as a parameter.",
+			"```",
+			"",
+			"</dd>",
+			"</dl>",
+			"</details>",
+			"",
+			"<!-- This is an auto-generated comment by CodeRabbit -->",
+		].join("\n");
+		draw(reviewComment.replace("A failed turn-on does not undo what it started.\n\nThe switch then shows **off**.", body));
+
+		const event = screen.getByTestId("pull-request-event");
+		expect(event).toHaveTextContent("Minor · Quick win");
+		expect(event).toHaveTextContent("Inserting the path into '<root>' breaks the query.");
+		expect(event).not.toHaveTextContent("<!--");
+		expect(event).not.toHaveTextContent("<picture");
+		expect(event).not.toHaveTextContent("storage.googleapis.com");
+		expect(event.querySelector("img, picture, source")).toBeNull();
+		const details = event.querySelector("details");
+		expect(details).not.toHaveAttribute("open");
+		expect(details?.querySelector("summary")).toHaveTextContent("Prompt for AI Agents");
+		expect(details).toHaveTextContent("Bind the root as a parameter.");
+
+		await userEvent.click(within(details as HTMLElement).getByText("Prompt for AI Agents"));
+		expect(details).toHaveAttribute("open");
+		expect(await within(event).findByRole("button", { name: "Show less" })).toBeInTheDocument();
+	});
+
 	it("keeps the card for anything it cannot read", () => {
 		draw("Checks failed:\nlint exited 1");
 

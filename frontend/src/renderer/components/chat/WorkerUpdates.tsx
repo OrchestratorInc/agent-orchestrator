@@ -549,7 +549,7 @@ export function Folded({ watch, children }: { watch: unknown; children: ReactNod
 	}, [open, watch]);
 	return (
 		<>
-			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")}>
+			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")} onToggle={(event) => (event.target as HTMLDetailsElement).open && setOpen(true)}>
 				<div>{children}</div>
 			</div>
 			{folds || open ? (
