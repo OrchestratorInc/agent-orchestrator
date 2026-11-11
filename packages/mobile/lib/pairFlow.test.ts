@@ -168,6 +168,17 @@ describe("pairFromCode", () => {
 		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ hostKey, token: "aod_t" }));
 	});
 
+	it("refuses a code without a key for a machine paired with one, before contacting it", async () => {
+		const pair = vi.fn();
+		const d = deps({ pair, findHost: vi.fn(async () => ({ id: "h_paired", name: "Studio", hostKey: "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0" })) });
+		const got = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(got).toEqual({ ok: false, reason: "outdated-desktop" });
+		expect(d.race).not.toHaveBeenCalled();
+		expect(pair).not.toHaveBeenCalled();
+		expect(d.saveHost).not.toHaveBeenCalled();
+	});
+
 	it("returns a config for the endpoint that won the race", async () => {
 		const got = await pairFromCode(`aomobile://pair#${code}`, deps());
 

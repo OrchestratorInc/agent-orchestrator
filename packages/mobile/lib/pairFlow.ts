@@ -7,7 +7,7 @@ import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 import { isLegacyPairingCode, parsePairingCode } from "./pairingCode";
 import type { RaceOutcome } from "./race";
 
-type SavedHost = Pick<Host, "id" | "name" | "appearance">;
+type SavedHost = Pick<Host, "id" | "name" | "appearance" | "hostKey">;
 
 export type PairSuccess = {
 	ok: true;
@@ -78,6 +78,12 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	// old to pair with, and saying so is more useful than "not a pairing code".
 	if (!offer) {
 		return { ok: false, reason: isLegacyPairingCode(raw) ? "outdated-desktop" : "not-ao-qr" };
+	}
+	// A machine paired with its key is never paired again without one: that would
+	// send the code unencrypted and drop the key. Only an older desktop shows such a code.
+	if (!offer.hostKey && offer.hostId) {
+		const saved = options.repairHost?.id === offer.hostId ? options.repairHost : await deps.findHost(offer.hostId);
+		if (saved?.hostKey) return { ok: false, reason: "outdated-desktop" };
 	}
 	const outcome = await deps.race(offer.endpoints, offer.hostId);
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };
