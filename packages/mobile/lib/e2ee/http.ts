@@ -1,4 +1,4 @@
-import { openChannel, type Channel } from "./channel";
+import { abortError, openChannel, type Channel } from "./channel";
 import { E2EEError } from "./handshake";
 
 // HTTP/1.1 over an encrypted channel. React Native's fetch and WebSocket cannot
@@ -139,10 +139,13 @@ export async function readHead(wire: Wire): Promise<ResponseHead> {
 	}
 }
 
-/** Reads one response body; `reusable` says whether the channel can carry another request after it. */
-function bodyReader(wire: Wire, head: ResponseHead, method: string): { next: () => Promise<Uint8Array | null>; reusable: boolean } {
+/**
+ * Reads one response body. `reusable` says whether the channel can carry another
+ * request after it; `size` is the body's length when the head gives it.
+ */
+function bodyReader(wire: Wire, head: ResponseHead, method: string): { next: () => Promise<Uint8Array | null>; reusable: boolean; size?: number } {
 	const reusable = !/\bclose\b/i.test(head.headers.get("connection") ?? "");
-	if (method === "HEAD" || head.status === 204 || head.status === 304) return { next: async () => null, reusable };
+	if (method === "HEAD" || head.status === 204 || head.status === 304) return { next: async () => null, reusable, size: 0 };
 	if (/\bchunked\b/i.test(head.headers.get("transfer-encoding") ?? "")) {
 		let left = 0;
 		let done = false;
@@ -174,6 +177,7 @@ function bodyReader(wire: Wire, head: ResponseHead, method: string): { next: () 
 		if (!Number.isSafeInteger(left) || left < 0) throw new E2EEError("The machine sent an unreadable length.");
 		return {
 			reusable,
+			size: left,
 			next: async () => {
 				if (left === 0) return null;
 				const piece = await wire.readUpTo(left);
@@ -274,9 +278,13 @@ function putIdle(key: string, wire: Wire): void {
 }
 
 /** Opens a channel to the machine, for one request or one WebSocket. */
-export async function openWire(target: SecureTarget): Promise<Wire> {
-	return new Wire(await openChannel(target.url, target.hostKey));
+export async function openWire(target: SecureTarget, signal?: AbortSignal): Promise<Wire> {
+	return new Wire(await openChannel(target.url, target.hostKey, {}, signal));
 }
+
+// A body up to this size is read before the response is returned, so the
+// channel is released even when the caller never reads it.
+const READ_AHEAD_BYTES = 1024 * 1024;
 
 /** Sends one request over a pooled channel to the machine. */
 export async function secureFetch(target: SecureTarget, request: SecureRequest, signal?: AbortSignal): Promise<SecureResponse> {
@@ -285,10 +293,11 @@ export async function secureFetch(target: SecureTarget, request: SecureRequest, 
 	for (let attempt = 0; ; attempt++) {
 		if (signal?.aborted) throw abortError();
 		const reused = takeIdle(key);
-		const wire = reused ?? (await openWire(target));
+		const wire = reused ?? (await openWire(target, signal));
 		const onAbort = () => wire.close();
 		signal?.addEventListener("abort", onAbort);
 		try {
+			if (signal?.aborted) throw abortError();
 			const body = request.body === undefined ? EMPTY : new TextEncoder().encode(request.body);
 			const sized = request.body !== undefined || !["GET", "HEAD"].includes(method);
 			const head = requestHead(target.authority, method, request.path, request.headers ?? {}, sized ? { "Content-Length": String(body.length) } : {});
@@ -314,6 +323,11 @@ export async function secureFetch(target: SecureTarget, request: SecureRequest, 
 					throw signal?.aborted ? abortError() : error;
 				}
 			};
+			if (reader.size !== undefined && reader.size <= READ_AHEAD_BYTES) {
+				const pieces: Uint8Array[] = [];
+				for (let piece = await next(); piece; piece = await next()) pieces.push(piece);
+				return new SecureResponse(response.status, response.statusText, response.headers, async () => pieces.shift() ?? null, () => {});
+			}
 			return new SecureResponse(response.status, response.statusText, response.headers, next, () => finish(false));
 		} catch (error) {
 			signal?.removeEventListener("abort", onAbort);
@@ -324,10 +338,6 @@ export async function secureFetch(target: SecureTarget, request: SecureRequest, 
 			throw error;
 		}
 	}
-}
-
-function abortError(): Error {
-	return Object.assign(new Error("Request cancelled"), { name: "AbortError" });
 }
 
 export function closeIdleChannels(): void {

@@ -18,10 +18,15 @@ export type ChannelDeps = {
 
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
 
-/** Opens `url` (the host's /api/v1/e2ee) and checks the host holds `hostKey`. */
-export async function openChannel(url: string, hostKey: Uint8Array, deps: Partial<ChannelDeps> = {}): Promise<Channel> {
+export function abortError(): Error {
+	return Object.assign(new Error("Request cancelled"), { name: "AbortError" });
+}
+
+/** Opens `url` (the host's /api/v1/e2ee) and checks the host holds `hostKey`. `signal` stops the handshake. */
+export async function openChannel(url: string, hostKey: Uint8Array, deps: Partial<ChannelDeps> = {}, signal?: AbortSignal): Promise<Channel> {
 	const randomBytes = deps.randomBytes ?? (await loadRandomBytes());
 	const Socket = deps.WebSocket ?? WebSocket;
+	if (signal?.aborted) throw abortError();
 	return new Promise((resolve, reject) => {
 		const handshake = startHandshake(randomBytes(32));
 		const ws = new Socket(url);
@@ -30,6 +35,8 @@ export async function openChannel(url: string, hostKey: Uint8Array, deps: Partia
 		let pending: Uint8Array[] = [];
 		let closed = false;
 		const timer = setTimeout(() => fail(new E2EEError("The machine did not answer the encrypted connection.")), HANDSHAKE_TIMEOUT_MS);
+		const onAbort = () => fail(abortError());
+		signal?.addEventListener("abort", onAbort, { once: true });
 
 		const channel: Channel = {
 			write(bytes) {
@@ -60,6 +67,7 @@ export async function openChannel(url: string, hostKey: Uint8Array, deps: Partia
 
 		function fail(error?: Error) {
 			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
 			if (closed) return;
 			closed = true;
 			try {
@@ -82,6 +90,7 @@ export async function openChannel(url: string, hostKey: Uint8Array, deps: Partia
 				if (!records) {
 					records = handshake.finish(message, hostKey);
 					clearTimeout(timer);
+					signal?.removeEventListener("abort", onAbort);
 					resolve(channel);
 					return;
 				}

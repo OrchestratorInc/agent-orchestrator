@@ -15,6 +15,8 @@ type FakeChannel = {
 };
 
 const opened: FakeChannel[] = [];
+// Set to hold the next channel open until the test releases it.
+let opening: Promise<void> | null = null;
 
 function fakeChannel(): FakeChannel {
 	const channel: FakeChannel = {
@@ -39,7 +41,9 @@ function fakeChannel(): FakeChannel {
 }
 
 vi.mock("./channel", () => ({
+	abortError: () => Object.assign(new Error("Request cancelled"), { name: "AbortError" }),
 	openChannel: async () => {
+		if (opening) await opening;
 		const channel = fakeChannel();
 		opened.push(channel);
 		return channel;
@@ -54,6 +58,7 @@ const target = { url: "ws://host/api/v1/e2ee", hostKey: new Uint8Array(32), auth
 beforeEach(() => {
 	closeIdleChannels();
 	opened.length = 0;
+	opening = null;
 });
 
 describe("secureFetch", () => {
@@ -111,6 +116,31 @@ describe("secureFetch", () => {
 		opened[0].close();
 		await expect(post).rejects.toThrow();
 		expect(opened).toHaveLength(1);
+	});
+
+	it("returns the channel to the pool even when a short body is never read", async () => {
+		const release = secureFetch(target, { method: "DELETE", path: "/api/v1/push/pairings/released" });
+		await vi.waitFor(() => expect(opened[0]?.written.length).toBe(1));
+		opened[0].send("HTTP/1.1 204 No Content\r\n\r\n");
+		expect((await release).status).toBe(204);
+
+		const next = secureFetch(target, { method: "GET", path: "/b" });
+		await vi.waitFor(() => expect(opened[0].written.length).toBe(2));
+		opened[0].send("HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\n{}");
+		expect((await next).status).toBe(404);
+		expect(opened).toHaveLength(1);
+	});
+
+	it("does not send a request cancelled while its channel was opening", async () => {
+		let open!: () => void;
+		opening = new Promise((resolve) => { open = resolve; });
+		const controller = new AbortController();
+		const pending = secureFetch(target, { method: "POST", path: "/kill", body: "" }, controller.signal);
+		controller.abort();
+		open();
+		await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+		await vi.waitFor(() => expect(opened[0]?.closed).toBe(true));
+		expect(opened[0].written).toHaveLength(0);
 	});
 
 	it("refuses a header value with a line break", async () => {

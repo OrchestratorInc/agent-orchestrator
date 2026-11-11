@@ -51,9 +51,9 @@ export class SecureWebSocket {
 		void this.run(target, path, headers, connect);
 	}
 
-	send(data: string | Uint8Array): void {
+	send(data: string | Uint8Array | ArrayBuffer): void {
 		if (this.readyState !== SecureWebSocket.OPEN || !this.wire) throw new Error("WebSocket is not open");
-		this.wire.write(typeof data === "string" ? frame(1, new TextEncoder().encode(data), this.randomBytes(4)) : frame(2, data, this.randomBytes(4)));
+		this.wire.write(typeof data === "string" ? frame(1, new TextEncoder().encode(data), this.randomBytes(4)) : frame(2, data instanceof ArrayBuffer ? new Uint8Array(data) : data, this.randomBytes(4)));
 	}
 
 	close(code = 1000, reason = ""): void {
