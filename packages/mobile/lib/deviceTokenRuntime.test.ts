@@ -27,7 +27,8 @@ describe("pairThisDevice", () => {
 		const first = { ...config, hostId: undefined, password: "Code5678" };
 		await pairThisDevice(first);
 		await pairThisDevice({ ...first, host: "192.168.1.99" });
-		expect(pairDevice).toHaveBeenCalledTimes(2);
+		await pairThisDevice({ ...first, host: "192.168.1.99", hostId: "http://192.168.1.42:3011" });
+		expect(pairDevice).toHaveBeenCalledTimes(3);
 	});
 
 	it("pairs again for a password, which a retry can still use", async () => {
