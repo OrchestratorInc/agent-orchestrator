@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { freshMachineSimActive, setFreshMachineSim, simulateFreshMachine } from "./fresh-machine-sim";
+import { AGENT_OPTIONS } from "./agent-options";
 import { developerModeStorageKey } from "./window-translucency";
 
 const noDaemon = () => Promise.reject(new TypeError("Failed to fetch"));
@@ -35,7 +36,8 @@ describe("simulateFreshMachine", () => {
 		expect(requirements.requirements.find((req: { id: string }) => req.id === "gh").satisfied).toBe(false);
 
 		const readiness = await (await simulateFreshMachine(get("/api/v1/agents/readiness"), noDaemon))!.json();
-		expect(readiness.agents.map((agent: { id: string }) => agent.id)).toEqual(["claude-code", "codex"]);
+		// Every harness AO knows, as on a real machine.
+		expect(readiness.agents.map((agent: { id: string }) => agent.id)).toEqual([...AGENT_OPTIONS]);
 		expect(readiness.agents.every((agent: { installation: { state: string } }) => agent.installation.state === "not_installed")).toBe(true);
 	});
 
