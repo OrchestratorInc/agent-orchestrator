@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 // TestSelectShellTerminalsBySessionID: Session Manager uses this to find and
@@ -249,5 +251,118 @@ func TestRestorableShellTerminalsAcrossAppLaunches(t *testing.T) {
 		if row.HandleID == "command-new" && !row.Transient {
 			t.Fatal("lost transient lifetime")
 		}
+	}
+}
+
+// endedStoreFixture inserts one session-scoped shell, as an ended tab would
+// start out, against a real SQLite store.
+func endedStoreFixture(t *testing.T) (*sqlite.Store, context.Context, shelltermsvc.ShellTerminalRecord) {
+	t.Helper()
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "portfolio")
+	sess, err := s.CreateSession(ctx, sampleRecord("portfolio"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	rec := shellTerminalRecord("shellterm-old", "run-1")
+	rec.SessionID = sess.ID
+	rec.ProjectID = "portfolio"
+	rec.Title = "Build"
+	rec.TitleExplicit = true
+	rec.CreatedAt = time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
+	if err := s.InsertShellTerminal(ctx, rec); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	return s, ctx, rec
+}
+
+func TestMarkShellTerminalEndedSetsEndedAtOnce(t *testing.T) {
+	s, ctx, rec := endedStoreFixture(t)
+	first := time.Date(2026, 11, 10, 20, 44, 0, 0, time.UTC)
+
+	marked, err := s.MarkShellTerminalEnded(ctx, rec.HandleID, first)
+	if err != nil || !marked {
+		t.Fatalf("first mark = %v, %v; want true", marked, err)
+	}
+	marked, err = s.MarkShellTerminalEnded(ctx, rec.HandleID, first.Add(time.Hour))
+	if err != nil || marked {
+		t.Fatalf("second mark = %v, %v; want false", marked, err)
+	}
+	if marked, err := s.MarkShellTerminalEnded(ctx, "shellterm-ghost", first); err != nil || marked {
+		t.Fatalf("unknown handle mark = %v, %v; want false", marked, err)
+	}
+	got, found, err := s.SelectShellTerminalByHandleID(ctx, rec.HandleID)
+	if err != nil || !found {
+		t.Fatalf("select = %v, %v", found, err)
+	}
+	if got.EndedAt == nil || !got.EndedAt.Equal(first) {
+		t.Fatalf("ended at = %v, want the first mark %v", got.EndedAt, first)
+	}
+}
+
+func TestUpdateShellTerminalAgentHarnessKeepsSameValue(t *testing.T) {
+	s, ctx, rec := endedStoreFixture(t)
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessClaudeCode} {
+		if err := s.UpdateShellTerminalAgentHarness(ctx, rec.HandleID, harness); err != nil {
+			t.Fatalf("update %s: %v", harness, err)
+		}
+	}
+	got, _, err := s.SelectShellTerminalByHandleID(ctx, rec.HandleID)
+	if err != nil || got.LastAgentHarness != domain.HarnessClaudeCode {
+		t.Fatalf("harness = %q, %v", got.LastAgentHarness, err)
+	}
+	if err := s.UpdateShellTerminalAgentHarness(ctx, rec.HandleID, domain.HarnessCodex); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := s.SelectShellTerminalByHandleID(ctx, rec.HandleID); got.LastAgentHarness != domain.HarnessCodex {
+		t.Fatalf("harness = %q, want a changed harness stored", got.LastAgentHarness)
+	}
+}
+
+func TestReplaceShellTerminalSwapsEndedRowInPlace(t *testing.T) {
+	s, ctx, old := endedStoreFixture(t)
+	if _, err := s.MarkShellTerminalEnded(ctx, old.HandleID, time.Date(2026, 11, 10, 20, 44, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	next := old
+	next.HandleID = "shellterm-new"
+	next.AppRunID = "run-2"
+	next.EndedAt = nil
+	next.LastAgentHarness = domain.HarnessClaudeCode
+
+	replaced, err := s.ReplaceShellTerminal(ctx, old.HandleID, next)
+	if err != nil || !replaced {
+		t.Fatalf("replace = %v, %v; want true", replaced, err)
+	}
+	if _, found, _ := s.SelectShellTerminalByHandleID(ctx, old.HandleID); found {
+		t.Fatal("old row still present after replace")
+	}
+	got, found, err := s.SelectShellTerminalByHandleID(ctx, next.HandleID)
+	if err != nil || !found {
+		t.Fatalf("select new = %v, %v", found, err)
+	}
+	if !got.CreatedAt.Equal(old.CreatedAt) || !got.TitleExplicit || got.Title != "Build" ||
+		got.LastAgentHarness != domain.HarnessClaudeCode || got.EndedAt != nil || got.SessionID != old.SessionID {
+		t.Fatalf("new row = %+v; want created_at, title, title_explicit and harness carried over, not ended", got)
+	}
+}
+
+func TestReplaceShellTerminalMissingOldRowChangesNothing(t *testing.T) {
+	s, ctx, existing := endedStoreFixture(t)
+	next := existing
+	next.HandleID = "shellterm-new"
+	next.LastAgentHarness = domain.HarnessCodex
+
+	replaced, err := s.ReplaceShellTerminal(ctx, "shellterm-ghost", next)
+	if err != nil || replaced {
+		t.Fatalf("replace = %v, %v; want false", replaced, err)
+	}
+	if _, found, _ := s.SelectShellTerminalByHandleID(ctx, next.HandleID); found {
+		t.Fatal("replacement row inserted although the old row was missing")
+	}
+	rows, err := s.SelectShellTerminalsBySessionID(ctx, existing.SessionID)
+	if err != nil || len(rows) != 1 || rows[0].HandleID != existing.HandleID {
+		t.Fatalf("rows = %+v, %v; want only the untouched existing row", rows, err)
 	}
 }
