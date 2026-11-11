@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-na
 import { useIsFocused } from "expo-router/react-navigation";
 import { WebView } from "react-native-webview";
 import { AppSymbol } from "../AppSymbol";
-import { authHeaders, httpBase } from "../config";
+import { authHeaders, httpBase, type ServerConfig } from "../config";
 import { hostFetch } from "../e2ee/host";
 import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
@@ -94,7 +94,7 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 	const encrypted = Boolean(config?.hostKey);
 	const failedRef = useRef(onFailed);
 	failedRef.current = onFailed;
-	const [fetched, setFetched] = useState<{ path: string; html: string }>();
+	const [fetched, setFetched] = useState<{ config: ServerConfig; path: string; html: string }>();
 	useEffect(() => {
 		if (!encrypted || html || !config) return;
 		let live = true;
@@ -103,10 +103,11 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 				if (!res.ok) throw new Error(String(res.status));
 				return res.text();
 			})
-			.then((text) => { if (live) setFetched({ path, html: text }); }, () => { if (live) failedRef.current(); });
+			.then((text) => { if (live) setFetched({ config, path, html: text }); }, () => { if (live) failedRef.current(); });
 		return () => { live = false; };
 	}, [encrypted, html, config, path]);
-	const page = html ?? (fetched?.path === path ? fetched.html : undefined);
+	// Only the page this machine sent: after a switch to another machine, the old one's page is never shown.
+	const page = html ?? (encrypted && fetched?.config === config && fetched.path === path ? fetched.html : undefined);
 	const pageUrl = config && !encrypted ? `${httpBase(config)}${path}` : undefined;
 	// The fragment only seeds first paint; a theme change is posted instead.
 	const uri = useMemo(() => pageUrl && `${pageUrl}${renderThemeFragment(themeRef.current, displayMode)}`, [pageUrl, displayMode]);

@@ -702,7 +702,8 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 	// or a rotated password retries on its own; tapping the chip retries in place.
 	const [failedLoad, setFailedLoad] = useState<AttachmentImageSource>();
 	const [viewerOpen, setViewerOpen] = useState(false);
-	const shown = useHostImage(source);
+	const [attempt, setAttempt] = useState(0);
+	const shown = useHostImage(source, attempt);
 	if (!source) {
 		return <View style={styles.attachmentChip}><Feather name="file-text" size={iconSize.xs} color={t.textTertiary} /><Text numberOfLines={1} style={styles.attachmentName}>{name}</Text></View>;
 	}
@@ -715,7 +716,7 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 			<ImageViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
 		</>;
 	}
-	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={space.md} onPress={() => setFailedLoad(undefined)} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
+	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={space.md} onPress={() => { setFailedLoad(undefined); setAttempt((n) => n + 1); }} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
 		<AppSymbol name="refresh" size={iconSize.xs} color={t.textTertiary} />
 		<Text numberOfLines={1} style={styles.attachmentName}>{name}</Text>
 		<Text style={styles.attachmentRetry}>Tap to retry</Text>

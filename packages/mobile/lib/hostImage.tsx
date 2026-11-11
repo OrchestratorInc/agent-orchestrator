@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Image, type ImageProps } from "react-native";
 import type { ServerConfig } from "./config";
 import { bytesToDataUri, hostFetch, hostPath } from "./e2ee/host";
@@ -34,23 +34,31 @@ function load({ config: cfg, headers }: Via, uri: string): Promise<string> {
 	return pending;
 }
 
-/** The source to render: unchanged, or the image read through the encrypted channel (undefined while it loads). */
-export function useHostImage<T extends Source>(source: T | undefined): T | { uri: string } | undefined {
+/**
+ * The source to render: unchanged, or the image read through the encrypted
+ * channel (undefined while it loads). A new `attempt` reads a failed image again.
+ */
+export function useHostImage<T extends Source>(source: T | undefined, attempt = 0): T | { uri: string } | undefined {
 	const via = (source as { via?: Via } | undefined)?.via;
+	const viaRef = useRef(via);
+	viaRef.current = via;
 	const uri = source?.uri ?? "";
-	const [shown, setShown] = useState<{ uri: string; data: string }>();
+	// Callers rebuild the source on every render, so the read is keyed on what it asks for.
+	const key = via ? `${via.config.hostKey}\n${uri}` : "";
+	const [shown, setShown] = useState<{ key: string; attempt: number; data: string }>();
 	useEffect(() => {
-		if (!via || !uri) return;
+		const current = viaRef.current;
+		if (!key || !current) return;
 		let live = true;
-		void load(via, uri).then((data) => {
-			if (live) setShown({ uri, data });
+		void load(current, uri).then((data) => {
+			if (live) setShown({ key, attempt, data });
 		});
 		return () => {
 			live = false;
 		};
-	}, [via, uri]);
+	}, [key, uri, attempt]);
 	if (!via) return source;
-	return shown?.uri === uri ? { uri: shown.data } : undefined;
+	return shown?.key === key && shown.attempt === attempt ? { uri: shown.data } : undefined;
 }
 
 /** Image for a source from hostImageSource; draws nothing while an encrypted read is in flight. */
