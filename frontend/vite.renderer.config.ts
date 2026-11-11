@@ -243,6 +243,7 @@ export default defineConfig({
 	},
 	// The app, plus the hidden page main renders cached artifact previews in.
 	build: {
+		sourcemap: sentry.sourcemap,
 		rollupOptions: {
 			input: {
 				index: fileURLToPath(new URL("./index.html", import.meta.url)),
@@ -279,7 +280,6 @@ export default defineConfig({
 		injectCspMeta,
 		...sentry.plugins,
 	],
-	build: { sourcemap: sentry.sourcemap },
 	test: {
 		environment: "jsdom",
 		silent: "passed-only",
