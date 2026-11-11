@@ -1119,10 +1119,10 @@ button.settings-row-bar {
 	padding-block: var(--space-3);
 }
 
-/* Updates page: one roomy card rather than the dense settings row. The class
+/* Updates page: the settings row with more air between its parts. The class
  * sits on a display: contents wrapper, so it only scopes these rules. */
 .updates-spacious {
-	--settings-row-inset: var(--space-10);
+	--settings-row-inset: var(--space-6);
 }
 
 .updates-spacious .settings-grouped-rows {
@@ -1131,27 +1131,24 @@ button.settings-row-bar {
 }
 
 .updates-spacious .settings-grouped-rows .settings-row-bar {
-	padding-block: var(--space-5);
+	padding-block: var(--space-4);
 }
 
 .update-hero {
-	padding-block: var(--space-10);
+	padding-block: var(--space-5);
 }
 
+/* 28px line: the small actions beside it centre on the version. */
 .update-hero-version {
-	font-size: 2.5rem;
-	line-height: 1.1;
-	font-weight: 400;
-	letter-spacing: -0.03em;
+	font-size: var(--font-size-heading-sm);
+	line-height: 28px;
+	font-weight: 500;
+	letter-spacing: -0.01em;
 	color: var(--color-text-settings-title);
 }
 
-.update-hero-target {
-	color: var(--color-text-settings-muted);
-}
-
 .update-notes {
-	padding-block: var(--space-8);
+	padding-block: var(--space-5);
 }
 
 /* Fade the last lines instead of slicing one in half; the bottom padding lets
@@ -1166,6 +1163,7 @@ button.settings-row-bar {
 	display: block;
 	width: 100%;
 	height: 2px;
+	margin-block: var(--space-1);
 	appearance: none;
 	overflow: hidden;
 	border: 0;

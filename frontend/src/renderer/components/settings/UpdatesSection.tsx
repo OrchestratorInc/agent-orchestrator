@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ArrowRight, CheckCircle2, Download, Info, Loader2, RefreshCw } from "@/components/app-icons";
+import { AlertTriangle, CheckCircle2, Download, Info, Loader2, RefreshCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
@@ -434,13 +434,9 @@ function UpdateActions({
 	// the status row resumes with the updater's terminal result.
 	const displayState: UpdateState = checking && !downloading && status.state !== "error" && status.state !== "downloaded" ? "checking" : status.state;
 	const showStatusState = displayState !== "checking";
-	const hasPrimaryAction = status.state === "available" || downloading || status.state === "downloaded" || Boolean(status.staged && status.staged.ready !== false);
-	// Headline target: only while a build is on its way in, and only when its
-	// base differs (nightly to nightly on one base would read "v1 → v1").
-	const incoming = status.state === "available" || downloading || status.state === "downloaded" || Boolean(status.staged);
-	const incomingVersion = incoming ? (status.version ?? status.staged?.version)?.replace(/^v/, "") : undefined;
-	const incomingBase = incomingVersion ? (parseNightlyVersion(incomingVersion)?.base ?? incomingVersion) : undefined;
-	const targetBase = incomingBase && incomingBase !== installedBase ? incomingBase : undefined;
+	const downloadedBytes = status.transferred !== undefined && status.total !== undefined
+		? t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })
+		: null;
 
 	const [now, setNow] = useState(Date.now());
 	useEffect(() => {
@@ -484,24 +480,19 @@ function UpdateActions({
 	// Restart & install are primary; Check for updates is a quiet row action.
 	return (
 		<>
-			<div className="update-hero settings-content-row flex min-w-0 flex-col">
-				<p className="update-hero-version flex min-w-0 flex-wrap items-baseline gap-x-4 tabular-nums">
+			{/* One row: version and live status on the left, actions on the right,
+			    level with the version line so they hold still as the status changes. */}
+			<div className="update-hero settings-content-row flex min-w-0 items-start justify-between gap-6">
+				<div className="min-w-0 flex-1">
+				<p className="update-hero-version tabular-nums">
 					<span
 						aria-label={t("settings.updates.currentVersion", { version: version.data ? `v${version.data}` : "…" })}
 						data-testid="app-version"
 					>
 						{version.data ? `v${installedBase}` : "…"}
 					</span>
-					{/* The move this update makes, at headline size. Decorative: the
-					    status line below names the full target for assistive tech. */}
-					{targetBase && (
-						<span className="update-hero-target flex items-baseline gap-x-4" aria-hidden="true">
-							<ArrowRight className="size-6 shrink-0 self-center" />
-							v{targetBase}
-						</span>
-					)}
 				</p>
-				<div className="mt-6 flex min-w-0 flex-col gap-1.5 text-control leading-4 text-settings-muted">
+				<div className="mt-2 flex min-w-0 flex-col gap-1.5 text-control leading-4 text-settings-muted">
 						{installed && (
 							// Two spans, not one string: the version needs break-all so a long
 							// nightly stamp can never overflow, but break-all applied to the
@@ -531,9 +522,14 @@ function UpdateActions({
 							// the notices below do not jump up.
 							className="flex min-h-9.5 min-w-0 flex-col gap-1.5"
 						>
-							{showStatusState && <UpdateStatusLine state={displayState} status={status} />}
-							{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} className="update-progress my-2" />}
-							{status.transferred !== undefined && status.total !== undefined && <p className="tabular-nums">{t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })}</p>}
+							{/* Status on the left, bytes at the far end of the track below. */}
+							{(showStatusState || downloadedBytes) && (
+								<div className="flex min-w-0 items-end justify-between gap-4">
+									{showStatusState && <UpdateStatusLine state={displayState} status={status} />}
+									{downloadedBytes && <p className="shrink-0 tabular-nums">{downloadedBytes}</p>}
+								</div>
+							)}
+							{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} className="update-progress" />}
 							{channelSwitchMessage && <p>{channelSwitchMessage}</p>}
 							{checkedAt ? (
 								<p className="tabular-nums" data-testid="update-checked-at">
@@ -551,15 +547,18 @@ function UpdateActions({
 						)}
 						{status.staleCheckNudge && <UpdateNotice tone="warning" text={t("settings.updates.networkStale")} />}
 				</div>
-				{/* Actions, under the status they act on. Never widened by a version
-				    string: the primary label used to carry the full nightly stamp. */}
-				<div className="mt-8 flex flex-wrap items-center gap-2">
+				</div>
+				{/* Actions. Fixed to the right and never widened by a version string:
+				    the primary label used to carry the full nightly stamp and grew
+				    across the version. The target build is named in the status line. */}
+				<div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
 					{/* Reflect every download, including automatic and channel-switch work. */}
 					{(status.state === "available" || downloading) && (
 						<Button
 							ref={setDownloadButtonRef}
 							type="button"
 							variant="primary"
+							size="sm"
 							aria-label={downloadAccessibleLabel}
 							aria-describedby="update-status-line"
 							aria-disabled={downloading}
@@ -576,7 +575,7 @@ function UpdateActions({
 						// Opens the restart confirmation rather than installing outright:
 						// installing quits the app, which costs a turn on any chat session
 						// running a daemon-owned driver.
-						<Button ref={restartButtonRef} type="button" variant="primary" onClick={requestUpdateInstall}>
+						<Button ref={restartButtonRef} type="button" variant="primary" size="sm" onClick={requestUpdateInstall}>
 							<RefreshCw className="size-icon-sm" aria-hidden="true" />
 							{t("settings.updates.restartInstall")}
 						</Button>
@@ -590,9 +589,8 @@ function UpdateActions({
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
 						aria-describedby={showStatusState ? "update-status-line" : undefined}
-						// Alone, it is the row's one action and takes a surface so it
-						// sits on the text edge; beside a primary it stays quiet.
-						variant={hasPrimaryAction ? "quiet" : "secondary"}
+						variant="quiet"
+						size="sm"
 						onClick={() => void checkNow()}
 						disabled={busy}
 					>
@@ -611,11 +609,11 @@ function UpdateActions({
 			    entirely. The shared renderer keeps contributor handles out while
 			    preserving linked PR numbers. */}
 			{(status.state === "downloaded" || status.staged) && status.releaseNotes ? (
-				<div className="update-notes settings-content-row flex flex-col gap-3" data-testid="update-release-notes">
+				<div className="update-notes settings-content-row flex flex-col gap-2" data-testid="update-release-notes">
 					<p className="text-sm font-medium text-settings-label">{t("update.restart.whatsNew")}</p>
 					<DesktopReleaseNotes
 						notes={status.releaseNotes}
-						textClassName="update-notes-scroll settings-thin-scrollbar max-h-72 overflow-y-auto overscroll-contain text-pretty text-sm leading-6 text-settings-label"
+						textClassName="update-notes-scroll settings-thin-scrollbar max-h-60 overflow-y-auto overscroll-contain text-pretty text-sm leading-6 text-settings-label"
 					/>
 				</div>
 			) : null}

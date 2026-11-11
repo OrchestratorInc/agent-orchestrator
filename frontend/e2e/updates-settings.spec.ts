@@ -19,7 +19,7 @@ test("downloaded update keeps the full version readable and actions aligned", as
 
 	await expect(page.getByTestId("update-status-line")).toContainText("Ready to install.");
 
-	// The headline carries the base version; the full nightly stamp sits on its
+	// The heading carries the base version; the full nightly stamp sits on its
 	// own monospace line. As one heading it wrapped mid-token and swallowed the
 	// row, and the primary action grew across it.
 	const version = page.getByTestId("app-version");
@@ -41,10 +41,9 @@ test("downloaded update keeps the full version readable and actions aligned", as
 	expect(restartBox).not.toBeNull();
 	expect(checkBox).not.toBeNull();
 	expect(Math.abs((restartBox?.height ?? 0) - (checkBox?.height ?? 0))).toBeLessThan(1);
-	// The actions sit under the version and status, on the same text edge.
+	// The actions row must not overrun the version block.
 	const versionBox = await version.boundingBox();
-	expect(restartBox?.y ?? 0).toBeGreaterThan((versionBox?.y ?? 0) + (versionBox?.height ?? 0));
-	expect(Math.abs((restartBox?.x ?? 0) - (versionBox?.x ?? 0))).toBeLessThan(1);
+	expect(restartBox?.x ?? 0).toBeGreaterThan((versionBox?.x ?? 0) + (versionBox?.width ?? 0));
 });
 
 test("@P0 live update flow stays synchronized without reopening Settings", async ({ page }) => {
@@ -98,7 +97,6 @@ for (const width of [1400, 900]) {
 		const progress = page.getByRole("progressbar", { name: "Download progress" });
 		const statusLine = page.getByTestId("update-status-line");
 		const action = page.getByRole("button", { name: /^Updating…/ });
-		const hero = page.locator(".update-hero");
 		const widths: number[] = [];
 		for (const percent of [0, 10, 57, 100]) {
 			await page.evaluate((value) => {
@@ -108,14 +106,11 @@ for (const width of [1400, 900]) {
 			const bar = (await progress.boundingBox())!;
 			const line = (await statusLine.boundingBox())!;
 			const button = (await action.boundingBox())!;
-			const card = (await hero.boundingBox())!;
-			// Starts at the text column and spans the card to the matching inset,
-			// not just under the longest text line (the old track stopped under
-			// "Built …"). The actions sit below it.
+			// Starts at the text column and runs up to the actions, not just under
+			// the longest text line (the old track stopped under "Built …").
 			expect(Math.abs(bar.x - line.x)).toBeLessThan(1);
-			expect(Math.abs(bar.x - card.x - (card.x + card.width - bar.x - bar.width))).toBeLessThan(1);
-			expect(Math.abs(button.x - bar.x)).toBeLessThan(1);
-			expect(button.y).toBeGreaterThan(bar.y + bar.height);
+			expect(button.x - (bar.x + bar.width)).toBeGreaterThanOrEqual(0);
+			expect(button.x - (bar.x + bar.width)).toBeLessThan(48);
 			widths.push(bar.width);
 		}
 		// The track never depends on progress; only the fill does.
