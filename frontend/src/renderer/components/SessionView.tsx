@@ -542,7 +542,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
 	// The Files review offers only what the session's kind of project has.
 	const remoteWorkspaceKind = useRemoteSessionProjectKind(sessionId, hostId);
-	const sessionWorkspaceKind = hostId ? remoteWorkspaceKind : workspaces.find((workspace) => workspace.id === session?.workspaceId)?.kind;
+	const sessionWorkspace = hostId ? undefined : workspaces.find((workspace) => workspace.id === session?.workspaceId);
+	const sessionWorkspaceKind = hostId ? remoteWorkspaceKind : sessionWorkspace?.kind;
 	const filesKind = session ? filesProjectKind(session, sessionWorkspaceKind) : undefined;
 	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
@@ -2090,9 +2091,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					orgId={session.cloud.orgId}
 					projectId={session.workspaceId}
 					sessionId={session.id}
-					canShare={session.cloud.orgId === cloudOrgId && sessionOffering.features.includes(SHARE_FEATURE)}
+					// A standalone agent shared with this person is its owner's to share.
+					canShare={session.cloud.orgId === cloudOrgId && sessionOffering.features.includes(SHARE_FEATURE) &&
+						!(sessionWorkspace?.standaloneAgent && sessionWorkspace.shared)}
 					sessionName={session.title}
-					projectName={workspaces.find((workspace) => workspace.id === session.workspaceId)?.name}
+					projectName={sessionWorkspace?.name}
+					standaloneAgent={sessionWorkspace?.standaloneAgent}
 				/>
 			) : null}
 			<SessionTopbarActions route={sessionTopbarRoute} />

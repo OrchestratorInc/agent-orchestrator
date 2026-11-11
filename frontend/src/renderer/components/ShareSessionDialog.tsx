@@ -238,7 +238,7 @@ function widensToWrite(link: Pick<CloudCpShareLink, "role" | "modeCap"> | undefi
  * Without a session it shares the whole project only. SharePanel draws it in
  * the share dialog and in Project settings › Sharing.
  */
-function useShareController({ active: open, orgId, projectId, sessionId, teams }: {
+function useShareController({ active: open, orgId, projectId, sessionId, teams, standaloneAgent = false }: {
 	/** Whether the surface is showing; closing it forgets everything but the shares themselves. */
 	active: boolean;
 	orgId: string;
@@ -247,6 +247,8 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams }
 	sessionId?: string;
 	/** Sharing with people and teams (Teams builds); off, links only. */
 	teams: boolean;
+	/** A Cloud standalone agent: its owner's alone, so the workspace's people reach it only when added. */
+	standaloneAgent?: boolean;
 }) {
 	const { t, i18n } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
@@ -258,7 +260,9 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams }
 	const workspace = org?.id === orgId ? org : undefined;
 	const workspaceName = workspace?.displayName;
 	// A personal workspace has nobody else in it, so "people in <it>" reads oddly.
-	const personal = isPersonalWorkspace(workspace);
+	// Nobody else in the workspace can open a standalone agent either, so it
+	// reads the same: only its owner and the people added.
+	const personal = standaloneAgent || isPersonalWorkspace(workspace);
 	const queryClient = useQueryClient();
 	// Opened for a project rather than a session: there is no session to go back to.
 	const projectOnly = !sessionId;
@@ -689,7 +693,7 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams }
 	);
 
 	return {
-		orgId, projectId, projectOnly, scope, scopeSession, switchScope, view, openSettings, closeSettings, staging, canStepBack, stepBack, initialFocus,
+		orgId, projectId, projectOnly, standaloneAgent, scope, scopeSession, switchScope, view, openSettings, closeSettings, staging, canStepBack, stepBack, initialFocus,
 		contentRef, fieldInputRef, copyButtonRef, backButtonRef, ready, peopleAvailable, error, locale: i18n.language,
 		staged, setStaged, stagedRole, setStagedRole, stagedCap, setStagedCap, share, unavailable, submitShare, cancelStaging, ownEntries, myEmail,
 		access, ordered, workspaceName, personal, update, accessKey, stopEntry, undoNotice, links, restricted, turnOnLinks, askTurnOff, askChange,
@@ -706,7 +710,7 @@ type ShareController = ReturnType<typeof useShareController>;
  * settings and Close on top, the SharePanel, then Copy link beside Done.
  * Without a session it shares the whole project only.
  */
-export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true }: {
+export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true, standaloneAgent = false }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	orgId: string;
@@ -719,9 +723,11 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	projectName?: string;
 	/** Sharing with people and teams (Teams builds); off, the dialog is links only. */
 	people?: boolean;
+	/** A Cloud standalone agent's session: its project is the agent, so there is no whole project to share instead. */
+	standaloneAgent?: boolean;
 }) {
 	const { t } = useTranslation();
-	const share = useShareController({ active: open, orgId, projectId, sessionId, teams });
+	const share = useShareController({ active: open, orgId, projectId, sessionId, teams, standaloneAgent });
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const { scope, view, staging, projectOnly } = share;
 	const title = scope === "project"
@@ -776,9 +782,11 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 									<span className="min-w-0 truncate">
 										{scope === "project"
 											? t("share.projectIncludes")
-											: projectName ? t("share.sessionIn", { project: projectName }) : t("share.sessionInProject")}
+											: standaloneAgent
+												? t("share.standaloneAgent")
+												: projectName ? t("share.sessionIn", { project: projectName }) : t("share.sessionInProject")}
 									</span>
-									{projectOnly ? null : (
+									{projectOnly || standaloneAgent ? null : (
 										<>
 											<span aria-hidden="true">·</span>
 											{/* A dotted underline, as Add Project's "Start without a repo", so it
@@ -869,7 +877,7 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 				if (!share.isPending) share.reset();
 			}}
 			unavailable={unavailable}
-			workspaceHasAccess
+			workspaceHasAccess={!controller.standaloneAgent}
 			placeholder={t("share.addPeopleOrTeams")}
 			ariaLabel={t("share.addPeopleOrTeams")}
 			onNewTeam={(people, typed) => {

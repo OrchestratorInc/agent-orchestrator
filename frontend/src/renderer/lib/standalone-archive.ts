@@ -1,5 +1,5 @@
 import {
-	STANDALONE_WORKSPACE_ID,
+	ownScratchpadWorkspaces,
 	workerSessions,
 	type WorkspaceSession,
 	type WorkspaceSummary,
@@ -22,8 +22,7 @@ export function isArchivedSession(session: WorkspaceSession): boolean {
 export function archivedStandaloneSessions(
 	workspaces: readonly WorkspaceSummary[],
 ): WorkspaceSession[] {
-	const standalone = workspaces.find((workspace) => workspace.id === STANDALONE_WORKSPACE_ID);
-	return workerSessions(standalone?.sessions ?? [])
+	return workerSessions(ownScratchpadWorkspaces(workspaces).flatMap((workspace) => workspace.sessions))
 		.filter(isArchivedSession)
 		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }

@@ -1148,6 +1148,59 @@ describe("Sidebar", () => {
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "adhoc-1" } });
 	});
 
+	it("lists the person's Cloud standalone agents in the Scratchpad, badged, and opens each on its project's route", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				workspace,
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [{ ...session, id: "adhoc-1", title: "baby", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" }],
+				},
+				{
+					id: "agent-1",
+					name: "Fix the flake",
+					kind: "cloud",
+					cloudOrgId: "org-1",
+					standaloneAgent: true,
+					path: "",
+					sessions: [{ ...session, id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake", cloud: { orgId: "org-1" } }],
+				},
+				{
+					id: "agent-shared",
+					name: "Shared agent",
+					kind: "cloud",
+					cloudOrgId: "org-2",
+					standaloneAgent: true,
+					shared: { source: "link" },
+					path: "",
+					sessions: [{ ...session, id: "shared-agent", title: "Their work", workspaceId: "agent-shared", workspaceName: "Shared agent", cloud: { orgId: "org-2", shared: true } }],
+				},
+			],
+		});
+
+		const section = document.querySelector("[data-scratchpad-section]")!;
+		expect(section).toContainElement(screen.getByText("baby"));
+		const agentRow = screen.getByText("Fix the flake").closest("[data-session-row]")!;
+		expect(section).toContainElement(agentRow as HTMLElement);
+		// Only the Cloud agent carries the badge that tells it from a local one.
+		expect(within(agentRow as HTMLElement).getByText("Cloud")).toBeInTheDocument();
+		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByText("Cloud")).toBeNull();
+		// It is no project of its own; a standalone agent shared with the person stays with the shared projects.
+		expect(document.querySelector('li[data-project-id="agent-1"]')).toBeNull();
+		expect(document.querySelector('li[data-project-id="agent-shared"]')).not.toBeNull();
+		expect(section).not.toContainElement(screen.queryByText("Their work"));
+
+		await user.click(screen.getByText("Fix the flake"));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "agent-1", sessionId: "cloud-agent" },
+		});
+	});
+
 	it("collapses the Scratchpad section from its header", async () => {
 		const user = userEvent.setup();
 		renderSidebar({

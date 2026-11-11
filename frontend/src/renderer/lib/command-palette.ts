@@ -399,7 +399,8 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 	});
 
 	if (currentProject) {
-		if (currentProject.id !== STANDALONE_WORKSPACE_ID) {
+		// A Cloud standalone agent has no orchestrator either.
+		if (currentProject.id !== STANDALONE_WORKSPACE_ID && !currentProject.standaloneAgent) {
 			items.push({
 				id: "current-open-orchestrator",
 				group: "current",
@@ -490,7 +491,8 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		items.push(sessionCommand(workspace, session, "attention"));
 	}
 
-	for (const workspace of workspaces.filter((candidate) => candidate.id !== STANDALONE_WORKSPACE_ID)) {
+	// Cloud standalone agents are the Scratchpad's, not projects; their sessions are listed.
+	for (const workspace of workspaces.filter((candidate) => candidate.id !== STANDALONE_WORKSPACE_ID && !candidate.standaloneAgent)) {
 		items.push({
 			id: `project:${workspace.id}`,
 			group: "projects",

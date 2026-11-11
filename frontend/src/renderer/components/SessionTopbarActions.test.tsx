@@ -294,6 +294,24 @@ describe("SessionTopbarActions embedded actions", () => {
 		expect(plain.container.querySelector("[data-session-owner-tag]")).toBeNull();
 	});
 
+	it("offers no orchestrator in a Cloud standalone agent, which has none", () => {
+		const agent = sessionWith({ workspaceId: "agent-1", workspaceName: "Fix the flake", cloud: { orgId: "org" } });
+		const data: WorkspaceSummary[] = [
+			{ id: "agent-1", name: "Fix the flake", path: "", kind: "cloud", cloudOrgId: "org", standaloneAgent: true, sessions: [agent] },
+		];
+		useWorkspaceQueryMock.mockReturnValue({ data, isError: false, isLoading: false, isSuccess: true });
+		paramsMock.projectId = "agent-1";
+		paramsMock.sessionId = agent.id;
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<SessionTopbarActions />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.queryByRole("button", { name: "Open orchestrator" })).toBeNull();
+	});
+
 	it("renders only session actions when embedded in the terminal bar", () => {
 		renderTopbar(
 			sessionWith(),

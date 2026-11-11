@@ -76,6 +76,7 @@ import {
 	resolveNextNavigationAfterSessionKill,
 	workerSessions,
 	CLOUD_PROJECT_KIND,
+	ownScratchpadWorkspaces,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
@@ -933,15 +934,22 @@ export const Sidebar = memo(function Sidebar({
 
 	// The ad hoc group is a bucket for projectless sessions, not a project: it
 	// gets its own Scratchpad section below the project list rather than a
-	// project row appended to the end of it.
-	const projectWorkspaces = useMemo(
-		() => orderedWorkspaces.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND),
-		[orderedWorkspaces],
-	);
-	const standaloneWorkspace = useMemo(
-		() => workspaces.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND),
-		[workspaces],
-	);
+	// project row appended to the end of it. The person's own Cloud standalone
+	// agents join it there; each keeps its project, which routes it.
+	const projectWorkspaces = useMemo(() => {
+		const scratchpads = new Set(ownScratchpadWorkspaces(orderedWorkspaces));
+		return orderedWorkspaces.filter((workspace) => !scratchpads.has(workspace));
+	}, [orderedWorkspaces]);
+	const standaloneWorkspace = useMemo((): WorkspaceSummary | undefined => {
+		const scratchpads = ownScratchpadWorkspaces(workspaces);
+		const local = scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND);
+		if (scratchpads.length === 0) return undefined;
+		if (scratchpads.length === 1 && local) return local;
+		return {
+			...(local ?? scratchpadSummary(t("standalone.workspaceName"))),
+			sessions: scratchpads.flatMap((workspace) => workspace.sessions),
+		};
+	}, [t, workspaces]);
 	const projectAvatars = useProjectAvatars(projectWorkspaces);
 	const {
 		listed: visibleWorkspaces,
@@ -2327,6 +2335,11 @@ const ProjectItem = memo(function ProjectItem({
 	);
 }, projectItemPropsEqual);
 
+/** The Scratchpad section's own fields, for when it holds Cloud standalone agents alone. */
+function scratchpadSummary(name: string): Pick<WorkspaceSummary, "id" | "name" | "kind" | "path"> {
+	return { id: STANDALONE_WORKSPACE_ID, name, kind: STANDALONE_PROJECT_KIND, path: "" };
+}
+
 /** Projectless ("ad hoc") agents. Their own section under Projects — same
  *  header chrome, own capped scroller, own Show more — instead of a project row
  *  appended to the project list. */
@@ -2379,16 +2392,22 @@ function ScratchpadSection({
 		},
 		[sessions],
 	);
+	// A Cloud standalone agent opens on its own project's route, a local one on
+	// the scratchpad's.
+	const scratchpadRouteOf = (sessionId: string) => {
+		const session = workspace.sessions.find((candidate) => candidate.id === sessionId);
+		return session?.cloud ? session.workspaceId : STANDALONE_WORKSPACE_ID;
+	};
 	const openSession = useLatestCallback((sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
-		selection.goSession(STANDALONE_WORKSPACE_ID, sessionId);
+		selection.goSession(scratchpadRouteOf(sessionId), sessionId);
 	});
 	const handleSessionKilled = useLatestCallback((killedSession: WorkspaceSession) => {
 		if (selection.activeSessionId !== killedSession.id) return;
 		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
 		// An ad hoc agent has no project board to fall back to.
 		if (nextRoute.target === "session") {
-			selection.goSession(STANDALONE_WORKSPACE_ID, nextRoute.sessionId);
+			selection.goSession(scratchpadRouteOf(nextRoute.sessionId), nextRoute.sessionId);
 		} else {
 			selection.goHome();
 		}
@@ -2486,6 +2505,7 @@ function ScratchpadSection({
 						sessionIds={listedSessionIds}
 						activeSessionId={selection.activeSessionId}
 						indented={false}
+						cloudBadge
 						onReorder={commitSessionOrder}
 						onKilled={handleSessionKilled}
 						onOpen={openSession}
@@ -2530,12 +2550,14 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
+	hostLabel,
 	onKilled,
 	onOpen,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
+	hostLabel?: string;
 	indented?: boolean;
 	layoutDependency?: string;
 	listIsDragging: boolean;
@@ -2559,6 +2581,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 		<SessionRow
 			session={session}
 			active={active}
+			hostLabel={hostLabel}
 			indented={indented}
 			onKilled={onKilled}
 			onOpen={open}
@@ -2581,6 +2604,7 @@ function SessionReorderList({
 	activeSessionId,
 	indented = true,
 	plain = false,
+	cloudBadge = false,
 	onReorder,
 	onKilled,
 	onOpen,
@@ -2592,6 +2616,8 @@ function SessionReorderList({
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
+	/** Badge Cloud sessions, in a list (the Scratchpad) that mixes them with local ones. */
+	cloudBadge?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
 	 *  otherwise every expanded project's DnD context measures its sortable
 	 *  descendants on drop. */
@@ -2600,6 +2626,8 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
+	const { t } = useTranslation();
+	const hostLabelOf = (session: WorkspaceSession) => cloudBadge && session.cloud ? t("shell.cloudProjectBadge") : undefined;
 	// Suppress the vertical glide for the first 500ms after the list mounts, so the
 	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
 	const [layoutSettled, setLayoutSettled] = useState(false);
@@ -2649,6 +2677,7 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
+						hostLabel={hostLabelOf(session)}
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2676,6 +2705,7 @@ function SessionReorderList({
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
+							hostLabel={hostLabelOf(session)}
 							indented={indented}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}

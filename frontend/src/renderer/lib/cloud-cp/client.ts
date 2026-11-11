@@ -27,6 +27,9 @@ import type {
 	CloudCpCreateGitHubRepositoryRequest,
 	CloudCpCreateGitHubRepositoryResponse,
 	CloudCpCreateStandaloneProjectRequest,
+	CloudCpCreateStandaloneAgentRequest,
+	CloudCpProjectListQuery,
+	CloudCpStandaloneAgentResponse,
 	CloudCpCreateProjectRequest,
 	CloudCpCreateSessionRequest,
 	CloudCpErrorEnvelope,
@@ -200,7 +203,7 @@ export interface CloudCpClient {
 
 	listProjects(
 		orgId: string,
-		query?: CloudCpListQuery,
+		query?: CloudCpProjectListQuery,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpProjectListResponse>;
 	createProject(
@@ -623,6 +626,12 @@ export interface CloudCpClient {
 		body: CloudCpCreateStandaloneProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
+	/** A standalone agent: its own project and its one worker session (POST /orgs/{orgId}/standalone-agents). */
+	createStandaloneAgent(
+		orgId: string,
+		body: CloudCpCreateStandaloneAgentRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpStandaloneAgentResponse>;
 }
 
 /** A value per key; an array repeats the key once per item. */
@@ -871,7 +880,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 
 		listProjects: (orgId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/projects`, {
-				query: { limit: query?.limit, cursor: query?.cursor },
+				query: { limit: query?.limit, cursor: query?.cursor, standaloneAgents: query?.standaloneAgents },
 				signal: o?.signal,
 			}),
 		createProject: (orgId, body, o) =>
@@ -1292,6 +1301,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		createStandaloneProject: (orgId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/projects/standalone`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		createStandaloneAgent: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/standalone-agents`, {
 				body,
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),

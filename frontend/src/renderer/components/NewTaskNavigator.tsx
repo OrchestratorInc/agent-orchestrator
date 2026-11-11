@@ -6,7 +6,7 @@ import { useCloudProjectsQuery, workspaceQueryKeyForHost } from "../hooks/useWor
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useUiStore } from "../stores/ui-store";
-import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { NewTaskDialog } from "./NewTaskDialog";
 
 // Every New Task entry point (⌘N / Ctrl+Shift+N, sidebar, topbar, board, home,
@@ -30,7 +30,9 @@ export function NewTaskNavigator() {
 		lastNonce.current = newTaskRequest.nonce;
 		const { projectId, hostId } = newTaskRequest;
 		const cloudProject = hostId ? undefined : cloudProjects?.find((project) => project.id === projectId);
-		if (cloudProject && projectSandboxProvider(cloudProject.config, cloudOffering) === CODER_PROVIDER) {
+		// A Cloud standalone agent runs one session: a new task beside it is another agent.
+		const target = cloudProject?.standaloneAgent ? CLOUD_STANDALONE_WORKSPACE_ID : projectId;
+		if (cloudProject && !cloudProject.standaloneAgent && projectSandboxProvider(cloudProject.config, cloudOffering) === CODER_PROVIDER) {
 			// An open dialog keeps its form rather than retargeting to another project.
 			setDialog((current) => current.open ? current : { open: true, projectId, hostId });
 			return;
@@ -38,7 +40,7 @@ export function NewTaskNavigator() {
 		void navigate({
 			to: "/new",
 			search: {
-				project: projectId === STANDALONE_WORKSPACE_ID ? undefined : projectId,
+				project: target === STANDALONE_WORKSPACE_ID ? undefined : target,
 				host: hostId,
 			},
 			// A new task from the new chat page replaces it rather than stacking history.

@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { appI18n } from "../i18n";
 import type { WorkspaceSummary } from "../types/workspace";
 
-const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTrustedApiBaseUrlMock, listProjectsMock, listSessionArtifactsMock, listSessionsMock, listSharedProjectSessionsMock, listSharedProjectsMock, remoteGetMock } = vi.hoisted(
+const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTrustedApiBaseUrlMock, listProjectsMock, listStandaloneAgentsMock, listSessionArtifactsMock, listSessionsMock, listSharedProjectSessionsMock, listSharedProjectsMock, remoteGetMock } = vi.hoisted(
 	() => ({
 		captureRendererEventMock: vi.fn().mockResolvedValue(undefined),
 		cloudState: { ready: false, org: undefined as { id: string } | undefined },
@@ -13,6 +13,7 @@ const { captureRendererEventMock, cloudState, getMock, getSessionMock, hasTruste
 		getSessionMock: vi.fn(),
 		hasTrustedApiBaseUrlMock: vi.fn(() => true),
 		listProjectsMock: vi.fn(),
+		listStandaloneAgentsMock: vi.fn(),
 		listSessionArtifactsMock: vi.fn(),
 		listSessionsMock: vi.fn(),
 		listSharedProjectSessionsMock: vi.fn(),
@@ -33,7 +34,9 @@ vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => ({
 		client: {
 			getSession: getSessionMock,
-			listProjects: listProjectsMock,
+			// The projects list and the standalone agents list are read apart.
+			listProjects: (orgId: string, query?: { standaloneAgents?: string }) =>
+				query?.standaloneAgents === "only" ? listStandaloneAgentsMock(orgId, query) : listProjectsMock(orgId, query),
 			listSessionArtifacts: listSessionArtifactsMock,
 			listSessions: listSessionsMock,
 			listSharedProjectSessions: listSharedProjectSessionsMock,
@@ -82,6 +85,7 @@ beforeEach(() => {
 	cloudState.ready = false;
 	cloudState.org = undefined;
 	listProjectsMock.mockReset();
+	listStandaloneAgentsMock.mockReset().mockResolvedValue({ items: [], page: { hasMore: false } });
 	listSessionsMock.mockReset().mockResolvedValue({ items: [] });
 	listSessionArtifactsMock.mockReset();
 	listSharedProjectSessionsMock.mockReset();
@@ -772,7 +776,48 @@ describe("useWorkspaceQuery", () => {
 			sessions: [],
 		});
 		expect(result.current.data?.[2]).toMatchObject({ id: "__standalone__", name: "Scratchpad" });
-		expect(listProjectsMock).toHaveBeenCalledWith("org-1", { limit: 100 });
+		expect(listProjectsMock).toHaveBeenCalledWith("org-1", { limit: 100, standaloneAgents: "exclude" });
+		expect(listStandaloneAgentsMock).toHaveBeenCalledWith("org-1", { limit: 100, standaloneAgents: "only" });
+	});
+
+	it("scopes the shell to a Cloud standalone agent as one", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		listProjectsMock.mockResolvedValue({ items: [], page: { hasMore: false } });
+		listStandaloneAgentsMock.mockResolvedValue({ items: [{
+			id: "agent-1", orgId: "org-1", displayName: "Agent", repositoryUrl: "https://scratch.ao.local/agent-1", defaultBranch: "main",
+			config: {}, standalone: true, standaloneAgent: true, createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
+		}], page: { hasMore: false } });
+		respondWith({});
+
+		const { result } = renderHook(() => useWorkspaceScope("agent-1"), { wrapper });
+		await waitFor(() => expect(result.current.data?.project).toMatchObject({ id: "agent-1", kind: "cloud", standaloneAgent: true }));
+	});
+
+	it("lists Cloud standalone agents beside the projects, flagged, and each project once", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		const project = (id: string, extra: Record<string, unknown> = {}) => ({
+			id, orgId: "org-1", displayName: id, repositoryUrl: `https://scratch.ao.local/${id}`, defaultBranch: "main",
+			config: {}, createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z", ...extra,
+		});
+		// A control plane without standalone agents lists every project in both.
+		listProjectsMock.mockResolvedValue({ items: [project("cp-1")], page: { hasMore: false } });
+		listStandaloneAgentsMock.mockResolvedValue({ items: [project("cp-1"), project("agent-1", { standalone: true, standaloneAgent: true })], page: { hasMore: false } });
+		listSessionsMock.mockResolvedValue({ items: [{
+			id: "s-agent", orgId: "org-1", projectId: "agent-1", kind: "worker", harness: "claude-code", displayName: "Agent", status: "working",
+			activityState: "active", isTerminated: false, prs: [], createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z",
+		}] });
+		respondWith({});
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data?.some((workspace) => workspace.id === "agent-1")).toBe(true));
+
+		expect(result.current.data?.filter((workspace) => workspace.id === "cp-1")).toHaveLength(1);
+		expect(result.current.data?.find((workspace) => workspace.id === "cp-1")?.standaloneAgent).toBeUndefined();
+		const agent = result.current.data?.find((workspace) => workspace.id === "agent-1");
+		expect(agent).toMatchObject({ kind: "cloud", standaloneAgent: true });
+		expect(agent?.sessions.map((session) => session.id)).toEqual(["s-agent"]);
 	});
 
 	it("maps Cloud failing-check details into the shared PR facts", async () => {

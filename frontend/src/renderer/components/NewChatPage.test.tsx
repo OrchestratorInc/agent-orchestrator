@@ -7,6 +7,8 @@ import type { ApprovalMode } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
+import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
+import { CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 
 const h = vi.hoisted(() => ({
 	navigate: vi.fn(),
@@ -24,6 +26,7 @@ const h = vi.hoisted(() => ({
 	approvalModes: undefined as ApprovalMode[] | undefined,
 	modelWarning: undefined as string | undefined,
 	modelWarningRetries: true,
+	offering: { ready: false, org: undefined as { id: string } | undefined, features: [] as string[] },
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -68,6 +71,7 @@ vi.mock("./TaskComposer", () => ({
 		renderEffortControl: () => null,
 	}),
 }));
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => h.offering }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }] }),
 	useRemoteWorkspaces: () => ({ data: [] }),
@@ -100,6 +104,7 @@ beforeEach(() => {
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
 	h.modelWarningRetries = true;
+	h.offering = { ready: false, org: undefined, features: [] };
 	window.localStorage.clear();
 });
 
@@ -178,6 +183,41 @@ describe("NewChatPage", () => {
 		// A cloud session opens on its own surface, so no local echo is seeded for it.
 		expect(queryClientEchos()).toBeUndefined();
 		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "cloud-sess-1" } })));
+	});
+
+	it("offers a Cloud scratchpad beside the local one where Cloud starts standalone agents", async () => {
+		const user = userEvent.setup();
+		// The project picker sits in the composer's tray.
+		const openPicker = async () => {
+			cleanup();
+			render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
+			const tray = h.workspace?.composerTray;
+			cleanup();
+			render(<QueryClientProvider client={new QueryClient()}>{tray}</QueryClientProvider>);
+			await user.click(screen.getByRole("button", { name: "Project: Scratchpad" }));
+		};
+		await openPicker();
+		expect(await screen.findByRole("menuitem", { name: "Scratchpad" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Cloud scratchpad" })).toBeNull();
+
+		h.offering = { ready: true, org: { id: "org-1" }, features: ["share", "standalone_agents"] };
+		await openPicker();
+		await user.click(await screen.findByRole("menuitem", { name: "Cloud scratchpad" }));
+		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
+	});
+
+	it("opens a new Cloud standalone agent on the project the control plane made for it", async () => {
+		h.isCloudProject = true;
+		h.launch.mockImplementation(async () => {
+			rememberStandaloneAgent("agent-sess-1", "agent-1");
+			return "agent-sess-1";
+		});
+		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-1"); });
+		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "agent-1", sessionId: "agent-sess-1" },
+		})));
 	});
 
 	it("takes attachments before a workspace exists and uploads them with the task", async () => {

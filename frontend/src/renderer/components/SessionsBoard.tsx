@@ -12,7 +12,7 @@ import {
 import { AlertTriangle, Archive, RotateCw } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
-	STANDALONE_PROJECT_KIND,
+	isScratchpadWorkspace,
 	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	isOrchestratorSession,
@@ -133,12 +133,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
 	useSessionShortcut("open-orchestrator", () => {
-		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.shared) return;
+		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || isScratchpadWorkspace(workspace) || workspace?.shared) return;
 		projectActions.openOrchestrator();
 	}, Boolean(projectId) && !projectActions.isSpawning && !isProvisioning);
 	useSessionMenuAvailable(
 		"open-orchestrator",
-		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && workspace?.kind !== STANDALONE_PROJECT_KIND && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
+		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && !isScratchpadWorkspace(workspace) && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
 	);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);

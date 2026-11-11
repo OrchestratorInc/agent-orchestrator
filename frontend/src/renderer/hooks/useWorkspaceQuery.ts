@@ -465,6 +465,16 @@ export function refreshCloudSessionLifecycle(queryClient: QueryClient): Promise<
  * providers (Coder) are left to the next list refresh, so their start is
  * unchanged.
  */
+/**
+ * Adds a standalone agent's project the desktop just created to the projects
+ * list, so its session, listed under that project, shows in the Scratchpad and
+ * opens at once rather than after the list's next read.
+ */
+export function seedCreatedStandaloneAgent(queryClient: QueryClient, baseUrl: string, orgId: string, project: CloudCpProject): void {
+	queryClient.setQueryData<CloudCpProject[]>([...cloudProjectsQueryKey, baseUrl, orgId], (current) =>
+		current === undefined || current.some((candidate) => candidate.id === project.id) ? current : [...current, project]);
+}
+
 export function seedCreatedFreestyleSession(queryClient: QueryClient, baseUrl: string, orgId: string, session: CloudCpSession): void {
 	if (session.sandboxProvider !== FREESTYLE_PROVIDER) return;
 	queryClient.setQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, baseUrl, orgId], (current) =>
@@ -573,6 +583,7 @@ export function toCloudWorkspace(project: CloudCpProject, sessions: CloudCpSessi
 				workspaceRepos: projectRepositoryUrls(project).map((url) => ({ name: repoDirName(url), relativePath: repoDirName(url), repo: url })),
 			}
 			: {}),
+		...(project.standaloneAgent ? { standaloneAgent: true } : {}),
 		// Cloud projects run in control-plane sandboxes; there is no local folder.
 		path: "",
 		sessions: sessions
@@ -655,9 +666,16 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 		queryFn: async (): Promise<CloudCpProject[]> => {
 			if (orgId === undefined) return [];
 			// First page only (control-plane max page size); pagination UI is a
-			// later phase alongside cloud sessions.
-			const response = await client.listProjects(orgId, { limit: 100 });
-			return response.items;
+			// later phase alongside cloud sessions. Every standalone agent is a
+			// project of its own, so the projects and the agents are read apart:
+			// many agents would otherwise page the projects out. A control plane
+			// without agents lists every project in both, once each here.
+			const [projects, agents] = await Promise.all([
+				client.listProjects(orgId, { limit: 100, standaloneAgents: "exclude" }),
+				client.listProjects(orgId, { limit: 100, standaloneAgents: "only" }),
+			]);
+			const listed = new Set(projects.items.map((project) => project.id));
+			return [...projects.items, ...agents.items.filter((project) => !listed.has(project.id))];
 		},
 	});
 }
@@ -1181,7 +1199,7 @@ export function useRemoteSessionProjectKind(sessionId: string, hostId?: string):
 }
 
 export type WorkspaceScope = {
-	project?: Pick<WorkspaceSummary, "id" | "kind" | "name" | "orchestratorAgent">;
+	project?: Pick<WorkspaceSummary, "id" | "kind" | "name" | "orchestratorAgent" | "standaloneAgent">;
 	hasWorkerSessions: boolean;
 	session?: WorkspaceSession;
 	orchestrator?: WorkspaceSession;
@@ -1206,6 +1224,7 @@ function selectWorkspaceScope(
 				kind: workspace.kind,
 				name: workspace.name,
 				orchestratorAgent: workspace.orchestratorAgent,
+				...(workspace.standaloneAgent ? { standaloneAgent: true } : {}),
 			}
 		: undefined;
 	return {

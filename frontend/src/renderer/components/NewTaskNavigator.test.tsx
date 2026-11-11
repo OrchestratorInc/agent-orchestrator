@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { NewTaskNavigator } from "./NewTaskNavigator";
 
 const { navigateMock, route, dialog } = vi.hoisted(() => ({
@@ -24,10 +24,16 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudProjectsQuery: () => ({ data: [
 		{ id: "cloud-1", config: { sandboxProvider: "freestyle" } },
 		{ id: "coder-1", config: { sandboxProvider: "coder" } },
+		// A standalone agent's project on an organization that defaults to Coder.
+		{ id: "agent-1", config: {}, standaloneAgent: true },
 	] }),
 	workspaceQueryKeyForHost: () => ["workspaces"],
 }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "freestyle", loaded: true }) }));
+vi.mock("../lib/cloud-offering", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/cloud-offering")>()),
+	projectSandboxProvider: (config: { sandboxProvider?: string } | undefined) => config?.sandboxProvider ?? "coder",
+}));
 vi.mock("./NewTaskDialog", () => ({
 	NewTaskDialog: (props: { open: boolean; projectId?: string }) => {
 		dialog.props = props;
@@ -69,6 +75,13 @@ describe("NewTaskNavigator", () => {
 		renderNavigator();
 		act(() => useUiStore.getState().requestNewTask("proj-1"));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/new", search: { project: "proj-1", host: undefined }, replace: true });
+	});
+
+	it("starts another Cloud standalone agent for a new task beside one, never a second session in it", () => {
+		renderNavigator();
+		act(() => useUiStore.getState().requestNewTask("agent-1"));
+		expect(navigateMock).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: { project: CLOUD_STANDALONE_WORKSPACE_ID, host: undefined } }));
+		expect(dialog.props).toMatchObject({ open: false });
 	});
 
 	it("opens the new chat page for cloud projects too", () => {
