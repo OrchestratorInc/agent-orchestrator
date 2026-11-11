@@ -100,6 +100,30 @@ func TestDragInAOWindowRefusesWhatItCannotRun(t *testing.T) {
 	}
 }
 
+func TestDragInAOWindowRefusesBadCoordinatesBeforeAnyGesture(t *testing.T) {
+	s, app, _ := ownWindowService(t)
+	ctx := context.Background()
+	if _, err := s.Call(ctx, CallRequest{Tool: "get_window_state", Arguments: map[string]any{"pid": 7, "window_id": 9}, SessionID: "w"}); err != nil {
+		t.Fatal(err)
+	}
+	var apiErr *apierr.Error
+	for name, toX := range map[string]any{"missing": nil, "null": nil, "text": "30"} {
+		bad := drag(7, 9)
+		arguments := bad["drag"].(map[string]any)
+		delete(arguments, "to_x")
+		if name != "missing" {
+			arguments["to_x"] = toX
+		}
+		_, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": []any{drag(7, 9), bad}}, SessionID: "w"})
+		if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_DRAG_COORDINATES" {
+			t.Fatalf("%s to_x error = %v", name, err)
+		}
+	}
+	if len(app.drags) != 0 {
+		t.Fatalf("a batch with a bad drag still moved the pointer: %v", app.drags)
+	}
+}
+
 func TestDragInOtherAppsStaysWithTheDriver(t *testing.T) {
 	s, app, tools := ownWindowService(t)
 	if _, err := s.Call(context.Background(), CallRequest{Tool: "run_steps", Arguments: map[string]any{"steps": []any{drag(8, 9)}}, SessionID: "w"}); err != nil {

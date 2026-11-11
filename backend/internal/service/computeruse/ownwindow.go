@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 )
 
 // OwnApp is the AO desktop app that runs drags in its own windows.
@@ -87,8 +88,7 @@ func (s *Service) ownWindowDrags(arguments map[string]any) ([]ownWindowDrag, Own
 }
 
 func (s *Service) runOwnWindowDrags(ctx context.Context, sessionID string, session any, drags []ownWindowDrag, app OwnApp) (map[string]any, error) {
-	reports := make([]any, 0, len(drags))
-	ok := true
+	requests := make([]map[string]any, 0, len(drags))
 	for index, step := range drags {
 		if step.drag["from_zoom"] == true {
 			return nil, actionRefused("COMPUTER_USE_OWN_WINDOW_ZOOM", "drag", index+1,
@@ -102,19 +102,27 @@ func (s *Service) runOwnWindowDrags(ctx context.Context, sessionID string, sessi
 				"Read the Orchestrator window with get_window_state first, then measure the drag on that screenshot.")
 		}
 		drag := map[string]any{"windowId": step.windowID}
-		for key, name := range map[string]string{"from_x": "fromX", "to_x": "toX"} {
-			value, _ := number(step.drag[key])
-			drag[name] = value * scale.xScale
-		}
-		for key, name := range map[string]string{"from_y": "fromY", "to_y": "toY"} {
-			value, _ := number(step.drag[key])
-			drag[name] = value * scale.yScale
+		for key, axis := range map[string]struct {
+			name  string
+			scale float64
+		}{"from_x": {"fromX", scale.xScale}, "to_x": {"toX", scale.xScale}, "from_y": {"fromY", scale.yScale}, "to_y": {"toY", scale.yScale}} {
+			value, ok := number(step.drag[key])
+			if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
+				return nil, actionRefused("COMPUTER_USE_DRAG_COORDINATES", "drag", index+1,
+					"A drag needs numbers for from_x, from_y, to_x and to_y, measured on the window's get_window_state screenshot.")
+			}
+			drag[axis.name] = value * axis.scale
 		}
 		for key, name := range map[string]string{"duration_ms": "durationMs", "steps": "steps", "button": "button", "modifier": "modifiers"} {
 			if has(step.drag, key) {
 				drag[name] = step.drag[key]
 			}
 		}
+		requests = append(requests, drag)
+	}
+	reports := make([]any, 0, len(requests))
+	ok := true
+	for index, drag := range requests {
 		value, err := app.Drag(ctx, sessionID, drag)
 		report := map[string]any{"step": index + 1, "tool": "drag", "ok": err == nil}
 		if err != nil {
