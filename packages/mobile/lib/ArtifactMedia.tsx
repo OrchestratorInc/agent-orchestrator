@@ -1,7 +1,7 @@
 import { useEvent } from "expo";
 import { useVideoPlayer, VideoView, type VideoPlayer } from "expo-video";
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { haptics } from "./haptics";
 import { formatMediaTime } from "./mediaTime";
 import { Feather } from "./icons";
@@ -11,14 +11,21 @@ import { fontScaleCap, iconSize, space, type } from "./tokens";
 import { EmptyState } from "./ui";
 import { useGlassBarInset } from "./useHeaderOverlap";
 
+// How long a failed Cloud source waits for its renewed address before saying it can't play.
+const RENEW_WAIT_MS = 10_000;
+
 /**
  * A video or audio artifact in the platform's own player, as the desktop plays
  * it in a media element. The player sends the connection's credential with
  * every request it makes, ranges included: a WebView sends it only with the
  * page load, so its player's own requests were refused. A page swiped off
- * screen pauses.
+ * screen pauses, and a neighbouring page not yet shown loads nothing.
+ *
+ * A Cloud source is a signed address that expires: a player that fails asks
+ * for fresh access once (`renew`) and plays from the new address, and says it
+ * can't play only if that fails too, as the web viewer does.
  */
-export function ArtifactMedia({ source, kind, active, name, label, hint }: {
+export function ArtifactMedia({ source, kind, active, name, label, hint, renew }: {
 	/** A daemon's source carries the credential; Cloud's signed address needs none. */
 	source: { uri: string; headers?: Record<string, string> };
 	kind: "video" | "audio";
@@ -29,10 +36,19 @@ export function ArtifactMedia({ source, kind, active, name, label, hint }: {
 	label: string;
 	/** Where else it can be opened, said with the format when it cannot play here. */
 	hint?: string;
+	/** Asks for fresh access after a refused load (Cloud's signed address ran out). */
+	renew?: () => void;
 }) {
+	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const glassInset = useGlassBarInset();
-	const player = useVideoPlayer(source, (created) => {
+	// The gallery mounts the pages beside the one on screen: until a page is
+	// shown, its player has no file, so nothing is buffered for a video not opened.
+	const [shown, setShown] = useState(active);
+	useEffect(() => {
+		if (active) setShown(true);
+	}, [active]);
+	const player = useVideoPlayer(shown ? source : null, (created) => {
 		created.loop = false;
 		// Audio draws its own position; a video's controls draw theirs.
 		if (kind === "audio") created.timeUpdateEventInterval = 0.25;
@@ -41,7 +57,24 @@ export function ArtifactMedia({ source, kind, active, name, label, hint }: {
 	useEffect(() => {
 		if (!active) player.pause();
 	}, [active, player]);
-	if (status === "error") {
+	const failed = status === "error";
+	// The address the player failed on, when fresh access was asked for.
+	const [renewedFrom, setRenewedFrom] = useState<string>();
+	const [renewTimedOut, setRenewTimedOut] = useState(false);
+	useEffect(() => {
+		if (!failed || !renew || renewedFrom !== undefined) return;
+		setRenewedFrom(source.uri);
+		renew();
+	}, [failed, renew, renewedFrom, source.uri]);
+	// Still on the address that failed, within the wait: the renewed one is on its way.
+	const awaitingRenewal = failed && Boolean(renew) && (renewedFrom === undefined || renewedFrom === source.uri) && !renewTimedOut;
+	useEffect(() => {
+		if (!awaitingRenewal) return;
+		const timer = setTimeout(() => setRenewTimedOut(true), RENEW_WAIT_MS);
+		return () => clearTimeout(timer);
+	}, [awaitingRenewal]);
+	if (awaitingRenewal) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	if (failed) {
 		return <View style={styles.center}><EmptyState icon={kind === "video" ? { ios: "video.slash", android: "videocam_off" } : { ios: "speaker.slash", android: "music_off" }} title={kind === "video" ? "This video can't play on the phone" : "This audio can't play on the phone"} message={hint ? `${label}\n${hint}` : label} /></View>;
 	}
 	// A rewritten file is a new source: fresh controls, so none of the last player's state (playing) carries over.

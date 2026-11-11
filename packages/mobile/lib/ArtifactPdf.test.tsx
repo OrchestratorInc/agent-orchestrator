@@ -93,4 +93,21 @@ describe("ArtifactPdf", () => {
 		const root = await show({ active: true, size: 2048 });
 		expect(root.root.find((node) => (node.type as unknown) === "EmptyState").props.title).toBe("Too large to preview on the phone");
 	});
+
+	it("asks Cloud for fresh access once when a download is refused, and downloads again with it", async () => {
+		const renew = vi.fn();
+		const cloud = (root: string) => ({ key: "cloud", cloud: true, streamSource: () => ({ uri: `${root}spec.pdf` }), renew }) as unknown as ArtifactsBackend;
+		mocks.downloadArtifact.mockRejectedValueOnce(new Error("403"));
+		const element = (backend: ArtifactsBackend) => createElement(ArtifactPdf, { backend, sessionId: "ao-1", artifact: { path: "spec.pdf", updatedAt: "v1", size: 2048 }, active: true, label: "PDF file", hint: "" });
+		await act(async () => { renderer = create(element(cloud("https://signed/old/"))); });
+		await act(async () => {});
+		expect(renew).toHaveBeenCalledTimes(1);
+		// Still loading, not failed: the renewed backend is on its way.
+		expect(renderer!.root.findAll((node) => (node.type as unknown) === "EmptyState")).toHaveLength(0);
+		await act(async () => { renderer!.update(element(cloud("https://signed/new/"))); });
+		await act(async () => {});
+		expect(mocks.downloadArtifact).toHaveBeenCalledTimes(2);
+		expect((mocks.downloadArtifact.mock.calls[1] as unknown[])[0]).toEqual({ uri: "https://signed/new/spec.pdf" });
+		expect(renderer!.root.findAll((node) => (node.type as unknown) === "PdfRendererView")).toHaveLength(1);
+	});
 });

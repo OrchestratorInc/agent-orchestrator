@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import PdfRendererView from "react-native-pdf-renderer";
 import { ArtifactTooLargeError, discardArtifact, downloadArtifact } from "./artifactDownload";
@@ -10,7 +10,10 @@ import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { Button, EmptyState } from "./ui";
 import { useGlassBarInset } from "./useHeaderOverlap";
 
-type PdfState = { key: string; uri?: string; error?: string; tooLarge?: boolean };
+type PdfState = { key: string; uri?: string; error?: string; tooLarge?: boolean; renewing?: boolean };
+
+// How long a refused Cloud download waits for renewed access before saying it failed.
+const RENEW_WAIT_MS = 10_000;
 
 /**
  * A PDF artifact drawn by the platform's PDF renderer (Android's PdfRenderer),
@@ -21,6 +24,10 @@ type PdfState = { key: string; uri?: string; error?: string; tooLarge?: boolean 
  * Only the page on screen downloads: a neighbouring page in the gallery waits
  * until it is swiped to (a download it started keeps going, and is picked up
  * again). A file over MAX_ARTIFACT_DOWNLOAD_BYTES is not downloaded at all.
+ *
+ * Cloud's address is signed and expires, and the native download cannot renew
+ * it itself: a refused download asks for fresh access once (`backend.renew`),
+ * and the renewed backend downloads again. Try again may ask once more.
  */
 export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint }: {
 	/** The paired machine's daemon, or Orchestrator Cloud. */
@@ -43,7 +50,9 @@ export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint 
 	const entry = useMemo(() => artifactCacheEntry(machine, sessionId, artifact.path, artifact.updatedAt), [artifact.path, artifact.updatedAt, machine, sessionId]);
 	const [state, setState] = useState<PdfState>();
 	const [attempt, setAttempt] = useState(0);
-	const settled = state?.key === key;
+	const renewed = useRef(false);
+	// Waiting on renewed access is not settled: the renewed backend runs the download again.
+	const settled = state?.key === key && !state.renewing;
 	useEffect(() => {
 		if (!active || settled) return;
 		let live = true;
@@ -62,12 +71,29 @@ export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint 
 			(uri) => { if (live) setState({ key, uri }); },
 			(cause) => {
 				if (!live) return;
-				setState(cause instanceof ArtifactTooLargeError ? { key, tooLarge: true } : { key, error: userFacingError(cause, "The PDF didn't download.") });
+				if (cause instanceof ArtifactTooLargeError) {
+					setState({ key, tooLarge: true });
+					return;
+				}
+				if (backend.renew && !renewed.current) {
+					renewed.current = true;
+					backend.renew();
+					setState({ key, renewing: true });
+					return;
+				}
+				setState({ key, error: userFacingError(cause, "The PDF didn't download.") });
 			},
 		);
 		return () => { live = false; };
 	}, [active, artifact.path, artifact.size, artifact.updatedAt, attempt, backend, entry, key, sessionId, settled]);
-	const retry = <Button title="Try again" icon="refresh-cw" onPress={() => { setState(undefined); setAttempt((n) => n + 1); }} />;
+	// Renewal that brings no new access ends in the error, with Try again.
+	const renewing = state?.key === key && state.renewing === true;
+	useEffect(() => {
+		if (!renewing) return;
+		const timer = setTimeout(() => setState({ key, error: "Orchestrator Cloud didn't renew access to this file." }), RENEW_WAIT_MS);
+		return () => clearTimeout(timer);
+	}, [key, renewing]);
+	const retry = <Button title="Try again" icon="refresh-cw" onPress={() => { renewed.current = false; setState(undefined); setAttempt((n) => n + 1); }} />;
 	if (settled && state.tooLarge) return <View style={styles.center}><EmptyState icon="file" title="Too large to preview on the phone" message={`${label}\n${hint}`} /></View>;
 	if (settled && state.error) return <View style={styles.center}><EmptyState icon="file" title="Couldn't load this PDF" message={state.error} action={retry} /></View>;
 	if (!settled || !state.uri) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;

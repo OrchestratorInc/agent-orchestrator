@@ -470,7 +470,7 @@ function ArtifactBody({ backend, sessionId, artifact, active, versionOf, onAsk }
 		case "video":
 		case "audio": {
 			const stream = backend.streamSource(sessionId, artifact.path, artifact.updatedAt);
-			return stream ? <ArtifactMedia source={stream} kind={kind} active={active} name={artifact.name} label={artifactFormatLabel(artifact)} hint={hint} /> : <NoPreview artifact={artifact} cloud={backend.cloud} />;
+			return stream ? <ArtifactMedia source={stream} kind={kind} active={active} name={artifact.name} label={artifactFormatLabel(artifact)} hint={hint} renew={backend.renew} /> : <NoPreview artifact={artifact} cloud={backend.cloud} />;
 		}
 		case "pdf":
 			// Android's WebView has no PDF viewer: the platform's renderer draws it instead.
