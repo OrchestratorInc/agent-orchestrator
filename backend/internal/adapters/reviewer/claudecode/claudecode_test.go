@@ -324,8 +324,8 @@ func TestReviewRestoreCommandEmitsResumeWithPolicySystemPromptAndTask(t *testing
 	}
 	for _, want := range [][]string{
 		{"--permission-mode", "auto"},
-		{"--allowedTools", strings.Join(reviewerAllowedTools, ",")},
-		{"--disallowedTools", strings.Join(reviewerDisallowedTools, ",")},
+		{"--allowedTools", strings.Join(workeragent.ReviewerAllowedTools, ",")},
+		{"--disallowedTools", strings.Join(workeragent.ReviewerDisallowedTools, ",")},
 		{"--append-system-prompt-file", systemPromptFile},
 		{"--resume", persistedID},
 		{"--", "read the new task file"},
