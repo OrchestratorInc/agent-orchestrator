@@ -148,10 +148,19 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				}
 				if action.name == "enable" {
 					// A new device pairs with a one-time code, not the password that
-					// works until it is rotated. A daemon without pairing codes
+					// works until it is rotated. Only a daemon without pairing codes
 					// prints the password, as before.
 					var pairing remoteHostPairingCode
-					if err := ctx.doJSON(cmd.Context(), http.MethodPost, "mobile/pairing-code", nil, &pairing); err == nil && pairing.Code != "" {
+					err := ctx.doJSON(cmd.Context(), http.MethodPost, "mobile/pairing-code", nil, &pairing)
+					var apiErr apiResponseError
+					unsupported := errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusNotFound || apiErr.StatusCode == http.StatusNotImplemented)
+					switch {
+					case unsupported:
+					case err != nil:
+						return remoteHostDaemonError(err)
+					case pairing.Code == "":
+						return errors.New("the daemon returned an empty pairing code; run `ao remote-host pair`")
+					default:
 						return printPairingCode(cmd, pairing)
 					}
 				}
