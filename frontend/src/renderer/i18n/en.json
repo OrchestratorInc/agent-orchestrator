@@ -367,6 +367,7 @@
 	"firstRun.showFewerHarnesses": "Show fewer",
 	"firstRun.moreHarnessesList": "More harnesses",
 	"firstRun.installHowTo": "How to install",
+	"firstRun.installOtherWays": "Other ways to install",
 	"firstRun.installDidNotFinish": "The install didn't finish.",
 	"firstRun.ghDocs": "Get the GitHub CLI",
 	"firstRun.orchPoint1Title": "Describe the outcome",

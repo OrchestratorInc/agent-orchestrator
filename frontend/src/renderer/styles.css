@@ -6496,7 +6496,7 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
  * window it takes the chrome treatment (clear canvases, the one 70% tint) back
  * from the floating-surface rule above, and the shell under it is hidden so
  * the desktop blur shows through instead of the app. */
-html[data-window-translucent="true"]:has(.first-run-onboarding) .app-shell-root {
+html[data-window-translucent="true"]:has(.first-run-onboarding:not([data-aside])) .app-shell-root {
 	visibility: hidden;
 }
 
