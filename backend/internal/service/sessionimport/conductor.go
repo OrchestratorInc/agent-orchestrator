@@ -416,6 +416,8 @@ func readConductorTranscript(ctx context.Context, root string, paths ...string) 
 		return t, errNoReadableConversation
 	case len(native) > 0:
 		return named(readClaudeTranscript(ctx, conductorClaudeRoot(), native...))
+	case !filepath.IsAbs(chat.cwd):
+		return t, errNoReadableConversation
 	}
 	t.nativeID, t.cwd, t.path = chat.nativeID, chat.cwd, paths[0]
 	var items []tagged

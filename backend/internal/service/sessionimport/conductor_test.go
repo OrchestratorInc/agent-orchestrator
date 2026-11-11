@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,6 +70,18 @@ func TestConductorChatsPlaceWorkspacesLikeConductor(t *testing.T) {
 	want := []string{"/src/one/berlin @ /src/one/.main", "/src/two @ /src/two", "/src/two/.conductor/paris @ /src/two", "/data/c/workspaces/three/tokyo @ /src/three", "/kept/lima @ /src/three", "/src/four/oslo @ /src/four/.main"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("folders = %q, want %q", got, want)
+	}
+}
+
+func TestConductorSkipsAChatWithoutAWorkspaceFolder(t *testing.T) {
+	root := t.TempDir()
+	_, exec := newConductorDB(t, root)
+	exec(`INSERT INTO repos (id, name, root_path, storage_version) VALUES ('r1', 'one', '/src/one', 2)`)
+	exec(`INSERT INTO workspaces (id, local_id, repository_id) VALUES ('c1', 'w1', 'r1')`)
+	exec(`INSERT INTO sessions (id, workspace_id, agent_type) VALUES ('11111111-1111-4111-8111-111111111111', 'w1', 'claude')`)
+	exec(`INSERT INTO session_messages (id, session_id, role, content, sent_at) VALUES ('m1', '11111111-1111-4111-8111-111111111111', 'user', 'hi', datetime('now'))`)
+	if _, err := readConductorTranscript(context.Background(), root, "11111111-1111-4111-8111-111111111111"); !errors.Is(err, errNoReadableConversation) {
+		t.Fatalf("read = %v, want errNoReadableConversation", err)
 	}
 }
 
