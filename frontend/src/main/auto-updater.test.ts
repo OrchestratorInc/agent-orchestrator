@@ -3637,6 +3637,7 @@ const TRANSLOCATED_EXEC_PATH =
 
 describe("quitAndInstallUpdate", () => {
   afterEach(() => {
+    vi.doUnmock("node:fs");
     vi.restoreAllMocks();
     vi.resetModules();
   });
@@ -4014,10 +4015,67 @@ describe("quitAndInstallUpdate", () => {
     const restore = stubProcess("darwin", execPath);
     try {
       const { module, autoUpdater } = await importAutoUpdater(undefined, { nativeReadyManually: true });
-      await expect(module.quitAndInstallUpdate()).rejects.toThrow(/writ/);
+      await module.startAutoUpdates(stateDir);
+      const blocker = module.getMacInstallBlocker();
+      if (location === "bundle") {
+        expect(blocker).toContain(`app bundle isn't writable: ${bundle}`);
+        expect(blocker).toContain(`owner UID ${process.getuid!()}`);
+        expect(blocker).not.toContain("location isn't writable");
+        expect(blocker).not.toContain("another user account");
+      } else {
+        expect(blocker).toContain(`location isn't writable: ${root}`);
+        expect(blocker).not.toContain("owner UID");
+      }
+      await expect(module.quitAndInstallUpdate()).rejects.toThrow(blocker);
+      expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     } finally {
       restore(); chmodSync(root, 0o755); chmodSync(bundle, 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([true, false])("identifies a foreign bundle owner when parent writable is %s", async (parentWritable) => {
+    const { root, bundle, execPath } = makeBundle();
+    chmodSync(bundle, 0o555);
+    if (!parentWritable) chmodSync(root, 0o555);
+    const restore = stubProcess("darwin", execPath);
+    try {
+      vi.doMock("node:fs", async (importOriginal) => ({
+        ...await importOriginal<typeof import("node:fs")>(),
+        statSync: () => ({ uid: 502 }),
+      }));
+      vi.spyOn(process, "getuid").mockReturnValue(501);
+      const { module, autoUpdater } = await importAutoUpdater();
+      const blocker = module.getMacInstallBlocker();
+      expect(blocker).toContain(`app bundle isn't writable: ${bundle}`);
+      expect(blocker).toContain("another user account (owner UID 502; your UID 501)");
+      expect(blocker).toContain("Reinstall Orchestrator from the DMG");
+      expect(blocker).not.toContain("location isn't writable");
+      await expect(module.quitAndInstallUpdate()).rejects.toThrow(blocker);
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally {
+      restore(); chmodSync(root, 0o755); chmodSync(bundle, 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still explains a bundle permission failure when its owner cannot be read", async () => {
+    const { root, bundle, execPath } = makeBundle();
+    chmodSync(bundle, 0o555);
+    const restore = stubProcess("darwin", execPath);
+    try {
+      vi.doMock("node:fs", async (importOriginal) => ({
+        ...await importOriginal<typeof import("node:fs")>(),
+        statSync: () => { throw new Error("stat failed"); },
+      }));
+      const { module } = await importAutoUpdater();
+      const blocker = module.getMacInstallBlocker();
+      expect(blocker).toContain(`app bundle isn't writable: ${bundle}`);
+      expect(blocker).not.toContain("owner UID");
+      expect(blocker).not.toContain("another user account");
+    } finally {
+      restore(); chmodSync(bundle, 0o755);
       rmSync(root, { recursive: true, force: true });
     }
   });

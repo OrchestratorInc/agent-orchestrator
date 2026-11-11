@@ -8,7 +8,7 @@ import { app, dialog, powerMonitor, autoUpdater as nativeAutoUpdater } from "ele
 import { startMacUpdateProgress } from "./mac-update-progress";
 import { markUpdateRelaunch } from "./update-relaunch-flag";
 import { createUpdateDiagnostics } from "./update-diagnostics";
-import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, readdirSync, statfsSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, readdirSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -2964,10 +2964,10 @@ export async function setMacDifferentialUpdates(
 // from where it was downloaded runs under App Translocation: a randomized
 // READ-ONLY mount beneath /private/var/folders/.../AppTranslocation. Squirrel
 // cannot replace that bundle, so quitAndInstall() silently does nothing: no
-// restart, no error, a dead button (#3527). The same dead end applies to any
-// bundle the user cannot write to, and to a writable bundle in a directory the
-// user cannot write to: ShipIt swaps by moving the bundle aside and moving the
-// new one in, so the PARENT is what has to be writable, not just the bundle.
+// restart, no error, a dead button (#3527). Keep the permission preflight for
+// the bundle and its parent until Squirrel's privileged ShipIt path has been
+// verified end to end on supported macOS versions. ShipIt swaps by moving the
+// bundle aside and moving the new one in, so check both paths separately.
 // Returns the user-facing explanation when installing cannot work from here,
 // undefined when the install may proceed. Fails open: only a positively
 // identified blocker suppresses the attempt.
@@ -2996,6 +2996,23 @@ export function getMacInstallBlocker(): string | undefined {
   if (!existsSync(bundle)) return undefined;
   try {
     accessSync(bundle, fsConstants.W_OK);
+  } catch {
+    let ownership = "";
+    try {
+      const ownerUid = statSync(bundle).uid;
+      const currentUid = process.getuid!();
+      ownership = ownerUid === currentUid
+        ? ` (owner UID ${ownerUid})`
+        : `. It is owned by another user account (owner UID ${ownerUid}; your UID ${currentUid})`;
+    } catch { /* Owner metadata is helpful, but the permission failure is known. */ }
+    return (
+      "The update can't be installed because the Orchestrator app bundle isn't " +
+      `writable: ${bundle}${ownership}. Reinstall Orchestrator from the DMG, or ask ` +
+      "an administrator to fix the app bundle's ownership and permissions, " +
+      "reopen it, and then restart to update."
+    );
+  }
+  try {
     // ShipIt writes into the enclosing directory, not just the bundle.
     accessSync(path.dirname(bundle), fsConstants.W_OK);
   } catch {

@@ -52,6 +52,12 @@ describe("coerceLocale", () => {
 });
 
 describe("app i18next instance", () => {
+	it.each(APP_LOCALES)("names Orchestrator in update preparation failures for %s", (locale) => {
+		const message = allCatalogs[locale]["update.restart.prepareFailed"];
+		expect(message).toContain("Orchestrator");
+		expect(message).not.toMatch(/\bAO\b/);
+	});
+
 	it("provides a brief side-chat description in every locale", () => {
 		for (const locale of APP_LOCALES) {
 			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
