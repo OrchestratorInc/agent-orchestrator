@@ -50,23 +50,24 @@ export function rememberChatSettingsTemplate(harness: string, hostId: string | u
 }
 
 const SKILLS_KEY = "ao.chat.skills.v1";
+const skillsKeyFor = (harness: string, projectId: string, hostId?: string) => `${hostId ?? "local"}:${projectId}:${harness}`;
 
-/** The skills a session of this agent last listed, for a new chat's "/" menu. */
-export function readChatSkills(harness: string, hostId?: string): ChatSkill[] {
+/** The skills a session of this agent last listed in this project, for a new chat's "/" menu. */
+export function readChatSkills(harness: string, projectId: string, hostId?: string): ChatSkill[] {
 	if (!harness) return [];
 	try {
 		const all: unknown = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
-		const skills = all && typeof all === "object" ? (all as Record<string, unknown>)[keyFor(harness, hostId)] : undefined;
+		const skills = all && typeof all === "object" ? (all as Record<string, unknown>)[skillsKeyFor(harness, projectId, hostId)] : undefined;
 		return Array.isArray(skills) ? (skills as ChatSkill[]) : [];
 	} catch {
 		return [];
 	}
 }
 
-export function rememberChatSkills(harness: string, hostId: string | undefined, skills: ChatSkill[]): void {
+export function rememberChatSkills(harness: string, projectId: string, hostId: string | undefined, skills: ChatSkill[]): void {
 	try {
 		const all: Record<string, ChatSkill[]> = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
-		const key = keyFor(harness, hostId);
+		const key = skillsKeyFor(harness, projectId, hostId);
 		if (JSON.stringify(all[key]) === JSON.stringify(skills)) return;
 		all[key] = skills;
 		storage()?.setItem(SKILLS_KEY, JSON.stringify(all));

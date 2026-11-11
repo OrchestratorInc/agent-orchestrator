@@ -408,13 +408,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const skillsHarness = snapshot?.harness;
 	useEffect(() => {
 		if (session.kind !== "worker" || !skillsHarness || !liveSkillsLoaded) return;
-		rememberChatSkills(skillsHarness, hostId, liveSkills);
-	}, [hostId, session.kind, liveSkills, liveSkillsLoaded, skillsHarness]);
+		rememberChatSkills(skillsHarness, session.workspaceId, hostId, liveSkills);
+	}, [hostId, session.kind, session.workspaceId, liveSkills, liveSkillsLoaded, skillsHarness]);
 	const skills = useMemo(
 		() => liveSkillsLoaded || !skillsHarness || session.cloud
 			? liveSkills
-			: readChatSkills(skillsHarness, hostId),
-		[hostId, liveSkills, liveSkillsLoaded, session.cloud, skillsHarness],
+			: readChatSkills(skillsHarness, session.workspaceId, hostId),
+		[hostId, liveSkills, liveSkillsLoaded, session.cloud, session.workspaceId, skillsHarness],
 	);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
