@@ -4,6 +4,7 @@ import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { shouldPoll } from "../../lib/appStatePoll";
 import { ChatSessionScreen } from "../../lib/chat/ChatSessionScreen";
 import { hostRouteMatches } from "../../lib/hostRoute";
+import { rememberLastProject } from "../../lib/lastProject";
 import { lookUpSession } from "../../lib/session/sessionLookup";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
 import {
@@ -41,6 +42,8 @@ function SessionRouteContent() {
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
+	const listedProjectId = listed?.projectId;
+	useEffect(() => { rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, listedProjectId]);
 	const key = sessionLookupKey(machine, id);
 	const [stored, setStored] = useState<KeyedSessionLookup | null>(null);
 	const [attempt, setAttempt] = useState(0);

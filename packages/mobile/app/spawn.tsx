@@ -14,6 +14,7 @@ import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
+import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
@@ -122,18 +123,23 @@ export default function SpawnScreen() {
 		if (holding.current) event.preventDefault();
 	}), [navigation]);
 
-	// Seed from this machine's routed project, or the selected machine's active
-	// project. A project id is never carried across machines.
+	// Seed from this machine's routed project, the project last worked in on it,
+	// or the selected machine's active project. A project id is never carried
+	// across machines. Waits for the stored last project, or a board filter
+	// seeded first would stick.
+	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
+		if (!lastProject.loaded) return;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
 			routeHostId === selectedHostId ? routeProjectId : undefined,
 			selectedHostId === currentHostId ? activeProjectId : ALL_PROJECTS,
 			projects,
 			projectsKnown,
+			lastProject.projectId,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, currentHostId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+	}, [activeProjectId, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
 
 	useEffect(() => {
 		const requestedHostId = selectedHostId;
@@ -466,6 +472,7 @@ export default function SpawnScreen() {
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
+			else rememberLastProject(selectedHostId, projectId);
 			holding.current = false;
 			// Covered while the request ran (a notification or link can still
 			// open a page over this one): the worker shows up on the board, and
