@@ -39,7 +39,9 @@ type systemPromptConfig struct {
 	OrchestratorSessionID string
 	ProjectRules          string
 	OrchestratorRules     string
-	AdditionalSections    []string
+	// TimeZone is the user's IANA zone name; empty omits the section.
+	TimeZone           string
+	AdditionalSections []string
 }
 
 // projectRulesConfig loads standing rules text plus an optional repo-relative
@@ -106,7 +108,11 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	default:
 		return ""
 	}
-	sections = append(sections, userOrientationPrompt(), publishingScopePrompt(), systemPromptGuard())
+	sections = append(sections, userOrientationPrompt(), publishingScopePrompt())
+	if zone := timeZonePrompt(cfg.TimeZone); zone != "" {
+		sections = append(sections, zone)
+	}
+	sections = append(sections, systemPromptGuard())
 	for _, section := range cfg.AdditionalSections {
 		if section := strings.TrimSpace(section); section != "" {
 			sections = append(sections, section)
@@ -119,11 +125,17 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 // itself, Claude's narration varies widely from run to run in both the terminal
 // and chat (measured: anywhere from none to one per call on the same task), and
 // a run of bare "Ran command" rows leaves the user unable to tell what is
-// happening or what a later question refers to.
+// happening or what a later question refers to. The narration itself is
+// welcome; what reads as noise is Orchestrator's own plumbing (reading the ao
+// command guides, --help, report and artifact commands, ao output quirks). So
+// agents keep narrating, but describe Orchestrator steps in plain technical
+// terms and never mention the ao CLI or its internals.
 func userOrientationPrompt() string {
 	return `## Keeping the User Oriented
 
-The user follows your work as it happens, and tool calls show only as short rows. Before each tool call, or each batch of related calls, write one short sentence saying what you are about to do or what you just found. Name the specific things involved, such as files, branches or worktrees. Skip this only for a single trivial step.`
+The user follows your work as it happens, and tool calls show only as short rows. Before each tool call, or each batch of related calls, write a short, friendly sentence saying what you are about to do or what you just found. Name the specific things involved, such as files, functions, tests, branches or errors. Skip this only for a single trivial step.
+
+When a step uses Orchestrator's ` + "`ao`" + ` commands, describe what it does in plain technical terms, not the command: "Opening the page in the Browser panel", "Checking the page's console for errors", "Saving the page as a deliverable", "Letting the orchestrator know this is done". Do not mention the ` + "`ao`" + ` CLI, its command names, flags or output, the guides you read to use it, or how Orchestrator works internally, unless the user asks. Reading those guides and running ` + "`--help`" + ` need no narration at all. When you name the app, call it Orchestrator, not AO.`
 }
 
 // publishingScopePrompt clarifies authority without replacing the established

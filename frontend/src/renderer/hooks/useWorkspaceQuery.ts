@@ -316,6 +316,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 			kind,
 			path: project.path,
 			folderMissing: project.folderMissing,
+			autoSpawnPauses: project.autoSpawnPauses,
 			orchestratorAgent: project.orchestratorAgent ? toAgentProvider(project.orchestratorAgent) : undefined,
 			sessions: sessions
 				.filter((session) => session.projectId === project.id)
@@ -376,6 +377,7 @@ function toRemoteWorkspaces(
 		kind: toProjectKind(project.kind),
 		path: project.path,
 		folderMissing: project.folderMissing,
+		autoSpawnPauses: project.autoSpawnPauses,
 		orchestratorAgent: project.orchestratorAgent ? toAgentProvider(project.orchestratorAgent) : undefined,
 		sessions: sessions.filter((session) => session.projectId === project.id).map((session) => ({
 			...toWorkspaceSession(session, project),
@@ -947,6 +949,18 @@ export function useRemoteProjectQuery(hostId: string, projectId: string) {
 		queryFn: () => fetchRemoteWorkspaces(hostId),
 		select,
 		enabled: Boolean(hostId && projectId),
+		retry: 1,
+	});
+}
+
+/** Every project on one remote host, from the same cache as the board's
+ * project query. The archive modal reads it, only while it is open. */
+export function useRemoteHostWorkspacesQuery(hostId: string, options: WorkspaceSubscriptionOptions = {}) {
+	return useQuery({
+		queryKey: remoteWorkspaceQueryKey(hostId),
+		queryFn: () => fetchRemoteWorkspaces(hostId),
+		enabled: Boolean(hostId) && options.enabled !== false,
+		subscribed: options.subscribed,
 		retry: 1,
 	});
 }

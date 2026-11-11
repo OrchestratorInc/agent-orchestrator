@@ -7,6 +7,7 @@ import { orchestratorProjectSections, projectDetailSessions, projectPageStats } 
 import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
 import { Spinner } from "../../lib/Spinner";
 import { StaleBanner } from "../../lib/StaleBanner";
+import { rememberLastProject } from "../../lib/lastProject";
 import { HostScope, useApp } from "../../lib/store";
 import { useCloud } from "../../lib/cloud/CloudProvider";
 import { isCloudHost } from "../../lib/cloud/mapping";
@@ -60,6 +61,9 @@ function ProjectScreenContent() {
 			: undefined,
 		[projects, sessions, orchestrators, id, hostMatches],
 	);
+	const listedProjectId = row?.project.id;
+	// On focus, not mount: coming back here from a task started elsewhere makes this the last project again.
+	useFocusEffect(useCallback(() => { if (hostMatches) rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, hostMatches, listedProjectId]));
 	const title = row?.project.name ?? "Project";
 	// The native header's title, and this page's name in the back-history menu
 	// of a page opened from here.

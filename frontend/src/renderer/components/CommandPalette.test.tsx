@@ -456,6 +456,20 @@ describe("CommandPalette workspace file search", () => {
 		expect(await screen.findByPlaceholderText("Search files")).toBeInTheDocument();
 	});
 
+	it("opens the current project's archive over the page without navigating", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		useUiStore.setState({ archiveModal: null });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+
+		fireEvent.click(document.querySelector('[cmdk-item][data-value="current-open-archive"]')!);
+
+		await waitFor(() => expect(useUiStore.getState().archiveModal).toMatchObject({ projectId: "proj-1" }));
+		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
 	it("does not call workspace search until two characters settle", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		getMock.mockResolvedValue({ data: { query: "", results: [], truncated: false } });

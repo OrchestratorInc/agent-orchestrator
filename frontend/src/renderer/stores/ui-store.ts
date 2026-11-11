@@ -5,6 +5,7 @@ import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucen
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
+import type { TerminalClickMode } from "../lib/terminal-mouse";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
@@ -125,6 +126,7 @@ export type GlobalToast = {
 	tone?: "info" | "error" | "success";
 	placement?: "bottom-right" | "top-center" | "bottom-center";
 	dismissible?: boolean;
+	/** Zero keeps the toast visible until explicitly dismissed. */
 	durationMs?: number;
 	dedupeKey?: string;
 	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */
@@ -155,6 +157,26 @@ export type ChatMessageFocusRequest = {
 	reviewId?: string;
 	nonce: number;
 };
+
+/** What the archive modal shows. */
+export type ArchiveModalRequest = {
+	/** The project it starts scoped to; unset shows every project on the host. */
+	projectId?: string;
+	hostId?: string;
+	/** Prefills the search. */
+	query?: string;
+	/**
+	 * Where focus goes once the modal closes: the board's button, the sidebar
+	 * menu's trigger or row, or wherever Cmd+K was opened from. The dialog has
+	 * no trigger of its own to return to.
+	 */
+	returnFocus?: HTMLElement | null;
+	/** New for every request, so a request made while open retargets it. */
+	nonce: number;
+};
+
+// Monotonic across closes, so a request is never mistaken for the last one.
+let archiveModalNonce = 0;
 
 // Selection (which project/session is open) now lives in the URL — the router
 // is the single source of truth, read via route params. This store holds only
@@ -189,6 +211,15 @@ export type UiState = {
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	/**
+	 * Where plain terminal clicks go when the running program has asked for the
+	 * mouse (DECSET 1000/1002/1003). "app" reports them to the program, like a
+	 * native terminal; Option (macOS) or Shift (elsewhere) still selects text.
+	 * "select" always selects text, the behavior before this setting existed.
+	 */
+	terminalClickMode: TerminalClickMode;
+	/** The one-time "hold Option to select text" hint has been shown. */
+	terminalSelectHintShown: boolean;
 	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
 	chatSendKeyMode: ChatSendKeyMode;
 	navigationGestures: boolean;
@@ -222,10 +253,10 @@ export type UiState = {
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
-	// One-shot "open this project's archive" from Cmd+K. The project's board
-	// consumes it when it is (or becomes) the visible page; `at` lets a request
-	// whose board never showed up expire instead of firing on a later visit.
-	archiveOpenRequest: { projectId: string; hostId?: string; nonce: number; at: number } | null;
+	// The archive modal, open over whatever page is showing (the shell hosts
+	// it). Null while closed. Every entry point (the board's Archive button,
+	// a sidebar project's menu, Cmd+K) opens it here; none navigates.
+	archiveModal: ArchiveModalRequest | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
@@ -268,6 +299,8 @@ export type UiState = {
 	setSplitPanes: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setTerminalClickMode: (mode: TerminalClickMode) => void;
+	markTerminalSelectHintShown: () => void;
 	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
@@ -316,8 +349,8 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
-	requestArchiveOpen: (projectId: string, hostId?: string) => void;
-	clearArchiveOpenRequest: (nonce: number) => void;
+	openArchive: (request: Omit<ArchiveModalRequest, "nonce">) => void;
+	closeArchive: () => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
@@ -344,6 +377,8 @@ const sideChatsStorageKey = "ao.sideChats";
 const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
 const splitPanesStorageKey = "ao.splitPanes";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const terminalClickModeStorageKey = "ao.terminalClickMode";
+const terminalSelectHintShownStorageKey = "ao.terminalSelectHintShown";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
@@ -382,6 +417,10 @@ function initialSessionImportOfferClosed() {
 	} catch {
 		return false;
 	}
+}
+
+function initialTerminalClickMode(): TerminalClickMode {
+	return getLocalStorage()?.getItem(terminalClickModeStorageKey) === "select" ? "select" : "app";
 }
 
 function initialTerminalCopyOnSelect() {
@@ -457,6 +496,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
+	terminalClickMode: initialTerminalClickMode(),
+	terminalSelectHintShown: getLocalStorage()?.getItem(terminalSelectHintShownStorageKey) === "true",
 	chatSendKeyMode: initialChatSendKeyMode(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
@@ -472,7 +513,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
-	archiveOpenRequest: null,
+	archiveModal: null,
 	firstRunPromptActive: false,
 	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
@@ -557,6 +598,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
+	},
+	setTerminalClickMode: (terminalClickMode) => {
+		getLocalStorage()?.setItem(terminalClickModeStorageKey, terminalClickMode);
+		set({ terminalClickMode });
+	},
+	markTerminalSelectHintShown: () => {
+		getLocalStorage()?.setItem(terminalSelectHintShownStorageKey, "true");
+		set({ terminalSelectHintShown: true });
 	},
 	setProjectAvatars: (projectAvatars) => {
 		getLocalStorage()?.setItem(projectAvatarsStorageKey, String(projectAvatars));
@@ -869,12 +918,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
-	requestArchiveOpen: (projectId, hostId) =>
-		set((state) => ({
-			archiveOpenRequest: { projectId, hostId, nonce: (state.archiveOpenRequest?.nonce ?? 0) + 1, at: Date.now() },
-		})),
-	clearArchiveOpenRequest: (nonce) =>
-		set((state) => (state.archiveOpenRequest?.nonce === nonce ? { archiveOpenRequest: null } : state)),
+	openArchive: (request) =>
+		set(() => {
+			archiveModalNonce += 1;
+			return { archiveModal: { ...request, nonce: archiveModalNonce } };
+		}),
+	closeArchive: () => set((state) => (state.archiveModal ? { archiveModal: null } : state)),
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {
