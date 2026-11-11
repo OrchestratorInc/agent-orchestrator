@@ -1428,9 +1428,9 @@ export const Sidebar = memo(function Sidebar({
 				<div
 					aria-hidden={isCollapsed || undefined}
 					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
-					// this way while an offcanvas sidebar slides away drops its content at once
-					// and leaves the footer's top border behind. aria-hidden and tabIndex -1
-					// already keep it out of reach while collapsed.
+					// this way while an offcanvas sidebar slides away drops its content at once,
+					// before the slide finishes. aria-hidden and tabIndex -1 already keep it
+					// out of reach while collapsed.
 					hidden={isIconRail}
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col"
 				>
@@ -3172,7 +3172,7 @@ function FooterAccountRow({
 	const { configured } = useCloudSession();
 
 	return (
-		<div className={cn(FOOTER_BOTTOM_ROW_CLASS, "@container")}>
+		<div className={FOOTER_BOTTOM_ROW_CLASS}>
 			<div className="flex min-w-0 flex-1">
 				{configured ? (
 					<>
@@ -3336,7 +3336,7 @@ function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 
 // CloudAccountRow: avatar and name for an existing cloud session (the
 // signed-in state), opening the account menu. One line, no email: the email
-// and plan live in the menu header. On a narrow sidebar only the avatar stays.
+// and plan live in the menu header. At the narrowest sidebar the name truncates.
 // The sign-in entry point is CloudSignInRow.
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
@@ -3359,7 +3359,7 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					<NavRowHighlight />
 					<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2">
 						<AccountAvatar size="lg" user={session?.user} />
-						<span className="min-w-0 truncate text-sm font-medium tracking-tight text-foreground @max-[11rem]:hidden">
+						<span className="min-w-0 truncate text-sm font-medium tracking-tight text-foreground">
 							{accountShortName(session?.user)}
 						</span>
 					</span>
