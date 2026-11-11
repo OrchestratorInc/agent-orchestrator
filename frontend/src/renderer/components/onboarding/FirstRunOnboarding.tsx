@@ -963,30 +963,6 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 				<Waiting>{t("firstRun.toolsChecking")}</Waiting>
 			) : (
 				<div className="flex flex-col gap-5">
-					{/* GitHub is optional: agents still work locally without it. */}
-					<RowGroup title={t("firstRun.toolsGithubHeading")} hint={t("firstRun.toolsGithubHint")}>
-						<ul className={ROW_LIST}>
-							<CheckRow
-								icon={<GitHubIcon className="size-icon-base text-muted-foreground" />}
-								label={t("firstRun.githubTitle")}
-								detail={ghInstalled && !ghSignedIn ? t("firstRun.ghSignInHint") : undefined}
-								trailing={ghView.busy ? <RowSpinner />
-									: !ghInstalled && ghView.job?.status === "unsupported" ? null
-									: !ghInstalled ? (
-										<Button size="sm" variant="secondary" onClick={() => void ghInstall.start()}>
-											{ghView.ended ? t("startup.installTryAgain") : t("firstRun.install")}
-										</Button>
-									)
-									: ghSignedIn ? <RowState>{t("firstRun.signedIn")}</RowState>
-									: null}
-								below={ghView.busy && !ghInstalled ? <InstallProgress job={ghView.job} label={t("firstRun.githubTitle")} />
-									: ghView.ended && !ghInstalled ? <InstallProblem view={ghView} docsUrl={GITHUB_CLI_URL} docsLabel={t("firstRun.ghDocs")} />
-									: undefined}
-							/>
-						</ul>
-						{/* The existing login flow: an embedded `gh auth login` terminal. */}
-						{ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded /> : null}
-					</RowGroup>
 					<RowGroup title={t("firstRun.toolsAgentsHeading")} hint={t("firstRun.agentsBodyNone")}>
 						<ul className={ROW_LIST}>
 							{agents.map(({ agent, state }) => {
@@ -1024,6 +1000,30 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 								);
 							})}
 						</ul>
+					</RowGroup>
+					{/* GitHub is optional: agents still work locally without it. */}
+					<RowGroup title={t("firstRun.toolsGithubHeading")} hint={t("firstRun.toolsGithubHint")}>
+						<ul className={ROW_LIST}>
+							<CheckRow
+								icon={<GitHubIcon className="size-icon-base text-muted-foreground" />}
+								label={t("firstRun.githubTitle")}
+								detail={ghInstalled && !ghSignedIn ? t("firstRun.ghSignInHint") : undefined}
+								trailing={ghView.busy ? <RowSpinner />
+									: !ghInstalled && ghView.job?.status === "unsupported" ? null
+									: !ghInstalled ? (
+										<Button size="sm" variant="secondary" onClick={() => void ghInstall.start()}>
+											{ghView.ended ? t("startup.installTryAgain") : t("firstRun.install")}
+										</Button>
+									)
+									: ghSignedIn ? <RowState>{t("firstRun.signedIn")}</RowState>
+									: null}
+								below={ghView.busy && !ghInstalled ? <InstallProgress job={ghView.job} label={t("firstRun.githubTitle")} />
+									: ghView.ended && !ghInstalled ? <InstallProblem view={ghView} docsUrl={GITHUB_CLI_URL} docsLabel={t("firstRun.ghDocs")} />
+									: undefined}
+							/>
+						</ul>
+						{/* The existing login flow: an embedded `gh auth login` terminal. */}
+						{ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded /> : null}
 					</RowGroup>
 					<Button variant="ghost" size="sm" className="self-end text-muted-foreground" onClick={() => void checkAgain()} disabled={checking}>
 						<RefreshCw className={cn("size-icon-md", checking && "animate-spin")} aria-hidden="true" />
