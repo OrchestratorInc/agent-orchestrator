@@ -16,6 +16,11 @@ func (f usageLimitAccountReaderFunc) SessionLimits(ctx context.Context, id domai
 	return f(ctx, id, harness, refresh)
 }
 
+func (f usageLimitAccountReaderFunc) CachedSessionLimits(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (domain.AgentAccountLimits, bool) {
+	_, limits, err := f(ctx, id, harness, false)
+	return limits, err == nil
+}
+
 func TestUsageLimitAccountDeadlineRefreshAcrossProviders(t *testing.T) {
 	for _, provider := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
 		t.Run(string(provider), func(t *testing.T) {

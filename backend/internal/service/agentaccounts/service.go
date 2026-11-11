@@ -1041,6 +1041,26 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	return account.ID, *r.limits, nil
 }
 
+// CachedSessionLimits returns the session's account limits from the last
+// reading only. It never starts a CLI read.
+func (s *Service) CachedSessionLimits(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (domain.AgentAccountLimits, bool) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok {
+		return domain.AgentAccountLimits{}, false
+	}
+	account, err := s.boundAccount(ctx, id, p)
+	if err != nil {
+		return domain.AgentAccountLimits{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.readings[account.ID]
+	if r == nil || r.mismatch || r.identityErr != "" || r.limitsErr != "" || r.limits == nil {
+		return domain.AgentAccountLimits{}, false
+	}
+	return *r.limits, true
+}
+
 func (s *Service) boundAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
 	accountID, bound, err := s.store.GetSessionAgentAccount(ctx, id, p)
 	if err != nil {

@@ -32,6 +32,7 @@ type usageLimitStore interface {
 
 type usageLimitAccountReader interface {
 	SessionLimits(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error)
+	CachedSessionLimits(context.Context, domain.SessionID, domain.AgentHarness) (domain.AgentAccountLimits, bool)
 }
 
 // SetUsageLimitAccounts shares the account service's provider readings with recovery.
@@ -114,12 +115,8 @@ func (s *Service) resetEarly(ctx context.Context, store usageLimitStore, source 
 	if accounts == nil || source.CompletedAt == nil {
 		return false, nil
 	}
-	_, limits, err := accounts.SessionLimits(ctx, source.HandledBySessionID, harness, false)
-	if err != nil {
-		s.log.Debug("usage-limit account reading unavailable; waiting for turn reset", "session", source.HandledBySessionID, "error", err)
-		limits.Windows = nil
-	}
-	if len(limits.Windows) == 0 || !limits.FetchedAt.After(*source.CompletedAt) {
+	limits, ok := accounts.CachedSessionLimits(ctx, source.HandledBySessionID, harness)
+	if !ok || len(limits.Windows) == 0 || !limits.FetchedAt.After(*source.CompletedAt) {
 		return false, nil
 	}
 	for _, w := range limits.Windows {

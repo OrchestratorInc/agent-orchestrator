@@ -131,3 +131,23 @@ func TestSessionLimitsRefusesChangedBindingWithoutDefaultFallback(t *testing.T) 
 		})
 	}
 }
+
+func TestCachedSessionLimitsNeverReads(t *testing.T) {
+	svc, _, provider := sessionLimitsFixture(t)
+	ctx := context.Background()
+	reads := 0
+	provider.read = func(context.Context, string) (domain.AgentAccountLimits, error) {
+		reads++
+		return domain.AgentAccountLimits{FetchedAt: time.Unix(7, 0)}, nil
+	}
+	if _, ok := svc.CachedSessionLimits(ctx, "session", domain.HarnessClaudeCode); ok || reads != 0 {
+		t.Fatalf("cache miss: ok=%v reads=%d", ok, reads)
+	}
+	if _, _, err := svc.SessionLimits(ctx, "session", domain.HarnessClaudeCode, true); err != nil {
+		t.Fatal(err)
+	}
+	limits, ok := svc.CachedSessionLimits(ctx, "session", domain.HarnessClaudeCode)
+	if !ok || reads != 1 || limits.FetchedAt.Unix() != 7 {
+		t.Fatalf("cache hit: ok=%v reads=%d fetched=%v", ok, reads, limits.FetchedAt)
+	}
+}
