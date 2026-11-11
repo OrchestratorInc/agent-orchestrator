@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -71,6 +72,10 @@ func capacityObservationFromEnvelope(envelope capacityReadEnvelope, observedAt t
 			continue
 		}
 		if overall != nil && bucket.LimitID == overall.LimitID {
+			// A duplicate that disagrees with the overall bucket leaves capacity unknown.
+			if !reflect.DeepEqual(capacityState(*bucket), capacityState(*overall)) {
+				dropped = true
+			}
 			continue
 		}
 		additional = append(additional, *bucket)
@@ -82,6 +87,10 @@ func capacityObservationFromEnvelope(envelope capacityReadEnvelope, observedAt t
 		ObservedAt:   observedAt.UTC(), Partial: partial,
 		AutoResumeResetsAt: capacityAutoResumeReset(envelope, observedAt, partial), DroppedBucket: dropped,
 	}
+}
+
+func capacityState(b domain.CodexCapacityBucket) []any {
+	return []any{b.Primary, b.Secondary, b.Reached, b.InvalidWindow}
 }
 
 func capacityAutoResumeReset(envelope capacityReadEnvelope, now time.Time, partial bool) *time.Time {

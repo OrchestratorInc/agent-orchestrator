@@ -35,6 +35,15 @@ func TestCapacityNormalizationIncludesBucketsAndRejectsMalformedWindows(t *testi
 	if observed.AdditionalBuckets[0].InvalidWindow || observed.DroppedBucket {
 		t.Fatalf("absent window or valid bucket was flagged: %#v", observed)
 	}
+	envelope.RateLimitsByLimitID["codex"] = capacityWireBucket{LimitID: new("codex"), Primary: &capacityWireWindow{UsedPercent: new(81.0), WindowDurationMins: new(int64(300)), ResetsAt: new(int64(4102444800))}, Secondary: &capacityWireWindow{UsedPercent: new(101.0)}}
+	if capacityObservationFromEnvelope(envelope, time.Unix(1, 0), false).DroppedBucket {
+		t.Fatal("duplicate bucket matching the overall bucket was flagged")
+	}
+	envelope.RateLimitsByLimitID["codex"] = capacityWireBucket{LimitID: new("codex"), Primary: &capacityWireWindow{UsedPercent: new(100.0)}}
+	if !capacityObservationFromEnvelope(envelope, time.Unix(1, 0), false).DroppedBucket {
+		t.Fatal("duplicate bucket disagreeing with the overall bucket was not flagged")
+	}
+	delete(envelope.RateLimitsByLimitID, "codex")
 	envelope.RateLimitsByLimitID["bad"] = capacityWireBucket{LimitID: new(strings.Repeat("x", 161))}
 	if !capacityObservationFromEnvelope(envelope, time.Unix(1, 0), false).DroppedBucket {
 		t.Fatal("bucket with an invalid limit id was dropped without a flag")
