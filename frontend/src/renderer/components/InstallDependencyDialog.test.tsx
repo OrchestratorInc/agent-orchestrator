@@ -90,6 +90,28 @@ describe("InstallDependencyDialog", () => {
 		expect(await screen.findByText(/brew install tmux/)).toBeInTheDocument();
 	});
 
+	it("shows a row busy from the click, so a second click can't start the install again", async () => {
+		apiMocks.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/system/install/{target}") return { data: { target: "tmux", status: "idle" }, error: undefined };
+			return { data: undefined, error: undefined };
+		});
+		let answer: (value: unknown) => void = () => undefined;
+		apiMocks.post.mockReset().mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		render(
+			<InstallDependencyDialog
+				requirements={[{ id: "tmux", label: "tmux", required: true, satisfied: false }] as never}
+				onRefetchRequirements={vi.fn()}
+			/>,
+		);
+
+		await userEvent.click(await screen.findByRole("button", { name: "Install" }));
+		// The daemon hasn't answered: the row says it's installing, with no Install to press again.
+		expect(screen.getByText("Installing…")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Install" })).toBeNull();
+		expect(apiMocks.post).toHaveBeenCalledOnce();
+		answer({ data: { target: "tmux", status: "succeeded" }, error: undefined });
+	});
+
 	it("surfaces a failed Check again refresh", async () => {
 		apiMocks.post.mockResolvedValue({ data: undefined, error: { message: "daemon unavailable" } });
 		const refetch = vi.fn();
