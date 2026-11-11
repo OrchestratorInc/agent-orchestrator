@@ -162,6 +162,28 @@ func TestAnUnreadableRegistryIsMovedAside(t *testing.T) {
 	}
 }
 
+// A damaged registry that cannot be moved aside is never written over.
+func TestARegistryThatCannotBeMovedAsideIsKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "access-devices.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory at the .bad path makes the rename fail everywhere.
+	if err := os.MkdirAll(filepath.Join(path+".bad", "taken"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := LoadAccessDevices(path)
+	if err == nil {
+		t.Fatal("a damaged registry loaded without an error")
+	}
+	if _, _, err := devices.Issue("Phone", "ios", time.Now()); err == nil {
+		t.Fatal("a device paired over a registry that was not moved aside")
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != "{not json" {
+		t.Fatalf("the registry was written over: %q", raw)
+	}
+}
+
 func TestPairingCodesAreSingleUseAndExpire(t *testing.T) {
 	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
 	codes := NewPairingCodes(func() time.Time { return now })
