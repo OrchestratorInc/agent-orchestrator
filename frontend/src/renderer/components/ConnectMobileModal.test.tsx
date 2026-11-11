@@ -1249,18 +1249,12 @@ test("keeps the password hidden until asked for, and the QR never carries it", a
 	expect(document.body).not.toHaveTextContent("fake-password-for-testing");
 });
 
-test("requiring device credentials posts the choice and takes the password off the panel", async () => {
+test("takes the password off the panel once the host refuses it", async () => {
+	mobileStatus.requireDeviceCredentials = true;
 	renderMobileSettings();
-	const toggle = await screen.findByRole("switch", { name: "Require device credentials" });
-	expect(toggle).not.toBeChecked();
-	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
-		mobileStatus.requireDeviceCredentials = true;
-		return { data: structuredClone(mobileStatus), error: undefined };
-	});
-	await userEvent.click(toggle);
-	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/require-device-credentials", { body: { enabled: true } });
-	await waitFor(() => expect(screen.queryByTestId("mobile-pairing-password")).not.toBeInTheDocument());
-	expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent("Code1234");
+	expect(await screen.findByTestId("mobile-pairing-code")).toHaveTextContent("Code1234");
+	expect(screen.queryByTestId("mobile-pairing-password")).not.toBeInTheDocument();
+	expect(screen.queryByRole("switch", { name: /device credentials/i })).not.toBeInTheDocument();
 });
 
 test("never shows an expired pairing code", async () => {
