@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, Download, Info, Loader2, RefreshCw } from "@/components/app-icons";
+import { AlertTriangle, ArrowRight, CheckCircle2, Download, Info, Loader2, RefreshCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
@@ -254,6 +254,9 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 
 	return (
 		<>
+			{/* display: contents, so the sections stay direct children of the
+			    settings column; the class only scopes the roomier Updates spacing. */}
+			<div className="updates-spacious contents">
 			<SettingsSection title={t("settings.updates.versionSection")} sectionId="updates" titleHidden={titleHidden} grouped>
 				<UpdateActions
 					status={manualCheckFailure ? { ...status, state: "error", message: manualCheckFailure, errorInfo: undefined } : status}
@@ -330,6 +333,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 					</p>
 				)}
 			</SettingsSection>
+			</div>
 			<ConfirmDialog
 				open={pendingPin !== null}
 				title={t("settings.updates.switchFeatureTitle")}
@@ -392,6 +396,7 @@ function UpdateActions({
 	const version = useQuery({ queryKey: ["app-version"], queryFn: () => aoBridge.app.getVersion() });
 	const requestUpdateInstall = useRequestUpdateInstall();
 	const installed = parseNightlyVersion(version.data);
+	const installedBase = installed?.base ?? version.data;
 	const downloadButtonRef = useRef<HTMLButtonElement | null>(null);
 	const restartButtonRef = useRef<HTMLButtonElement | null>(null);
 	const checkButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -429,6 +434,13 @@ function UpdateActions({
 	// the status row resumes with the updater's terminal result.
 	const displayState: UpdateState = checking && !downloading && status.state !== "error" && status.state !== "downloaded" ? "checking" : status.state;
 	const showStatusState = displayState !== "checking";
+	const hasPrimaryAction = status.state === "available" || downloading || status.state === "downloaded" || Boolean(status.staged && status.staged.ready !== false);
+	// Headline target: only while a build is on its way in, and only when its
+	// base differs (nightly to nightly on one base would read "v1 → v1").
+	const incoming = status.state === "available" || downloading || status.state === "downloaded" || Boolean(status.staged);
+	const incomingVersion = incoming ? (status.version ?? status.staged?.version)?.replace(/^v/, "") : undefined;
+	const incomingBase = incomingVersion ? (parseNightlyVersion(incomingVersion)?.base ?? incomingVersion) : undefined;
+	const targetBase = incomingBase && incomingBase !== installedBase ? incomingBase : undefined;
 
 	const [now, setNow] = useState(Date.now());
 	useEffect(() => {
@@ -472,18 +484,24 @@ function UpdateActions({
 	// Restart & install are primary; Check for updates is a quiet row action.
 	return (
 		<>
-			<SettingsRow
-				label={
+			<div className="update-hero settings-content-row flex min-w-0 flex-col">
+				<p className="update-hero-version flex min-w-0 flex-wrap items-baseline gap-x-4 tabular-nums">
 					<span
 						aria-label={t("settings.updates.currentVersion", { version: version.data ? `v${version.data}` : "…" })}
-						className="tabular-nums"
 						data-testid="app-version"
 					>
-						{version.data ? `v${installed?.base ?? version.data}` : "…"}
+						{version.data ? `v${installedBase}` : "…"}
 					</span>
-				}
-				description={
-					<div className="flex min-w-0 flex-col gap-1">
+					{/* The move this update makes, at headline size. Decorative: the
+					    status line below names the full target for assistive tech. */}
+					{targetBase && (
+						<span className="update-hero-target flex items-baseline gap-x-4" aria-hidden="true">
+							<ArrowRight className="size-6 shrink-0 self-center" />
+							v{targetBase}
+						</span>
+					)}
+				</p>
+				<div className="mt-6 flex min-w-0 flex-col gap-1.5 text-control leading-4 text-settings-muted">
 						{installed && (
 							// Two spans, not one string: the version needs break-all so a long
 							// nightly stamp can never overflow, but break-all applied to the
@@ -511,10 +529,10 @@ function UpdateActions({
 							tabIndex={-1}
 							// Keep one line while the button owns the checking feedback, so
 							// the notices below do not jump up.
-							className="flex min-h-4 min-w-0 flex-col gap-1"
+							className="flex min-h-9.5 min-w-0 flex-col gap-1.5"
 						>
 							{showStatusState && <UpdateStatusLine state={displayState} status={status} />}
-							{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} className="h-1 w-full" />}
+							{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} className="update-progress my-2" />}
 							{status.transferred !== undefined && status.total !== undefined && <p className="tabular-nums">{t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })}</p>}
 							{channelSwitchMessage && <p>{channelSwitchMessage}</p>}
 							{checkedAt ? (
@@ -532,20 +550,16 @@ function UpdateActions({
 							<UpdateNotice tone="warning" text={t("settings.updates.checksFailing")} />
 						)}
 						{status.staleCheckNudge && <UpdateNotice tone="warning" text={t("settings.updates.networkStale")} />}
-					</div>
-				}
-			>
-				{/* Actions. Fixed to the right and never widened by a version string:
-				    the primary label used to carry the full nightly stamp and grew
-				    across the version. The target build is named in the status line. */}
-				<div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+				</div>
+				{/* Actions, under the status they act on. Never widened by a version
+				    string: the primary label used to carry the full nightly stamp. */}
+				<div className="mt-8 flex flex-wrap items-center gap-2">
 					{/* Reflect every download, including automatic and channel-switch work. */}
 					{(status.state === "available" || downloading) && (
 						<Button
 							ref={setDownloadButtonRef}
 							type="button"
 							variant="primary"
-							size="sm"
 							aria-label={downloadAccessibleLabel}
 							aria-describedby="update-status-line"
 							aria-disabled={downloading}
@@ -562,7 +576,7 @@ function UpdateActions({
 						// Opens the restart confirmation rather than installing outright:
 						// installing quits the app, which costs a turn on any chat session
 						// running a daemon-owned driver.
-						<Button ref={restartButtonRef} type="button" variant="primary" size="sm" onClick={requestUpdateInstall}>
+						<Button ref={restartButtonRef} type="button" variant="primary" onClick={requestUpdateInstall}>
 							<RefreshCw className="size-icon-sm" aria-hidden="true" />
 							{t("settings.updates.restartInstall")}
 						</Button>
@@ -576,8 +590,9 @@ function UpdateActions({
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
 						aria-describedby={showStatusState ? "update-status-line" : undefined}
-						variant="quiet"
-						size="sm"
+						// Alone, it is the row's one action and takes a surface so it
+						// sits on the text edge; beside a primary it stays quiet.
+						variant={hasPrimaryAction ? "quiet" : "secondary"}
 						onClick={() => void checkNow()}
 						disabled={busy}
 					>
@@ -589,18 +604,18 @@ function UpdateActions({
 						{checking ? t("settings.updates.checking") : t("settings.updates.check")}
 					</Button>
 				</div>
-			</SettingsRow>
+			</div>
 
 			{/* Release notes used to live only in the restart confirmation, so
 			    skipping that dialog when nothing is at risk would have hidden them
 			    entirely. The shared renderer keeps contributor handles out while
 			    preserving linked PR numbers. */}
 			{(status.state === "downloaded" || status.staged) && status.releaseNotes ? (
-				<div className="settings-content-row flex flex-col gap-1.5" data-testid="update-release-notes">
+				<div className="update-notes settings-content-row flex flex-col gap-3" data-testid="update-release-notes">
 					<p className="text-sm font-medium text-settings-label">{t("update.restart.whatsNew")}</p>
 					<DesktopReleaseNotes
 						notes={status.releaseNotes}
-						textClassName="settings-thin-scrollbar max-h-40 overflow-y-auto overscroll-contain text-pretty text-sm leading-5 text-settings-label"
+						textClassName="update-notes-scroll settings-thin-scrollbar max-h-72 overflow-y-auto overscroll-contain text-pretty text-sm leading-6 text-settings-label"
 					/>
 				</div>
 			) : null}

@@ -136,7 +136,7 @@ it("keeps restart available when native staging has stalled", async () => {
 	} satisfies UpdateStatus);
 	renderUpdates();
 
-	expect(await screen.findByText(/0.13.7/)).toBeVisible();
+	expect(await screen.findByText("Updating to v0.13.7-nightly.202610101220")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Restart & install" })).toBeVisible();
 	expect(screen.getByText("Downloaded. Restart to finish updating.")).toBeVisible();
 });

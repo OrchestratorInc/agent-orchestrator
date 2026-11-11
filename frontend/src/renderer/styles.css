@@ -1119,6 +1119,81 @@ button.settings-row-bar {
 	padding-block: var(--space-3);
 }
 
+/* Updates page: one roomy card rather than the dense settings row. The class
+ * sits on a display: contents wrapper, so it only scopes these rules. */
+.updates-spacious {
+	--settings-row-inset: var(--space-10);
+}
+
+.updates-spacious .settings-grouped-rows {
+	border-radius: var(--radius-lg);
+	padding-block: 0;
+}
+
+.updates-spacious .settings-grouped-rows .settings-row-bar {
+	padding-block: var(--space-5);
+}
+
+.update-hero {
+	padding-block: var(--space-10);
+}
+
+.update-hero-version {
+	font-size: 2.5rem;
+	line-height: 1.1;
+	font-weight: 400;
+	letter-spacing: -0.03em;
+	color: var(--color-text-settings-title);
+}
+
+.update-hero-target {
+	color: var(--color-text-settings-muted);
+}
+
+.update-notes {
+	padding-block: var(--space-8);
+}
+
+/* Fade the last lines instead of slicing one in half; the bottom padding lets
+ * the final line scroll clear of the fade. */
+.update-notes-scroll {
+	padding-bottom: var(--space-6);
+	mask-image: linear-gradient(to bottom, black calc(100% - var(--space-8)), transparent);
+}
+
+/* The download track: a hairline in the accent, not the browser's green. */
+.update-progress {
+	display: block;
+	width: 100%;
+	height: 2px;
+	appearance: none;
+	overflow: hidden;
+	border: 0;
+	border-radius: var(--radius-full);
+	background: var(--color-border);
+}
+
+.update-progress::-webkit-progress-bar {
+	background: var(--color-border);
+}
+
+.update-progress::-webkit-progress-value {
+	border-radius: var(--radius-full);
+	background: var(--color-accent);
+	transition: width 300ms ease-out;
+}
+
+.update-progress::-moz-progress-bar {
+	border-radius: var(--radius-full);
+	background: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.update-progress::-webkit-progress-value {
+		transition: none;
+	}
+}
+
 @utility settings-menu-item {
 	display: flex;
 	align-items: center;
