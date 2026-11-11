@@ -4351,7 +4351,6 @@ app.whenReady().then(async () => {
 		void import("./main/desktop-version-floor")
 			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({
 					parent: () => mainWindow,
-					// Like updates:relaunch, an update quit keeps running agents.
 					quit: () => {
 						preserveAgentsOnQuit = true;
 						desktopQuit.quitCompletely();

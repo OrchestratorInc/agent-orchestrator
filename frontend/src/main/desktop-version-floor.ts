@@ -30,7 +30,6 @@ function isBelow(running: string, floor: string): boolean {
 }
 
 type FloorOptions = {
-  // The window the dialogs attach to, so they block it (a sheet on macOS).
   parent?: () => BaseWindow | null;
   // Quits past the macOS tray; app.quit alone would leave the app running.
   quit?: () => void;
