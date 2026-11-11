@@ -709,6 +709,46 @@ describe("SessionsBoard", () => {
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
 	});
 
+	it("shows the project's active primary and independent orchestrators with role labels, workers without either", () => {
+		const primary = boardSession({ id: "p1-orchestrator", kind: "orchestrator", title: "Primary orchestrator", status: "working" });
+		const independent = boardSession({
+			id: "p1-orchestrator-2",
+			independentOrchestrator: true,
+			kind: "orchestrator",
+			title: "Independent orchestrator",
+			status: "idle",
+		});
+		const worker = boardSession({ id: "s-worker", kind: "worker", title: "ordinary worker", status: "working" });
+		const terminatedPrimary = boardSession({
+			id: "p1-orchestrator-0",
+			isTerminated: true,
+			kanbanColumn: "archive",
+			kind: "orchestrator",
+			status: "terminated",
+			title: "terminated primary",
+		});
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([primary, independent, worker, terminatedPrimary])],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+
+		const cardOf = (title: string) =>
+			screen.getByText(title).closest('[data-testid="board-session-card"]') as HTMLElement;
+		const roleLabelOf = (title: string) =>
+			cardOf(title).querySelector<HTMLElement>("[data-orchestrator-role]");
+		expect(roleLabelOf("Primary orchestrator")).toHaveAttribute("data-orchestrator-role", "primary");
+		expect(roleLabelOf("Primary orchestrator")).toHaveTextContent("Primary");
+		expect(roleLabelOf("Independent orchestrator")).toHaveAttribute("data-orchestrator-role", "independent");
+		expect(roleLabelOf("Independent orchestrator")).toHaveTextContent("Independent");
+		expect(roleLabelOf("ordinary worker")).toBeNull();
+		// A terminated primary orchestrator stays off the board and out of the archive.
+		expect(screen.queryByText("terminated primary")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
+	});
+
 	it("shows naming shimmer on a synchronous orchestrator-created worker until its worktree is ready", () => {
 		const worker = boardSession({
 			id: "s-delegated",

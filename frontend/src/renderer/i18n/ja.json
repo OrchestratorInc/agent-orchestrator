@@ -1912,6 +1912,8 @@
 	"shell.openSession": "{{title}} を開く",
 	"shell.openOrchestrator": "オーケストレーターを開く",
 	"shell.orchestrator": "オーケストレーター",
+	"shell.orchestratorPrimary": "プライマリ",
+	"shell.orchestratorIndependent": "独立",
 	"shell.orchestratorBoard": "オーケストレーターボード",
 	"shell.orchestratorWithActivity": "オーケストレーター、{{activity}}",
 	"shell.pinned": "ピン留め",

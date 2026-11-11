@@ -2304,6 +2304,8 @@
 	"shell.openSession": "Открыть {{title}}",
 	"shell.openOrchestrator": "Открыть оркестратор",
 	"shell.orchestrator": "Оркестратор",
+	"shell.orchestratorPrimary": "Основной",
+	"shell.orchestratorIndependent": "Независимый",
 	"shell.orchestratorBoard": "Доска оркестратора",
 	"shell.orchestratorWithActivity": "Оркестратор, {{activity}}",
 	"shell.pinned": "Закреплено",

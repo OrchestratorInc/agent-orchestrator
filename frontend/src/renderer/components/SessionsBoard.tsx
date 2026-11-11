@@ -22,6 +22,7 @@ import {
 	newestActiveOrchestrator,
 	orchestratorHealth,
 	hasConfiguredOrchestratorAgent,
+	sessionIsActive,
 } from "../types/workspace";
 import {
 	boardKanbanColumnOrder,
@@ -114,7 +115,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
-	const liveSessions = workspaces.flatMap((workspace) => workspace.sessions.filter((session) => !isPrimaryOrchestratorSession(session)));
+	// The board carries every active session, including the project's primary
+	// orchestrator and any independent ones. A terminated primary orchestrator
+	// stays off the board and out of the archive, as before.
+	const liveSessions = workspaces.flatMap((workspace) =>
+		workspace.sessions.filter((session) => !isPrimaryOrchestratorSession(session) || sessionIsActive(session)),
+	);
 	const demoWorkspaceId = projectId ?? workspaces[0]?.id;
 	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
 		? demoBoardSessions(demoWorkspaceId)
@@ -345,7 +351,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								onOpen={() => openSession(session)}
 								onOpenArtifact={(path) => openSessionArtifact(session, path)}
 								onOpenArtifacts={() => openSessionArtifacts(session)}
-								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
+								// An orchestrator goes with its project, so the primary
+								// orchestrator has no archive action on its own card.
+								onTerminate={
+									isPrimaryOrchestratorSession(session) ? undefined
+										: !hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined
+								}
 								session={session}
 							/>
 						)}

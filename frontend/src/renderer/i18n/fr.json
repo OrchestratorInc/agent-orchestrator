@@ -1942,6 +1942,8 @@
 	"shell.openSession": "Ouvrir {{title}}",
 	"shell.openOrchestrator": "Ouvrir l'orchestrateur",
 	"shell.orchestrator": "Orchestrateur",
+	"shell.orchestratorPrimary": "Principal",
+	"shell.orchestratorIndependent": "Indépendant",
 	"shell.orchestratorBoard": "Tableau de l'orchestrateur",
 	"shell.orchestratorWithActivity": "Orchestrateur, {{activity}}",
 	"shell.pinned": "Épinglés",

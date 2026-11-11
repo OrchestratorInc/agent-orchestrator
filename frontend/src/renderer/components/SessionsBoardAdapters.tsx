@@ -27,7 +27,7 @@ import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
-import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
+import { canonicalTrackerIssueId, isOrchestratorSession, sessionArtifacts } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
@@ -184,6 +184,36 @@ export function ArchivedSessionCardAdapter({
 	);
 }
 
+/**
+ * The tags a board card carries above its title: an orchestrator's role, and
+ * the requester of a shared cloud session. A worker carries neither role tag,
+ * and the role comes from the session's own `independentOrchestrator` fact
+ * rather than from its id.
+ */
+function CardTags({ owner, session }: { owner?: WorkspaceSession; session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const role = isOrchestratorSession(session)
+		? {
+				kind: session.independentOrchestrator ? "independent" : "primary",
+				label: t(session.independentOrchestrator ? "shell.orchestratorIndependent" : "shell.orchestratorPrimary"),
+			}
+		: undefined;
+	if (!role && !owner) return null;
+	return (
+		<span className="flex min-w-0 items-center gap-1">
+			{role ? (
+				<span
+					className="inline-flex min-w-0 max-w-full items-center rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
+					data-orchestrator-role={role.kind}
+				>
+					<span className="min-w-0 truncate">{role.label}</span>
+				</span>
+			) : null}
+			{owner ? <SessionOwnerTag session={owner} /> : null}
+		</span>
+	);
+}
+
 function DesktopSessionCard({
 	me,
 	participants,
@@ -328,7 +358,7 @@ function DesktopSessionCard({
 				url: prBrowserUrl(pr),
 			}))}
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
-			tag={session.cloud?.requestedBy ? <SessionOwnerTag session={session} /> : undefined}
+			tag={<CardTags owner={session.cloud?.requestedBy ? session : undefined} session={session} />}
 			session={
 				hideTerminatedStatus
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))

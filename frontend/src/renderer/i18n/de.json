@@ -1912,6 +1912,8 @@
 	"shell.openSession": "{{title}} öffnen",
 	"shell.openOrchestrator": "Orchestrator öffnen",
 	"shell.orchestrator": "Orchestrator",
+	"shell.orchestratorPrimary": "Primär",
+	"shell.orchestratorIndependent": "Unabhängig",
 	"shell.orchestratorBoard": "Orchestrator-Board",
 	"shell.orchestratorWithActivity": "Orchestrator, {{activity}}",
 	"shell.pinned": "Angeheftet",

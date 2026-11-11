@@ -2339,6 +2339,8 @@
 	"shell.openSession": "Open {{title}}",
 	"shell.openOrchestrator": "Open orchestrator",
 	"shell.orchestrator": "Orchestrator",
+	"shell.orchestratorPrimary": "Primary",
+	"shell.orchestratorIndependent": "Independent",
 	"shell.orchestratorBoard": "Orchestrator board",
 	"shell.orchestratorWithActivity": "Orchestrator, {{activity}}",
 	"shell.pinned": "Pinned",
