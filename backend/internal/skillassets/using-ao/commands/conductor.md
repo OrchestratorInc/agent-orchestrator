@@ -21,14 +21,16 @@ Each later file overrides the earlier ones, key by key:
 | `.conductor/settings.toml` | The repository's settings. |
 | `.conductor/settings.local.toml` | The user's uncommitted overrides. |
 
-Conductor also keeps settings typed into its app in the repository's row of its database. Read that row read-only:
+Conductor also keeps settings typed into its app in the repository's row of its database. Read that row read-only. When Conductor is closed and the database has no `-wal` file, open it as `immutable=1` so SQLite does not create `-wal` or `-shm` files next to it:
 
 ```sh
-sqlite3 -line "file:$HOME/Library/Application%20Support/com.conductor.app/conductor.db?mode=ro" \
-  "SELECT * FROM repos WHERE root_path = '<root>'"
+db="$HOME/Library/Application Support/com.conductor.app/conductor.db"
+uri="file:$HOME/Library/Application%20Support/com.conductor.app/conductor.db?mode=ro"
+[ -e "$db-wal" ] || uri="$uri&immutable=1"
+sqlite3 -line "$uri" "SELECT * FROM repos WHERE root_path = '<root>'"
 ```
 
-If that fails with `unable to open database file`, Conductor is closed and its database has no write-ahead log. Use `mode=ro&immutable=1` in place of `mode=ro`. The useful columns are `setup_script`, `archive_script`, `run_script`, `custom_prompt_general`, and `file_include_globs`. If the files and the database disagree, show the user both and ask which to keep.
+The useful columns are `setup_script`, `archive_script`, `run_script`, `custom_prompt_general`, and `file_include_globs`. If the files and the database disagree, show the user both and ask which to keep.
 
 ## 3. Map each setting
 
@@ -43,7 +45,7 @@ If that fails with `unable to open database file`, Conductor is closed and its d
 | `.worktreeinclude`, else `file_include_globs`, else `.env*` | a Setup step that copies those ignored files; see below |
 | `environment_variables.cloud`, `git.*`, `run_mode`, `run_script_mode`, other `prompts.*` and `custom_prompt_*` | nothing; list them as skipped |
 
-A run action is a table with `command`, optional `args`, `options.cwd`, `hide`, and `available_in`. Append each of `args` to the command, shell-quoted. When `options.cwd` is set and is not `.`, start the command with `cd -- '<cwd>' && `. Skip an action with `hide = true`, and one whose `available_in` does not include `"local"`.
+A run action is a table with `command`, optional `args`, `options.cwd`, `hide`, and `available_in`. Append each of `args` to the command, shell-quoted. When `options.cwd` is set and is not `.`, put `cd -- <cwd> &&` before the command, with `<cwd>` shell-quoted. Skip an action with `hide = true`, and one whose `available_in` does not include `"local"`.
 
 To copy ignored files, put this step before the setup script, so the script finds `.env` when it runs. Pass one `:(glob)` pathspec for each pattern. Prefix `**/` to a pattern that has no `/`, and use `:(exclude,glob)` for a pattern that starts with `!`.
 
@@ -79,8 +81,8 @@ Show the user the Setup and Cleanup steps, Cues, variables, and agent rules you 
 ```bash
 ao project set-config <id> \
   --post-create '<existing step>' --post-create '<copy step>' --post-create '<setup script>' \
-  --pre-remove '<archive script>' \
-  --env 'API_URL=http://localhost:3000' \
+  --pre-remove '<existing step>' --pre-remove '<archive script>' \
+  --env 'EXISTING_KEY=<existing value>' --env 'API_URL=http://localhost:3000' \
   --agent-rules '<existing rules>
 
 <general prompt>'
