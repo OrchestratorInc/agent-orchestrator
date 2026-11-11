@@ -3,9 +3,10 @@ package testenv
 
 import "os"
 
-// sessionVars are exported by AO, or by Claude Code, into an agent session's
-// shell. Product code reads them, so tests run from inside a session would
-// otherwise use that session's tmux socket, session id, and daemon.
+// sessionVars are exported by AO, or by Claude Code, into the shell of an agent
+// session, a reviewer, a side chat, or a session terminal tab. Product code reads
+// them, so tests run from inside one would otherwise use its tmux socket,
+// session id, and daemon.
 var sessionVars = []string{
 	"AO_SESSION_ID",
 	"AO_PROJECT_ID",
@@ -33,6 +34,12 @@ var sessionVars = []string{
 	"AO_WAKE_HELPER",
 	"AO_USER_ZDOTDIR",
 	"AO_USER_BASH_ENV",
+	"AO_REVIEW_SESSION_ID",
+	"AO_REVIEW_WORKER_SESSION_ID",
+	"AO_SIDE_CONVERSATION_ID",
+	"AO_SESSION",
+	"AO_PREVIEW_CAPABILITY",
+	"AO_SHELL_TERMINAL",
 	"CLAUDE_CODE_ENTRYPOINT",
 	"CLAUDE_PID",
 }
