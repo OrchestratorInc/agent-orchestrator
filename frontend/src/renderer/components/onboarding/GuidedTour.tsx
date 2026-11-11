@@ -178,9 +178,17 @@ function cornerRadius(element: Element): number {
 const sameRect = (a: Rect, b: Rect) =>
 	Math.abs(a.top - b.top) < 0.5 && Math.abs(a.left - b.left) < 0.5 && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
 
-/** Watches the page every frame while a step runs: moves the tour on once the
- * next step's control shows up (a page can mount well after the last one
- * went), and reports where this step's control is. */
+/** How often a running step looks over the page. */
+const SCAN_MS = 120;
+/** Frames a lit control has to hold still before the tour stops following it. */
+const SETTLE_FRAMES = 12;
+
+/** Watches the page while a step runs: moves the tour on once the next step's
+ * control shows up (a page can mount well after the last one went), and
+ * reports where this step's control is. It looks over the page every SCAN_MS,
+ * not every frame, since the tour can sit unanswered for days; only while the
+ * lit control moves (a scroll, a resize, a panel sliding) does it follow it
+ * frame by frame, re-measuring just that control. */
 function useSeen(step: TourStep | undefined): Seen {
 	const [seen, setSeen] = useState<Seen>({ kind: "pending" });
 	// A layout effect, so a step's first look happens before it paints: the
@@ -190,7 +198,9 @@ function useSeen(step: TourStep | undefined): Seen {
 			setSeen({ kind: "missing" });
 			return;
 		}
+		let timer = 0;
 		let frame = 0;
+		let still = 0;
 		let last: Seen | undefined;
 		let lastShownAt = performance.now();
 		const report = (next: Seen) => {
@@ -198,11 +208,31 @@ function useSeen(step: TourStep | undefined): Seen {
 				next.kind !== "shown" || (last.kind === "shown" && next.element === last.element && sameRect(next.rect, last.rect))
 			);
 			if (unchanged) return;
+			const moved = next.kind === "shown" && last?.kind === "shown" && next.element === last.element;
 			last = next;
 			setSeen(next);
+			if (moved) follow();
 		};
-		const tick = () => {
-			frame = requestAnimationFrame(tick);
+		// Re-measures only the lit control each frame until it holds still.
+		const followFrame = () => {
+			frame = 0;
+			if (last?.kind !== "shown") return;
+			const rect = litBox(last.element, ALSO_LIT[step]);
+			if (rect.width <= 0 || rect.height <= 0) return; // Gone: the next look decides.
+			if (sameRect(rect, last.rect)) {
+				if (++still >= SETTLE_FRAMES) return;
+			} else {
+				still = 0;
+				last = { ...last, rect };
+				setSeen(last);
+			}
+			frame = requestAnimationFrame(followFrame);
+		};
+		function follow() {
+			still = 0;
+			if (!frame) frame = requestAnimationFrame(followFrame);
+		}
+		const look = () => {
 			const ahead = DONE_WHEN_SHOWN[step];
 			if (ahead && findVisible(TARGET[ahead])) {
 				const board = findVisible([BOARD])?.getAttribute("data-project-id") ?? undefined;
@@ -226,8 +256,20 @@ function useSeen(step: TourStep | undefined): Seen {
 			if (performance.now() - lastShownAt > MISSING_GRACE_MS) report({ kind: "missing" });
 			else if (last?.kind !== "shown") report({ kind: "pending" });
 		};
-		tick();
-		return () => cancelAnimationFrame(frame);
+		const scan = () => {
+			look();
+			timer = window.setTimeout(scan, SCAN_MS);
+		};
+		scan();
+		// Scrolling or resizing moves the lit control at once, before the next look.
+		window.addEventListener("scroll", follow, { capture: true, passive: true });
+		window.addEventListener("resize", follow);
+		return () => {
+			window.clearTimeout(timer);
+			cancelAnimationFrame(frame);
+			window.removeEventListener("scroll", follow, { capture: true });
+			window.removeEventListener("resize", follow);
+		};
 	}, [step]);
 	return seen;
 }
