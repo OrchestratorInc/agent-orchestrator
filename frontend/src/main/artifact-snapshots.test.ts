@@ -180,6 +180,22 @@ describe("artifact snapshot store", () => {
 			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
 		});
 
+		it("keep being served, and a render under way keeps going, when the same account is bound again", async () => {
+			let finish: (() => void) | undefined;
+			const render = vi.fn(() => new Promise<Buffer>((resolve) => {
+				finish = () => resolve(Buffer.from("x"));
+			}));
+			const cache = createArtifactSnapshotStore({ directory, render, gapMs: 0 });
+			await cache.bindCloudAccount("user-1");
+			const pending = cache.request(cloudJob);
+			await vi.waitFor(() => expect(render).toHaveBeenCalled());
+			// A session refresh tells main the same account is still signed in.
+			await cache.bindCloudAccount("user-1");
+			finish?.();
+			expect(await pending).not.toBeNull();
+			expect(await cache.get(cloudJob)).not.toBeNull();
+		});
+
 		it("are not served until a failed delete has been retried", async () => {
 			const first = store();
 			await first.bindCloudAccount("user-1");

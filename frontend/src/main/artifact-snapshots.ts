@@ -238,10 +238,14 @@ export function createArtifactSnapshotStore(options: {
 		 * record, so the next call (a restart, a new sign-in) tries again, and rejects so the caller can report it.
 		 */
 		bindCloudAccount(userId: string | null): Promise<void> {
+			const owner = userId ? createHash("sha256").update(userId).digest("hex").slice(0, 32) : "";
+			// The same account again, with nothing pending (a session refresh says so too): nothing changes, and
+			// Cloud renders under way and requests keep going. While a bind is pending the owner is unset, so
+			// that never counts as settled, and a lost or different account always takes the full path.
+			if (owner && cloudOwner === owner) return Promise.resolve();
 			const seq = (bindSeq += 1);
 			cloudOwner = undefined;
 			cloudEpoch += 1;
-			const owner = userId ? createHash("sha256").update(userId).digest("hex").slice(0, 32) : "";
 			const run = binding.then(async () => {
 				const recorded = ((await fs.readFile(ownerFile, "utf8").catch(() => "")) ?? "").trim();
 				if (recorded !== owner) {
