@@ -158,6 +158,12 @@ export interface ConversationTurn {
 	 * empty changed-files panel as if the turn had been inspected.
 	 */
 	diff?: TurnDiff;
+	/**
+	 * The session artifacts the turn created or edited, as the daemon saw them in
+	 * the artifact directory when it ended. Independent of the provider, so it
+	 * lists files written through a shell command. Absent when there were none.
+	 */
+	artifacts?: TurnArtifactChange[];
 	/** The agent's plan for this turn, or absent when it made none. */
 	plan?: ConversationPlan;
 }
@@ -172,6 +178,12 @@ export interface DiffFile {
 	status: DiffStatus;
 	/** Set only for a rename. */
 	oldPath?: string;
+}
+
+/** One session artifact a turn changed, by its path in the artifact directory. */
+export interface TurnArtifactChange {
+	path: string;
+	status: "added" | "modified";
 }
 
 export interface TurnDiff {

@@ -1,8 +1,10 @@
 import { artifactFileIcon } from "./artifact-file-icon";
-import { ChevronDown, Clock, Cloud, File, Filter, Folder, List, Loader2, Package, Pin, Plus, Search, SelectMultiple, Trash2, X } from "@/components/app-icons";
+import { ChevronDown, Clock, File, Filter, List, Loader2, Package, Pin, Plus, SelectMultiple, Trash2 } from "@/components/app-icons";
+import { useProjectAvatars } from "../hooks/useProjectAvatars";
+import { ProjectIcon } from "./ProjectIcon";
 import { ScrollArea } from "radix-ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useTranslation } from "react-i18next";
@@ -30,13 +32,14 @@ import { cn } from "../lib/utils";
 import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
-import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { useArtifactShareFile } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Checkbox } from "./ui/checkbox";
 import { ArtifactPreviewModal } from "./ArtifactPreviewModal";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { FilterChip, ToolbarSearch } from "./PageToolbar";
 import { Button } from "./ui/button";
 import {
 	DropdownMenu,
@@ -48,7 +51,6 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import { Input } from "./ui/input";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useEdgeFadeRef } from "../hooks/useEdgeFade";
@@ -58,6 +60,19 @@ const ARTIFACT_GRID_CLASS = "grid grid-cols-1 gap-4 @lg:grid-cols-2 @2xl:grid-co
 const MAX_LIVE_PREVIEWS = 4;
 /** How many selected names the bulk delete confirmation lists before "+N more". */
 const MAX_CONFIRM_NAMES = 5;
+const NO_WORKSPACES: WorkspaceSummary[] = [];
+
+/**
+ * A project's icon as the sidebar draws it: its repository owner's avatar or
+ * colour-coded letter tile, or a folder with avatars off.
+ */
+function ArtifactProjectIcon({ workspace, avatarUrl }: { workspace: Pick<WorkspaceSummary, "id" | "name" | "path">; avatarUrl?: string }) {
+	return (
+		<span aria-hidden="true" className="inline-flex size-icon-md shrink-0 items-center justify-center">
+			<ProjectIcon avatarUrl={avatarUrl} expanded={false} name={workspace.name} seed={workspace.path || workspace.id} />
+		</span>
+	);
+}
 
 /**
  * Every artifact agents have written, grouped by project: on this machine, and
@@ -69,7 +84,9 @@ export function ArtifactsView() {
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
-	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
+	const orchestratorTitle = t("shell.orchestrator");
+	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? [], orchestratorTitle), [workspaces, orchestratorTitle]);
+	const projectAvatars = useProjectAvatars(workspaces ?? NO_WORKSPACES);
 	const [query, setQuery] = useState("");
 	const [projectId, setProjectId] = useState("");
 	const [location, setLocation] = useState<ArtifactLocation | undefined>();
@@ -146,7 +163,11 @@ export function ArtifactsView() {
 	const { client: cloudClient } = useCloudCp(cloudArtifacts);
 	const cloudUserId = useCloudMeUserId(cloudArtifacts);
 	// Another member's cloud session files are view only, so they cannot be selected.
-	const deleteBlockedReason = (row: ArtifactRow) => canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
+	// A bundle row stands for one of its files, so deleting it would leave the
+	// rest of the bundle behind; it has no Delete in its menu either.
+	const deleteBlockedReason = (row: ArtifactRow) => row.bundle
+		? t("artifacts.bundleNotDeletable")
+		: canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
 	const [selecting, setSelecting] = useState(false);
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
@@ -265,7 +286,7 @@ export function ArtifactsView() {
 					<div className="ms-auto flex shrink-0 items-center gap-0.5">
 						{hasArtifacts ? (
 							<>
-								<ArtifactSearch query={query} onQueryChange={setQuery} />
+								<ToolbarSearch label={t("artifacts.search")} query={query} onQueryChange={setQuery} />
 								<DropdownMenu>
 									<Tooltip>
 										<TooltipTrigger asChild>
@@ -355,11 +376,12 @@ export function ArtifactsView() {
 							<FilterChip
 								label={t("artifacts.filterProject")}
 								value={projectName(selectedProject)}
+								removeLabel={t("artifacts.removeFilter", { filter: `${t("artifacts.filterProject")}: ${projectName(selectedProject)}` })}
 								onRemove={() => setProjectId("")}
 							/>
 						) : null}
 						{type ? (
-							<FilterChip label={t("artifacts.filterType")} value={t(`artifacts.type.${type}`)} onRemove={() => setType(undefined)} />
+							<FilterChip label={t("artifacts.filterType")} value={t(`artifacts.type.${type}`)} removeLabel={t("artifacts.removeFilter", { filter: `${t("artifacts.filterType")}: ${t(`artifacts.type.${type}`)}` })} onRemove={() => setType(undefined)} />
 						) : null}
 					</div>
 				) : null}
@@ -383,12 +405,12 @@ export function ArtifactsView() {
 								</div>
 							) : (
 								<div>
-									{pinnedCards.length > 0 ? <ArtifactSection sectionId="pinned" name={t("artifacts.pinned")} icon={Pin} view={view}>
+									{pinnedCards.length > 0 ? <ArtifactSection sectionId="pinned" name={t("artifacts.pinned")} icon={<Pin aria-hidden="true" className="size-icon-md shrink-0" />} view={view}>
 										{pinnedCards.map(({ row, projectName }) => (
 											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "pinned"} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 										))}
 									</ArtifactSection> : null}
-									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={Clock} view={view}>
+									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={<Clock aria-hidden="true" className="size-icon-md shrink-0" />} view={view}>
 										{cards.slice(0, 3).map(({ row, projectName }) => (
 											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName previewLive={livePreviewSections.get(artifactKey(row)) === "recent"} onPreview={openPreview} selection={selectionFor(row, projectName)} />
 										))}
@@ -400,7 +422,9 @@ export function ArtifactsView() {
 												key={group.id}
 												sectionId={`project:${group.id}`}
 												name={projectName}
-												icon={group.isScratchpad ? File : group.cloud ? Cloud : Folder}
+												icon={group.isScratchpad
+													? <File aria-hidden="true" className="size-icon-md shrink-0" />
+													: <ArtifactProjectIcon avatarUrl={projectAvatars.get(group.id)} workspace={workspaces?.find((workspace) => workspace.id === group.id) ?? { id: group.id, name: group.name, path: "" }} />}
 												view={view}
 												collapsible={showProjectSections}
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
@@ -443,72 +467,10 @@ export function ArtifactsView() {
 	);
 }
 
-/** Search behind an icon; the field shows while focused or holding a query. */
-function ArtifactSearch({ query, onQueryChange }: { query: string; onQueryChange: (query: string) => void }) {
-	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	const toggleRef = useRef<HTMLButtonElement>(null);
-	if (open || query) {
-		return (
-			<label className="relative me-1 block w-56 min-w-0 shrink">
-				<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
-				<Input
-					aria-label={t("artifacts.search")}
-					autoFocus
-					className="inspector-field-input ps-8 [&::-webkit-search-cancel-button]:appearance-none"
-					onBlur={() => setOpen(false)}
-					onChange={(event) => onQueryChange(event.target.value)}
-					onKeyDown={(event) => {
-						if (event.key !== "Escape") return;
-						// Escape clears search first; a second one leaves selection mode.
-						event.preventDefault();
-						onQueryChange("");
-						setOpen(false);
-						requestAnimationFrame(() => toggleRef.current?.focus());
-					}}
-					placeholder={t("artifacts.search")}
-					type="search"
-					value={query}
-				/>
-			</label>
-		);
-	}
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button ref={toggleRef} type="button" size="icon-sm" variant="quiet" aria-label={t("artifacts.search")} onClick={() => setOpen(true)}>
-					<Search aria-hidden="true" className="size-icon-sm" />
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent side="bottom">{t("artifacts.search")}</TooltipContent>
-		</Tooltip>
-	);
-}
-
-/** One active filter from the Filter menu, removable in place. */
-function FilterChip({ label, value, onRemove }: { label: string; value: string; onRemove: () => void }) {
-	const { t } = useTranslation();
-	return (
-		<Button
-			type="button"
-			size="xs"
-			variant="secondary"
-			shape="pill"
-			className="max-w-64 ps-2.5 pe-1.5"
-			aria-label={t("artifacts.removeFilter", { filter: `${label}: ${value}` })}
-			onClick={onRemove}
-		>
-			<span className="text-muted-foreground">{label}:</span>
-			<span className="truncate">{value}</span>
-			<X aria-hidden="true" className="size-icon-xs text-muted-foreground" />
-		</Button>
-	);
-}
-
-function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, view, collapsible = true }: {
+function ArtifactSection({ sectionId, name, icon, updatedAt, children, view, collapsible = true }: {
 	sectionId: string;
 	name: string;
-	icon: typeof Folder;
+	icon: ReactNode;
 	updatedAt?: string;
 	children: ReactNode;
 	view: ArtifactViewMode;
@@ -520,7 +482,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	const gridId = useId();
 	const headerContent = <>
 		<span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-brand font-semibold leading-none tracking-tight text-foreground">
-			<Icon aria-hidden="true" className="size-icon-md shrink-0" />
+			{icon}
 			<span className="truncate">{name}</span>
 		</span>
 		{updatedAt ? (
@@ -606,7 +568,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 						</span>
 					</Pressable>
 					{selection ? null : <div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
-						<ArtifactActionsMenu
+						{row.bundle ? null : <DeferredArtifactActionsMenu
 							artifact={row}
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
@@ -615,7 +577,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
 							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
-						/>
+						/>}
 					</div>}
 					<time dateTime={row.updatedAt} className="pointer-events-none relative z-[1] w-20 shrink-0 text-right text-xs tabular-nums text-passive">
 						{formatTimeCompact(row.updatedAt)}
@@ -632,8 +594,8 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 			context={showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 			onPreview={open}
 			selection={selection}
-			actions={selection ? null : (
-				<ArtifactActionsMenu
+			actions={selection || row.bundle ? null : (
+				<DeferredArtifactActionsMenu
 					artifact={row}
 					session={{ id: row.sessionId, cloud: row.cloud }}
 					iconOnly
@@ -705,6 +667,7 @@ function CreateArtifactMenu({
 	localDisabledReason?: string;
 }) {
 	const { t } = useTranslation();
+	const projectAvatars = useProjectAvatars(workspaces);
 	// Cloud workspaces are listed only when the control plane keeps artifacts.
 	const projects = workspaces.filter(
 		(workspace) =>
@@ -776,11 +739,7 @@ function CreateArtifactMenu({
 						disabled={localBlocked && project.kind !== CLOUD_PROJECT_KIND}
 						onSelect={() => void create(project.id, project.kind === CLOUD_PROJECT_KIND ? project.cloudOrgId : undefined)}
 					>
-						{project.kind === CLOUD_PROJECT_KIND ? (
-							<Cloud aria-hidden="true" className="size-icon-sm" />
-						) : (
-							<Folder aria-hidden="true" className="size-icon-sm" />
-						)}
+						<ArtifactProjectIcon avatarUrl={projectAvatars.get(project.id)} workspace={project} />
 						<span className="truncate">{project.name}</span>
 					</DropdownMenuItem>
 				))}

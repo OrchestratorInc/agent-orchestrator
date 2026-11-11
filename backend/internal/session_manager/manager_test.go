@@ -6556,6 +6556,9 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
 	wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-7"))
+	if !strings.Contains(sp, "Run `ao artifact add <path>`") {
+		t.Fatal("artifact guidance does not say how to register a deliverable")
+	}
 	if !strings.Contains(sp, "## Session Artifacts") {
 		t.Fatalf("system prompt missing artifacts section:\n%s", sp)
 	}
@@ -6588,6 +6591,36 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 	if !strings.Contains(chatPrompt, inThread) {
 		t.Fatalf("chat session prompt missing %q", inThread)
+	}
+	// A kept render is not registered, and only a chat session can keep one.
+	const keptRender = "`ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns"
+	if !strings.Contains(chatPrompt, keptRender) {
+		t.Fatalf("chat session prompt missing %q", keptRender)
+	}
+	if strings.Contains(sp, "ao render --artifact") {
+		t.Fatalf("terminal session prompt names ao render:\n%s", sp)
+	}
+}
+
+// An orchestrator's files are listed by the same rule as a worker's, so its
+// prompt must name its own artifact directory and tell it to register them.
+func TestSystemPrompt_OrchestratorGetsArtifactGuidance(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
+
+	for _, chat := range []bool{false, true} {
+		sp, err := m.buildSystemPrompt(ctx, domain.KindOrchestrator, "mer", "mer-orchestrator-2", "", chat)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt chat=%v: %v", chat, err)
+		}
+		wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-orchestrator-2"))
+		for _, want := range []string{"## Session Artifacts", wantDir, "Run `ao artifact add <path>`"} {
+			if !strings.Contains(sp, want) {
+				t.Fatalf("orchestrator prompt (chat=%v) missing %q:\n%s", chat, want, sp)
+			}
+		}
 	}
 }
 

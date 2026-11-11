@@ -34,6 +34,11 @@ export interface CloudShareFile {
 	 * organization, session and path instead.
 	 */
 	projectId: string;
+	/**
+	 * The artifact's identity, which a rename keeps: the link record follows
+	 * it, so a renamed file is offered Republish on its own link.
+	 */
+	artifactId?: string;
 	/** Update this active link instead of publishing a new document. */
 	shareId?: string;
 	/** The fingerprint of the inspection the person saw; publishing refuses a file that changed since. */

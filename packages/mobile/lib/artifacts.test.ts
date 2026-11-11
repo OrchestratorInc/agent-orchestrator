@@ -6,6 +6,7 @@ import {
 	artifactFilePath,
 	artifactMenuActions,
 	artifactPageAt,
+	artifactViewerPages,
 	artifactFilesPath,
 	artifactViewKind,
 	resolveArtifactAssetPath,
@@ -264,5 +265,29 @@ describe("stableArtifactOrder", () => {
 
 	it("puts a new file at the end and drops a removed one", () => {
 		expect(stableArtifactOrder(["c", "b", "a"], files("new", "c", "a")).map((f) => f.path)).toEqual(["c", "a", "new"]);
+	});
+});
+
+describe("artifactViewerPages", () => {
+	const file = (path: string, registered?: boolean) => ({ path, name: path, kind: "file", size: 1, updatedAt: "2026-11-07T00:00:00Z", registered });
+	const files = [file("brand.html", true), file("deck.icon/icon.json", true), file("deck.icon/mark.png", true), file("draft.md"), file("assets/a.png")];
+	const paths = (pages: readonly { path: string }[]) => pages.map((page) => page.path);
+
+	it("pages through what the list shows, with a bundle as one page", () => {
+		expect(paths(artifactViewerPages(undefined, files, "brand.html"))).toEqual(["brand.html", "deck.icon/mark.png"]);
+	});
+
+	it("opens a hidden file on its own, with no way to swipe to the others", () => {
+		expect(paths(artifactViewerPages(undefined, files, "assets/a.png"))).toEqual(["assets/a.png"]);
+	});
+
+	it("keeps the root fallback when nothing is registered", () => {
+		const unregistered = [file("report.html"), file("assets/a.png")];
+		expect(paths(artifactViewerPages(undefined, unregistered, "report.html"))).toEqual(["report.html"]);
+	});
+
+	it("keeps the order the pages had on open", () => {
+		const reordered = [file("second.md", true), file("first.md", true)];
+		expect(paths(artifactViewerPages(["first.md", "second.md"], reordered, "first.md"))).toEqual(["first.md", "second.md"]);
 	});
 });

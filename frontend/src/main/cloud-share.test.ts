@@ -236,11 +236,11 @@ describe("uploadShare", () => {
 		}
 	});
 
-	it("updates a link by its ID", async () => {
+	it("updates a link by its ID, naming where the file is now", async () => {
 		const snapshot = await snapshotOf("x");
 		const { api, calls } = fakeControlPlane(4);
 		await uploadShare(api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "f", shareId: "share-9" }, () => undefined);
-		expect(JSON.parse(calls[0].body as string)).toEqual({ name: "upload.txt", size: 1, sha256: sha("x"), shareId: "share-9" });
+		expect(JSON.parse(calls[0].body as string)).toEqual({ name: "upload.txt", size: 1, sha256: sha("x"), project: "p", feature: "f", shareId: "share-9" });
 	});
 
 	it("aborts the upload when a part fails or finalize refuses", async () => {

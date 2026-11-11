@@ -56,7 +56,8 @@ func CLIActorType(actorType, commandPath string) string {
 	if _, ok := legacyActorlessUserCLICommands[normalized]; ok {
 		return "user"
 	}
-	if normalized == "ao hooks" || normalized == "ao report" {
+	switch normalized {
+	case "ao hooks", "ao report", "ao artifact", "ao artifact add":
 		return "agent"
 	}
 	return "system"

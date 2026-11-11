@@ -13,6 +13,7 @@ vi.mock("motion/react", async (importOriginal) => {
 });
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
 import {
@@ -37,6 +38,10 @@ import { useSessionImportStore } from "../stores/session-import-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { resetSessionPreviewWarmth } from "../hooks/useSessionPreviewHover";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
+import { useRemoteWorkspaces } from "../hooks/useWorkspaceQuery";
+import { clearOptimisticSessionKill, trackOptimisticSessionKill } from "../hooks/optimistic-session-kills";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
+import { sessionUiKey } from "../lib/hosts";
 
 type DragOverTestEvent = {
 	active: {
@@ -60,6 +65,7 @@ const {
 	navigateMock,
 	mockLocation,
 	mockParams,
+	routeStore,
 	postMock,
 	renameSessionMock,
 	spawnMock,
@@ -85,6 +91,9 @@ const {
 		navigateMock: vi.fn(),
 		mockLocation: { pathname: "/" },
 		mockParams: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+		// The router hooks subscribe to the route, as the real ones do, so a
+		// memoized Sidebar still sees a route change without new props.
+		routeStore: { version: 0, listeners: new Set<() => void>() },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
 		resumeOrchestratorMock: vi.fn(),
@@ -165,11 +174,31 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 	return {
 		...actual,
 		useNavigate: () => navigateMock,
-		useParams: () => ({ ...mockParams }),
-		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
-			select({ location: { pathname: mockLocation.pathname } }),
+		useParams: () => {
+			useSyncExternalStore(subscribeRoute, routeVersion);
+			return { ...mockParams };
+		},
+		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) => {
+			useSyncExternalStore(subscribeRoute, routeVersion);
+			return select({ location: { pathname: mockLocation.pathname } });
+		},
 	};
 });
+
+function subscribeRoute(listener: () => void) {
+	routeStore.listeners.add(listener);
+	return () => routeStore.listeners.delete(listener);
+}
+
+function routeVersion() {
+	return routeStore.version;
+}
+
+/** Tells the mocked router hooks that `mockParams` / `mockLocation` changed. */
+function notifyRouteChange() {
+	routeStore.version += 1;
+	for (const listener of routeStore.listeners) listener();
+}
 
 vi.mock("../lib/bridge", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/bridge")>();
@@ -4183,7 +4212,7 @@ describe("Sidebar session switch rendering", () => {
 		sessionRowRenders.clear();
 		mockParams.projectId = p2.id;
 		mockParams.sessionId = "p2-a";
-		view.rerender(tree());
+		act(() => notifyRouteChange());
 
 		expect([...sessionRowRenders.keys()].sort()).toEqual(["p1-a", "p2-a"]);
 
@@ -4314,5 +4343,180 @@ describe("Sidebar active-session reveal", () => {
 		});
 		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+	});
+});
+
+// The shell's re-renders no longer reach the memoized Sidebar, so it has to
+// follow every store it reads by itself. Each test renders it once with props
+// that keep their identity, then changes only the real store.
+describe("Memoized Sidebar with unchanged props", () => {
+	const handlers = {
+		onCloneProject: vi.fn().mockResolvedValue(undefined),
+		onCreateProject: vi.fn().mockResolvedValue(undefined),
+		onInitializeProject: vi.fn().mockResolvedValue(undefined),
+		onRemoveProject: vi.fn().mockResolvedValue(undefined),
+		onCreateRemoteProject: vi.fn().mockResolvedValue(undefined),
+		onInitializeRemoteProject: vi.fn().mockResolvedValue(undefined),
+	};
+	const alpha: WorkspaceSummary = {
+		...workspace,
+		id: "alpha",
+		name: "Alpha",
+		path: "/repo/alpha",
+		sessions: [{ ...session, id: "alpha-1", workspaceId: "alpha", workspaceName: "Alpha", title: "alpha task" }],
+	};
+	const bravo: WorkspaceSummary = {
+		...workspace,
+		id: "bravo",
+		name: "Bravo",
+		path: "/repo/bravo",
+		sessions: [{ ...session, id: "bravo-1", workspaceId: "bravo", workspaceName: "Bravo", title: "bravo task" }],
+	};
+
+	function newClient() {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentReadinessQueryKey, {
+			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
+		});
+		return client;
+	}
+
+	function shell(client: QueryClient, children: React.ReactNode) {
+		return (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SidebarProvider>{children}</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+	}
+
+	afterEach(() => {
+		useRemoteUnpinStore.setState({ unpins: {} });
+	});
+
+	it("moves a project pinned through the order store to the top, and back", () => {
+		const workspaces = [alpha, bravo];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+		const labels = () => Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent);
+		expect(labels()).toEqual(["Alpha", "Bravo"]);
+
+		act(() => useSidebarOrderStore.getState().setProjectPinned("bravo", true));
+
+		expect(labels()).toEqual(["Bravo", "Alpha"]);
+		expect(screen.getByRole("button", { name: "Unpin" }).closest("[data-project-id]")).toHaveAttribute("data-project-id", "bravo");
+
+		act(() => useSidebarOrderStore.getState().setProjectPinned("bravo", false));
+
+		expect(screen.queryByRole("button", { name: "Unpin" })).not.toBeInTheDocument();
+	});
+
+	it("opens a collapsed project when the import store reports sessions imported into it", () => {
+		const workspaces = [alpha];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+		expect(screen.queryByLabelText("Open alpha task")).not.toBeInTheDocument();
+
+		act(() => useSessionImportStore.getState().recordImport("alpha", 1));
+
+		expect(screen.getByLabelText("Open alpha task")).toBeInTheDocument();
+		expect(screen.getByLabelText("Toggle Alpha sessions")).toHaveAttribute("aria-expanded", "true");
+	});
+
+	it("opens and closes projects in turn, each click seeing the state the last one left", async () => {
+		const user = userEvent.setup();
+		const workspaces = [alpha, bravo];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+
+		await user.click(screen.getByLabelText("Toggle Alpha sessions"));
+		await user.click(screen.getByLabelText("Toggle Bravo sessions"));
+		expect(screen.getByLabelText("Open alpha task")).toBeInTheDocument();
+		expect(screen.getByLabelText("Open bravo task")).toBeInTheDocument();
+
+		await user.click(screen.getByLabelText("Toggle Alpha sessions"));
+
+		expect(screen.queryByLabelText("Open alpha task")).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Open bravo task")).toBeInTheDocument();
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual(["bravo"]);
+	});
+
+	it("counts archived sessions from the latest workspaces and asks the ui store to open that archive", async () => {
+		const user = userEvent.setup();
+		useUiStore.setState({ archiveOpenRequest: null });
+		const client = newClient();
+		const view = render(shell(client, <Sidebar workspaces={[alpha]} {...handlers} />));
+		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
+		expect(await screen.findByRole("menuitem", { name: "Open dashboard" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Archive/ })).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Open dashboard" })).not.toBeInTheDocument());
+
+		const archived = { ...alpha, sessions: [...alpha.sessions, { ...alpha.sessions[0]!, id: "alpha-2", title: "old task", kanbanColumn: "archive" as const }] };
+		view.rerender(shell(client, <Sidebar workspaces={[archived]} {...handlers} />));
+		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
+		await user.click(await screen.findByRole("menuitem", { name: "Archive, 1 session" }));
+
+		expect(useUiStore.getState().archiveOpenRequest).toMatchObject({ projectId: "alpha" });
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "alpha" } });
+	});
+
+	describe("remote pins through the real remote hook", () => {
+		const hosts: RemoteHost[] = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3011", status: "offline" }];
+		const savedHostIds = ["box-a"];
+		const noLocalWorkspaces: WorkspaceSummary[] = [];
+		const pinnedAt = "2026-11-01T00:00:00Z";
+		// The host's own project row may list the same session; look only in Pinned.
+		const pinnedRow = () => {
+			const list = screen.queryByTestId("pinned-session-list");
+			return list ? within(list).queryByRole("button", { name: "Open remote task · Box A" }) : null;
+		};
+
+		// The shell's wiring: a saved, offline host's cached lists go through
+		// useRemoteWorkspaces into the memoized Sidebar.
+		function RemoteShell() {
+			const remote = useRemoteWorkspaces({ cachedHostIds: savedHostIds });
+			return <Sidebar workspaces={noLocalWorkspaces} remoteHosts={hosts} remoteWorkspaces={remote.data} {...handlers} />;
+		}
+
+		function renderRemote() {
+			const client = newClient();
+			client.setQueryData(["remote-workspaces", "box-a", "projects"], [{ id: "remote-project", name: "Remote Project", path: "/remote" }]);
+			client.setQueryData(["remote-workspaces", "box-a", "sessions"], [{
+				id: "remote-1",
+				projectId: "remote-project",
+				harness: "codex",
+				status: "working",
+				prs: [],
+				displayName: "remote task",
+				isPinned: true,
+				pinnedAt,
+			}]);
+			render(shell(client, <RemoteShell />));
+		}
+
+		it("drops a pinned row unpinned here while its host is offline, and restores it when the unpin is cleared", () => {
+			renderRemote();
+			expect(pinnedRow()).toBeInTheDocument();
+
+			act(() => useRemoteUnpinStore.getState().add("box-a", "remote-1", pinnedAt));
+
+			expect(pinnedRow()).not.toBeInTheDocument();
+
+			act(() => useRemoteUnpinStore.getState().remove([sessionUiKey("remote-1", "box-a")]));
+
+			expect(pinnedRow()).toBeInTheDocument();
+		});
+
+		it("drops a pinned remote row while its kill is in flight, before the host's lists change", () => {
+			renderRemote();
+			expect(pinnedRow()).toBeInTheDocument();
+			try {
+				act(() => trackOptimisticSessionKill("remote-1", "box-a"));
+
+				expect(pinnedRow()).not.toBeInTheDocument();
+			} finally {
+				act(() => clearOptimisticSessionKill("remote-1", "box-a"));
+			}
+			expect(pinnedRow()).toBeInTheDocument();
+		});
 	});
 });
