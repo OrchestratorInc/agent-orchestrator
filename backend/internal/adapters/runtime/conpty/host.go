@@ -347,6 +347,25 @@ func (h *host) record(chunk []byte) {
 	}
 }
 
+// dropClientLocked removes conn from the broadcast set, releasing the
+// foreground-watcher count it held. Every removal path goes through it: a
+// dropped watcher that kept its count would leave fgWatchers permanently above
+// zero, so record would keep feeding the tracker — including one processArgv
+// read per evaluation — for a session nobody watches.
+//
+// Callers hold h.mu. The identity guard makes repeated drops of the same
+// client harmless, so the reader and the writer may both discover a dead
+// connection.
+func (h *host) dropClientLocked(conn net.Conn, client *clientState) {
+	if h.clients[conn] != client {
+		return
+	}
+	delete(h.clients, conn)
+	if client.watcher {
+		h.fgWatchers.Add(-1)
+	}
+}
+
 // setTitle records a title and tells the title watchers, only when it changed.
 // A watcher whose queue is full is dropped: it re-subscribes and reads the
 // current title, so it cannot be left holding a stale one.
@@ -360,7 +379,7 @@ func (h *host) setTitle(title string) {
 	frame := titleFrame(title)
 	for conn, client := range h.clients {
 		if client.titleWatcher && !client.enqueue(frame) {
-			delete(h.clients, conn)
+			h.dropClientLocked(conn, client)
 			client.close(conn)
 		}
 	}
@@ -432,7 +451,7 @@ func (h *host) lockWithRoom() bool {
 		if !time.Now().Before(deadline) {
 			// Stalled: drop it so it cannot hold the PTY. A dropped client may
 			// have been the largest viewer; the grid follows the rest.
-			delete(h.clients, fullConn)
+			h.dropClientLocked(fullConn, full)
 			h.applyLargestLocked()
 			h.mu.Unlock()
 			full.close(fullConn)
@@ -473,7 +492,7 @@ func (h *host) sendTo(conn net.Conn, msg []byte) {
 		return
 	}
 	if !client.enqueue(msg) {
-		delete(h.clients, conn)
+		h.dropClientLocked(conn, client)
 		h.applyLargestLocked()
 		h.mu.Unlock()
 		client.close(conn)
@@ -521,13 +540,8 @@ func (h *host) writeClient(conn net.Conn, client *clientState) {
 // a hypothetical replacement registered under the same net.Conn key.
 func (h *host) removeClient(conn net.Conn, client *clientState) {
 	h.mu.Lock()
-	if h.clients[conn] == client {
-		delete(h.clients, conn)
-		if client.watcher {
-			h.fgWatchers.Add(-1)
-		}
-		h.applyLargestLocked()
-	}
+	h.dropClientLocked(conn, client)
+	h.applyLargestLocked()
 	h.mu.Unlock()
 	client.close(conn)
 }

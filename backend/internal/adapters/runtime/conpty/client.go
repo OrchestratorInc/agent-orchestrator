@@ -27,6 +27,9 @@ const (
 	dialTimeout      = 3 * time.Second
 	getOutputTimeout = 3 * time.Second
 	isAliveTimeout   = 2 * time.Second
+	// writeTimeout bounds a single frame write to the pty-host. Typed input is
+	// tiny, so the only way to reach it is a host that stopped reading.
+	writeTimeout = 3 * time.Second
 )
 
 // dialHost opens a TCP connection to addr with a deadline. Callers close it.
@@ -52,15 +55,34 @@ func armClientDeadline(ctx context.Context, conn net.Conn, timeout time.Duration
 	return func() { _ = stop() }
 }
 
+// writeFrame bounds one frame write by both the transport timeout and ctx.
+// A per-frame deadline (rather than one covering the whole sequence) keeps a
+// long chunked paste from being cut off, while a host that stops reading still
+// fails fast instead of blocking the caller.
+func writeFrame(ctx context.Context, conn net.Conn, frame []byte, timeout time.Duration) error {
+	stop := armClientDeadline(ctx, conn, timeout)
+	_, err := conn.Write(frame)
+	stop()
+	if err != nil {
+		return ctxOrErr(ctx, err)
+	}
+	return nil
+}
+
 // clientSendMessage chunks message by 512 runes and sends each as a
-// MsgTerminalInput frame with 15ms gaps, then pauses 300ms and sends "\r".
+// MsgTerminalInput frame with 15ms gaps, then pauses and sends "\r".
 // Mirrors ptyHostSendMessage from pty-client.ts.
-func clientSendMessage(addr, message string) error {
-	conn, err := dialHost(addr, dialTimeout)
+//
+// Every wait honors ctx, so a cancelled request stops typing instead of
+// finishing the paste first.
+func clientSendMessage(ctx context.Context, addr, message string) error {
+	conn, err := dialHostContext(ctx, addr, dialTimeout)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
+	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stopCancellation()
 
 	runes := []rune(message)
 	for i := 0; i < len(runes); i += ptyInputChunkRunes {
@@ -73,12 +95,14 @@ func clientSendMessage(addr, message string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := conn.Write(frame); err != nil {
+		if err := writeFrame(ctx, conn, frame, writeTimeout); err != nil {
 			return err
 		}
 		// Inter-chunk delay only between chunks, not after the last one.
 		if end < len(runes) {
-			time.Sleep(ptyInputChunkDelay)
+			if !sleepContext(ctx, ptyInputChunkDelay) {
+				return ctx.Err()
+			}
 		}
 	}
 
@@ -87,18 +111,19 @@ func clientSendMessage(addr, message string) error {
 	// settle, and the pause would only widen the guard-read→Enter window
 	// (mirrors the tmux runtime's enterDelay contract).
 	if delay := inputdelay.ForMessage(message, ptyInputEnterDelay); delay > 0 {
-		time.Sleep(delay)
+		if !sleepContext(ctx, delay) {
+			return ctx.Err()
+		}
 	}
 	frame, err := EncodeMessage(MsgTerminalInput, []byte("\r"))
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(frame)
-	return err
+	return writeFrame(ctx, conn, frame, writeTimeout)
 }
 
-func clientSendInput(addr, input string) error {
-	conn, err := dialHost(addr, dialTimeout)
+func clientSendInput(ctx context.Context, addr, input string) error {
+	conn, err := dialHostContext(ctx, addr, dialTimeout)
 	if err != nil {
 		return err
 	}
@@ -107,7 +132,28 @@ func clientSendInput(addr, input string) error {
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(frame)
+	return writeFrame(ctx, conn, frame, writeTimeout)
+}
+
+// sleepContext waits for d, returning false when ctx ends first.
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// ctxOrErr reports ctx's error when it is the reason a conn write failed: the
+// deadline arm cancels in-flight I/O on cancellation, so the transport error
+// in that case describes our own interruption, not the host.
+func ctxOrErr(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	return err
 }
 

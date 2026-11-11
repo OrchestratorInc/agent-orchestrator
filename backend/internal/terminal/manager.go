@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -39,6 +40,12 @@ const (
 	// attachment's read loop blocks, so tmux throttles at the source instead of
 	// the connection being torn down under a flood.
 	dataWatermark = 1 << 20
+	// controlWatermark caps queued non-data frames per connection. Control frames
+	// never wait for room — the CDC fan-out enqueues them on one goroutine shared
+	// by every connection — so without a cap a stalled client's queue grows for
+	// as long as it stays connected. Whole-state frames coalesce, and past this
+	// budget the oldest control frame is dropped.
+	controlWatermark = 4 << 20
 	// burstFlushInterval spaces writes while output streams. A frame queued
 	// after a quiet period (a keystroke's echo) is written at once; frames
 	// queued within this interval of the previous write wait for it, so a flood
@@ -795,9 +802,12 @@ func (c *connState) handleShellAgents(msg clientMsg) {
 type outQueue struct {
 	mu     sync.Mutex
 	frames []serverMsg
-	bytes  int
-	wake   chan struct{}
-	room   chan struct{}
+	// bytes counts every queued frame's cost, so the control budget below covers
+	// PTY output too: dataWatermark throttles the producer, and a producer that
+	// is not an attachment read loop cannot outrun it either.
+	bytes int
+	wake  chan struct{}
+	room  chan struct{}
 }
 
 func newOutQueue() *outQueue {
@@ -806,6 +816,33 @@ func newOutQueue() *outQueue {
 
 // maxMergedData bounds one merged data frame.
 const maxMergedData = 256 << 10
+
+// frameCost is the queued size of msg, available before and after the writer
+// turns raw into Data. Data is base64 of raw, so counting the encoded string
+// for a drained frame would overstate it by a third; raw is what the queue
+// holds until then.
+func frameCost(msg serverMsg) int {
+	if msg.raw != nil {
+		return len(msg.raw)
+	}
+	return len(msg.Data) + len(msg.Agents) + len(msg.Error) + len(msg.ID) + len(msg.Ch)
+}
+
+// coalesces reports whether a newer frame of this kind replaces the one queued
+// before it. Only a frame that carries whole state qualifies: its consumer
+// renders the current value, so a client that missed an earlier one needs
+// nothing from it.
+//
+// The chShellAgents payload is that kind of whole-state snapshot. chSessions is
+// NOT: each frame is one CDC change, identified by its Seq/SessionID, and a
+// consumer applies it as an event. Replacing one with the next would silently
+// drop a distinct session's change, so those frames are never coalesced.
+func (msg serverMsg) coalesces() bool {
+	if msg.raw != nil || msg.Type != msgSnapshot {
+		return false
+	}
+	return msg.Ch == chShellAgents
+}
 
 func (q *outQueue) push(msg serverMsg) {
 	q.mu.Lock()
@@ -816,8 +853,8 @@ func (q *outQueue) push(msg serverMsg) {
 	if n := len(q.frames); n > 0 && msg.raw != nil {
 		if last := &q.frames[n-1]; last.raw != nil && last.Ch == msg.Ch && last.ID == msg.ID &&
 			last.Type == msg.Type && len(last.raw)+len(msg.raw) <= maxMergedData {
-			last.raw = append(last.raw, msg.raw...)
 			q.bytes += len(msg.raw)
+			last.raw = append(last.raw, msg.raw...)
 			q.mu.Unlock()
 			return
 		}
@@ -825,8 +862,41 @@ func (q *outQueue) push(msg serverMsg) {
 	if msg.raw != nil {
 		msg.raw = append([]byte(nil), msg.raw...)
 	}
+	// A whole-state frame already waiting is replaced, not queued behind: a
+	// newer state supersedes an older one for the same channel. Per-event frames
+	// such as chSessions never take this path (see coalesces).
+	if msg.coalesces() {
+		for i := len(q.frames) - 1; i >= 0; i-- {
+			if q.frames[i].coalesces() && q.frames[i].Ch == msg.Ch {
+				q.bytes += frameCost(msg) - frameCost(q.frames[i])
+				q.frames[i] = msg
+				q.mu.Unlock()
+				return
+			}
+		}
+	}
 	q.frames = append(q.frames, msg)
-	q.bytes += len(msg.Data) + len(msg.raw)
+	q.bytes += frameCost(msg)
+	// Control frames may never block, so the budget is enforced here by
+	// discarding. Only a control frame is dropped: PTY output is a byte stream,
+	// so removing one would corrupt it, and it is already bounded by
+	// dataWatermark because its producer waits for room. Whole-state frames
+	// coalesce above, so this only reaches per-event frames (chSessions) and
+	// one-off transitions.
+	for q.bytes > controlWatermark {
+		oldest := -1
+		for i, queued := range q.frames {
+			if queued.raw == nil && queued.Type != msgData {
+				oldest = i
+				break
+			}
+		}
+		if oldest < 0 {
+			break
+		}
+		q.bytes -= frameCost(q.frames[oldest])
+		q.frames = slices.Delete(q.frames, oldest, oldest+1)
+	}
 	q.mu.Unlock()
 	select {
 	case q.wake <- struct{}{}:

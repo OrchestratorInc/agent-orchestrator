@@ -1057,6 +1057,95 @@ func TestEnqueueControlFramesNeverWait(t *testing.T) {
 	}
 }
 
+// Control frames may never block, so a stalled client's queue is bounded by
+// dropping control frames instead of growing without limit: the CDC fan-out
+// enqueues them on one goroutine shared by every connection.
+func TestControlQueueIsBounded(t *testing.T) {
+	q := newOutQueue()
+	// Small state updates that coalesce only per channel, so they accumulate.
+	for i := 0; i < 64; i++ {
+		q.push(serverMsg{Ch: chTerminal, ID: "t1", Type: msgError, Error: strings.Repeat("e", controlWatermark/32)})
+	}
+	q.mu.Lock()
+	bytes, frames := q.bytes, len(q.frames)
+	q.mu.Unlock()
+	if bytes > controlWatermark {
+		t.Fatalf("queued %d bytes, above the %d control budget", bytes, controlWatermark)
+	}
+	if frames <= 1 {
+		t.Fatal("every control frame was discarded; the budget must keep recent frames")
+	}
+}
+
+// A whole-state snapshot supersedes an older one on the same channel, so a
+// stalled client receives the current state instead of a backlog of obsolete
+// states. chShellAgents carries exactly that: each frame replaces the list.
+func TestQueuedWholeStateSnapshotIsReplacedNotStacked(t *testing.T) {
+	q := newOutQueue()
+	q.push(serverMsg{Ch: chShellAgents, Type: msgSnapshot, Agents: json.RawMessage(`[{"id":"old"}]`)})
+	q.push(serverMsg{Ch: chShellAgents, Type: msgSnapshot, Agents: json.RawMessage(`[{"id":"new"}]`)})
+
+	q.mu.Lock()
+	frames := len(q.frames)
+	q.mu.Unlock()
+	if frames != 1 {
+		t.Fatalf("queued shell-agent snapshots = %d, want 1 (latest state wins)", frames)
+	}
+
+	got := q.drain()
+	if len(got) != 1 || string(got[0].Agents) != `[{"id":"new"}]` {
+		t.Fatalf("drained %#v, want the newest snapshot", got)
+	}
+}
+
+// chSessions frames are per-event CDC changes, not whole state: each carries a
+// distinct Seq/SessionID that a consumer applies as one event. Coalescing them
+// silently dropped every change but the last, so two distinct queued session
+// events must both survive, in order.
+func TestQueuedSessionEventsAreNotCoalesced(t *testing.T) {
+	q := newOutQueue()
+	q.push(serverMsg{Ch: chSessions, Type: msgSnapshot, Session: &sessionUpdate{Seq: 1, ProjectID: "p1", SessionID: "s1", EventType: "session.created"}})
+	q.push(serverMsg{Ch: chSessions, Type: msgSnapshot, Session: &sessionUpdate{Seq: 2, ProjectID: "p1", SessionID: "s2", EventType: "session.created"}})
+
+	q.mu.Lock()
+	queued := len(q.frames)
+	q.mu.Unlock()
+	if queued != 2 {
+		t.Fatalf("queued session events = %d, want 2 (each is a distinct change)", queued)
+	}
+
+	got := q.drain()
+	if len(got) != 2 {
+		t.Fatalf("drained %d session events, want 2", len(got))
+	}
+	if got[0].Session == nil || got[0].Session.SessionID != "s1" || got[0].Session.Seq != 1 {
+		t.Fatalf("first event = %#v, want s1 seq 1", got[0].Session)
+	}
+	if got[1].Session == nil || got[1].Session.SessionID != "s2" || got[1].Session.Seq != 2 {
+		t.Fatalf("second event = %#v, want s2 seq 2", got[1].Session)
+	}
+}
+
+// PTY output is a byte stream: dropping a queued data frame would corrupt the
+// terminal. The control budget must therefore never remove one.
+func TestControlBudgetKeepsQueuedPTYOutput(t *testing.T) {
+	q := newOutQueue()
+	q.push(serverMsg{Ch: chTerminal, ID: "t1", Type: msgData, raw: []byte("output")})
+	for i := 0; i < 64; i++ {
+		q.push(serverMsg{Ch: chTerminal, ID: "t1", Type: msgError, Error: strings.Repeat("e", controlWatermark/32)})
+	}
+
+	var data int
+	for _, frame := range q.drain() {
+		if frame.Type == msgData {
+			data++
+		}
+	}
+	if data != 1 {
+		t.Fatalf("queued data frames = %d, want 1 (output must survive trimming)", data)
+	}
+}
+
 // A blocked producer must not outlive its connection, or daemon shutdown hangs.
 func TestEnqueueDataUnblocksOnConnClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

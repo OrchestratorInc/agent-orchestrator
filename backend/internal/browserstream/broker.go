@@ -47,14 +47,24 @@ type Subscription struct {
 	Events   <-chan Event
 	Frames   <-chan Event
 	close    func()
+	// closeOnce makes Close idempotent under concurrent and repeated calls. A
+	// plain field check raced: two callers could both read a non-nil close and
+	// both unsubscribe. It also orders the write to close that the field check
+	// used to rely on.
+	closeOnce sync.Once
 }
 
 // Close releases this subscriber and stops the host capture when it was the last one.
+// It is safe to call more than once and from several goroutines.
 func (s *Subscription) Close() {
-	if s != nil && s.close != nil {
-		s.close()
-		s.close = nil
+	if s == nil {
+		return
 	}
+	s.closeOnce.Do(func() {
+		if s.close != nil {
+			s.close()
+		}
+	})
 }
 
 // Broker owns the single authenticated Electron media link and fans one host
