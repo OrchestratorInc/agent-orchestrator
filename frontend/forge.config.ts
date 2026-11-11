@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
 import { checkMacDmgLayout } from "./scripts/build-mac-dmg.mjs";
+import { APP_LOCALES } from "./src/shared/ui-locale";
 
 // Default GitHub release target (production). Releases land on Untrivial-ai
 // (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
@@ -86,6 +87,20 @@ export function labelMacBundle(
 	const label = readFileSync(path.join(resources, "en.lproj", "InfoPlist.strings"));
 	for (const locale of readdirSync(resources).filter((entry) => entry.endsWith(".lproj"))) {
 		writeFileSync(path.join(resources, locale, "InfoPlist.strings"), label);
+	}
+}
+
+// Chromium ships about 220 locale folders (49 MB). Keep the app's own UI
+// languages; for any other, macOS falls back to English, as the app's UI does.
+// Must run before signing.
+export function pruneChromiumLocales(buildPath: string): void {
+	const resources = path.join(
+		buildPath, `${PACKAGER_NAME}.app`, "Contents", "Frameworks", "Electron Framework.framework", "Resources",
+	);
+	const keep = new Set<string>(APP_LOCALES.map((locale) => locale.replace("-", "_")));
+	for (const entry of readdirSync(resources)) {
+		const locale = /^(.+?)(?:_(?:FEMININE|MASCULINE|NEUTER))?\.lproj$/.exec(entry)?.[1];
+		if (locale && !keep.has(locale)) rmSync(path.join(resources, entry), { recursive: true, force: true });
 	}
 }
 
@@ -216,6 +231,7 @@ const config: ForgeConfig = {
 			if (platform !== "darwin") return callback();
 			try {
 				labelMacBundle(buildPath);
+				pruneChromiumLocales(buildPath);
 				callback();
 			} catch (error) {
 				callback(error as Error);

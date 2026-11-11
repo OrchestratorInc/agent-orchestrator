@@ -22,6 +22,7 @@ import {
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
 	pruneNodeDistribution,
+	pruneRuntimePackages,
 	runtimeSourceFiles,
 } from "./build-acp-runtime-helpers.mjs";
 
@@ -112,6 +113,7 @@ const nativeClaudePackages = [
 for (const name of nativeClaudePackages) {
 	rmSync(join(anthropicDir, name), { recursive: true, force: true });
 }
+pruneRuntimePackages(join(outDir, "node_modules"));
 
 const workDir = createWorkDirectory(outDir);
 try {

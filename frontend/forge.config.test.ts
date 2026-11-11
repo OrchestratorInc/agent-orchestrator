@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MachOParseError } from "./makers/macho-archs";
@@ -31,7 +31,7 @@ vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
 	return { ...actual, checkMacDmgLayout };
 });
 
-import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, WINDOWS_DISPLAY_NAME } from "./forge.config";
+import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, pruneChromiumLocales, WINDOWS_DISPLAY_NAME } from "./forge.config";
 
 // Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
 // two on-disk layouts the signing selector must tell apart. Full parser
@@ -456,6 +456,35 @@ describe("packaged native dependencies", () => {
 		expect(ignore("/node_modules/react/index.js")).toBe(true);
 		expect(ignore("/src/main.ts")).toBe(true);
 		expect(config.hooks?.prePackage).toBeTypeOf("function");
+	});
+});
+
+describe("Chromium locale pruning", () => {
+	let buildPath: string;
+	beforeEach(() => {
+		buildPath = mkdtempSync(join(tmpdir(), "ao-locales-"));
+	});
+	afterEach(() => rmSync(buildPath, { recursive: true, force: true }));
+
+	it("keeps the app's UI languages and their variants and removes the rest", () => {
+		const resources = join(
+			buildPath, `${config.packagerConfig?.name}.app`, "Contents", "Frameworks", "Electron Framework.framework", "Resources",
+		);
+		const entries = [
+			"en.lproj", "en_FEMININE.lproj", "zh_CN.lproj", "zh_CN_NEUTER.lproj", "pt_BR.lproj",
+			"en_GB.lproj", "zh_TW.lproj", "pt_PT_MASCULINE.lproj", "af.lproj", "Info.plist",
+		];
+		mkdirSync(resources, { recursive: true });
+		for (const entry of entries) {
+			if (entry.endsWith(".lproj")) mkdirSync(join(resources, entry));
+			else writeFileSync(join(resources, entry), "");
+		}
+
+		pruneChromiumLocales(buildPath);
+
+		expect(readdirSync(resources).sort()).toEqual([
+			"Info.plist", "en.lproj", "en_FEMININE.lproj", "pt_BR.lproj", "zh_CN.lproj", "zh_CN_NEUTER.lproj",
+		]);
 	});
 });
 

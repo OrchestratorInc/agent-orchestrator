@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	archiveExtraction,
@@ -23,6 +23,7 @@ import {
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
 	pruneNodeDistribution,
+	pruneRuntimePackages,
 	runtimeSourceFiles,
 } from "./build-acp-runtime-helpers.mjs";
 
@@ -688,5 +689,27 @@ describe("archiveExtraction", () => {
 			const { command } = archiveExtraction("/w/a", "/w", { platform, systemRoot: "C:\\Windows" });
 			expect(command).not.toMatch(/powershell|cmd\.exe|\bsh\b/i);
 		}
+	});
+});
+
+describe("pruneRuntimePackages", () => {
+	it("removes declarations, source maps and docs and keeps code", () => {
+		const nodeModules = temporaryDirectory();
+		const files = [
+			"pkg/index.js", "pkg/index.js.map", "pkg/index.d.ts", "pkg/esm/index.d.mts", "pkg/cjs/index.d.cts",
+			"pkg/README.md", "pkg/package.json", "pkg/lib/map.js", "@scope/sdk/dist/client.js",
+		];
+		for (const file of files) {
+			mkdirSync(dirname(join(nodeModules, file)), { recursive: true });
+			writeFileSync(join(nodeModules, file), "");
+		}
+
+		pruneRuntimePackages(nodeModules);
+
+		const left = readdirSync(nodeModules, { recursive: true, withFileTypes: true })
+			.filter((entry) => entry.isFile())
+			.map((entry) => relative(nodeModules, join(entry.parentPath, entry.name)).split(sep).join("/"))
+			.sort();
+		expect(left).toEqual(["@scope/sdk/dist/client.js", "pkg/index.js", "pkg/lib/map.js", "pkg/package.json"]);
 	});
 });
