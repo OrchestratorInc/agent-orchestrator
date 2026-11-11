@@ -142,6 +142,28 @@ why the first release shares one. Lume has no "no network" mode.
 3. **More isolation and hosts.** One VM per session; Linux and Windows hosts
    through other MCP endpoints.
 
+## Alternative: run AO inside the VM
+
+AO already supports [remote hosts](../self-hosted-remote.md): the daemon runs
+on another machine and the desktop app is a client. A local VM could be one.
+
+- **Gain.** The agent process, its shell, and its worktree move into the VM
+  too, which this plan does not do. Computer use inside the VM is today's
+  host mode, so it needs no new transport.
+- **Cost.** Repositories, agent logins, and GitHub credentials must live in
+  the VM.
+- **Guest.** Remote-host setup supports Ubuntu x64 only today. That fits a
+  Linux x86 host. On Apple silicon it needs remote-host support for a macOS
+  guest, because Cua Driver has no ARM64 Linux build.
+- **Setting.** Computer use cannot be turned on over the remote listener
+  today; those routes are blocked there by design.
+- **Not through the Cloudflare tunnel.** Cloudflare terminates TLS and can
+  read the traffic, and the tunnel needs internet and an AO account, for a VM
+  on the same machine. Pair over the VM's private address instead (the
+  existing `--lan` mode).
+
+Open question 1 decides between the two.
+
 ## Open questions
 
 1. Is isolating desktop control enough, or must the agent itself run in the
