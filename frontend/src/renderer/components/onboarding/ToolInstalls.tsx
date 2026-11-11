@@ -30,6 +30,8 @@ type InstallJob = components["schemas"]["InstallJob"];
 type InstallPlan = components["schemas"]["AgentInstallPlan"];
 
 const POLL_MS = 1_000;
+// Polls in a row that get no answer before the GitHub CLI install stops waiting (about 30 s).
+const POLL_GIVE_UP_AFTER = 30;
 const ENDED = new Set<InstallJob["status"]>(["failed", "interrupted", "unsupported"]);
 
 export type AgentRowState = "ready" | "signin" | "missing" | "checking";
@@ -147,6 +149,8 @@ export function useGhInstall(onInstalled: () => void) {
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState<string | undefined>();
 	const timer = useRef<number | undefined>(undefined);
+	// Set from the click, so a second click before the next render can't start another install.
+	const starting = useRef(false);
 	const onInstalledRef = useRef(onInstalled);
 	onInstalledRef.current = onInstalled;
 	useEffect(() => () => window.clearInterval(timer.current), []);
@@ -172,7 +176,8 @@ export function useGhInstall(onInstalled: () => void) {
 	}, []);
 
 	const start = async () => {
-		if (pending || isActiveInstallJob(job)) return;
+		if (starting.current || isActiveInstallJob(job)) return;
+		starting.current = true;
 		setPending(true);
 		setError(undefined);
 		try {
@@ -183,14 +188,27 @@ export function useGhInstall(onInstalled: () => void) {
 			}
 			if (settle(data)) return;
 			window.clearInterval(timer.current);
+			let misses = 0;
+			const missed = () => {
+				// A blip is tried again on the next tick; a daemon gone for good ends the wait.
+				if (++misses < POLL_GIVE_UP_AFTER) return;
+				window.clearInterval(timer.current);
+				setJob(undefined);
+				setError(t("firstRun.installDidNotFinish"));
+			};
 			timer.current = window.setInterval(() => {
-				void apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } }).then(({ data: next }) => {
-					if (next) settle(next);
-				});
+				void apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } })
+					.then(({ data: next }) => {
+						if (!next) return missed();
+						misses = 0;
+						settle(next);
+					})
+					.catch(missed);
 			}, POLL_MS);
 		} catch (startError) {
 			setError(startError instanceof Error ? startError.message : t("settings.harness.startFailed"));
 		} finally {
+			starting.current = false;
 			setPending(false);
 		}
 	};
