@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,11 +26,11 @@ type linkFixture struct {
 	// Daemon.
 	enabled, loopbackOnly, tunnel, fixed bool
 	// AO Cloud.
-	listed             string // JSON for the account's hosts
-	fixedAddresses     bool
-	conflictWithoutURL bool
-	connectorStuck     bool // never gets its fixed address
-	registrations      []map[string]string
+	listed           string // JSON for the account's hosts
+	fixedAddresses   bool
+	refuseWithoutURL string // "<status> <code>" AO Cloud answers a registration without url
+	connectorStuck   bool   // never gets its fixed address
+	registrations    []map[string]string
 	// WorkOS answers to each poll; the last one repeats.
 	polls []string
 }
@@ -118,9 +119,10 @@ func (f *linkFixture) cloud(w http.ResponseWriter, r *http.Request) {
 		var registration map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&registration)
 		f.registrations = append(f.registrations, registration)
-		if registration["url"] == "" && f.conflictWithoutURL {
-			w.WriteHeader(http.StatusConflict)
-			_, _ = io.WriteString(w, `{"code":"fixed_address_limit_reached"}`)
+		if status, code, ok := strings.Cut(f.refuseWithoutURL, " "); ok && registration["url"] == "" {
+			n, _ := strconv.Atoi(status)
+			w.WriteHeader(n)
+			_, _ = io.WriteString(w, `{"code":"`+code+`"}`)
 			return
 		}
 		// Listed without an address, the machine's connector gets its fixed one.
@@ -194,19 +196,25 @@ func TestRemoteHostLinkSignsInAndListsTheMachineInTheAccount(t *testing.T) {
 		"Address: https://"+linkFixedHost, "Cloudflare terminates TLS")
 }
 
-func TestRemoteHostLinkUsesTheQuickTunnelWhenTheAccountIsOutOfFixedAddresses(t *testing.T) {
-	f := &linkFixture{fixedAddresses: true, conflictWithoutURL: true}
-	out, err := f.run(t, Deps{}, "--label", "build-vm")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.registrations) != 2 || f.registrations[1]["url"] != "https://"+linkQuickHost {
-		t.Fatalf("registrations = %v, want a retry at the quick tunnel", f.registrations)
-	}
-	// The address the machine is listed at, not a wait for a fixed one that never comes.
-	wantOutput(t, out, "Address: https://"+linkQuickHost)
-	if strings.Contains(out, "not ready") {
-		t.Fatalf("output %q waited for a fixed address", out)
+// AO Cloud answers 409, 429 or 502 when it cannot make the fixed address; a
+// registration with url still lists the machine (#7294, #7976).
+func TestRemoteHostLinkUsesTheQuickTunnelWhenAOCloudCannotMakeTheFixedAddress(t *testing.T) {
+	for _, refusal := range []string{"409 fixed_address_limit_reached", "429 tunnel_rate_limited", "502 tunnel_unavailable"} {
+		t.Run(refusal, func(t *testing.T) {
+			f := &linkFixture{fixedAddresses: true, refuseWithoutURL: refusal}
+			out, err := f.run(t, Deps{}, "--label", "build-vm")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(f.registrations) != 2 || f.registrations[1]["url"] != "https://"+linkQuickHost {
+				t.Fatalf("registrations = %v, want a retry at the quick tunnel", f.registrations)
+			}
+			// The address the machine is listed at, not a wait for a fixed one that never comes.
+			wantOutput(t, out, `Linked "build-vm"`, "Address: https://"+linkQuickHost)
+			if strings.Contains(out, "not ready") {
+				t.Fatalf("output %q waited for a fixed address", out)
+			}
+		})
 	}
 }
 

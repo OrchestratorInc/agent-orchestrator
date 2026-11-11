@@ -992,6 +992,48 @@ describe("TerminalCacheProvider", () => {
 		}
 	});
 
+	it("shows a terminal in each split pane and moves one between panes without remounting it", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([sessionA, sessionB]));
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const previousAO = window.ao;
+		window.ao = {} as typeof window.ao;
+		const tree = (left?: WorkspaceSession, right?: WorkspaceSession) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<TerminalCacheProvider daemonReady theme="dark">
+						<div data-testid="left-pane">
+							{left ? <TerminalPane daemonReady fontSize={12} session={left} theme="dark" /> : null}
+						</div>
+						<div data-testid="right-pane">
+							{right ? <TerminalPane daemonReady fontSize={12} session={right} theme="dark" /> : null}
+						</div>
+					</TerminalCacheProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree(sessionA, sessionB));
+		try {
+			await waitFor(() => expect(within(screen.getByTestId("left-pane")).getByTestId("xterm")).toBeInTheDocument());
+			await waitFor(() => expect(within(screen.getByTestId("right-pane")).getByTestId("xterm")).toBeInTheDocument());
+			const hostA = document.querySelector<HTMLElement>(`[data-terminal-cache-key^="session:${sessionA.id}:worker|"]`);
+			const hostB = document.querySelector<HTMLElement>(`[data-terminal-cache-key^="session:${sessionB.id}:worker|"]`);
+			// Both panes are on screen at once: neither terminal is parked.
+			expect(hostA).toHaveAttribute("data-terminal-activation-phase", "visible");
+			expect(hostB).toHaveAttribute("data-terminal-activation-phase", "visible");
+			const mounts = xtermMounts.value;
+
+			// A moves to the right pane and B leaves: A's live renderer is re-parented.
+			view.rerender(tree(undefined, sessionA));
+			await waitFor(() => expect(screen.getByTestId("right-pane").contains(hostA)).toBe(true));
+			expect(hostA).toHaveAttribute("data-terminal-activation-phase", "visible");
+			expect(hostB).toHaveAttribute("data-terminal-activation-phase", "parked");
+			expect(xtermMounts.value).toBe(mounts);
+		} finally {
+			window.ao = previousAO;
+		}
+	});
+
 	it("focuses each retained TUI terminal when switching among TUI sessions", async () => {
 		const tuiA = { ...sessionA, mode: "tui" as const };
 		const tuiB = { ...sessionB, mode: "tui" as const };

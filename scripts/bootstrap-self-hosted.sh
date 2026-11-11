@@ -7,7 +7,7 @@ set -euo pipefail
 {
 usage() {
 	printf '%s\n' 'Usage: bootstrap-self-hosted.sh [--nightly | --source-ref BRANCH] [--lan]'
-	printf '%s\n' 'Installs prerequisites, then installs released AO or builds a source branch.'
+	printf '%s\n' 'Installs prerequisites, then installs released Orchestrator or builds a source branch.'
 	printf '%s\n' 'Downloads stable by default; --nightly installs the newest published nightly.'
 }
 
@@ -38,7 +38,7 @@ sudo apt-get update
 sudo apt-get install -y ca-certificates curl gh git python3
 sudo loginctl enable-linger "$(id -un)"
 systemctl --user show-environment >/dev/null || {
-	printf '%s\n' 'A systemd user session is required for an always-on AO host.' >&2; exit 1;
+	printf '%s\n' 'A systemd user session is required for an always-on Orchestrator host.' >&2; exit 1;
 }
 
 if "$tunnel" && ! command -v cloudflared >/dev/null; then

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -15,6 +16,38 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
+
+func TestCapturedExcerptSurvivesQueueAndSourceDeletion(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	active, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "active", ClientMessageID: "active"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := ports.ChatExcerptReference{ConversationID: h.ctrl.ConversationID(), MessageID: "deleted-source", Revision: 12, Text: "selected\n\tcode", Snapshot: &domain.ChatExcerptSnapshot{Version: 1, RawText: "**selected**\n\tcode", CaptureMode: "exact"}}
+	msg := ports.ChatUserMessage{Text: "explain", ClientMessageID: "snapshot-queue", Excerpts: []ports.ChatExcerptReference{ref}}
+	turn, err := h.svc.Send(ctx, testSession, msg)
+	if err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("queue = %+v, %v", turn, err)
+	}
+	if duplicate, err := h.svc.Send(ctx, testSession, msg); err != nil || duplicate.ID != "" {
+		t.Fatalf("duplicate = %+v, %v", duplicate, err)
+	}
+	changed := *ref.Snapshot
+	changed.RawText = "different raw source"
+	msg.Excerpts[0].Snapshot = &changed
+	if _, err := h.svc.Send(ctx, testSession, msg); !errors.Is(err, domain.ErrClientMessageConflict) {
+		t.Fatalf("conflict = %v", err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: active.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["explain"] == domain.TurnStateRunning
+	})
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 || !strings.Contains(sent[1].Text, ref.Text) || !strings.Contains(sent[1].Text, ref.Snapshot.RawText) {
+		t.Fatalf("delivery = %+v", sent)
+	}
+}
 
 // Keep queue writes and settlement real while simulating source changes after
 // the excerpt has been accepted. The invalid case simulates a malformed stored
@@ -132,7 +165,13 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				states := turnStateByText(t, s)
 				return states["stale excerpt"] == domain.TurnStateFailed && states["next valid"] == domain.TurnStateRunning
 			})
+			// The joined message settles in its own write after the snapshot
+			// above; re-read it briefly instead of racing that write under load.
 			lastTurn, err := h.st.TurnByID(ctx, last.ID)
+			for deadline := time.Now().Add(5 * time.Second); (err != nil || lastTurn.State != domain.TurnStateCompleted) && time.Now().Before(deadline); {
+				time.Sleep(10 * time.Millisecond)
+				lastTurn, err = h.st.TurnByID(ctx, last.ID)
+			}
 			if err != nil || lastTurn.State != domain.TurnStateCompleted {
 				t.Fatalf("last queued message did not join the batch: turn=%+v err=%v", lastTurn, err)
 			}

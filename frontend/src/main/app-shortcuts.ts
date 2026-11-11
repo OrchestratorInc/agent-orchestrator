@@ -14,6 +14,8 @@ import {
 	PREVIOUS_TAB_SHORTCUT_CHANNEL,
 	terminalFontSizeDelta,
 	TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL,
+	ARTIFACT_ZOOM_SHORTCUT_CHANNEL,
+	artifactZoomAction,
 	type AppShortcutEvent,
 	type AppShortcutId,
 	type KeybindingOverrides,
@@ -83,6 +85,15 @@ const legacyShortcutChannels: Partial<Record<AppShortcutId, string>> = {
 // Handled in main itself rather than forwarded to the shell.
 const mainHandledShortcuts: ReadonlySet<AppShortcutId> = new Set(["toggle-browser-devtools"]);
 
+/** The IPC message that runs shortcut `id` in the shell, shared by chords and menu items. */
+export function appShortcutDelivery(
+	id: AppShortcutId,
+	event: AppShortcutEvent = { id },
+): { channel: string; payload: unknown[] } {
+	const legacy = legacyShortcutChannels[id];
+	return legacy ? { channel: legacy, payload: [] } : { channel: APP_SHORTCUT_CHANNEL, payload: [event] };
+}
+
 const appShortcutMatch = (
 	chord: ShortcutChord,
 	isMac: boolean,
@@ -90,10 +101,8 @@ const appShortcutMatch = (
 ): { id: AppShortcutId; channel: string; payload: unknown[] } | null => {
 	for (const { id } of APP_SHORTCUTS) {
 		if (mainHandledShortcuts.has(id) || !matchesAppShortcut(id, chord, isMac, overrides)) continue;
-		const legacy = legacyShortcutChannels[id];
-		if (legacy) return { id, channel: legacy, payload: [] };
 		const event: AppShortcutEvent = id === "jump-to-session" ? { id, index: Number(chord.key) - 1 } : { id };
-		return { id, channel: APP_SHORTCUT_CHANNEL, payload: [event] };
+		return { id, ...appShortcutDelivery(id, event) };
 	}
 	return null;
 };
@@ -115,6 +124,10 @@ export function attachAppShortcuts(
 	// leave them to app zoom. Defaults to "any focused terminal" for callers that
 	// do not distinguish.
 	isTerminalFontSizeFocused: () => boolean = isTerminalFocused,
+	// An artifact viewer that can zoom, under the pointer or holding focus,
+	// claims the zoom chords ahead of the app's View zoom, even from a framed
+	// page whose keys never reach the viewer itself.
+	isArtifactZoomEngaged: () => boolean = () => false,
 ): void {
 	contents.on("before-input-event", (event, input) => {
 		if (input.type !== "keyDown") return;
@@ -131,6 +144,12 @@ export function attachAppShortcuts(
 			event.preventDefault();
 			if (focusTarget) target.focus();
 			target.send(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, fontSizeDelta);
+			return;
+		}
+		const artifactZoom = artifactZoomAction(chord, isMac);
+		if (artifactZoom && isArtifactZoomEngaged()) {
+			event.preventDefault();
+			target.send(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, artifactZoom);
 			return;
 		}
 		// Let the renderer's capture listener receive application-owned chords
@@ -150,6 +169,9 @@ export function attachAppShortcuts(
 		const match = appShortcutMatch(chord, isMac, getOverrides());
 		if (!match) return;
 		const { id, channel, payload } = match;
+		// Find is owned by the focused surface, on every platform. Let the
+		// renderer route it after inspecting dialogs, editors and chat focus.
+		if (id === "find-in-chat") return;
 		if (!isMac && shortcutYieldsToTerminal(id, chord) && isTerminalFocused()) return;
 		if (!shouldHandle(id, chord)) {
 			// Browser context owns these chords. Consume them so a racing shell

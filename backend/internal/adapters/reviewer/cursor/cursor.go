@@ -98,7 +98,7 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 func cursorPrompt(inv ports.ReviewInvocation) string {
 	if inv.SystemPromptFile != "" {
 		return fmt.Sprintf(
-			"Read and follow the AO reviewer role in `%s`, then %s",
+			"Read and follow the Orchestrator reviewer role in `%s`, then %s",
 			filepath.ToSlash(inv.SystemPromptFile),
 			strings.TrimSpace(inv.Prompt),
 		)

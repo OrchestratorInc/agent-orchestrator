@@ -1,5 +1,5 @@
 import { useRef, type CSSProperties, type ReactNode } from "react";
-import { Check } from "lucide-react";
+import { Check } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 
 export function MultiStepLoader({

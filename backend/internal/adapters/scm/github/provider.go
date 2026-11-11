@@ -232,6 +232,11 @@ func (p *Provider) fetchRESTPull(ctx context.Context, owner, repo string, number
 // risk reporting a broken PR as passing).
 const graphQLCheckContextLimit = 100
 
+// checkRunFields is the CheckRun selection every rollup query uses. The
+// workflow name and event identify which runs are reruns of the same check
+// (see latestCheckRuns).
+const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ workflowRun{ event workflow{ name } } }`
+
 // prObservationQuery is the GraphQL query (derived from PR #28, credited
 // to @whoisasx) that pulls everything we need in one round trip:
 //   - reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED / null)
@@ -259,7 +264,7 @@ const prObservationQuery = `query($owner:String!,$repo:String!,$number:Int!){
           contexts(first:CONTEXT_LIMIT){
             nodes{
               __typename
-              ... on CheckRun  { name status conclusion detailsUrl url databaseId }
+              ... on CheckRun  { ` + checkRunFields + ` }
               ... on StatusContext { context state targetUrl }
             }
             pageInfo{ hasNextPage }
@@ -316,8 +321,12 @@ func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobI
 
 // ciSummaryFromGraphQL maps the per-PR status rollup onto domain.CIState.
 // If ANY visible context concluded failure-class we return CIFailing.
-// Otherwise any pending context wins over passing. An empty rollup is
-// CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
+// Otherwise any pending context wins over passing. A cancelled check is
+// not a failure: it usually means a replacement run is on its way, which
+// the pending case reports. With nothing running, a cancelled check (say,
+// one stopped by hand) settles as CIUnknown even beside passing checks:
+// it proved nothing, so AO must not report the PR as passing. An empty
+// rollup is CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
 // the verdict is conservative: a known failure is still safe — failures
 // don't get un-failed by more pages — but passing/pending/unknown
 // verdicts could hide a failing context on the next page, so we degrade
@@ -328,19 +337,21 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 		return domain.CIUnknown
 	}
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := nodes(contexts["nodes"])
+	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
 	if len(rawNodes) == 0 {
 		// GitHub returns a top-level "state" on the rollup even when the
 		// nodes list is empty (e.g. SUCCESS / FAILURE / PENDING). Honor it
 		// rather than returning CIUnknown for an otherwise-decided PR.
 		return mapRollupState(str(roll["state"]))
 	}
-	pending, passing := false, false
+	pending, passing, cancelled := false, false, false
 	for _, n := range rawNodes {
 		st := checkStatusFromGraphQL(n)
 		switch st {
-		case domain.PRCheckFailed, domain.PRCheckCancelled:
+		case domain.PRCheckFailed:
 			return domain.CIFailing
+		case domain.PRCheckCancelled:
+			cancelled = true
 		case domain.PRCheckQueued, domain.PRCheckInProgress:
 			pending = true
 		case domain.PRCheckPassed:
@@ -353,6 +364,8 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	switch {
 	case pending:
 		return domain.CIPending
+	case cancelled:
+		return domain.CIUnknown
 	case passing:
 		return domain.CIPassing
 	default:
@@ -467,7 +480,7 @@ func mergeabilityFromGraphQL(pr map[string]any, rest restPull, ci domain.CIState
 func checksFromGraphQL(pr map[string]any, headSHA string) []ports.PRCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := nodes(contexts["nodes"])
+	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
 	if len(rawNodes) == 0 {
 		return nil
 	}
@@ -556,7 +569,7 @@ func isBotAuthor(author map[string]any) bool {
 func jobIDForCheck(pr map[string]any, name string) int64 {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	for _, n := range nodes(contexts["nodes"]) {
+	for _, n := range latestCheckRuns(nodes(contexts["nodes"])) {
 		if str(n["__typename"]) != "CheckRun" {
 			continue
 		}
@@ -566,6 +579,44 @@ func jobIDForCheck(pr map[string]any, name string) int64 {
 		return int64(num(n["databaseId"]))
 	}
 	return 0
+}
+
+// latestCheckRuns drops check runs that a newer run of the same check
+// superseded on this commit. statusCheckRollup keeps every workflow run on the
+// SHA (one cancelled when the workflow re-ran, a failed attempt before a green
+// rerun) and GitHub's rollup state counts them, while GitHub's checks list and
+// `gh pr checks` show only the newest run per workflow, event and job. Check
+// run IDs grow, so the highest databaseId is the newest. A run without a
+// readable workflowRun (another app, or a token without Actions access) is
+// always kept: it can't be matched to its reruns.
+func latestCheckRuns(in []map[string]any) []map[string]any {
+	newest := map[string]float64{}
+	for _, n := range in {
+		if key := checkRunKey(n); key != "" {
+			newest[key] = max(newest[key], num(n["databaseId"]))
+		}
+	}
+	out := make([]map[string]any, 0, len(in))
+	for _, n := range in {
+		if key := checkRunKey(n); key != "" && num(n["databaseId"]) < newest[key] {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func checkRunKey(n map[string]any) string {
+	if str(n["__typename"]) != "CheckRun" {
+		return ""
+	}
+	suite, _ := n["checkSuite"].(map[string]any)
+	run, _ := suite["workflowRun"].(map[string]any)
+	workflow, _ := run["workflow"].(map[string]any)
+	if workflow == nil {
+		return ""
+	}
+	return strings.Join([]string{str(workflow["name"]), str(run["event"]), str(n["name"])}, "\x00")
 }
 
 // statusRollup extracts the commits[0].commit.statusCheckRollup blob
@@ -626,7 +677,7 @@ func checkStatusFromGraphQL(n map[string]any) domain.PRCheckStatus {
 }
 
 func isFailingCheckStatus(s domain.PRCheckStatus) bool {
-	return s == domain.PRCheckFailed || s == domain.PRCheckCancelled
+	return s == domain.PRCheckFailed
 }
 
 // ---------------------------------------------------------------------------
