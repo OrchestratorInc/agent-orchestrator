@@ -2578,6 +2578,19 @@ type ShellTerminalResponse struct {
 	// label the tab instead of Title.
 	TerminalTitle string    `json:"terminalTitle,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
+	// EndedAt is set when the shell's process is gone, for example after the
+	// computer restarted. The tab stays listed so the user can reopen or close it.
+	EndedAt *time.Time `json:"endedAt,omitempty" description:"When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached."`
+	// ResumeHarness names the agent an ended shell can resume on reopen.
+	ResumeHarness string `json:"resumeHarness,omitempty" description:"For an ended shell, the coding agent last seen in it whose conversation picker reopening can start."`
+}
+
+// ReopenShellTerminalRequest is the body of POST /api/v1/shell-terminals/{handleId}/reopen.
+type ReopenShellTerminalRequest struct {
+	Shell       string `json:"shell,omitempty" description:"Shell to launch, as for opening a shell terminal."`
+	ResumeAgent bool   `json:"resumeAgent,omitempty" description:"Also start the agent last seen in this terminal in its own conversation picker. Nothing the old shell ran is replayed."`
+	Cols        int    `json:"cols,omitempty" description:"Initial terminal columns, as for opening a shell terminal."`
+	Rows        int    `json:"rows,omitempty" description:"Initial terminal rows. See cols."`
 }
 
 // ListShellTerminalsResponse is the body of GET /api/v1/shell-terminals.

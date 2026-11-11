@@ -61,6 +61,8 @@ export function preloadXtermTerminal(): void {
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
 import { Button } from "./ui/button";
+import { EndedShellTerminal } from "./EndedShellTerminal";
+import type { HostId } from "../lib/hosts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { captureRendererException } from "../lib/telemetry";
 
@@ -682,6 +684,7 @@ export function TerminalCacheProvider({
 			const shell = shells.get(entry.handleId);
 			if (
 				!shell ||
+				shell.endedAt ||
 				shell.createdAt !== entry.generation ||
 				shell.sessionId !== entry.sessionId
 			) {
@@ -819,6 +822,13 @@ export function TerminalPane({
 			: ({ kind: "worker" } satisfies TerminalTarget);
 	const isOptimisticShell =
 		terminalTarget.kind === "shell" && terminalTarget.handleId.startsWith("pending-shell:");
+	const shellHostId = session?.hostId as HostId | undefined;
+	const shellTerminalsQuery = useShellTerminals(shellHostId);
+	// A shell whose process is gone has no PTY to attach to; it shows as ended.
+	const endedShell =
+		terminalTarget.kind === "shell"
+			? shellTerminalsQuery.data?.find((shell) => shell.handleId === terminalTarget.handleId && shell.endedAt)
+			: undefined;
 	const cache = useContext(TerminalCacheContext);
 	// Subscribe to this session's terminal-reset nonce so a restore (which bumps
 	// it) re-renders the pane and recomputes the descriptor/mux key below, forcing
@@ -832,6 +842,9 @@ export function TerminalPane({
 			? terminalTarget.handleId
 			: `${session?.terminalHandleId ?? "empty"}:${session?.terminalGeneration ?? ""}`;
 
+	if (endedShell) {
+		return <EndedShellTerminal hostId={shellHostId} shell={endedShell} />;
+	}
 	if (!window.ao) {
 		// A standalone shell has no agent and no branch, so it previews as a plain
 		// prompt rather than borrowing the session's agent transcript.

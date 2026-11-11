@@ -119,7 +119,8 @@ func (s *Service) SetTerminalTrackers(ctx context.Context, trackers ...TerminalT
 		return
 	}
 	for _, rec := range recs {
-		if !rec.Transient {
+		// An ended shell has no program left to follow.
+		if !rec.Transient && rec.EndedAt == nil {
 			for _, tracker := range trackers {
 				tracker.TrackShellTerminal(rec.HandleID)
 			}
@@ -273,6 +274,9 @@ func (s *Service) ValidPreviewCapability(ctx context.Context, sessionID domain.S
 	}
 	for _, rec := range recs {
 		if s.previewCapabilities.Valid(sessionID, token, rec.PreviewCapabilityVerifier) {
+			if rec.EndedAt != nil {
+				return false, nil
+			}
 			alive, err := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 			if err != nil {
 				return false, fmt.Errorf("probe shell preview owner %s: %w", rec.HandleID, err)
@@ -363,13 +367,44 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		}
 		title = nextShellTerminalTitle(openTerminals)
 	}
-	argv, usedFallback := resolveUserLoginShell(in.Shell)
+	launch, err := s.prepareUserShell(in.SessionID, in.Shell, projectEnv)
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	defer launch.done()
+	argv, env, verifier := launch.argv, launch.env, launch.verifier
+	return s.openTerminal(ctx, openTerminalConfig{
+		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
+		workingDir: workingDir, title: title, titleExplicit: titleExplicit,
+		previewVerifier: verifier,
+		startOnAttach:   in.StartOnAttach,
+		cols:            in.Cols,
+		rows:            in.Rows,
+	})
+}
+
+// userShellLaunch is the argv and environment of a user's login shell, plus
+// the preview capability verifier a session-scoped shell persists.
+type userShellLaunch struct {
+	argv     []string
+	env      map[string]string
+	verifier string
+	// done ends the launch-gap admission of the shell's preview bearer; call
+	// it once the shell's row is persisted (or the open failed).
+	done func()
+}
+
+// prepareUserShell resolves the user's login shell and builds its
+// environment. A session-scoped shell gets AO_SESSION_ID and a preview-only
+// capability that is admitted while the launch is in flight.
+func (s *Service) prepareUserShell(sessionID domain.SessionID, shell string, projectEnv map[string]string) (userShellLaunch, error) {
+	argv, usedFallback := resolveUserLoginShell(shell)
 	if usedFallback {
-		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_SHELL_UNAVAILABLE",
-			fmt.Sprintf("The selected shell is unavailable: %s. Choose another shell in Settings.", in.Shell), nil)
+		return userShellLaunch{}, apierr.Invalid("SHELL_TERMINAL_SHELL_UNAVAILABLE",
+			fmt.Sprintf("The selected shell is unavailable: %s. Choose another shell in Settings.", shell), nil)
 	}
 	if len(argv) == 0 {
-		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL",
+		return userShellLaunch{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL",
 			"Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
 	env := s.pinnedEnv(projectEnv)
@@ -382,34 +417,27 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	env["AO_PREVIEW_CAPABILITY"] = ""
 	// What the user types here is theirs, not the agent's turn's (see cli caller header).
 	env[caller.ShellTerminalEnv] = "1"
-	var verifier string
-	if in.SessionID != "" {
-		env["AO_SESSION_ID"] = string(in.SessionID)
-		var token string
-		token, verifier, err = s.previewCapabilities.Issue(in.SessionID)
+	launch := userShellLaunch{argv: argv, env: env, done: func() {}}
+	if sessionID != "" {
+		env["AO_SESSION_ID"] = string(sessionID)
+		token, verifier, err := s.previewCapabilities.Issue(sessionID)
 		if err != nil {
-			return ShellTerminal{}, fmt.Errorf("open shell terminal: preview capability: %w", err)
+			return userShellLaunch{}, fmt.Errorf("open shell terminal: preview capability: %w", err)
 		}
 		env["AO_PREVIEW_CAPABILITY"] = token
+		launch.verifier = verifier
 		// The shell can issue its first CLI request before runtime.Create returns
 		// and its durable row is inserted. Admit it only during this launch gap.
 		s.pendingPreviewMu.Lock()
-		s.pendingPreview[in.SessionID] = verifier
+		s.pendingPreview[sessionID] = verifier
 		s.pendingPreviewMu.Unlock()
-		defer func() {
+		launch.done = func() {
 			s.pendingPreviewMu.Lock()
-			delete(s.pendingPreview, in.SessionID)
+			delete(s.pendingPreview, sessionID)
 			s.pendingPreviewMu.Unlock()
-		}()
+		}
 	}
-	return s.openTerminal(ctx, openTerminalConfig{
-		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
-		workingDir: workingDir, title: title, titleExplicit: titleExplicit,
-		previewVerifier: verifier,
-		startOnAttach:   in.StartOnAttach,
-		cols:            in.Cols,
-		rows:            in.Rows,
-	})
+	return launch, nil
 }
 
 const authWorkspaceDirectoryName = "auth-workspace"
@@ -697,6 +725,12 @@ type openTerminalConfig struct {
 	previewVerifier          string
 	startOnAttach            bool
 	cols, rows               int
+	// replaces names an ended shell whose row this terminal takes over, in
+	// one transaction. createdAt and lastAgentHarness carry over from it so
+	// the reopened tab keeps its place and its agent.
+	replaces         string
+	createdAt        time.Time
+	lastAgentHarness domain.AgentHarness
 }
 
 // openTerminal creates and persists a terminal, rolling the runtime back on
@@ -715,6 +749,9 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 	// any order, and the list is ordered by creation, so tabs opened in quick
 	// succession must keep the order they were opened in.
 	createdAt := s.now().UTC()
+	if !cfg.createdAt.IsZero() {
+		createdAt = cfg.createdAt
+	}
 	// SessionID is the runtime adapters' name for "what to call this PTY"; it
 	// is not a session row and no sessions record is ever created. The
 	// shellterm- prefix keeps the two namespaces disjoint.
@@ -754,8 +791,19 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		CommandOwner:              cfg.commandOwner,
 		CreatedAt:                 createdAt,
 		PreviewCapabilityVerifier: cfg.previewVerifier,
+		LastAgentHarness:          cfg.lastAgentHarness,
 	}
-	if err := s.store.InsertShellTerminal(ctx, rec); err != nil {
+	persist := func() error { return s.store.InsertShellTerminal(ctx, rec) }
+	if cfg.replaces != "" {
+		persist = func() error {
+			replaced, err := s.store.ReplaceShellTerminal(ctx, cfg.replaces, rec)
+			if err == nil && !replaced {
+				err = apierr.NotFound("SHELL_TERMINAL_NOT_FOUND", "No such shell terminal: "+cfg.replaces)
+			}
+			return err
+		}
+	}
+	if err := persist(); err != nil {
 		stillAlive, destroyErr := s.destroyRuntimeConfirmed(context.WithoutCancel(ctx), handle)
 		if stillAlive {
 			destroyErr = agentlaunch.RedactError(destroyErr, cfg.projectEnv)
@@ -896,14 +944,15 @@ func (s *Service) CloseShellTerminal(ctx context.Context, handleID string) error
 }
 
 // ListShellTerminalsForCurrentAppRun returns durable shells from every launch
-// plus the current launch's trusted auth terminals,
-// closing any whose child exited (the user typed `exit`, or the machine
-// rebooted out from under a persisted row). Retained hosts are destroyed before
-// their rows are removed; failed cleanup keeps the row available for retry.
+// plus the current launch's trusted auth terminals. A shell whose child exited
+// (the user typed `exit`, or the machine rebooted out from under a persisted
+// row) has its retained host destroyed; a session's user shell is then kept
+// as an ended tab the user can reopen or close, and any other shell is
+// forgotten. Failed cleanup keeps the row as it was, for retry.
 //
 // A liveness probe that ERRORS is not treated as proof of death — the same rule
 // internal/terminal applies on attach — so a transient runtime hiccup cannot
-// silently delete a working terminal.
+// end or delete a working terminal.
 func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]ShellTerminal, error) {
 	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
 	if err != nil {
@@ -911,6 +960,10 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 	}
 	out := make([]ShellTerminal, 0, len(recs))
 	for _, rec := range recs {
+		if rec.EndedAt != nil {
+			out = append(out, shellTerminalFromRecord(rec))
+			continue
+		}
 		alive, err := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 		if err != nil {
 			s.log.Warn("shell terminal liveness probe failed; keeping row",
@@ -919,6 +972,14 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 			continue
 		}
 		if !alive {
+			if keepsEndedShell(rec) {
+				ended, stillAlive, destroyErr := s.endShell(ctx, rec)
+				if stillAlive {
+					s.log.Warn("ending exited shell terminal: runtime survived cleanup", "handleId", rec.HandleID, "error", destroyErr)
+				}
+				out = append(out, shellTerminalFromRecord(ended))
+				continue
+			}
 			// Native hosts retain scrollback after child exit. Tear down that
 			// host before forgetting its row; preserve failures for retry.
 			if stillAlive, destroyErr := s.destroyConfirmed(ctx, rec); stillAlive {
@@ -930,6 +991,36 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 		out = append(out, shellTerminalFromRecord(rec))
 	}
 	return out, nil
+}
+
+// keepsEndedShell reports whether a shell whose process is gone stays listed
+// as an ended tab. Only a session's user shell does: it is the only kind a
+// client shows, and its tab, title and directory are the user's work. Trusted
+// auth terminals end with their flow, and a shell with no session is shown
+// nowhere.
+func keepsEndedShell(rec ShellTerminalRecord) bool {
+	return !rec.Transient && rec.SessionID != ""
+}
+
+// endShell tears down an exited shell's retained host and marks its row
+// ended instead of deleting it. When the host cannot be confirmed gone the
+// row is left unchanged (stillAlive=true) so the next pass retries.
+func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord) (ShellTerminalRecord, bool, error) {
+	stillAlive, destroyErr := s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: rec.HandleID})
+	if stillAlive {
+		return rec, true, destroyErr
+	}
+	for _, tracker := range s.trackers {
+		tracker.UntrackShellTerminal(rec.HandleID)
+	}
+	endedAt := s.now().UTC()
+	if _, err := s.store.MarkShellTerminalEnded(ctx, rec.HandleID, endedAt); err != nil {
+		// The host is gone either way; the next pass marks the row again.
+		s.log.Warn("shell terminal: mark ended failed", "handleId", rec.HandleID, "error", err)
+	}
+	s.log.Info("shell terminal ended; kept for reopening", "handleId", rec.HandleID)
+	rec.EndedAt = &endedAt
+	return rec, false, nil
 }
 
 // ListCommandTerminalsForCurrentAppRun returns the trusted command terminals
@@ -950,11 +1041,13 @@ func (s *Service) ListCommandTerminalsForCurrentAppRun(ctx context.Context) ([]S
 	return out, nil
 }
 
-// ReapShellTerminalsFromPreviousAppRuns prunes confirmed-dead user shells and
-// destroys abandoned trusted auth terminals. Live or unknown session shells
-// are preserved with their original associations and attach handles. A user
-// shell with no session is destroyed even when alive: clients show shells
-// only in a session's tab strip, so nothing could show or close it.
+// ReapShellTerminalsFromPreviousAppRuns destroys abandoned trusted auth
+// terminals and session-less shells. Live or unknown session shells are
+// preserved with their original associations and attach handles; one whose
+// process is confirmed gone (for example after a reboot) is kept as an ended
+// tab rather than deleted. A user shell with no session is destroyed even
+// when alive: clients show shells only in a session's tab strip, so nothing
+// could show or close it. The count is of rows deleted.
 func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (int64, error) {
 	orphans, err := s.store.SelectShellTerminalsFromPreviousAppRuns(ctx, s.appRunID)
 	if err != nil {
@@ -962,15 +1055,22 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 	}
 	var cleared int64
 	for _, rec := range orphans {
-		if !rec.Transient && rec.SessionID != "" {
+		if keepsEndedShell(rec) {
+			if rec.EndedAt != nil {
+				continue
+			}
 			alive, probeErr := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 			if probeErr != nil {
 				s.log.Warn("shell terminal liveness probe failed; keeping row", "handleId", rec.HandleID, "error", probeErr)
 				continue
 			}
-			if alive {
-				continue
+			if !alive {
+				if _, stillAlive, destroyErr := s.endShell(ctx, rec); stillAlive {
+					s.log.Warn("ending shell terminal from previous app run: runtime still alive after destroy",
+						"handleId", rec.HandleID, "appRunId", rec.AppRunID, "error", destroyErr)
+				}
 			}
+			continue
 		}
 		stillAlive, destroyErr := s.destroyConfirmed(ctx, rec)
 		if stillAlive {
@@ -1003,9 +1103,12 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 // destroyConfirmed runs, the handle is already known to exist.
 func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord) (stillAlive bool, destroyErr error) {
 	handleID := rec.HandleID
-	stillAlive, destroyErr = s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: handleID})
-	if stillAlive {
-		return true, destroyErr
+	// An ended shell's host was already destroyed when it was marked ended.
+	if rec.EndedAt == nil {
+		stillAlive, destroyErr = s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: handleID})
+		if stillAlive {
+			return true, destroyErr
+		}
 	}
 	for _, tracker := range s.trackers {
 		tracker.UntrackShellTerminal(handleID)
@@ -1185,6 +1288,8 @@ func shellTerminalFromRecord(rec ShellTerminalRecord) ShellTerminal {
 		WorkingDir:    rec.WorkingDir,
 		Title:         rec.Title,
 		CreatedAt:     rec.CreatedAt,
+		EndedAt:       rec.EndedAt,
+		ResumeHarness: resumeHarness(rec),
 	}
 }
 

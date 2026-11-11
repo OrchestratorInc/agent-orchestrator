@@ -13417,6 +13417,63 @@ paths:
       summary: Rename a standalone shell terminal tab
       tags:
       - shellTerminals
+  /api/v1/shell-terminals/{handleId}/reopen:
+    post:
+      operationId: reopenShellTerminal
+      parameters:
+      - description: Shell terminal runtime handle identifier.
+        in: path
+        name: handleId
+        required: true
+        schema:
+          description: Shell terminal runtime handle identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReopenShellTerminalRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShellTerminalEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace an ended shell terminal with a fresh shell in the same tab
+      tags:
+      - shellTerminals
   /api/v1/side-chats/launch/claim:
     post:
       operationId: claimSideChatLaunch
@@ -20595,6 +20652,22 @@ components:
       - level
       - text
       type: object
+    ReopenShellTerminalRequest:
+      properties:
+        cols:
+          description: Initial terminal columns, as for opening a shell terminal.
+          type: integer
+        resumeAgent:
+          description: Also start the agent last seen in this terminal in its own
+            conversation picker. Nothing the old shell ran is replayed.
+          type: boolean
+        rows:
+          description: Initial terminal rows. See cols.
+          type: integer
+        shell:
+          description: Shell to launch, as for opening a shell terminal.
+          type: string
+      type: object
     ReorderQueuedConversationTurnsRequest:
       properties:
         turnIds:
@@ -22233,9 +22306,20 @@ components:
         createdAt:
           format: date-time
           type: string
+        endedAt:
+          description: When the shell's process was found gone. Present only for an
+            ended shell, which can be reopened or closed but not attached.
+          format: date-time
+          type:
+          - "null"
+          - string
         handleId:
           type: string
         projectId:
+          type: string
+        resumeHarness:
+          description: For an ended shell, the coding agent last seen in it whose
+            conversation picker reopening can start.
           type: string
         sessionId:
           type: string

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -17,7 +18,15 @@ var _ shelltermsvc.Store = (*Store)(nil)
 func (s *Store) InsertShellTerminal(ctx context.Context, rec shelltermsvc.ShellTerminalRecord) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	_, err := s.qw.InsertShellTerminal(ctx, gen.InsertShellTerminalParams{
+	_, err := s.qw.InsertShellTerminal(ctx, insertShellTerminalParams(rec))
+	if err != nil {
+		return fmt.Errorf("insert shell terminal %s: %w", rec.HandleID, err)
+	}
+	return nil
+}
+
+func insertShellTerminalParams(rec shelltermsvc.ShellTerminalRecord) gen.InsertShellTerminalParams {
+	return gen.InsertShellTerminalParams{
 		HandleID:                  rec.HandleID,
 		ProjectID:                 optionalProjectID(rec.ProjectID),
 		SessionID:                 optionalSessionID(rec.SessionID),
@@ -29,11 +38,7 @@ func (s *Store) InsertShellTerminal(ctx context.Context, rec shelltermsvc.ShellT
 		CommandOwner:              rec.CommandOwner,
 		CreatedAt:                 rec.CreatedAt,
 		PreviewCapabilityVerifier: rec.PreviewCapabilityVerifier,
-	})
-	if err != nil {
-		return fmt.Errorf("insert shell terminal %s: %w", rec.HandleID, err)
 	}
-	return nil
 }
 
 // SelectShellTerminalByHandleID looks up one shell terminal's row, reporting
@@ -110,6 +115,66 @@ func (s *Store) DeleteShellTerminalByHandleID(ctx context.Context, handleID stri
 	return affected > 0, nil
 }
 
+// MarkShellTerminalEnded records that a shell's process is gone while keeping
+// its row, reporting whether a not-yet-ended row was updated.
+func (s *Store) MarkShellTerminalEnded(ctx context.Context, handleID string, endedAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	affected, err := s.qw.MarkShellTerminalEnded(ctx, gen.MarkShellTerminalEndedParams{
+		EndedAt:  sql.NullTime{Time: endedAt.UTC(), Valid: true},
+		HandleID: handleID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("mark shell terminal %s ended: %w", handleID, err)
+	}
+	return affected > 0, nil
+}
+
+// UpdateShellTerminalAgentHarness remembers the coding agent last seen in a shell.
+func (s *Store) UpdateShellTerminalAgentHarness(ctx context.Context, handleID string, harness domain.AgentHarness) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.qw.UpdateShellTerminalAgentHarness(ctx, gen.UpdateShellTerminalAgentHarnessParams{
+		LastAgentHarness: string(harness),
+		HandleID:         handleID,
+	}); err != nil {
+		return fmt.Errorf("update shell terminal %s agent: %w", handleID, err)
+	}
+	return nil
+}
+
+// ReplaceShellTerminal swaps an ended shell's row for the shell that reopens
+// it in one transaction, so the tab is never listed twice or not at all. It
+// reports false, changing nothing, when the old row no longer exists.
+func (s *Store) ReplaceShellTerminal(ctx context.Context, oldHandleID string, rec shelltermsvc.ShellTerminalRecord) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	replaced := false
+	err := s.inTx(ctx, "replace shell terminal "+oldHandleID, func(q *gen.Queries) error {
+		affected, err := q.DeleteShellTerminalByHandleID(ctx, oldHandleID)
+		if err != nil || affected == 0 {
+			return err
+		}
+		if _, err := q.InsertShellTerminal(ctx, insertShellTerminalParams(rec)); err != nil {
+			return err
+		}
+		if rec.LastAgentHarness != "" {
+			if _, err := q.UpdateShellTerminalAgentHarness(ctx, gen.UpdateShellTerminalAgentHarnessParams{
+				LastAgentHarness: string(rec.LastAgentHarness),
+				HandleID:         rec.HandleID,
+			}); err != nil {
+				return err
+			}
+		}
+		replaced = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return replaced, nil
+}
+
 // DeleteShellTerminalsFromPreviousAppRuns clears every orphaned row in one
 // statement and returns how many were removed.
 func (s *Store) DeleteShellTerminalsFromPreviousAppRuns(ctx context.Context, appRunID string) (int64, error) {
@@ -168,6 +233,11 @@ func shellTerminalFromGen(row gen.ShellTerminal) shelltermsvc.ShellTerminalRecor
 	if row.SessionID.Valid {
 		rec.SessionID = domain.SessionID(row.SessionID.String)
 	}
+	if row.EndedAt.Valid {
+		endedAt := row.EndedAt.Time.UTC()
+		rec.EndedAt = &endedAt
+	}
+	rec.LastAgentHarness = domain.AgentHarness(row.LastAgentHarness)
 	return rec
 }
 

@@ -897,6 +897,8 @@ func Run(buildVersion string) error {
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
+		// Remembered so a shell that ends can offer to resume its agent.
+		shellAgents.SetHarnessRecorder(shellTermSvc.RecordShellAgent)
 		shellTrackers = append(shellTrackers, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
 	}
