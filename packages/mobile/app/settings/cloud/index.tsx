@@ -8,9 +8,9 @@ import { CloudSignIn } from "../../../lib/cloud/components";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { CloudError, cloudErrorMessage } from "../../../lib/cloud/errors";
 import { installGitHubApp } from "../../../lib/cloud/githubInstall";
-import { cloudAgentsOffered, cloudPlanView } from "../../../lib/cloud/plan";
+import { cloudAgentsOffered, cloudPlanView, freePlanSummary } from "../../../lib/cloud/plan";
 import { useCloudPlan, type CloudPlanState } from "../../../lib/cloud/planStore";
-import type { CloudGitHubInstallation, CloudProviderConnection } from "../../../lib/cloud/types";
+import type { CloudGitHubInstallation, CloudOffering, CloudProviderConnection } from "../../../lib/cloud/types";
 import { haptics } from "../../../lib/haptics";
 import { SettingsButtonRow, SettingsForm, SettingsMeterRow, SettingsSection, SettingsStatusRow, SettingsValueRow, type SettingsTone } from "../../../lib/SettingsForm";
 import { Spinner } from "../../../lib/Spinner";
@@ -205,7 +205,7 @@ export default function CloudSettingsScreen() {
 					<SettingsValueRow icon="organization" label={org.displayName} value={role} testID="cloud-settings-organization" />
 				</SettingsSection>
 
-				{planSection(plan)}
+				{planSection(plan, org.offering)}
 
 				{/* Agents' sign-ins, GitHub and new projects only matter where the plan runs cloud agents. */}
 				{agentsOffered ? (
@@ -246,7 +246,7 @@ export default function CloudSettingsScreen() {
  * Placed as the section itself, as GitHub's is, so the form never holds an
  * empty slot.
  */
-function planSection(plan: CloudPlanState | undefined): ReactElement | null {
+function planSection(plan: CloudPlanState | undefined, offering: CloudOffering | undefined): ReactElement | null {
 	if (!plan) return null;
 	if (plan.status === "loading") {
 		return (
@@ -267,7 +267,7 @@ function planSection(plan: CloudPlanState | undefined): ReactElement | null {
 	if (view.kind === "free") {
 		return (
 			<SettingsSection title="Plan">
-				<SettingsValueRow icon="plan" label="Free" value="No cloud agents" testID="cloud-settings-plan" />
+				<SettingsValueRow icon="plan" label="Free" value={freePlanSummary(offering)} testID="cloud-settings-plan" />
 			</SettingsSection>
 		);
 	}

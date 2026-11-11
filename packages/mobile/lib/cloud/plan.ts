@@ -127,6 +127,14 @@ export function cloudPlanBlock(summary: CloudBillingSummary | undefined, now = D
 	return undefined;
 }
 
+/**
+ * What Free includes, beside its name: no cloud agents, or only Coder where
+ * the organization runs that free (its own Coder, or the coder capability).
+ */
+export function freePlanSummary(offering: Pick<CloudOffering, "customCoder"> | undefined): string {
+	return offering?.customCoder ? "Coder only" : "No cloud agents";
+}
+
 /** A refusal's headline, by the code the control plane refused with. */
 export function planRefusalTitle(code: string | undefined): string {
 	switch (code) {

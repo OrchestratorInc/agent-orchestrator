@@ -160,6 +160,20 @@ describe("CloudProvider", () => {
 		expect(fixtures.forgetDrafts).toHaveBeenCalledTimes(2);
 	});
 
+	// The clearing runs in the background: the next account's Cloud screens,
+	// which draw a composer only once an organization is resolved, must not
+	// read a draft the last account left before it is gone.
+	it("holds the next account's workspace until the last account's drafts are gone", async () => {
+		await mount();
+		let cleared!: () => void;
+		fixtures.forgetDrafts.mockImplementation(() => new Promise<void>((resolve) => { cleared = resolve; }));
+		await act(async () => { fixtures.accountChanged?.({ id: "u2", email: "v@example.com" }); await flush(); });
+		// The switch clears the organization; Cloud's screens show nothing without one.
+		expect(latest?.org).toBeNull();
+		await act(async () => { cleared(); await flush(); });
+		expect(latest).toMatchObject({ status: "ready", org: { id: "a" } });
+	});
+
 	it("offers no Chat agents when the control plane doesn't say which run in Chat", async () => {
 		fixtures.client.getMe.mockImplementation(async () => me("a", { chatHarnesses: undefined }));
 		await mount();

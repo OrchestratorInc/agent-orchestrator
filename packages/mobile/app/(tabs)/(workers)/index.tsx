@@ -208,9 +208,14 @@ export default function FleetScreen() {
 	const resolving = !configured && hostStates.length === 0 && !cloud && (!configResolved || cloudPending);
 	// Which empty state the board shows when it has no rows; only the idle one
 	// offers its own way to start a task (New agent).
+	// Cloud's state counts where its rows can be on the board in view (all
+	// machines or Cloud alone, and no machine's project as the filter), judged
+	// by that board's rows: machine workers elsewhere don't make Cloud loaded.
+	const filteredProject = workerProjectId === ALL_WORKER_PROJECTS ? undefined : allProjects.find((item) => hostedProjectKey(item) === workerProjectId);
+	const cloudInView = !selectedHost && (!filteredProject || filteredProject.hostId === CLOUD_HOST_ID) && projectSessions.length === 0;
 	const emptyView = unpaired ? "unpaired"
-		: resolving || (!selectedHost && (fleetLoading || cloudLoading) && allSessions.length === 0 && !cloudReady) ? "loading"
-			: !selectedHost && cloudFailed && allSessions.length === 0 ? "cloud"
+		: resolving || (!selectedHost && fleetLoading && allSessions.length === 0 && !cloudReady) || (cloudInView && cloudLoading) ? "loading"
+			: cloudInView && cloudFailed ? "cloud"
 			: selectedHost && selectedHost.connection !== "open" ? "machine"
 				: fleetError && !cloud ? "error"
 					: workerProjectId !== ALL_WORKER_PROJECTS ? "project"

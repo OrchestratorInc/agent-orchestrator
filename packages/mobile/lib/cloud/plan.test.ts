@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloudAgentsOffered, cloudPlanBlock, cloudPlanView, cloudSessionBilled, formatPlanHours, planRefusalTitle } from "./plan";
+import { cloudAgentsOffered, cloudPlanBlock, cloudPlanView, cloudSessionBilled, formatPlanHours, freePlanSummary, planRefusalTitle } from "./plan";
 import type { CloudBillingSummary } from "./types";
 
 const NOW = Date.parse("2026-11-11T10:00:00Z");
@@ -98,6 +98,14 @@ describe("what a plan pays for", () => {
 		// Not known yet: as billed, so Free still says so.
 		expect(cloudSessionBilled(undefined, undefined)).toBe(true);
 	});
+	// The page offers coding agents and projects to a Free organization with
+	// free Coder, so Free can't say it has no cloud agents there.
+	it("says what Free includes: Coder only where Coder runs free, else no cloud agents", () => {
+		expect(freePlanSummary(coderFree)).toBe("Coder only");
+		expect(freePlanSummary({ customCoder: false })).toBe("No cloud agents");
+		expect(freePlanSummary(undefined)).toBe("No cloud agents");
+	});
+
 	it("lets a Free organization start a task on its free Coder, and keeps Cloud offered", () => {
 		expect(cloudPlanBlock(free, NOW, cloudSessionBilled("coder", coderFree))).toBeUndefined();
 		expect(cloudPlanBlock(free, NOW, cloudSessionBilled("freestyle", coderFree))).toMatchObject({ reason: "plan" });

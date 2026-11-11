@@ -216,6 +216,8 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			if (own !== generation.current) return;
 			const nextOrg = await resolveOrganization(client, nextMe);
 			if (own !== generation.current) return;
+			await draftsCleared.current;
+			if (own !== generation.current) return;
 			// Another organization than the one shown (a 403 re-resolved it):
 			// what was loaded for the old one goes, and its loads still out are dropped.
 			if (orgRef.current && orgRef.current.id !== nextOrg.id) {
@@ -245,10 +247,13 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	// The account last adopted. Drafts outlive a restart, so they go only when
 	// one account gives way to none or another, never when the app opens.
 	const adopted = useRef<Account | null>(null);
+	// The last account's drafts going: the next one's workspace waits for it,
+	// so no composer (drawn only once Cloud is ready) reads one first.
+	const draftsCleared = useRef<Promise<void>>(Promise.resolve());
 	const adopt = useCallback((next: Account | null) => {
 		const previous = adopted.current;
 		adopted.current = next;
-		if (previous && previous.id !== next?.id) void forgetCloudDrafts().catch(() => {});
+		if (previous && previous.id !== next?.id) draftsCleared.current = forgetCloudDrafts().catch(() => {});
 		signingOut.current = false;
 		reset();
 		setAccount(next);

@@ -8,7 +8,7 @@ import { space, type } from "../tokens";
 import { SheetScreen } from "../ui";
 import { useCloud } from "./CloudProvider";
 import { planResetCopy } from "./errors";
-import { cloudPlanView, planRefusalTitle } from "./plan";
+import { cloudPlanView, freePlanSummary, planRefusalTitle } from "./plan";
 import type { PlanSheetParams } from "./planRefusal";
 import { useCloudPlan } from "./planStore";
 
@@ -35,7 +35,7 @@ export function CloudPlanSheet({ code, message, resetsAt }: PlanSheetParams) {
 			{plan?.status === "failed" ? <Text style={styles.note}>Couldn't load your plan's usage.</Text> : null}
 			{view?.kind === "free" ? (
 				<View style={styles.rows}>
-					<UsageRow label="Free plan" value="No cloud agents" />
+					<UsageRow label="Free plan" value={freePlanSummary(org?.offering)} />
 				</View>
 			) : null}
 			{view?.kind === "paid" ? (

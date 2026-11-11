@@ -21,6 +21,8 @@ const fixtures = vi.hoisted(() => {
 		router: { push, navigate },
 		configured: true,
 		connection: "open" as "open" | "closed",
+		cloudSessionsLoaded: false,
+		cloudSessionsError: null as string | null,
 		cloud: null as null | { hostId: string; name: string; appearance: { symbol: string }; connection: "open"; projects: []; sessions: []; orchestrators: [] },
 		notificationsUnread: 0,
 		theme: new Proxy({}, { get: (_, key) => `#${String(key)}` }),
@@ -71,7 +73,11 @@ vi.mock("./machine-menu-image", async (importOriginal) => {
 vi.mock("./worker-environment-filter", () => ({ WorkerEnvironmentFilter: "WorkerEnvironmentFilter" }));
 // The picker is a SwiftUI menu or a Compose dropdown, tested in environment-picker.test.
 vi.mock("./environment-picker", () => ({ EnvironmentPicker: "EnvironmentPicker" }));
-vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ status: "signed-out", notificationsUnread: 0, sessionsLoaded: false, watch: () => () => {} }) }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({
+	status: fixtures.cloud ? "ready" : "signed-out", notificationsUnread: 0,
+	sessionsLoaded: fixtures.cloudSessionsLoaded, sessionsError: fixtures.cloudSessionsError,
+	refreshSessions: async () => {}, watch: () => () => {},
+}) }));
 vi.mock("./store", () => ({ useApp: () => ({
 	configured: fixtures.configured, configResolved: true, connection: fixtures.connection, loading: false, error: null, cloud: fixtures.cloud,
 	config: { hostId: "mac" },
@@ -182,6 +188,8 @@ beforeEach(() => {
 	fixtures.configured = true;
 	fixtures.connection = "open";
 	fixtures.cloud = null;
+	fixtures.cloudSessionsLoaded = false;
+	fixtures.cloudSessionsError = null;
 	fixtures.notificationsUnread = 0;
 	fixtures.projects = [];
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -367,6 +375,29 @@ describe("Workers spawn action", () => {
 		choose(filterMenu(), "Game · Windows");
 		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "windows", projectId: "game" } });
+	});
+});
+
+// Filtered to Cloud, the board shows Cloud's rows alone: the machines'
+// workers elsewhere must not turn a Cloud list still loading, or one that
+// failed, into "No workers on Cloud".
+describe("Workers filtered to Cloud", () => {
+	const signIn = () => { fixtures.cloud = { hostId: "orchestrator-cloud", name: "Cloud", appearance: { symbol: "cloud" }, connection: "open", projects: [], sessions: [], orchestrators: [] }; };
+
+	it("waits for Cloud's first list rather than saying it has no workers", () => {
+		signIn();
+		act(() => { renderer = create(<FleetScreen />); });
+		chooseMachine("Cloud");
+		expect(renderer.root.findAllByType("ActivityIndicator" as never)).toHaveLength(1);
+		expect(renderer.root.findAllByType("EmptyState" as never)).toHaveLength(0);
+	});
+
+	it("offers Retry when Cloud's first list failed", () => {
+		signIn();
+		fixtures.cloudSessionsError = "Couldn't reach Orchestrator Cloud.";
+		act(() => { renderer = create(<FleetScreen />); });
+		chooseMachine("Cloud");
+		expect(emptyState().props.title).toBe("Couldn't load cloud workers");
 	});
 });
 
