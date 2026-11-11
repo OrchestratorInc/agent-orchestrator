@@ -141,6 +141,26 @@ func TestAccessDevicesCapAndDamagedFile(t *testing.T) {
 	}
 }
 
+// A registry that cannot be read is moved aside, so pairing a device does not
+// write over it.
+func TestAnUnreadableRegistryIsMovedAside(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "access-devices.json")
+	// A directory in the file's place fails to read on every platform.
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := LoadAccessDevices(path)
+	if err == nil {
+		t.Fatal("an unreadable registry loaded without an error")
+	}
+	if _, err := os.Stat(path + ".bad"); err != nil {
+		t.Fatalf("the unreadable registry was not moved aside: %v", err)
+	}
+	if _, _, err := devices.Issue("Phone", "ios", time.Now()); err != nil {
+		t.Fatalf("pair after an unreadable registry: %v", err)
+	}
+}
+
 func TestPairingCodesAreSingleUseAndExpire(t *testing.T) {
 	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
 	codes := NewPairingCodes(func() time.Time { return now })

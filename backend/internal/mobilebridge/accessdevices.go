@@ -74,8 +74,9 @@ type AccessDevices struct {
 }
 
 // LoadAccessDevices reads the registry. A missing file is an empty registry.
-// A damaged one is moved aside and reported, and the returned registry is
-// empty and usable: every device then pairs again.
+// A damaged or unreadable one is moved aside, so the next write cannot replace
+// it, and reported. The returned registry is empty and usable: every device
+// then pairs again.
 func LoadAccessDevices(path string) (*AccessDevices, error) {
 	r := &AccessDevices{path: path, devices: map[string]AccessDevice{}, byHash: map[string]string{}, shared: map[string]time.Time{}}
 	raw, err := os.ReadFile(path)
@@ -83,6 +84,7 @@ func LoadAccessDevices(path string) (*AccessDevices, error) {
 		return r, nil
 	}
 	if err != nil {
+		_ = os.Rename(path, path+".bad")
 		return r, fmt.Errorf("read access devices: %w", err)
 	}
 	var file accessDevicesFile
