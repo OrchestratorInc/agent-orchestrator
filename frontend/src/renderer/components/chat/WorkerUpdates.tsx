@@ -555,7 +555,10 @@ export function Folded({ watch, children }: { watch: unknown; children: ReactNod
 			{folds || open ? (
 				<Pressable
 					aria-expanded={open}
-					onClick={() => setOpen((current) => !current)}
+					onClick={() => {
+						if (open) body.current?.querySelectorAll("details[open]").forEach((details) => details.removeAttribute("open"));
+						setOpen(!open);
+					}}
 					className="mt-1 inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					{t(open ? "shell.showLess" : "shell.showMore")}

@@ -471,9 +471,9 @@ function ForgeLink({ url, className, children }: { url?: string; className?: str
 
 const GITHUB_HTML: Options["rehypePlugins"] = [rehypeRaw, [rehypeSanitize, {
 	...defaultSchema,
-	tagNames: defaultSchema.tagNames?.filter((tag) => !["img", "picture", "source"].includes(tag)),
+	tagNames: defaultSchema.tagNames?.filter((tag) => tag !== "picture" && tag !== "source"),
 	protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "ao"] },
-	attributes: { ...defaultSchema.attributes, code: [["className", /^language-./, "math-inline", "math-display"]] },
+	attributes: { ...defaultSchema.attributes, img: [], code: [["className", /^language-./, "math-inline", "math-display"]] },
 }]];
 
 /** What GitHub reported on the session's PR, in the PR glyph tinted by what it means. */

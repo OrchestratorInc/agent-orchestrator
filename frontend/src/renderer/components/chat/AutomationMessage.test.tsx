@@ -260,6 +260,8 @@ describe("drawing AO's automation messages", () => {
 			"",
 			"Inserting the path into `'<root>'` breaks the query.",
 			"",
+			"![Flow diagram](https://example.com/flow.png)",
+			"",
 			"<details>",
 			'<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/a/bot-dark.svg"><img src="https://storage.googleapis.com/a/bot.svg" alt=""></picture> Prompt for AI Agents</summary>',
 			"<dl>",
@@ -286,6 +288,8 @@ describe("drawing AO's automation messages", () => {
 		expect(event).not.toHaveTextContent("<!--");
 		expect(event).not.toHaveTextContent("<picture");
 		expect(event).not.toHaveTextContent("storage.googleapis.com");
+		expect(event).toHaveTextContent("Flow diagram");
+		expect(event).not.toHaveTextContent("example.com/flow.png");
 		expect(event.querySelector("img, picture, source")).toBeNull();
 		const details = event.querySelector("details");
 		expect(details).not.toHaveAttribute("open");
@@ -295,7 +299,8 @@ describe("drawing AO's automation messages", () => {
 
 		await userEvent.click(within(details as HTMLElement).getByText("Prompt for AI Agents"));
 		expect(details).toHaveAttribute("open");
-		expect(await within(event).findByRole("button", { name: "Show less" })).toBeInTheDocument();
+		await userEvent.click(await within(event).findByRole("button", { name: "Show less" }));
+		expect(details).not.toHaveAttribute("open");
 	});
 
 	it("keeps the card for anything it cannot read", () => {
