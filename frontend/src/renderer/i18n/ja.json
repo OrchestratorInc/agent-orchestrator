@@ -2765,6 +2765,8 @@
 	"settings.sideChatsHint": "インスペクターで別のサイド会話を開き、/btw で質問します。",
 	"settings.splitPanes": "分割ペイン",
 	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。",
+	"settings.prView": "PR ビュー",
+	"settings.prViewHint": "プルリクエストを専用のタブで開き、説明、コメント、チェック、スタックを表示します。",
 	"settings.newSidebarDesign": "新しいサイドバーデザイン",
 	"settings.newSidebarDesignHint": "左サイドバーのステータスアイコン、ホバープレビュー、リポジトリのアバターと、それに合わせたボードの色。オフにすると以前のサイドバーに戻ります。",
 	"settings.chromeAgents.label": "自分の Chrome でエージェントを使う",

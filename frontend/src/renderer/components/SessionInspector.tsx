@@ -9,7 +9,7 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -58,6 +58,8 @@ import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifac
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { openPRTab, usePRTabs, type PRTabSection } from "../lib/pr-tabs";
+import { usePRViewEnabled } from "../lib/pr-view";
+import { ClassicSessionBranchSummary } from "./ClassicSessionBranchSummary";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
@@ -467,6 +469,7 @@ const SummaryView = memo(function SummaryView({
 	// Reached through a share: this person sees the session's pull requests but
 	// leaves managing them, and the session's policies, to its owner.
 	const guest = session.cloud?.shared === true;
+	const prView = usePRViewEnabled();
 	return (
 		<SessionInspectorSummaryView
 			activity={
@@ -486,7 +489,7 @@ const SummaryView = memo(function SummaryView({
 				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
-			branch={orchestrator ? undefined : (
+			branch={orchestrator ? undefined : prView ? (
 				<SessionBranchSummary
 					conflictFiles={branchPR?.mergeability.conflictFiles?.map((file) => file.path)}
 					openPRConflicting={branchPR?.mergeability.state === "conflicting"}
@@ -537,8 +540,36 @@ const SummaryView = memo(function SummaryView({
 					session={session}
 					title={prSectionTitle}
 				/>
+			) : (
+				<ClassicSessionBranchSummary
+					hostId={hostId}
+					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
+					onOpenFiles={onOpenFiles}
+					openPRNumber={prSummaries.find((pr) => pr.state === "open" || pr.state === "draft")?.number}
+					pullRequests={hasPRs ? (
+						<>
+							{prSummaries.map((pr) => (
+								<PRSummaryCard
+									canOpenReviews={canOpenReviews}
+									key={pr.url || pr.htmlUrl || pr.number}
+									showRepository={prsSpanRepositories(prSummaries)}
+									onOpenReviews={onOpenReviews}
+									pr={pr}
+									hostId={hostId}
+									sessionId={session.id}
+									cloudOrgId={session.cloud?.orgId}
+									guest={guest}
+									projectId={session.workspaceId}
+								/>
+							))}
+							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectRepositories)} key={pr.url} pr={pr} />)}
+						</>
+					) : null}
+					session={session}
+					title={prSectionTitle}
+				/>
 			)}
-			comments={focusedPR && !session.cloud ? (
+			comments={prView && focusedPR && !session.cloud ? (
 				<PRComments
 					hostId={hostId}
 					onViewInDiff={onOpenReviewFile}
@@ -547,7 +578,7 @@ const SummaryView = memo(function SummaryView({
 					session={session}
 				/>
 			) : undefined}
-			commentsTitle={focusedPR && !session.cloud ? t("pr.comments.sectionTitle", { count: prCommentCount(focusedPR) }) : undefined}
+			commentsTitle={prView && focusedPR && !session.cloud ? t("pr.comments.sectionTitle", { count: prCommentCount(focusedPR) }) : undefined}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
@@ -995,7 +1026,15 @@ function BranchWorkElsewhere({ branchPR }: { branchPR: SessionPRSummary }) {
 }
 
 
-export function PRSummaryCard({
+/**
+ * A PR's card: the PR view's (one PR in focus, its own tab, one action button)
+ * while that Developer mode preview is on, else the card as it was before it.
+ */
+export function PRSummaryCard(props: ComponentProps<typeof PRViewSummaryCard>) {
+	return usePRViewEnabled() ? <PRViewSummaryCard {...props} /> : <ClassicPRSummaryCard {...props} />;
+}
+
+function PRViewSummaryCard({
 	canOpenReviews,
 	elsewhere,
 	hostId,
@@ -1070,6 +1109,7 @@ export function PRSummaryCard({
 	const activeTabUrl = usePRTabs(sessionUiKey(sessionId, hostId)).active;
 	const cardView = (
 		<InspectorPullRequestCardView
+			compact
 			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
 			headerless={layout === "focus"}
 			description={<PRDescriptionPreview cloud={Boolean(cloudOrgId)} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
@@ -1184,6 +1224,147 @@ export function PRSummaryCard({
 				</div>
 			) : null}
 		</section>
+	);
+}
+
+/** The card as it was before the PR view; shown while that preview is off. Delete with the prView flag. */
+function ClassicPRSummaryCard({
+	canOpenReviews,
+	hostId,
+	cloudOrgId,
+	guest = false,
+	onOpenReviews,
+	pr,
+	projectId,
+	liveSessionId,
+	sessionId,
+	showRepository = false,
+}: {
+	canOpenReviews: boolean;
+	hostId?: string;
+	cloudOrgId?: string;
+	/** Reached through a share: this person asks the project's owner to merge. */
+	guest?: boolean;
+	onOpenReviews: () => void;
+	pr: SessionPRSummary;
+	/** The cloud project, for a guest's merge requests. */
+	projectId?: string;
+	/** The session on screen, whose live stream says when merge requests change; the card's own by default. */
+	liveSessionId?: string;
+	sessionId: string;
+	/** Label the card with its repository: the session has PRs on several. */
+	showRepository?: boolean;
+}) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const workspaceKey = workspaceQueryKeyForHost(hostId);
+	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
+	const presentation = prCardPresentation(pr);
+	const canMerge = prCanMerge(pr) && Boolean(pr.url && pr.headSha);
+	const mergePr = useMutation({
+		mutationFn: async () => {
+			if (usePreviewData) return;
+			if (cloudOrgId) {
+				await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
+				return;
+			}
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
+				params: { path: { id: String(pr.number) } },
+				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
+			});
+			if (error) throw apiErrorException(error, t("pr.merge.failed", { number: pr.number }));
+			return data;
+		},
+		onSuccess: async (result) => {
+			if (!cloudOrgId && result?.state === "merged") {
+				queryClient.setQueryData<{ prs: SessionPRSummary[]; linkedPrs: SessionPRReference[] }>(
+					sessionScmSummaryQueryKey(sessionId, hostId),
+					(current) => current ? {
+						...current,
+						prs: current.prs.map((cached) => cached.url === pr.url ? {
+							...cached,
+							state: result.state,
+							stateChangedAt: result.stateChangedAt,
+							updatedAt: result.stateChangedAt,
+						} : cached),
+					} : current,
+				);
+				await queryClient.invalidateQueries({ queryKey: workspaceKey });
+				return;
+			}
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: cloudOrgId ? ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] : sessionScmSummaryQueryKey(sessionId, hostId) }),
+				queryClient.invalidateQueries({ queryKey: workspaceKey }),
+			]);
+		},
+	});
+	const asksToMerge = guest && Boolean(cloudOrgId);
+	const mergeRequests = useProjectMergeRequests(cloudOrgId, projectId, asksToMerge, liveSessionId ?? sessionId);
+	const mergeRequestActions = useMergeRequestActions(cloudOrgId, projectId);
+	const pendingRequest = pendingMergeRequestFor(mergeRequests.data, pr.url);
+	const requestMerge = mergeRequestActions.request;
+	const mergeFailure = asksToMerge ? requestMerge.error : mergePr.error;
+	const mergeError = mergeFailure instanceof Error ? mergeFailure.message : null;
+	const viewModel: InspectorPullRequest = {
+		...pr,
+		card: presentation,
+		href: prBrowserUrl(pr),
+		stateLabel: t(prStateLabelKeys[pr.state]),
+		repositoryLabel: showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
+		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
+			<Button className="whitespace-nowrap text-settings-muted" onClick={onOpenReviews} type="button" variant="link">
+				<span className="text-xs">{t("pr.review.viewDetails")} ↗</span>
+			</Button>
+		) : undefined,
+	};
+	return (
+		<InspectorPullRequestCardView
+			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
+			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
+			externalLink={ProductExternalLink}
+			mergeAction={
+				canMerge && asksToMerge ? (
+					<Button
+						aria-label={t("pr.merge.requestFor", { number: pr.number })}
+						className="gap-1 px-2"
+						disabled={requestMerge.isPending || Boolean(pendingRequest)}
+						onClick={() => requestMerge.mutate({ sessionId, number: pr.number, prUrl: pr.url })}
+						size="sm"
+						type="button"
+						variant="secondary"
+						data-request-merge
+					>
+						{requestMerge.isPending ? (
+							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<GitMerge className="size-icon-sm" aria-hidden="true" />
+						)}
+						{pendingRequest ? t("pr.merge.requested") : t("pr.merge.request")}
+					</Button>
+				) : canMerge ? (
+					<Button
+						aria-label={t("pr.merge.actionFor", { number: pr.number })}
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80 active:bg-success/70"
+						disabled={mergePr.isPending}
+						onClick={() => mergePr.mutate()}
+						size="sm"
+						type="button"
+					>
+						{mergePr.isPending ? (
+							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<GitMerge className="size-icon-sm" aria-hidden="true" />
+						)}
+						{mergePr.isPending ? t("pr.merge.merging") : t("pr.merge.action")}
+					</Button>
+				) : undefined
+			}
+			mergeError={mergeError}
+			openLabel={t("inspector.openPR", { number: pr.number })}
+			openedViaLabel={t("pr.openedVia")}
+			pr={viewModel}
+			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
+		/>
 	);
 }
 

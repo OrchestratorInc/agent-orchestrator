@@ -1003,6 +1003,7 @@ describe("SessionView", () => {
 		workspaceQueryState.directLoading = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
+			prView: false,
 			workspaceFileOpenRequest: null,
 			// Opening a session leaves the inspector closed (covered by the
 			// "keeps the inspector closed" test); most tests here exercise the
@@ -1097,7 +1098,28 @@ describe("SessionView", () => {
 		});
 	});
 
+	it("shows no PR tab while the PR view is off, even one opened before", () => {
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			expect(screen.queryByTestId("pr-tab-pane")).not.toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: /^#7 Seven/ })).not.toBeInTheDocument();
+
+			// Turning the PR view on brings the tab back where it was.
+			act(() => useUiStore.setState({ developerMode: true, prView: true }));
+			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+		}
+	});
+
 	it("keeps a PR's tab mounted behind the others, so coming back finds it as it was", () => {
+		// A PR's tab is part of the PR view, a Developer mode preview.
+		useUiStore.setState({ developerMode: true, prView: true });
 		const url = "https://github.com/acme/app/pull/7";
 		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
 		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];

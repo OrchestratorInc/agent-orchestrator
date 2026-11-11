@@ -72,7 +72,8 @@ import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionInspector } from "./SessionInspector";
 import { PRTabChip, PRTabPane } from "./PRTabPane";
-import { activatePRTab, closePRTab, deactivatePRTab, prTabKey, prTabUrl, usePRTabs } from "../lib/pr-tabs";
+import { activatePRTab, closePRTab, deactivatePRTab, prTabKey, prTabUrl, usePRTabs, type PRTabsState } from "../lib/pr-tabs";
+import { usePRViewEnabled } from "../lib/pr-view";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
@@ -665,7 +666,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, SessionFileTabState>>({});
 	const fileTabs = fileTabsBySession[uiSessionId] ?? EMPTY_SESSION_FILE_TABS;
 	// PRs opened from the inspector's card, as tabs beside the chat and file tabs.
-	const prTabs = usePRTabs(uiSessionId);
+	// They belong to the PR view, a Developer mode preview: off, none show.
+	const prView = usePRViewEnabled();
+	const prTabState = usePRTabs(uiSessionId);
+	const prTabs = prView ? prTabState : NO_PR_TABS;
 	const activePRUrl = prTabs.active ?? undefined;
 	// A PR that left the session (moved to another session) takes its tab with it.
 	const sessionPRUrls = session?.prs.map((facts) => facts.url).join("\n");
@@ -3075,6 +3079,8 @@ function terminalTabKey(target: TerminalTarget): string {
 }
 
 const EMPTY_TAB_GROUPS: TabGroup[] = [];
+/** The PR tabs while the PR view is off: none. */
+const NO_PR_TABS: PRTabsState = { open: [], active: null };
 const PENDING_SHELL_KEY_PREFIX = "pending-shell:";
 const FULL_PANE_STYLE: CSSProperties = { position: "absolute", left: 0, top: 0, width: "100%", height: "100%" };
 

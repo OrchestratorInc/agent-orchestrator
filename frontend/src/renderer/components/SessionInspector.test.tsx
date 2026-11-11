@@ -370,7 +370,7 @@ beforeEach(() => {
   navigateMock.mockReset();
   patchMock.mockReset();
   postMock.mockReset();
-  useUiStore.setState({ developerMode: false, inspectorSessions: {}, settingsModal: null });
+  useUiStore.setState({ developerMode: false, prView: false, inspectorSessions: {}, settingsModal: null });
   putMock.mockReset();
   mockCommonGets();
   patchMock.mockResolvedValue({
@@ -639,6 +639,11 @@ describe("SessionInspector tabs", () => {
 });
 
 describe("SessionInspector PR section", () => {
+  // The one-card PR summary and its tab are the PR view, a Developer mode preview.
+  beforeEach(() => {
+    useUiStore.setState({ developerMode: true, prView: true });
+  });
+
   // Scope assertions to the PR section so the card order is explicit.
   const prSection = (title: string) =>
     within(
@@ -2001,38 +2006,6 @@ describe("SessionInspector Artifacts section", () => {
     expect(
       screen.queryByText("No pull request opened yet."),
     ).not.toBeInTheDocument();
-  });
-
-  it("lists the four newest artifacts first and reveals the rest on Show more", async () => {
-    const at = (day: number) => `2026-06-${String(day).padStart(2, "0")}T00:00:00Z`;
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          outputType: "artifact",
-          artifactFiles: [1, 6, 3, 5, 2, 4].map((day) => artifact({ path: `day-${day}.md`, kind: "markdown", updatedAt: at(day) })),
-        })}
-      />,
-    );
-
-    const names = () => screen.getAllByText(/^day-\d\.md$/).map((element) => element.textContent);
-    expect(screen.getByText("Artifacts (6)")).toBeInTheDocument();
-    expect(names()).toEqual(["day-6.md", "day-5.md", "day-4.md", "day-3.md"]);
-
-    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
-
-    await waitFor(() => expect(names()).toEqual(["day-6.md", "day-5.md", "day-4.md", "day-3.md", "day-2.md", "day-1.md"]));
-    expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
-  });
-
-  it("shows no Show more for four artifacts or fewer", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], { outputType: "artifact", artifactFiles: [1, 2, 3, 4].map((day) => artifact({ path: `day-${day}.md` })) })}
-      />,
-    );
-
-    expect(screen.getByText("day-4.md")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
   });
 
   it("does not show artifacts for a plain PR session with no artifact files", () => {
@@ -5746,6 +5719,11 @@ describe("SessionInspector Cloud reviews", () => {
 });
 
 describe("SessionInspector branch summary", () => {
+  // The one-card PR summary and its tab are the PR view, a Developer mode preview.
+  beforeEach(() => {
+    useUiStore.setState({ developerMode: true, prView: true });
+  });
+
   const changedFile = (path: string, additions: number, deletions: number) => ({
     path,
     status: "modified" as const,
@@ -6257,35 +6235,43 @@ describe("SessionInspector branch summary", () => {
     expect(screen.queryByTestId("pr-checks")).not.toBeInTheDocument();
   });
 
-  const mergedHead = "a".repeat(40);
-  const mergedPR = () => prSummary(7, "merged", { url: "https://example.com/pr/7", headSha: mergedHead });
-  const renderMerged = (branchState: SessionBranchState) =>
-    renderWithQuery(<SessionInspector session={session([pr(7, "merged")], { branchState })} />, undefined, (client) =>
-      seedPRSummaries(client, [mergedPR()]),
-    );
+  // The classic summary, shown while the PR view is off, hides Create PR once
+  // the merged PR has the pushed head; the PR view's own tests cover it there.
+  describe("before the PR view", () => {
+    beforeEach(() => {
+      useUiStore.setState({ developerMode: false, prView: false });
+    });
 
-  it("offers no Create PR once the merged PR has the pushed head", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
-    renderMerged({ ...pushed(4), remoteHead: mergedHead });
+    const mergedHead = "a".repeat(40);
+    const mergedPR = () => prSummary(7, "merged", { url: "https://example.com/pr/7", headSha: mergedHead });
+    const renderMerged = (branchState: SessionBranchState) =>
+      renderWithQuery(<SessionInspector session={session([pr(7, "merged")], { branchState })} />, undefined, (client) =>
+        seedPRSummaries(client, [mergedPR()]),
+      );
 
-    expect(await branch().findByText("→ main")).toBeInTheDocument();
-    expect(branch().getByText("4 commits")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Create PR" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
-  });
+    it("offers no Create PR once the merged PR has the pushed head", async () => {
+      mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+      renderMerged({ ...pushed(4), remoteHead: mergedHead });
 
-  it("offers a new PR for commits pushed after the merge", async () => {
-    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
-    renderMerged({ ...pushed(5), remoteHead: "b".repeat(40) });
+      expect(await branch().findByText("→ main")).toBeInTheDocument();
+      expect(branch().getByText("4 commits")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Create PR" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
+    });
 
-    expect(await screen.findByRole("button", { name: "Create PR" })).toBeInTheDocument();
-  });
+    it("offers a new PR for commits pushed after the merge", async () => {
+      mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+      renderMerged({ ...pushed(5), remoteHead: "b".repeat(40) });
 
-  it("offers a new PR for work made after the merge", async () => {
-    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
-    renderMerged({ ...pushed(4), remoteHead: mergedHead });
+      expect(await screen.findByRole("button", { name: "Create PR" })).toBeInTheDocument();
+    });
 
-    expect(await screen.findByRole("button", { name: "Commit & create PR" })).toBeInTheDocument();
+    it("offers a new PR for work made after the merge", async () => {
+      mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)], prs: [mergedPR()] });
+      renderMerged({ ...pushed(4), remoteHead: mergedHead });
+
+      expect(await screen.findByRole("button", { name: "Commit & create PR" })).toBeInTheDocument();
+    });
   });
 
   it("leaves the loading state once the PR appears", async () => {
@@ -6342,5 +6328,66 @@ describe("SessionInspector branch summary", () => {
 
     expect(await screen.findByText("Session is terminated")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Commit & push" })).toBeEnabled();
+  });
+});
+
+describe("SessionInspector without the PR view", () => {
+  // The PR view is a Developer mode preview. Off, the default, the PR section
+  // is the card list it was before: a card per PR with its own Merge button.
+  const readyPR = () => prSummary(7, "open", {
+    url: "https://example.com/pr/7",
+    headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+  });
+
+  it.each([
+    ["off", { developerMode: false, prView: false }],
+    ["on without Developer mode", { developerMode: false, prView: true }],
+    ["off in Developer mode", { developerMode: true, prView: false }],
+  ])("lists a card per PR, with no PR tab or comments, while the PR view is %s", (_label, flags) => {
+    useUiStore.setState(flags);
+    const prs = [readyPR(), prSummary(8, "open", { url: "https://example.com/pr/8" })];
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs, linkedPrs: [] } }
+      : respond(path));
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open"), pr(8, "open")])} />,
+      undefined,
+      (client) => seedPRSummaries(client, prs),
+    );
+
+    expect(screen.getByRole("link", { name: "Open PR #7" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open PR #8" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeEnabled();
+    expect(screen.queryByTestId("pr-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pr-focus")).not.toBeInTheDocument();
+    expect(screen.queryByText("Open tab")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Comments \(/)).not.toBeInTheDocument();
+  });
+
+  it("merges from the card through the daemon, as before the PR view", async () => {
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/merge"
+      ? { data: { ok: true, prNumber: 7, method: "squash", state: "merged", stateChangedAt: "2026-10-19T11:06:22Z" }, error: undefined }
+      : { data: { ok: true, sessionId: "sess-1" }, error: undefined });
+    const prs = [readyPR()];
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs, linkedPrs: [] } }
+      : respond(path));
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")])} />,
+      undefined,
+      (client) => seedPRSummaries(client, prs),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Merge PR #7" }));
+
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/merge", {
+        params: { path: { id: "7" } },
+        body: { prUrl: "https://example.com/pr/7", expectedHeadSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      }),
+    );
   });
 });

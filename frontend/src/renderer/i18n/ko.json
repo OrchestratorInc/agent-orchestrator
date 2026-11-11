@@ -2765,6 +2765,8 @@
 	"settings.sideChatsHint": "인스펙터에서 별도의 사이드 대화를 열고 /btw로 질문합니다.",
 	"settings.splitPanes": "분할 창",
 	"settings.splitPanesHint": "탭을 가운데 창의 가장자리로 끌어 현재 탭 옆에 표시합니다.",
+	"settings.prView": "PR 보기",
+	"settings.prViewHint": "풀 리퀘스트를 전용 탭에서 열어 설명, 댓글, 검사, 스택을 확인합니다.",
 	"settings.newSidebarDesign": "새 사이드바 디자인",
 	"settings.newSidebarDesignHint": "왼쪽 사이드바의 상태 아이콘, 호버 미리보기, 저장소 아바타와 이에 맞춘 보드 색상입니다. 끄면 이전 사이드바로 돌아갑니다.",
 	"settings.chromeAgents.label": "내 Chrome에서 에이전트 사용",

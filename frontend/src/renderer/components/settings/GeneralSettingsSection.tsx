@@ -501,6 +501,7 @@ export function GeneralSettingsSection({
 				<CliShadowSettingsRow />
 				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
+				{developerMode && <PRViewRow />}
 				{developerMode && <NewSidebarDesignRow />}
 				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
@@ -614,6 +615,18 @@ function SplitPanesRow() {
 	return (
 		<SettingsRow label={t("settings.splitPanes")} description={t("settings.splitPanesHint")}>
 			<Switch aria-label={t("settings.splitPanes")} checked={splitPanes} onCheckedChange={setSplitPanes} />
+		</SettingsRow>
+	);
+}
+
+/** Developer Mode-only switch for the PR view: a PR's own tab, comments, stacks and actions. Off by default. */
+function PRViewRow() {
+	const { t } = useTranslation();
+	const prView = useUiStore((state) => state.prView);
+	const setPRView = useUiStore((state) => state.setPRView);
+	return (
+		<SettingsRow label={t("settings.prView")} description={t("settings.prViewHint")}>
+			<Switch aria-label={t("settings.prView")} checked={prView} onCheckedChange={setPRView} />
 		</SettingsRow>
 	);
 }

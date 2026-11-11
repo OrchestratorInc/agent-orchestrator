@@ -2765,6 +2765,8 @@
 	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw eine Frage stellen.",
 	"settings.splitPanes": "Geteilte Bereiche",
 	"settings.splitPanesHint": "Ziehe einen Tab an einen Rand des mittleren Bereichs, um ihn neben dem aktuellen anzuzeigen.",
+	"settings.prView": "PR-Ansicht",
+	"settings.prViewHint": "Einen Pull Request in einem eigenen Tab öffnen, mit Beschreibung, Kommentaren, Checks und Stack.",
 	"settings.newSidebarDesign": "Neues Seitenleisten-Design",
 	"settings.newSidebarDesignHint": "Statussymbole, Hover-Vorschauen und Repository-Avatare in der linken Seitenleiste, mit den passenden Board-Farben. Ausschalten, um zur vorherigen Seitenleiste zurückzukehren.",
 	"settings.chromeAgents.label": "Agenten in meinem Chrome verwenden",

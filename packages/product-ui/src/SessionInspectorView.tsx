@@ -341,6 +341,7 @@ const prStateTone: Record<InspectorPullRequestState, string> = {
 };
 
 export function InspectorPullRequestCardView({
+	compact = false,
 	countNounLabel,
 	description,
 	details,
@@ -356,6 +357,11 @@ export function InspectorPullRequestCardView({
 	readinessDetails,
 	statusNotice,
 }: {
+	/**
+	 * The PR view's denser card: the author and diff stats on one line, and one
+	 * dropdown for the facts that decide the merge instead of every status row.
+	 */
+	compact?: boolean;
 	countNounLabel: CountNounLabel;
 	/** The PR body, shown under the number and state, before the branches. */
 	description?: ReactNode;
@@ -420,6 +426,7 @@ export function InspectorPullRequestCardView({
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				inline={compact}
 				openedViaLabel={openedViaLabel}
 				pr={pr}
 			/>
@@ -429,7 +436,7 @@ export function InspectorPullRequestCardView({
 					<PRCardStatusSummary
 						action={mergeAction}
 						className="mt-2"
-						compactReadiness
+						compactReadiness={compact}
 						externalLink={ExternalLink}
 						presentation={pr.card}
 						readinessDetails={readinessDetails}

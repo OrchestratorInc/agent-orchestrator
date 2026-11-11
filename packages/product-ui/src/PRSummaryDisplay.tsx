@@ -33,6 +33,7 @@ export function PRSummaryMeta({
 	className,
 	countNounLabel = defaultCountNounLabel,
 	externalLink: ExternalLink,
+	inline = false,
 	leading,
 	openedViaLabel = "via Orchestrator",
 	pr,
@@ -40,6 +41,8 @@ export function PRSummaryMeta({
 	className?: string;
 	countNounLabel?: CountNounLabel;
 	externalLink: ExternalLinkComponent;
+	/** The author and the diff stats share one line, as the PR view's card shows them. */
+	inline?: boolean;
 	leading?: string;
 	/** Follows the person's name on a PR AO's GitHub App opened for them. */
 	openedViaLabel?: string;
@@ -115,13 +118,18 @@ export function PRSummaryMeta({
 					))}
 				</div>
 			) : null}
-			{author || hasDiff ? (
+			{inline ? (author || hasDiff ? (
 				<div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-muted-foreground">
 					{author ? <span className="min-w-0 break-words [overflow-wrap:anywhere]">{author}</span> : null}
 					{author && hasDiff ? <span className="shrink-0 text-passive">·</span> : null}
 					{hasDiff ? <PRDiffMeta countNounLabel={countNounLabel} pr={pr} /> : null}
 				</div>
-			) : null}
+			) : null) : (
+				<>
+					{author ? <div className="mt-0.5 min-w-0 break-words [overflow-wrap:anywhere] text-muted-foreground">{author}</div> : null}
+					{hasDiff ? <PRDiffMeta countNounLabel={countNounLabel} pr={pr} /> : null}
+				</>
+			)}
 		</div>
 	);
 }
