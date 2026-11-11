@@ -84,6 +84,8 @@ import type {
 	CloudCpSessionChildrenResponse,
 	CloudCpHarnessInspectResponse,
 	CloudCpHarnessStatus,
+	CloudCpHarnessVersion,
+	CloudCpHarnessVersionsResponse,
 	CloudCpSessionDeletedResponse,
 	CloudCpSessionListResponse,
 	CloudCpResumeSessionResponse,
@@ -284,6 +286,16 @@ export interface CloudCpClient {
 		harness: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpHarnessStatus>;
+	/**
+	 * The release of each harness CLI the org's new sessions run, the newest
+	 * release, and the last install of a chosen one (any member). `refresh`
+	 * looks the newest releases up again. An older control plane answers 404.
+	 */
+	listOrgHarnessVersions(orgId: string, query?: { refresh?: boolean }, options?: CloudCpRequestOptions): Promise<CloudCpHarnessVersionsResponse>;
+	/** Have the org's new sessions run `expectedVersion` of a harness (org admins). */
+	installOrgHarnessVersion(orgId: string, agent: string, expectedVersion: string, options?: CloudCpRequestOptions): Promise<CloudCpHarnessVersion>;
+	/** Have the org's new sessions run the AO-tested release of a harness again (org admins). */
+	resetOrgHarnessVersion(orgId: string, agent: string, options?: CloudCpRequestOptions): Promise<CloudCpHarnessVersion>;
 	getInterfaceTransition(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpInterfaceTransitionStatusResponse>;
 	startInterfaceTransition(
 		orgId: string,
@@ -947,6 +959,18 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviewer-harnesses/${seg(harness)}/install`, {
 				signal: o?.signal,
 			}),
+		listOrgHarnessVersions: (orgId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/harness-versions`, {
+				query: { refresh: query?.refresh ? "true" : undefined },
+				signal: o?.signal,
+			}),
+		installOrgHarnessVersion: (orgId, agent, expectedVersion, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/harness-versions/${seg(agent)}/install`, {
+				body: { method: "ao-cloud", operation: "update", expectedVersion },
+				signal: o?.signal,
+			}),
+		resetOrgHarnessVersion: (orgId, agent, o) =>
+			requestJson("DELETE", `/orgs/${seg(orgId)}/harness-versions/${seg(agent)}`, { signal: o?.signal }),
 		listCoderTemplates: (orgId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sandbox/coder/templates`, { signal: o?.signal }),
 		getCoderTemplateParameters: (orgId, templateId, o) =>

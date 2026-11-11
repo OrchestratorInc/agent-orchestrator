@@ -2682,6 +2682,112 @@ paths:
                 $ref: "#/components/schemas/Offering"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listOrgHarnessVersions
+      tags: [Providers]
+      description: >-
+        The release of each coding-agent CLI the organization's new Cloud
+        sessions run, the newest release its publisher has, and how the last
+        install of a release the organization chose went (any member). A
+        harness runs the release AO tested (`defaultVersion`) until an
+        organization admin chooses a newer one (`selectedVersion`). Each entry
+        carries the local daemon's install plan, update advisory and install
+        job shapes, so a client shows AO Cloud's harnesses the way it shows a
+        computer's. `editable` says whether the caller may change them.
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          description: Look up the newest releases again instead of reading the control plane's cache.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Every harness whose version AO Cloud manages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersions"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions/{agent}/install:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CloudHarnessAgent"
+    post:
+      operationId: installOrgHarnessVersion
+      tags: [Providers]
+      description: >-
+        Have the organization's new sessions run `expectedVersion` of this
+        harness in place of the AO-tested release (organization admins). The
+        version must be a stable release newer than the AO-tested one that the
+        publisher has (the npm registry, or Cursor's download host). Only the
+        harness's CLI moves: the tools it also runs (Claude Code's Chat
+        adapter) keep the release AO tested. Each new session's worker installs
+        the release and checks it against what the publisher listed; when that
+        fails the session runs the AO-tested release and the failure shows as
+        the entry's failed `job`. Sessions already running keep their release.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloudHarnessInstallInput"
+      responses:
+        "200":
+          description: The harness as new sessions now run it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersion"
+        "403":
+          description: ORG_ADMIN_REQUIRED. Only organization owners and admins change the version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: >-
+            INVALID_HARNESS_VERSION (not a stable release of the harness),
+            HARNESS_VERSION_NOT_NEWER (not newer than the AO-tested release),
+            UNKNOWN_HARNESS_VERSION (the publisher has no such release), or
+            UNVERIFIABLE_HARNESS_VERSION (the release installs something AO
+            Cloud cannot check against its publisher's listing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: RELEASE_LOOKUP_UNAVAILABLE. The publisher could not be reached; nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions/{agent}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CloudHarnessAgent"
+    delete:
+      operationId: resetOrgHarnessVersion
+      tags: [Providers]
+      description: >-
+        Have the organization's new sessions run the AO-tested release of this
+        harness's CLI again (organization admins; 403 ORG_ADMIN_REQUIRED
+        otherwise).
+      responses:
+        "200":
+          description: The harness as new sessions now run it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersion"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/coder-config:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -4053,6 +4159,14 @@ components:
       schema:
         type: string
         pattern: "^h_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    CloudHarnessAgent:
+      name: agent
+      in: path
+      required: true
+      description: A harness whose version AO Cloud manages.
+      schema:
+        type: string
+        enum: [claude-code, codex, cursor]
     OrgId:
       name: orgId
       in: path
@@ -4501,6 +4615,176 @@ components:
         defaultProvider:
           type: string
           description: A provider from the organization's offering, or empty to clear the choice.
+    CloudHarnessVersions:
+      type: object
+      additionalProperties: false
+      required: [editable, agents]
+      properties:
+        editable:
+          type: boolean
+          description: The caller administers the organization, so may change the versions.
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudHarnessVersion"
+    CloudHarnessVersion:
+      type: object
+      additionalProperties: false
+      description: One harness as the organization's new Cloud sessions run it.
+      required: [agentId, defaultVersion, plan, advisory]
+      properties:
+        agentId:
+          type: string
+          enum: [claude-code, codex, cursor]
+        defaultVersion:
+          type: string
+          description: The release of the harness's CLI that AO tested and its images bake.
+        selectedVersion:
+          type: string
+          description: The newer release the organization chose in its place; absent while it runs the default.
+        supersededVersion:
+          type: string
+          description: >-
+            A release the organization chose that AO's tested release has since
+            caught up with or passed. New sessions run `defaultVersion` instead,
+            never an older CLI than AO tests; absent otherwise.
+        plan:
+          $ref: "#/components/schemas/CloudHarnessInstallPlan"
+        advisory:
+          $ref: "#/components/schemas/CloudHarnessUpdateAdvisory"
+        job:
+          $ref: "#/components/schemas/CloudHarnessInstallJob"
+        components:
+          type: array
+          description: Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter). They always run the release AO tested; clients show them read-only.
+          items:
+            $ref: "#/components/schemas/CloudHarnessComponent"
+    CloudHarnessComponent:
+      type: object
+      additionalProperties: false
+      required: [tool, version, defaultVersion]
+      properties:
+        tool:
+          type: string
+        version:
+          type: string
+        defaultVersion:
+          type: string
+    CloudHarnessInstallPlan:
+      type: object
+      additionalProperties: false
+      description: The local daemon's AgentInstallPlan shape. AO Cloud has one method, ao-cloud.
+      required: [agentId, automatic, available, documentationUrl, method, methods]
+      properties:
+        agentId:
+          type: string
+        automatic:
+          type: boolean
+        available:
+          type: boolean
+        documentationUrl:
+          type: string
+        method:
+          type: string
+        methods:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudHarnessInstallMethod"
+    CloudHarnessInstallMethod:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's AgentInstallMethod shape. updateAvailable is false
+        for a caller who may not change the version, with updateReason saying
+        why.
+      required: [id, label, available, recommended, reinstallAvailable, updateAvailable]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        available:
+          type: boolean
+        recommended:
+          type: boolean
+        reinstallAvailable:
+          type: boolean
+        updateAvailable:
+          type: boolean
+        updateReason:
+          type: string
+    CloudHarnessUpdateAdvisory:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's AgentUpdateAdvisory shape. currentVersion is the
+        release new sessions run; latestVersion the newest the publisher has.
+      required: [agentId, checkedAt, status]
+      properties:
+        agentId:
+          type: string
+        checkedAt:
+          type: string
+          format: date-time
+        currentVersion:
+          type: string
+        latestVersion:
+          type: string
+        maintenanceMethod:
+          type: string
+        source:
+          type: string
+        reason:
+          type: string
+          enum: [lookup_failed, build_unordered]
+        status:
+          type: string
+          enum: [unknown, current, behind_latest, ahead_of_latest]
+    CloudHarnessInstallJob:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's InstallJob shape, for the latest install of the
+        organization's chosen release a session's worker reported: failed when
+        it could not be installed (that session ran the AO-tested release),
+        succeeded once one installed it.
+      required: [target, status]
+      properties:
+        target:
+          type: string
+        status:
+          type: string
+          enum: [succeeded, failed]
+        method:
+          type: string
+        error:
+          type: string
+        output:
+          type: string
+          description: The end of the installer's output.
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CloudHarnessInstallInput:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        method:
+          type: string
+          enum: [ao-cloud]
+        operation:
+          type: string
+          enum: [update]
+        expectedVersion:
+          type: string
+          description: The release to run, as the advisory listed it (its latestVersion).
     Offering:
       type: object
       additionalProperties: false

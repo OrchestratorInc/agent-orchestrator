@@ -1266,6 +1266,79 @@ export interface CloudCpHarnessStatus {
 export interface CloudCpHarnessInspectResponse {
 	harnesses: CloudCpHarnessStatus[];
 }
+
+// ---------------------------------------------------------------------------
+// Harness versions (`harness_version_handlers.go`)
+// ---------------------------------------------------------------------------
+
+/** The harnesses whose CLI release AO Cloud manages for an organization. */
+export type CloudCpManagedHarness = "claude-code" | "codex" | "cursor";
+
+/**
+ * One harness as an organization's new Cloud sessions run it. `plan`,
+ * `advisory` and `job` are the local daemon's AgentInstallPlan,
+ * AgentUpdateAdvisory and InstallJob shapes, so AO Cloud is shown with the
+ * code that shows a computer's harnesses.
+ */
+export interface CloudCpHarnessVersion {
+	agentId: CloudCpManagedHarness;
+	/** The release AO tested and its images bake. */
+	defaultVersion: string;
+	/** The newer release the organization chose in its place; absent while it runs the default. */
+	selectedVersion?: string;
+	/** A release the organization chose that AO's tested release has since caught up with; new sessions run `defaultVersion`. */
+	supersededVersion?: string;
+	plan: {
+		agentId: string;
+		automatic: boolean;
+		available: boolean;
+		documentationUrl: string;
+		method: string;
+		methods: Array<{
+			id: string;
+			label: string;
+			available: boolean;
+			recommended: boolean;
+			reinstallAvailable: boolean;
+			/** False for a caller who may not change the version; updateReason says why. */
+			updateAvailable: boolean;
+			updateReason?: string;
+		}>;
+	};
+	advisory: {
+		agentId: string;
+		checkedAt: string;
+		/** The release new sessions run. */
+		currentVersion?: string;
+		/** The newest release the publisher has. */
+		latestVersion?: string;
+		maintenanceMethod?: string;
+		source?: string;
+		reason?: "lookup_failed" | "build_unordered";
+		status: "unknown" | "current" | "behind_latest" | "ahead_of_latest";
+	};
+	/** The latest install of the chosen release a session's worker reported; absent before any. */
+	job?: {
+		target: string;
+		/** failed: that session ran the AO-tested release instead. */
+		status: "succeeded" | "failed";
+		method?: string;
+		error?: string;
+		output?: string;
+		startedAt?: string;
+		finishedAt?: string;
+		updatedAt?: string;
+	};
+	/** Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter), always at the release AO tested. Read-only. */
+	components?: Array<{ tool: string; version: string; defaultVersion: string }>;
+}
+
+/** GET /orgs/{orgId}/harness-versions. */
+export interface CloudCpHarnessVersionsResponse {
+	/** The caller administers the organization, so may change the versions. */
+	editable: boolean;
+	agents: CloudCpHarnessVersion[];
+}
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
