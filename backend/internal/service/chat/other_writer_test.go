@@ -483,3 +483,28 @@ func TestFailedStopKeepsTheHoldOfAConcurrentStop(t *testing.T) {
 	_ = h.svc.SetChatView(ctx, testSession, "view-1", true)
 	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "from b")
 }
+
+func TestRelayHoldsMessageWhileAnotherProcessWrites(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+
+	if _, err := h.svc.RelayChatTurnWithID(ctx, testSession, "relayed", "elsewhere-13"); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	if sent := old.sentTexts(); len(sent) != 1 {
+		t.Fatalf("running provider received %v; want only the first message", sent)
+	}
+	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "relayed")
+}

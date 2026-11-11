@@ -2976,6 +2976,12 @@ func (s *Service) relayChatTurn(
 	// through the provider start, and a caller holding the session's input
 	// lease (a lifecycle nudge) deadlocks with the resume, which waits for that
 	// lease to drain.
+	stoppedForOtherWriter := false
+	defer func() {
+		if stoppedForOtherWriter {
+			s.startBackgroundWake(id)
+		}
+	}()
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -2983,6 +2989,14 @@ func (s *Service) relayChatTurn(
 		record, err := s.requireChatSession(ctx, id)
 		if err != nil {
 			return "", err
+		}
+		held, err := s.stopForOtherWriter(ctx, record)
+		if err != nil {
+			return "", err
+		}
+		if held {
+			stoppedForOtherWriter = true
+			continue
 		}
 		if record.HibernatedAt != nil {
 			turn, err := s.queueWithoutController(ctx, record, msg, false)
