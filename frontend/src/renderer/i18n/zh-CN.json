@@ -405,6 +405,7 @@
 	"firstRun.showFewerHarnesses": "收起",
 	"firstRun.moreHarnessesList": "更多 Harness",
 	"firstRun.installHowTo": "如何安装",
+	"firstRun.installOtherWays": "其他安装方式",
 	"firstRun.installDidNotFinish": "安装未完成。",
 	"firstRun.ghDocs": "获取 GitHub CLI",
 	"firstRun.orchPoint1Title": "描述想要的结果",
