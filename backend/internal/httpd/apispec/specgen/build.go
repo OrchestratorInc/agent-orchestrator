@@ -556,6 +556,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersCatalogProviderParam":             "CatalogProviderParam",
 	"ControllersListCatalogProvidersResponse":     "ListCatalogProvidersResponse",
 	"ControllersListCatalogModelsResponse":        "ListCatalogModelsResponse",
+	"ControllersRecordAgentSignInResponse":        "RecordAgentSignInResponse",
 	"PortsAgentModelCatalog":                      "AgentModelsResponse",
 	"PortsAgentModelInfo":                         "AgentModelInfo",
 	"ControllersListNotificationsQuery":           "ListNotificationsQuery",
