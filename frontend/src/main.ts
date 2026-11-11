@@ -3999,7 +3999,11 @@ function notifyRenderersOfCloudSession(
 // Telemetry's Cloud binding is retired as part of sign-out itself, not only when
 // the renderer later hands the sign-out to the daemon: the app can quit first,
 // and a CLI-started daemon would then restore the departed account.
-installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, () => telemetryIdentity.signOut());
+installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, async () => {
+	// Cloud artifact previews cached on disk go with the account.
+	await artifactSnapshotStore.clearCloud().catch(() => undefined);
+	await telemetryIdentity.signOut();
+});
 
 // Dev-only local (email/password) sign-in against a loopback Docker control
 // plane running AO_CLOUD_LOCAL_AUTH. Gated to unpackaged/dev builds + loopback

@@ -29,6 +29,7 @@ export const SNAPSHOT_RETRY_MS = 60_000;
 /** More than this waiting in the queue and the oldest request is dropped, so a long scroll cannot pile up work. */
 export const SNAPSHOT_MAX_QUEUED = 64;
 const PRUNE_EVERY_WRITES = 25;
+const CLOUD_FOLDER = "cloud";
 /** A pause after each render, so a long queue leaves the app room to draw and scroll. */
 export const SNAPSHOT_GAP_MS = 150;
 
@@ -58,7 +59,9 @@ export function createArtifactSnapshotStore(options: {
 	const { directory, render } = options;
 	const now = options.now ?? Date.now;
 	const gapMs = options.gapMs ?? SNAPSHOT_GAP_MS;
-	const fileFor = (key: string) => path.join(directory, `${key}.webp`);
+	// Cloud snapshots live in their own folder so signing out can remove them all at once.
+	const cloudDirectory = path.join(directory, CLOUD_FOLDER);
+	const fileFor = (key: string, cloud: boolean) => path.join(cloud ? cloudDirectory : directory, `${key}.webp`);
 	const inFlight = new Map<string, Promise<SnapshotResult>>();
 	const failedAt = new Map<string, number>();
 	// Oldest first; the newest request is at the end.
@@ -67,23 +70,25 @@ export function createArtifactSnapshotStore(options: {
 	// unmounts the previous one's preview, so two at once would wipe each other mid-render.
 	let running = false;
 	let writes = 0;
+	// Bumped when the Cloud snapshots are cleared, so a render that began before a sign-out is not written after it.
+	let cloudEpoch = 0;
 	let pruning: Promise<void> | undefined;
 
-	async function read(key: string): Promise<Buffer | null> {
+	async function read(key: string, cloud: boolean): Promise<Buffer | null> {
 		try {
-			const bytes = await fs.readFile(fileFor(key));
+			const bytes = await fs.readFile(fileFor(key, cloud));
 			// Reading marks the file as recent for pruning; a failure to is harmless.
 			const at = new Date();
-			void fs.utimes(fileFor(key), at, at).catch(() => undefined);
+			void fs.utimes(fileFor(key, cloud), at, at).catch(() => undefined);
 			return bytes;
 		} catch {
 			return null;
 		}
 	}
 
-	async function write(key: string, bytes: Buffer): Promise<void> {
-		await fs.mkdir(directory, { recursive: true });
-		const target = fileFor(key);
+	async function write(key: string, bytes: Buffer, cloud: boolean): Promise<void> {
+		const target = fileFor(key, cloud);
+		await fs.mkdir(path.dirname(target), { recursive: true });
 		const staging = `${target}.${process.pid}.tmp`;
 		await fs.writeFile(staging, bytes);
 		await fs.rename(staging, target);
@@ -95,25 +100,29 @@ export function createArtifactSnapshotStore(options: {
 	function prune(): Promise<void> {
 		pruning ??= (async () => {
 			try {
-				const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".webp") || name.endsWith(".tmp"));
-				const files = (await Promise.all(names.map(async (name) => {
-					try {
-						const stat = await fs.stat(path.join(directory, name));
-						return { name, size: stat.size, at: stat.mtimeMs };
-					} catch {
-						return undefined;
-					}
-				}))).filter((file): file is { name: string; size: number; at: number } => file !== undefined);
+				const listed = await Promise.all([directory, cloudDirectory].map(async (folder) => {
+					const names = await fs.readdir(folder).catch(() => [] as string[]);
+					return Promise.all(names.filter((name) => name.endsWith(".webp") || name.endsWith(".tmp")).map(async (name) => {
+						const file = path.join(folder, name);
+						try {
+							const stat = await fs.stat(file);
+							return { file, size: stat.size, at: stat.mtimeMs };
+						} catch {
+							return undefined;
+						}
+					}));
+				}));
+				const files = listed.flat().filter((entry): entry is { file: string; size: number; at: number } => entry !== undefined);
 				// A staging file left by a crash is garbage once it is not being written.
-				const stale = files.filter((file) => file.name.endsWith(".tmp") && now() - file.at > 60_000);
-				await Promise.all(stale.map((file) => fs.rm(path.join(directory, file.name), { force: true })));
-				const kept = files.filter((file) => file.name.endsWith(".webp")).sort((a, b) => a.at - b.at);
-				let bytes = kept.reduce((total, file) => total + file.size, 0);
+				const stale = files.filter((entry) => entry.file.endsWith(".tmp") && now() - entry.at > 60_000);
+				await Promise.all(stale.map((entry) => fs.rm(entry.file, { force: true })));
+				const kept = files.filter((entry) => entry.file.endsWith(".webp")).sort((x, y) => x.at - y.at);
+				let bytes = kept.reduce((total, entry) => total + entry.size, 0);
 				let count = kept.length;
-				for (const file of kept) {
+				for (const entry of kept) {
 					if (bytes <= SNAPSHOT_CACHE_MAX_BYTES && count <= SNAPSHOT_CACHE_MAX_FILES) break;
-					await fs.rm(path.join(directory, file.name), { force: true });
-					bytes -= file.size;
+					await fs.rm(entry.file, { force: true });
+					bytes -= entry.size;
 					count -= 1;
 				}
 			} catch {
@@ -132,6 +141,9 @@ export function createArtifactSnapshotStore(options: {
 	}
 
 	function enqueue(job: ArtifactSnapshotJob, key: string): Promise<SnapshotResult> {
+		const cloud = Boolean(job.cloud);
+		const epoch = cloudEpoch;
+		const signedOut = () => cloud && epoch !== cloudEpoch;
 		return new Promise((resolve) => {
 			waiting.push({
 				drop: () => resolve(SNAPSHOT_DROPPED),
@@ -139,8 +151,10 @@ export function createArtifactSnapshotStore(options: {
 					running = true;
 					void (async () => {
 						try {
+							if (signedOut()) throw new Error("signed out before the render began");
 							const bytes = await render(job);
-							await write(key, bytes);
+							if (signedOut()) throw new Error("signed out during the render");
+							await write(key, bytes, cloud);
 							failedAt.delete(key);
 							resolve(bytes);
 						} catch (error) {
@@ -163,7 +177,7 @@ export function createArtifactSnapshotStore(options: {
 	return {
 		/** The image already cached for the snapshot, or null. */
 		async get(snapshot: ArtifactSnapshotIdentity): Promise<Buffer | null> {
-			return read(artifactSnapshotKey(snapshot));
+			return read(artifactSnapshotKey(snapshot), Boolean(snapshot.cloud));
 		},
 		/**
 		 * The job's image, rendered if it is not cached yet; null when it cannot be rendered,
@@ -171,7 +185,7 @@ export function createArtifactSnapshotStore(options: {
 		 */
 		async request(job: ArtifactSnapshotJob): Promise<SnapshotResult> {
 			const key = artifactSnapshotKey(job);
-			const cached = await read(key);
+			const cached = await read(key, Boolean(job.cloud));
 			if (cached) return cached;
 			const existing = inFlight.get(key);
 			if (existing) return existing;
@@ -185,6 +199,11 @@ export function createArtifactSnapshotStore(options: {
 			return pending;
 		},
 		prune,
+		/** Deletes every Cloud snapshot, for a sign-out: nothing of an account's content stays on disk. */
+		async clearCloud(): Promise<void> {
+			cloudEpoch += 1;
+			await fs.rm(cloudDirectory, { recursive: true, force: true });
+		},
 	};
 }
 

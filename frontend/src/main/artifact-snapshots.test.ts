@@ -135,6 +135,33 @@ describe("artifact snapshot store", () => {
 		clearInterval(opener);
 	});
 
+	it("keeps Cloud snapshots in their own folder and removes them, only them, on sign-out", async () => {
+		const store = createArtifactSnapshotStore({ directory, render: async () => Buffer.from("x"), gapMs: 0 });
+		const cloudJob = job({ path: "cloud.html", cloud: { orgId: "org-1" } });
+		await store.request(job({ path: "local.html" }));
+		await store.request(cloudJob);
+		expect(await fs.readdir(path.join(directory, "cloud"))).toHaveLength(1);
+		expect(await store.get(cloudJob)).not.toBeNull();
+		await store.clearCloud();
+		expect(await store.get(cloudJob)).toBeNull();
+		expect(await store.get(job({ path: "local.html" }))).not.toBeNull();
+	});
+
+	it("does not write a Cloud render that finished after a sign-out", async () => {
+		let finish: (() => void) | undefined;
+		const render = vi.fn(() => new Promise<Buffer>((resolve) => {
+			finish = () => resolve(Buffer.from("x"));
+		}));
+		const store = createArtifactSnapshotStore({ directory, render, gapMs: 0 });
+		const cloudJob = job({ path: "late.html", cloud: { orgId: "org-1" } });
+		const pending = store.request(cloudJob);
+		await vi.waitFor(() => expect(render).toHaveBeenCalled());
+		await store.clearCloud();
+		finish?.();
+		expect(await pending).toBeNull();
+		expect(await store.get(cloudJob)).toBeNull();
+	});
+
 	it("prunes the oldest-read files once the cache is over its limit", async () => {
 		const store = createArtifactSnapshotStore({ directory, render: async () => Buffer.alloc(10) });
 		await fs.mkdir(directory, { recursive: true });
