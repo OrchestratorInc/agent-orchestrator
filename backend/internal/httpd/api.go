@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
+	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -101,6 +102,9 @@ type APIDeps struct {
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
 	Presence *presence.Tracker
+	// ClientTimeZone records the time zone the desktop app reports, which
+	// agent prompts prefer over this daemon's own. Nil disables recording.
+	ClientTimeZone *clienttz.Recorder
 
 	// DeviceRoster and DeviceLive back the desktop-only mobile device roster.
 	DeviceRoster controllers.DeviceRoster
@@ -260,6 +264,13 @@ func setupRoute(req *http.Request) bool {
 	return false
 }
 
+// setupRequestBudget is the base budget of a Setup route before its Setup
+// steps extend it. A cold spawn fetches the default branch, creates a worktree
+// and starts the agent inside one request, which can outlast the general
+// REST timeout on a slow machine or a large repository.
+// A var only so tests can shorten it.
+var setupRequestBudget = 120 * time.Second
+
 // serveWithSetupBudget serves a Setup route under budget, like
 // middleware.Timeout, except that the operation may extend the deadline
 // (ports.ExtendSpawnRequestBudget) once it knows its Setup steps.
@@ -312,7 +323,7 @@ func (a *API) Register(root chi.Router) {
 					// than one REST request: the operation extends this budget by its
 					// Setup steps' limits once it knows its project.
 					if setupRoute(req) {
-						budget := timeout
+						budget := max(timeout, setupRequestBudget)
 						// Resuming an agent reads its whole native history, which takes
 						// over a minute for a large imported Codex thread.
 						if attachmentUploadRoute(req) ||
@@ -339,6 +350,7 @@ func (a *API) Register(root chi.Router) {
 				})
 			})
 			r.Use(presenceMiddleware(a.deps.Presence))
+			r.Use(clientTimeZoneMiddleware(a.deps.ClientTimeZone))
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
 			a.agentAccounts.Register(r)

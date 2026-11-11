@@ -1,9 +1,10 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { shouldPoll } from "../../lib/appStatePoll";
 import { ChatSessionScreen } from "../../lib/chat/ChatSessionScreen";
 import { hostRouteMatches } from "../../lib/hostRoute";
+import { rememberLastProject } from "../../lib/lastProject";
 import { lookUpSession } from "../../lib/session/sessionLookup";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
 import {
@@ -37,7 +38,7 @@ function SessionRouteContent() {
 	// `machine` and `paired`, not `config`: the verified connection drops on every
 	// app switch and endpoint race, and this screen must stay mounted through
 	// both (see viewMachine.ts).
-	const { sessions, orchestrators, config, machine, paired, currentHostId, connection, loading } = useApp();
+	const { sessions, orchestrators, projects, config, machine, paired, currentHostId, connection, loading } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
@@ -120,6 +121,11 @@ function SessionRouteContent() {
 	}, []);
 
 	const view = sessionRouteView({ listed, paired, connection, loading, lookup, routeHostId, currentHostId: currentHostId ?? undefined });
+	// The session on screen, listed or looked up. A session can outlive its
+	// project; only a project still listed is worth starting in.
+	const shownProjectId = view.kind === "screen" ? view.session.projectId : undefined;
+	const rememberedProjectId = shownProjectId && projects.some((project) => project.id === shownProjectId) ? shownProjectId : undefined;
+	useFocusEffect(useCallback(() => { rememberLastProject(currentHostId, rememberedProjectId); }, [currentHostId, rememberedProjectId]));
 
 	switch (view.kind) {
 		case "screen":

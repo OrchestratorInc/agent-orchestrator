@@ -42,6 +42,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
+	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
@@ -1195,6 +1196,7 @@ func Run(buildVersion string) error {
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,
+		ClientTimeZone:     clienttz.NewRecorder(ctx, cfg.DataDir),
 		DeviceRoster:       deviceRoster,
 		DeviceLive:         presenceTracker,
 		DeviceAccess:       bs,

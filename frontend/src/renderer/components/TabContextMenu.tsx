@@ -30,16 +30,18 @@ export type TabSplitActions = { right?: () => void; down?: () => void; newTermin
 export const TabSplitMenuContext = createContext<((tabKey: string) => TabSplitActions) | undefined>(undefined);
 
 /**
- * The agent and interface rows of a local session's tab, provided by the
- * session view while they apply: the terminal's agent picker and the switch
- * to the other interface. Absent on Cloud sessions and while a switch runs.
+ * The agent and interface rows of a session's tab, provided by the session
+ * view while they apply: a local terminal's agent picker and the switch to
+ * the other interface. Absent while a switch runs.
  */
 export type SessionTabAgentMenu = {
 	session: WorkspaceSession;
 	hostId?: string;
 	/** The agent is working, so it cannot be replaced right now. */
 	blocked: boolean;
-	/** The interface a switch goes to; "chat" means the tab shows a terminal, which picks its agent here. */
+	/** A local terminal picks its agent here; a chat does so from its composer, and Cloud cannot. */
+	picksAgent: boolean;
+	/** The interface a switch goes to. */
 	switchTarget: SessionInterfaceMode;
 	switchAction?: { disabled: boolean; reason?: string; run: () => void };
 };
@@ -95,8 +97,7 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 	if (!own) return entries;
 
 	if (session && agentMenu && agentMenu.session.id === session.session.id) {
-		// A terminal picks its agent here; a chat switches agent from its composer.
-		if (agentMenu.switchTarget === "chat") {
+		if (agentMenu.picksAgent) {
 			entries.push({
 				kind: "custom",
 				id: "agent-picker",
@@ -241,7 +242,7 @@ export function TabDropdownMenu({ spec, label }: { spec: TabMenuSpec; label: str
 				{/* A native title: a Radix tooltip would reopen when the menu hands focus back. */}
 				<Pressable
 					aria-label={label}
-					className={cn(terminalTabActionClassName, "data-[state=open]:bg-interactive-hover data-[state=open]:text-foreground")}
+					className={cn(terminalTabActionClassName, "data-[state=open]:text-foreground")}
 					data-session-actions-trigger
 					title={label}
 					type="button"

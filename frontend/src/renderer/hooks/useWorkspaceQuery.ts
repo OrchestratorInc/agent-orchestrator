@@ -81,6 +81,8 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 		updatedAt: artifact.updatedAt,
 		registered: artifact.registered,
 		...(artifact.previousPaths?.length ? { previousPaths: artifact.previousPaths } : {}),
+		// Set while the file is published from this computer; the Artifacts list marks it.
+		...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
 	};
 }
 
@@ -316,6 +318,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 			kind,
 			path: project.path,
 			folderMissing: project.folderMissing,
+			autoSpawnPauses: project.autoSpawnPauses,
 			orchestratorAgent: project.orchestratorAgent ? toAgentProvider(project.orchestratorAgent) : undefined,
 			sessions: sessions
 				.filter((session) => session.projectId === project.id)
@@ -376,6 +379,7 @@ function toRemoteWorkspaces(
 		kind: toProjectKind(project.kind),
 		path: project.path,
 		folderMissing: project.folderMissing,
+		autoSpawnPauses: project.autoSpawnPauses,
 		orchestratorAgent: project.orchestratorAgent ? toAgentProvider(project.orchestratorAgent) : undefined,
 		sessions: sessions.filter((session) => session.projectId === project.id).map((session) => ({
 			...toWorkspaceSession(session, project),

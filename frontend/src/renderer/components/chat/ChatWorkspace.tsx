@@ -61,6 +61,7 @@ import {
 	type Virtualizer,
 } from "@tanstack/react-virtual";
 import { isShownAORender } from "../../lib/mcp-tool";
+import { isOrchestratorPlumbing } from "./activity-step";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
 import { annotationBody, annotationTextMatches, annotationReferenceRange, annotationDiagramBlock, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
@@ -2471,6 +2472,9 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.activityKind === "reasoning") return false;
 		// The page an html_render call shows is its own row right after it.
 		if (isShownAORender(item)) return false;
+		// Reading Orchestrator's own guides or `ao --help` is how the agent learns the
+		// tool, not work on the user's task.
+		if (isOrchestratorPlumbing(item)) return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (

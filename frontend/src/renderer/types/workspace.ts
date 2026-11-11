@@ -89,6 +89,8 @@ export type SessionArtifact = {
 	registered?: boolean;
 	/** The paths the artifact had before it was renamed, latest last. */
 	previousPaths?: string[];
+	/** The file's public link while it is published from this computer. */
+	shareUrl?: string;
 };
 
 /** The daemon-committed controller currently responsible for the session. */
@@ -510,6 +512,8 @@ export type WorkspaceSummary = {
 	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
 	folderMissing?: boolean;
+	/** Automatic starts (tracker intake, schedules) the daemon paused after repeated identical failures. */
+	autoSpawnPauses?: import("../hooks/useAutoSpawnPauseNotice").AutoSpawnPause[];
 	workspaceRepos?: WorkspaceRepoSummary[];
 	type?: "main" | "worktree";
 	orchestratorAgent?: AgentProvider;

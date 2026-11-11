@@ -198,6 +198,7 @@ export function AgentModelField({
 			<div className="min-w-0">
 				<div className="min-w-0">
 					<AgentModelCombobox
+			hostId={hostId}
 						aria-label={label}
 						value={model}
 						models={models}

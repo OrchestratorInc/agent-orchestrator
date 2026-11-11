@@ -223,6 +223,24 @@ describe("useWorkspaceQuery", () => {
 		expect(result.current.data?.[0].sessions[0].artifactFiles?.[0]).toMatchObject({ path: "q3/report.html", inlineUrl });
 	});
 
+	it("keeps a published artifact's public link, which the Artifacts list marks it by", async () => {
+		const shareUrl = "https://viewer.test/artifact/abc";
+		respondWith({
+			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
+			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", statusReadiness: "ready",
+				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" }, updatedAt: "2026-01-01T00:00:00Z", prs: [],
+				artifactFiles: [
+					{ path: "poem.html", name: "poem.html", kind: "html", size: 12, updatedAt: "2026-01-01T00:00:00Z", shareUrl },
+					{ path: "notes.md", name: "notes.md", kind: "markdown", size: 3, updatedAt: "2026-01-01T00:00:00Z" },
+				] }] } },
+		});
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		const [published, unshared] = result.current.data?.[0].sessions[0].artifactFiles ?? [];
+		expect(published).toMatchObject({ path: "poem.html", shareUrl });
+		expect(unshared).not.toHaveProperty("shareUrl");
+	});
+
 	it("rejects workspace reads while the daemon base URL is untrusted", async () => {
 		hasTrustedApiBaseUrlMock.mockReturnValue(false);
 
