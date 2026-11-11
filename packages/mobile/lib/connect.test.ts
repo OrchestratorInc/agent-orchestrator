@@ -223,6 +223,13 @@ describe("connectHost with device tokens", () => {
 		expect(d.saveEndpoints).toHaveBeenCalledOnce();
 	});
 
+	it("keeps the device token when the machine refuses the kept password too", async () => {
+		const d = deps(host({ token, fallbackToken: "pw" }), { refreshEndpoints: vi.fn(async () => { throw refused("BAD_PASSWORD"); }) });
+		const got = await connectHost("h_paired", d);
+		expect(d.saveToken).not.toHaveBeenCalled();
+		expect(got.ok && got.config.password).toBe(token);
+	});
+
 	it.each([["removed this phone", "DEVICE_REVOKED"], ["sent no error code", undefined]])("does not use the kept password when the machine %s", async (_name, code) => {
 		const d = deps(host({ token, fallbackToken: "pw" }), { refreshEndpoints: refreshRefusing(code) });
 		const got = await connectHost("h_paired", d);

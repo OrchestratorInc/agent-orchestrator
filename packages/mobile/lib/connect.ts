@@ -112,11 +112,18 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		// rollback, refuses this phone's token with BAD_PASSWORD; the kept password works there.
 		const { status, code } = (typeof error === "object" && error !== null ? error : {}) as { status?: unknown; code?: unknown };
 		if (deps.saveToken && host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && status === 401 && code === "BAD_PASSWORD") {
+			const deviceToken = token;
 			token = host.fallbackToken;
-			await deps.saveToken(hostKey, token);
 			config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
-			await swapPairingPassword();
-			await refreshEndpoints().catch(() => {});
+			try {
+				// The device token is replaced only once the kept password works.
+				await refreshEndpoints();
+				await deps.saveToken(hostKey, token);
+				await swapPairingPassword();
+			} catch {
+				token = deviceToken;
+				config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+			}
 		}
 	}
 	await deps.touch(hostKey);
