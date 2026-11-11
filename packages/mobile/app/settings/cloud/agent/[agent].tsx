@@ -304,6 +304,10 @@ export default function CloudAgentScreen() {
 				stillWanted();
 				await save(method.credentialType, secretValue);
 			} catch (cause) {
+				// A failure before the browser opened leaves the listener up: only
+				// run() stops it. A newer sign-in owns the listener, so only the
+				// current one stops it here.
+				if (owns(mine)) session.cancel();
 				// Back to the choices, unless the page already moved on (Use a code instead).
 				setFlow((current) => (current.kind === "browser" && current.cancel === cancel ? { kind: "choose" } : current));
 				throw cause;
