@@ -12,7 +12,7 @@ const MAX_ENCRYPTED_FILE_BYTES = 25 * 1024 * 1024;
 const folder = () => new Directory(Paths.cache, "encrypted-files");
 let cleared = false;
 
-function writeFile(bytes: Uint8Array, path: string): File {
+function writeFile(bytes: Uint8Array, path: string, contentType: string): File {
 	const dir = folder();
 	// Files left by an earlier run, as after a crash, go before the first new one.
 	if (!cleared) {
@@ -20,7 +20,8 @@ function writeFile(bytes: Uint8Array, path: string): File {
 		if (dir.exists) dir.delete();
 	}
 	dir.create({ intermediates: true, idempotent: true });
-	const extension = /\.([a-z0-9]{1,8})$/i.exec(path)?.[1] ?? "bin";
+	// The WebView takes the type from the extension, and a large Markdown file arrives rendered as HTML.
+	const extension = /^text\/html\b/i.test(contentType) ? "html" : /\.([a-z0-9]{1,8})$/i.exec(path)?.[1] ?? "bin";
 	const file = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.${extension}`);
 	file.write(bytes);
 	return file;
@@ -73,7 +74,7 @@ export function useEncryptedFile(config: ServerConfig | null, url: string, versi
 			}
 			const bytes = await readUpTo(res, MAX_ENCRYPTED_FILE_BYTES);
 			if (!live) return;
-			written = writeFile(bytes, path);
+			written = writeFile(bytes, path, res.headers.get("content-type") ?? "");
 			setState({ key, uri: written.uri, readAccess: folder().uri, failed: false });
 		})().catch(() => { if (live) setState({ key, failed: true }); });
 		return () => {

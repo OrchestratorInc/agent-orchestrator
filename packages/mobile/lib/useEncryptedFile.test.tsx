@@ -40,8 +40,8 @@ function streamed(...chunks: Uint8Array[]) {
 	const cancel = vi.fn(async () => {});
 	return { cancel, getReader: () => ({ read: async () => next < chunks.length ? { done: false, value: chunks[next++] } : { done: true }, cancel, releaseLock: () => {} }) };
 }
-function Probe() {
-	result = useEncryptedFile(config, "http://h:1/api/v1/sessions/s/artifacts/report.pdf", "v1");
+function Probe({ path = "report.pdf" }: { path?: string }) {
+	result = useEncryptedFile(config, `http://h:1/api/v1/sessions/s/artifacts/${path}`, "v1");
 	return null;
 }
 
@@ -72,6 +72,13 @@ describe("useEncryptedFile", () => {
 		act(() => renderer.unmount());
 		expect(disk.size).toBe(0);
 		act(() => { renderer = create(<Probe />); });
+	});
+
+	it("names a file the machine sent as HTML .html, as for a large Markdown file", async () => {
+		hostFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers({ "content-type": "text/html; charset=utf-8" }), body: streamed(Uint8Array.of(60)) });
+		act(() => { renderer = create(<Probe path="notes.md" />); });
+		await settle();
+		expect(result.uri).toMatch(/\.html$/);
 	});
 
 	it("stops reading a file without a length once it passes the size cap", async () => {
