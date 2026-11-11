@@ -16,11 +16,6 @@ func (f usageLimitAccountReaderFunc) SessionLimits(ctx context.Context, id domai
 	return f(ctx, id, harness, refresh)
 }
 
-func (f usageLimitAccountReaderFunc) CachedSessionLimits(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (domain.AgentAccountLimits, bool) {
-	_, limits, err := f(ctx, id, harness, false)
-	return limits, err == nil
-}
-
 func TestUsageLimitAccountDeadlineRefreshAcrossProviders(t *testing.T) {
 	for _, provider := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
 		t.Run(string(provider), func(t *testing.T) {
@@ -30,16 +25,14 @@ func TestUsageLimitAccountDeadlineRefreshAcrossProviders(t *testing.T) {
 			later := h.now().Add(5 * time.Minute)
 			calls := 0
 			h.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(readCtx context.Context, id domain.SessionID, got domain.AgentHarness, refresh bool) (string, domain.AgentAccountLimits, error) {
-				if !refresh {
-					return "bound-account", domain.AgentAccountLimits{}, nil
-				}
 				calls++
 				deadline, ok := readCtx.Deadline()
-				if id != testSession || got != provider || !refresh || !ok || time.Until(deadline) > 2*time.Second {
+				if id != testSession || got != provider || !refresh || !ok || time.Until(deadline) > 10*time.Second {
 					t.Fatalf("account refresh is not scoped and bounded: %s, %s, %v, %v", id, got, refresh, deadline)
 				}
-				limits := domain.AgentAccountLimits{FetchedAt: h.now()}
-				if calls == 1 {
+				limits := domain.AgentAccountLimits{FetchedAt: h.now(),
+					Windows: []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 100}}}
+				if calls <= 2 {
 					limits.AutoResumeResetsAt = &later
 				}
 				return "bound-account", limits, nil
@@ -47,8 +40,8 @@ func TestUsageLimitAccountDeadlineRefreshAcrossProviders(t *testing.T) {
 			if err := h.svc.SetTurnAutoResume(ctx, testSession, source.ID, true); err != nil {
 				t.Fatal(err)
 			}
-			if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || calls != 0 {
-				t.Fatalf("pre-deadline account probe: %d, %v", calls, err)
+			if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || calls != 1 || len(h.conv.sentMessages()) != 1 {
+				t.Fatalf("pre-deadline early reset check: %d, %v", calls, err)
 			}
 			h.advance(time.Minute)
 			if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil {
@@ -59,7 +52,7 @@ func TestUsageLimitAccountDeadlineRefreshAcrossProviders(t *testing.T) {
 				!stored.UsageLimit.ResetsAt.Equal(later) || len(h.conv.sentMessages()) != 1 {
 				t.Fatalf("updated account deadline was not persisted: %+v, %v", stored.UsageLimit, err)
 			}
-			if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || calls != 1 {
+			if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || calls != 2 {
 				t.Fatalf("postponed deadline was polled: %d, %v", calls, err)
 			}
 			h.advance(4 * time.Minute)
@@ -172,27 +165,37 @@ func TestUsageLimitAccountResetResumesBeforeDeadline(t *testing.T) {
 	ctx := context.Background()
 	reset := h.now().Add(2 * time.Hour)
 	source := failUsageLimitedTurnAt(t, h, "Usage limit reached", reset)
-	used := 100.0
-	h.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error) {
+	used, readErr, reads := 100.0, error(nil), 0
+	h.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(_ context.Context, _ domain.SessionID, _ domain.AgentHarness, refresh bool) (string, domain.AgentAccountLimits, error) {
+		reads++
+		if !refresh {
+			t.Fatal("early reset check used a cached reading")
+		}
 		return "bound-account", domain.AgentAccountLimits{FetchedAt: h.now(),
-			Windows: []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: used}}}, nil
+			Windows: []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: used}}}, readErr
 	}))
 	if err := h.svc.SetTurnAutoResume(ctx, testSession, source.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	h.advance(time.Second)
-	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || len(h.conv.sentMessages()) != 1 {
-		t.Fatalf("resumed while the account was still limited: %v", err)
+	resume := func(wantSent, wantReads int, msg string) {
+		t.Helper()
+		if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || len(h.conv.sentMessages()) != wantSent || reads != wantReads {
+			t.Fatalf("%s: sent=%d reads=%d err=%v", msg, len(h.conv.sentMessages()), reads, err)
+		}
 	}
-	used = 2
-	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || len(h.conv.sentMessages()) != 1 {
-		t.Fatalf("checked again inside the backoff: %v", err)
-	}
-	h.advance(30 * time.Second)
-	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || len(h.conv.sentMessages()) != 2 {
-		t.Fatalf("did not resume after the account reset: %v", err)
-	}
+	resume(1, 1, "resumed while the account was still limited")
+	used, readErr = 2, errors.New("claude ended without answering get_usage")
+	resume(1, 1, "read again inside the early-check interval")
+	h.advance(5 * time.Minute)
+	resume(1, 2, "resumed on a failed reading")
 	stored, err := h.st.TurnByID(ctx, source.ID)
+	if err != nil || stored.UsageLimit == nil || !stored.UsageLimit.ResetsAt.Equal(reset) {
+		t.Fatalf("failed reading moved the deadline: %+v, %v", stored.UsageLimit, err)
+	}
+	readErr = nil
+	h.advance(5 * time.Minute)
+	resume(2, 3, "did not resume after the account reset")
+	stored, err = h.st.TurnByID(ctx, source.ID)
 	if err != nil || stored.UsageLimit == nil || stored.UsageLimit.AutoResume {
 		t.Fatalf("consent was not consumed: %+v, %v", stored.UsageLimit, err)
 	}
