@@ -195,6 +195,21 @@ describe("AgentModelPicker", () => {
 		}
 	});
 
+	it("names a favourite's agent beside its logo, since two agents can share a mark", async () => {
+		const user = userEvent.setup();
+		const saved = { harness: "opencode-v2", row: "gpt-x", model: "gpt-x", label: "GPT X" };
+		toggleModelFavorite(saved);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const row = await screen.findByRole("menuitemradio", { name: /GPT X/ });
+			expect(row.querySelector("img")).toBeInTheDocument();
+			expect(row).toHaveTextContent("OpenCode 2");
+		} finally {
+			toggleModelFavorite(saved);
+		}
+	});
+
 	it("greys out a favourite whose model the agent no longer lists", async () => {
 		const user = userEvent.setup();
 		const gone = { harness: "codex", row: "gpt-gone", model: "gpt-gone", label: "GPT Gone" };

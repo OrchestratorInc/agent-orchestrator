@@ -458,7 +458,9 @@ export function AgentModelPicker({
 									{favorite.fast ? <Zap aria-label={t("agentSwitch.fastMode")} className="ml-1.5 size-3 shrink-0 fill-current" /> : null}
 									{favorite.thinking ? <Brain aria-label={t("agentSwitch.thinking")} className="ml-1.5 size-3 shrink-0" /> : null}
 									{favorite.effortLabel ? <span className="ml-1.5 shrink-0 text-muted-foreground">{favorite.effortLabel}</span> : null}
-									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} />
+									{/* Named as search rows are: two agents can share a mark (OpenCode, OpenCode 2) and a model. The sr-only name above reads it once. */}
+									<span aria-hidden="true" className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(favorite.harness)}</span>
+									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} className="ml-2" />
 								</OptionMenuItem>
 							))}
 							<div className={setups.length > 0 ? DIVIDER : undefined}>
@@ -753,7 +755,7 @@ function favoriteFor(harness: string, model: PickerModel, chosen: PickerSource |
 }
 
 /** The star at the end of a model row. It shows on hover, and stays once starred. */
-function FavoriteStar({ starred, onToggle }: { starred: boolean; onToggle: () => void }) {
+function FavoriteStar({ starred, onToggle, className }: { starred: boolean; onToggle: () => void; className?: string }) {
 	const { t } = useTranslation();
 	return (
 		<span
@@ -768,6 +770,7 @@ function FavoriteStar({ starred, onToggle }: { starred: boolean; onToggle: () =>
 			className={cn(
 				"ml-auto flex size-5 shrink-0 items-center justify-center rounded hover:bg-interactive-active",
 				starred ? "text-warning" : "text-muted-foreground opacity-0 group-hover/model:opacity-100 group-data-highlighted/model:opacity-100",
+				className,
 			)}
 		>
 			<Star aria-hidden="true" className={cn("size-3.5", starred ? "fill-current" : undefined)} />
