@@ -74,6 +74,17 @@ describe("ChatImage copy and save", () => {
 		await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith({ name: "attachment-1.png", bytes: png }));
 	});
 
+	it("names a saved image from its content type without MIME parameters", async () => {
+		const user = userEvent.setup();
+		const render1 = "http://127.0.0.1:4000/api/v1/sessions/s1/renders/r1";
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(png, { headers: { "content-type": "image/jpeg; charset=binary" } }));
+		const save = vi.spyOn(aoBridge.chatImage, "save").mockResolvedValue(true);
+		render(<ChatImage src={render1} alt="Chart" />);
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open image: Chart" }));
+		await user.click(screen.getByRole("menuitem", { name: "Save image" }));
+		await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith({ name: "r1.jpg", bytes: png }));
+	});
+
 	it("refuses a loopback image over the chat image size limit before reading it", async () => {
 		const user = userEvent.setup();
 		const huge = new Response(png, { headers: { "content-type": "image/png", "content-length": String(MAX_CHAT_IMAGE_BYTES + 1) } });

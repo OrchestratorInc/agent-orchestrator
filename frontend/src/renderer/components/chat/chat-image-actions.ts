@@ -34,9 +34,10 @@ async function loadChatImage(url: string): Promise<ImageBytes> {
 	if (!response.ok) throw new Error(`Image request failed (${response.status})`);
 	if (loopback && Number(response.headers.get("content-length")) > MAX_CHAT_IMAGE_BYTES) throw new Error("Image is too large");
 	const blob = await response.blob();
-	if (loopback && !blob.type.startsWith("image/")) throw new Error("Not an image");
+	const mimeType = blob.type.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+	if (loopback && !mimeType.startsWith("image/")) throw new Error("Not an image");
 	if (loopback && blob.size > MAX_CHAT_IMAGE_BYTES) throw new Error("Image is too large");
-	return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
+	return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType };
 }
 
 /** Re-encode as PNG, the one format every clipboard target accepts. */
