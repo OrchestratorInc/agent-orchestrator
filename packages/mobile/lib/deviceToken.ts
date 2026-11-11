@@ -2,7 +2,6 @@ import type { ServerConfig } from "./config";
 
 export const DEVICE_TOKEN_PREFIX = "aod_";
 
-/** The account's token for a machine: 32 random bytes in hex. */
 const ACCOUNT_TOKEN = /^[0-9a-f]{64}$/;
 
 export function isPairingSecret(token: string): boolean {
