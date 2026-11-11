@@ -401,6 +401,9 @@ type StreamOptions = { cwd?: string; env: NodeJS.ProcessEnv; input?: string; enc
 /** git's whole output, as a stream runner would hand it on: fed its input, in its encoding. */
 async function streamOutput(args: string[], options: StreamOptions): Promise<string> {
 	const run = execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+	// git can exit before it reads stdin it never needed (`git log`); the write
+	// then fails with EPIPE, which the runner ignores (cloud-folder-push.ts).
+	run.child.stdin?.on("error", () => undefined);
 	run.child.stdin?.end(options.input ?? "");
 	return (await run).stdout.toString(options.encoding ?? "utf8");
 }
