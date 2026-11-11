@@ -26,6 +26,7 @@ import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { HostImage, useHostImage } from "../../lib/hostImage";
+import { useEncryptedFile } from "../../lib/useEncryptedFile";
 import { imageSourceForPlatform } from "../../lib/imageSource";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -455,6 +456,7 @@ function ArtifactWeb({ config, url, version, page }: {
 	const web = useRef<WebView>(null);
 	const [error, setError] = useState<string>();
 	const inlined = useInlinedArtifactPage({ enabled: Boolean(page), config, sessionId: page?.sessionId ?? "", path: page?.path ?? "", version });
+	const file = useEncryptedFile(config.hostKey && !page ? config : null, url, version);
 	// An inlined page carries AO's theme bootstrap; it takes the app's live theme, as a chat frame does.
 	const theme = useRenderTheme();
 	const themeRef = useRef(theme);
@@ -468,16 +470,19 @@ function ArtifactWeb({ config, url, version, page }: {
 	// Inlining failed: the page still opens from its URL.
 	if (page && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	// A URL load would send the token in plaintext to a machine whose traffic is encrypted.
-	if (!html && config?.hostKey) return <Unavailable title="This file didn't load" message="Open it on the machine instead." />;
+	if (!html && config.hostKey && !file.uri) {
+		if (!page && !file.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+		return <Unavailable title="This file didn't load" message="Open it on the machine instead." />;
+	}
 	return (
 		<View style={styles.screen}>
 			<WebView
 				// A new version of the file reloads the page.
-				key={`${version}|${inlined.html ? "inline" : "url"}`}
+				key={`${version}|${inlined.html ? "inline" : file.uri ? "file" : "url"}`}
 				ref={web}
 				// Inlined, the page loads from memory with no origin: it needs no
 				// cookie, and it cannot reach the daemon.
-				source={html ? { html } : { uri: url, headers: authHeaders(config) }}
+				source={html ? { html } : file.uri ? { uri: file.uri } : { uri: url, headers: authHeaders(config) }}
 				style={styles.web}
 				// Under the clear glass bar, the page scrolls on beneath it.
 				contentInsetAdjustmentBehavior="automatic"

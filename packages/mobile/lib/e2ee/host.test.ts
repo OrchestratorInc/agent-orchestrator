@@ -43,7 +43,8 @@ describe("hostImageSource", () => {
 });
 
 describe("bytesToDataUri", () => {
-	it("drops content type parameters", () => {
-		expect(bytesToDataUri(Uint8Array.of(104, 105), "text/plain; charset=utf-8")).toBe("data:text/plain;base64,aGk=");
+	it("keeps only the charset of the content type", () => {
+		expect(bytesToDataUri(Uint8Array.of(104, 105), "text/plain; charset=utf-8; x=y")).toBe("data:text/plain;charset=utf-8;base64,aGk=");
+		expect(bytesToDataUri(Uint8Array.of(104, 105), "image/png")).toBe("data:image/png;base64,aGk=");
 	});
 });

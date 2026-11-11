@@ -50,8 +50,11 @@ export function hostPath(url: string): string {
 	return `${pathname}${search}`;
 }
 
-export function bytesToDataUri(bytes: Uint8Array, mimeType: string): string {
+/** A data URI for bytes from the machine, keeping the charset so text decodes as sent. */
+export function bytesToDataUri(bytes: Uint8Array, contentType: string): string {
 	let binary = "";
 	for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
-	return `data:${mimeType.split(";")[0].trim() || "application/octet-stream"};base64,${btoa(binary)}`;
+	const [type, ...params] = contentType.split(";").map((part) => part.trim());
+	const charset = params.find((param) => /^charset=[\w-]+$/i.test(param));
+	return `data:${type || "application/octet-stream"}${charset ? `;${charset}` : ""};base64,${btoa(binary)}`;
 }
