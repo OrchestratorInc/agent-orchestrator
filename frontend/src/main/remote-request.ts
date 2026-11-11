@@ -107,18 +107,14 @@ function remoteUrl(entry: Pick<RemoteEntry, "url">, path: string): URL {
 }
 
 export type PairDeviceResult =
-	/** The host issued this device its own token. credential is what was presented. */
 	| { kind: "paired"; token: string; credential: "pairing-code" | "password" }
-	/** The host has no device tokens, or will not issue one: keep the credential as it is. */
+	/** No device token: keep the credential as it is. */
 	| { kind: "unsupported" }
 	| { kind: "unauthorized" }
 	| { kind: "offline" };
 
-/**
- * Exchanges a one-time pairing code, or the pairing password, for this
- * device's own token. Call it only after the host's identity is confirmed:
- * it sends the secret.
- */
+/** Exchanges a pairing code or password for this device's own token. Confirm the
+ * host's identity first: this sends the secret. */
 export async function pairDevice(
 	entry: Pick<RemoteEntry, "url" | "hostId">,
 	secret: string,
@@ -151,7 +147,6 @@ export async function pairDevice(
 	}
 }
 
-/** The error code of the host's 401 for this entry's credential, such as DEVICE_REVOKED. */
 export async function readAuthErrorCode(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 5_000): Promise<string | undefined> {
 	try {
 		const response = await fetchImpl(remoteUrl(entry, "/healthz").href, {

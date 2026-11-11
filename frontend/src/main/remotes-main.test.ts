@@ -643,7 +643,6 @@ describe("registerRemotesIpc", () => {
 			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_new", probe, pair });
 			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "typed-secret" })).resolves.toBe("online");
 			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ url: "https://new.example", hostId: "h_new" }), "typed-secret", { name: "Test Mac", platform: process.platform });
-			// The host is probed with the token, and a spent code is not kept.
 			expect(probe).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
 			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toEqual({
 				hostId: "h_new", label: "New", url: "https://new.example", password: token, accountUserId: TEST_ACCOUNT, ...(fallbackPassword ? { fallbackPassword } : {}),

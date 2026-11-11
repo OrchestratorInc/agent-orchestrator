@@ -14,20 +14,14 @@ export type RemoteEntry = {
 	sealedPassword?: string;
 	/** Set beside sealedPassword when that password is the account's token, not a pairing password. */
 	accountToken?: true;
-	/**
-	 * The pairing password this device swapped for its own token, which is now
-	 * `password`. Used again if the host stops knowing the token, as after a
-	 * rollback to a release without device tokens.
-	 */
+	/** The pairing password swapped for the token in `password`, used again if the host forgets the token. */
 	fallbackPassword?: string;
 	/** An encrypted fallbackPassword this launch could not decrypt. */
 	sealedFallbackPassword?: string;
 };
 
-/** A device's own token for a host, as the host issues it. */
 export const DEVICE_TOKEN_PREFIX = "aod_";
 
-/** Whether the saved credential is a pairing password, which a host with device tokens swaps for one. */
 export function holdsPairingPassword(entry: Pick<RemoteEntry, "password">): boolean {
 	return entry.password !== "" && !entry.password.startsWith(DEVICE_TOKEN_PREFIX) && !ACCOUNT_TOKEN.test(entry.password);
 }
@@ -52,8 +46,7 @@ export function setPasswordCipher(resolve: () => PasswordCipher | null): void {
 
 type StoredRemote = Omit<RemoteEntry, "password"> & { password?: string };
 
-// The fallback password is stored the way the password is: encrypted when a
-// cipher is available, and kept encrypted when it cannot be decrypted.
+// Stored like the password: encrypted when possible, and kept encrypted when it cannot be decrypted.
 function unsealFallback(plain: string | undefined, sealed: string | undefined, cipher: PasswordCipher | null): Pick<RemoteEntry, "fallbackPassword" | "sealedFallbackPassword"> {
 	if (sealed === undefined) return plain ? { fallbackPassword: plain } : {};
 	if (cipher) {
