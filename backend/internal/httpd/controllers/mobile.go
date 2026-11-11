@@ -389,6 +389,9 @@ type BridgeService struct {
 	// wired, as in tests of the other bridge behavior.
 	Devices *mobilebridge.AccessDevices
 	Codes   *mobilebridge.PairingCodes
+	// PushDevices is the push registry, so revoking every device also stops
+	// their notifications. Nil leaves the registry alone.
+	PushDevices DeviceRoster
 
 	// OnBrowserRemoteAccessDisabled synchronously revokes live streams when the
 	// desktop turns the additional browser-access gate off. It is nil until the
@@ -1122,16 +1125,26 @@ func (b *BridgeService) applyPasswordLogin(st mobilebridge.State) {
 	}
 }
 
-// revokeAllDevices removes every device token and unused pairing code. The
-// caller rotates the password, which closes the listener's connections.
+// revokeAllDevices removes every device token, unused pairing code and push
+// registration. The caller rotates the password, which closes the listener's
+// connections.
 func (b *BridgeService) revokeAllDevices() error {
 	if b.Codes != nil {
 		b.Codes.Clear()
 	}
-	if b.Devices == nil {
-		return nil
+	if b.Devices != nil {
+		if err := b.Devices.RevokeAll(); err != nil {
+			return err
+		}
 	}
-	return b.Devices.RevokeAll()
+	// Best effort: access is already revoked. A phone that pairs again
+	// registers again.
+	if b.PushDevices != nil {
+		for _, device := range b.PushDevices.List() {
+			_ = b.PushDevices.Delete(device.InstallID)
+		}
+	}
+	return nil
 }
 
 // NewPairingCode makes a one-time code for a new device.
