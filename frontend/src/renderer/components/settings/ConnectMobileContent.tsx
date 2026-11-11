@@ -85,6 +85,7 @@ export function qrValueFor(input: {
 	platform: string;
 	password: string;
 	endpoints: readonly PairingEndpoint[];
+	hostKey?: string;
 }): string {
 	// v2 only. The phone no longer accepts v1: those codes predate the identity
 	// probe the race uses to verify a machine before sending it a credential, so
@@ -98,6 +99,7 @@ export function qrValueFor(input: {
 			hostId: input.hostId,
 			name: input.host,
 			platform: input.platform,
+			hostKey: input.hostKey,
 		}),
 		PAIRING_LINK_BASE,
 	);
@@ -234,6 +236,8 @@ interface MobileStatus {
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
 	hostId?: string;
+	/** The machine's Ed25519 public key, echoed into the pairing code. */
+	hostKey?: string;
 	/** Every advertised way to reach this daemon, in preference order. Optional
 	 * for the same reason as hostId. */
 	endpoints?: PairingEndpoint[];
@@ -778,6 +782,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				platform: "",
 				password: pairingCode,
 				endpoints: status?.endpoints ?? [],
+				hostKey: status?.hostKey,
 			})
 		: null;
 	const secureReasonText = reasonMessage(status.securePairing?.reason ?? "", t);

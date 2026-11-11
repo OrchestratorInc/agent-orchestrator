@@ -28,6 +28,8 @@ export type PairingOffer = {
 	platform: string;
 	endpoints: PairingEndpoint[];
 	token: string;
+	/** The machine's Ed25519 public key. The phone encrypts its traffic to it. */
+	hostKey?: string;
 };
 
 export type PairingOfferInput = {
@@ -36,6 +38,7 @@ export type PairingOfferInput = {
 	hostId: string;
 	name: string;
 	platform: string;
+	hostKey?: string;
 };
 
 /**
@@ -60,6 +63,7 @@ export function buildPairingOffer(input: PairingOfferInput): PairingOffer {
 		platform: input.platform,
 		endpoints: [...input.endpoints],
 		token: input.password,
+		...(input.hostKey ? { hostKey: input.hostKey } : {}),
 	};
 }
 
