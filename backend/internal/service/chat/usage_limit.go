@@ -105,7 +105,33 @@ func validateUsageLimitSession(record domain.SessionRecord) error {
 	return nil
 }
 
-// Account readings can extend a known deadline, never shorten it or create consent.
+// resetEarly moves a future deadline to now when a cached account reading taken
+// after the failure shows every window below 100%, as after a provider-side reset.
+func (s *Service) resetEarly(ctx context.Context, store usageLimitStore, source *domain.ConversationTurn, harness domain.AgentHarness) (bool, error) {
+	s.mu.RLock()
+	accounts := s.usageLimitAccounts
+	s.mu.RUnlock()
+	if accounts == nil || source.CompletedAt == nil {
+		return false, nil
+	}
+	_, limits, err := accounts.SessionLimits(ctx, source.HandledBySessionID, harness, false)
+	if err != nil || len(limits.Windows) == 0 || !limits.FetchedAt.After(*source.CompletedAt) {
+		return false, nil
+	}
+	for _, w := range limits.Windows {
+		if w.UsedPercent >= 100 {
+			return false, nil
+		}
+	}
+	now := s.now()
+	moved, err := store.PostponeTurnAutoResume(ctx, source.ConversationID, source.ID, now)
+	if moved {
+		source.UsageLimit.ResetsAt = &now
+	}
+	return moved, err
+}
+
+// A fresh reading can extend a known deadline, never shorten it or create consent.
 func (s *Service) postponeUsageLimit(ctx context.Context, store usageLimitStore, source domain.ConversationTurn, harness domain.AgentHarness) (bool, error) {
 	s.mu.RLock()
 	accounts := s.usageLimitAccounts
@@ -223,6 +249,9 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
+	s.mu.RLock()
+	checkEarly := s.usageLimitAccounts != nil
+	s.mu.RUnlock()
 	s.autoResumeMu.Lock()
 	if s.autoResumeScanning || len(s.autoResumeInFlight) >= usageLimitAutoResumeWorkers {
 		s.autoResumeMu.Unlock()
@@ -254,8 +283,8 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		if s.autoResumeInFlight[candidate.ID] || s.autoResumeRetryAt[candidate.ID].After(s.now()) {
 			continue
 		}
-		// Eligibility reads are needed only once the durable deadline arrives.
-		if candidate.UsageLimit != nil && candidate.UsageLimit.ResetsAt != nil && candidate.UsageLimit.ResetsAt.After(s.now()) {
+		// Before the deadline, only an account reading can make a turn due.
+		if !checkEarly && candidate.UsageLimit != nil && candidate.UsageLimit.ResetsAt != nil && candidate.UsageLimit.ResetsAt.After(s.now()) {
 			continue
 		}
 		if s.autoResumeInFlight == nil {
@@ -300,13 +329,16 @@ func (s *Service) resumeUsageLimitedTurn(ctx context.Context, store usageLimitSt
 		if source.UsageLimit != nil && !source.UsageLimit.AutoResume {
 			return nil
 		}
-		if source.UsageLimit != nil && source.UsageLimit.ResetsAt != nil && source.UsageLimit.ResetsAt.After(s.now()) {
-			return nil
-		}
 		record, err = s.requireChatSession(ctx, source.HandledBySessionID)
-		if err == nil {
-			err = validateUsageLimitSession(record)
+	}
+	if err == nil && source.UsageLimit != nil && source.UsageLimit.ResetsAt != nil && source.UsageLimit.ResetsAt.After(s.now()) {
+		var early bool
+		if early, err = s.resetEarly(ctx, store, &source, record.Harness); err == nil && !early {
+			err = domain.ErrConversationAutoResumeNotDue
 		}
+	}
+	if err == nil {
+		err = validateUsageLimitSession(record)
 	}
 	if err == nil {
 		err = validateUsageLimitSource(ctx, s.store, store, source, source.HandledBySessionID)
@@ -327,22 +359,27 @@ func (s *Service) resumeUsageLimitedTurn(ctx context.Context, store usageLimitSt
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if errors.Is(err, domain.ErrConversationAutoResumeNotDue) {
-		return nil
-	}
-	if permanentUsageLimitResumeError(err) {
+	// A future deadline is checked again after the backoff, not on every scan.
+	notDue := errors.Is(err, domain.ErrConversationAutoResumeNotDue)
+	if notDue {
+		err = nil
+	} else if permanentUsageLimitResumeError(err) {
 		err = store.SetTurnAutoResume(ctx, candidate.ConversationID, candidate.ID, nil, false,
 			"Auto-resume stopped: "+err.Error())
 	}
 	s.autoResumeMu.Lock()
 	defer s.autoResumeMu.Unlock()
-	if err == nil {
+	if err == nil && !notDue {
 		delete(s.autoResumeRetryAt, candidate.ID)
 	} else {
 		if s.autoResumeRetryAt == nil {
 			s.autoResumeRetryAt = make(map[string]time.Time)
 		}
-		s.autoResumeRetryAt[candidate.ID] = s.now().Add(usageLimitAutoResumeBackoff)
+		retryAt := s.now().Add(usageLimitAutoResumeBackoff)
+		if notDue && source.UsageLimit != nil && source.UsageLimit.ResetsAt != nil && source.UsageLimit.ResetsAt.Before(retryAt) {
+			retryAt = *source.UsageLimit.ResetsAt
+		}
+		s.autoResumeRetryAt[candidate.ID] = retryAt
 	}
 	return err
 }

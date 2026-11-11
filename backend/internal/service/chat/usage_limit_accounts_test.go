@@ -25,6 +25,9 @@ func TestUsageLimitAccountDeadlineRefreshAcrossProviders(t *testing.T) {
 			later := h.now().Add(5 * time.Minute)
 			calls := 0
 			h.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(readCtx context.Context, id domain.SessionID, got domain.AgentHarness, refresh bool) (string, domain.AgentAccountLimits, error) {
+				if !refresh {
+					return "bound-account", domain.AgentAccountLimits{}, nil
+				}
 				calls++
 				deadline, ok := readCtx.Deadline()
 				if id != testSession || got != provider || !refresh || !ok || time.Until(deadline) > 2*time.Second {
@@ -156,5 +159,36 @@ func TestUsageLimitAccountRefreshCannotRearmConsumedConsent(t *testing.T) {
 	if err != nil || stored.UsageLimit == nil || stored.UsageLimit.AutoResume ||
 		!stored.UsageLimit.ResetsAt.Equal(*source.UsageLimit.ResetsAt) || len(h.conv.sentMessages()) != 1 {
 		t.Fatalf("account refresh recreated consumed intent: %+v, %v", stored.UsageLimit, err)
+	}
+}
+
+func TestUsageLimitAccountResetResumesBeforeDeadline(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	reset := h.now().Add(2 * time.Hour)
+	source := failUsageLimitedTurnAt(t, h, "Usage limit reached", reset)
+	used := 100.0
+	h.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error) {
+		return "bound-account", domain.AgentAccountLimits{FetchedAt: h.now(),
+			Windows: []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: used}}}, nil
+	}))
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, source.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Second)
+	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || len(h.conv.sentMessages()) != 1 {
+		t.Fatalf("resumed while the account was still limited: %v", err)
+	}
+	used = 2
+	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || len(h.conv.sentMessages()) != 1 {
+		t.Fatalf("checked again inside the backoff: %v", err)
+	}
+	h.advance(30 * time.Second)
+	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil || len(h.conv.sentMessages()) != 2 {
+		t.Fatalf("did not resume after the account reset: %v", err)
+	}
+	stored, err := h.st.TurnByID(ctx, source.ID)
+	if err != nil || stored.UsageLimit == nil || stored.UsageLimit.AutoResume {
+		t.Fatalf("consent was not consumed: %+v, %v", stored.UsageLimit, err)
 	}
 }
