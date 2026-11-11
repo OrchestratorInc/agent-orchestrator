@@ -549,13 +549,15 @@ function refreshConversationState(queryClient: QueryClient, sessionId: string, h
 	else void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) }, { cancelRefetch: false });
 }
 
-const settingsWriteKey = (sessionId: string, hostId?: string) => ["conversation-settings-write", hostId ?? "", sessionId];
+const SETTINGS_WRITE_KEY = ["conversation-settings-write"];
+const settingsWriteMeta = (sessionId: string, hostId?: string) => ({ settingsFor: `${hostId ?? ""}:${sessionId}` });
 
 export const CHAT_SETTINGS_NOT_SAVED = "CHAT_SETTINGS_NOT_SAVED";
 
 function settingsWritesSettled(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
 	const cache = queryClient.getMutationCache();
-	const writes = cache.findAll({ mutationKey: settingsWriteKey(sessionId, hostId), status: "pending" });
+	const { settingsFor } = settingsWriteMeta(sessionId, hostId);
+	const writes = cache.findAll({ mutationKey: SETTINGS_WRITE_KEY, status: "pending", predicate: (write) => write.options.meta?.settingsFor === settingsFor });
 	if (writes.length === 0) return Promise.resolve();
 	return new Promise((resolve, reject) => {
 		const stop = cache.subscribe(() => {
@@ -1020,7 +1022,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			} : current,
 		);
 	const chooseSettings = useMutation({
-		mutationKey: settingsWriteKey(sessionId ?? "", hostId),
+		mutationKey: SETTINGS_WRITE_KEY,
+		meta: settingsWriteMeta(sessionId ?? "", hostId),
 		// Shown at once, so the next pick builds on this one rather than on the saved settings.
 		onMutate: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
 			await queryClient.cancelQueries({ queryKey: conversationQueryKey(targetSessionId, hostId) });
@@ -1696,7 +1699,8 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		},
 	});
 	const mutation = useMutation({
-		mutationKey: settingsWriteKey(sessionId ?? "", hostId),
+		mutationKey: SETTINGS_WRITE_KEY,
+		meta: settingsWriteMeta(sessionId ?? "", hostId),
 		// Held across the whole write, paired with the cancel below: `onMutate`
 		// runs before the request and `onSettled` after the result is committed,
 		// so no poll can start or land inside that window.
