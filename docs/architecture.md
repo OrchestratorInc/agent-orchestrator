@@ -1064,6 +1064,13 @@ The daemon runs two independent HTTP listeners sharing the same chi router:
    [current access guide](../frontend/src/docs/content/configuration/remote-access.mdx)
    and [historical LAN ADR](adr/0001-lan-listener-for-mobile.md).
 
+That second listener has a third bind form: **loopback-only** (`LoopbackOnly`
+in the mobile state and `StartLoopback`), which binds the same authenticated
+mobile handler to `127.0.0.1` for a managed tunnel connector on a headless host
+(`ao remote-host enable --tunnel-only`). It serves the authenticated app API and
+never a LAN-reachable address, and a listener cannot silently change bind mode:
+switching requires disabling the current one first.
+
 The mobile app is a second thin renderer over those same session resources. It
 branches on the session's persisted `mode`: TUI attaches the existing mux PTY,
 while Chat reads the paged conversation projection and uses the durable CDC SSE
