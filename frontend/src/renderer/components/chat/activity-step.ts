@@ -648,7 +648,9 @@ export function isOrchestratorPlumbing(activity: ConversationActivity): boolean 
 			}
 			const segment = toSegment(words);
 			words = [];
-			if (!segment || NAVIGATION.has(segment.binary) || SHELL_SYNTAX.has(segment.binary)) continue;
+			// `source` and `.` run a script, which can do real work, so they are not skipped.
+			const sourced = segment?.binary === "source" || segment?.binary === ".";
+			if (!segment || (NAVIGATION.has(segment.binary) && !sourced) || SHELL_SYNTAX.has(segment.binary)) continue;
 			if (!isPlumbingStage(segment)) return false;
 			stages += 1;
 		}
