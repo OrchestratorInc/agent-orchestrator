@@ -1,3 +1,5 @@
+import type { AppSymbolName } from "./symbols";
+
 export const machineAppearancePalette = {
 	symbols: ["server", "cloud", "linux", "desktop", "laptop", "mac-mini", "mac-studio"] as const,
 };
@@ -20,6 +22,17 @@ export const machineSymbolLabels: Record<MachineSymbol, string> = {
 	"mac-studio": "Workstation",
 };
 
+/** The system glyph each machine shape draws as: an SF Symbol on iOS, a Material Symbol on Android. */
+export const machineSymbolNames = {
+	server: "server",
+	cloud: "cloud",
+	linux: "terminal",
+	desktop: "desktop",
+	laptop: "laptop",
+	"mac-mini": "miniPc",
+	"mac-studio": "workstation",
+} as const satisfies Record<MachineSymbol, AppSymbolName>;
+
 const legacySymbols: Record<string, MachineSymbol> = {
 	monitor: "desktop",
 	terminal: "linux",
@@ -35,32 +48,15 @@ type MachineIdentity = {
 	appearance?: { symbol: string };
 };
 
-function identityHash(value: string): number {
-	let hash = 2166136261;
-	for (let index = 0; index < value.length; index++) {
-		hash ^= value.charCodeAt(index);
-		hash = Math.imul(hash, 16777619);
-	}
-	return hash >>> 0;
-}
+/** What a machine with no saved icon draws as: most paired machines are someone's laptop. */
+const DEFAULT_SYMBOL: MachineSymbol = "laptop";
 
 export function machineAppearance(machine: MachineIdentity): MachineAppearance {
 	if (machine.appearance) {
 		const symbol = machineAppearancePalette.symbols.find((candidate) => candidate === machine.appearance?.symbol) ?? legacySymbols[machine.appearance.symbol] ?? "server";
 		return { symbol };
 	}
-	const symbols = machineAppearancePalette.symbols;
-	return { symbol: symbols[identityHash(machine.id || machine.name) % symbols.length] };
-}
-
-/** Icons that more than one machine uses; those machines need their name beside the icon. */
-export function sharedMachineSymbols(machines: readonly MachineIdentity[]): ReadonlySet<MachineSymbol> {
-	const counts = new Map<MachineSymbol, number>();
-	for (const machine of machines) {
-		const { symbol } = machineAppearance(machine);
-		counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
-	}
-	return new Set([...counts].filter(([, count]) => count > 1).map(([symbol]) => symbol));
+	return { symbol: DEFAULT_SYMBOL };
 }
 
 /** The preferred icon unless another machine already has it; then the first free one. */

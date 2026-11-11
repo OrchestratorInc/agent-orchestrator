@@ -1,5 +1,6 @@
-import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
-import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, Loader2, RefreshCw, Search } from "@/components/app-icons";
+import { type ReactNode, useMemo, useRef, useState } from "react";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
@@ -11,6 +12,7 @@ import { ToggleRow } from "../chat/AgentSwitchPicker";
 import { formatEffortLabel } from "./EffortPicker";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
+import { Pressable } from "../ui/pressable";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -68,7 +70,10 @@ export function AgentModelCombobox({
 	retryAt,
 	onChange,
 	onCustom,
+	onUseDefault,
 	emptyLabel,
+	footer,
+	modelHint,
 	triggerLabel,
 	triggerClassName,
 	menuAlign = "end",
@@ -93,8 +98,14 @@ export function AgentModelCombobox({
 	retryAt?: string | null;
 	onChange: (value: string) => void;
 	onCustom?: (value: string) => void;
+	/** Offers the agent's native default as a choice, above the listed models. */
+	onUseDefault?: () => void;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
+	/** A note under the models, such as where they come from. */
+	footer?: ReactNode;
+	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
+	modelHint?: { id: string; label: string };
 	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
 	agentId?: string;
 	triggerLabel?: string;
@@ -226,23 +237,7 @@ export function AgentModelCombobox({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);
 	const effortTriggerRef = useRef<HTMLDivElement>(null);
-	const [canScrollDown, setCanScrollDown] = useState(false);
-	const updateScrollCue = useCallback(() => {
-		const element = scrollRef.current;
-		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
-	}, []);
-	useLayoutEffect(() => {
-		if (!menuOpen) {
-			setCanScrollDown(false);
-			return;
-		}
-		updateScrollCue();
-		const element = scrollRef.current;
-		if (!element || typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(updateScrollCue);
-		observer.observe(element);
-		return () => observer.disconnect();
-	}, [groups.length, menuOpen, normalizedSearch, showCustomSearchAction, updateScrollCue, visibleModels.length]);
+	useEdgeFade(scrollRef, "y", [menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
 	const selectModel = (picked: string, want?: Partial<ModelVariant>) => {
 		// A Cursor model keeps the current effort, thinking and speed where it has them.
@@ -292,10 +287,9 @@ export function AgentModelCombobox({
 			}}
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
-				<button
-					type="button"
+				<Pressable
 					className={cn(
-						"group/agent-model-trigger settings-option-trigger max-w-full min-w-0 hover:text-settings-label focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:outline-none data-[state=open]:ring-0",
+						"group/agent-model-trigger settings-option-trigger max-w-full min-w-0 hover:text-settings-label",
 						disabled && "cursor-not-allowed opacity-50",
 						triggerClassName,
 					)}
@@ -313,7 +307,7 @@ export function AgentModelCombobox({
 						className="size-icon-sm shrink-0 opacity-70 transition-transform duration-300 ease-out group-data-[state=open]/agent-model-trigger:rotate-180"
 						aria-hidden="true"
 					/>
-				</button>
+				</Pressable>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent
 				align={menuAlign}
@@ -413,9 +407,18 @@ export function AgentModelCombobox({
 				<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
 					<div
 						ref={scrollRef}
-						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
-						onScroll={updateScrollCue}
+						className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					>
+						{onUseDefault && normalizedSearch === "" && (
+							<>
+								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "")}>
+									<span className="truncate text-settings-label">
+										{t("settings.models.useConfiguredDefault")}
+									</span>
+								</DropdownMenuItem>
+								{visibleModels.length > 0 && <DropdownMenuSeparator />}
+							</>
+						)}
 						{groups.map((group, groupIndex) => (
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
@@ -424,16 +427,26 @@ export function AgentModelCombobox({
 									compact ? (
 										<DropdownMenuItem
 											key={item.id}
+											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
 											aria-current={tuning && item.id === shownModel ? true : undefined}
 										>
-											<span className="truncate text-settings-label">{item.label}</span>
+											<div className="min-w-0 flex-1">
+												<span className="truncate text-settings-label">{item.label}</span>
+												{item.model.unavailableReason && (
+													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
+												)}
+											</div>
+											{modelHint?.id === item.id && (
+												<span className="ml-2 shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
+											)}
 											{tuning && item.id === shownModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 										</DropdownMenuItem>
 									) : (
 										<DropdownMenuItem
 											key={item.id}
+											disabled={Boolean(item.model.unavailableReason)}
 											onSelect={(event) => selectCatalogModel(event, item)}
 											className={modelItemClass(item.id === shownModel)}
 										>
@@ -443,7 +456,13 @@ export function AgentModelCombobox({
 													{shouldShowModelID(item, visibleModels, normalizedSearch) && (
 														<p className="truncate text-xs text-settings-muted">{item.id}</p>
 													)}
+													{item.model.unavailableReason && (
+														<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
+													)}
 												</div>
+												{modelHint?.id === item.id && (
+													<span className="shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
+												)}
 												{group.kind !== "provider" && item.provider !== "Other" && (
 													<span className="shrink-0 text-xs text-settings-muted">{item.provider}</span>
 												)}
@@ -515,11 +534,13 @@ export function AgentModelCombobox({
 							</p>
 						)}
 					</div>
-					<div
-						className={cn("model-menu-overflow-cue", canScrollDown ? "opacity-100" : "opacity-0")}
-						aria-hidden="true"
-					/>
 				</div>
+				{footer && (
+					<div className="shrink-0">
+						<DropdownMenuSeparator />
+						<p className="px-2 py-1.5 text-xs text-settings-muted" aria-live="polite">{footer}</p>
+					</div>
+				)}
 				{/* Cursor's effort and thinking open beside the model like other agents' effort (no fast mode here, as for them). */}
 				{variant && tuning && (variant.family.efforts.length > 1 || variant.family.hasThinkingChoice) && (
 					<div className="shrink-0">

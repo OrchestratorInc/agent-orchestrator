@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { InspectorSection } from "@aoagents/product-ui";
@@ -15,9 +16,8 @@ import {
 	Loader2,
 	Pencil,
 	RefreshCw,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -27,8 +27,9 @@ import { ChangeCounts, ChangedFilesList } from "./ChangedFilesList";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
+import { type SessionBranchState, type WorkspaceSession, sessionWorkspaceReady } from "../types/workspace";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
 const PENDING_MAX_MS = 10 * 60_000;
@@ -78,6 +79,7 @@ export function SessionBranchSummary({
 	conflictFiles,
 	hostId,
 	onOpenFile,
+	merged = false,
 	onOpenFiles,
 	openPRConflicting = false,
 	openPRNumber,
@@ -91,6 +93,7 @@ export function SessionBranchSummary({
 	hostId?: string;
 	/** Opens one changed file's diff in the main area. */
 	onOpenFile?: (target: { line?: number; path: string }) => void;
+	merged?: boolean;
 	onOpenFiles: () => void;
 	/** The provider says that PR conflicts with its base, whatever the local checkout knows. */
 	openPRConflicting?: boolean;
@@ -109,9 +112,11 @@ export function SessionBranchSummary({
 }) {
 	const { t } = useTranslation();
 	// Cloud sessions have no local workspace facts; orchestrators coordinate
-	// workers rather than shipping a branch of their own.
-	const showGit = !session.cloud && session.kind !== "orchestrator";
-	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit });
+	// workers rather than shipping a branch of their own. An imported chat has
+	// no branch until it is opened.
+	const showGit = !session.cloud && session.kind !== "orchestrator" && !session.needsResume;
+	// No worktree yet means a guaranteed 404; read it once the start publishes one.
+	const manifest = useQuery({ ...sessionWorkspaceFilesQueryOptions(session.id, undefined, hostId), enabled: showGit && sessionWorkspaceReady(session) });
 
 	const sections = manifest.data?.sections;
 	const facts: GitFacts = {
@@ -122,7 +127,7 @@ export function SessionBranchSummary({
 		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
-	const plan = gitActionPlan(facts, openPRNumber, shippedHeadShas, openPRConflicting);
+	const plan = gitActionPlan(facts, openPRNumber, shippedHeadShas, openPRConflicting, merged);
 	const { pending, run, error: sendError } = useAgentGitAction(session, hostId, "", (kind) => gitActionDone(kind, facts, openPRNumber, openPRConflicting));
 	const send = (kind: SessionGitActionKind) => run(kind, gitActionMessage(kind, facts.branch?.base ?? facts.base, openPRNumber, conflictFiles));
 
@@ -275,12 +280,11 @@ function GitStatusRow({
 	const opens = files.length > 0;
 	return (
 		<div className="flex min-w-0 flex-col">
-			<button
+			<Pressable
 				aria-controls={opens && open ? id : undefined}
 				aria-expanded={opens ? open : undefined}
-				className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+				className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-sm transition-colors hover:bg-interactive-hover"
 				onClick={() => (opens ? setOpen(!open) : onOpenAll())}
-				type="button"
 			>
 				{icon}
 				<span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-sm">
@@ -291,7 +295,7 @@ function GitStatusRow({
 				</span>
 				<ChangeCounts additions={additions} deletions={deletions} className="gap-1.5 text-xs" />
 				<ChevronRight aria-hidden="true" className={cn("size-icon-sm shrink-0 text-passive transition-transform motion-reduce:transition-none", opens && open && "rotate-90")} />
-			</button>
+			</Pressable>
 			{opens && open ? <ChangedFilesList files={files} id={id} onOpenAll={onOpenAll} onOpenFile={onOpenFile} /> : null}
 		</div>
 	);
@@ -387,14 +391,14 @@ function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: 
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
-function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, shippedHeadShas: string[] = [], prConflicting = false): GitActionPlan | null {
+export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, shippedHeadShas: string[] = [], prConflicting = false, merged = false): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
 	const unpushed = facts.branch?.unpushed ?? 0;
 	const head = facts.branch?.head;
 	// A squash or rebase merge leaves the branch "ahead" of its base for good, so
 	// a tip that is a merged or closed PR's head has nothing new to ship or update.
-	const shipped = Boolean(head && shippedHeadShas.includes(head));
+	const shipped = merged || Boolean(head && shippedHeadShas.includes(head));
 	// Behind is only known against a named base. Conflicts turn the update into
 	// resolving them; it waits behind committing and pushing the work at hand.
 	// The provider's word on the open PR counts too: the checkout's base can be
@@ -450,7 +454,7 @@ export function useAgentGitAction(session: WorkspaceSession, hostId: string | un
 				params: { path: { sessionId: session.id } },
 				body: { message },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.git.actionFailed")));
+			if (error) throw apiErrorException(error, t("inspector.git.actionFailed"));
 		},
 		onMutate: ({ kind }) => startPending(key, kind),
 		onError: () => clearPending(key),

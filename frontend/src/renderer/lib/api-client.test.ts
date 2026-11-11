@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	eventStreamBaseUrl,
 	apiClient,
 	apiErrorDetails,
 	apiErrorMessage,
 	getApiBaseUrl,
 	hasTrustedApiBaseUrl,
 	normalizeApiOperation,
+	reportingFetch,
 	setApiDaemonStatus,
 	setApiBaseUrl,
 	subscribeApiBaseUrl,
@@ -23,6 +25,34 @@ vi.mock("./sentry", () => ({
 
 const captureMock = vi.mocked(captureRendererEvent);
 const sentryCaptureMock = vi.mocked(captureApiErrorToSentry);
+
+describe("remote daemon reporting fetch", () => {
+	afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); });
+
+	it("reports a failure once and leaves the response body available", async () => {
+		const body = { code: "INTERNAL_ERROR", message: "private details" };
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status: 500 }));
+		const response = await reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"));
+		expect(await response.json()).toEqual(body);
+		expect(sentryCaptureMock).toHaveBeenCalledExactlyOnceWith("GET /api/v1/projects", "http_5xx", 500, "INTERNAL_ERROR", undefined);
+	});
+
+	it.each(["UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"])("keeps remote proxy state %s out of Sentry without consuming the response", async (code) => {
+		const body = { code, message: "private remote" };
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(body), { status: 502 }));
+		const response = await reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"));
+		expect(await response.json()).toEqual(body);
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+		expect(captureMock).not.toHaveBeenCalled();
+	});
+
+	it("preserves cancellation without reporting an error", async () => {
+		const error = new DOMException("cancelled", "AbortError");
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(error);
+		await expect(reportingFetch(new Request("http://127.0.0.1:4123/api/v1/projects"))).rejects.toBe(error);
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+	});
+});
 
 describe("apiClient runtime base URL", () => {
 	afterEach(() => {
@@ -164,7 +194,7 @@ describe("apiClient runtime base URL", () => {
 
 		const { error } = await apiClient.GET("/api/v1/projects");
 
-		expect(error).toEqual({ message: "AO daemon is not ready." });
+		expect(error).toEqual({ message: "Daemon is not ready." });
 		expect(getApiBaseUrl()).toBe("");
 		expect(hasTrustedApiBaseUrl()).toBe(false);
 		expect(fetchSpy).not.toHaveBeenCalled();
@@ -175,12 +205,47 @@ describe("apiClient runtime base URL", () => {
 		setApiDaemonStatus({
 			state: "error",
 			code: "exited",
-			message: "AO daemon exited with code 1",
+			message: "Orchestrator daemon exited with code 1",
 		});
 
 		const { error } = await apiClient.GET("/api/v1/projects");
 
-		expect(error).toEqual({ code: "exited", message: "AO daemon exited with code 1" });
+		expect(error).toEqual({ code: "exited", message: "Orchestrator daemon exited with code 1" });
+	});
+});
+
+// Event streams hold their connection for life, so they open on a separate
+// loopback host and leave the daemon's six connections to ordinary requests.
+describe("eventStreamBaseUrl", () => {
+	afterEach(() => setApiDaemonStatus({ state: "stopped" }));
+
+	it("moves the loopback daemon to the event-stream host on the same port while it serves [::1]", () => {
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001", true)).toBe("http://ao-events.localhost:3001");
+		expect(eventStreamBaseUrl("http://127.0.0.1:3002/", true)).toBe("http://ao-events.localhost:3002");
+	});
+
+	it("keeps streams on 127.0.0.1 unless the daemon serves [::1] too", () => {
+		// The name resolves to ::1 first: without the daemon there, another process would get the streams.
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001", false)).toBe("http://127.0.0.1:3001");
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001/")).toBe("http://127.0.0.1:3001");
+	});
+
+	it("follows the daemon status", () => {
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 1, ipv6Loopback: true });
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://ao-events.localhost:3001");
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 2 });
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 3, ipv6Loopback: false });
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
+		// A stopped daemon's last flag does not carry over.
+		setApiDaemonStatus({ state: "ready", port: 3001, pid: 4, ipv6Loopback: true });
+		setApiDaemonStatus({ state: "stopped", ipv6Loopback: true });
+		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
+	});
+
+	it("leaves other bases alone", () => {
+		expect(eventStreamBaseUrl("https://box-a.example.ts.net:8443/", true)).toBe("https://box-a.example.ts.net:8443");
+		expect(eventStreamBaseUrl("", true)).toBe("");
 	});
 });
 
@@ -229,6 +294,13 @@ describe("normalizeApiOperation", () => {
         expect(normalizeApiOperation("POST", "/api/v1/awake/sessions/private-source/end")).toBe("POST /api/v1/awake/sessions/:id/end");
         expect(normalizeApiOperation("GET", "/api/v1/awake")).toBe("GET /api/v1/awake");
     });
+	it("never leaks identifiers from routes missing a template", () => {
+		expect(normalizeApiOperation("PUT", "/api/v1/sessions/ao-7/conversation/side-chats/24109bad-e350-4680-9ddd-76caf539d12a/draft")).toBe(
+			"PUT /api/v1/sessions/:id/conversation/side-chats/:id/draft",
+		);
+		expect(normalizeApiOperation("DELETE", "/api/v1/shell-terminals/shellterm-60e83cc6a8c245d9")).toBe("DELETE /api/v1/shell-terminals/:id");
+		expect(normalizeApiOperation("GET", "/api/v1/health")).toBe("GET /api/v1/health");
+	});
 	it("replaces identifier segments after resource collections", () => {
 		expect(normalizeApiOperation("get", "/api/v1/projects/my project id")).toBe("GET /api/v1/projects/:id");
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/kill")).toBe("POST /api/v1/sessions/:id/kill");
@@ -267,6 +339,15 @@ describe("normalizeApiOperation", () => {
 		expect(normalizeApiOperation("POST", "/api/v1/agents/claude-code/auth")).toBe(
 			"POST /api/v1/agents/:id/auth",
 		);
+	});
+
+	it.each([
+		["POST", "/api/v1/agents/claude-code/auth/operations", "POST /api/v1/agents/:id/auth/operations"],
+		["GET", "/api/v1/agents/claude-code/auth/operations/72d4db6e-da2c-414c-a6a9-fdbd09a006b6", "GET /api/v1/agents/:id/auth/operations/:id"],
+		["DELETE", "/api/v1/agents/codex/auth/operations/72d4db6e-da2c-414c-a6a9-fdbd09a006b6", "DELETE /api/v1/agents/:id/auth/operations/:id"],
+		["POST", "/api/v1/agents/codex/auth/operations/72d4db6e-da2c-414c-a6a9-fdbd09a006b6/code", "POST /api/v1/agents/:id/auth/operations/:id/code"],
+	])("normalizes sign-in operation identifiers for %s %s", (method, path, expected) => {
+		expect(normalizeApiOperation(method, path)).toBe(expected);
 	});
 
 	it("keeps workspace file routes aligned with the generated API schema", () => {
@@ -314,12 +395,24 @@ describe("api error telemetry", () => {
 
 		await apiClient.GET("/api/v1/agents");
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", {
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", {
 			operation: "GET /api/v1/agents",
 			error_category: "http_5xx",
 			status: 500,
 		});
 		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps daemon unavailability and probe 4xx out of Sentry", async () => {
+		setApiBaseUrl(null);
+		setApiDaemonStatus({ state: "stopped" });
+		await apiClient.GET("/api/v1/agents");
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
+
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not found", { status: 404 }));
+		setApiBaseUrl("http://127.0.0.1:3037");
+		await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/models", { params: { path: { sessionId: "test" } } });
+		expect(sentryCaptureMock).not.toHaveBeenCalled();
 	});
 
 	it("reports a failed project or session list like any other request", async () => {
@@ -329,16 +422,16 @@ describe("api error telemetry", () => {
 		await apiClient.GET("/api/v1/projects");
 		await apiClient.GET("/api/v1/sessions");
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/projects", error_category: "http_5xx", status: 500 });
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/sessions", error_category: "http_5xx", status: 500 });
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", { operation: "GET /api/v1/projects", error_category: "http_5xx", status: 500 });
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", { operation: "GET /api/v1/sessions", error_category: "http_5xx", status: 500 });
 	});
 
 	it("drops expected Codex and closed-shell outcomes and still reports GitHub auth and other 401 and 404 responses", async () => {
 		const fetchMock = vi.spyOn(globalThis, "fetch");
 		setApiBaseUrl("http://127.0.0.1:3037");
-		for (const code of ["CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "SHELL_TERMINAL_NOT_FOUND"]) {
+		for (const code of ["CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "SHELL_TERMINAL_NOT_FOUND", "UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"]) {
 			fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code, message: "expected" }), {
-				status: code === "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" ? 503 : 404,
+				status: code === "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" ? 503 : ["UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"].includes(code) ? 502 : 404,
 				headers: { "Content-Type": "application/json" },
 			}));
 			await apiClient.GET("/api/v1/agents");
@@ -349,14 +442,14 @@ describe("api error telemetry", () => {
 			headers: { "Content-Type": "application/json" },
 		}));
 		await apiClient.GET("/api/v1/agents");
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 401, error_category: "http_4xx" }));
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", expect.objectContaining({ status: 401, error_category: "http_4xx", error_code: "GITHUB_AUTH_INVALID" }));
 		captureMock.mockClear();
 		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "conflict" }), {
 			status: 409,
 			headers: { "Content-Type": "application/json" },
 		}));
 		await apiClient.GET("/api/v1/agents/{agent}/models", { params: { path: { agent: "codex" } } });
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", expect.objectContaining({
 			operation: "GET /api/v1/agents/:id/models",
 			status: 409,
 			error_category: "http_4xx",
@@ -373,7 +466,7 @@ describe("api error telemetry", () => {
 			headers: { "Content-Type": "application/json" },
 		}));
 		await apiClient.GET("/api/v1/agents");
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 404, error_category: "http_4xx" }));
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", expect.objectContaining({ status: 404, error_category: "http_4xx" }));
 	});
 
 	it("reports http_4xx with ids stripped from the operation", async () => {
@@ -384,7 +477,7 @@ describe("api error telemetry", () => {
 			params: { path: { sessionId: "ao-raw-id" } },
 		});
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", {
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", {
 			operation: "POST /api/v1/sessions/:id/kill",
 			error_category: "http_4xx",
 			status: 404,
@@ -397,7 +490,7 @@ describe("api error telemetry", () => {
 
 		await expect(apiClient.GET("/api/v1/agents")).rejects.toThrow("Failed to fetch");
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", {
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", {
 			operation: "GET /api/v1/agents",
 			error_category: "network_error",
 			status: undefined,
@@ -418,7 +511,7 @@ describe("api error telemetry", () => {
 
 		await apiClient.GET("/api/v1/agents");
 
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", {
+		expect(captureMock).toHaveBeenCalledWith("ao.requests.failed", {
 			operation: "GET /api/v1/agents",
 			error_category: "daemon_unavailable",
 			status: 503,

@@ -1,10 +1,14 @@
 package telemetrymeta
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	sqlite3 "modernc.org/sqlite"
 
 	"github.com/go-chi/chi/v5"
 
@@ -23,11 +27,54 @@ func TestErrorKindAndCode(t *testing.T) {
 	}
 }
 
+type diagnosticCodeError struct{}
+
+func (diagnosticCodeError) Error() string { return "private database path" }
+func (diagnosticCodeError) Code() int     { return 1 }
+
+func TestErrorTypeUsesOnlyFixedCauseTypes(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("private: %w", apierr.InternalCause("REPORT_CREATE_FAILED", "Report failed", &sqlite3.Error{})), "sqlite"},
+		{apierr.InternalCause("REPORT_LIST_FAILED", "Report failed", errors.New("private path")), "unknown"},
+		{apierr.InternalCause("REPORT_LIST_FAILED", "Report failed", diagnosticCodeError{}), "unknown"},
+		{apierr.Internal("INTERNAL_ERROR", "Internal error"), "api_error"},
+		{fmt.Errorf("private: %w", context.DeadlineExceeded), "context_deadline"},
+		{errors.New("private project"), "unknown"},
+	} {
+		if got := ErrorType(tc.err); got != tc.want {
+			t.Fatalf("ErrorType(%T) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+func TestSafeErrorAndPanicKinds(t *testing.T) {
+	for _, kind := range []apierr.Kind{
+		apierr.KindInternal, apierr.KindInvalid, apierr.KindNotFound,
+		apierr.KindConflict, apierr.KindForbidden, apierr.KindTooManyRequests,
+		apierr.KindNotImplemented, apierr.KindUnavailable,
+	} {
+		if !IsErrorKind(ErrorKind(kind)) {
+			t.Fatalf("produced error kind %v was rejected", kind)
+		}
+	}
+	for _, value := range []any{errors.New("private panic"), "private panic", 7} {
+		if !IsPanicKind(PanicKind(value)) {
+			t.Fatalf("produced panic kind %T was rejected", value)
+		}
+	}
+	if IsErrorKind("private_project") || IsPanicKind("private_session") {
+		t.Fatal("dynamic error or panic kind was accepted")
+	}
+}
+
 func TestRoutePatternPrefersChiPattern(t *testing.T) {
 	var got string
 	r := chi.NewRouter()
 	r.Get("/api/v1/projects/{projectID}/sessions/{sessionID}", func(w http.ResponseWriter, req *http.Request) {
-		got = RoutePattern(req)
+		got = RoutePattern(req).String()
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -40,6 +87,13 @@ func TestRoutePatternPrefersChiPattern(t *testing.T) {
 	}
 	if got != "/api/v1/projects/{projectID}/sessions/{sessionID}" {
 		t.Fatalf("route pattern = %q, want chi route pattern", got)
+	}
+}
+
+func TestRoutePatternNeverFallsBackToRequestPath(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/PrivateProjectOrSession_Z9", nil)
+	if got := RoutePattern(req).String(); got != "unmatched" {
+		t.Fatalf("unmatched route = %q, want fixed fallback", got)
 	}
 }
 

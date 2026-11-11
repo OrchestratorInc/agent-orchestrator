@@ -27,6 +27,11 @@ vi.mock("./settings/DefaultCloudSandboxRow", () => ({
 	DefaultCloudSandboxSection: () => <div data-testid="default-cloud-sandbox-section" />,
 }));
 
+// The real section polls the daemon's /computer-use routes; ComputerUseSection.test covers it.
+vi.mock("./settings/ComputerUseSection", () => ({
+	ComputerUseSection: () => <div data-testid="computer-use-section" />,
+}));
+
 const {
 	getUpdate,
 	setUpdate,
@@ -221,8 +226,8 @@ beforeEach(async () => {
 	setKeybindings.mockImplementation(async (overrides) => overrides);
 	setKeybindingRecording.mockResolvedValue(undefined);
 	setMacDifferentialUpdates.mockResolvedValue(undefined);
-	getTelemetryPolicy.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
-	setTelemetryEvents.mockResolvedValue({ eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true });
+	getTelemetryPolicy.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
+	setTelemetryEvents.mockResolvedValue({ eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
 	onTelemetryPolicy.mockReturnValue(() => undefined);
 	getAnalyticsOptOut.mockResolvedValue(false);
 	setAnalyticsOptOut.mockImplementation(async (optedOut: boolean) => optedOut);
@@ -244,8 +249,8 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, navigationGestures: false });
-	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, chatSendKeyMode: "enter", navigationGestures: false });
+	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	document.documentElement.lang = "en";
 });
@@ -428,6 +433,24 @@ describe("GlobalSettingsForm", () => {
 		expect(useLocaleStore.getState().locale).toBe("zh-CN");
 	});
 
+	it("selects and persists both chat send key modes in General settings", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		const preference = await screen.findByLabelText("Chat send key");
+		expect(preference).toHaveTextContent("Enter sends; Shift+Enter inserts newline");
+
+		await user.click(preference);
+		await user.click(await screen.findByRole("menuitem", { name: "Enter inserts newline; Cmd/Ctrl+Enter sends" }));
+		expect(useUiStore.getState().chatSendKeyMode).toBe("mod-enter");
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe("mod-enter");
+		expect(preference).toHaveTextContent("Enter inserts newline; Cmd/Ctrl+Enter sends");
+
+		await user.click(preference);
+		await user.click(await screen.findByRole("menuitem", { name: "Enter sends; Shift+Enter inserts newline" }));
+		expect(useUiStore.getState().chatSendKeyMode).toBe("enter");
+		expect(window.localStorage.getItem("ao.chatSendKeyMode")).toBe("enter");
+	});
+
 	it("toggles sound notifications on and persists the change", async () => {
 		const user = userEvent.setup();
 		renderForm();
@@ -441,8 +464,8 @@ describe("GlobalSettingsForm", () => {
 	});
 
 	it("shows pending daemon cleanup without claiming opt-out completed", async () => {
-		setTelemetryEvents.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off-2", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: false, consentRenewalRequired: false, state: "cleanup_pending", environmentVeto: false, durabilitySupported: true, reason: "cleanup_failed" });
-		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true });
+		setTelemetryEvents.mockResolvedValue({ eventsEnabled: false, consentGeneration: "generation-off-2", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: false, state: "cleanup_pending", environmentVeto: false, durabilitySupported: true, reason: "cleanup_failed" });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true });
 		const user = userEvent.setup(); renderForm();
 		await user.click(await screen.findByRole("switch", { name: "Share error events" }));
 		expect(await screen.findByText("Telemetry is off locally. Daemon cleanup is still pending.")).toBeInTheDocument();
@@ -472,21 +495,21 @@ describe("GlobalSettingsForm", () => {
 	});
 
 	it("names the platform restriction instead of claiming cleanup keeps retrying", async () => {
-		useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: false, durabilitySupported: false, reason: "durability_unsupported" }, loaded: true });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: false, state: "cleanup_failed", environmentVeto: false, durabilitySupported: false, reason: "durability_unsupported" }, loaded: true });
 		renderForm();
 		expect(await screen.findByText("Enabling is unavailable on this platform because durable consent writes are not supported.")).toBeInTheDocument();
 		expect(screen.queryByText("Telemetry cleanup failed. Reporting remains disabled while cleanup retries.")).not.toBeInTheDocument();
 	});
 
 	it("does not promise retries for the fail-closed view when the controller is unavailable", async () => {
-		useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" }, loaded: true });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" }, loaded: true });
 		renderForm();
 		expect(await screen.findByText("Enabling is unavailable on this platform because durable consent writes are not supported.")).toBeInTheDocument();
 		expect(screen.queryByText("Telemetry cleanup failed. Reporting remains disabled while cleanup retries.")).not.toBeInTheDocument();
 	});
 
 	it("names the release gate when a saved opt-in cannot be honoured", async () => {
-		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true, reason: "release_blocked" }, loaded: true });
+		useTelemetryPolicyStore.setState({ view: { eventsEnabled: true, consentGeneration: "generation-on", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true, reason: "release_blocked" }, loaded: true });
 		renderForm();
 		expect(await screen.findByText("Error reporting is disabled by this release's safety gate.")).toBeInTheDocument();
 		expect(screen.queryByText("Telemetry is off locally. Daemon cleanup is still pending.")).not.toBeInTheDocument();
@@ -501,6 +524,30 @@ describe("GlobalSettingsForm", () => {
 		await user.click(await screen.findByRole("menuitem", { name: "Git Bash" }));
 
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "git-bash" } }));
+	});
+
+	it("lists the shells the daemon detected outside Windows and stores the picked path", async () => {
+		isWindowsPlatform.mockReturnValue(false);
+		const user = userEvent.setup();
+		const qc = renderForm();
+		qc.setQueryData(["terminal-shells"], {
+			default: { id: "auto", name: "zsh", path: "/bin/zsh" },
+			shells: [
+				{ id: "/opt/homebrew/bin/fish", name: "fish", path: "/opt/homebrew/bin/fish" },
+				{ id: "/bin/zsh", name: "zsh", path: "/bin/zsh" },
+			],
+		});
+
+		expect(await screen.findByText("Applies to new terminals. Open terminals keep their shell.")).toBeInTheDocument();
+		await user.click(await screen.findByLabelText("Terminal shell"));
+		expect(await screen.findByRole("menuitem", { name: /System default/ })).toHaveTextContent("/bin/zsh");
+		expect(screen.queryByRole("menuitem", { name: "Git Bash" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitem", { name: /fish/ }));
+
+		await waitFor(() =>
+			expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom", path: "/opt/homebrew/bin/fish" } }),
+		);
+		await waitFor(() => expect(screen.getByLabelText("Terminal shell")).toHaveTextContent("fish"));
 	});
 
 	it("picks the default editor from the installed editors and updates every session's cached state", async () => {
@@ -547,11 +594,9 @@ describe("GlobalSettingsForm", () => {
 		renderForm();
 
 		await user.click(await screen.findByLabelText("Terminal shell"));
-		await user.click(await screen.findByRole("menuitem", { name: "Custom path" }));
-		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "custom" } }));
+		await user.click(await screen.findByRole("menuitem", { name: "Custom…" }));
 
-		setUiSettings.mockClear();
-		await user.click(screen.getByRole("button", { name: "Edit Shell executable" }));
+		await user.click(await screen.findByRole("button", { name: "Edit Shell executable" }));
 		const input = screen.getByLabelText("Shell executable");
 		await user.type(input, "C:\\Tools\\bash.exe");
 		await user.keyboard("{Escape}");
@@ -913,14 +958,14 @@ describe("GlobalSettingsForm", () => {
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
 		const copied = writeText.mock.calls[0][0] as string;
 		expect(copied).toContain("Create project fails");
-		expect(copied).toContain("AO version: 9.9.9-test");
+		expect(copied).toContain("Orchestrator version: 9.9.9-test");
 		expect(copied).toContain("Daemon: ready");
 		expect(copied).toContain("[redacted-local-path]");
 		expect(copied).toContain("[redacted-local-url]");
 		expect(copied).not.toContain("/Users/alice");
 		expect(copied).not.toContain("local-secret");
 		expect(copied).not.toContain("## Type");
-		expect(copied).not.toContain("Generated locally by AO");
+		expect(copied).not.toContain("Generated locally by Orchestrator");
 		expect(openExternal).toHaveBeenCalledWith(
 			expect.stringContaining("https://github.com/Untrivial-ai/agent-orchestrator/issues/new"),
 		);
@@ -943,7 +988,7 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: /copy & open discord/i }));
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		expect(writeText.mock.calls[0][0]).toContain("**AO feedback**");
+		expect(writeText.mock.calls[0][0]).toContain("**Orchestrator feedback**");
 		expect(screen.getByText("Discord draft copied.")).toBeInTheDocument();
 		expect(screen.getByLabelText("Title")).toHaveValue("");
 		expect(screen.getByLabelText("What happened?")).toHaveValue("");
@@ -958,7 +1003,7 @@ describe("GlobalSettingsForm", () => {
 		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
 		expect(writeText.mock.calls[0][0]).toContain("Daemon: unknown");
 		expect(writeText.mock.calls[1][0]).toContain("To: prasad@untrivial.ai");
-		expect(writeText.mock.calls[1][0]).toContain("AO feedback");
+		expect(writeText.mock.calls[1][0]).toContain("Orchestrator feedback");
 		expect(openExternal).toHaveBeenCalledWith("https://discord.gg/WjKNa7EbB8");
 		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("https://mail.google.com/mail/"));
 		expect(open).not.toHaveBeenCalled();

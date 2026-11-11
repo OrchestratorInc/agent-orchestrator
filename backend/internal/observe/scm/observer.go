@@ -21,6 +21,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -90,6 +91,7 @@ type Store interface {
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
 	WriteSCMObservation(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error
+	RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error
 }
 
 // Lifecycle is the provider-neutral lifecycle notification sink.
@@ -262,6 +264,9 @@ type Observer struct {
 	rateLimitUntil map[string]time.Time
 	// Cache holds bounded in-memory provider ETags and review poll timestamps.
 	Cache ObserverCache
+	// renames holds the repository renames already recorded, keyed
+	// host/old name. One entry per renamed scan repository.
+	renames map[string]string
 	// branchStates refreshes local branch facts on each tick.
 	branchStates BranchStateReconciler
 	// forceMu guards forcedReviews.
@@ -270,6 +275,14 @@ type Observer struct {
 	// poll fetches regardless of guards and review cadence. Each request is
 	// consumed by exactly one poll, whatever its outcome.
 	forcedReviews map[string]bool
+	// forcedSessions holds sessions whose open PRs the next poll fetches
+	// regardless of guards. Guarded by forceMu.
+	forcedSessions map[domain.SessionID]bool
+	// sessionRefreshArmed is true while a debounce timer is pending. Guarded by
+	// forceMu.
+	sessionRefreshArmed bool
+	// sessionRefreshDebounce coalesces a burst of session refresh requests.
+	sessionRefreshDebounce time.Duration
 	// trigger wakes the poll loop for a forced refresh.
 	trigger chan struct{}
 	// lifecycleTimeout bounds each lifecycle notification.
@@ -279,7 +292,7 @@ type Observer struct {
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout, forcedReviews: map[string]bool{}, trigger: make(chan struct{}, 1)}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout, forcedReviews: map[string]bool{}, forcedSessions: map[domain.SessionID]bool{}, sessionRefreshDebounce: 500 * time.Millisecond, trigger: make(chan struct{}, 1)}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -384,6 +397,41 @@ func (o *Observer) RequestReviewRefresh(prURL string) {
 	}
 }
 
+// RequestSessionRefresh asks the poll loop to re-fetch sessionID's open PRs
+// after a short debounce, for a local signal that they probably just changed
+// on the provider (the agent ran `gh pr merge`). It does not wait; the regular
+// cadence remains the fallback.
+func (o *Observer) RequestSessionRefresh(sessionID domain.SessionID) {
+	if sessionID == "" {
+		return
+	}
+	o.forceMu.Lock()
+	defer o.forceMu.Unlock()
+	o.forcedSessions[sessionID] = true
+	if o.sessionRefreshArmed {
+		return
+	}
+	o.sessionRefreshArmed = true
+	time.AfterFunc(o.sessionRefreshDebounce, func() {
+		o.forceMu.Lock()
+		o.sessionRefreshArmed = false
+		o.forceMu.Unlock()
+		select {
+		case o.trigger <- struct{}{}:
+		default:
+		}
+	})
+}
+
+// takeForcedSessions returns and clears the pending forced sessions.
+func (o *Observer) takeForcedSessions() map[domain.SessionID]bool {
+	o.forceMu.Lock()
+	defer o.forceMu.Unlock()
+	forced := o.forcedSessions
+	o.forcedSessions = map[domain.SessionID]bool{}
+	return forced
+}
+
 // takeForcedReviews returns and clears the pending forced refreshes.
 func (o *Observer) takeForcedReviews() map[string]bool {
 	o.forceMu.Lock()
@@ -421,6 +469,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		o.logger.Debug("scm observer: poll completed", attrs...)
 	}()
 	now := o.clock().UTC()
+	forcedSessions := o.takeForcedSessions()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -495,9 +544,8 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-
 	forced := o.takeForcedReviews()
-	selection := o.selectRefreshCandidates(ctx, subjects, repoGuards, listedPRs, forced, markRepoRefreshFailed, now)
+	selection := o.selectRefreshCandidates(ctx, subjects, repoGuards, listedPRs, forced, forcedSessions, markRepoRefreshFailed, now)
 	// Item 2 — terminal-state reconciliation for GitHub: tracked open PRs
 	// not in the current state=open listing may have transitioned to
 	// merged/closed. Run a reconciliation pass that issues a full detail
@@ -677,6 +725,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		}
 		if err := o.store.WriteSCMObservation(ctx, pr, checks, reviews, threads, comments, reviewMode); err != nil {
 			o.logger.Error("scm observer: DB write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+			sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
 			markRepoRefreshFailed(subj.repo)
 			continue
 		}
@@ -692,11 +741,13 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			cancel()
 			if err != nil {
 				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "notify"})
 				markRepoRefreshFailed(subj.repo)
 				continue
 			}
 			if err := o.store.WriteSCMObservation(ctx, finalPR, finalChecks, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: DB lifecycle acknowledgement failed", "session", subj.session.ID, "pr", finalPR.URL, "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "db_write"})
 				markRepoRefreshFailed(subj.repo)
 				continue
 			}
@@ -1149,6 +1200,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			continue
 		}
 		pullsByRepo[repoKey] = pulls
+		o.recordRename(ctx, repo, pulls)
 		// Record the listed PR numbers so selectRefreshCandidates can
 		// restrict refresh to only updated MRs rather than every tracked MR.
 		// Subjects are identity-keyed, so when a listed PR's provider id
@@ -1193,7 +1245,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				continue
 			}
 			id := identities[identityKey(repo.Provider, repo.Host)]
-			if !strings.EqualFold(strings.TrimSpace(pr.Author), id.Login) {
+			if !id.Authored(pr.Author) {
 				continue
 			}
 			if _, ok := subjects[prKey(repo, pr.Number)]; ok {
@@ -1238,7 +1290,6 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				Host:         repo.Host,
 				Repo:         repoFullName(repo),
 				ProviderID:   pr.ProviderID,
-				URLAlias:     listedRepoAlias(firstNonEmpty(pr.URL, pr.HTMLURL), repo),
 				UpdatedAt:    now,
 			}
 			// Persist the discovered PR as an open baseline row immediately, before
@@ -1249,6 +1300,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			// durable, and the session could terminate while that PR is still open.
 			if err := o.store.WriteSCMObservation(ctx, known, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 				o.logger.Error("scm observer: persist discovered PR failed", "session", sr.session.ID, "pr", known.URL, "err", err)
+				sentryobs.CaptureBackground(ctx, err, "scm", "scm_persist", map[string]string{"reason": "persist"})
 				if markRepoFailed != nil {
 					markRepoFailed(repo)
 				}
@@ -1379,7 +1431,7 @@ func sessionBranchPrefixes(branch string) []string {
 	return prefixes
 }
 
-func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[string]*subject, guards map[string]repoGuardState, listedPRs, forced map[string]bool, markRepoFailed func(ports.SCMRepo), now time.Time) refreshSelection {
+func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[string]*subject, guards map[string]repoGuardState, listedPRs, forced map[string]bool, forcedSessions map[domain.SessionID]bool, markRepoFailed func(ports.SCMRepo), now time.Time) refreshSelection {
 	selection := refreshSelection{
 		subjectsByPR:  map[string]*subject{},
 		commitETags:   map[string]pendingCacheString{},
@@ -1391,7 +1443,9 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 		}
 		key := keyForTrackedPR(s.known, s.repo)
 		selection.subjectsByPR[key] = s
-		candidate := missingLocalState(s.known) || forcedFor(forced, s.known)
+		// A forced session's terminal PRs stay terminal; only open ones can move.
+		candidate := missingLocalState(s.known) || forcedFor(forced, s.known) ||
+			(forcedSessions[s.session.ID] && !s.known.Merged && !s.known.Closed)
 		repoCursor := o.Cache.LastSyncCursor[prKey(s.repo, 0)]
 		hasCursor := !repoCursor.IsZero()
 		g := guards[prKey(s.repo, 0)]
@@ -1407,7 +1461,10 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 				candidate = true
 			}
 		}
-		if s.known.HeadSHA != "" {
+		// A poll forced by a session's local signal must not wait on one serial
+		// guard request per other tracked PR; the next regular tick checks them.
+		deferChecksGuard := len(forcedSessions) > 0 && !forcedSessions[s.session.ID]
+		if s.known.HeadSHA != "" && !deferChecksGuard {
 			commitKey := commitKey(s.repo, s.known.HeadSHA)
 			prev := o.Cache.CommitChecksETag[commitKey]
 			started := time.Now()
@@ -1995,7 +2052,7 @@ func ciObservationFromLocal(pr domain.PullRequest, checks []domain.PullRequestCh
 			ProviderID: ch.Details,
 		}
 		ci.Checks = append(ci.Checks, check)
-		if ch.Status == domain.PRCheckFailed || ch.Status == domain.PRCheckCancelled {
+		if ch.Status == domain.PRCheckFailed {
 			ci.FailedChecks = append(ci.FailedChecks, check)
 			if ch.LogTail != "" {
 				tails = append(tails, ch.LogTail)
@@ -2207,21 +2264,30 @@ func repoFullName(repo ports.SCMRepo) string {
 	return repo.Owner + "/" + repo.Name
 }
 
-// listedRepoAlias returns prURL rewritten to the repository name it was listed
-// under when the provider answered with another name (a renamed or transferred
-// repository), so links built from the old name resolve to the same PR. The
-// alias is normalized like ParseChangeRequestURL so any spelling of it matches.
-func listedRepoAlias(prURL string, repo ports.SCMRepo) string {
-	ref, err := domain.ParseChangeRequestURL(prURL)
-	listed := repoFullName(repo)
-	if err != nil || strings.EqualFold(ref.Repository, listed) {
-		return ""
+// recordRename stores the provider's current name for repo when its PR
+// listing answers under another name, as a renamed or transferred
+// repository's old name does. Each rename is written once per process.
+func (o *Observer) recordRename(ctx context.Context, repo ports.SCMRepo, pulls []ports.SCMPRObservation) {
+	if len(pulls) == 0 || pulls[0].BaseRepo == "" {
+		return
 	}
-	alias, err := domain.ParseChangeRequestURL(strings.Replace(ref.URL, "/"+ref.Repository+"/", "/"+listed+"/", 1))
-	if err != nil {
-		return ""
+	r := domain.RepositoryRename{
+		Host:    strings.ToLower(repo.Host),
+		OldName: strings.ToLower(repoFullName(repo)),
+		Name:    strings.ToLower(pulls[0].BaseRepo),
 	}
-	return alias.URL
+	key := r.Host + "/" + r.OldName
+	if r.Name == r.OldName || o.renames[key] == r.Name {
+		return
+	}
+	if err := o.store.RecordRepositoryRename(ctx, r); err != nil {
+		o.logger.Warn("scm observer: record repository rename failed", "repo", key, "err", err)
+		return
+	}
+	if o.renames == nil {
+		o.renames = map[string]string{}
+	}
+	o.renames[key] = r.Name
 }
 
 func ownerOf(full string) string {

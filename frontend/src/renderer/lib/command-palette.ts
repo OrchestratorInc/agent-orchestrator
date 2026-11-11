@@ -22,6 +22,7 @@ import {
 	type PRReviewState,
 } from "./session-reviews";
 import { appI18n, type MessageKey } from "../i18n";
+import { isArchivedSession } from "./standalone-archive";
 import type { components } from "../../api/schema";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import type { GlobalSettingsSection } from "../stores/ui-store";
@@ -33,6 +34,7 @@ export type CommandGroupId = "current" | "attention" | "files" | "content" | "me
 export type NavigateTarget =
 	| { to: "/" }
 	| { to: "/settings" }
+	| { to: "/usage" }
 	| { to: "/projects/$projectId"; params: { projectId: string } }
 	| { to: "/projects/$projectId/settings"; params: { projectId: string } }
 	| { to: "/projects/$projectId/sessions/$sessionId"; params: { projectId: string; sessionId: string } }
@@ -58,6 +60,7 @@ export type CommandAction =
 	| { kind: "open-new-task"; projectId: string }
 	| { kind: "open-new-project" }
 	| { kind: "open-orchestrator"; projectId: string }
+	| { kind: "open-archive"; projectId: string }
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
 	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
@@ -115,6 +118,7 @@ export type CommandPaletteContext = {
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
 	/** Signed in to Cloud, so a shared session's link can be opened. */
 	cloudReady?: boolean;
+	developerMode?: boolean;
 };
 
 export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
@@ -407,6 +411,18 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				disabledReason: isProjectRestarting ? t("command.orchestratorRestarting") : undefined,
 				action: { kind: "open-orchestrator", projectId: currentProject.id },
 			});
+			const archivedCount = workerSessions(currentProject.sessions).filter(isArchivedSession).length;
+			if (archivedCount > 0) {
+				items.push({
+					id: "current-open-archive",
+					group: "current",
+					title: t("command.openArchive"),
+					emphasis: currentProject.name,
+					subtitle: t("command.archivedCount", { count: archivedCount }),
+					keywords: ["archive", "archived", "ended", "terminated", "restore", "history", currentProject.name],
+					action: { kind: "open-archive", projectId: currentProject.id },
+				});
+			}
 			items.push({
 				id: "current-project-settings",
 				group: "current",
@@ -459,7 +475,9 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		.flatMap((workspace) => workerSessions(workspace.sessions).map((session) => ({ workspace, session })))
 		.filter(
 			({ session }) =>
-				session.id !== currentSessionId && (attentionZone(session) === "merge" || sessionNeedsAttention(session)),
+				session.id !== currentSessionId &&
+				sessionIsActive(session) &&
+				(attentionZone(session) === "merge" || sessionNeedsAttention(session)),
 		)
 		.sort(
 			(a, b) =>
@@ -558,6 +576,15 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		keywords: ["add", "import", "repo", "workspace"],
 		action: { kind: "open-new-project" },
 	});
+	if (ctx.developerMode) {
+		items.push({
+			id: "global-usage",
+			group: "global",
+			title: t("command.openUsage"),
+			keywords: ["usage", "cost", "tokens", "limits", "spend", "billing", "quota"],
+			action: { kind: "navigate", target: { to: "/usage" } },
+		});
+	}
 	items.push({
 		id: "global-settings",
 		group: "global",

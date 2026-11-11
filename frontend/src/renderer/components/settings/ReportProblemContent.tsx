@@ -11,7 +11,7 @@ import {
 import { aoBridge } from "../../lib/bridge";
 import { isWindowsPlatform } from "../../lib/platform";
 import { captureRendererEvent } from "../../lib/telemetry";
-import { GitHubIcon } from "../icons";
+import { GitHubIcon } from "../GitHubIcon";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -78,7 +78,7 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 			setCopyError(null);
 			return;
 		}
-		void captureRendererEvent("ao.renderer.support_opened");
+		void captureRendererEvent("ao.support.opened");
 		let cancelled = false;
 		void collectReportProblemDiagnostics().then((nextDiagnostics) => {
 			if (!cancelled) setDiagnostics(nextDiagnostics);
@@ -179,9 +179,8 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 											<DropdownMenuTrigger asChild>
 												<Button
 													type="button"
-													variant="ghost"
+													variant="quiet"
 													size="icon-sm"
-													className="text-settings-muted hover:text-settings-label"
 													disabled={!canSubmit}
 													aria-label={option.action}
 												>
@@ -210,9 +209,8 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 								<TooltipTrigger asChild>
 									<Button
 										type="button"
-										variant="ghost"
+										variant="quiet"
 										size="icon-sm"
-										className="text-settings-muted hover:text-settings-label"
 										disabled={!canSubmit}
 										aria-label={option.action}
 										onClick={() => {

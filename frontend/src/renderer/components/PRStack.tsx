@@ -1,10 +1,10 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CornerDownRight, Plus } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { prStackQueryKey } from "../hooks/usePRStack";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
@@ -109,7 +109,7 @@ function StackTaskDialog({ hostId, onOpenChange, open, pr, session }: {
 					projectId: session.workspaceId,
 				},
 			});
-			if (error || !data?.workerId) throw new Error(apiErrorMessage(error, t("pr.stack.newTaskFailed")));
+			if (error || !data?.workerId) throw apiErrorException(error, t("pr.stack.newTaskFailed"));
 			return data.workerId;
 		},
 		onSuccess: (workerId) => {
@@ -171,7 +171,7 @@ export function PRStackSection({ hostId, pr, section, session }: {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.stack.addFailed")));
+			if (error) throw apiErrorException(error, t("pr.stack.addFailed"));
 			return data;
 		},
 		onSuccess: (data) => queryClient.setQueryData(prStackQueryKey(pr.url, hostId), data),

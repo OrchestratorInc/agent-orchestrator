@@ -64,7 +64,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 			return fmt.Errorf("crush.GetAgentHooks: %w", err)
 		}
 		if !managed {
-			return fmt.Errorf("crush.GetAgentHooks: refusing to overwrite non-AO file at %s", promptPath)
+			return fmt.Errorf("crush.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s", promptPath)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("crush.GetAgentHooks: stat system prompt: %w", err)

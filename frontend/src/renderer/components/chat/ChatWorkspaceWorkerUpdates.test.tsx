@@ -44,27 +44,27 @@ function reply(turnId: string, minute: number, text: string): ConversationMessag
 	};
 }
 
-function snapshot(items: ConversationItem[]): ConversationSnapshot {
-	const turnIds = [...new Set(items.map((item) => item.turnId as string))];
+function snapshot(items: ConversationItem[], turnState: "completed" | "running" = "completed"): ConversationSnapshot {
+	const turnIds = [...new Set(items.map((item) => item.turnId).filter((id): id is string => Boolean(id)))];
 	return {
 		...chatFixtureEmpty,
 		latestSequence: Math.max(...items.map((item) => item.sequence)),
 		turns: turnIds.map((id) => ({
-			id, state: "completed" as const, providerTurnId: `provider-${id}`,
+			id, state: turnState, providerTurnId: `provider-${id}`,
 			requestedAt: items.find((item) => item.turnId === id)!.createdAt,
-			completedAt: items.filter((item) => item.turnId === id).at(-1)!.createdAt,
+			completedAt: turnState === "completed" ? items.filter((item) => item.turnId === id).at(-1)!.createdAt : undefined,
 		})),
 		items,
 	};
 }
 
-function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator") {
+function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator", turnState: "completed" | "running" = "completed") {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(workspaceQueryKey, workspaces);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<ChatWorkspace snapshot={snapshot(items)} sessionRole={sessionRole} onRollback={onRollback} />
+				<ChatWorkspace snapshot={snapshot(items, turnState)} sessionRole={sessionRole} onRollback={onRollback} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -72,30 +72,152 @@ function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), wor
 }
 
 describe("orchestrator worker updates", () => {
-	it("draws a report as a row and an answer that asks nothing as one line that keeps copy and rollback", async () => {
-		const onRollback = renderOrchestrator([
+	it("shows one collapsed spawn group and an idle worker when the daemon also recorded the spawn", async () => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [] }],
+		}] as unknown as WorkspaceSummary[];
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj --name 'Audit usage'"),
+			detail: { command: "ao spawn --project proj --name 'Audit usage'", output: 'spawned session proj-288 "Audit usage" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
+
+		// The agents a turn spawned fold with its work.
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
+		const group = screen.getByRole("button", { name: "Spawned 1 agent" });
+		expect(group).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+		expect(screen.queryByText("Audit usage")).not.toBeInTheDocument();
+		await userEvent.click(group);
+		expect(group).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("Audit usage")).toBeInTheDocument();
+		const idle = screen.getByText("Idle");
+		expect(idle.parentElement?.querySelector(".animate-spin")).toBeNull();
+	});
+
+	it("keeps a structured spawn action when no command group represents it", () => {
+		const action: ConversationActivity = {
+			kind: "activity", id: "action", sequence: 2, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check current usage."), action]);
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it("keeps an action filed under a rolled-back turn on its own line", () => {
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-9", turnId: "t2", sequence: 25, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Spawned an agent", createdAt: at(2),
+			detail: { action: "session.spawned", operationId: "proj-9", targetSessionId: "proj-9" },
+		};
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ChatWorkspace
+						snapshot={{
+							...chatFixtureEmpty, latestSequence: 25,
+							items: [automation("t1", 1, "Check usage."), reply("t1", 1, "Checked."), action],
+							turns: [
+								{ id: "t1", state: "completed", providerTurnId: "provider-t1", requestedAt: at(1), completedAt: at(1) },
+								{ id: "t2", state: "completed", providerTurnId: "provider-t2", requestedAt: at(2), completedAt: at(2), rolledBack: true },
+							],
+						}}
+						sessionRole="orchestrator"
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it("hides the matching action as soon as the command completes during a running turn", () => {
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, action], vi.fn(), [], "orchestrator", "running");
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
+	it("keeps a distinct structured spawn next to the command spawn group", async () => {
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-289", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-289", targetSessionId: "proj-289" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started."), action]);
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
+		expect(screen.getByRole("button", { name: "Spawned 1 agent" })).toBeInTheDocument();
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it.each([
+		["provisioning", { provisionState: "provisioning" }, "Spawning", true],
+		["active", { status: "working", activity: { state: "active" } }, "Working", true],
+		["idle", { status: "idle", activity: { state: "idle" } }, "Idle", false],
+		["exited", { status: "exited", activity: { state: "exited" } }, "Exited", false],
+		["terminated", { status: "terminated", isTerminated: true }, "Terminated", false],
+		["failed start", { provisionState: "failed" }, "Start failed", false],
+		["status needs input", { status: "needs_input" }, "Needs input", false],
+		["PR waiting input", { status: "needs_input", prs: [{ number: 94, state: "open", ci: "pending", review: "pending", mergeability: "unknown" }] }, "Needs input", false],
+		["activity waiting input", { activity: { state: "waiting_input" } }, "Needs input", false],
+		["activity blocked", { activity: { state: "blocked" } }, "Needs input", false],
+		["checking", { statusReadiness: "checking" }, "Checking status", false],
+		["unavailable", { statusReadiness: "unavailable" }, "Status unavailable", false],
+		["missing", null, "Status unavailable", false],
+	] as const)("shows %s child state without a false spinner", async (_case, child, label, spinning) => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: child ? [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [], ...child }] : [],
+		}] as unknown as WorkspaceSummary[];
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started.")], vi.fn(), workspaces);
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
+		await userEvent.click(screen.getByRole("button", { name: "Spawned 1 agent" }));
+		const line = screen.getByText(label).parentElement;
+		expect(line?.querySelector(".animate-spin") !== null).toBe(spinning);
+	});
+
+	it("draws a report batch as one line that opens to its rows, and the orchestrator's answer as a normal reply", async () => {
+		renderOrchestrator([
 			report("t1", 1, "[done] [Check regressions](ao://sessions/proj/proj-288)\nOne strong candidate: #7043\nScreened 58 PRs."),
 			command("t1", 1, "gh pr merge 7054"),
 			reply("t1", 2, "Merged [#7054](https://github.com/o/r/pull/7054)."),
 		]);
 
+		const line = screen.getByRole("button", { name: "1 Agent Report" });
+		expect(line).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
+		await userEvent.click(line);
 		const row = screen.getByTestId("worker-update");
 		expect(row).toHaveTextContent("Check regressions");
 		expect(row).toHaveTextContent("One strong candidate: #7043");
 		expect(screen.queryByText(/Reports since your previous turn/)).not.toBeInTheDocument();
 
-		const answer = screen.getByTestId("orchestrator-reply");
-		expect(answer).toHaveTextContent("Merged #7054.");
-		expect(screen.queryByRole("button", { name: /^Worked for/ })).not.toBeInTheDocument();
-		expect(within(answer).getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
-
-		const work = within(answer).getByRole("button", { name: "Show the work behind this reply" });
-		await userEvent.click(work);
-		expect(work).toHaveAttribute("aria-expanded", "true");
-
-		await userEvent.click(within(answer).getByRole("button", { name: "Roll back to here" }));
-		await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Roll back" }));
-		expect(onRollback).toHaveBeenCalledWith("t1");
+		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^Worked for/ })).toBeInTheDocument();
+		expect(screen.getByText("#7054").closest("[data-chat-message-role]")).toHaveAttribute("data-chat-message-role", "assistant");
 	});
 
 	it("keeps an answer that asks the user something as the full reply", () => {
@@ -139,12 +261,73 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText(/AO TASK TITLE UPDATE/)).not.toBeInTheDocument();
 	});
 
-	it("still shows the work of a turn that answered with tools only", () => {
+	it("draws nothing for reports sent with a human message", () => {
+		const envelope = [
+			"Reports since your previous turn:", "",
+			"[needs_input] [iOS pages](ao://sessions/proj/proj-286)", "Tunnel or loopback?", "",
+			"[done] [Menus](ao://sessions/proj/proj-285)", "Menus render.",
+		].join("\n");
+		const human: ConversationMessage = {
+			kind: "message", id: "t1-human", turnId: "t1", sequence: 10, revision: 0, role: "user", origin: "human",
+			streaming: false, createdAt: at(1), text: `How is it going?\n\n<ao-worker-reports>\n${envelope}\n</ao-worker-reports>`,
+		};
+		renderOrchestrator([human, reply("t1", 2, "Both moved.")]);
+
+		expect(screen.getByText("How is it going?")).toBeInTheDocument();
+		expect(screen.queryByTestId("worker-reports")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
+		expect(screen.queryByText(/iOS pages/)).not.toBeInTheDocument();
+	});
+
+	it("keeps reports a worker's steer carried under that steer after the turn settles", async () => {
+		const prompt: ConversationMessage = {
+			kind: "message", id: "run-human", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human",
+			streaming: false, createdAt: at(1), text: "How are the workers doing?",
+		};
+		const steer: ConversationActivity = {
+			kind: "activity", id: "steer-1", turnId: "run", sequence: 12, revision: 0, activityKind: "system", status: "completed",
+			summary: "Steer", createdAt: at(1), detail: { event: "steer", senderSessionId: "proj-7", senderDisplayName: "Menus", text: "Rebased." },
+		};
+		const carried = report("t-report", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?");
+		// Work before the steer, so the steer arrives mid-turn rather than with the prompt.
+		const items: ConversationItem[] = [prompt, { ...command("run", 1, "ao status"), sequence: 11 }, steer, { ...carried, sequence: 13 }, reply("run", 2, "Both moved.")];
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ChatWorkspace
+						snapshot={{
+							...chatFixtureEmpty, latestSequence: 22, items,
+							// The batched report turn is not among the snapshot's turns, as the daemon sends it.
+							turns: [{ id: "run", state: "completed", providerTurnId: "provider-run", requestedAt: at(1), completedAt: at(2) }],
+							batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+						}}
+						sessionRole="orchestrator"
+					/>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+
+		await userEvent.click(screen.getByRole("button", { name: /^1 Agent Report/ }));
+		expect(screen.getByText("iOS pages")).toBeInTheDocument();
+	});
+
+	it("draws one logo per sender on the reports line", () => {
+		const entries = [1, 2, 3, 4].map((n) => `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${n}.`).join("\n\n");
+		renderOrchestrator([report("t1", 1, entries), reply("t1", 2, "Noted.")]);
+		const line = screen.getByRole("button", { name: /^4 Agent Reports/ });
+		expect(line.querySelectorAll("[data-report-logo]")).toHaveLength(1);
+		expect(line).not.toHaveTextContent("...");
+	});
+
+	it("still shows the work of a turn that answered with tools only", async () => {
 		renderOrchestrator([
 			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render above the browser"),
 			command("t1", 1, "gh pr merge 7054"),
 		]);
 
+		await userEvent.click(screen.getByRole("button", { name: "1 Agent Report" }));
 		expect(screen.getByTestId("worker-update")).toHaveTextContent("Menus");
 		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^Worked for/ })).toBeInTheDocument();

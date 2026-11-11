@@ -1,14 +1,14 @@
-import { useMemo, useState } from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { useMemo } from "react";
+import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { useReviewerConversation, useReviewerConversationCommands, useReviewerConversationModels } from "../../hooks/useReviewerConversation";
 import { useHostConnection } from "../../hooks/useHostConnection";
-import { useChatMessageFocus, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
+import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { sessionUiKey } from "../../lib/hosts";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import { ChatWorkspace } from "./ChatWorkspace";
 
-export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHeader = false }: { reviewId: string; workerSessionId: string; hostId?: string; hideHeader?: boolean }) {
+export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hostUnreachable = false, hideHeader = false }: { reviewId: string; workerSessionId: string; hostId?: string; hostUnreachable?: boolean; hideHeader?: boolean }) {
 	const { t } = useTranslation();
 	const { snapshot, isLoading, error, hasOlder, isLoadingOlder, loadOlder } = useReviewerConversation(reviewId, hostId);
 	const catalog = useReviewerConversationModels(reviewId, Boolean(snapshot && snapshot.controller.state !== "stopped"), hostId);
@@ -16,8 +16,9 @@ export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHea
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const { baseUrl: remoteBase } = useHostConnection(hostId);
 	const draftOwner = useMemo(() => ({ sessionId: sessionUiKey(`review:${reviewId}`, hostId), incarnation: reviewId }), [hostId, reviewId]);
-	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<ChatMessageFocusTarget>();
-	useChatMessageFocus(sessionUiKey(workerSessionId, hostId), reviewId, Boolean(snapshot), setAnnotationNavigationRequest);
+	// One surface shows each review's chat in turn: a target is for its review, once.
+	const annotationNavigation = useChatNavigationRequest<ChatMessageFocusTarget>(reviewId);
+	useChatMessageFocus(sessionUiKey(workerSessionId, hostId), reviewId, Boolean(snapshot), annotationNavigation.navigate);
 	if (isLoading)
 		return (
 			<Centered>
@@ -29,16 +30,20 @@ export function ReviewerChatSurface({ reviewId, workerSessionId, hostId, hideHea
 		return (
 			<Centered>
 				<AlertTriangle className="size-4 text-destructive" />
-				{error ?? t("shell.couldNotLoadSessions")}
+				{hostUnreachable && error ? t("remote.hostOffline") : error ?? t("shell.couldNotLoadSessions")}
 			</Centered>
 		);
 	return (
 		<ChatWorkspace
-			annotationNavigationRequest={annotationNavigationRequest}
+			annotationNavigationRequest={annotationNavigation.request}
+			onAnnotationNavigationHandled={annotationNavigation.handled}
 			uiSessionId={hostId ? sessionUiKey(reviewId, hostId) : undefined}
 			assetBaseUrl={remoteBase}
 			remoteHostId={hostId}
 			snapshot={snapshot}
+			newWorkDisabled={hostUnreachable}
+			composerLockedPlaceholder={hostUnreachable ? t("remote.offlineCopy") : undefined}
+			savedCopy={hostUnreachable}
 			draftOwner={draftOwner}
 			onSessionLinkOpen={openSessionLink}
 			sessionTitle={t("terminal.reviewer")}

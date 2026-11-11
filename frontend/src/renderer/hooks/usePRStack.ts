@@ -1,5 +1,5 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery } from "@tanstack/react-query";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import type { PRStackInfo } from "../lib/pr-stack";
@@ -24,7 +24,7 @@ export function usePRStack(pr: SessionPRSummary, hostId?: string, enabled = true
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/prs/{id}/stack", {
 				params: { path: { id: String(pr.number) }, query: { prUrl: pr.url } },
 			});
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data ?? {};
 		},
 	});

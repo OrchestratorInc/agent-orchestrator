@@ -14,7 +14,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// Clear every recognised var so we observe pure defaults regardless of the
 	// surrounding environment.
-	for _, k := range []string{"AO_TELEMETRY_RETENTION", "AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
+	for _, k := range []string{"AO_TELEMETRY_RETENTION", "AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_INSTALLER_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
 		t.Setenv(k, "")
 	}
 
@@ -33,6 +33,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ShutdownTimeout != DefaultShutdownTimeout {
 		t.Errorf("ShutdownTimeout = %s, want %s", cfg.ShutdownTimeout, DefaultShutdownTimeout)
+	}
+	if cfg.InstallerShutdownTimeout != 0 {
+		t.Errorf("InstallerShutdownTimeout = %s, want 0", cfg.InstallerShutdownTimeout)
 	}
 	if cfg.RunFilePath == "" {
 		t.Error("RunFilePath is empty, want a resolved default path")
@@ -103,6 +106,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("AO_PORT", "4002")
 	t.Setenv("AO_REQUEST_TIMEOUT", "5s")
 	t.Setenv("AO_SHUTDOWN_TIMEOUT", "3s")
+	t.Setenv("AO_INSTALLER_SHUTDOWN_TIMEOUT", "2s")
 	t.Setenv("AO_RUN_FILE", runFilePath)
 	t.Setenv("AO_DATA_DIR", dataDir)
 	t.Setenv("AO_TELEMETRY_EVENTS", "on")
@@ -123,6 +127,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.ShutdownTimeout != 3*time.Second {
 		t.Errorf("ShutdownTimeout = %s, want 3s", cfg.ShutdownTimeout)
+	}
+	if cfg.InstallerShutdownTimeout != 2*time.Second {
+		t.Errorf("InstallerShutdownTimeout = %s, want 2s", cfg.InstallerShutdownTimeout)
 	}
 	if cfg.RunFilePath != runFilePath {
 		t.Errorf("RunFilePath = %q, want %q", cfg.RunFilePath, runFilePath)
@@ -157,6 +164,8 @@ func TestLoadInvalid(t *testing.T) {
 		{"negative request timeout", map[string]string{"AO_REQUEST_TIMEOUT": "-1s"}},
 		{"zero shutdown timeout", map[string]string{"AO_SHUTDOWN_TIMEOUT": "0s"}},
 		{"negative shutdown timeout", map[string]string{"AO_SHUTDOWN_TIMEOUT": "-5s"}},
+		{"bad installer shutdown timeout", map[string]string{"AO_INSTALLER_SHUTDOWN_TIMEOUT": "later"}},
+		{"zero installer shutdown timeout", map[string]string{"AO_INSTALLER_SHUTDOWN_TIMEOUT": "0s"}},
 		{"null origin", map[string]string{"AO_ALLOWED_ORIGINS": "app://renderer,null"}},
 		{"wildcard origin", map[string]string{"AO_ALLOWED_ORIGINS": "*"}},
 		{"bad telemetry events", map[string]string{"AO_TELEMETRY_EVENTS": "maybe"}},
@@ -271,7 +280,7 @@ func TestLoadAppVersionOnlyFromEnvironment(t *testing.T) {
 
 func TestLoadOfferingDefaults(t *testing.T) {
 	// Clear the offering vars so we observe pure defaults: no client identity,
-	// cloud off, local on.
+	// cloud on, local on.
 	for _, k := range []string{"AO_CLIENT", "AO_CLOUD_OFFERING", "AO_LOCAL_OFFERING", "AO_CLOUD_CONTROL_PLANE_URL"} {
 		t.Setenv(k, "")
 	}
@@ -282,8 +291,8 @@ func TestLoadOfferingDefaults(t *testing.T) {
 	if cfg.Client != "" {
 		t.Errorf("Client = %q, want empty", cfg.Client)
 	}
-	if cfg.CloudOffering {
-		t.Error("CloudOffering = true, want false by default")
+	if !cfg.CloudOffering {
+		t.Error("CloudOffering = false, want true by default")
 	}
 	if !cfg.LocalOffering {
 		t.Error("LocalOffering = false, want true by default")
@@ -295,7 +304,7 @@ func TestLoadOfferingDefaults(t *testing.T) {
 
 func TestLoadOfferingOverrides(t *testing.T) {
 	t.Setenv("AO_CLIENT", "  eleven_x  ")
-	t.Setenv("AO_CLOUD_OFFERING", "true")
+	t.Setenv("AO_CLOUD_OFFERING", "false")
 	t.Setenv("AO_LOCAL_OFFERING", "false")
 	t.Setenv("AO_CLOUD_CONTROL_PLANE_URL", " https://cp.example.com ")
 
@@ -306,8 +315,8 @@ func TestLoadOfferingOverrides(t *testing.T) {
 	if cfg.Client != "eleven_x" {
 		t.Errorf("Client = %q, want trimmed eleven_x", cfg.Client)
 	}
-	if !cfg.CloudOffering {
-		t.Error("CloudOffering = false, want true")
+	if cfg.CloudOffering {
+		t.Error("CloudOffering = true, want explicit false to stick")
 	}
 	if cfg.LocalOffering {
 		t.Error("LocalOffering = true, want explicit false to stick")
@@ -318,17 +327,17 @@ func TestLoadOfferingOverrides(t *testing.T) {
 }
 
 // The offering toggles must accept the numeric spellings the supervisor may
-// hand down: 1 switches cloud on, 0 is the only way local goes off.
+// hand down: 0 is the only way either offering goes off.
 func TestLoadOfferingNumericToggles(t *testing.T) {
-	t.Setenv("AO_CLOUD_OFFERING", "1")
+	t.Setenv("AO_CLOUD_OFFERING", "0")
 	t.Setenv("AO_LOCAL_OFFERING", "0")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !cfg.CloudOffering {
-		t.Error("CloudOffering = false, want true for AO_CLOUD_OFFERING=1")
+	if cfg.CloudOffering {
+		t.Error("CloudOffering = true, want false for AO_CLOUD_OFFERING=0")
 	}
 	if cfg.LocalOffering {
 		t.Error("LocalOffering = true, want false for AO_LOCAL_OFFERING=0")

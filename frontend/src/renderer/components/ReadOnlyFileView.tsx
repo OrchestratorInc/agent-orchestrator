@@ -1,3 +1,5 @@
+import { useLatestCallback } from "../hooks/useStable";
+import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import { mediaCrossOrigin } from "../lib/file-media";
 import { fileReferenceSource } from "../lib/file-reference-source";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
@@ -41,7 +43,7 @@ export function ReadOnlyFileView({
 	annotation,
 	annotationRange,
  annotationReady = true,
-	detail,
+	detail: incomingDetail,
 	editing = false,
 	onContentReady,
 	onEditChange,
@@ -77,6 +79,8 @@ export function ReadOnlyFileView({
 	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, side, editing, annotationRange?.requestKey]);
+	const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
 	const annotationReveal=useFileAnnotationReveal(containerRef,editing ? undefined : annotationRange, {ready:annotationReady,contentKey:detail.content});
 	const pendingRevealRef = useRef(revealLine);
 	const consumedRevealRequestKeysRef = useRef(new Set<number>());
@@ -119,6 +123,12 @@ export function ReadOnlyFileView({
 	const askInChat = useAskInChat(sessionId, hostId);
 	const captureSource = fileReferenceSource(source, commitSha);
 	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, false), side: side === "before" ? "old" : "file", endSide: side === "before" ? "old" : "file", ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, askInChat !== undefined && captureSource !== undefined && !editing);
+	const onPostRender = useLatestCallback(() => {
+		gutterHover.restoreAfterRender();
+		onContentReady?.();
+		revealRequestedLine();
+		annotationReveal.reveal();
+	});
 	if (detail.binary) {
 		if (detail.imageMediaType) {
 			return (
@@ -185,12 +195,7 @@ export function ReadOnlyFileView({
 					disableFileHeader: true,
 					enableGutterUtility: true,
 					lineHoverHighlight: "line",
-					onPostRender: () => {
-						gutterHover.restoreAfterRender();
-						onContentReady?.();
-						revealRequestedLine();
-						annotationReveal.reveal();
-					},
+					onPostRender,
 					overflow: "wrap",
 					preferredHighlighter: PIERRE_HIGHLIGHTER,
 					theme: { dark: "github-dark", light: "github-light" },
@@ -214,7 +219,7 @@ export function ReadOnlyFileView({
 			/>
 			{annotationReveal.loading ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationLoading")}</p>
 			: annotationReveal.changed || annotationReveal.unverified ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
-			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
+			<SelectionAskButton onAsk={codeSelection.ask} onDismiss={codeSelection.dismiss} source={codeSelection.source} />
 		</div>
 	);
 }

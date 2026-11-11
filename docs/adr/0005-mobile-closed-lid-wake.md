@@ -19,7 +19,7 @@ only on normal sidecar exit would leave the Mac awake after a crash.
 Use a fixed-purpose unprivileged Swift coordinator managed by the login's launchd
 GUI domain. It has no network listener, no arbitrary commands, no administrator
 setup, and no `pmset disablesleep`, sudoers or privileged-file mutation. The
-daemon owns policy and mobile lifetime; Electron supplies the native resource
+daemon owns policy and wake lifetime; Electron supplies the native resource
 path. The renderer does not own recovery. Implement independently of the closed
 main Amphetamine app and Insomnia's installer.
 
@@ -29,7 +29,13 @@ Keeping the executable outside the replaceable app bundle preserves recovery
 across updates. Plist, private request files, status and journal also live here;
 no files go into OS-default app-data or `~/Library/LaunchAgents`. After a
 restart/login, restoring an enabled preference bootstraps an existing setup.
-An unused mobile connection does not need an always-on login installation.
+An unused wake feature does not need an always-on login installation.
+
+The awake preference is independent of Connect Mobile. An explicit wake opt-in
+starts without enabling a listener, and disabling mobile access does not release
+it. Daemon boot restores saved wake ownership even with mobile disabled or a
+failed listener bind. Turning off wake or fully exiting the daemon releases its
+ownership. Network access still requires its separate explicit opt-in.
 
 AO instances of the same login using the default durable data root (`~/.ao/data`)
 share this coordinator. Custom or scratch `AO_DATA_DIR` roots cannot enable native

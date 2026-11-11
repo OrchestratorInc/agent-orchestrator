@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+// EnvComputerUse is set to "1" on a chat session's `ao mcp` server when the
+// user had "Let agents use this computer" on as the session started; the
+// server then offers the computer-use tools. The session manager sets it and
+// the CLI reads it.
+const EnvComputerUse = "AO_COMPUTER_USE"
+
 const (
 	// LoopbackHost is the only host the daemon ever binds. There is deliberately
 	// no AO_HOST env var: the daemon has no auth/CORS/TLS and a stray
@@ -134,7 +140,8 @@ type Config struct {
 	// RequestTimeout bounds REST request handling.
 	RequestTimeout time.Duration
 	// ShutdownTimeout is the hard graceful-shutdown deadline.
-	ShutdownTimeout time.Duration
+	ShutdownTimeout          time.Duration
+	InstallerShutdownTimeout time.Duration
 	// RunFilePath is where the PID + port handshake file (running.json) is
 	// written so the Electron supervisor can discover and reap the daemon.
 	RunFilePath string
@@ -205,9 +212,10 @@ type Config struct {
 	// daemon: the cloud offering (B2B/B2C, providers, billing) is decided per
 	// organization by the cloud control plane.
 	Client string
-	// CloudOffering reports whether the cloud offering flag is switched on
-	// (AO_CLOUD_OFFERING). It forces the cloud gate on regardless of the user's
-	// toggle; the settings service still requires a configured control plane.
+	// CloudOffering reports whether the cloud offering is available
+	// (AO_CLOUD_OFFERING). It defaults to true; only an explicit false/0
+	// switches it off. The settings service still requires a configured
+	// control plane.
 	CloudOffering bool
 	// LocalOffering reports whether the local offering is available
 	// (AO_LOCAL_OFFERING). It defaults to true; only an explicit false/0
@@ -242,6 +250,7 @@ func (c Config) Addr() string {
 //	AO_PORT              bind port           (default 3001)
 //	AO_REQUEST_TIMEOUT   per-request timeout (Go duration > 0, default 60s)
 //	AO_SHUTDOWN_TIMEOUT  shutdown deadline   (Go duration > 0, default 10s)
+//	AO_INSTALLER_SHUTDOWN_TIMEOUT harness installer drain (Go duration > 0, default systeminstall.DefaultShutdownTimeout)
 //	AO_RUN_FILE          running.json path   (default ~/.ao/running.json)
 //	AO_DATA_DIR          durable state dir   (default ~/.ao/data)
 //	AO_AGENT             compatibility agent id (default claude-code)
@@ -257,7 +266,7 @@ func (c Config) Addr() string {
 //	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
 //	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
 //	AO_CLIENT                  client identity reported to clients (trimmed, default empty)
-//	AO_CLOUD_OFFERING          cloud offering flag off|on (default off)
+//	AO_CLOUD_OFFERING          cloud offering off|on (default on)
 //	AO_LOCAL_OFFERING          local offering off|on (default on)
 //	AO_CLOUD_CONTROL_PLANE_URL cloud control plane base URL (trimmed, must be http(s))
 //	AO_AGENT_BROWSER_URL       the host's agent browser (loopback http URL, default none)
@@ -276,6 +285,7 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
+		CloudOffering:          true,
 		LocalOffering:          true,
 		HarnessUpdateChecks:    true,
 		HarnessUpdateInterval:  DefaultHarnessUpdateInterval,
@@ -312,6 +322,14 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.ShutdownTimeout = d
+	}
+
+	if raw := os.Getenv("AO_INSTALLER_SHUTDOWN_TIMEOUT"); raw != "" {
+		d, err := parsePositiveDuration("AO_INSTALLER_SHUTDOWN_TIMEOUT", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.InstallerShutdownTimeout = d
 	}
 
 	if raw := os.Getenv("AO_AGENT"); raw != "" {
@@ -506,8 +524,8 @@ func Load() (Config, error) {
 	}
 	// The control-plane URL is public client configuration (like the WorkOS
 	// client id), so it ships as a baked default and the env var is only a
-	// development override. Users never configure it; the Settings toggle is
-	// the sole cloud switch.
+	// development override. Users never configure it: cloud is on for everyone
+	// a control plane is configured for.
 	cfg.CloudControlPlaneURL = defaultCloudControlPlaneURL
 	if raw := os.Getenv("AO_CLOUD_CONTROL_PLANE_URL"); strings.TrimSpace(raw) != "" {
 		u, err := parseCloudControlPlaneURL(raw)

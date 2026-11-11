@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileCode2, Loader2, MessageSquare, MoreHorizontal, Plus, Reply } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -6,7 +7,6 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { useSendToSessionWorker } from "../hooks/useSendToSessionWorker";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { apiErrorMessage } from "../lib/api-client";
 import { useAddTextToChat } from "../lib/chat-context-bus";
 import { formatTimeCompact } from "../lib/format-time";
 import { getGitHubStatus } from "../lib/github-daemon";
@@ -330,7 +330,7 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, body, ...(threadId ? { threadId } : {}) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.comments.postFailed")));
+			if (error) throw apiErrorException(error, t("pr.comments.postFailed"));
 		},
 		onSuccess: async () => {
 			setReplying(null);
@@ -342,7 +342,7 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 			params: { path: { id: String(pr.number) } },
 			body: { prUrl: pr.url, ...file },
 		});
-		if (error || !data) throw new Error(apiErrorMessage(error, t("pr.comments.attach.failed", { name: file.name })));
+		if (error || !data) throw apiErrorException(error, t("pr.comments.attach.failed", { name: file.name }));
 		return data.markdown;
 	} : undefined;
 	const resolve = useMutation({
@@ -351,7 +351,7 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 				params: { path: { sessionId: session.id } },
 				body: { pullRequestUrl: pr.url, commentUrl: thread.comments[0]?.url ?? "" },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.comments.resolveFailed")));
+			if (error) throw apiErrorException(error, t("pr.comments.resolveFailed"));
 		},
 		onSuccess: async (_data, thread) => {
 			setResolvedHere((previous) => new Set(previous).add(thread.id));

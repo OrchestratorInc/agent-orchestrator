@@ -9,7 +9,7 @@ import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
 import type { PRTabSection } from "../lib/pr-tabs";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
-import { GitHubIcon } from "./icons";
+import { GitHubIcon } from "./GitHubIcon";
 import { blockReasonLabel, PRActionButton, PRStateMenu } from "./PRActions";
 import { AppLink } from "./AppLink";
 import { checkTone, sortedChecks } from "./PRCardDetails";
@@ -18,10 +18,10 @@ import { PRDescriptionBody } from "./PRDescriptionBody";
 import { prStateIcon } from "./PRPills";
 import { PRStackSection, usePRStackSection } from "./PRStack";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { TerminalTabFrame } from "./TerminalTabFrame";
+import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
+import { Pressable } from "./ui/pressable";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 /** The session's PR with this URL, as the inspector's card shows it. */
 export function useSessionPR(session: WorkspaceSession | undefined, url: string, hostId?: string): SessionPRSummary | undefined {
@@ -43,30 +43,23 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 	const pr = useSessionPR(session, url, hostId);
 	const state = prStateIcon[pr?.state ?? "open"];
 	const name = pr ? `#${pr.number} ${pr.title}` : t("pr.tab.loading");
+	// The close button takes the state icon's slot on hover, like a file tab's.
+	const closeAction = (
+		<Pressable
+			aria-label={t("files.closeTab", { name })}
+			className={terminalTabActionClassName}
+			onClick={(event) => {
+				event.stopPropagation();
+				onClose();
+			}}
+			type="button"
+		>
+			<X aria-hidden="true" className="size-icon-sm" />
+		</Pressable>
+	);
 	return (
 		<TerminalTabFrame
-			action={(
-				<span className="grid size-icon-base place-items-center">
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								aria-label={t("files.closeTab", { name })}
-								className="pointer-events-none grid size-icon-sm place-items-center rounded-sm text-passive opacity-0 hover:bg-interactive-hover hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/50 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
-								onClick={(event) => {
-									event.stopPropagation();
-									onClose();
-								}}
-								type="button"
-							>
-								<X aria-hidden="true" className="size-icon-sm" />
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{t("files.closeTab", { name })}</TooltipContent>
-					</Tooltip>
-				</span>
-			)}
-			actionLayout="overlay"
-			actionPosition="leading"
+			action={closeAction}
 			active={active}
 			buttonProps={{
 				"aria-label": name,
@@ -77,12 +70,9 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 				title: name,
 				type: "button",
 			}}
-			className="max-w-shell-tab-max"
-			contentClassName="font-medium"
-		>
-			<state.icon aria-hidden="true" className={cn("size-icon-base shrink-0 group-hover:opacity-0 group-focus-within:opacity-0", state.className)} />
-			<span className="truncate">{name}</span>
-		</TerminalTabFrame>
+			icon={<state.icon aria-hidden="true" className={cn("size-icon-base shrink-0", state.className)} />}
+			label={name}
+		/>
 	);
 }
 

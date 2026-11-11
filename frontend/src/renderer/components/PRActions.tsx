@@ -1,3 +1,4 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpFromLine, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
 import { useState } from "react";
@@ -6,7 +7,6 @@ import { prStackQueryKey, usePRStack } from "../hooks/usePRStack";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { prSummaryBlockReason, type PRBlockReason } from "../lib/pr-display";
 import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
@@ -84,7 +84,7 @@ function usePRStateChange(pr: SessionPRSummary, sessionId: string, hostId?: stri
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, action },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t(`pr.state.failed.${action}`, { number: pr.number })));
+			if (error) throw apiErrorException(error, t(`pr.state.failed.${action}`, { number: pr.number }));
 			return data;
 		},
 		onSuccess: (result) => {
@@ -133,7 +133,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha, method },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.merge.failed", { number: pr.number })));
+			if (error) throw apiErrorException(error, t("pr.merge.failed", { number: pr.number }));
 			return data;
 		},
 		onSuccess: async (result) => {
@@ -153,7 +153,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, method, expectedHeads: (landing ?? []).map(({ headSha, number }) => ({ headSha, number })) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("pr.stack.mergeFailed")));
+			if (error) throw apiErrorException(error, t("pr.stack.mergeFailed"));
 			return data;
 		},
 		onSuccess: async (result) => {
@@ -401,6 +401,7 @@ const blockedSentence = {
 	draft: "pr.actions.blockedDraft",
 	conflict: "pr.actions.blockedConflict",
 	checks: "pr.actions.blockedChecks",
+	cancelled: "pr.merge.checksCancelledDetail",
 	checking: "pr.actions.blockedChecking",
 	changes: "pr.actions.blockedChanges",
 	review: "pr.actions.blockedReview",
@@ -409,10 +410,11 @@ const blockedSentence = {
 } as const;
 
 /** The same reasons as a label, short enough for a row. */
-export const blockReasonLabel: Record<PRBlockReason, "pr.blocker.draft" | "pr.blocker.conflict" | "pr.blocker.checks" | "pr.blocker.checking" | "pr.blocker.changes" | "pr.blocker.review" | "pr.blocker.threads"> = {
+export const blockReasonLabel: Record<PRBlockReason, "pr.blocker.draft" | "pr.blocker.conflict" | "pr.blocker.checks" | "pr.card.checksCancelled" | "pr.blocker.checking" | "pr.blocker.changes" | "pr.blocker.review" | "pr.blocker.threads"> = {
 	draft: "pr.blocker.draft",
 	conflict: "pr.blocker.conflict",
 	checks: "pr.blocker.checks",
+	cancelled: "pr.card.checksCancelled",
 	checking: "pr.blocker.checking",
 	changes: "pr.blocker.changes",
 	review: "pr.blocker.review",

@@ -1,4 +1,4 @@
-import { render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
@@ -40,7 +40,7 @@ describe("TitlebarNav", () => {
 		const nav = container.querySelector('[data-slot="titlebar-nav"]');
 		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
 		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
-		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
+		expect(nav).toHaveClass("top-0", "h-toolbar", "left-titlebar-cluster-left-fullscreen");
 		// The brand and the history arrows trade places; the hidden one is inert and
 		// aria-hidden (it collapses to width 0 rather than unmounting).
 		const brand = container.querySelector('[data-slot="titlebar-brand"]');
@@ -64,5 +64,19 @@ describe("TitlebarNav", () => {
 		rerender(<TooltipProvider><TitlebarNav isFullScreen zoomFactor={1.25} /></TooltipProvider>);
 		expect(onResize).toHaveBeenCalledTimes(3);
 		window.removeEventListener("resize", onResize);
+	});
+
+	it("enables Settings Back even on home without route history", () => {
+		useUiStore.setState({ isSidebarOpen: false });
+		const onBack = vi.fn();
+		history.back.mockClear();
+		const { rerender } = render(<TitlebarNav historyLocked onBack={onBack} />);
+		const back = screen.getByRole("button", { name: "Go back" });
+		expect(back).toBeEnabled();
+		fireEvent.click(back);
+		expect(onBack).toHaveBeenCalledTimes(1);
+		expect(history.back).not.toHaveBeenCalled();
+		rerender(<TooltipProvider><TitlebarNav historyLocked /></TooltipProvider>);
+		expect(back).toBeDisabled();
 	});
 });

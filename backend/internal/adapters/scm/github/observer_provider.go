@@ -95,6 +95,33 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	}
 }
 
+// ListOpenPRsByBranch lists the open pull requests whose head is branch in
+// repo itself (head=<owner>:<branch>), so PRs from forks are not returned. One
+// request: GitHub filters on the server, so a repository's other open PRs
+// are never paged through. Reading only the first page of 100 is deliberate:
+// GitHub allows one open PR per head and base, so a branch with more than 100
+// open PRs would need more than 100 base branches. The GitLab provider pages
+// because its client already has a pagination helper; this one has none.
+func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	q := url.Values{}
+	q.Set("state", "open")
+	q.Set("head", repo.Owner+":"+branch)
+	q.Set("per_page", "100")
+	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
+	if err != nil {
+		return nil, err
+	}
+	var pulls []restListPull
+	if err := json.Unmarshal(resp.Body, &pulls); err != nil {
+		return nil, fmt.Errorf("github scm: decode branch PR list: %w", err)
+	}
+	out := make([]ports.SCMPRObservation, 0, len(pulls))
+	for _, pull := range pulls {
+		out = append(out, restListPullToSCM(pull))
+	}
+	return out, nil
+}
+
 // githubCheckRunsPageSize fetches the complete check-run set for a commit in a
 // single REST page when the commit has no more than this many runs. A commit
 // virtually never exceeds GitHub's 100-result cap, so one request carries the
@@ -417,7 +444,7 @@ author{ login avatarUrl }
 mergeCommit{ oid }
 commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONTEXT_LIMIT){ nodes{
   __typename
-  ... on CheckRun { name status conclusion detailsUrl url databaseId }
+  ... on CheckRun { `+checkRunFields+` }
   ... on StatusContext { context state targetUrl }
 } pageInfo{ hasNextPage endCursor } } } } } }
 `)
@@ -464,7 +491,7 @@ func buildCheckContextsQuery(ref ports.SCMPRRef, cursor string) string {
 repo: repository(owner:%s,name:%s){ pullRequest(number:%d){
   commits(last:1){ nodes{ commit{ statusCheckRollup{ contexts(first:%d, after:%s){ nodes{
     __typename
-    ... on CheckRun { name status conclusion detailsUrl url databaseId }
+    ... on CheckRun { `+checkRunFields+` }
     ... on StatusContext { context state targetUrl }
   } pageInfo{ hasNextPage endCursor } } } } } }
 } }
@@ -500,7 +527,7 @@ func pageInfoEndCursor(connection map[string]any) string {
 func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMObservation {
 	checks := scmChecksFromGraphQL(pr)
 	failed := failedSCMChecks(checks)
-	ci := string(ciSummaryFromRollupState(pr))
+	ci := string(scmCISummary(pr))
 	prURL := firstNonEmpty(str(pr["url"]), ref.URL)
 	review := string(reviewDecisionFromGraphQL(pr))
 	providerMergeable := str(pr["mergeable"])
@@ -572,6 +599,30 @@ func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 	return mapRollupState(str(roll["state"]))
 }
 
+// scmCISummary is GitHub's rollup state, except a FAILURE that only superseded
+// or cancelled check runs cause: rollup state counts every run on the commit
+// and treats cancelled as failed, so with the full context list in hand the
+// verdict comes from the newest run per check.
+func scmCISummary(pr map[string]any) domain.CIState {
+	ci := ciSummaryFromRollupState(pr)
+	if ci != domain.CIFailing || scmContextsPaginated(pr) {
+		return ci
+	}
+	if latest := ciSummaryFromGraphQL(pr); latest != domain.CIUnknown || hasCancelledCheck(pr) {
+		return latest
+	}
+	return ci
+}
+
+func hasCancelledCheck(pr map[string]any) bool {
+	for _, n := range latestCheckRuns(nodes(statusContexts(pr)["nodes"])) {
+		if checkStatusFromGraphQL(n) == domain.PRCheckCancelled {
+			return true
+		}
+	}
+	return false
+}
+
 func scmContextsPaginated(pr map[string]any) bool {
 	return pageInfoHasMore(statusContexts(pr))
 }
@@ -579,7 +630,7 @@ func scmContextsPaginated(pr map[string]any) bool {
 func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
-	rawNodes := nodes(contexts["nodes"])
+	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
 	out := make([]ports.SCMCheckObservation, 0, len(rawNodes))
 	for _, n := range rawNodes {
 		typ := str(n["__typename"])
@@ -612,8 +663,7 @@ func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 func failedSCMChecks(checks []ports.SCMCheckObservation) []ports.SCMCheckObservation {
 	out := make([]ports.SCMCheckObservation, 0, len(checks))
 	for _, ch := range checks {
-		status := domain.PRCheckStatus(ch.Status)
-		if status == domain.PRCheckFailed || status == domain.PRCheckCancelled {
+		if isFailingCheckStatus(domain.PRCheckStatus(ch.Status)) {
 			out = append(out, ch)
 		}
 	}

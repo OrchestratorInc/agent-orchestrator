@@ -981,7 +981,8 @@ func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 	return f.reconcileErr
 }
 
-func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
+func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error        { return nil }
+func (*fakeSessionLifecycle) ReconcileWorkspaceCleanup(context.Context) error { return nil }
 func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration) error {
 	return nil
 }
@@ -999,6 +1000,7 @@ func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.Ses
 }
 func (*fakeSessionLifecycle) SetVersionTelemetry(ports.EventSink)                                {}
 func (*fakeSessionLifecycle) SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy) {}
+func (*fakeSessionLifecycle) SetComputerUseEnabled(func(context.Context) bool)                   {}
 func (*fakeSessionLifecycle) RetryVersionMoves(context.Context) error                            { return nil }
 func (*fakeSessionLifecycle) ObserveChatVersionSwitch(domain.SessionID, string, string)          {}
 func (*fakeSessionLifecycle) MarkHarnessUpdated(context.Context, domain.AgentHarness, string, time.Time) error {
@@ -1015,6 +1017,7 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 
 func (*fakeSessionLifecycle) WaitAgentSwitchWorkers(context.Context) error { return nil }
 func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error  { return nil }
+func (*fakeSessionLifecycle) StopAgentsForQuit(context.Context) error      { return nil }
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}
@@ -1022,10 +1025,11 @@ func (f *fakeSessionLifecycle) AcquireSessionInput(domain.SessionID) (func(), bo
 	return func() {}, true
 }
 
-func (f *fakeSessionLifecycle) SessionMutationInProgress(domain.SessionID) bool         { return false }
-func (f *fakeSessionLifecycle) SetReviewerTerminator(sessionmanager.ReviewerTerminator) {}
-func (f *fakeSessionLifecycle) SetHarnessUseGate(sessionmanager.HarnessUseGate)         {}
-func (f *fakeSessionLifecycle) CodexAccountSwitchInProgress() bool                      { return false }
+func (f *fakeSessionLifecycle) SessionMutationInProgress(domain.SessionID) bool                 { return false }
+func (f *fakeSessionLifecycle) SetReviewerTerminator(sessionmanager.ReviewerTerminator)         {}
+func (f *fakeSessionLifecycle) SetHarnessUseGate(sessionmanager.HarnessUseGate)                 {}
+func (f *fakeSessionLifecycle) SetImportArchiveRefresher(sessionmanager.ImportArchiveRefresher) {}
+func (f *fakeSessionLifecycle) CodexAccountSwitchInProgress() bool                              { return false }
 func (f *fakeSessionLifecycle) StartCodexAccountSwitch(context.Context, ports.CodexAccountSwitchConfig) (domain.CodexAccountSwitch, error) {
 	return domain.CodexAccountSwitch{}, nil
 }

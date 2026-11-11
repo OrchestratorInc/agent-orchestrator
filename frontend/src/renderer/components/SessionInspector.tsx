@@ -1,10 +1,15 @@
-import { BrowserIcon, GitHubIcon } from "./icons";
-import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
+import { apiErrorException } from "../lib/api-error-exception";
+import { BrowserIcon } from "./icons";
+import { GitHubIcon } from "./GitHubIcon";
+import { artifactFileIcon } from "./artifact-file-icon";
+import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
+import { ArtifactThumbnail } from "./ArtifactThumbnail";
+import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -28,17 +33,14 @@ import {
 import {
 	Archive,
 	ArrowUpRight,
-	PanelLeftOpen,
-	ChevronRight,
+	PanelLeft,
 	GitPullRequest,
 	GitMerge,
 	Info,
 	Play,
 	Loader2,
-	SearchCheck,
 	X,
-} from "lucide-react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+} from "@/components/app-icons";
 import { InfoRow, InfoRowButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
@@ -47,7 +49,7 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
-import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
+import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
@@ -86,7 +88,8 @@ import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../typ
 import {
 	openPRs,
 	resolveNextNavigationAfterSessionKill,
-	sessionArtifacts,
+	sessionDeliverables,
+	sessionWorkspaceReady,
 	sortedPRs,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
@@ -96,6 +99,7 @@ import type { BrowserViewModel } from "../hooks/useBrowserView";
 import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { cn } from "../lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -119,7 +123,7 @@ import {
 	type PRReviewState,
 	type ReviewRunFacts,
 } from "../lib/session-reviews";
-import type { CloudCpAOReviewRun, CloudCpSessionReviewState, CloudCpPullRequestSummary } from "../lib/cloud-cp";
+import type { CloudCpAOReviewRun, CloudCpProjectRepo, CloudCpSessionReviewState, CloudCpPullRequestSummary } from "../lib/cloud-cp";
 
 type ProjectConfig = components["schemas"]["ProjectConfig"];
 type OpenReviewerTerminal = (target: { handleId: string; harness: string }) => void;
@@ -132,37 +136,12 @@ const VIEW_DEFS: {
 	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
-	{
-		id: "summary",
-		labelKey: "inspector.summary",
-		icon: (
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-				<line x1="8" y1="7" x2="20" y2="7" />
-				<line x1="8" y1="12" x2="20" y2="12" />
-				<line x1="8" y1="17" x2="16" y2="17" />
-				<circle cx="4" cy="7" r="1" />
-				<circle cx="4" cy="12" r="1" />
-				<circle cx="4" cy="17" r="1" />
-			</svg>
-		),
-	},
-	{
-		id: "reviews",
-		labelKey: "inspector.reviewTab",
-		icon: <SearchCheck aria-hidden="true" />,
-	},
-	{
-		id: "browser",
-		labelKey: "inspector.browser",
-		icon: <BrowserIcon aria-hidden="true" />,
-	},
-	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
-	{
-		id: "files",
-		labelKey: "inspector.files",
-		icon: <FolderClosed aria-hidden="true" data-testid="files-viewer-icon" />,
-	},
-	{ id: "artifacts", labelKey: "artifacts.title", icon: <File aria-hidden="true" /> },
+	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
+	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
+	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
+	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
+	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -173,10 +152,10 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 };
 
 /**
- * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Side chat · Files · Artifacts).
+ * Tabbed inspector rail beside the terminal (Summary · Files · Reviews · Browser · Side chat · Artifacts).
  */
 export const SessionInspector = memo(function SessionInspector({
-	browserOnly = false,
+	orchestrator = false,
 	session,
 	hostId: hostIdProp,
 	onOpenReviewerTerminal,
@@ -197,7 +176,8 @@ export const SessionInspector = memo(function SessionInspector({
 	view: viewProp,
 	onViewChange,
 }: {
-	browserOnly?: boolean;
+	/** An orchestrator's rail has Summary, Browser, and contextual Artifacts. */
+	orchestrator?: boolean;
 	session?: WorkspaceSession;
 	hostId?: string;
 	onOpenReviewerTerminal?: OpenReviewerTerminal;
@@ -222,7 +202,6 @@ export const SessionInspector = memo(function SessionInspector({
 }) {
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
-	const onlyBrowser = browserOnly;
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
@@ -233,8 +212,9 @@ export const SessionInspector = memo(function SessionInspector({
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
 	const inspectorQueryClient = useQueryClient();
+	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
-		onlyBrowser || session?.cloud ? undefined : session?.id,
+		orchestrator || session?.cloud || session?.needsResume || (session && !sessionWorkspaceReady(session)) ? undefined : session?.id,
 		hostId,
 	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
@@ -242,7 +222,10 @@ export const SessionInspector = memo(function SessionInspector({
 	const cloudOrgId = session?.cloud?.orgId;
 	const cloudReview = useQuery({
 		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session?.id ?? "", "summary"],
-		enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined,
+		// Only a connected worker answers for its files, as in the Files panel: a
+		// waking session's count is not polled until its worker is back, and the
+		// count read before stays on the tab meanwhile.
+		enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined && session.runtimeConnected === true,
 		refetchInterval: 5_000,
 		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session!.id),
 	});
@@ -270,20 +253,22 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
+	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
+		entry.id === "summary" || entry.id === "browser" || (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
-			// The tab is contextual: an artifact click opens it; leaving it hides it.
-			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+			// Artifacts shows whenever the session lists files, or while an artifact
+			// link waits for the list to refresh.
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !onlyBrowser)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, onlyBrowser, requestedView, sessionLoaded, view]);
+	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -346,7 +331,6 @@ export const SessionInspector = memo(function SessionInspector({
 						) : null}
 						<div className="session-inspector__trailing flex shrink-0 items-center">
 							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
-							<span aria-hidden="true" className="session-inspector-actions-spacer" />
 						</div>
 					</>
 				}
@@ -361,11 +345,13 @@ export const SessionInspector = memo(function SessionInspector({
 						<SummaryView
 							canOpenReviews={reviewsAvailable}
 							hostId={hostId}
+							inspectorVisible={isInspectorVisible}
 							key={sessionUiKey(session.id, hostId)}
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
 							onOpenReviews={openReviews}
 							onOpenReviewFile={onOpenReviewFile}
+							orchestrator={orchestrator}
 							session={session}
 						/>
 					) : undefined
@@ -398,18 +384,23 @@ const SummaryView = memo(function SummaryView({
 	canOpenReviews,
 	onOpenArtifact,
 	hostId,
+	inspectorVisible,
 	onOpenFiles,
 	onOpenReviewFile,
 	onOpenReviews,
+	orchestrator,
 	session,
 }: {
 	canOpenReviews: boolean;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	hostId?: string;
+	/** The Summary stays mounted while the inspector is closed. */
+	inspectorVisible: boolean;
 	onOpenFiles: () => void;
 	/** Opens a file's diff at a line, for a review thread's "View in diff". */
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onOpenReviews: () => void;
+	orchestrator: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
@@ -426,10 +417,24 @@ const SummaryView = memo(function SummaryView({
 			return data?.status === "ok" && "repo" in data.project ? data.project : undefined;
 		},
 	});
+	// A Cloud project's repositories come from the control plane: its own and
+	// the additional ones its sessions check out.
+	const { client: cloudClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp(Boolean(session.cloud));
+	const cloudProjectQuery = useQuery({
+		queryKey: ["cloud-project-repositories", cloudBaseUrl, session.cloud?.orgId ?? "", session.workspaceId],
+		enabled: linkedPRs.length > 0 && Boolean(session.cloud) && cloudReady,
+		staleTime: 60_000,
+		queryFn: async () => {
+			const { project } = await cloudClient.getProject(session.cloud!.orgId, session.workspaceId);
+			const repos = (project.config as { repos?: CloudCpProjectRepo[] } | undefined)?.repos ?? [];
+			return [project.repositoryUrl, ...repos.map((repo) => repo.url)];
+		},
+	});
+	const projectRepositories = session.cloud ? cloudProjectQuery.data : projectRepositoryUrls(projectQuery.data);
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
-	const artifacts = sessionArtifacts(session);
+	const artifacts = sessionDeliverables(session);
 	const hasArtifacts = artifacts.length > 0;
 	const opensPR = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
 	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : opensPR ? t("inspector.pullRequest") : t("inspector.branch");
@@ -459,14 +464,15 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
-	// Subscription accounts are a developer-mode preview.
-	const accountsPreview = useUiStore((state) => state.developerMode);
+	// Reached through a share: this person sees the session's pull requests but
+	// leaves managing them, and the session's policies, to its owner.
+	const guest = session.cloud?.shared === true;
 	return (
 		<SessionInspectorSummaryView
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
+					{hostId ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -477,15 +483,16 @@ const SummaryView = memo(function SummaryView({
 			}
 			activityTitle={t("inspector.activity")}
 			artifactCards={
-				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} /> : undefined
+				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
-			branch={
+			branch={orchestrator ? undefined : (
 				<SessionBranchSummary
 					conflictFiles={branchPR?.mergeability.conflictFiles?.map((file) => file.path)}
 					openPRConflicting={branchPR?.mergeability.state === "conflicting"}
 					hostId={hostId}
 					onOpenFile={onOpenReviewFile}
+					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					shippedHeadShas={prSummaries.filter((pr) => pr.state === "merged" || pr.state === "closed").map((pr) => pr.headSha)}
@@ -511,7 +518,7 @@ const SummaryView = memo(function SummaryView({
 										elsewhere={branchPR && prFocusKey(focusedPR) !== prFocusKey(branchPR) ? (
 											<BranchWorkElsewhere branchPR={branchPR} />
 										) : undefined}
-										guest={session.cloud?.shared === true}
+										guest={guest}
 										hostId={hostId}
 										key={prFocusKey(focusedPR)}
 										layout="focus"
@@ -524,13 +531,13 @@ const SummaryView = memo(function SummaryView({
 									/>
 								</div>
 							) : null}
-							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
+							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectRepositories)} key={pr.url} pr={pr} />)}
 						</>
 					) : null}
 					session={session}
 					title={prSectionTitle}
 				/>
-			}
+			)}
 			comments={focusedPR && !session.cloud ? (
 				<PRComments
 					hostId={hostId}
@@ -541,7 +548,7 @@ const SummaryView = memo(function SummaryView({
 				/>
 			) : undefined}
 			commentsTitle={focusedPR && !session.cloud ? t("pr.comments.sectionTitle", { count: prCommentCount(focusedPR) }) : undefined}
-			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
@@ -625,13 +632,12 @@ function InspectorPolicyRow({
 				{description ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Pressable
 								aria-label={description}
-								className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-								type="button"
+								className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
 							>
 								<Info aria-hidden="true" className="size-icon-2xs" />
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className={cn("leading-normal", tooltipClassName)}>{description}</TooltipContent>
 					</Tooltip>
@@ -648,9 +654,13 @@ function InspectorPolicyRow({
 	);
 }
 
-function isExternalRepository(pr: SessionPRReference, project: components["schemas"]["Project"] | undefined): boolean {
-	if (!project) return false;
-	const repositories = [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
+function projectRepositoryUrls(project: components["schemas"]["Project"] | undefined): Array<string | undefined> | undefined {
+	if (!project) return undefined;
+	return [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
+}
+
+function isExternalRepository(pr: SessionPRReference, repositories: Array<string | null | undefined> | undefined): boolean {
+	if (!repositories) return false;
 	const identities = repositories.flatMap((repository) => {
 		if (!repository) return [];
 		try {
@@ -680,9 +690,9 @@ function LinkedPRCard({ external, pr }: { external: boolean; pr: SessionPRRefere
 					<span>{t("inspector.reportedByWorker")}</span>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" type="button">
+							<Pressable aria-label={t("inspector.linkedPRInfo")} className="inline-flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-muted hover:text-foreground">
 								<Info aria-hidden="true" className="size-icon-2xs" />
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-72 leading-normal text-pretty">{t("inspector.linkedPRInfo")}</TooltipContent>
 					</Tooltip>
@@ -713,7 +723,7 @@ function AutoInjectCIPolicyControl({ session, hostId }: { session: WorkspaceSess
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectCI },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.ci.autoInjectError", { status: response.status })));
+			if (error) throw apiErrorException(error, t("inspector.ci.autoInjectError", { status: response.status }));
 		},
 		onMutate: async (autoInjectCI) => {
 			await queryClient.cancelQueries({ queryKey: workspaceKey });
@@ -776,7 +786,7 @@ function AutoInjectReviewPolicyControl({ session, hostId }: { session: Workspace
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectReview },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.review.autoInjectError")));
+			if (error) throw apiErrorException(error, t("inspector.review.autoInjectError"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
@@ -842,7 +852,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 				params: { path: { sessionId: session.id } },
 				body: { terminateOnPrMerge },
 			});
-			if (error) throw new Error(apiErrorMessage(error, `Failed to update merge policy (${response.status})`));
+			if (error) throw apiErrorException(error, `Failed to update merge policy (${response.status})`);
 		},
 		onMutate: async (terminateOnPrMerge) => {
 			await queryClient.cancelQueries({ queryKey: workspaceKey });
@@ -874,7 +884,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		if (nextNav.target === "session") {
 			void navigate(sessionNavigateTarget(session.workspaceId, nextNav.sessionId, hostId));
 		} else {
-			if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+			if (isStandaloneSession) {
 				void navigate({ to: "/" });
 				return;
 			}
@@ -887,33 +897,29 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	const terminateAction = (
 		<div className="flex items-center justify-between gap-3 py-1">
 			<span className="min-w-0 text-sm text-settings-label">{t("inspector.archiveShort")}</span>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex">
-						<SessionArchiveDialog
-							onConfirm={confirmTermination}
-							onOpenChange={setConfirmOpen}
-							open={confirmOpen}
-							session={session}
-							trigger={
-								<button
-									aria-label={t("inspector.archive")}
-									className="inline-flex size-control-md items-center justify-center rounded-sm text-passive transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-									onClick={() => {
-										clearTerminateSessionState(queryClient, session.id, hostId);
-										// Always open the confirm; the modal owns its own dismissal.
-										setConfirmOpen(true);
-									}}
-									type="button"
-								>
-									<Archive className="size-icon-sm" aria-hidden="true" />
-								</button>
-							}
-						/>
-					</span>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("inspector.archive")}</TooltipContent>
-			</Tooltip>
+			<span className="inline-flex">
+				<SessionArchiveDialog
+					onConfirm={confirmTermination}
+					onOpenChange={setConfirmOpen}
+					open={confirmOpen}
+					session={session}
+					trigger={
+						<Button
+							aria-label={t("inspector.archive")}
+							size="icon-sm"
+							variant="quiet"
+							onClick={() => {
+								clearTerminateSessionState(queryClient, session.id, hostId);
+								// Always open the confirm; the modal owns its own dismissal.
+								setConfirmOpen(true);
+							}}
+							type="button"
+						>
+							<Archive className="size-icon-sm" aria-hidden="true" />
+						</Button>
+					}
+				/>
+			</span>
 		</div>
 	);
 
@@ -1056,9 +1062,9 @@ export function PRSummaryCard({
 		stateLabel: t(prStateLabelKeys[pr.state]),
 		repositoryLabel: showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
 		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
-			<button className="whitespace-nowrap text-settings-muted underline-offset-2 hover:underline" onClick={onOpenReviews} type="button">
+			<Button className="whitespace-nowrap text-settings-muted" onClick={onOpenReviews} type="button" variant="link">
 				<span className="text-xs">{t("pr.review.viewDetails")} ↗</span>
-			</button>
+			</Button>
 		) : undefined,
 	};
 	const activeTabUrl = usePRTabs(sessionUiKey(sessionId, hostId)).active;
@@ -1073,7 +1079,7 @@ export function PRSummaryCard({
 				canMerge && asksToMerge ? (
 					<Button
 						aria-label={t("pr.merge.requestFor", { number: pr.number })}
-						className="gap-1 px-2 text-xs"
+						className="gap-1 px-2"
 						disabled={requestMerge.isPending || Boolean(pendingRequest)}
 						onClick={() => requestMerge.mutate({ sessionId, number: pr.number, prUrl: pr.url })}
 						size="sm"
@@ -1094,7 +1100,7 @@ export function PRSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80 active:bg-success/70"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -1137,7 +1143,7 @@ export function PRSummaryCard({
 		<InfoRowLink
 			ariaLabel={t("inspector.openPR", { number: pr.number })}
 			href={viewModel.href}
-			icon={pr.provider === "github" ? <GitHubIcon aria-hidden="true" className="size-icon-sm shrink-0 text-passive" /> : undefined}
+			icon={pr.provider === "github" ? <GitHubIcon className="size-icon-sm shrink-0 text-passive" /> : undefined}
 		/>
 	);
 	return (
@@ -1152,7 +1158,7 @@ export function PRSummaryCard({
 					title={pr.title}
 					trailing={tabShowing ? undefined : (
 						<span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-muted px-2 text-micro font-medium text-muted-foreground transition-colors group-hover:text-foreground">
-							<PanelLeftOpen aria-hidden="true" className="size-icon-2xs shrink-0" />
+							<PanelLeft aria-hidden="true" className="size-icon-2xs shrink-0" />
 							{t("pr.openTab")}
 						</span>
 					)}
@@ -1181,86 +1187,149 @@ export function PRSummaryCard({
 	);
 }
 
-const ARTIFACT_PREVIEW_COUNT = 4;
+/** The row holds as many previews as fit at this width or wider, up to the maximum. */
+const ARTIFACT_PREVIEW_MIN_WIDTH = 88;
+const ARTIFACT_PREVIEW_GAP = 8;
+const ARTIFACT_PREVIEW_MAX = 4;
+/** Fills a 5:4 preview tile with a page laid out 1000 wide. */
+const ARTIFACT_PREVIEW_PAGE_HEIGHT = 800;
+const ARTIFACT_ROWS_COLLAPSED = 3;
 
-/** The newest artifacts first, capped until the person asks for the rest. */
+/**
+ * The Summary's artifacts: previews of the most recently updated ones, as many
+ * as fit the width, then the rest by name. Each opens its file in the
+ * inspector's Artifacts tab.
+ */
 function ArtifactSummaryList({
 	artifacts,
 	onOpenArtifact,
+	previewLive,
+	session,
 }: {
 	artifacts: SessionArtifact[];
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	/** Off while the inspector is closed, so hidden pages and PDFs unload. */
+	previewLive: boolean;
+	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
+	const container = useRef<HTMLDivElement>(null);
+	const [columns, setColumns] = useState(3);
 	const [expanded, setExpanded] = useState(false);
-	const reduceMotion = useReducedMotion();
-	const newestFirst = [...artifacts].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-	const hidden = newestFirst.length - ARTIFACT_PREVIEW_COUNT;
+	useLayoutEffect(() => {
+		const element = container.current;
+		if (!element) return;
+		const measure = (width: number) => {
+			if (width <= 0) return;
+			const fit = Math.floor((width + ARTIFACT_PREVIEW_GAP) / (ARTIFACT_PREVIEW_MIN_WIDTH + ARTIFACT_PREVIEW_GAP));
+			setColumns(Math.min(ARTIFACT_PREVIEW_MAX, Math.max(1, fit)));
+		};
+		measure(element.getBoundingClientRect().width);
+		const observer = new ResizeObserver(([entry]) => {
+			if (entry) measure(entry.contentRect.width);
+		});
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
+	const previews = artifacts.slice(0, columns);
+	const rest = artifacts.slice(columns);
+	const rows = expanded ? rest : rest.slice(0, ARTIFACT_ROWS_COLLAPSED);
 	return (
-		<>
-			{newestFirst.slice(0, ARTIFACT_PREVIEW_COUNT).map((artifact) => (
-				<ArtifactSummaryCard artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} />
-			))}
-			<AnimatePresence initial={false}>
-				{expanded && hidden > 0 ? (
-					// -mt cancels the list's gap while collapsed; the inner pt restores it once open.
-					<motion.div
-						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
-						className="-mt-1.5"
-						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
-						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
-						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
-					>
-						<div className="flex flex-col gap-1.5 pt-1.5">
-							{newestFirst.slice(ARTIFACT_PREVIEW_COUNT).map((artifact) => (
-								<ArtifactSummaryCard artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} />
-							))}
-						</div>
-					</motion.div>
-				) : null}
-			</AnimatePresence>
-			{hidden > 0 ? (
-				<Button
-					aria-expanded={expanded}
-					// A faint resting fill: present, but quieter than the rows above it.
-					className="h-control-sm gap-1 self-start bg-interactive-hover px-2.5 text-xs text-muted-foreground hover:bg-interactive-active hover:text-foreground dark:hover:bg-interactive-active focus-visible:ring-2 focus-visible:ring-ring/60"
-					onClick={() => setExpanded((open) => !open)}
-					size="none"
-					type="button"
-					variant="ghost"
-				>
-					{expanded ? t("inspector.showLess") : t("inspector.showMore")}
-					<ChevronRight aria-hidden="true" className={cn("size-icon-sm transition-transform motion-reduce:transition-none", expanded ? "-rotate-90" : "rotate-90")} />
-				</Button>
+		<div className="flex min-w-0 flex-col" ref={container}>
+			<div className="grid" style={{ gap: ARTIFACT_PREVIEW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+				{previews.map((artifact) => (
+					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} />
+				))}
+			</div>
+			{rest.length > 0 ? (
+				<ul className="mt-2 flex min-w-0 flex-col border-t border-border pt-1">
+					{rows.map((artifact) => (
+						<li key={artifact.path}>
+							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} />
+						</li>
+					))}
+					{rest.length > ARTIFACT_ROWS_COLLAPSED ? (
+						<li>
+							<Pressable
+								aria-expanded={expanded}
+								className="flex min-h-8 w-full min-w-0 items-center rounded-md px-1 text-sm text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+								onClick={() => setExpanded((current) => !current)}
+							>
+								{t(expanded ? "inspector.showLess" : "inspector.showMore")}
+							</Pressable>
+						</li>
+					) : null}
+				</ul>
 			) : null}
-		</>
+		</div>
 	);
 }
 
-/** One Summary row opens its file in the inspector's contextual Artifacts tab. */
-function ArtifactSummaryCard({
+/** One Summary preview: a small thumbnail with the file's name and last update. */
+function ArtifactPreviewTile({
+	artifact,
+	onOpenArtifact,
+	previewLive,
+	session,
+}: {
+	artifact: SessionArtifact;
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	previewLive: boolean;
+	session: WorkspaceSession;
+}) {
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
+	return (
+		<Pressable
+			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
+			onClick={() => onOpenArtifact?.({ path: artifact.path })}
+			title={artifact.path}
+		>
+			<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={ARTIFACT_PREVIEW_PAGE_HEIGHT} previewLive={previewLive} row={row} />
+			</span>
+			<span className="flex min-w-0 flex-col">
+				<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
+				{artifact.updatedAt ? (
+					<time
+						className="truncate text-caption leading-4 tabular-nums text-passive"
+						dateTime={artifact.updatedAt}
+						title={new Date(artifact.updatedAt).toLocaleString()}
+					>
+						{formatTimeCompact(artifact.updatedAt)}
+					</time>
+				) : null}
+			</span>
+		</Pressable>
+	);
+}
+
+/** One Summary row: icon, name and last update. */
+function ArtifactSummaryRow({
 	artifact,
 	onOpenArtifact,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 }) {
-	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
+	const KindIcon = artifactFileIcon(artifact);
 	return (
-		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
-			<button
-				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left outline-none"
-				onClick={handleOpen}
-				type="button"
-			>
-				{artifact.kind === "html" ? (
-					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-				) : (
-					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-				)}
-				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
-			</button>
-		</div>
+		<Pressable
+			className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+			onClick={() => onOpenArtifact?.({ path: artifact.path })}
+			title={artifact.path}
+		>
+			<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+			{artifact.updatedAt ? (
+				<time
+					className="shrink-0 text-caption tabular-nums text-settings-muted"
+					dateTime={artifact.updatedAt}
+					title={new Date(artifact.updatedAt).toLocaleString()}
+				>
+					{formatTimeCompact(artifact.updatedAt)}
+				</time>
+			) : null}
+		</Pressable>
 	);
 }
 
@@ -1278,24 +1347,37 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		queryFn: sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId).queryFn,
 		staleTime: Infinity,
 		placeholderData: (previous) => previous,
-		enabled: !session.cloud && session.kind !== "orchestrator",
+		enabled: !session.cloud && session.kind !== "orchestrator" && !session.needsResume && sessionWorkspaceReady(session),
 	});
+	// A Cloud session's commits come from its worker's workspace review, the
+	// same read (and cache entry) the inspector polls for its Files count.
+	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
+	const cloudOrgId = session.cloud?.orgId;
+	const cloudReview = useQuery({
+		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session.id, "summary"],
+		enabled: cloudReady && cloudOrgId !== undefined && session.runtimeConnected === true && session.kind !== "orchestrator",
+		placeholderData: (previous) => previous,
+		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session.id),
+	});
+	const commits = session.cloud ? cloudReview.data?.commits : history.data?.commits;
 	const events: SortableTimelineEvent[] = [];
 	const pushEvent = (event: InspectorTimelineEvent, timestamp?: string | null) => {
 		events.push({ ...event, sortTime: timelineSortTime(timestamp) });
 	};
 	const createdAt = session.createdAt ?? session.updatedAt;
+	const isStandalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	const creationLabel = appI18n.t(isStandalone ? "inspector.timeline.createdSession" : "inspector.timeline.createdWorkspace");
 
 	pushEvent(
 		{
 			tone: "neutral",
-			content: <>{appI18n.t("inspector.timeline.createdWorkspace")}</>,
+			content: <>{creationLabel}</>,
 			timestamp: formatTimeCompact(createdAt),
 		},
 		createdAt,
 	);
 
-	for (const commit of history.data?.commits.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
+	for (const commit of commits?.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
 		pushEvent(
 			{
 				tone: "neutral",
@@ -1363,7 +1445,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	const activityView = accountMoving
 		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
 		: getAgentActivityView(session.activity);
-	const activityAt = session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
+	const activityAt = (accountMoving ? transition?.createdAt : undefined) ?? session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
 	pushEvent(
 		{
 			tone: "now",
@@ -1463,7 +1545,6 @@ function TimelinePill({ label, tone }: { label: string; tone: string; breathe: b
 function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 	const states: ScmTimelineState[] = [];
 	const seen = new Set<ScmTimelineState>();
-	const open = new Set(openPRs(session));
 	const add = (state: ScmTimelineState) => {
 		if (seen.has(state)) return;
 		seen.add(state);
@@ -1473,15 +1554,14 @@ function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 	if (session.status === "ci_failed") add("ci_failed");
 	if (session.status === "changes_requested") add("changes_requested");
 	if (session.status === "commented") add("commented");
-	for (const pr of session.prs) {
-		if (open.has(pr) && pr.ci === "failing") add("ci_failed");
+	// Only open and draft PRs contribute live PR signals.
+	for (const pr of openPRs(session)) {
+		if (pr.ci === "failing") add("ci_failed");
 		if (pr.review === "changes_requested") add("changes_requested");
 		// Read the raw fact directly rather than session.status: status collapses
 		// to "working" while the agent is active, but unresolved comments from a
 		// non-blocking review must stay visible regardless of agent activity.
-		// Gated on the PR still being open so a stale comment on a merged/closed
-		// PR cannot keep the pill around.
-		if (open.has(pr) && pr.reviewComments) add("commented");
+		if (pr.reviewComments) add("commented");
 		if (pr.mergeability === "conflicting") add("conflict");
 	}
 
@@ -1622,7 +1702,7 @@ function LocalReviewsSection({
 					agentConfig: nextReviewerConfig,
 				},
 			});
-			if (error) throw new Error(apiErrorMessage(error, "Unable to save reviewer"));
+			if (error) throw apiErrorException(error, "Unable to save reviewer");
 			if (data) queryClient.setQueryData(reviewsKey, data);
 		},
 		onSuccess: () => {
@@ -1639,7 +1719,7 @@ function LocalReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { enabled },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.reviewRequestFailed")));
+			if (error) throw apiErrorException(error, t("inspector.reviewRequestFailed"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
@@ -1656,7 +1736,7 @@ function LocalReviewsSection({
 				params: { path: { sessionId: session.id } },
 				body: { ...(selectedHarness ? { harness: selectedHarness } : {}), ...(reviewerConfig ? { agentConfig: reviewerConfig } : {}), ...(rerun ? { rerun: true } : {}) },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableStartReview")));
+			if (error) throw apiErrorException(error, t("inspector.unableStartReview"));
 			return { data, reused: response?.status === 200, rerun, ownerKey, reviewsKey, workspaceKey };
 		},
 		onMutate: async () => {
@@ -1689,7 +1769,7 @@ function LocalReviewsSection({
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/cancel", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableCancelReview")));
+			if (error) throw apiErrorException(error, t("inspector.unableCancelReview"));
 		},
 		onSuccess: () => {
 			void queryClient.invalidateQueries({ queryKey: reviewsKey });
@@ -1701,7 +1781,7 @@ function LocalReviewsSection({
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/kill", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, t("inspector.unableKillReviewSession")));
+			if (error) throw apiErrorException(error, t("inspector.unableKillReviewSession"));
 			return {
 				data,
 				requestReviewsKey: reviewsKey,
@@ -1848,7 +1928,10 @@ function CloudReviewsSection({
 		queryFn: () => client.inspectSessionReviewerHarnesses(orgId, session.id),
 		retry: 1,
 	});
-	const effectiveReviewerHarness = reviewsQuery.data?.reviewerHarness || session.reviewerHarness || session.provider;
+	// With no reviewer chosen, the worker's agent maps to its default reviewer
+	// the way a local project's does (WORKER_DEFAULT_REVIEWERS).
+	const defaultReviewer = defaultReviewerHarness(session.provider, true);
+	const effectiveReviewerHarness = reviewsQuery.data?.reviewerHarness || session.reviewerHarness || defaultReviewer;
 	const [selectedReviewerHarness, setSelectedReviewerHarness] = useState(effectiveReviewerHarness);
 	useEffect(() => setSelectedReviewerHarness(effectiveReviewerHarness), [effectiveReviewerHarness, session.id]);
 	const [autoReviewEnabled, setAutoReviewEnabled] = useState(session.autoReviewEnabled === true);
@@ -1865,7 +1948,7 @@ function CloudReviewsSection({
 			if (running && data.reviewerHandleId) {
 				onOpenReviewerTerminal?.({
 					handleId: data.reviewerHandleId,
-					harness: data.reviewerHarness || session.provider,
+					harness: data.reviewerHarness || defaultReviewer,
 				});
 			} else if (!running) {
 				setReviewNotice(t("inspector.reviewAlreadyRanForCommit"));
@@ -1937,11 +2020,13 @@ function CloudReviewsSection({
 		...session,
 		prs: (pullRequestsQuery.data?.pullRequests ?? []).map(cloudPullRequestFacts),
 	};
-	const reviewState = cloudReviewsToLocal(reviewsQuery.data, session.provider);
+	const reviewState = cloudReviewsToLocal(reviewsQuery.data, effectiveReviewerHarness);
+	const guest = session.cloud?.shared === true;
 	return (
 		<>
 			<ReviewPanel
 				cloud
+				readOnly={guest}
 				autoReviewEnabled={autoReviewEnabled}
 				error={
 					pullRequestsQuery.error ??
@@ -1988,6 +2073,7 @@ function CloudReviewsSection({
 			/>
 			<MergedReviewsSection
 				githubPRs={[]}
+				readOnly={guest}
 				isLoading={pullRequestsQuery.isLoading || reviewsQuery.isLoading}
 				onOpenReviewFile={onOpenReviewFile}
 				onWorkerMessageSent={onWorkerMessageSent}
@@ -2061,6 +2147,7 @@ function cloudReviewsToLocal(
 function MergedReviewsSection({
 	githubPRs,
 	hostId,
+	readOnly = false,
 	isLoading,
 	onOpenReviewFile,
 	onWorkerMessageSent,
@@ -2070,6 +2157,8 @@ function MergedReviewsSection({
 }: {
 	githubPRs: SessionPRSummary[];
 	hostId?: string;
+	/** Reached through a share: the reviews show, but only the owner acts on them. */
+	readOnly?: boolean;
 	isLoading: boolean;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onWorkerMessageSent?: () => void;
@@ -2114,14 +2203,14 @@ function MergedReviewsSection({
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: review.pullRequestUrl, reviewerId: review.reviewerId },
 		});
-		if (error) throw new Error(apiErrorMessage(error, "Unable to request re-review"));
+		if (error) throw apiErrorException(error, "Unable to request re-review");
 	};
 	const resolveInlineComment = async (comment: InspectorInlineComment) => {
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
 			params: { path: { sessionId: session.id } },
 			body: { pullRequestUrl: comment.pullRequestUrl, commentUrl: comment.url ?? "" },
 		});
-		if (error) throw new Error(apiErrorMessage(error, "Unable to resolve review comment"));
+		if (error) throw apiErrorException(error, "Unable to resolve review comment");
 		void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(session.id, hostId) });
 		void queryClient.invalidateQueries({ queryKey: workspaceKey });
 	};
@@ -2368,11 +2457,11 @@ function MergedReviewsSection({
 			groups={groups}
 			isLoading={isLoading}
 			labels={labels}
-			onRequestRereview={requestRereview}
-			onResolveInlineComment={resolveInlineComment}
+			onRequestRereview={readOnly ? undefined : requestRereview}
+			onResolveInlineComment={readOnly ? undefined : resolveInlineComment}
 			onOpenInAOBrowser={openInAOBrowser}
-			onSendInlineComment={sendInlineCommentToWorker}
-			onSendReviewSummary={sendReviewSummaryToWorker}
+			onSendInlineComment={readOnly ? undefined : sendInlineCommentToWorker}
+			onSendReviewSummary={readOnly ? undefined : sendReviewSummaryToWorker}
 			onViewInlineCommentInFile={(comment) => {
 				if (comment.file) onOpenReviewFile?.({ line: comment.line, path: comment.file });
 			}}
@@ -2476,7 +2565,7 @@ function formatInlineReviewCommentMessage(comment: InspectorInlineComment & { re
 	if (url) {
 		lines.push("", `Comment URL: ${url}`);
 	}
-	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what AO has provided here.");
+	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what Orchestrator has provided here.");
 	return lines.join("\n");
 }
 
@@ -2484,9 +2573,9 @@ function formatReviewSummaryMessage(summary: InspectorReviewSummaryAction): stri
 	const reviewer = sanitizeWorkerMessagePart(summary.reviewerId.trim() || "reviewer");
 	const body = sanitizeWorkerMessagePart(summary.body.trim());
 	const url = sanitizeWorkerMessagePart((summary.url || summary.pullRequestUrl || "").trim());
-	const source = summary.source === "agent" ? "AO agent review" : "external PR review";
+	const source = summary.source === "agent" ? "Orchestrator review" : "external PR review";
 	const lines = [
-		`A ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
+		`An ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
 		"",
 		"Review summary:",
 		body,
@@ -2510,6 +2599,7 @@ function mockProjectConfig(): ProjectConfig {
 
 function ReviewPanel({
 	cloud = false,
+	readOnly = false,
 	notice,
 	cloudReviewerHarnesses = [],
 	cloudReviewerHarness = "",
@@ -2575,6 +2665,8 @@ function ReviewPanel({
 	onKill: () => void;
 	/** Cloud sessions choose from only credentials connected for the session owner. */
 	cloud?: boolean;
+	/** Reached through a share: the reviews show, but only the owner runs them. */
+	readOnly?: boolean;
 	/** Cloud-only: the trigger declined to run and says why. */
 	notice?: string | null;
 	cloudReviewerHarnesses?: string[];
@@ -2586,24 +2678,25 @@ function ReviewPanel({
 	onCloudInstallHarness?: () => void;
 }) {
 	const { t } = useTranslation();
-	const latestAutoFailure = reviewStates
+	// A failed run stores its reason in body. Show it for manual triggers too:
+	// the trigger request itself only returns a generic "Review operation failed".
+	const latestFailure = reviewStates
 		.map((review) => review.latestRun)
 		.filter(
 			(run): run is ReviewRunFacts =>
 				Boolean(
-					autoReviewEnabled &&
-						run?.triggerSource === "auto" &&
-						run.status === "failed" &&
-						run.body?.trim(),
+					run?.status === "failed" &&
+						run.body?.trim() &&
+						(run.triggerSource !== "auto" || autoReviewEnabled),
 				),
 		)
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-	const [dismissedAutoFailureId, setDismissedAutoFailureId] = useState<string | null>(null);
+	const [dismissedFailureId, setDismissedFailureId] = useState<string | null>(null);
 	useEffect(() => {
-		if (!latestAutoFailure || latestAutoFailure.id === dismissedAutoFailureId) return;
-		const timer = window.setTimeout(() => setDismissedAutoFailureId(latestAutoFailure.id), 10_000);
+		if (!latestFailure || latestFailure.id === dismissedFailureId) return;
+		const timer = window.setTimeout(() => setDismissedFailureId(latestFailure.id), 10_000);
 		return () => window.clearTimeout(timer);
-	}, [dismissedAutoFailureId, latestAutoFailure]);
+	}, [dismissedFailureId, latestFailure]);
 	if (sortedPRs(session).length === 0) {
 		return <Section surface={false} title={t("inspector.review.controls")}><p className={inspectorEmptyClass}>{t("inspector.noPROpened")}</p></Section>;
 	}
@@ -2625,8 +2718,8 @@ function ReviewPanel({
 	const resolvedDefaultHarness = resolveDefaultReviewerHarness(config, session.provider);
 	const effectiveReviewerHarness = reviewerOverride || resolvedDefaultHarness;
 	const activeReviewerHarness = latest?.harness || effectiveReviewerHarness;
-	const autoReviewFailure =
-		latestAutoFailure && latestAutoFailure.id !== dismissedAutoFailureId ? latestAutoFailure.body.trim() : null;
+	const reviewFailure =
+		latestFailure && latestFailure.id !== dismissedFailureId ? latestFailure : null;
 	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
@@ -2650,29 +2743,30 @@ function ReviewPanel({
 							{apiErrorMessage(error, t("inspector.reviewRequestFailed"))}
 					</p>
 				) : null}
-				{autoReviewFailure ? (
+				{reviewFailure ? (
 					<p className="m-0 rounded-md border border-error/28 bg-error/8 px-2.5 py-2 text-xs leading-normal text-error" role="status">
 						<span className="font-semibold">
-							{t("inspector.autoReview")} {t("inspector.review.failed")}:
+							{reviewFailure.triggerSource === "auto" ? t("inspector.autoReview") : t("pr.section.review")}{" "}
+							{t("inspector.review.failed")}:
 						</span>{" "}
-						{autoReviewFailure}
+						{reviewFailure.body.trim()}
 					</p>
 				) : null}
 				{notice ? (
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
+							<Pressable
 								aria-label={notice}
-								className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-left text-2xs font-medium leading-normal text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-								type="button"
+								className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-2xs font-medium leading-normal text-muted-foreground transition-colors hover:text-foreground"
 							>
 								<Info aria-hidden="true" className="mt-px size-icon-2xs shrink-0" />
 								<span className="min-w-0 text-xs">{t("inspector.reviewAlreadyRanShort")}</span>
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-56 leading-normal">{notice}</TooltipContent>
 					</Tooltip>
 				) : null}
+				{readOnly ? null : (
 				<div className="review-run-controls-container flex min-w-0 flex-col text-xs">
 					{cloud ? (
 						<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
@@ -2707,7 +2801,7 @@ function ReviewPanel({
 										onClick={onCloudInstallHarness}
 										size="sm"
 										type="button"
-										variant="outline"
+										variant="secondary"
 									>
 										{isInstallingCloudHarness ? "Installing…" : "Install"}
 									</Button>
@@ -2748,7 +2842,7 @@ function ReviewPanel({
 										<span className="truncate">{agentLabel(surface.harness)}</span>
 									</span>
 									<Button
-										className="shrink-0 px-1.5 text-xs"
+										className="shrink-0 px-1.5"
 										disabled={surface.mode !== "chat" && !surface.handleId}
 										onClick={() => onOpenReviewer(surface)}
 										size="sm"
@@ -2774,7 +2868,7 @@ function ReviewPanel({
 						<div className="flex min-w-0 items-center justify-end gap-1.5">
 							<Button
 								aria-label={primaryReviewActionLabel}
-								className="shrink-0 gap-1 px-1.5 text-xs [&_svg]:size-icon-sm"
+								className="shrink-0 gap-1 px-1.5 [&_svg]:size-icon-sm"
 								disabled={reviewRunning ? isCancelling || isKilling || isSwitchingReviewer : runDisabled || autoReviewEnabled}
 								onClick={reviewRunning ? onCancel : onTrigger}
 								size="sm"
@@ -2807,6 +2901,7 @@ function ReviewPanel({
 						</div>
 					</div>
 				</div>
+				)}
 				{reviewLive ? (
 					<div className="flex items-center gap-2 border-t border-border pt-3">
 						<Loader2 aria-hidden="true" className="size-icon-sm shrink-0 animate-spin text-muted-foreground" />
@@ -2952,12 +3047,14 @@ function BrowserView({
 	// second BrowserPanelView — it would fight the overlay over the shared native
 	// view slot). Exit is via the overlay's own minimize button.
 	const { t } = useTranslation();
+	// Stable, so the memoized panel skips this view's unrelated renders.
+	const togglePopOut = useCallback((next: boolean) => onTogglePopOut?.(next), [onTogglePopOut]);
 	if (browserPoppedOut) {
 		return (
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
 				<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 py-10 px-5 text-center")}>
 					<p className="text-md-sm text-muted-foreground">{t("inspector.browserInCenter")}</p>
-					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="outline">
+					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="secondary">
 						{t("inspector.returnToPanel")}
 					</Button>
 				</div>
@@ -2974,7 +3071,7 @@ function BrowserView({
 			active={isActive}
 			annotationQueue={browserAnnotationQueue}
 			browserView={browserView}
-			onTogglePopOut={(next) => onTogglePopOut?.(next)}
+			onTogglePopOut={togglePopOut}
 			poppedOut={false}
 			session={session}
 			topbarHost={topbarHost}
@@ -2995,7 +3092,7 @@ function FilesView({ filesView, onOpenFiles }: { filesView?: ReactNode; onOpenFi
 		<div role="tabpanel">
 			<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 px-5 py-10 text-center")}>
 				<p className="text-md-sm text-muted-foreground">{t("inspector.filesUnavailable")}</p>
-				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="outline">
+				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="secondary">
 					{t("inspector.openFiles")}
 				</Button>
 			</div>

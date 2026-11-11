@@ -3,10 +3,14 @@ package usage
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 )
 
-const defaultWatcherRestartDelay = 30 * time.Second
+const (
+	defaultWatcherRestartDelay = 30 * time.Second
+	flushWait                  = 5 * time.Second
+)
 
 type watcherFactory func(context.Context, []string) (transcriptWatcher, error)
 
@@ -22,6 +26,7 @@ type Pipeline struct {
 	restartWait time.Duration
 	reconcile   chan struct{}
 	inventory   chan struct{}
+	live        atomic.Pointer[Coordinator]
 }
 
 // NewPipeline constructs a supervised usage collection pipeline.
@@ -50,7 +55,7 @@ func NewPipeline(
 	}
 }
 
-// NotifySourcesChanged requests bounded discovery and ingestion.
+// NotifySourcesChanged requests bounded discovery.
 func (p *Pipeline) NotifySourcesChanged() {
 	select {
 	case p.reconcile <- struct{}{}:
@@ -58,13 +63,27 @@ func (p *Pipeline) NotifySourcesChanged() {
 	}
 }
 
-// NotifyInventoryChanged requests ingestion for newly registered sources
-// without scanning provider roots.
+// NotifyInventoryChanged records newly registered sources without scanning
+// provider roots.
 func (p *Pipeline) NotifyInventoryChanged() {
 	select {
 	case p.inventory <- struct{}{}:
 	default:
 	}
+}
+
+// Flush ingests unread usage changes before a read, waiting at most flushWait.
+func (p *Pipeline) Flush(ctx context.Context) {
+	if p == nil {
+		return
+	}
+	coordinator := p.live.Load()
+	if coordinator == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, flushWait)
+	defer cancel()
+	coordinator.Flush(ctx)
 }
 
 // Start runs until ctx is canceled, recreating a failed watcher after a bounded
@@ -107,6 +126,8 @@ func (p *Pipeline) runCoordinator(ctx context.Context, watcher transcriptWatcher
 	defer cancelCoordinator()
 	coordinator := NewCoordinator(p.store, p.ingestor, watcher, p.cfg)
 	coordinatorDone := coordinator.Start(coordinatorCtx)
+	p.live.Store(coordinator)
+	defer p.live.CompareAndSwap(coordinator, nil)
 	for {
 		select {
 		case <-ctx.Done():

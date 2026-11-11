@@ -389,6 +389,8 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	m.logger.Error("spawn: asynchronous chat start failed", "sessionID", id, "error", cause)
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
+	// The 201 has already gone out, so the request logger never sees this.
+	captureBackgroundFault(cleanupCtx, cause, "chat_spawn", "")
 	m.stopChatBestEffort(cleanupCtx, id)
 	// A failed Setup step already explains itself; the spawn stage prefix is noise.
 	message := cause.Error()
@@ -396,8 +398,9 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	if errors.As(cause, &setupErr) {
 		message = setupErr.Error()
 	}
-	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, message); err != nil {
+	if _, err := m.setProvisionStateCause(cleanupCtx, id, domain.SessionProvisionFailed, message, cause); err != nil {
 		m.logger.Error("spawn: record failed start", "sessionID", id, "error", err)
+		captureBackgroundFault(cleanupCtx, err, "chat_spawn", "record_failure")
 	}
 }
 
@@ -542,10 +545,37 @@ func (m *Manager) setProvisionState(
 	state domain.SessionProvisionState,
 	message string,
 ) (domain.SessionRecord, error) {
+	return m.setProvisionStateCause(ctx, id, state, message, nil)
+}
+
+// ProvisionObserver hears every durable provision-state write of an
+// asynchronous start: provisioning opens an attempt, ready or failed settles
+// it. cause is the failure when the writer had one. It runs on the writer's
+// goroutine, so it must not block.
+type ProvisionObserver func(ctx context.Context, rec domain.SessionRecord, state domain.SessionProvisionState, cause error)
+
+// SetProvisionObserver installs the observer. Call it during wiring, before
+// any spawn runs.
+func (m *Manager) SetProvisionObserver(fn ProvisionObserver) { m.provisionObserver = fn }
+
+func (m *Manager) setProvisionStateCause(
+	ctx context.Context,
+	id domain.SessionID,
+	state domain.SessionProvisionState,
+	message string,
+	cause error,
+) (domain.SessionRecord, error) {
 	if _, err := m.store.SetSessionProvisionState(ctx, id, state, message, m.clock()); err != nil {
 		return domain.SessionRecord{}, err
 	}
-	return m.getRecord(ctx, id)
+	rec, err := m.getRecord(ctx, id)
+	if err == nil && m.provisionObserver != nil {
+		if cause == nil && state == domain.SessionProvisionFailed {
+			cause = errors.New("asynchronous start failed")
+		}
+		m.provisionObserver(ctx, rec, state, cause)
+	}
+	return rec, err
 }
 
 // FailInterruptedProvisioning marks sessions whose background start did not
@@ -568,7 +598,7 @@ func (m *Manager) failInterruptedProvisioningRecords(ctx context.Context, recs [
 			continue
 		}
 		if _, err := m.setProvisionState(ctx, rec.ID, domain.SessionProvisionFailed,
-			"AO restarted before this session finished starting"); err != nil {
+			"Orchestrator restarted before this session finished starting"); err != nil {
 			failures = append(failures, fmt.Errorf("session %s: %w", rec.ID, err))
 			retries = append(retries, rec)
 		}
@@ -627,7 +657,7 @@ func (m *Manager) cancelAsyncChatSpawn(ctx context.Context, id domain.SessionID)
 	if err != nil || !ok || !rec.ProvisionState.IsProvisioning() {
 		return err
 	}
-	_, err = m.setProvisionState(ctx, id, domain.SessionProvisionFailed, "Session start was cancelled")
+	_, err = m.setProvisionStateCause(ctx, id, domain.SessionProvisionFailed, "Session start was cancelled", context.Canceled)
 	return err
 }
 

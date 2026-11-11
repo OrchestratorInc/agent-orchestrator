@@ -103,6 +103,11 @@ function canonicalKey(url: string, number: number): string {
 	return canonicalURL(url) || `number:${number}`;
 }
 
+/** The key that tells two observations of one pull request apart from others. */
+export function prDisplayKey(pr: { url: string; number: number }): string {
+	return canonicalKey(pr.url, pr.number);
+}
+
 function canonicalURL(rawUrl: string): string | undefined {
 	return prURL({ url: rawUrl, htmlUrl: rawUrl, mergeability: { prUrl: rawUrl } } as SessionPRSummary);
 }
@@ -233,6 +238,8 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 		primary = cardStatus("review", "pr.card.reviewRequired", "review", appI18n.t("pr.card.reviewRequiredDetail"));
 	} else if (pr.ci.state === "pending") {
 		primary = cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], prChecksUrl(pr), true);
+	} else if (ciCancelled(pr)) {
+		primary = cardStatus("ci", "pr.card.checksCancelled", "passive", undefined, [], prChecksUrl(pr));
 	} else if (pr.ci.state === "unknown") {
 		primary = cardStatus("ci", "pr.card.checksLoading", "passive", undefined, [], prChecksUrl(pr), true);
 	} else if (pr.mergeability.state === "blocked" || pr.mergeability.state === "unstable") {
@@ -259,6 +266,8 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			supporting.push(cardStatus("ci", "pr.card.checksPassing", "success", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "pending") {
 			supporting.push(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], prChecksUrl(pr), true));
+		} else if (ciCancelled(pr)) {
+			supporting.push(cardStatus("ci", "pr.card.checksCancelled", "passive", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "unknown") {
 			supporting.push(cardStatus("ci", "pr.card.checksLoading", "passive", undefined, [], prChecksUrl(pr), true));
 		}
@@ -274,6 +283,8 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			statusRows.push(cardStatus("ci", "pr.card.checksFailing", "error", undefined, [], prChecksUrl(pr)));
 		} else if (mergeReasons(pr).includes("github_checks_unavailable")) {
 			statusRows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning", undefined, [], prChecksUrl(pr)));
+		} else if (ciCancelled(pr)) {
+			statusRows.push(cardStatus("ci", "pr.card.checksCancelled", "neutral", undefined, [], prChecksUrl(pr)));
 		} else if (pr.ci.state === "pending" || pr.ci.state === "unknown") {
 			statusRows.push(cardStatus("ci", pr.ci.state === "pending" ? "pr.card.checksPending" : "pr.card.checksLoading", "neutral", undefined, [], prChecksUrl(pr), true));
 		}
@@ -292,6 +303,13 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 				label: appI18n.t("pr.merge.accessLost"),
 				detail: appI18n.t("pr.merge.accessLostDetail"),
 				tone: "warning",
+			} };
+		}
+		if (ciCancelled(pr)) {
+			return { primary, supporting, statusRows, readiness: {
+				label: appI18n.t("pr.card.checksCancelled"),
+				detail: appI18n.t("pr.merge.checksCancelledDetail"),
+				tone: "neutral",
 			} };
 		}
 		const checkingReadiness = pr.ci.state === "pending" || pr.ci.state === "unknown" || pr.mergeability.state === "unknown";
@@ -399,6 +417,7 @@ function cardStatus(
 		| "pr.card.checksUnknown"
 		| "pr.merge.noConflicts"
 		| "pr.merge.conflictsUnknown"
+		| "pr.card.checksCancelled"
 		| "pr.card.draft"
 		| "pr.card.readyToMerge"
 		| "pr.card.reviewApproved"
@@ -437,13 +456,15 @@ export function prReviewers(pr: SessionPRSummary): PRReviewer[] {
 }
 
 /** Why a PR can't merge, most fundamental first. */
-export type PRBlockReason = "draft" | "conflict" | "checks" | "checking" | "changes" | "review" | "threads";
+export type PRBlockReason = "draft" | "conflict" | "checks" | "cancelled" | "checking" | "changes" | "review" | "threads";
 
 /** The first thing stopping these facts merging; undefined when none is known. */
-export function prBlockReason(facts: { state: string; ci: string; mergeability: string; review: string; threads?: boolean }): PRBlockReason | undefined {
+export function prBlockReason(facts: { state: string; ci: string; mergeability: string; review: string; threads?: boolean; cancelled?: boolean }): PRBlockReason | undefined {
 	if (facts.state === "draft") return "draft";
 	if (facts.mergeability === "conflicting") return "conflict";
 	if (facts.ci === "failing") return "checks";
+	// A cancelled run with no replacement is settled: it needs a re-run, not a wait.
+	if (facts.cancelled) return "cancelled";
 	if (facts.ci === "pending" || facts.ci === "unknown" || facts.mergeability === "unknown") return "checking";
 	if (facts.review === "changes_requested") return "changes";
 	if (facts.review === "review_required") return "review";
@@ -457,7 +478,14 @@ export const prSummaryBlockReason = (pr: SessionPRSummary) => prBlockReason({
 	mergeability: pr.mergeability.state,
 	review: pr.review.decision,
 	threads: pr.review.hasUnresolvedHumanComments,
+	cancelled: ciCancelled(pr),
 });
+
+// A run cancelled with no replacement: the backend reports unknown and lists the
+// cancelled checks. It is settled, so it must not read as still loading.
+function ciCancelled(pr: SessionPRSummary): boolean {
+	return pr.ci.state === "unknown" && pr.ci.failingChecks.some((check) => check.status === "cancelled");
+}
 
 export function prCanMerge(pr: SessionPRSummary): boolean {
 	return (
@@ -478,14 +506,16 @@ function reviewStatusDetail(pr: SessionPRSummary): string {
 		case "approved": return appI18n.t("pr.review.requirementSatisfied");
 		case "changes_requested": return appI18n.t("pr.review.changesActive");
 		case "review_required": return appI18n.t("pr.review.requiredNotSubmitted");
-		case "none": return appI18n.t("pr.review.notRequired");
+		// Unresolved comments hold a PR back (the row is a warning) even with no review required.
+		case "none": return appI18n.t(pr.review.hasUnresolvedHumanComments ? "pr.review.unresolvedComments" : "pr.review.notRequired");
 	}
 }
 
 function mergeReadinessDetail(pr: SessionPRSummary): string {
 	if (pr.mergeability.state === "conflicting") return appI18n.t("pr.merge.reasonConflict");
-	if (pr.ci.state === "failing") return appI18n.t("pr.merge.reasonChecksFailing");
+	// Review first: the checks-failing text states the review requirement is satisfied.
 	if (!reviewAllowsMerge(pr.review.decision)) return appI18n.t("pr.merge.reasonReview");
+	if (pr.ci.state === "failing") return appI18n.t("pr.merge.reasonChecksFailing");
 	if (pr.review.hasUnresolvedHumanComments) return appI18n.t("pr.merge.reasonComments");
 	if (pr.mergeability.state !== "mergeable") return providerBlockedDetail(pr);
 	return appI18n.t("pr.merge.reasonReady");
@@ -500,7 +530,9 @@ export function prSummaryParts(pr: SessionPRSummary): PRSummaryPart[] {
 		{
 			key: "ci",
 			label: appI18n.t("pr.section.ci"),
-			status: mergeReasons(pr).includes("github_checks_unavailable") ? appI18n.t("pr.card.checksUnavailable") : ciLabel(pr.ci.state),
+			status: mergeReasons(pr).includes("github_checks_unavailable")
+				? appI18n.t("pr.card.checksUnavailable")
+				: ciCancelled(pr) ? appI18n.t("pr.card.checksCancelled") : ciLabel(pr.ci.state),
 			summary: mergeReasons(pr).includes("github_checks_unavailable") ? appI18n.t("pr.merge.checksUnavailableDetail") : ciSummary(pr),
 			links: ciLinks(pr),
 			linkTotal: pr.ci.state === "failing" ? pr.ci.failingChecks.length : 0,

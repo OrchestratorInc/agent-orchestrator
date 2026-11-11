@@ -34,21 +34,38 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao version` / `ao --version` | Print build metadata.                                                                                                             |
 | `ao daemon`                   | Run the daemon in the foreground (normally supervised by the desktop app or an OS service manager).                               |
 | `ao remote-host status/enable/disable` | Inspect or toggle this machine's authenticated remote listener through the local daemon. |
+| `ao remote-host link` | Add this machine to your AO account by signing in from another device; it then gets a fixed address. |
 
 For a self-hosted machine, use the [host setup command](../self-hosted-remote.md)
 to install the daemon with its Claude Chat runtime and start the OS user
-service. It calls `ao remote-host enable` and prints the host ID, address, and
-pairing password for **Settings → Remote hosts** on another desktop. With
-`cloudflared` installed, setup `--tunnel` calls `ao remote-host enable
---tunnel-only`: its authenticated listener binds only to loopback. Direct
+service. With `cloudflared` installed, setup `--tunnel` calls `ao remote-host
+enable --tunnel-only`: its authenticated listener binds only to loopback. At a
+terminal it then runs `ao remote-host link`; otherwise, or when the sign-in
+does not finish, it prints the host ID, address, and a one-time pairing code for
+**Settings → Remote hosts** on another desktop. Direct
 `ao remote-host enable --tunnel` keeps both LAN and Cloudflare access for users
 who deliberately want both. Check `ao remote-host status` when the HTTPS
 address is ready.
-Running `enable` again prints the current details without rotating the
-password. `status` shows the password from the host's local shell. The LAN
+Running `enable` again prints the current details and a new pairing code
+without rotating the password. `ao remote-host pair` prints another code,
+`ao remote-host devices` lists and revokes paired devices, and
+`ao remote-host require-device-credentials on` stops accepting the password. The LAN
 listener uses plain HTTP; do not publish its port directly to the internet.
-Cloudflare terminates tunnel TLS and can see its traffic; quick-tunnel
-addresses change on restart.
+Cloudflare terminates tunnel TLS and can see its traffic. Until the machine is
+linked to an account, by `ao remote-host link` or a signed-in desktop adding
+it, it uses a quick tunnel whose address changes on restart; once linked, it
+moves to a fixed address.
+
+`ao remote-host link` prints a sign-in link and a QR code, then waits up to 5
+minutes. Open the link on any device, check that it shows the same code, and
+sign in: the machine joins that AO account, every device signed in to it lists
+the machine within about 30 seconds, and the machine keeps none of the sign-in.
+`--label` sets the name devices show (default: the name the account already
+has for the machine, else the hostname); `--no-qr` prints only the link. On a
+LAN-only listener it adds a Cloudflare tunnel, as `enable --tunnel` does. Run
+it again to move the machine to another account. An agent
+without a terminal runs it in the background and reads its output; see
+[Set up a VM as an agent](../self-hosted-remote.md#set-up-a-vm-as-an-agent).
 
 ### Product commands
 
@@ -72,6 +89,7 @@ addresses change on restart.
 | `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
 | `ao session rename <id> <name>`     | `PATCH /api/v1/sessions/{id}`                  |
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
+| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}`                 |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
@@ -203,6 +221,16 @@ query values are redacted.
 
 `go run .` in `backend/` remains a compatibility wrapper around the daemon.
 
+Merge a tracked PR with its full URL and the head SHA you reviewed:
+
+```bash
+ao pr merge 42 --url https://github.com/acme/widgets/pull/42 --expected-head-sha <sha>
+```
+
+Both flags are required. The URL identifies the repository, and the daemon
+rejects the request if the tracked or provider head has changed. A rejected
+head must be reviewed again before retrying with a new SHA.
+
 PR actions are available through `ao pr merge` and
 `ao pr resolve-comments`. Review actions are available through `ao review ls`,
 `ao review trigger` (also `execute` and `restart`), `ao review cancel` (also
@@ -218,7 +246,8 @@ The CLI and daemon share the same environment-driven config:
 | `AO_RUN_FILE`         | `~/.ao/running.json` | PID/port handshake.                                                                            |
 | `AO_DATA_DIR`         | `~/.ao/data`         | SQLite data directory.                                                                         |
 | `AO_REQUEST_TIMEOUT`  | `60s`                | REST request timeout.                                                                          |
-| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (9x + 18s).    |
+| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (8x + 18s, plus the installer wait). |
+| `AO_INSTALLER_SHUTDOWN_TIMEOUT` | about `285s` | How long the daemon waits at shutdown for an agent CLI install or update it started to stop and clean up. Never less than `AO_SHUTDOWN_TIMEOUT`. A new daemon on the same data directory waits for this too. Tests set it low. |
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 
@@ -290,10 +319,11 @@ ao project set-config my-project \
   --canonical-repo-url https://github.com/my-org/my-repo
 ```
 
-`set-config` replaces the whole config. For an existing configured project, read
-`ao project get my-project --json`, preserve its `project.config` fields, add
-`canonicalRepoURL`, and submit the complete object with `--config-json`. The same
-object is accepted by `PUT /api/v1/projects/{id}/config` as `{"config": {...}}`.
+`set-config` flags change only the fields they name, so this also works for an
+existing configured project. `--config-json` replaces the whole config; to use it,
+read `ao project get my-project --json`, preserve its `project.config` fields, add
+`canonicalRepoURL`, and submit the complete object. The same object is accepted
+by `PUT /api/v1/projects/{id}/config` as `{"config": {...}}`.
 Use an HTTPS repository URL, without a PR/MR suffix, credentials, query, or fragment.
 Self-managed GitLab URLs and nested namespaces are supported. Explicit ports
 are preserved and must match too; `gitlab.example.com:8443` is a different

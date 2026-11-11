@@ -1,9 +1,9 @@
-import { Pencil } from "lucide-react";
 import { isSettingsPageOpen } from "../hooks/useAppShortcut";
-import { motion, Reorder, useDragControls } from "motion/react";
+import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
 import {
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -31,13 +31,17 @@ import { handleTerminalTabListKeyDown } from "../lib/terminal-tabs";
 import { cn } from "../lib/utils";
 import { sidebarOccupiesLayout, useUiStore, type Theme } from "../stores/ui-store";
 import type { TerminalTarget } from "../types/terminal";
-import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
-import { TerminalTabFrame } from "./TerminalTabFrame";
+import { TerminalTabFrame, terminalTabRenameInputClassName } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
+import { SessionTabsTopbar } from "./PageTopbar";
+import { beginPaneTabDrag } from "../lib/pane-drag";
+import { SESSION_TAB_KEY } from "../lib/pane-split";
+import { useSplitCloseFocused, useSplitHiddenTabKeys } from "./split-pane-context";
+import { TabContextMenu, TabMenuSpecContext, type TabMenuSpec } from "./TabContextMenu";
 
 type CenterPaneProps = {
 	session?: WorkspaceSession;
@@ -62,8 +66,8 @@ type CenterPaneProps = {
 	topbarActions?: ReactNode;
 	/** Agent-session actions (interface switch, handoff) on the primary session tab. */
 	sessionTabAction?: ReactNode;
-	/** Widen the primary tab's action slot while an interface switch spinner is showing. */
-	sessionTabActionWide?: boolean;
+	/** Keep the primary tab's action showing while an interface switch runs. */
+	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	workspaceTabs?: CenterPaneWorkspaceTab[];
@@ -87,6 +91,8 @@ export type CenterPaneWorkspaceTab = {
 	content: ReactNode;
 	onSelect: () => void;
 	onClose?: () => void;
+	/** The tab's menu; absent, the tab draws its own (a split group's tab). */
+	menu?: TabMenuSpec;
 };
 
 type AuxiliaryTab =
@@ -100,22 +106,106 @@ const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
-function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value: string }) {
+const PANE_DRAG_IGNORE = "[data-terminal-tab-action],input,a";
+
+// The session's own tab does not reorder, but it can still be dragged out of
+// the strip into a split.
+export function startSessionTabPaneDrag(event: PointerEvent<HTMLElement>) {
+	if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
+	beginPaneTabDrag(event, SESSION_TAB_KEY, event.currentTarget);
+}
+
+// The strip's slot for the session's own tab. It drags out like any tab, and
+// it is left out while the tab is shown in a split group's tab.
+export function SessionTabSlot({ children }: { children: ReactNode }) {
+	if (useSplitHiddenTabKeys().has(SESSION_TAB_KEY)) return null;
+	return (
+		<div className="flex shrink-0 self-stretch" data-terminal-tab-key={SESSION_TAB_KEY} onPointerDown={startSessionTabPaneDrag}>
+			{children}
+		</div>
+	);
+}
+
+// A reorderable strip tab. It stays inside its group, so it never covers the
+// pinned session tab or the toolbar, and keeps its hover look while dragged.
+// Pulled out of the strip vertically, it hands over to the split-pane drag.
+export function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value: string }) {
 	const dragControls = useDragControls();
+	const itemRef = useRef<HTMLDivElement>(null);
+	const x = useMotionValue(0);
+	const [dragging, setDragging] = useState(false);
+	const dragRef = useRef<{ pointerX: number; grabOffset: number; scroller: HTMLElement | null } | null>(null);
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-		if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
+		if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
 		dragControls.start(event);
+		const item = itemRef.current;
+		if (item) beginPaneTabDrag(event, value, item, settleInSlot);
 	};
+	// While dragging, the tab's x is derived from the pointer and the group's
+	// current box, not from framer's pointer delta: Reorder's edge auto-scroll
+	// and each reorder move the layout, and framer only catches x up a frame
+	// later. Recomputing on every write, scroll and commit keeps the tab under
+	// the pointer and inside the group, so it never covers the session tab.
+	const followPointer = useCallback(() => {
+		const drag = dragRef.current;
+		const item = itemRef.current;
+		const group = item?.parentElement;
+		if (!drag || !item || !group) return;
+		const offset = item.offsetLeft - group.offsetLeft;
+		const layoutLeft = group.getBoundingClientRect().left + offset;
+		const max = group.offsetWidth - item.offsetWidth - offset;
+		const next = Math.min(max, Math.max(-offset, drag.pointerX - drag.grabOffset - layoutLeft));
+		if (Math.abs(x.get() - next) > 0.01) x.set(next);
+	}, [x]);
+	useEffect(() => x.on("change", followPointer), [x, followPointer]);
+	// Lifting the tab out into a split hands its motion to the drag ghost. The
+	// tab goes straight back to its slot: letting the reorder drag animate home
+	// while followPointer still tracked the pointer could strand it a few
+	// pixels off, leaving a gap in the strip.
+	const settleInSlot = useCallback(() => {
+		dragRef.current?.scroller?.removeEventListener("scroll", followPointer);
+		dragRef.current = null;
+		dragControls.cancel();
+		x.stop();
+		x.set(0);
+		setDragging(false);
+	}, [dragControls, followPointer, x]);
+	// A tab removed mid-drag gets no onDragEnd; drop its scroll listener anyway.
+	useEffect(() => () => dragRef.current?.scroller?.removeEventListener("scroll", followPointer), [followPointer]);
+	useLayoutEffect(followPointer);
 
 	return (
 		<Reorder.Item
 			as="div"
-			className="flex shrink-0 self-stretch touch-pan-y"
+			// The opaque background keeps a dragged tab from showing the tabs it passes over.
+			className="flex shrink-0 self-stretch touch-pan-y bg-background"
+			data-dragging={dragging || undefined}
 			data-terminal-tab-key={value}
 			drag="x"
 			dragControls={dragControls}
 			dragListener={false}
+			onDrag={(event) => {
+				if (!dragRef.current) return;
+				dragRef.current.pointerX = (event as globalThis.PointerEvent).clientX;
+				followPointer();
+			}}
+			onDragEnd={() => {
+				dragRef.current?.scroller?.removeEventListener("scroll", followPointer);
+				dragRef.current = null;
+				setDragging(false);
+			}}
+			onDragStart={(event) => {
+				const item = itemRef.current;
+				if (!item) return;
+				const pointerX = (event as globalThis.PointerEvent).clientX;
+				const scroller = item.closest<HTMLElement>("[data-tab-scroll-region]");
+				dragRef.current = { pointerX, grabOffset: pointerX - item.getBoundingClientRect().left, scroller };
+				scroller?.addEventListener("scroll", followPointer);
+				setDragging(true);
+			}}
 			onPointerDown={startDrag}
+			ref={itemRef}
+			style={{ x }}
 			// Reorder needs layout measurement, but tabs should snap into place
 			// when a sibling opens or closes rather than slide.
 			transition={{ layout: { duration: 0 } }}
@@ -146,7 +236,7 @@ export function CenterPane({
 	onRenameShellTerminal,
 	topbarActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -179,6 +269,8 @@ export function CenterPane({
 	);
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const sessionId = session?.id;
+	const splitHiddenTabKeys = useSplitHiddenTabKeys();
+	const closeFocusedSplitPane = useSplitCloseFocused();
 	const auxiliaryTabs = useMemo<AuxiliaryTab[]>(
 		() => [
 			...(reviewerTerminal
@@ -195,10 +287,11 @@ export function CenterPane({
 				: []),
 			...shellTerminals.map((terminal) => ({ key: terminal.handleId, kind: "shell" as const, terminal })),
 			...(workspaceTabs ?? []).map((tab) => ({ key: tab.key, kind: "workspace" as const, tab })),
-		],
-		[reviewerChat, reviewerTerminal, shellTerminals, workspaceTabs],
+		].filter((tab) => !splitHiddenTabKeys.has(tab.key)),
+		[reviewerChat, reviewerTerminal, shellTerminals, splitHiddenTabKeys, workspaceTabs],
 	);
 	const availableAuxiliaryKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
+	const stripShellHandleIds = useMemo(() => shellTerminals.map((terminal) => terminal.handleId), [shellTerminals]);
 	const orderedAuxiliaryTabs = useMemo(() => {
 		const preferred = auxiliaryTabOrder ?? (sessionId ? (tabOrderBySession[sessionId] ?? []) : []);
 		const byKey = new Map(auxiliaryTabs.map((tab) => [tab.key, tab]));
@@ -214,8 +307,6 @@ export function CenterPane({
 	const {
 		scrollRef: tabsOverflowRef,
 		scrollToEnd: scrollTabsToEnd,
-		showLeftFade,
-		showRightFade,
 	} = useTabScrollEdges([isFullscreen, tabOverflowWatch]);
 	const previousTabCountRef = useRef(availableAuxiliaryKeys.length);
 	const target = terminalTarget ?? { kind: "worker" };
@@ -323,10 +414,11 @@ export function CenterPane({
 	useEffect(
 		() =>
 			aoBridge.app.onCloseShellTerminalShortcut(() => {
-				if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
+				if (closeFocusedSplitPane) closeFocusedSplitPane();
+				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (target.kind === "shell") onCloseShellTerminal?.(target.handleId);
 			}),
-		[activeWorkspaceTab, target, onCloseShellTerminal],
+		[activeWorkspaceTab, closeFocusedSplitPane, target, onCloseShellTerminal],
 	);
 
 	useEffect(() => {
@@ -340,10 +432,10 @@ export function CenterPane({
 
 	useEffect(() => {
 		aoBridge.app.setCloseShellTerminalShortcutEnabled(
-			Boolean(activeWorkspaceTab?.onClose) || (target.kind === "shell" && Boolean(onCloseShellTerminal)),
+			Boolean(closeFocusedSplitPane) || Boolean(activeWorkspaceTab?.onClose) || (target.kind === "shell" && Boolean(onCloseShellTerminal)),
 		);
 		return () => aoBridge.app.setCloseShellTerminalShortcutEnabled(false);
-	}, [activeWorkspaceTab, target.kind, onCloseShellTerminal]);
+	}, [activeWorkspaceTab, closeFocusedSplitPane, target.kind, onCloseShellTerminal]);
 
 	useEffect(() => {
 		if (availableAuxiliaryKeys.length > previousTabCountRef.current) scrollTabsToEnd();
@@ -358,7 +450,8 @@ export function CenterPane({
 				: target.kind === "reviewer"
 					? `reviewer:${target.handleId}`
 					: undefined);
-	const orderedAuxiliaryTabKeys = orderedAuxiliaryTabs.map((tab) => tab.key).join("|");
+	// Sorted, so reordering by drag does not scroll the strip under the pointer.
+	const auxiliaryTabSet = orderedAuxiliaryTabs.map((tab) => tab.key).sort().join("|");
 	// Reveal the active tab only when the selection or tab set changes. Keyed on
 	// strings, not the tab objects, which are rebuilt on every render and would
 	// otherwise yank a manually scrolled strip back to the active tab.
@@ -378,7 +471,7 @@ export function CenterPane({
 		if (tabRect.right > scrollRect.right) nextScrollLeft += tabRect.right - scrollRect.right;
 		if (nextScrollLeft === scrollRegion.scrollLeft) return;
 		scrollRegion.scrollTo({ behavior: "smooth", left: Math.max(0, nextScrollLeft) });
-	}, [activeAuxiliaryTabKey, orderedAuxiliaryTabKeys]);
+	}, [activeAuxiliaryTabKey, auxiliaryTabSet]);
 
 	useEffect(() => {
 		const pane = paneRef.current;
@@ -453,24 +546,21 @@ export function CenterPane({
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
 	const terminalTopbar = (
-		<div className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
-
-			<div className="session-topbar-surface flex min-w-0 flex-1" data-testid="session-workspace-topbar">
-				<div
-					className={cn(
-						"flex min-w-0 shrink items-stretch",
-						!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
-						!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
-					)}
-					data-testid="session-terminal-region"
-					ref={clearanceRef}
-					style={{
-						width: terminalBounds.width > 0 ? terminalBounds.width : "100%",
-					}}
-				>
+		<SessionTabsTopbar
+			fullscreen={isFullscreen}
+			actions={topbarActions}
+			clearanceClassName={cn(
+				!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
+				!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
+			)}
+			clearanceRef={clearanceRef}
+			tabsTrailing={tabStripAction}
+			hideActions={isFullscreen}
+			regionWidth={terminalBounds.width > 0 ? terminalBounds.width : "100%"}
+			tabs={
 					<div
 							aria-label={t("terminal.tabsAria")}
-							className="flex h-full min-w-0 flex-1 items-stretch"
+							className="flex h-full min-w-0 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
 							ref={tabListRef}
 							role="tablist"
@@ -478,24 +568,30 @@ export function CenterPane({
 							<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
 								<motion.div
 									ref={tabsOverflowRef}
-									className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
+									className="session-tab-scroll-region edge-fade edge-fade-x scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
+									data-tab-scroll-region
 									layoutScroll
 								>
-								<div className="flex w-max items-stretch">
+								{/* The macOS header is a window drag region outside its controls; the
+								    whole tab row opts out so separators and tab edges still take
+								    wheel scrolling and clicks. */}
+								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
-									{session ? (
-										<SessionPaneTab
-											isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
-											label={sessionTabLabel}
-											onSelect={onSelectSessionTerminal}
-											onRenamed={refreshWorkspaces}
-											session={session}
-											tabAction={sessionTabAction}
-											tabActionWide={sessionTabActionWide}
-										/>
-									) : (
-										<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
-									)}
+									<SessionTabSlot>
+										{session ? (
+											<SessionPaneTab
+												isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
+												label={sessionTabLabel}
+												onSelect={onSelectSessionTerminal}
+												onRenamed={refreshWorkspaces}
+												session={session}
+												tabAction={sessionTabAction}
+												tabActionPinned={sessionTabActionPinned}
+											/>
+										) : (
+											<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
+										)}
+									</SessionTabSlot>
 									<Reorder.Group
 										as="div"
 										axis="x"
@@ -507,11 +603,10 @@ export function CenterPane({
 											<DraggableWorkspaceTab key={tab.key} value={tab.key}>
 												{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
 													<SessionPaneTab
-														appearance="connected"
 														icon={
 															<AgentAvatar
 																provider={tab.terminal.harness}
-																className="size-terminal-agent-icon"
+																className="size-icon-sm!"
 																decorative
 															/>
 														}
@@ -522,6 +617,8 @@ export function CenterPane({
 																? onSelectReviewerTerminal?.(tab.terminal)
 																: onSelectReviewerChat?.(tab.terminal)
 														}
+														tabKey={tab.key}
+														tabMenu
 														title={tab.terminal.harness}
 													/>
 												) : tab.kind === "shell" ? (
@@ -536,9 +633,14 @@ export function CenterPane({
 														}
 														onSelect={() => onSelectShellTerminal?.(tab.terminal.handleId)}
 														shell={tab.terminal}
+														stripShellHandleIds={stripShellHandleIds}
 													/>
 												) : (
-													tab.tab.content
+													tab.tab.menu ? (
+														<TabContextMenu spec={{ ...tab.tab.menu, closeShortcut: tab.key === workspaceActiveTabKey }}>
+															{tab.tab.content}
+														</TabContextMenu>
+													) : tab.tab.content
 												)}
 											</DraggableWorkspaceTab>
 										))}
@@ -546,22 +648,10 @@ export function CenterPane({
 									{workspaceTabActions}
 								</div>
 							</motion.div>
-								{showLeftFade ? <div aria-hidden="true" className="session-tab-scroll-fade session-tab-scroll-fade--left" /> : null}
-								{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 							</div>
 					</div>
-				</div>
-				{isFullscreen ? null : (
-					<div
-						className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
-			data-testid="session-action-region"
-		>
-			{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-			{topbarActions}
-					</div>
-				)}
-			</div>
-		</div>
+			}
+		/>
 	);
 
 	return (
@@ -611,43 +701,56 @@ export function CenterPane({
 	);
 }
 
+// The interface switch arrives as a shared topbar control (28px button, or a
+// 28px status with a cancel button). In the tab's icon slot it is resized to
+// match the close and menu controls: a 16px box, 13px glyph, 28px hit area.
+const sessionTabActionClassName = cn(
+	"grid place-items-center [&_svg]:size-icon-sm",
+	"[&_[data-interface-switch]]:relative [&_[data-interface-switch]]:size-icon-base [&_[data-interface-switch]]:rounded-sm [&_[data-interface-switch]]:after:absolute [&_[data-interface-switch]]:after:-inset-1.5 [&_[data-interface-switch]]:after:content-['']",
+	"[&_[role=status]]:size-icon-base [&_[role=status]_button]:rounded-sm [&_[role=status]_button]:before:absolute [&_[role=status]_button]:before:-inset-1.5 [&_[role=status]_button]:before:content-['']",
+);
+
 type SessionPaneTabProps = {
 	label: string;
 	isActive: boolean;
-	appearance?: "primary" | "connected";
 	onSelect?: () => void;
 	onRenamed?: () => void | Promise<void>;
 	session?: WorkspaceSession;
+	/** The agent shown without a session; its mark is the icon and its name joins the label. */
+	provider?: string;
 	icon?: ReactNode;
 	title?: string;
-	/** Session-scoped controls (interface switch, handoff) beside the tab label. */
+	/** Session-scoped controls (interface switch, handoff) in the tab's icon slot. */
 	tabAction?: ReactNode;
-	/** Only while switching: reserve action width so the spinner does not cover the title. */
-	tabActionWide?: boolean;
+	/** Keep the action showing at rest, e.g. while an interface switch runs. */
+	tabActionPinned?: boolean;
+	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
+	tabMenu?: boolean;
+	/** The tab's strip key, for split actions in its menu. */
+	tabKey?: string;
 };
 
-// Shared tab chrome: the open tab is highlighted with the same rounded
-// background as the inspector rail tabs (Summary · Reviews · Browser), and
-// the full label only becomes the hover tooltip when the tab strip is
-// crowded enough to truncate it.
+// The session, reviewer and no-session tabs of the strip. The full label only
+// becomes the hover tooltip when the tab strip is crowded enough to truncate it.
 export function SessionPaneTab({
 	label,
 	isActive,
-	appearance = "primary",
 	onSelect,
 	onRenamed,
 	session,
+	provider = session?.provider,
 	icon,
 	title,
 	tabAction,
-	tabActionWide = false,
+	tabActionPinned = false,
+	tabMenu = false,
+	tabKey = SESSION_TAB_KEY,
 }: SessionPaneTabProps) {
 	const { t } = useTranslation();
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
 	const activityLabel = session ? getAgentActivityView(session.activity, t).label : undefined;
-	const providerLabel = session ? agentLabel(session.provider) : undefined;
-	const tabIcon = session ? <AgentAvatar className="size-terminal-agent-icon" decorative provider={session.provider} /> : icon;
-	const connected = appearance === "connected";
+	const providerLabel = provider ? agentLabel(provider) : undefined;
+	const tabIcon = provider ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project
@@ -655,35 +758,30 @@ export function SessionPaneTab({
 	const renameSession = onRenamed && session && !isOrchestratorSession(session) ? session : undefined;
 	const rename = useSessionRename(renameSession, onRenamed);
 	const editingContent = renameSession && rename.isEditing ? (
-		<div className="flex h-full min-w-0 flex-1 items-center gap-2 px-2">
-			{tabIcon}
-			<input
-				aria-label={t("shell.renameSession", { title: renameSession.title })}
-				autoFocus
-				className="min-w-0 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
-				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
-				onBlur={() => void rename.commit()}
-				onChange={(event) => rename.setDraft(event.target.value)}
-				onFocus={(event) => event.currentTarget.select()}
-				onKeyDown={(event) => {
-					if (event.key === "Enter") {
-						event.preventDefault();
-						event.currentTarget.blur();
-					} else if (event.key === "Escape") {
-						event.preventDefault();
-						rename.cancel();
-					}
-				}}
-				value={rename.draft}
-			/>
-		</div>
+		<input
+			aria-label={t("shell.renameSession", { title: renameSession.title })}
+			autoFocus
+			className={terminalTabRenameInputClassName}
+			maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
+			onBlur={() => void rename.commit()}
+			onChange={(event) => rename.setDraft(event.target.value)}
+			onFocus={(event) => event.currentTarget.select()}
+			onKeyDown={(event) => {
+				if (event.key === "Enter") {
+					event.preventDefault();
+					event.currentTarget.blur();
+				} else if (event.key === "Escape") {
+					event.preventDefault();
+					rename.cancel();
+				}
+			}}
+			value={rename.draft}
+		/>
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			action={!rename.isEditing && tabAction ? <span data-testid="session-tab-action">{tabAction}</span> : undefined}
-			// Idle tabs keep the overlay ⋮ slot (title looks like before). Only while
-			// switching do we reserve width so the spinner cannot cover the label.
-			actionLayout={tabActionWide ? "inline" : "overlay"}
+			action={!rename.isEditing && tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			actionPinned={tabActionPinned}
 			active={isActive}
 			buttonProps={{
 				"aria-current": isActive,
@@ -713,26 +811,28 @@ export function SessionPaneTab({
 				type: "button",
 			}}
 			buttonRef={ref}
-			className="w-shell-tab-connected min-w-shell-tab-min"
-			data-terminal-role={connected ? undefined : "primary"}
 			editingContent={editingContent}
-		>
-			{tabIcon}
-			<span className="truncate">{label}</span>
-		</TerminalTabFrame>
+			editingValue={rename.draft}
+			icon={tabIcon}
+			label={label}
+		/>
 	);
-	if (!renameSession || rename.isEditing) return tabFrame;
+	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
+	// Archive only where the ⇧⌘A confirmation is mounted (SessionTopbarActions):
+	// an active local or remote worker. The orchestrator goes with its project.
+	const menu: TabMenuSpec = session
+		? {
+				kind: "session",
+				tabKey,
+				session,
+				onRename: renameSession ? rename.begin : undefined,
+				canArchive: !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session),
+			}
+		: { kind: "plain", tabKey };
+	// The ⋮ button in the action slot opens this same spec.
 	return (
-		<ContextMenu>
-			<ContextMenuTrigger asChild>
-				<span className="contents">{tabFrame}</span>
-			</ContextMenuTrigger>
-			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem aria-label={t("shell.renameSession", { title: renameSession.title })} onSelect={rename.begin}>
-					<Pencil aria-hidden="true" />
-					{t("shell.rename")}
-				</ContextMenuItem>
-			</ContextMenuContent>
-		</ContextMenu>
+		<TabMenuSpecContext.Provider value={menu}>
+			<TabContextMenu spec={menu}>{tabFrame}</TabContextMenu>
+		</TabMenuSpecContext.Provider>
 	);
 }
