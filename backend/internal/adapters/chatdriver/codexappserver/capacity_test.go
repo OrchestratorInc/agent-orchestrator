@@ -32,8 +32,12 @@ func TestCapacityNormalizationIncludesBucketsAndRejectsMalformedWindows(t *testi
 	if observed.Overall.Secondary != nil || !observed.Overall.InvalidWindow {
 		t.Fatalf("out-of-range window was accepted or not flagged: %#v", observed.Overall)
 	}
-	if observed.AdditionalBuckets[0].InvalidWindow {
-		t.Fatalf("absent window was flagged invalid: %#v", observed.AdditionalBuckets[0])
+	if observed.AdditionalBuckets[0].InvalidWindow || observed.DroppedBucket {
+		t.Fatalf("absent window or valid bucket was flagged: %#v", observed)
+	}
+	envelope.RateLimitsByLimitID["bad"] = capacityWireBucket{LimitID: new(strings.Repeat("x", 161))}
+	if !capacityObservationFromEnvelope(envelope, time.Unix(1, 0), false).DroppedBucket {
+		t.Fatal("bucket with an invalid limit id was dropped without a flag")
 	}
 	if len(observed.AdditionalBuckets) != 2 || observed.AdditionalBuckets[0].LimitID != "alpha" || observed.AdditionalBuckets[1].LimitID != "spark" || observed.AdditionalBuckets[1].Reached != domain.CodexCapacityNotReached {
 		t.Fatalf("additional buckets = %#v", observed.AdditionalBuckets)

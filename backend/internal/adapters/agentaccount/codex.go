@@ -131,7 +131,7 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 	}
 	out := domain.AgentAccountLimits{
 		Windows: []domain.AgentAccountLimitWindow{}, FetchedAt: time.Now().UTC(),
-		AutoResumeResetsAt: capacity.AutoResumeResetsAt, Incomplete: capacity.Partial,
+		AutoResumeResetsAt: capacity.AutoResumeResetsAt, Incomplete: capacity.Partial || capacity.DroppedBucket,
 	}
 	addBucket := func(bucket *domain.CodexCapacityBucket, prefix string) {
 		if bucket == nil {

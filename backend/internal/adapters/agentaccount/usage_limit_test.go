@@ -80,6 +80,7 @@ func TestCodexLimitsIncomplete(t *testing.T) {
 		incomplete bool
 	}{
 		{"complete", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached}}, false},
+		{"dropped bucket", ports.CodexCapacityObservation{DroppedBucket: true, Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached}}, true},
 		{"partial read", ports.CodexCapacityObservation{Partial: true, Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached}}, true},
 		{"dropped window", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached, InvalidWindow: true}}, true},
 		{"reached bucket", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached},
