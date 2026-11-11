@@ -6907,6 +6907,7 @@ export interface components {
             endpoints: components["schemas"]["MobileEndpoint"][];
             host: string;
             hostId: string;
+            hostKey?: string;
             keepAwake: components["schemas"]["ControllersKeepAwakeStatus"];
             loopbackOnly: boolean;
             noPublicTunnel: boolean;

@@ -2838,6 +2838,9 @@ type MobileStatusResponse struct {
 	// HostID is this machine's stable identity, echoed into the pairing code.
 	// The phone checks every endpoint it races against this value.
 	HostID string `json:"hostId"`
+	// HostKey is the machine's Ed25519 public key, unpadded base64url, echoed
+	// into the pairing code. The phone encrypts its traffic to the key holder.
+	HostKey string `json:"hostKey,omitempty"`
 	// Tunnel is the managed remote-access connector's state, so the desktop can
 	// show progress during the tens of seconds before it is advertisable.
 	Tunnel mobilebridge.TunnelStatus `json:"tunnel"`

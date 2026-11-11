@@ -26,6 +26,7 @@ require (
 	github.com/unixshells/vt-go v0.2.0
 	github.com/unreallabsai/unreal-agent v0.1.1
 	github.com/yuin/goldmark v1.8.2
+	golang.org/x/crypto v0.51.0
 	golang.org/x/net v0.53.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
@@ -65,7 +66,6 @@ require (
 	github.com/u-root/u-root v0.16.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/image v0.46.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/libc v1.72.3 // indirect

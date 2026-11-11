@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 type LANManager struct {
 	handler     http.Handler // shared router, already auth-wrapped
 	tunnel      http.Handler // lanTunnelPath, behind the same auth
+	hostKey     func() (ed25519.PrivateKey, error)
 	defaultPort int
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
@@ -206,6 +208,12 @@ func (m *LANManager) UseDeviceCredentials(devices *mobilebridge.AccessDevices, c
 	m.state.devices, m.state.codes = devices, codes
 }
 
+// UseHostKey sets where the e2ee route gets the key it signs handshakes with.
+// Call it before Start.
+func (m *LANManager) UseHostKey(load func() (ed25519.PrivateKey, error)) {
+	m.hostKey = load
+}
+
 // SetPasswordLoginDisabled turns the pairing password off or on. Off closes its connections.
 func (m *LANManager) SetPasswordLoginDisabled(off bool) {
 	m.transitionMu.Lock()
@@ -367,6 +375,10 @@ func (m *LANManager) dispatch() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == lanTunnelPath {
 			m.tunnel.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == e2eePath {
+			m.serveE2EE(w, r)
 			return
 		}
 		m.handler.ServeHTTP(w, r)

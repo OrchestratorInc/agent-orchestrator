@@ -511,6 +511,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 		}),
 		Tunnel:                   b.tunnelStatus(),
 		HostID:                   b.HostID,
+		HostKey:                  b.hostPublicKey(),
 		RequireDeviceCredentials: st.RequireDeviceCredentials,
 	}
 	if b.Devices != nil {

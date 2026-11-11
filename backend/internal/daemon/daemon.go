@@ -6,6 +6,7 @@ package daemon
 import (
 	"cmp"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1301,6 +1302,7 @@ func Run(buildVersion string) error {
 	// the LAN surface and loopback surface never drift apart.
 	lan := httpd.NewMobileLAN(srv.Handler(), hostIdentity.HostID, mobilebridge.DefaultPort, log, telemetrySink)
 	lan.UseDeviceCredentials(accessDevices, pairingCodes)
+	lan.UseHostKey(func() (ed25519.PrivateKey, error) { return mobilebridge.HostKey(bs.ConfigPath) })
 	bs.LAN = lan
 
 	// Restore Connect Mobile across a daemon restart: if the bridge was left
