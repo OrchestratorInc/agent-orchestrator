@@ -308,3 +308,35 @@ func TestAutomationAttributedAsyncProbeSettlesWithoutRunID(t *testing.T) {
 		t.Fatalf("failed async probe remained reserved: %v", err)
 	}
 }
+
+func TestAutoSpawnManualFailuresDoNotRetainNewConfigurations(t *testing.T) {
+	svc, _, fc, _ := newBreakerService(t)
+	fc.spawnErr = fmt.Errorf("spawn: %w", sessionmanager.ErrUnsupportedModel)
+	for i := 0; i < 50; i++ {
+		cfg := manualStart
+		cfg.AgentConfig.Model = fmt.Sprintf("manual-model-%d", i)
+		if _, _, _, err := svc.Spawn(t.Context(), cfg); err == nil {
+			t.Fatal("expected manual failure")
+		}
+	}
+	if got := len(svc.autoSpawns.streaks); got != 0 {
+		t.Fatalf("retained %d manual configurations, want zero", got)
+	}
+	for i := 0; i < 3; i++ {
+		_, _, _, _ = svc.Spawn(t.Context(), intakeStart)
+	}
+	if got := len(svc.autoSpawns.streaks); got != 1 {
+		t.Fatalf("automatic streaks = %d, want one", got)
+	}
+	_, _, _, _ = svc.Spawn(t.Context(), manualStart)
+	if _, _, _, err := svc.Spawn(t.Context(), intakeStart); spawnCode(err) != "AUTO_SPAWN_PAUSED" {
+		t.Fatalf("manual failure changed existing pause: %v", err)
+	}
+	fc.spawnErr = nil
+	if _, _, _, err := svc.Spawn(t.Context(), manualStart); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(svc.autoSpawns.streaks); got != 0 {
+		t.Fatalf("manual success retained matching pause: %d", got)
+	}
+}

@@ -88,6 +88,9 @@ func (b *autoSpawnBreaker) begin(key autoSpawnKey, settings string, automatic bo
 	}
 	streak := b.current(key, settings)
 	if streak == nil {
+		if !automatic {
+			return nil, false
+		}
 		streak = &autoSpawnStreak{settings: settings}
 		b.streaks[key] = streak
 	}
