@@ -305,6 +305,43 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
+	// Gemini's Account has no env_ method, but its own key method saves
+	// GEMINI_API_KEY in AO's store, so a fresh visit still loads saved keys.
+	it("loads saved keys for Gemini's key method and reloads them after a save", async () => {
+		const readiness = { agents: [agentReadiness("gemini", "Gemini CLI", { authentication: "unauthorized" })] };
+		let keyLoads = 0;
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "gemini", action: "login", available: true, launchMode: "terminal", methods: [
+				{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true },
+				{ id: "native", label: "Other native sign-in", secret: false },
+			] }] } } as never;
+			if (path === "/api/v1/agents/provider-keys") {
+				keyLoads += 1;
+				return { data: { keys: [{ name: "GEMINI_API_KEY", label: "Gemini", agents: ["gemini", "opencode", "pi"], configured: keyLoads > 1, checkable: true, device: false, deviceAvailable: true }] } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness/ensure" || path === "/api/v1/agents/refresh") return { data: readiness } as never;
+			if (path === "/api/v1/agents/{agent}/auth/operations") return { data: { id: "login-gemini", agentId: "gemini", method: "gemini_api_key", status: "succeeded", expiresAt: "2026-10-28T12:00:00Z" } } as never;
+			if (path === "/api/v1/agents/{agent}/probe") return { data: { agent: { id: "gemini", authStatus: "configured" }, supported: true, installed: true } } as never;
+			return { data: undefined } as never;
+		});
+		const user = userEvent.setup();
+		renderSection();
+		const page = await findAgentRow("gemini");
+		await user.click(await within(page).findByRole("button", { name: "Login" }));
+		expect(await within(page).findByText("AO also gives this key to OpenCode, Pi, which read GEMINI_API_KEY.")).toBeVisible();
+		expect(keyLoads).toBe(1);
+
+		await user.type(within(page).getByLabelText("API key"), "sk-gemini");
+		await user.click(within(page).getByRole("button", { name: "Save and verify" }));
+		await waitFor(() => expect(keyLoads).toBe(2));
+	});
+
 	it("blocks updates during inline sign-in and releases the guard after cancellation", async () => {
 		mockInstalledOperations("npm");
 		const login = { id: "login-update-guard", agentId: "codex", method: "browser", status: "running", expiresAt: "2026-10-28T12:00:00Z", loginUrl: "https://auth.openai.com/authorize" };

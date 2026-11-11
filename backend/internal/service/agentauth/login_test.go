@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1244,5 +1245,111 @@ func TestLoginFailsClosedWhenSurvivingTerminalsCannotBeChecked(t *testing.T) {
 				t.Fatalf("expected an inconclusive check to refuse login: %v", err)
 			}
 		})
+	}
+}
+
+// A sign-in that cannot release the old API-key claim is incomplete: new
+// sessions would still get, and bill, that key. Both completion paths end
+// failed and keep the claim, so the panel offers a retry.
+func TestSignInFailsWhenTheKeyClaimCannotBeReleased(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a data directory the test user cannot write")
+	}
+	finish := func(t *testing.T, svc *Service, agentID, id string) string {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			snapshot, err := svc.Login(t.Context(), agentID, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Status != "running" {
+				return snapshot.Status
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("sign-in did not finish")
+		return ""
+	}
+	readOnly := func(t *testing.T, dir string) {
+		t.Helper()
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	}
+	t.Run("account sign-in", func(t *testing.T) {
+		svc := loginTestService(t, "succeed")
+		svc.executables = executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil })
+		svc.dataDir = t.TempDir()
+		claimAnthropicKeyForClaude(t, svc.dataDir)
+		if err := os.MkdirAll(filepath.Join(svc.dataDir, authWorkspaceRootName, "ui-claude-code"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		readOnly(t, svc.dataDir)
+		started, err := svc.StartLogin(t.Context(), "claude-code", "browser", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status := finish(t, svc, "claude-code", started.ID); status != "failed" {
+			t.Fatalf("status = %q, want failed", status)
+		}
+		if _, withhold, _ := providerkeys.ForSession(svc.dataDir, "claude-code"); len(withhold) != 0 {
+			t.Fatalf("claim dropped: withhold=%v", withhold)
+		}
+	})
+	t.Run("guided native sign-in", func(t *testing.T) {
+		t.Setenv("GEMINI_API_KEY", "")
+		t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+		dataDir := t.TempDir()
+		if err := providerkeys.Save(t.Context(), dataDir, "GEMINI_API_KEY", "ao-gemini-key"); err != nil {
+			t.Fatal(err)
+		}
+		if err := providerkeys.ClaimForHarness(t.Context(), dataDir, "GEMINI_API_KEY", "gemini"); err != nil {
+			t.Fatal(err)
+		}
+		pty := &guidedTerminalFake{output: "Waiting for authentication...\n"}
+		svc := NewWithAgentResolver(foundExecutable("gemini"), &signInProberFake{state: domain.AgentAuthenticationAuthorized}, pty, dataDir)
+		t.Cleanup(svc.Close)
+		started, err := svc.StartLogin(t.Context(), "gemini", "native", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		readOnly(t, dataDir)
+		pty.mu.Lock()
+		pty.alive = false
+		pty.mu.Unlock()
+		if status := finish(t, svc, "gemini", started.ID); status != "failed" {
+			t.Fatalf("status = %q, want failed", status)
+		}
+		if _, withhold, _ := providerkeys.ForSession(dataDir, "gemini"); len(withhold) != 0 {
+			t.Fatalf("claim dropped: withhold=%v", withhold)
+		}
+	})
+}
+
+// `ao claude-login` runs Claude Code's own login in a terminal and then asks
+// the daemon to record it, so the daemon alone changes AO's key claims.
+func TestRecordSignInReleasesTheKeyClaimAndEarlierSetupToken(t *testing.T) {
+	dataDir := t.TempDir()
+	svc := NewWithAgentResolver(executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil }), nil, nil, dataDir)
+	t.Cleanup(svc.Close)
+	if err := claudecode.SaveLocalOAuthToken(dataDir, []byte("sk-ant-oat01-earlier-setup-token")); err != nil {
+		t.Fatal(err)
+	}
+	claimAnthropicKeyForClaude(t, dataDir)
+	released, err := svc.RecordSignIn(t.Context(), "claude-code")
+	if err != nil || released != "ANTHROPIC_API_KEY" {
+		t.Fatalf("RecordSignIn = %q, %v", released, err)
+	}
+	assertClaudeKeyReleased(t, dataDir)
+	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(dataDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("earlier setup token survived a newer sign-in: %v", err)
+	}
+	if released, err := svc.RecordSignIn(t.Context(), "claude-code"); err != nil || released != "" {
+		t.Fatalf("second RecordSignIn = %q, %v; want nothing left to release", released, err)
+	}
+	if _, err := svc.RecordSignIn(t.Context(), "not-a-harness"); err == nil {
+		t.Fatal("recorded a sign-in for an unknown harness")
 	}
 }

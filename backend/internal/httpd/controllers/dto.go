@@ -195,6 +195,12 @@ type CatalogProviderParam struct {
 	Provider string `path:"provider" description:"Provider ID from the harness's catalog."`
 }
 
+// RecordAgentSignInResponse names the AO-saved key the daemon stopped passing
+// the harness after its sign-in, if any.
+type RecordAgentSignInResponse struct {
+	ReleasedKey string `json:"releasedKey,omitempty"`
+}
+
 // ListCatalogProvidersResponse lists the key-only providers in a harness's
 // own provider catalog.
 type ListCatalogProvidersResponse struct {

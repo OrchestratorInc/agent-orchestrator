@@ -40,6 +40,12 @@ type ProviderKeyService interface {
 	CheckProviderKey(ctx context.Context, name, secret string) (agentauth.ProviderKeyCheck, error)
 }
 
+// AgentSignInRecorder applies a sign-in completed in the harness's own
+// terminal login to AO's state, so the CLI never writes that state itself.
+type AgentSignInRecorder interface {
+	RecordSignIn(ctx context.Context, agentID string) (string, error)
+}
+
 // ProviderCatalogService reads a harness's own provider catalog.
 type ProviderCatalogService interface {
 	CatalogProviders(ctx context.Context, agentID string) ([]agentauth.CatalogProvider, error)
@@ -80,6 +86,22 @@ func (c *AgentAuthController) registerUILogin(r chi.Router) {
 	r.Delete("/agents/{agent}/auth/operations/{operationId}", c.uiLogin)
 	r.Post("/agents/{agent}/auth/operations/{operationId}/actions", c.uiLoginAction)
 	r.Post("/agents/{agent}/auth/operations/{operationId}/code", c.submitUILoginCode)
+	r.Post("/agents/{agent}/auth/signed-in", c.recordSignIn)
+}
+
+func (c *AgentAuthController) recordSignIn(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	svc, ok := c.Svc.(AgentSignInRecorder)
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, "/api/v1/agents/{agent}/auth/signed-in")
+		return
+	}
+	released, err := svc.RecordSignIn(r.Context(), chi.URLParam(r, "agent"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, RecordAgentSignInResponse{ReleasedKey: released})
 }
 
 func (c *AgentAuthController) uiLoginAction(w http.ResponseWriter, r *http.Request) {

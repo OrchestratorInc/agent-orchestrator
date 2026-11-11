@@ -2037,6 +2037,12 @@ func agentOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/signed-in", id: "recordAgentSignIn", tag: "agents",
+			summary:    "Apply a sign-in completed in an agent's own terminal login",
+			pathParams: []any{controllers.AgentIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.RecordAgentSignInResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/agents/{agent}/auth/providers", id: "listAgentCatalogProviders", tag: "agents",
 			summary:    "List the key-only providers in an agent's own provider catalog on this device",
 			pathParams: []any{controllers.AgentIDParam{}},

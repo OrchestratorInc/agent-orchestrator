@@ -31,6 +31,9 @@ type fakeAgentAuthService struct {
 	uiOperation string
 	uiCode      string
 	codeCalls   int
+	signedInID  string
+	releasedKey string
+	recordErr   error
 }
 
 func (f *fakeAgentAuthService) StartLogin(_ context.Context, agentID, method, secret string) (agentauth.LoginSnapshot, error) {
@@ -278,6 +281,7 @@ func TestAgentAuthNotImplementedWithoutService(t *testing.T) {
 		{method: http.MethodGet, path: "/api/v1/agents/codex/auth/operations/login-1"},
 		{method: http.MethodDelete, path: "/api/v1/agents/codex/auth/operations/login-1"},
 		{method: http.MethodPost, path: "/api/v1/agents/codex/auth/operations/login-1/actions"},
+		{method: http.MethodPost, path: "/api/v1/agents/codex/auth/signed-in"},
 	} {
 		body, status, _ := doRequest(t, server, request.method, request.path, "")
 		if status != http.StatusNotImplemented || !strings.Contains(string(body), `"code":"NOT_IMPLEMENTED"`) {
@@ -313,5 +317,26 @@ func TestAgentLogoutRouteIgnoresClientCommandsAndPreservesErrors(t *testing.T) {
 				t.Fatalf("missing request id: %s", body)
 			}
 		})
+	}
+}
+
+func (f *fakeAgentAuthService) RecordSignIn(_ context.Context, agentID string) (string, error) {
+	f.signedInID = agentID
+	return f.releasedKey, f.recordErr
+}
+
+// `ao claude-login` reports a completed terminal sign-in here instead of
+// writing AO's key claims itself.
+func TestAgentSignInRecordRunsInTheDaemon(t *testing.T) {
+	svc := &fakeAgentAuthService{releasedKey: "ANTHROPIC_API_KEY"}
+	server := newAgentAuthTestServer(t, svc)
+	body, status, _ := doRequest(t, server, http.MethodPost, "/api/v1/agents/claude-code/auth/signed-in", "")
+	if status != http.StatusOK || svc.signedInID != "claude-code" || !strings.Contains(string(body), `"releasedKey":"ANTHROPIC_API_KEY"`) {
+		t.Fatalf("status=%d agent=%q body=%s", status, svc.signedInID, body)
+	}
+	svc.recordErr = apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO could not stop passing this harness its earlier API key.")
+	body, status, _ = doRequest(t, server, http.MethodPost, "/api/v1/agents/claude-code/auth/signed-in", "")
+	if status != http.StatusServiceUnavailable || !strings.Contains(string(body), `"code":"AGENT_AUTH_STORE_UNAVAILABLE"`) {
+		t.Fatalf("status=%d body=%s", status, body)
 	}
 }

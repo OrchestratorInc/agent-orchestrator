@@ -73,3 +73,56 @@ func TestStartupRepublicationSkipsKeysRemovedMeanwhile(t *testing.T) {
 		t.Fatalf("republished removed keys: %v", published)
 	}
 }
+
+// An OpenHands save whose key step fails after the model was stored must put
+// the earlier model back, or later sessions pair the new model with the old key.
+func TestOpenHandsModelRollsBackWhenTheKeySaveFails(t *testing.T) {
+	stubDeviceEnvironment(t)
+	publishProviderKey = func(context.Context, string, string, string) error { return providerkeys.ErrUserValue }
+	t.Setenv("LLM_API_KEY", "")
+	t.Setenv("LLM_MODEL", "")
+	t.Cleanup(func() {
+		_ = providerkeys.RestoreInherited("LLM_API_KEY")
+		_ = providerkeys.RestoreInherited("LLM_MODEL")
+	})
+	dir := t.TempDir()
+	svc := NewWithAgentResolver(foundExecutable("openhands"), nil, nil, dir)
+	if _, err := svc.StartLoginWithModel(t.Context(), "openhands", "env_LLM_API_KEY", "old-key", "openai/gpt-old"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartLoginWithOptions(t.Context(), "openhands", "env_LLM_API_KEY", "new-key", LoginOptions{Model: "openai/gpt-new", Device: new(true)}); err == nil {
+		t.Fatal("reported success although sharing the key failed")
+	}
+	keys, err := providerkeys.Load(dir)
+	if err != nil || keys["LLM_MODEL"] != "openai/gpt-old" || keys["LLM_API_KEY"] != "old-key" {
+		t.Fatalf("store after a failed save = %v, %v", keys, err)
+	}
+	if got := os.Getenv("LLM_MODEL"); got != "openai/gpt-old" {
+		t.Fatalf("active LLM_MODEL = %q, want the earlier model", got)
+	}
+}
+
+// A Qwen save whose key step fails must leave Qwen's earlier settings.json.
+func TestQwenSettingsRollBackWhenTheKeySaveFails(t *testing.T) {
+	stubDeviceEnvironment(t)
+	publishProviderKey = func(context.Context, string, string, string) error { return providerkeys.ErrUserValue }
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("OPENROUTER_API_KEY") })
+	home := filepath.Join(t.TempDir(), "qwen")
+	t.Setenv("QWEN_HOME", home)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(home, "settings.json")
+	before := []byte("{\n  // mine\n  \"model\": {\"name\": \"qwen-old\"}\n}\n")
+	if err := os.WriteFile(settings, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewWithAgentResolver(foundExecutable("qwen"), nil, nil, t.TempDir())
+	if _, err := svc.StartLoginWithOptions(t.Context(), "qwen", "env_OPENROUTER_API_KEY", "sk-or-new", LoginOptions{Model: "or-new", Device: new(true)}); err == nil {
+		t.Fatal("reported success although sharing the key failed")
+	}
+	if got, _ := os.ReadFile(settings); string(got) != string(before) {
+		t.Fatalf("settings.json = %q, want the earlier settings", got)
+	}
+}

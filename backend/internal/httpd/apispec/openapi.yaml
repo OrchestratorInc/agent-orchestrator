@@ -420,6 +420,45 @@ paths:
       summary: List the model IDs an agent's own catalog offers for one provider
       tags:
       - agents
+  /api/v1/agents/{agent}/auth/signed-in:
+    post:
+      operationId: recordAgentSignIn
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordAgentSignInResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Apply a sign-in completed in an agent's own terminal login
+      tags:
+      - agents
   /api/v1/agents/{agent}/chat/prewarm:
     post:
       operationId: prewarmChatAgent
@@ -20264,6 +20303,11 @@ components:
           type: integer
       required:
       - pat
+      type: object
+    RecordAgentSignInResponse:
+      properties:
+        releasedKey:
+          type: string
       type: object
     RegisterPushDeviceRequest:
       properties:

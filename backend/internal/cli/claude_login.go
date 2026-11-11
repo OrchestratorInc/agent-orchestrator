@@ -9,10 +9,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
@@ -66,47 +62,21 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	if err := c.deps.RunInteractiveCommand(ctx, claude, args, in, out, stderr); err != nil {
 		return fmt.Errorf("claude login failed: %w", err)
 	}
-	// The newest sign-in wins: a setup token saved earlier would otherwise keep
-	// signing sessions in over the login the user just completed. The sign-in
-	// itself already succeeded, so failing to clear the token is only a warning.
-	if err := clearClaudeSetupToken(); err != nil {
-		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; Orchestrator-managed sessions may keep using the earlier setup token.\n", err); writeErr != nil {
-			return writeErr
-		}
+	// The newest sign-in wins: the daemon stops passing Claude Code an API key
+	// saved from its AO panel and removes an earlier setup token, either of
+	// which would otherwise keep signing sessions in over this login. The key
+	// stays saved for other harnesses. The sign-in itself already succeeded,
+	// so a failure here is only a warning.
+	var recorded struct {
+		ReleasedKey string `json:"releasedKey"`
 	}
-	// Likewise an Anthropic API key saved from Claude Code's AO panel, the
-	// same release the daemon's own sign-ins do. The key stays saved for
-	// other harnesses.
-	if _, err := releaseClaudeAPIKey(ctx); err != nil {
-		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; AO sessions may keep using the saved Anthropic API key.\n", err); writeErr != nil {
+	if err := c.postJSON(ctx, "agents/claude-code/auth/signed-in", nil, &recorded); err != nil {
+		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; AO sessions may keep using the earlier setup token or saved Anthropic API key.\n", err); writeErr != nil {
 			return writeErr
 		}
 	}
 	_, err = fmt.Fprintf(out, "\n%s\n", style.success("Claude Code sign-in complete."))
 	return err
-}
-
-func clearClaudeSetupToken() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("resolve Orchestrator data directory to clear the saved setup token: %w", err)
-	}
-	return claudecode.RemoveLocalOAuthToken(cfg.DataDir)
-}
-
-// releaseClaudeAPIKey stops AO passing Claude Code the ANTHROPIC_API_KEY
-// saved from its own panel, which would otherwise override the sign-in just
-// completed. It returns the variable released ("" when none).
-func releaseClaudeAPIKey(ctx context.Context) (string, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return "", fmt.Errorf("resolve AO data directory to switch off the saved Anthropic API key: %w", err)
-	}
-	released, err := providerkeys.ReleaseHarness(ctx, cfg.DataDir, "claude-code")
-	if err != nil {
-		return "", fmt.Errorf("switch off the saved Anthropic API key: %w", err)
-	}
-	return released, nil
 }
 
 func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader, out io.Writer, style codexLoginStyle) error {
@@ -125,30 +95,20 @@ func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader,
 	if !claudeSetupTokenPattern.Match(secret) {
 		return usageError{fmt.Errorf("setup token must start with sk-ant-oat and contain no spaces")}
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("resolve Orchestrator data directory: %w", err)
+	// The daemon saves the token as the Account panel's setup-token sign-in
+	// does: it stops passing Claude Code its saved ANTHROPIC_API_KEY, which
+	// would keep winning over the token, and gives it back if the token cannot
+	// be written, so a failure leaves the previous sign-in in place.
+	var login struct {
+		Status string `json:"status"`
 	}
-	// Claude Code's saved ANTHROPIC_API_KEY would keep winning over the token.
-	// Release it first and give it back if the token cannot be written, as the
-	// daemon does, so a failure leaves the previous sign-in in place.
-	released, err := providerkeys.ReleaseHarness(ctx, cfg.DataDir, "claude-code")
-	if err != nil {
-		return fmt.Errorf("switch off the saved Anthropic API key, so the setup token was not saved: %w", err)
+	if err := c.postJSON(ctx, "agents/claude-code/auth/operations", map[string]string{"method": "setup_token", "secret": string(secret)}, &login); err != nil {
+		return fmt.Errorf("save setup token: %w", err)
 	}
-	if err := claudecode.SaveLocalOAuthToken(cfg.DataDir, secret); err != nil {
-		if released != "" {
-			if restoreErr := providerkeys.ClaimForHarness(ctx, cfg.DataDir, released, "claude-code"); restoreErr != nil {
-				return fmt.Errorf("%w; the saved Anthropic API key could not be switched back on either: %w", err, restoreErr)
-			}
-		}
-		return err
+	if login.Status != "succeeded" {
+		return fmt.Errorf("save setup token: sign-in ended %s", login.Status)
 	}
-	if _, err := fmt.Fprintln(out, style.success("Claude Code will sign in to local sessions with this setup token.")); err != nil {
-		return err
-	}
-	// Name the file so a data directory other than the daemon's is visible.
-	_, err = fmt.Fprintln(out, style.dim("Saved to "+claudecode.LocalOAuthTokenPath(cfg.DataDir)))
+	_, err = fmt.Fprintln(out, style.success("Claude Code will sign in to local sessions with this setup token."))
 	return err
 }
 

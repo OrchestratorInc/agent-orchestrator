@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -1008,6 +1009,28 @@ func (s *Service) recordCompletedLogin(agentID, method string) (LoginSnapshot, e
 	close(complete.done)
 	s.operations[complete.snapshot.ID] = complete
 	return complete.snapshot, nil
+}
+
+// RecordSignIn applies what a completed sign-in changes in AO's state when
+// the harness's own terminal login ran it, as `ao claude-login` does: AO
+// stops passing the harness an API key saved from its own panel, which would
+// override the new sign-in, and for Claude Code it removes an earlier setup
+// token. The key stays saved for other harnesses. It returns the variable
+// whose claim it withdrew, or "".
+func (s *Service) RecordSignIn(ctx context.Context, agentID string) (string, error) {
+	if _, ok := planByAgentID[agentID]; !ok {
+		return "", apierr.Invalid("AGENT_AUTH_TARGET_UNKNOWN", fmt.Sprintf("unknown agent authentication target %q", agentID), nil)
+	}
+	released, err := s.releaseSubscriptionKey(ctx, agentID)
+	if err != nil {
+		return "", apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO could not stop passing this harness its earlier API key.")
+	}
+	if agentID == "claude-code" && s.dataDir != "" {
+		if err := claudecode.RemoveLocalOAuthToken(s.dataDir); err != nil {
+			return "", apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "AO could not remove the earlier Claude Code setup token.")
+		}
+	}
+	return released, nil
 }
 
 // pruneOperationsLocked keeps only the latest operation per harness. A stale
