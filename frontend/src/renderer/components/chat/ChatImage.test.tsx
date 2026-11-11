@@ -9,7 +9,7 @@ import { chatImageSaveName } from "./chat-image-actions";
 
 const url = "http://127.0.0.1:4000/api/v1/sessions/s1/preview/files/.ao/attachments/attachment-1.png";
 const png = new Uint8Array([137, 80, 78, 71]);
-const pngResponse = () => new Response(new Blob([png], { type: "image/png" }));
+const pngResponse = () => new Response(png, { headers: { "content-type": "image/png" } });
 
 afterEach(() => vi.restoreAllMocks());
 
