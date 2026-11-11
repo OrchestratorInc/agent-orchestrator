@@ -702,6 +702,25 @@ describe("GlobalSettingsForm", () => {
 			.toBeInTheDocument();
 	});
 
+	it("keeps the channel-switch guidance drawn when the headline already names the target", async () => {
+		let emit: (s: { state: string; version?: string; requestId?: string }) => void = () => undefined;
+		updOnStatus.mockImplementation((cb: (s: unknown) => void) => {
+			emit = cb as typeof emit;
+			return () => undefined;
+		});
+		renderForm();
+		await userEvent.click(await screen.findByLabelText("Updates channel"));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Nightly (Pre-release)" }));
+		await waitFor(() => expect(updCheck).toHaveBeenCalledWith(expect.objectContaining({ requestId: expect.stringMatching(/^channel-update-/) })));
+		const requestId = updCheck.mock.calls.at(-1)?.[0]?.requestId;
+		// A plain version goes in the headline, so the status has no line of its
+		// own; the guidance shares its container and must not be hidden with it.
+		act(() => emit({ state: "available", version: "1.5.0", requestId }));
+		expect(await screen.findByText("Update and restart to switch to Nightly.")).toBeInTheDocument();
+		expect(screen.getByTestId("update-target-version")).toHaveTextContent("v1.5.0");
+		expect(screen.getByTestId("update-status-line")).not.toHaveClass("sr-only");
+	});
+
 	it("auto-saves when automatic updates are toggled", async () => {
 		renderForm();
 		await userEvent.click(await screen.findByRole("switch", { name: "Automatic updates" }));

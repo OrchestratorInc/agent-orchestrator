@@ -35,11 +35,17 @@ const MAX_MANUAL_CHECK_MS = 90_000;
 
 let updateRequestSequence = 0;
 
+/** A request id unique within this renderer, so a status event can be matched to the action that asked for it. */
 function nextUpdateRequestId(prefix = "feature-update"): string {
 	updateRequestSequence += 1;
 	return `${prefix}-${updateRequestSequence}`;
 }
 
+/**
+ * Settings › Updates: the version card (installed version, live update status
+ * and its actions) and the preferences under it (automatic updates, channel,
+ * and feature builds in developer mode).
+ */
 export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) {
 	const { t } = useTranslation();
 	const onOwnPage = useContext(SettingsPageTitleContext) !== null;
@@ -350,6 +356,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 	);
 }
 
+/** Developer-mode picker for pinning the app to one pull request's build. */
 function FeatureBuildsSelect({
 	currentPr,
 	onPin,
@@ -382,6 +389,11 @@ function FeatureBuildsSelect({
 	);
 }
 
+/**
+ * The version card: the installed version (and the target of an incoming
+ * build) as the headline, one live status line where no action already says
+ * it, and the action for the current state on the right.
+ */
 function UpdateActions({
 	status,
 	manualCheckRequestId,
@@ -465,7 +477,10 @@ function UpdateActions({
 	// then says which one it means.
 	const stagedVersion = status.staged?.version?.replace(/^v/, "");
 	const restartVersion = stagedVersion !== undefined && stagedVersion !== incomingVersion ? stagedVersion : undefined;
-	const showCheck = !downloading && status.state !== "available";
+	// Beside Update it is normally redundant, but not when checking itself is
+	// what failed: Update would only fetch the earlier offer, not retry.
+	const checkIsFailing = Boolean(status.checkError) || Boolean(status.checksFailing) || Boolean(status.staleCheckNudge);
+	const showCheck = !downloading && (status.state !== "available" || checkIsFailing);
 	const statusParts = statusLineParts(displayState, status, headlineNamesTarget);
 	const statusHasLine = showStatusState && (statusParts.label || statusParts.detail);
 	const [hadStatusLine, setHadStatusLine] = useState(false);
@@ -568,11 +583,11 @@ function UpdateActions({
 							aria-atomic="true"
 							aria-busy={checking || downloading}
 							tabIndex={-1}
-							// With nothing to show it leaves the layout (the version and
-							// its action then share one centred row) but stays in the DOM
-							// as the live region. During a check it keeps the line it had,
+							// With nothing to show (no status line, no channel-switch
+							// guidance) it leaves the layout, so the version and its action
+							// share one centred row, but stays in the DOM as the live region. During a check it keeps the line it had,
 							// so the card does not jump while the button owns the feedback.
-							className={statusHasLine || reserveStatusLine ? "flex min-h-4 min-w-0 flex-col gap-1.5" : "sr-only"}
+							className={statusHasLine || reserveStatusLine || channelSwitchMessage ? "flex min-h-4 min-w-0 flex-col gap-1.5" : "sr-only"}
 						>
 							{showStatusState && <UpdateStatusLine state={displayState} status={status} detailHidden={headlineNamesTarget} />}
 							{/* The percentage and the track already show progress; the byte
@@ -634,8 +649,9 @@ function UpdateActions({
 					    staged left no way to re-check at all: a user sitting on a build
 					    that will not install had a single dead Restart button and no
 					    other action on the page. It is left out only where it has no
-					    use: beside Update, which already acts on a fresh check, and
-					    during a download, where it was disabled throughout. */}
+					    use: beside Update, which already acts on a fresh check (unless
+					    checks are failing), and during a download, where it was
+					    disabled throughout. */}
 					{/* The tooltip opens on hover and on keyboard focus, so the last
 					    check time does not depend on a mouse. Its own provider keeps
 					    the section usable where no app-level one is mounted. */}
@@ -690,6 +706,7 @@ function UpdateNotice({ tone, text }: { tone: "warning" | "error"; text: string 
 	);
 }
 
+/** A ring that fills with the download: the status line's icon while downloading. */
 function DownloadProgressIcon({ percent }: { percent: number }) {
 	const clamped = Math.min(100, Math.max(0, percent));
 	return (

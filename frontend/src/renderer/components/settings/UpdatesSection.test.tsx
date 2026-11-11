@@ -237,6 +237,27 @@ it.each(["downloaded", "error"] as const)("keeps focus on the live status while 
 	expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
 });
 
+it("offers only Update beside an available update", async () => {
+	updGetStatus.mockResolvedValue({ state: "available", version: "9.9.9" } satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("button", { name: "Update to v9.9.9" })).toBeVisible();
+	expect(screen.queryByRole("button", { name: "Check for updates" })).toBeNull();
+});
+
+it.each([
+	["a check failed", { checkError: "net::ERR_INTERNET_DISCONNECTED" }],
+	["checks keep failing", { checksFailing: true }],
+	["checks have gone stale", { staleCheckNudge: true }],
+] as const)("keeps Check for updates beside Update when %s", async (_label, failure) => {
+	// Update would fetch the earlier offer; only Check retries the check itself.
+	updGetStatus.mockResolvedValue({ state: "available", version: "9.9.9", ...failure } satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("button", { name: "Update to v9.9.9" })).toBeVisible();
+	expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+});
+
 it("names the staged build on Restart when a newer one is only available", async () => {
 	// Restart installs the staged 2.0.0; the headline and Update are about 3.0.0.
 	updGetStatus.mockResolvedValue({
