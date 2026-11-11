@@ -107,7 +107,7 @@ type Service struct {
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops   map[domain.SessionID]bool
-	heldElsewhere map[domain.SessionID]bool
+	heldElsewhere map[domain.SessionID]int
 	otherWriter   func(context.Context, domain.SessionRecord, time.Time) bool
 
 	runPromptSuggestion   func(context.Context, domain.SessionID, string, string, string) (string, error)

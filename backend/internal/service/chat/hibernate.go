@@ -734,12 +734,10 @@ func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionReco
 	if !s.otherWriter(ctx, rec, since) {
 		return false, nil
 	}
-	alreadyHeld := s.setHeldElsewhere(rec.ID, true)
+	s.holdElsewhere(rec.ID)
 	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{otherWriter: true, ignoreViews: true})
 	if !stopped {
-		if !alreadyHeld {
-			s.setHeldElsewhere(rec.ID, false)
-		}
+		s.releaseElsewhere(rec.ID, false)
 		if err != nil {
 			s.log.Warn("could not stop a chat another process writes", "session", rec.ID, "err", err)
 		}
@@ -756,7 +754,7 @@ func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) {
 	held := s.isHeldElsewhere(id)
 	defer func() {
 		if held {
-			s.setHeldElsewhere(id, false)
+			s.releaseElsewhere(id, true)
 		}
 	}()
 	for {
@@ -766,8 +764,10 @@ func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) {
 			if rec.IsTerminated || rec.HibernatedAt == nil || !s.otherWriter(ctx, rec, time.Time{}) {
 				return
 			}
-			held = true
-			s.setHeldElsewhere(id, true)
+			if !held {
+				held = true
+				s.holdElsewhere(id)
+			}
 		case !held || errors.Is(err, ports.ErrSessionNotFound) || errors.Is(err, ErrNotChatMode):
 			return
 		default:
@@ -777,25 +777,32 @@ func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) {
 	}
 }
 
-func (s *Service) setHeldElsewhere(id domain.SessionID, held bool) (was bool) {
+// holdElsewhere adds one hold. Each stop attempt and the waiter own their own,
+// so an attempt that fails cannot release the hold of one that stopped.
+func (s *Service) holdElsewhere(id domain.SessionID) {
 	s.wakeMu.Lock()
 	defer s.wakeMu.Unlock()
-	was = s.heldElsewhere[id]
-	if !held {
-		delete(s.heldElsewhere, id)
-		return was
-	}
 	if s.heldElsewhere == nil {
-		s.heldElsewhere = make(map[domain.SessionID]bool)
+		s.heldElsewhere = make(map[domain.SessionID]int)
 	}
-	s.heldElsewhere[id] = true
-	return was
+	s.heldElsewhere[id]++
+}
+
+// releaseElsewhere drops one hold, or every hold once the other process left.
+func (s *Service) releaseElsewhere(id domain.SessionID, all bool) {
+	s.wakeMu.Lock()
+	defer s.wakeMu.Unlock()
+	if all || s.heldElsewhere[id] <= 1 {
+		delete(s.heldElsewhere, id)
+		return
+	}
+	s.heldElsewhere[id]--
 }
 
 func (s *Service) isHeldElsewhere(id domain.SessionID) bool {
 	s.wakeMu.Lock()
 	defer s.wakeMu.Unlock()
-	return s.heldElsewhere[id]
+	return s.heldElsewhere[id] > 0
 }
 
 func (s *Service) failQueuedTurns(ctx context.Context, id domain.SessionID, message string) {

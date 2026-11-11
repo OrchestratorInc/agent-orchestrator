@@ -427,3 +427,59 @@ func TestSendSeesTurnsWrittenWhileTheProviderStarted(t *testing.T) {
 		t.Fatalf("reloaded provider received %v", sent)
 	}
 }
+
+func TestFailedStopKeepsTheHoldOfAConcurrentStop(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+	// Both sends pass detection and set the hold; each then pauses in the
+	// provider's background-work check until the test lets it go.
+	var checks atomic.Int32
+	paused := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	resume := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	old.onBackgroundCheck = func(context.Context) {
+		if n := checks.Add(1); n <= 2 {
+			close(paused[n-1])
+			<-resume[n-1]
+		}
+	}
+
+	aErr, bErr := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "from a", ClientMessageID: "elsewhere-11"})
+		aErr <- err
+	}()
+	<-paused[0]
+	go func() {
+		_, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "from b", ClientMessageID: "elsewhere-12"})
+		bErr <- err
+	}()
+	<-paused[1]
+	close(resume[0])
+	if err := <-aErr; !errors.Is(err, chatsvc.ErrChatOpenElsewhere) {
+		t.Fatalf("send whose stop lost to the other = %v; want ErrChatOpenElsewhere", err)
+	}
+	if snapshot, err := h.svc.Snapshot(ctx, testSession); err != nil || !snapshot.OpenElsewhere {
+		t.Fatalf("snapshot while the other stop runs = elsewhere %v, %v", snapshot.OpenElsewhere, err)
+	}
+	close(resume[1])
+	if err := <-bErr; err != nil {
+		t.Fatalf("send that stopped the provider: %v", err)
+	}
+	if old.calls.Load() != 1 {
+		t.Fatalf("provider stops = %d; want 1", old.calls.Load())
+	}
+	_ = h.svc.SetChatView(ctx, testSession, "view-1", true)
+	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "from b")
+}
