@@ -4,12 +4,14 @@ type QuitEvent = { preventDefault(): void };
 // Homebrew's `uninstall quit:` and logout give up on an app within seconds.
 export const EXTERNAL_QUIT_DEADLINE_MS = 5_000;
 
-// On macOS with the tray, AO's own Quit (app menu, ⌘Q, the Quit command) only
-// closes the window and leaves the Dock; the tray and the daemon keep running.
-// Every other quit request — a quit Apple Event from `osascript`, Homebrew,
-// the Dock menu or logout, and SIGTERM — exits the process. Electron routes all
-// of them through the same `before-quit`, so the in-app Quit marks itself
-// before calling app.quit() and anything unmarked counts as an outside quit.
+/**
+ * Controls macOS quit requests while the tray and daemon keep running.
+ * AO's own Quit (app menu, ⌘Q, the Quit command) closes the window and leaves
+ * the Dock. Every other quit request — an Apple Event from `osascript`,
+ * Homebrew, the Dock menu or logout, and SIGTERM — exits the process.
+ * Electron routes them all through `before-quit`, so the in-app Quit marks
+ * itself before app.quit() and anything unmarked counts as an outside quit.
+ */
 export function createDesktopQuitController(options: {
 	platform: NodeJS.Platform;
 	hasTray(): boolean;
