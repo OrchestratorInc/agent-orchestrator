@@ -509,6 +509,11 @@ export type WorkspaceSummary = {
 	 * `kind === CLOUD_PROJECT_KIND`.
 	 */
 	kind?: ProjectKind | typeof CLOUD_PROJECT_KIND | typeof STANDALONE_PROJECT_KIND;
+	/**
+	 * "workspace" on a cloud project laid out like a local workspace: every
+	 * repository (workspaceRepos) side by side in one folder.
+	 */
+	cloudLayout?: "workspace";
 	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
 	folderMissing?: boolean;

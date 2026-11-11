@@ -24,6 +24,8 @@ import type {
 	CloudCpCreateOrganizationRequest,
 	CloudCpCreateOrganizationResponse,
 	CloudCpCreateGitHubProjectRequest,
+	CloudCpCreateGitHubRepositoryRequest,
+	CloudCpCreateGitHubRepositoryResponse,
 	CloudCpCreateStandaloneProjectRequest,
 	CloudCpCreateProjectRequest,
 	CloudCpCreateSessionRequest,
@@ -605,6 +607,16 @@ export interface CloudCpClient {
 		body: CloudCpCreateGitHubProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
+	/**
+	 * An empty private GitHub repository for a local folder, granted to the org
+	 * (POST /orgs/{orgId}/github/repositories). Answers 200 with created false
+	 * for an empty repository of that name that already existed.
+	 */
+	createGitHubRepository(
+		orgId: string,
+		body: CloudCpCreateGitHubRepositoryRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpCreateGitHubRepositoryResponse>;
 	/** A project without a repository (POST /orgs/{orgId}/projects/standalone). */
 	createStandaloneProject(
 		orgId: string,
@@ -703,6 +715,20 @@ function isAbortError(error: unknown): boolean {
 
 function newIdempotencyKey(): string {
 	return crypto.randomUUID();
+}
+
+/** The longest description the control plane takes for a new GitHub repository, in characters. */
+export const MAX_GITHUB_REPOSITORY_DESCRIPTION = 350;
+
+/**
+ * A settings write without config.layout: a project is created a workspace or
+ * not, and the control plane refuses any settings write that names a layout,
+ * even the one the project already has.
+ */
+function withoutProjectLayout(body: CloudCpProjectSettingsRequest): CloudCpProjectSettingsRequest {
+	if (!body.config || !("layout" in body.config)) return body;
+	const { layout: _layout, ...config } = body.config as Record<string, unknown>;
+	return { ...body, config: config as CloudCpProjectSettingsRequest["config"] };
 }
 
 export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClient {
@@ -862,7 +888,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		getProject: (orgId, projectId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}`, { signal: o?.signal }),
 		updateProjectSettings: (orgId, projectId, body, o) =>
-			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/settings`, { body, signal: o?.signal }),
+			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/settings`, { body: withoutProjectLayout(body), signal: o?.signal }),
 		getProjectEnvironment: (orgId, projectId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/environment`, { signal: o?.signal }),
 		putProjectEnvironment: (orgId, projectId, variables, o) =>
@@ -1257,6 +1283,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				body,
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		createGitHubRepository: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/github/repositories`, {
+				// The control plane refuses a description over its limit.
+				body: body.description === undefined ? body : { ...body, description: [...body.description].slice(0, MAX_GITHUB_REPOSITORY_DESCRIPTION).join("") },
+				signal: o?.signal,
 			}),
 		createStandaloneProject: (orgId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/projects/standalone`, {

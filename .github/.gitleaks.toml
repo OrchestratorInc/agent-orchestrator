@@ -72,8 +72,12 @@ title = "gitleaks config"
     regex = '''-----BEGIN ((EC|PGP|DSA|RSA|OPENSSH) )?PRIVATE KEY( BLOCK)?-----'''
     tags = ["key", "AsymmetricPrivateKey"]
     [rules.allowlist]
-        description = "Synthetic empty private key fixture"
-        regexes = ['''^\s*"private_key": "-----BEGIN PRIVATE KEY-----\\n-----END PRIVATE KEY-----\\n",$''']
+        description = "Synthetic private key fixtures"
+        regexes = [
+            '''^\s*"private_key": "-----BEGIN PRIVATE KEY-----\\n-----END PRIVATE KEY-----\\n",$''',
+            # cloud-folder-push.test.ts: PEM blocks whose body is the FAKE placeholder.
+            '''-----BEGIN ((EC|PGP|DSA|RSA|OPENSSH) )?PRIVATE KEY( BLOCK)?-----\\n\$\{FAKE\}\\n-----END ''',
+        ]
 
 [[rules]]
     description = "Google API key"
