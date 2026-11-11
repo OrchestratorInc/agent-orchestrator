@@ -151,11 +151,11 @@ func TestSaveLocalOAuthTokenReplacesTokenWithoutLeftovers(t *testing.T) {
 // for the same credential a session would get.
 func TestRuntimeCredentialEnvReturnsSavedSetupToken(t *testing.T) {
 	dataDir := withSavedSetupToken(t)
-	got := New().RuntimeCredentialEnv(dataDir)
+	got := New().RuntimeCredentialEnv(dataDir, nil)
 	if len(got) != 1 || got["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
 		t.Fatalf("RuntimeCredentialEnv = %v, want only the saved setup token", got)
 	}
-	if got := New().RuntimeCredentialEnv(t.TempDir()); got != nil {
+	if got := New().RuntimeCredentialEnv(t.TempDir(), nil); got != nil {
 		t.Fatalf("RuntimeCredentialEnv without a saved token = %v, want nil", got)
 	}
 }
@@ -303,5 +303,23 @@ func TestAuthStatusForRuntimeOffersTheCloudTokenWhenTheExportedKeyIsHeldBack(t *
 	}
 	if value, ok := probed["ANTHROPIC_API_KEY"]; !ok || value != "" {
 		t.Fatalf("probe env = %v, want ANTHROPIC_API_KEY blanked", probed)
+	}
+}
+
+// Model discovery and the account check pass the keys AO holds back as base:
+// a blanked exported key does not hide the AO Cloud token sessions get.
+func TestRuntimeCredentialEnvChoosesTheCloudTokenAgainstHeldBackKeys(t *testing.T) {
+	dataDir := withCloudToken(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-ao-exported")
+	base := map[string]string{"ANTHROPIC_API_KEY": ""}
+	got := New().RuntimeCredentialEnv(dataDir, base)
+	if got["CLAUDE_CODE_OAUTH_TOKEN"] != testCloudToken {
+		t.Fatalf("RuntimeCredentialEnv = %v, want the AO Cloud token", got)
+	}
+	if value, ok := got["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("RuntimeCredentialEnv = %v, want ANTHROPIC_API_KEY kept blank", got)
+	}
+	if len(base) != 1 {
+		t.Fatalf("base was changed: %v", base)
 	}
 }

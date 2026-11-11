@@ -149,10 +149,14 @@ func hasNativeCredential(ctx context.Context, env map[string]string) bool {
 	return found
 }
 
-// RuntimeCredentialEnv is the setup-token AugmentRuntimeEnv gives a session
-// that sets no credential of its own, or nil when it would add none.
-func (p *Plugin) RuntimeCredentialEnv(dataDir string) map[string]string {
-	env := map[string]string{}
+// RuntimeCredentialEnv is base plus the setup-token AugmentRuntimeEnv gives a
+// session with that environment, or nil when both are empty. A key base
+// blanks is no login of Claude Code's own, so it never hides the cloud token.
+func (p *Plugin) RuntimeCredentialEnv(dataDir string, base map[string]string) map[string]string {
+	env := make(map[string]string, len(base)+1)
+	for name, value := range base {
+		env[name] = value
+	}
 	p.AugmentRuntimeEnv(env, dataDir)
 	if len(env) == 0 {
 		return nil

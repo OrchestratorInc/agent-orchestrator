@@ -1767,7 +1767,7 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 			// The daemon exports AO's saved keys to itself; the account check
 			// must not see one Claude Code's sessions never get.
 			DeviceEnv: func(ctx context.Context) map[string]string {
-				return providerkeys.HoldBack(ctx, claudePlugin.RuntimeCredentialEnv(cfg.DataDir), cfg.DataDir, "claude-code")
+				return claudePlugin.RuntimeCredentialEnv(cfg.DataDir, providerkeys.HoldBack(ctx, nil, cfg.DataDir, "claude-code"))
 			},
 		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},

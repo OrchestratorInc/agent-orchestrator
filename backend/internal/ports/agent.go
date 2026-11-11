@@ -202,9 +202,12 @@ type AgentRuntimeAuthChecker interface {
 // AgentRuntimeCredentialEnv reports the credential environment AO adds when it
 // launches a local session from dataDir (such as a login AO saved itself), so
 // work done outside a session, like model discovery or the computer's account
-// check, sees the same credential. It returns nil when AO adds none.
+// check, sees the same credential. base is the environment that work already
+// has over the daemon's own (the keys AO holds back from the harness), and the
+// credential is chosen against it as a session launch chooses it. It returns
+// base plus that credential, or nil when both are empty. base is not mutated.
 type AgentRuntimeCredentialEnv interface {
-	RuntimeCredentialEnv(dataDir string) map[string]string
+	RuntimeCredentialEnv(dataDir string, base map[string]string) map[string]string
 }
 
 // AgentAuthCacheInvalidator is implemented by an adapter that remembers what its

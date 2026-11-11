@@ -632,8 +632,9 @@ func (s *Service) runtimeCredentialEnv(ctx context.Context, agentID string) map[
 		return nil
 	}
 	// Keys AO holds back from this harness's sessions stay out of the
-	// discovery its sessions' models come from.
-	return providerkeys.HoldBack(ctx, source.RuntimeCredentialEnv(s.dataDir), s.dataDir, agentID)
+	// discovery its sessions' models come from, and the credential is chosen
+	// with them held back, as for a session.
+	return source.RuntimeCredentialEnv(s.dataDir, providerkeys.HoldBack(ctx, nil, s.dataDir, agentID))
 }
 
 func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryRequest) (ports.AgentModelDiscoveryRequest, error) {
