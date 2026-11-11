@@ -626,7 +626,7 @@ describe("ArtifactsView", () => {
 		expect(await within(dialog).findByRole("button", { name: "Publish: caching-options.md" })).toBeInTheDocument();
 	});
 
-	it("marks a published artifact with the globe, and offers Copy public link and Unpublish instead of Publish", async () => {
+	it("marks a published artifact with the globe, and offers Copy link and Unpublish instead of Publish", async () => {
 		const user = userEvent.setup();
 		const published = session("ao-2", "Review pricing", [{ name: "pricing.md", updatedAt: "2026-10-10T10:00:00Z" }]);
 		published.artifactFiles![0].shareUrl = "https://share.test/pricing";
@@ -638,7 +638,7 @@ describe("ArtifactsView", () => {
 		expect(within(row("caching-options.md")).queryByRole("img", { name: "Published" })).not.toBeInTheDocument();
 
 		await user.click(within(row("pricing.md")).getByRole("button", { name: "More actions: pricing.md" }));
-		expect(await screen.findByRole("menuitem", { name: "Copy public link" })).toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: "Copy link" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Unpublish" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Publish" })).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
@@ -646,7 +646,7 @@ describe("ArtifactsView", () => {
 		await user.click(within(row("caching-options.md")).getByRole("button", { name: "More actions: caching-options.md" }));
 		expect(await screen.findByRole("menuitem", { name: "Publish" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Unpublish" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: "Copy public link" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Copy link" })).not.toBeInTheDocument();
 	});
 
 	it.each(["list", "gallery"] as const)("names the globe Published on hover in %s view", async (view) => {

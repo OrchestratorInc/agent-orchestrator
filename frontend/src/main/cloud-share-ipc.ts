@@ -12,17 +12,24 @@ import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import {
 	artifactShareUrl,
 	CLOUD_SHARE_PROGRESS_CHANNEL,
+	type CloudShareAccess,
 	type CloudShareFile,
+	type CloudShareGrant,
 	type CloudShareInspection,
 	type CloudShareLinks,
 	type CloudSharePublishResult,
 	type CloudSessionShareFile,
+	type CloudShareLink,
 } from "../shared/cloud-share";
 import {
 	CloudShareError,
 	type CloudShareApi,
 	inspectCloudSessionArtifact,
+	inviteShareGrants,
+	listShareGrants,
 	listShareLinks,
+	removeShareGrant,
+	setShareLinkAccess,
 	resolveShareFile,
 	shareLinksAvailable,
 	scanShareFile,
@@ -50,6 +57,20 @@ function isVideo(name: string): boolean {
 	return VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase());
 }
 
+function accessArgument(value: unknown): CloudShareAccess | undefined {
+	if (value === undefined) return undefined;
+	if (value !== "restricted" && value !== "anyone") throw new CloudShareError("invalid_request", "Not who a link opens for.");
+	return value;
+}
+
+function emailsArgument(value: unknown): string[] | undefined {
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value) || !value.every((email) => typeof email === "string")) {
+		throw new CloudShareError("invalid_request", "Not a list of emails.");
+	}
+	return value as string[];
+}
+
 function shareFileArgument(value: unknown): CloudShareFile {
 	if (typeof value !== "object" || value === null) throw new CloudShareError("invalid_request", "Not a file to share.");
 	const { source, baseUrl, sessionId, path: filePath, projectId, orgId, artifactId, shareId, fingerprint } = value as Record<string, unknown>;
@@ -58,15 +79,24 @@ function shareFileArgument(value: unknown): CloudShareFile {
 		(shareId !== undefined && typeof shareId !== "string") || (fingerprint !== undefined && typeof fingerprint !== "string")) {
 		throw new CloudShareError("invalid_request", "Not a file to share.");
 	}
+	const access = accessArgument((value as { access?: unknown }).access);
+	const emails = emailsArgument((value as { emails?: unknown }).emails);
+	const startsWith = { ...(access ? { access } : {}), ...(emails ? { emails } : {}) };
 	if (source === "cloud") {
 		if (typeof orgId !== "string") throw new CloudShareError("invalid_request", "Not a file to share.");
-		return { source, baseUrl, orgId, sessionId, path: filePath, projectId: "", artifactId, shareId, fingerprint } satisfies CloudSessionShareFile;
+		return { source, baseUrl, orgId, sessionId, path: filePath, projectId: "", artifactId, shareId, fingerprint, ...startsWith } satisfies CloudSessionShareFile;
 	}
 	// A local file's project names the document: an empty one would make a
 	// second document, and link, for a file already published.
 	if (source !== undefined && source !== "local") throw new CloudShareError("invalid_request", "Not a file to share.");
 	if (typeof projectId !== "string" || projectId === "") throw new CloudShareError("invalid_request", "Not a file to share.");
-	return { baseUrl, sessionId, path: filePath, projectId, artifactId, shareId, fingerprint };
+	return { baseUrl, sessionId, path: filePath, projectId, artifactId, shareId, fingerprint, ...startsWith };
+}
+
+function shareIdArgument(value: unknown): string {
+	const shareId = (value as { shareId?: unknown } | null)?.shareId;
+	if (typeof shareId !== "string") throw new CloudShareError("invalid_request", "Not a share link.");
+	return shareId;
 }
 
 function isCloudFile(file: CloudShareFile): file is CloudSessionShareFile {
@@ -204,10 +234,35 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 
 	deps.ipcMain.handle("cloudShare:unpublish", async (event, value: unknown): Promise<void> => {
 		requireMainFrame(event);
-		const shareId = (value as { shareId?: unknown } | null)?.shareId;
-		if (typeof shareId !== "string") throw new CloudShareError("invalid_request", "Not a share link.");
+		const shareId = shareIdArgument(value);
 		await unpublishShareLink(deps, baseUrlArgument(value), shareId);
 		await deps.records.forgetShare(shareId);
+	});
+
+	// Who a published link opens for. Like publishing, only the app's own
+	// window may change it: making a link public is the person's decision.
+	deps.ipcMain.handle("cloudShare:setAccess", async (event, value: unknown): Promise<CloudShareLink> => {
+		requireMainFrame(event);
+		const access = accessArgument((value as { access?: unknown } | null)?.access);
+		if (!access) throw new CloudShareError("invalid_request", "Not who a link opens for.");
+		return setShareLinkAccess(deps, baseUrlArgument(value), shareIdArgument(value), access);
+	});
+
+	deps.ipcMain.handle("cloudShare:grants", async (_event, value: unknown): Promise<CloudShareGrant[]> =>
+		listShareGrants(deps, baseUrlArgument(value), shareIdArgument(value)));
+
+	deps.ipcMain.handle("cloudShare:invite", async (event, value: unknown): Promise<CloudShareGrant[]> => {
+		requireMainFrame(event);
+		const emails = emailsArgument((value as { emails?: unknown } | null)?.emails);
+		if (!emails || emails.length === 0) throw new CloudShareError("invalid_request", "Not a list of emails.");
+		return inviteShareGrants(deps, baseUrlArgument(value), shareIdArgument(value), emails);
+	});
+
+	deps.ipcMain.handle("cloudShare:removeGrant", async (event, value: unknown): Promise<void> => {
+		requireMainFrame(event);
+		const grantId = (value as { grantId?: unknown } | null)?.grantId;
+		if (typeof grantId !== "string") throw new CloudShareError("invalid_request", "Not someone the link is shared with.");
+		await removeShareGrant(deps, baseUrlArgument(value), shareIdArgument(value), grantId);
 	});
 
 	deps.ipcMain.handle("cloudShare:cancel", (event) => {
@@ -273,6 +328,8 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				project: file.projectId,
 				feature: folder === "." ? file.sessionId : `${file.sessionId}/${folder}`,
 				shareId: file.shareId,
+				access: file.access,
+				emails: file.emails,
 			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
 			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };

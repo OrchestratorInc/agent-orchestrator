@@ -18,6 +18,7 @@ const ORG_ID = "a1a1a1a1-0000-4000-8000-000000000001";
 const CLOUD_SESSION_ID = "a1a1a1a1-0000-4000-8000-0000000000a1";
 const CLOUD_SESSION_PATH = `/api/cloud/v1/orgs/${ORG_ID}/sessions/${CLOUD_SESSION_ID}`;
 const CLOUD_SHA256 = "0".repeat(64);
+const GRANT_ID = "6f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40";
 
 let dataDir: string;
 
@@ -77,6 +78,13 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			if (pathname === `${CLOUD_SESSION_PATH}/artifacts/share`) {
 				if (options.shareStatus) return json({ code: options.shareCode, message: "Refused." }, options.shareStatus);
 				return json({ share: { id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
+			}
+			if (pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`) {
+				const emails = init.method === "POST" ? (JSON.parse(String(init.body)) as { emails: string[] }).emails : ["maya@acme.co"];
+				return json({ grants: emails.map((email, index) => ({ id: `${GRANT_ID.slice(0, -1)}${index}`, email: email.toLowerCase(), createdAt: "" })) });
+			}
+			if (init.method === "PATCH" && pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}`) {
+				return json({ id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/", ...(JSON.parse(String(init.body)) as object) });
 			}
 			if (init.method === "DELETE" && pathname.includes("/me/artifact-shares/")) return new Response(null, { status: 204 });
 			return new Response("", { status: 404 });
@@ -329,6 +337,56 @@ describe("cloudShare IPC", () => {
 		// A publish with no inspection at all is refused the same way.
 		await expect(invoke("cloudShare:publish", file)).resolves.toMatchObject({ status: "changed" });
 		expect(requests).toEqual([]);
+	});
+
+	it("sends who a new link opens for only when asked, so an older control plane is not refused", async () => {
+		const plain = setup();
+		await expect(plain.publish()).resolves.toMatchObject({ status: "published" });
+		expect(plain.bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).not.toHaveProperty("access");
+		expect(plain.bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).not.toHaveProperty("emails");
+
+		const restricted = setup();
+		await expect(restricted.publish({ ...restricted.file, access: "restricted", emails: ["dev@acme.co"] })).resolves.toMatchObject({ status: "published" });
+		expect(restricted.bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ access: "restricted", emails: ["dev@acme.co"] });
+
+		const cloud = setup();
+		await expect(cloud.invoke("cloudShare:publish", { ...cloud.cloudFile, fingerprint: CLOUD_SHA256, access: "restricted" })).resolves.toMatchObject({ status: "published" });
+		expect(cloud.bodies.get(`${CLOUD_SESSION_PATH}/artifacts/share`)).toEqual({ path: "reports/q3 plan.md", sha256: CLOUD_SHA256, access: "restricted" });
+
+		await expect(plain.invoke("cloudShare:publish", { ...plain.file, access: "everyone" })).rejects.toThrow("Not who a link opens for");
+		await expect(plain.invoke("cloudShare:publish", { ...plain.file, emails: "dev@acme.co" })).rejects.toThrow("Not a list of emails");
+	});
+
+	it("changes a live link's access and who it is shared with", async () => {
+		const { invoke, requests, bodies } = setup();
+		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" })).resolves.toMatchObject({ id: SHARE_ID, access: "anyone" });
+		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}`)).toEqual({ access: "anyone" });
+		await expect(invoke("cloudShare:grants", { baseUrl: "https://cp.test", shareId: SHARE_ID })).resolves.toEqual([{ id: `${GRANT_ID.slice(0, -1)}0`, email: "maya@acme.co", createdAt: "" }]);
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: ["Dev@acme.co"] })).resolves.toEqual([{ id: `${GRANT_ID.slice(0, -1)}0`, email: "dev@acme.co", createdAt: "" }]);
+		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`)).toEqual({ emails: ["Dev@acme.co"] });
+		await expect(invoke("cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: GRANT_ID })).resolves.toBeUndefined();
+		expect(requests).toEqual([
+			`PATCH /api/cloud/v1/me/artifact-shares/${SHARE_ID}`,
+			`GET /api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`,
+			`POST /api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`,
+			`DELETE /api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants/${GRANT_ID}`,
+		]);
+		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "public" })).rejects.toThrow("Not who a link opens for");
+		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: "../x", access: "anyone" })).rejects.toThrow("Not a share link");
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: [] })).rejects.toThrow("Not a list of emails");
+		await expect(invoke("cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: "../x" })).rejects.toThrow("Not someone the link is shared with");
+	});
+
+	it("changes access, invites and removes people only from the app's main frame", async () => {
+		const { handlers } = setup();
+		const subframe = { sender: { id: 7 }, senderFrame: { parent: {} } };
+		for (const [channel, value] of [
+			["cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" }],
+			["cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: ["a@b.co"] }],
+			["cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: GRANT_ID }],
+		] as const) {
+			await expect(Promise.resolve().then(() => handlers.get(channel)!(subframe, value))).rejects.toThrow("only available from the app window");
+		}
 	});
 
 	it("refuses a second publish from the same window at once", async () => {

@@ -13,7 +13,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
-import type { CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
+import type { CloudShareAccess, CloudShareGrant, CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -323,12 +323,53 @@ export function listShareLinks(api: CloudShareApi, baseUrl: string): Promise<Clo
 	return callApi<CloudShareLinks>(api, baseUrl, "GET", "/me/artifact-shares").then((links) => ({
 		...links,
 		unlimited: Boolean(links.unlimited),
+		privateLinks: Boolean(links.privateLinks),
 	}));
 }
 
+function shareLinkPath(shareId: string): string {
+	if (!UUID_PATTERN.test(shareId)) throw new CloudShareError("invalid_request", "Not a share link.");
+	return `/me/artifact-shares/${shareId}`;
+}
+
 export async function unpublishShareLink(api: CloudShareApi, baseUrl: string, shareId: string): Promise<void> {
-	if (!/^[0-9a-f-]{36}$/i.test(shareId)) throw new CloudShareError("invalid_request", "Not a share link.");
-	await callApi<void>(api, baseUrl, "DELETE", `/me/artifact-shares/${shareId}`);
+	await callApi<void>(api, baseUrl, "DELETE", shareLinkPath(shareId));
+}
+
+/** Makes a link private or public. Its URL stays the same. */
+export function setShareLinkAccess(api: CloudShareApi, baseUrl: string, shareId: string, access: CloudShareAccess): Promise<CloudShareLink> {
+	return callApi<CloudShareLink>(api, baseUrl, "PATCH", shareLinkPath(shareId), { access });
+}
+
+/** The emails a link is shared with. */
+export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrant[]> {
+	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`)).grants;
+}
+
+/** Shares a link with emails at once, and returns everyone it is shared with now. */
+export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, emails: string[]): Promise<CloudShareGrant[]> {
+	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, { emails })).grants;
+}
+
+export async function removeShareGrant(api: CloudShareApi, baseUrl: string, shareId: string, grantId: string): Promise<void> {
+	if (!UUID_PATTERN.test(grantId)) throw new CloudShareError("invalid_request", "Not someone the link is shared with.");
+	await callApi<void>(api, baseUrl, "DELETE", `${shareLinkPath(shareId)}/grants/${grantId}`);
+}
+
+/**
+ * What a publish asks a new link to start with. Neither is sent when unset:
+ * a control plane that predates private links refuses fields it does not know.
+ */
+export interface ShareAccessInput {
+	access?: CloudShareAccess;
+	emails?: string[];
+}
+
+function accessFields(input: ShareAccessInput): ShareAccessInput {
+	return {
+		...(input.access ? { access: input.access } : {}),
+		...(input.emails && input.emails.length > 0 ? { emails: input.emails } : {}),
+	};
 }
 
 /** One committed file of a cloud session, named by its organization, session and path. */
@@ -399,14 +440,14 @@ export async function inspectCloudSessionArtifact(
 export function shareCloudSessionArtifact(
 	api: CloudShareApi,
 	baseUrl: string,
-	ref: CloudSessionArtifactRef & { sha256: string; shareId?: string },
+	ref: CloudSessionArtifactRef & ShareAccessInput & { sha256: string; shareId?: string },
 	signal?: AbortSignal,
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
 	return callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`,
-		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}) }, signal);
+		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}), ...accessFields(ref) }, signal);
 }
 
-export interface ShareUploadInput {
+export interface ShareUploadInput extends ShareAccessInput {
 	baseUrl: string;
 	snapshot: ShareSnapshot;
 	name: string;
@@ -508,7 +549,7 @@ export async function uploadShare(
 		}
 		completed.sort((a, b) => a.partNumber - b.partNumber);
 		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize",
-			{ uploadToken: start.uploadToken, parts: completed }, signal);
+			{ uploadToken: start.uploadToken, parts: completed, ...accessFields(input) }, signal);
 	} catch (error) {
 		batch.abort();
 		await Promise.allSettled(running);
