@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="530" viewBox="0 0 1160 530" role="img" aria-label="Terminal output frame cost before and after">
+  <rect width="1160" height="530" fill="#ffffff"/>
+
+  <text x="24" y="42" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="20" font-weight="700" fill="#0f172a">Terminal output frame: before vs after</text>
+  <text x="24" y="66" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="12" fill="#64748b">median of 5 runs · Windows amd64, i5-1240P · lower is better</text>
+
+  <text x="344" y="104" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" letter-spacing="1" fill="#94a3b8">TIME (ns/op)</text>
+  <text x="790" y="104" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" letter-spacing="1" fill="#94a3b8">ALLOCATED (B/op)</text>
+
+  <!-- row 1: 4 KiB -->
+  <text x="24" y="148" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0f172a">4 KiB frame</text>
+  <text x="24" y="167" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#15803d">−28.4% time · −49.5% allocated</text>
+  <line x1="24" y1="186" x2="1136" y2="186" stroke="#eef2f7"/>
+  <rect x="344" y="130" width="340" height="13" rx="3" fill="#cbd5e1"/>
+  <rect x="344" y="149" width="243" height="13" rx="3" fill="#16a34a"/>
+  <text x="692" y="140" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">23,315</text>
+  <text x="595" y="159" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">16,693</text>
+  <rect x="790" y="130" width="260" height="13" rx="3" fill="#cbd5e1"/>
+  <rect x="790" y="149" width="131" height="13" rx="3" fill="#16a34a"/>
+  <text x="1058" y="140" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">20,625</text>
+  <text x="929" y="159" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">10,424</text>
+
+  <!-- row 2: 32 KiB -->
+  <text x="24" y="240" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0f172a">32 KiB frame</text>
+  <text x="24" y="259" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#15803d">−20.0% time · −49.6% allocated</text>
+  <line x1="24" y1="278" x2="1136" y2="278" stroke="#eef2f7"/>
+  <rect x="344" y="222" width="340" height="13" rx="3" fill="#cbd5e1"/>
+  <rect x="344" y="241" width="272" height="13" rx="3" fill="#16a34a"/>
+  <text x="692" y="232" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">160,186</text>
+  <text x="624" y="251" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">128,096</text>
+  <rect x="790" y="222" width="260" height="13" rx="3" fill="#cbd5e1"/>
+  <rect x="790" y="241" width="131" height="13" rx="3" fill="#16a34a"/>
+  <text x="1058" y="232" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">163,987</text>
+  <text x="929" y="251" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">82,701</text>
+
+  <!-- row 3: 256 KiB -->
+  <text x="24" y="332" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0f172a">256 KiB frame (merge ceiling)</text>
+  <text x="24" y="351" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#15803d">−18.0% time · −48.5% allocated</text>
+  <line x1="24" y1="370" x2="1136" y2="370" stroke="#eef2f7"/>
+  <rect x="344" y="314" width="340" height="13" rx="3" fill="#cbd5e1"/>
+  <rect x="344" y="333" width="279" height="13" rx="3" fill="#16a34a"/>
+  <text x="692" y="324" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">1,129,626</text>
+  <text x="631" y="343" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">926,637</text>
+  <rect x="790" y="314" width="260" height="13" rx="3" fill="#cbd5e1"/>
+  <rect x="790" y="333" width="134" height="13" rx="3" fill="#16a34a"/>
+  <text x="1058" y="324" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">1,228,966</text>
+  <text x="932" y="343" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">632,530</text>
+
+  <!-- row 4: burst -->
+  <text x="24" y="424" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0f172a">Burst: 32 × 1 KiB, merged</text>
+  <text x="24" y="443" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#15803d">−9.3% time · −17.5% allocated</text>
+  <rect x="344" y="406" width="340" height="13" rx="3" fill="#cbd5e1"/>
+  <rect x="344" y="425" width="308" height="13" rx="3" fill="#16a34a"/>
+  <text x="692" y="416" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">214,485</text>
+  <text x="660" y="435" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">194,551</text>
+  <rect x="790" y="406" width="260" height="13" rx="3" fill="#cbd5e1"/>
+  <rect x="790" y="425" width="214" height="13" rx="3" fill="#16a34a"/>
+  <text x="1058" y="416" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">277,145</text>
+  <text x="1012" y="435" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="700" fill="#15803d">228,534</text>
+
+  <!-- legend -->
+  <rect x="24" y="478" width="12" height="12" rx="3" fill="#cbd5e1"/>
+  <text x="42" y="489" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#475569">before (canonical/main)</text>
+  <rect x="214" y="478" width="12" height="12" rx="3" fill="#16a34a"/>
+  <text x="232" y="489" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="11.5" fill="#15803d">after (this branch)</text>
+  <text x="1136" y="489" text-anchor="end" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">internal/terminal/outqueue_bench_test.go</text>
+
+  <!-- footer note -->
+  <text x="24" y="514" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="10.5" fill="#94a3b8">Same machine, same base commit; only the two source files differ. Allocs/op: 5 → 3 (4/32/256 KiB), 45 → 43 (burst).</text>
+</svg>
