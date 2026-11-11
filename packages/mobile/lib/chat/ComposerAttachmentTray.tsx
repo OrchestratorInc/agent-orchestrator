@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -41,7 +41,12 @@ export function ComposerAttachmentTray({ items, onRemove }: { items: readonly Co
 	// over it rather than behind it.
 	const openFeedback = usePressFeedback("button", { foreground: true });
 	const removeFeedback = usePressFeedback("icon");
-	const [viewing, setViewing] = useState<{ name: string; uri: string }>();
+	// The photo open full screen, by key, and only while it is still attached: a
+	// send can land meanwhile and take it, and the tray stays mounted, so a kept
+	// selection would reopen on the next pick.
+	const [viewingKey, setViewingKey] = useState<string>();
+	const viewing = viewingKey === undefined ? undefined : items.find((item) => item.key === viewingKey && item.previewUri);
+	useEffect(() => { if (viewingKey !== undefined && !viewing) setViewingKey(undefined); }, [viewingKey, viewing]);
 	if (!items.length) return null;
 	return <>
 		{/* iOS form sheets (react-native-screens) look for a ScrollView among a
@@ -70,7 +75,7 @@ export function ComposerAttachmentTray({ items, onRemove }: { items: readonly Co
 								accessibilityRole="imagebutton"
 								accessibilityLabel={`Open ${item.name}`}
 								android_ripple={openFeedback.android_ripple}
-								onPress={() => setViewing({ name: item.name, uri: preview })}
+								onPress={() => setViewingKey(item.key)}
 								style={({ pressed }) => [styles.thumbOpen, pressed && openFeedback.pressed]}
 							>
 								<Image accessibilityIgnoresInvertColors source={{ uri: preview }} resizeMode="cover" style={styles.thumbImage} />
@@ -87,7 +92,7 @@ export function ComposerAttachmentTray({ items, onRemove }: { items: readonly Co
 				})}
 			</ScrollView>
 		</View>
-		{viewing ? <ImageViewer visible name={viewing.name} source={{ uri: viewing.uri }} onClose={() => setViewing(undefined)} /> : null}
+		{viewing?.previewUri ? <ImageViewer visible name={viewing.name} source={{ uri: viewing.previewUri }} onClose={() => setViewingKey(undefined)} /> : null}
 	</>;
 }
 

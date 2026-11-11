@@ -75,6 +75,21 @@ describe("ComposerAttachmentTray", () => {
 		expect(root.findAll((node) => String(node.type) === "ImageViewer")).toHaveLength(0);
 	});
 
+	// A send can land while a photo is open and take every attachment with it.
+	// The tray stays mounted, so a stale selection must not reopen on the next pick.
+	it("drops the open photo once its attachment is gone", async () => {
+		await act(async () => { renderer = create(<ComposerAttachmentTray items={[photo]} onRemove={vi.fn()} />); });
+		const open = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Open IMG_0111.jpg")[0];
+		await act(async () => open.props.onPress());
+		expect(renderer!.root.findAll((node) => String(node.type) === "ImageViewer")).toHaveLength(1);
+
+		await act(async () => renderer!.update(<ComposerAttachmentTray items={[]} onRemove={vi.fn()} />));
+		expect(renderer!.toJSON()).toBeNull();
+
+		await act(async () => renderer!.update(<ComposerAttachmentTray items={[photo]} onRemove={vi.fn()} />));
+		expect(renderer!.root.findAll((node) => String(node.type) === "ImageViewer")).toHaveLength(0);
+	});
+
 	it("keeps its scroll view out of a form sheet's scroll view lookup", async () => {
 		await act(async () => { renderer = create(<ComposerAttachmentTray items={[photo]} onRemove={vi.fn()} />); });
 		const wrapper = renderer!.root.findAll((node) => String(node.type) === "View" && node.props.collapsable === false)[0];
