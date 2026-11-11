@@ -6474,7 +6474,7 @@ function atCarryingSteer(items: ConversationItem[], deliveries: readonly Batched
 			carried += 1;
 			const sequence = steer.sequence + carried / 1000;
 			const cached = carriedRows.get(item);
-			if (cached?.turnId === steer.turnId && cached.sequence === sequence) return cached;
+			if (cached && cached.turnId === steer.turnId && cached.sequence === sequence) return cached;
 			const row = { ...item, turnId: steer.turnId, sequence };
 			carriedRows.set(item, row);
 			return row;
