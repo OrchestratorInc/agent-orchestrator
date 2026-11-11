@@ -334,7 +334,6 @@ function ShellLayout() {
 	useWorkspacePolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	useAutoSpawnPauseNotice(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS);
 	const { hosts: remoteHosts, listed: remoteHostsListed, refresh: refreshRemoteHosts } = useRemoteHosts();
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
@@ -353,6 +352,7 @@ function ShellLayout() {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
 	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();

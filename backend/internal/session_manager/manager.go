@@ -1168,7 +1168,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		agentConfig = resolved
 	}
 	cfg.RequestedMode = mode
-	NoteSpawnLaunch(ctx, mode, cfg.Async && mode == domain.SessionModeChat)
+	NoteSpawnLaunch(ctx, mode, false)
 
 	// Adapters whose model picker is an agent-owned mode list (e.g. Amp) keep
 	// their selectable values in AgentConfig.Mode. Normalize a copy for the
@@ -2487,6 +2487,19 @@ func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) por
 		merged.Permissions = rec.Metadata.Permissions
 	}
 	return merged
+}
+
+// EffectiveSpawnAgentConfig merges project, role, and per-start tuning for
+// admission bookkeeping without running model discovery or changing settings.
+func EffectiveSpawnAgentConfig(cfg ports.SpawnConfig, project domain.ProjectConfig) ports.AgentConfig {
+	if cfg.AgentConfigResolved {
+		return cfg.AgentConfig
+	}
+	resolved := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project), cfg.AgentConfig)
+	if cfg.EffortOverride {
+		resolved.Effort = cfg.AgentConfig.Effort
+	}
+	return resolved
 }
 
 func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {

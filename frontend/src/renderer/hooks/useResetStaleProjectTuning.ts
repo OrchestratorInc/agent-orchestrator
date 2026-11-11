@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
@@ -38,7 +38,7 @@ export function useResetStaleProjectTuning(args: {
 	const queryClient = useQueryClient();
 	const attempted = useRef(new Set<string>());
 	const latest = useRef(args);
-	latest.current = args;
+	useLayoutEffect(() => { latest.current = args; }, [args]);
 	const { projectId, hostId, agent, agentLabel, projectAgent, config, catalog } = args;
 	const { model, effort, modelSlot, effortSlot } = effectiveSavedTuning(config);
 	const stale = agent !== "" && agent === projectAgent ? staleSavedTuning(catalog, model, effort, agent) : undefined;
@@ -85,6 +85,17 @@ export function useResetStaleProjectTuning(args: {
 			);
 		};
 		let confirmed = false;
+		const runReset = () => {
+			if (confirmed) return;
+			confirmed = true;
+			void reset().catch(() => {
+				confirmed = false;
+				useUiStore.getState().showGlobalToast(
+					t("newTask.staleTuningReset.failed", { defaultValue: "Could not reset saved model settings" }), undefined,
+					{ tone: "error", durationMs: 0, dismissible: true, action: { label: t("common.retry", { defaultValue: "Retry" }), run: runReset } },
+				);
+			});
+		};
 		useUiStore.getState().showGlobalToast(
 			t("newTask.staleTuningReset.proposalTitle", { defaultValue: "Saved model settings need attention" }),
 			stale.model
@@ -94,19 +105,13 @@ export function useResetStaleProjectTuning(args: {
 				})
 				: t("newTask.staleTuningReset.proposalEffort", {
 					defaultValue: "{{model}} does not support {{effort}} effort. Reset this project's saved effort?",
-					model, effort,
+					model: model || t("settings.models.default", { defaultValue: "Agent default" }), effort,
 				}),
 			{
-				tone: "info", durationMs: 20_000, dismissible: true,
+				tone: "info", durationMs: 0, dismissible: true,
 				action: {
 					label: t("newTask.staleTuningReset.confirm", { defaultValue: "Reset saved settings" }),
-					run: () => {
-						if (confirmed) return;
-						confirmed = true;
-						void reset().catch(() => useUiStore.getState().showGlobalToast(
-							t("newTask.staleTuningReset.failed", { defaultValue: "Could not reset saved model settings" }), undefined, { tone: "error" },
-						));
-					},
+					run: runReset,
 				},
 			},
 		);

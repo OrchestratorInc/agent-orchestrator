@@ -15,7 +15,7 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 const catalog = { refreshState: "idle", models: [{ id: "claude-sonnet-5-5", efforts: ["low", "high"] }] };
-const config = { env: { KEEP: "1" }, worker: { agent: "claude-code", agentConfig: { model: "claude-gone-4", effort: "high" } } };
+const config = { env: { KEEP: "1" }, worker: { agent: "claude-code", agentConfig: { model: "claude-sonnet-5-5", effort: "max" } } };
 
 async function confirmReset() {
 	await waitFor(() => expect(useUiStore.getState().globalToasts[0]?.action?.label).toBe("Reset saved settings"));
@@ -35,14 +35,14 @@ describe("useResetStaleProjectTuning", () => {
 		useUiStore.setState({ globalToasts: [] });
 	});
 
-	it("resets a saved worker model the catalog no longer lists, once, keeping the rest of the config", async () => {
+	it("resets unsupported worker effort once, keeping the model and remaining config", async () => {
 		const props = { projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code", config, catalog };
 		const { rerender } = renderHook((p) => useResetStaleProjectTuning(p), { wrapper, initialProps: props });
 		await confirmReset();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
 			params: { path: { id: "mer" } },
-			body: { displayName: "Mer", config: { env: { KEEP: "1" }, worker: { agent: "claude-code", agentConfig: {} } } },
+			body: { displayName: "Mer", config: { env: { KEEP: "1" }, worker: { agent: "claude-code", agentConfig: { model: "claude-sonnet-5-5" } } } },
 		});
 		await waitFor(() => expect(useUiStore.getState().globalToasts).toHaveLength(1));
 		expect(useUiStore.getState().globalToasts[0].title).toBe("Project model settings reset");
@@ -76,8 +76,8 @@ describe("useResetStaleProjectTuning", () => {
 		const savedConfig = { env: { KEEP: "1" }, ...saved };
 		getMock.mockResolvedValue({ data: { status: "ok", project: { id: "mer", name: "Mer", config: savedConfig } } });
 		renderHook(() => useResetStaleProjectTuning({
-			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
-			config: savedConfig, catalog,
+			projectId: "mer", agent: saved.agentConfig?.model === "claude-gone-4" || saved.worker?.agentConfig?.model === "claude-gone-4" ? "memcode" : "claude-code", agentLabel: "Agent", projectAgent: saved.agentConfig?.model === "claude-gone-4" || saved.worker?.agentConfig?.model === "claude-gone-4" ? "memcode" : "claude-code",
+			config: savedConfig, catalog: saved.agentConfig?.model === "claude-gone-4" || saved.worker?.agentConfig?.model === "claude-gone-4" ? { ...catalog, source: "official", customModelEntry: "none" } : catalog,
 		}), { wrapper });
 		await confirmReset();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
@@ -106,7 +106,7 @@ describe("useResetStaleProjectTuning", () => {
 		getMock.mockResolvedValue({ data: { status: "ok", project: { id: "mer", name: "Mer", config: currentConfig } } });
 		renderHook(() => useResetStaleProjectTuning({
 			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
-			config: { agentConfig: { model: "claude-gone-4", effort: "high" } }, catalog,
+			config: { agentConfig: { model: "claude-sonnet-5-5", effort: "max" } }, catalog,
 		}), { wrapper });
 		await confirmReset();
 		await waitFor(() => expect(getMock).toHaveBeenCalledOnce());
@@ -135,6 +135,7 @@ describe("useResetStaleProjectTuning", () => {
 		await waitFor(() => expect(useUiStore.getState().globalToasts).toHaveLength(1));
 		const toast = useUiStore.getState().globalToasts[0];
 		expect(toast.dismissible).toBe(true);
+		expect(toast.durationMs).toBe(0);
 		act(() => useUiStore.getState().dismissGlobalToast(toast.nonce));
 		expect(getMock).not.toHaveBeenCalled();
 		expect(putMock).not.toHaveBeenCalled();
@@ -148,6 +149,11 @@ describe("useResetStaleProjectTuning", () => {
 		await confirmReset();
 		await waitFor(() => expect(useUiStore.getState().globalToasts[0]?.title).toBe("Could not reset saved model settings"));
 		expect(useUiStore.getState().globalToasts[0].tone).toBe("error");
+		const retry = useUiStore.getState().globalToasts[0];
+		expect(retry.action?.label).toBe("Retry");
+		putMock.mockResolvedValue({ data: {} });
+		await act(async () => { retry.action?.run(); });
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(2));
 	});
 
 	it("preserves saved model and effort when Claude Code only needs updating", () => {
@@ -165,7 +171,7 @@ describe("useResetStaleProjectTuning", () => {
 		const props = { projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code", config, catalog };
 		const { rerender } = renderHook((p) => useResetStaleProjectTuning(p), { wrapper, initialProps: props });
 		const toast = useUiStore.getState().globalToasts[0];
-		rerender({ ...props, catalog: { ...catalog, models: [{ id: "claude-gone-4", efforts: ["high"] }] } });
+		rerender({ ...props, catalog: { ...catalog, models: [{ id: "claude-sonnet-5-5", efforts: ["high", "max"] }] } });
 		await act(async () => { toast.action?.run(); });
 		expect(getMock).not.toHaveBeenCalled();
 		expect(putMock).not.toHaveBeenCalled();

@@ -93,12 +93,12 @@ describe("AgentModelCombobox", () => {
 		renderCombobox([
 			{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
 			{ id: "claude-opus-5-5", label: "Opus 5.5", requiresVersion: "2.1.280", unavailableReason: "Requires Claude Code 2.1.280 or newer." },
-		], { compact: true, agentId: "claude-code" });
+		], { compact: true, agentId: "claude-code", hostId: "remote-host" });
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		expect(screen.getByRole("menuitem", { name: /Opus 5\.5/ })).toHaveAttribute("aria-disabled", "true");
 		expect(screen.getAllByRole("menuitem", { name: "Update Claude Code" })).toHaveLength(1);
 		await userEvent.click(screen.getByRole("menuitem", { name: "Update Claude Code" }));
-		expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ focusAgentId: "claude-code", harnessView: "local" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ hostId: "remote-host", focusAgentId: "claude-code", harnessView: "local", preserveProject: true }));
 	});
 
 	it("closes only the effort submenu on Escape", async () => {

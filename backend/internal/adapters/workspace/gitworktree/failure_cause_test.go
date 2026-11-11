@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"testing"
 )
 
@@ -36,6 +37,9 @@ func TestCommandErrorFailureCause(t *testing.T) {
 }
 
 func TestKilledGitProcessIsKilled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX signal semantics")
+	}
 	cmd := exec.Command("sh", "-c", "kill -9 $$")
 	err := cmd.Run()
 	if got := (commandError{err: err}).FailureCause(); got != "killed" {

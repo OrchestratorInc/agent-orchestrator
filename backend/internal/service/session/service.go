@@ -424,7 +424,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return newestSession(existing), 0, 0, nil
 		}
 	}
-	return s.spawnUnlessAutoPaused(ctx, cfg, func() (domain.Session, int, int, error) { return s.spawn(ctx, cfg) })
+	return s.spawnUnlessAutoPaused(ctx, cfg, func(spawnCtx context.Context) (domain.Session, int, int, error) { return s.spawn(spawnCtx, cfg) })
 }
 
 func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -498,7 +498,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	createdBy := s.spawnCreatedBy(ctx, cfg)
 	// An asynchronous Chat start answers before it is usable; the provision
 	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
-	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
+	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project, autoSpawn: autoSpawnAttemptFrom(ctx)}
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
 	err = sessionmanager.ClassifySpawnError(ctx, sessionmanager.RelabelSpawnTimeout(err, ctx))
 	answeredMs := s.monoNow().Sub(start).Milliseconds()

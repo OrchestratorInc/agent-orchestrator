@@ -27,6 +27,7 @@ type spawnAcceptance struct {
 	createdBy     domain.SessionCreator
 	firstEligible bool
 	project       domain.ProjectRecord
+	autoSpawn     *autoSpawnAttempt
 
 	// Set by the observer when the start went asynchronous. Written on the
 	// spawn goroutine before manager.Spawn returns, read after it returns.
@@ -190,7 +191,9 @@ func (s *Service) abandonAsyncSpawn(acc *spawnAcceptance) bool {
 }
 
 func (s *Service) settleAsyncSpawn(rec domain.SessionRecord, attempt *asyncSpawnAttempt, ready bool, cause error) {
-	s.settleAutoSpawn(rec, ready, cause)
+	if attempt.acceptance != nil {
+		s.settleAutoSpawn(attempt.acceptance.autoSpawn, ready, cause)
+	}
 	elapsed := s.monoNow().Sub(attempt.start).Milliseconds()
 	// The first_for_install claim is taken only by a start that became usable.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, attempt.firstEligible, ready)

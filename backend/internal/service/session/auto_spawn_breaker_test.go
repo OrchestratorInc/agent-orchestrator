@@ -104,23 +104,35 @@ func TestAutoSpawnResumesWhenProjectAgentSettingsChange(t *testing.T) {
 	}
 }
 
+func openBreakerAttempt(t *testing.T, svc *Service, cfg ports.SpawnConfig) *autoSpawnAttempt {
+	t.Helper()
+	var attempt *autoSpawnAttempt
+	_, _, _, err := svc.spawnUnlessAutoPaused(t.Context(), cfg, func(ctx context.Context) (domain.Session, int, int, error) {
+		attempt = autoSpawnAttemptFrom(ctx)
+		return domain.Session{SessionRecord: domain.SessionRecord{ProvisionState: domain.SessionProvisionProvisioning}}, 0, 0, nil
+	})
+	if err != nil {
+		t.Fatalf("admit attempt: %v", err)
+	}
+	return attempt
+}
+
 func TestAsyncScheduledStartFailuresCount(t *testing.T) {
 	svc, _, _, _ := newBreakerService(t)
 	runID := domain.AutomationRunID("run-1")
-	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, AutomationRunID: &runID}
+	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, AutomationRunID: &runID}
 	for i := 0; i < autoSpawnFailureLimit; i++ {
-		svc.settleAutoSpawn(rec, false, fmt.Errorf("spawn: %w", sessionmanager.ErrUnsupportedModel))
+		svc.settleAutoSpawn(openBreakerAttempt(t, svc, cfg), false, sessionmanager.ErrUnsupportedModel)
 	}
-	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AutomationRunID: &runID}); spawnCode(err) != "AUTO_SPAWN_PAUSED" {
-		t.Fatalf("start after three failed async schedule starts = %v, want AUTO_SPAWN_PAUSED", err)
+	if _, _, _, err := svc.Spawn(t.Context(), cfg); spawnCode(err) != "AUTO_SPAWN_PAUSED" {
+		t.Fatalf("scheduled start = %v", err)
 	}
-	// A cancelled background start is not a failure.
 	svc2, _, _, _ := newBreakerService(t)
 	for i := 0; i < 5; i++ {
-		svc2.settleAutoSpawn(rec, false, fmt.Errorf("spawn: %w", context.Canceled))
+		svc2.settleAutoSpawn(openBreakerAttempt(t, svc2, cfg), false, context.Canceled)
 	}
-	if _, _, _, err := svc2.Spawn(context.Background(), intakeStart); spawnCode(err) == "AUTO_SPAWN_PAUSED" {
-		t.Fatal("cancelled starts paused automatic starts")
+	if _, _, _, err := svc2.Spawn(t.Context(), intakeStart); spawnCode(err) == "AUTO_SPAWN_PAUSED" {
+		t.Fatal("canceled starts paused intake")
 	}
 }
 
@@ -201,7 +213,7 @@ func TestAutoSpawnCooldownAdmitsOnlyOneProbeAndRepauses(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Go(func() {
-			if _, paused := svc.autoSpawns.paused(autoSpawnKey{project: "mer"}, autoSpawnSettings(domain.ProjectRecord{Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "old-model"}}}), now); !paused {
+			if _, paused := svc.autoSpawns.begin(autoSpawnKey{project: "mer", model: "old-model", kind: domain.KindWorker}, autoSpawnSettings(domain.ProjectRecord{Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "old-model"}}}), true, now); !paused {
 				admitted.Add(1)
 			}
 		})
@@ -211,9 +223,88 @@ func TestAutoSpawnCooldownAdmitsOnlyOneProbeAndRepauses(t *testing.T) {
 		t.Fatalf("concurrent probes = %d, want 1", admitted.Load())
 	}
 	// A slow probe remains the only probe even beyond another cooldown.
-	key := autoSpawnKey{project: "mer"}
+	key := autoSpawnKey{project: "mer", model: "old-model", kind: domain.KindWorker}
 	settings := autoSpawnSettings(domain.ProjectRecord{Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "old-model"}}})
-	if _, paused := svc.autoSpawns.paused(key, settings, now.Add(time.Hour)); !paused {
+	if _, paused := svc.autoSpawns.begin(key, settings, true, now.Add(time.Hour)); !paused {
 		t.Fatal("an in-flight probe admitted another automatic start")
+	}
+}
+
+func TestAutoSpawnConfigurationsAreIsolated(t *testing.T) {
+	svc, st, fc, _ := newBreakerService(t)
+	bad := intakeStart
+	bad.Harness = domain.HarnessClaudeCode
+	bad.AgentConfig.Model = "invalid"
+	bad.AgentConfig.Effort = "max"
+	fc.spawnErr = sessionmanager.ErrUnsupportedModel
+	for i := 0; i < 3; i++ {
+		_, _, _, _ = svc.Spawn(t.Context(), bad)
+	}
+	good := bad
+	good.AgentConfig.Model = "working"
+	fc.spawnErr = nil
+	if _, _, _, err := svc.Spawn(t.Context(), good); err != nil {
+		t.Fatal(err)
+	}
+	manual := good
+	manual.CreatedBy = domain.SessionCreatedByUser
+	if _, _, _, err := svc.Spawn(t.Context(), manual); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := svc.Spawn(t.Context(), bad); spawnCode(err) != "AUTO_SPAWN_PAUSED" {
+		t.Fatalf("bad config lost pause: %v", err)
+	}
+	otherEffort := bad
+	otherEffort.AgentConfig.Effort = "high"
+	if _, _, _, err := svc.Spawn(t.Context(), otherEffort); err != nil {
+		t.Fatal(err)
+	}
+	pauses := svc.AutoSpawnPauses(t.Context(), st.projects["mer"])
+	if len(pauses) != 1 || pauses[0].Model != "invalid" || pauses[0].Effort != "max" {
+		t.Fatalf("pause summaries = %+v", pauses)
+	}
+}
+
+func TestAutoSpawnStaleAsyncOutcomesCannotAffectNewGeneration(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprint(ready), func(t *testing.T) {
+			svc, st, _, _ := newBreakerService(t)
+			old := []*autoSpawnAttempt{openBreakerAttempt(t, svc, intakeStart), openBreakerAttempt(t, svc, intakeStart), openBreakerAttempt(t, svc, intakeStart)}
+			project := st.projects["mer"]
+			project.Config.AgentConfig.Mode = "repaired"
+			st.projects["mer"] = project
+			for i := 0; i < 3; i++ {
+				svc.settleAutoSpawn(openBreakerAttempt(t, svc, intakeStart), false, sessionmanager.ErrUnsupportedModel)
+			}
+			for _, attempt := range old {
+				svc.settleAutoSpawn(attempt, ready, ports.ErrUnsupportedEffort)
+			}
+			pauses := svc.AutoSpawnPauses(t.Context(), project)
+			if len(pauses) != 1 || pauses[0].Failures != 3 || pauses[0].ErrorCode != "UNSUPPORTED_MODEL" {
+				t.Fatalf("stale outcome changed current pause: %+v", pauses)
+			}
+		})
+	}
+}
+
+func TestAutomationAttributedAsyncProbeSettlesWithoutRunID(t *testing.T) {
+	svc, cmd, _, _, _ := newAsyncSpawnService(t)
+	cfg := ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator, Harness: domain.HarnessClaudeCode, CreatedBy: domain.SessionCreatedByAutomation}
+	for i := 0; i < 3; i++ {
+		sess, _, _, err := svc.Spawn(t.Context(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd.observer(context.Background(), sess.SessionRecord, domain.SessionProvisionFailed, sessionmanager.ErrUnsupportedModel)
+	}
+	cmd.clock.advance(30 * time.Minute)
+	sess, _, _, err := svc.Spawn(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.observer(context.Background(), sess.SessionRecord, domain.SessionProvisionFailed, sessionmanager.ErrUnsupportedModel)
+	cmd.clock.advance(30 * time.Minute)
+	if _, _, _, err := svc.Spawn(t.Context(), cfg); err != nil {
+		t.Fatalf("failed async probe remained reserved: %v", err)
 	}
 }

@@ -21,10 +21,12 @@ func addSpawnLaunchProps(payload map[string]any, trace sessionmanager.SpawnTrace
 	if trace.Mode != "" {
 		mode = trace.Mode
 	}
-	switch domain.NormalizeSessionMode(mode) {
-	case domain.SessionModeChat:
+	switch {
+	case mode == "":
+		// An early failure did not choose a mode.
+	case domain.NormalizeSessionMode(mode) == domain.SessionModeChat:
 		payload["mode"] = "chat"
-	case domain.SessionModeTUI:
+	case domain.NormalizeSessionMode(mode) == domain.SessionModeTUI:
 		payload["mode"] = "terminal"
 	}
 	payload["async"] = trace.Async

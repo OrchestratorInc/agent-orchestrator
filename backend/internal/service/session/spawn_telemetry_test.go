@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"testing"
 	"time"
 
@@ -16,6 +17,9 @@ import (
 
 func killedProcessError(t *testing.T) error {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX signal semantics")
+	}
 	err := exec.Command("sh", "-c", "kill -9 $$").Run()
 	if err == nil || err.Error() != "signal: killed" {
 		t.Fatalf("killed process error = %v, want signal: killed", err)
@@ -124,3 +128,22 @@ type gitStderrError struct{ cause string }
 
 func (e gitStderrError) Error() string        { return "git worktree add: exit status 128" }
 func (e gitStderrError) FailureCause() string { return e.cause }
+
+func TestLaunchPropsOmitModeBeforeSelection(t *testing.T) {
+	for _, tc := range []struct {
+		requested, selected domain.SessionMode
+		want                string
+	}{
+		{"", "", ""}, {domain.SessionModeChat, "", "chat"}, {domain.SessionModeTUI, "", "terminal"}, {domain.SessionModeChat, domain.SessionModeTUI, "terminal"},
+	} {
+		payload := map[string]any{}
+		addSpawnLaunchProps(payload, sessionmanager.SpawnTraceFacts{Mode: tc.selected}, tc.requested)
+		if tc.want == "" {
+			if _, ok := payload["mode"]; ok {
+				t.Fatalf("unchosen mode reported: %v", payload)
+			}
+		} else if payload["mode"] != tc.want {
+			t.Fatalf("mode = %v, want %s", payload["mode"], tc.want)
+		}
+	}
+}

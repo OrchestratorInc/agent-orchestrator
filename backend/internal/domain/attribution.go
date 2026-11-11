@@ -57,6 +57,9 @@ type SessionTelemetryFacts struct {
 // only in the local desktop and never exported.
 type AutoSpawnPause struct {
 	Harness   AgentHarness `json:"harness"`
+	Model     string       `json:"model,omitempty"`
+	Effort    string       `json:"effort,omitempty"`
+	Kind      string       `json:"kind,omitempty"`
 	ErrorCode string       `json:"errorCode"`
 	Message   string       `json:"message"`
 	Failures  int          `json:"failures"`

@@ -5082,10 +5082,13 @@ export interface components {
             mimeType?: string;
         };
         AutoSpawnPause: {
+            effort?: string;
             errorCode: string;
             failures: number;
             harness: string;
+            kind?: string;
             message: string;
+            model?: string;
             /** Format: date-time */
             pausedAt: string;
         };

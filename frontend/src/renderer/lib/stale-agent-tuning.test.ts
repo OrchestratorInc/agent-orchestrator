@@ -10,8 +10,13 @@ const catalog = {
 };
 
 describe("staleSavedTuning", () => {
-	it("resets a model the account's catalog does not list, with its effort", () => {
-		expect(staleSavedTuning(catalog, "claude-gone-4", "high", "claude-code")).toEqual({ model: true, effort: true });
+	it("checks effort against the catalog default without clearing the absent saved model", () => {
+		expect(staleSavedTuning({ models: [{ id: "claude-haiku-4-5", isDefault: true, efforts: [] }] }, "", "high", "claude-code")).toEqual({ model: false, effort: true });
+	});
+	it("keeps unlisted dynamic models for agent-side validation", () => {
+		expect(staleSavedTuning(catalog, "claude-gone-4", "high", "claude-code")).toBeUndefined();
+		expect(staleSavedTuning({ ...catalog, customModelEntry: "configured" }, "other", "high", "codex")).toBeUndefined();
+		expect(staleSavedTuning({ ...catalog, source: "official-modes", customModelEntry: "none" }, "removed", "high", "memcode")).toEqual({ model: true, effort: true });
 	});
 	it("preserves a model that needs a newer Claude Code", () => {
 		expect(staleSavedTuning(catalog, "claude-fable-5-1", "max", "claude-code")).toBeUndefined();

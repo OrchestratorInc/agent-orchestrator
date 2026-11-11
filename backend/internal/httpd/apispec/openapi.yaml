@@ -14941,13 +14941,19 @@ components:
       type: object
     AutoSpawnPause:
       properties:
+        effort:
+          type: string
         errorCode:
           type: string
         failures:
           type: integer
         harness:
           type: string
+        kind:
+          type: string
         message:
+          type: string
+        model:
           type: string
         pausedAt:
           format: date-time

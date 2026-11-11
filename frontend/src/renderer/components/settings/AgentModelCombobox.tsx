@@ -60,6 +60,7 @@ export type ModelSearchResult = {
 };
 
 export function AgentModelCombobox({
+	hostId,
 	value,
 	models,
 	allowCustom,
@@ -88,6 +89,7 @@ export function AgentModelCombobox({
 	disabled = false,
 	"aria-label": ariaLabel,
 }: {
+	hostId?: string;
 	value: string;
 	models: AgentModel[];
 	allowCustom?: boolean;
@@ -473,7 +475,7 @@ export function AgentModelCombobox({
 									{item.model.requiresVersion && agentId === "claude-code" && (
 										// The model row is disabled; the way out is the usual update flow.
 										<DropdownMenuItem
-											onSelect={() => openGlobalSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}
+											onSelect={() => openGlobalSettings("harness", { hostId, focusAgentId: agentId, harnessView: "local", preserveProject: true })}
 											className="pl-6 text-xs text-settings-label"
 										>
 											{t("settings.models.updateClaudeCode", { defaultValue: "Update Claude Code" })}

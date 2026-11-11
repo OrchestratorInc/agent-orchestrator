@@ -436,15 +436,28 @@ func TestResolveAgentConfigValidatesAgainstSavedCatalogFirst(t *testing.T) {
 		saved: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "opus", Efforts: []string{"high"}}}},
 		fresh: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "sonnet", Efforts: []string{"high"}}}},
 	}}
-	resolved, err := m.resolveAgentConfig(context.Background(), spawn, domain.ProjectConfig{})
-	if err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { close(release); waitForBackgroundRefresh(t, refreshed) })
+	type result struct {
+		config ports.AgentConfig
+		err    error
 	}
-	if resolved.Model != "sonnet" || resolved.Effort != "high" || len(refreshes) != 1 || refreshes[0] {
-		t.Fatalf("resolved=%#v reads=%v, want a launch from one saved read", resolved, refreshes)
+	returned := make(chan result, 1)
+	go func() {
+		resolved, err := m.resolveAgentConfig(t.Context(), spawn, domain.ProjectConfig{})
+		returned <- result{resolved, err}
+	}()
+	select {
+	case got := <-returned:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if got.config.Model != "sonnet" || got.config.Effort != "high" || len(refreshes) != 1 || refreshes[0] {
+			t.Fatalf("resolved=%#v reads=%v, want a launch from one saved read", got.config, refreshes)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("model resolution waited for background rediscovery")
 	}
-	close(release)
-	waitForBackgroundRefresh(t, refreshed)
+
 }
 
 func TestResolveAgentConfigRefreshesUnusableSavedCatalogInBackground(t *testing.T) {

@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1436,5 +1437,32 @@ func TestCancelWithoutBackgroundRunReportsCancellation(t *testing.T) {
 	}
 	if !errors.Is(cause, context.Canceled) {
 		t.Fatalf("cause = %v, want context.Canceled", cause)
+	}
+}
+
+type failAsyncSeedStore struct{ *fakeStore }
+
+func (s *failAsyncSeedStore) CreateSession(context.Context, domain.SessionRecord) (domain.SessionRecord, error) {
+	return domain.SessionRecord{}, errors.New("seed failed")
+}
+
+func TestSpawnAsyncTelemetryRequiresAcceptedBackgroundStart(t *testing.T) {
+	for _, failSeed := range []bool{true, false} {
+		t.Run(fmt.Sprint(failSeed), func(t *testing.T) {
+			m, st, _ := newChatManager(&recordingLauncher{})
+			deferredBackground(m)
+			if failSeed {
+				m.store = &failAsyncSeedStore{st}
+			}
+			ctx, trace := WithSpawnTrace(t.Context())
+			_, _, _, err := m.Spawn(ctx, asyncChatSpawnConfig(""))
+			if (err != nil) != failSeed {
+				t.Fatalf("spawn error = %v", err)
+			}
+			facts := trace.Facts()
+			if facts.Mode != domain.SessionModeChat || facts.Async == failSeed {
+				t.Fatalf("launch facts = %+v, seed failure %v", facts, failSeed)
+			}
+		})
 	}
 }

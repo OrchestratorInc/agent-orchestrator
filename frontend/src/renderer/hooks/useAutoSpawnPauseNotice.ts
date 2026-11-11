@@ -4,50 +4,49 @@ import type { components } from "../../api/schema";
 import { useUiStore } from "../stores/ui-store";
 
 export type AutoSpawnPause = components["schemas"]["AutoSpawnPause"];
-
-const SEEN_KEY = "ao.autoSpawnPauseNotices";
+const SEEN_KEY = "ao.autoSpawnPauseAcknowledgements.v2";
+const acknowledged = new Set<string>();
 
 function seenPauses(): Set<string> {
 	try {
-		const raw = window.localStorage.getItem(SEEN_KEY);
-		return new Set(raw ? (JSON.parse(raw) as string[]) : []);
-	} catch {
-		return new Set();
-	}
+		const saved: unknown = JSON.parse(window.localStorage.getItem(SEEN_KEY) ?? "[]");
+		if (Array.isArray(saved)) for (const key of saved) if (typeof key === "string") acknowledged.add(key);
+	} catch { /* Memory acknowledgements remain available when storage is denied. */ }
+	return acknowledged;
 }
 
-/**
- * Shows each automatic-start pause once. The daemon stops tracker intake and
- * schedule starts for a project and harness after three identical configuration or authentication failures. A cooldown
- * admits one automatic probe; notices are remembered per pause.
- */
-export function useAutoSpawnPauseNotice(projects: { id: string; name: string; autoSpawnPauses?: AutoSpawnPause[] }[]) {
+/** Keeps each active launch-configuration pause visible until acknowledged. */
+export function useAutoSpawnPauseNotice(projects: { id: string; name: string; hostId?: string; autoSpawnPauses?: AutoSpawnPause[] }[]) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	useEffect(() => {
 		const seen = seenPauses();
-		let changed = false;
+		const active = new Set<string>();
 		for (const project of projects) {
 			for (const pause of project.autoSpawnPauses ?? []) {
-				const key = `${project.id}|${pause.harness}|${pause.pausedAt}`;
-				if (seen.has(key)) continue;
-				seen.add(key);
-				changed = true;
+				const key = JSON.stringify([project.hostId ?? "", project.id, pause.harness, pause.kind ?? "", pause.model ?? "", pause.effort ?? "", pause.pausedAt]);
+				const dedupeKey = `auto-spawn-pause:${key}`;
+				active.add(dedupeKey);
+				if (seen.has(key) || useUiStore.getState().globalToasts.some((toast) => toast.dedupeKey === dedupeKey)) continue;
 				showGlobalToast(
 					t("autoSpawnPause.title", { defaultValue: "Automatic starts paused for {{project}}", project: project.name }),
-					t("autoSpawnPause.body", {
-						defaultValue: "{{failures}} automatic starts with {{harness}} failed in a row: {{message}} An automatic probe is allowed after a 30-minute cooldown. Start a session yourself or change the project's agent or model settings to retry sooner.",
-						failures: pause.failures,
-						harness: pause.harness,
-						message: pause.message,
+					t("autoSpawnPause.configurationBody", {
+						defaultValue: "{{failures}} starts with {{harness}} ({{kind}}, model {{model}}, effort {{effort}}) failed: {{message}} An automatic probe is allowed after a 30-minute cooldown.",
+						failures: pause.failures, harness: pause.harness, kind: pause.kind || "worker",
+						model: pause.model || "default", effort: pause.effort || "default", message: pause.message,
 					}),
-					{ tone: "error", durationMs: 20_000, dedupeKey: `auto-spawn-pause:${key}` },
+					{
+						tone: "error", durationMs: 0, dedupeKey,
+						action: { label: t("autoSpawnPause.acknowledge", { defaultValue: "Acknowledge" }), run: () => {
+							seen.add(key);
+							try { window.localStorage.setItem(SEEN_KEY, JSON.stringify([...seen])); } catch { /* Retained in memory for this app run. */ }
+						} },
+					},
 				);
 			}
 		}
-		if (changed) {
-			// ponytail: grows by one key per pause; prune if it ever matters.
-			window.localStorage.setItem(SEEN_KEY, JSON.stringify([...seen]));
+		for (const toast of useUiStore.getState().globalToasts) {
+			if (toast.dedupeKey?.startsWith("auto-spawn-pause:") && !active.has(toast.dedupeKey)) useUiStore.getState().dismissGlobalToast(toast.nonce);
 		}
 	}, [projects, showGlobalToast, t]);
 }

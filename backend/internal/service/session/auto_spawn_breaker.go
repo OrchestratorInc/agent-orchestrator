@@ -4,18 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // autoSpawnFailureLimit is how many automatic starts in a row may fail with
-// the same error code for one project and harness before automatic starts
+// the same error code for one launch configuration before automatic starts
 // stop. A bad saved model or a missing login fails identically every time,
 // and tracker intake and schedules used to retry it hundreds of times.
 const autoSpawnFailureLimit = 3
@@ -32,8 +32,10 @@ func automaticSpawn(cfg ports.SpawnConfig) bool {
 }
 
 type autoSpawnKey struct {
-	project domain.ProjectID
-	harness domain.AgentHarness
+	project       domain.ProjectID
+	harness       domain.AgentHarness
+	model, effort string
+	kind          domain.SessionKind
 }
 
 type autoSpawnStreak struct {
@@ -64,37 +66,67 @@ func (b *autoSpawnBreaker) current(key autoSpawnKey, settings string) *autoSpawn
 	return streak
 }
 
-// paused returns the pause in force for key, if any.
-func (b *autoSpawnBreaker) paused(key autoSpawnKey, settings string, now time.Time) (domain.AutoSpawnPause, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	streak := b.current(key, settings)
-	if streak == nil || streak.pausedAt.IsZero() {
-		return domain.AutoSpawnPause{}, false
-	}
-	if !streak.probing && !now.Before(streak.pausedAt.Add(autoSpawnCooldown)) {
-		// Reserve the probe under the same lock so concurrent schedule/intake
-		// starts cannot all pass after the cooldown. Success clears the pause;
-		// the same failure leaves it paused for another cooldown.
-		streak.pausedAt = now
-		streak.probing = true
-		return domain.AutoSpawnPause{}, false
-	}
-	return streak.pause(key), true
+// autoSpawnAttempt pins admission identity through synchronous and async outcomes.
+type autoSpawnAttempt struct {
+	key       autoSpawnKey
+	state     *autoSpawnStreak
+	automatic bool
+	settled   bool // guarded by the breaker mutex
+}
+type autoSpawnAttemptKey struct{}
+
+func autoSpawnAttemptFrom(ctx context.Context) *autoSpawnAttempt {
+	attempt, _ := ctx.Value(autoSpawnAttemptKey{}).(*autoSpawnAttempt)
+	return attempt
 }
 
-// fail records one failed automatic start and reports whether it tripped
-// the breaker just now.
-func (b *autoSpawnBreaker) fail(key autoSpawnKey, settings, code, message string, now time.Time) bool {
+func (b *autoSpawnBreaker) begin(key autoSpawnKey, settings string, automatic bool, now time.Time) (*autoSpawnAttempt, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.streaks == nil {
 		b.streaks = map[autoSpawnKey]*autoSpawnStreak{}
 	}
 	streak := b.current(key, settings)
-	if streak == nil || streak.code != code {
-		streak = &autoSpawnStreak{code: code, settings: settings}
+	if streak == nil {
+		streak = &autoSpawnStreak{settings: settings}
 		b.streaks[key] = streak
+	}
+	if automatic && !streak.pausedAt.IsZero() {
+		if streak.probing || now.Before(streak.pausedAt.Add(autoSpawnCooldown)) {
+			return nil, true
+		}
+		streak.probing, streak.pausedAt = true, now
+	}
+	return &autoSpawnAttempt{key: key, state: streak, automatic: automatic}, false
+}
+
+// finish ignores duplicate outcomes and outcomes from a replaced generation.
+// An empty code is a success or a transient failure and clears this streak.
+func (b *autoSpawnBreaker) finish(attempt *autoSpawnAttempt, code, message string, now time.Time) bool {
+	if attempt == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if attempt.settled {
+		return false
+	}
+	attempt.settled = true
+	streak := b.streaks[attempt.key]
+	if streak != attempt.state {
+		return false
+	}
+	if code == "" {
+		// Retire the identity so already-running old attempts cannot recreate
+		// the streak after a successful start or transient recovery.
+		delete(b.streaks, attempt.key)
+		return false
+	}
+	if !attempt.automatic {
+		return false
+	}
+	if streak.code != code {
+		streak.code, streak.count, streak.pausedAt = code, 0, time.Time{}
 	}
 	streak.count++
 	streak.message = message
@@ -104,14 +136,6 @@ func (b *autoSpawnBreaker) fail(key autoSpawnKey, settings, code, message string
 		return true
 	}
 	return false
-}
-
-// succeed clears every streak for the project and harness: any start that
-// worked, manual or automatic, proves the configuration can launch.
-func (b *autoSpawnBreaker) succeed(key autoSpawnKey) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	delete(b.streaks, key)
 }
 
 // pauses lists the pauses in force for a project.
@@ -131,7 +155,7 @@ func (b *autoSpawnBreaker) pauses(project domain.ProjectID, settings string, now
 }
 
 func (s *autoSpawnStreak) pause(key autoSpawnKey) domain.AutoSpawnPause {
-	return domain.AutoSpawnPause{Harness: key.harness, ErrorCode: s.code, Message: s.message, Failures: s.count, PausedAt: s.pausedAt}
+	return domain.AutoSpawnPause{Harness: key.harness, Model: key.model, Effort: key.effort, Kind: string(key.kind), ErrorCode: s.code, Message: s.message, Failures: s.count, PausedAt: s.pausedAt}
 }
 
 // autoSpawnSettings fingerprints the project settings a start depends on:
@@ -158,60 +182,63 @@ func (s *Service) AutoSpawnPauses(ctx context.Context, project domain.ProjectRec
 }
 
 // spawnUnlessAutoPaused runs spawn, refusing an automatic start whose project
-// and harness are paused, and keeps the breaker's counts.
-func (s *Service) spawnUnlessAutoPaused(ctx context.Context, cfg ports.SpawnConfig, spawn func() (domain.Session, int, int, error)) (domain.Session, int, int, error) {
-	var key autoSpawnKey
-	var settings string
-	auto := automaticSpawn(cfg) && cfg.ProjectID != "" && s.store != nil
-	if auto {
+// launch configuration is paused, and keeps the breaker's counts.
+func (s *Service) spawnUnlessAutoPaused(ctx context.Context, cfg ports.SpawnConfig, spawn func(context.Context) (domain.Session, int, int, error)) (domain.Session, int, int, error) {
+	var attempt *autoSpawnAttempt
+	if cfg.ProjectID != "" && s.store != nil {
 		project, ok, err := s.store.GetProject(ctx, string(cfg.ProjectID))
 		if err == nil && ok {
-			key, settings = autoSpawnKey{project: cfg.ProjectID, harness: autoSpawnHarness(cfg, project)}, autoSpawnSettings(project)
-			if pause, paused := s.autoSpawns.paused(key, settings, s.now()); paused {
+			harness := autoSpawnHarness(cfg, project)
+			launch := cfg
+			launch.Harness = harness
+			tuning := sessionmanager.EffectiveSpawnAgentConfig(launch, project.Config)
+			key := autoSpawnKey{project: cfg.ProjectID, harness: harness, model: tuning.Model, effort: tuning.Effort, kind: cfg.Kind}
+			var paused bool
+			attempt, paused = s.autoSpawns.begin(key, autoSpawnSettings(project), automaticSpawn(cfg), s.now())
+			if paused {
 				return domain.Session{}, 0, 0, apierr.Conflict("AUTO_SPAWN_PAUSED",
-					fmt.Sprintf("Automatic starts for this project are paused after %d failed starts in a row (%s). A probe start is allowed automatically after a 30-minute cooldown. Start a session yourself or change the project's agent or model settings to retry sooner.", pause.Failures, pause.ErrorCode),
-					map[string]any{"errorCode": pause.ErrorCode, "harness": string(pause.Harness)})
+					"Automatic starts for this launch configuration are paused. A probe is allowed after a 30-minute cooldown. Start this configuration manually to retry sooner.",
+					map[string]any{"harness": string(harness), "model": key.model, "effort": key.effort})
 			}
-		} else {
-			auto = false
+			ctx = context.WithValue(ctx, autoSpawnAttemptKey{}, attempt)
 		}
 	}
-	sess, promptBytes, systemPromptBytes, err := spawn()
-	switch {
-	case err == nil:
-		// An async start answers before it is usable; its outcome settles in
-		// settleAsyncSpawn, which keeps the breaker for it.
-		if sess.ProvisionState != domain.SessionProvisionProvisioning {
-			s.autoSpawns.succeed(autoSpawnKey{project: sess.ProjectID, harness: sess.Harness})
-		}
-	case auto:
-		s.recordAutoSpawnFailure(key, settings, err)
+	sess, promptBytes, systemPromptBytes, err := spawn(ctx)
+	if err != nil || sess.ProvisionState != domain.SessionProvisionProvisioning {
+		s.settleAutoSpawn(attempt, err == nil, err)
 	}
 	return sess, promptBytes, systemPromptBytes, err
 }
 
-// recordAutoSpawnFailure counts one failed automatic start. A cancelled start
-// is not a failure, and a pause refusal is not a new attempt.
-func (s *Service) recordAutoSpawnFailure(key autoSpawnKey, settings string, err error) {
-	kind, code := telemetrymeta.ErrorKindAndCode(toSpawnAPIError(err))
+// Settlement is in-memory and uses admission-time identity. It performs no
+// blocking project lookup and cannot attach an old outcome to new settings.
+func (s *Service) settleAutoSpawn(attempt *autoSpawnAttempt, ready bool, err error) {
+	if attempt == nil {
+		return
+	}
+	if ready {
+		s.autoSpawns.finish(attempt, "", "", s.now())
+		return
+	}
+	if !attempt.automatic {
+		return
+	}
+	mapped := toSpawnAPIError(err)
+	kind, code := telemetrymeta.ErrorKindAndCode(mapped)
 	if code == "AUTO_SPAWN_PAUSED" {
 		return
 	}
-	// Only repeatable configuration/authentication failures justify a pause.
-	// Transient failures break a streak instead of accumulating across sleep,
-	// network outages, controller crashes, or slow disk operations.
 	if kind == "internal" || errors.Is(err, context.Canceled) || !autoSpawnConfigFailure(code) {
-		s.autoSpawns.succeed(key)
+		s.autoSpawns.finish(attempt, "", "", s.now())
 		return
 	}
 	message := code
 	var apiErr *apierr.Error
-	if errors.As(toSpawnAPIError(err), &apiErr) && apiErr.Kind != apierr.KindInternal {
+	if errors.As(mapped, &apiErr) && apiErr.Kind != apierr.KindInternal {
 		message = apiErr.Message
 	}
-	if s.autoSpawns.fail(key, settings, code, message, s.now()) && s.logger != nil {
-		s.logger.Warn("session: automatic starts paused after repeated identical failures",
-			"project", key.project, "harness", key.harness, "code", code, "failure_limit", autoSpawnFailureLimit)
+	if s.autoSpawns.finish(attempt, code, message, s.now()) && s.logger != nil {
+		s.logger.Warn("session: automatic launch configuration paused", "project", attempt.key.project, "harness", attempt.key.harness, "code", code)
 	}
 }
 
@@ -225,22 +252,4 @@ func autoSpawnConfigFailure(code string) bool {
 	default:
 		return false
 	}
-}
-
-// settleAutoSpawn keeps the breaker for an asynchronous start: a schedule's
-// orchestrator start (always async) fails or succeeds in the background.
-func (s *Service) settleAutoSpawn(rec domain.SessionRecord, ready bool, cause error) {
-	key := autoSpawnKey{project: rec.ProjectID, harness: rec.Harness}
-	if ready {
-		s.autoSpawns.succeed(key)
-		return
-	}
-	if rec.AutomationRunID == nil || s.store == nil {
-		return
-	}
-	project, ok, err := s.store.GetProject(context.Background(), string(rec.ProjectID))
-	if err != nil || !ok {
-		return
-	}
-	s.recordAutoSpawnFailure(key, autoSpawnSettings(project), cause)
 }

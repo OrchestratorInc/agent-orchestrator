@@ -1024,12 +1024,12 @@ func TestLinkedWorkspaceMissingCommonRepository(t *testing.T) {
 }
 
 func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
-	busy := classifyWorkspaceGitError(context.Background(), "/repo", errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
+	busy := classifyWorkspaceGitError(context.Background(), "/repo", "status", errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
 	var apiErr *apierr.Error
 	if !errors.As(busy, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
 		t.Fatalf("lock error = %v, want retryable WORKSPACE_GIT_BUSY", busy)
 	}
-	unknown := classifyWorkspaceGitError(context.Background(), "/repo-unknown", errors.New("git exit"), "fatal: bad object")
+	unknown := classifyWorkspaceGitError(context.Background(), "/repo-unknown", "status", errors.New("git exit"), "fatal: bad object")
 	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
 		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
 	}
@@ -6640,7 +6640,7 @@ func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
 func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "w-1")
 	read := func(detail string) error {
-		return classifyWorkspaceGitError(context.Background(), root, errors.New("git exit"), detail)
+		return classifyWorkspaceGitError(context.Background(), root, "status", errors.New("git exit"), detail)
 	}
 	steps := []struct {
 		name   string
@@ -6652,7 +6652,7 @@ func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
 		{"and the poll after", func() error { return read("fatal: bad object HEAD") }, true},
 		{"a different failure", func() error { return read("fatal: your current branch appears to be broken") }, false},
 		{"after a successful read", func() error {
-			noteWorkspaceGitReadOK(root)
+			noteWorkspaceGitReadOK(root, "status")
 			return read("fatal: your current branch appears to be broken")
 		}, false},
 	}
@@ -6666,8 +6666,34 @@ func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
 			t.Errorf("%s: skipped by Sentry = %v, want %v", step.name, got, step.repeat)
 		}
 	}
-	other := classifyWorkspaceGitError(context.Background(), filepath.Join(t.TempDir(), "w-2"), errors.New("git exit"), "fatal: bad object HEAD")
+	other := classifyWorkspaceGitError(context.Background(), filepath.Join(t.TempDir(), "w-2"), "status", errors.New("git exit"), "fatal: bad object HEAD")
 	if sentryobs.IsRepeat(other) {
 		t.Error("a second workspace's first failure was skipped")
+	}
+}
+
+func TestWorkspaceGitRecoveryIsScopedToOperation(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	read := func(op string) error {
+		return classifyWorkspaceGitError(t.Context(), root, op, errors.New("git exit"), "fatal: bad object HEAD")
+	}
+	read("diff")
+	for _, capped := range []bool{false, true} {
+		read("status")
+		if capped {
+			if _, _, err := gitWorkspaceOutputCapped(t.Context(), root, 1, "status"); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if _, err := gitWorkspaceOutput(t.Context(), root, "status"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if sentryobs.IsRepeat(read("status")) {
+			t.Error("recovered status was still suppressed")
+		}
+		if !sentryobs.IsRepeat(read("diff")) {
+			t.Error("successful status rearmed unrelated diff")
+		}
 	}
 }
