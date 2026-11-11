@@ -46,9 +46,10 @@ export function useWorkflowCoordination(id: string) {
 	} });
 }
 
-export function useWorkflowTask(id: string, taskId: string) {
+/** refetchInterval 由调用方按持久 attempt 状态决定，终态必须返回 false。 */
+export function useWorkflowTask(id: string, taskId: string, refetchInterval: (data: components["schemas"]["WorkflowTaskEnvelope"] | undefined) => number | false = () => false) {
 	const scope = useWorkflowScope();
-	return useQuery({ queryKey: [...scope, id, taskId, "attempts"], enabled: !!scope[1] && !!id && !!taskId, queryFn: async ({ signal }) => {
+	return useQuery<components["schemas"]["WorkflowTaskEnvelope"]>({ queryKey: [...scope, id, taskId, "attempts"], refetchInterval: query => refetchInterval(query.state.data), enabled: !!scope[1] && !!id && !!taskId, queryFn: async ({ signal }) => {
 		const { data, error } = await apiClient.GET("/api/v1/workflows/{workflowId}/tasks/{taskId}", { signal, params: { path: { workflowId: id, taskId } } });
 		if (error) throw workflowError(error);
 		return data!;

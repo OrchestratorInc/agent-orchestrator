@@ -14,6 +14,7 @@ import { WorkflowPlanEditor, WorkflowCreate } from "./WorkflowPlanEditor";
 import { WorkflowTaskPanel } from "./WorkflowTaskPanel";
 import { WorkflowQualityPanel } from "./WorkflowQualityPanel";
 import { WorkflowBudgetPanel } from "./WorkflowBudgetPanel";
+import { WorkflowStartupSteps, useStartupStep } from "./WorkflowStartupSteps";
 
 /** 工作台覆盖原路由，原 Session/Terminal 宿主保持挂载；所有业务事实来自同一 daemon。 */
 export default function WorkflowWorkbench() {
@@ -55,11 +56,13 @@ function WorkflowDetail({ id }: { id: string }) {
 	const ui = useWorkflowUi();
 	const [tab, setTab] = useWorkflowDraft(`${scope[1]}:${id}:tab`, "graph");
 	const authorize = useMutation({ retry: false, mutationFn: () => aoBridge.operator.authorizeWorkflow(id), onSuccess: () => client.invalidateQueries({ queryKey: [...scope, id] }) });
+	const step = useStartupStep(definition.data, scheduler.data?.paused);
 	if (definition.isPending) return <p role="status">{t("workflow.loading")}</p>;
 	if (definition.error || !definition.data) return <p role="alert">{definition.error?.message}</p>;
 	const data = definition.data;
 	const path = `/api/v1/workflows/${id}`;
 	return <div className="space-y-5">
+		<WorkflowStartupSteps step={step} />
 		<div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-medium">{data.workflow.title}</h2><p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{data.workflow.goal}</p><p className="mt-2 text-xs">{data.workflow.state} · r{data.workflow.revision}</p></div>
 			<div className="flex flex-wrap gap-2">
 				<Button variant="outline" size="sm" disabled={!window.ao || authorize.isPending} onClick={() => authorize.mutate()}>{t("workflow.authorize")}</Button>

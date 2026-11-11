@@ -24,7 +24,9 @@ beforeEach(() => {
 	Object.defineProperty(window, "ao", { configurable: true, value: {} });
 	setEventsConnectionState("connected");
 	useWorkflowUi.setState({ requests: {}, drafts: {} });
-	transport.get.mockImplementation(async (path: string) => ({ data: path.endsWith("provider-profiles") ? { profiles: [profile] } : { projects: [{ id: "project", name: "本地仓库" }] } }));
+	transport.get.mockImplementation(async (path: string) => ({ data: path.endsWith("provider-profiles") ? { profiles: [profile] }
+		: path === "/api/v1/projects" ? { projects: [{ id: "project", name: "本地仓库" }] }
+		: { status: "ok", project: { id: "project", defaultBranch: "main" } } }));
 	transport.run.mockResolvedValue({ status: 200, body: { workflow: { id: "created" } } });
 });
 afterEach(cleanup);
