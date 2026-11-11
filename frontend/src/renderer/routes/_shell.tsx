@@ -340,7 +340,7 @@ function ShellLayout() {
 	useEffect(() => {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
@@ -1417,11 +1417,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// session-links path as ao:// links, so both schemes behave alike:
 	// artifact routes open the file in the destination session, a terminated
 	// session refuses with the same toast, and a stale link focuses the app
-	// with a quiet toast instead of navigating to a wrong session. A
-	// cold-start link is flushed as soon as the shell mounts; a link that
-	// arrives before the first workspace page succeeds (startup loader,
-	// daemon not ready — the query then sits in error with no data) is held
-	// until that first success.
+	// with a quiet toast instead of navigating to a wrong session.
+	//
+	// A link is handled only once its evidence can be trusted, and held until
+	// then (flushed as soon as that flips true):
+	// - the confirmed startup fetch has landed — a green query alone is not
+	//   enough, since the route loader can cache a stale [] from before the
+	//   daemon port was known (same gate the startup loader uses);
+	// - remote hosts that are on have finished loading (or failed) — a
+	//   cold-start link must not race a host's project query. An offline host
+	//   has concluded its connect attempt, so it counts as settled and never
+	//   holds the gate open.
+	const remoteWorkspaceLoadSettled = !remoteHostsEnabled
+		|| (remoteHostsListed && remoteHostIds.every((hostId) => remoteHosts.some((host) => host.hostId === hostId && host.status === "offline")
+			|| remoteLoadedProjectHostIds.includes(hostId)
+			|| remoteFailedHostIds.includes(hostId)));
+	const sessionDeepLinksReady = workspaceQuery.isSuccess && workspaceStartupState === "ready" && remoteWorkspaceLoadSettled;
 	const pendingSessionDeepLinkRef = useRef<string | null>(null);
 	const handleSessionDeepLink = useCallback(
 		(rawUrl: string) => {
@@ -1430,13 +1441,17 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			const target = parseSessionLink(link) ?? artifact;
 			const workspaces = workspacesRef.current;
 			const remoteWorkspaces = remoteWorkspacesRef.current;
-			const resolved = target
-				? resolveSessionLink(link, workspaces) ?? resolveSessionLink(link, remoteWorkspaces)
-				: undefined;
-			const workspace = resolved
-				? workspaces.find((entry) => entry.id === resolved.projectId)
-					?? remoteWorkspaces.find((entry) => entry.id === resolved.projectId)
-				: undefined;
+			// Resolve the session and its owning workspace from the same list:
+			// a local and a remote project can share an id, and the workspace
+			// supplies the hostId for the route and artifact requests.
+			const resolvedLocal = target ? resolveSessionLink(link, workspaces) : undefined;
+			const resolvedRemote = resolvedLocal || !target ? undefined : resolveSessionLink(link, remoteWorkspaces);
+			const resolved = resolvedLocal ?? resolvedRemote;
+			const workspace = resolvedLocal
+				? workspaces.find((entry) => entry.id === resolvedLocal.projectId)
+				: resolvedRemote
+					? remoteWorkspaces.find((entry) => entry.id === resolvedRemote.projectId)
+					: undefined;
 			if (!resolved || !workspace) {
 				useUiStore.getState().showGlobalToast(t("deepLink.sessionNotFound"));
 				return;
@@ -1454,20 +1469,20 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	);
 	useEffect(() => {
 		return aoBridge.app.onOpenSessionDeepLink((rawUrl) => {
-			if (!workspaceQuery.isSuccess) {
+			if (!sessionDeepLinksReady) {
 				pendingSessionDeepLinkRef.current = rawUrl;
 				return;
 			}
 			handleSessionDeepLink(rawUrl);
 		});
-	}, [handleSessionDeepLink, workspaceQuery.isSuccess]);
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
 	useEffect(() => {
-		if (!workspaceQuery.isSuccess) return;
+		if (!sessionDeepLinksReady) return;
 		const pending = pendingSessionDeepLinkRef.current;
 		if (!pending) return;
 		pendingSessionDeepLinkRef.current = null;
 		handleSessionDeepLink(pending);
-	}, [handleSessionDeepLink, workspaceQuery.isSuccess]);
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
 
 	useEffect(() => {
 		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));
