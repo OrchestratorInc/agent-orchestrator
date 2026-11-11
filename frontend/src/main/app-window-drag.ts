@@ -55,11 +55,24 @@ function pageViewAt(window: DragWindow, [x, y]: Point): PageView | undefined {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function dragInAppWindow(
+let gesture: Promise<unknown> = Promise.resolve();
+
+export function dragInAppWindow(
 	windows: readonly DragWindow[],
 	args: Record<string, unknown>,
 	signal?: AbortSignal,
 ): Promise<AppDragResult> {
+	const run = gesture.then(() => runDrag(windows, args, signal));
+	gesture = run.catch(() => {});
+	return run;
+}
+
+async function runDrag(
+	windows: readonly DragWindow[],
+	args: Record<string, unknown>,
+	signal?: AbortSignal,
+): Promise<AppDragResult> {
+	if (signal?.aborted) fail("APP_DRAG_ABORTED", "The drag was cancelled before it started.");
 	const window = findWindow(windows, finite(args.windowId, "windowId"));
 	if (!window) fail("APP_WINDOW_NOT_FOUND", "No Orchestrator window has this window_id; read the Orchestrator windows with list_windows again.");
 	const bounds = window.getBounds();
