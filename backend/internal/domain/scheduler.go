@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"time"
 )
@@ -11,6 +12,7 @@ const (
 	SchedulerDefaultGlobalCap  int64 = 3
 	SchedulerHardCap           int64 = 10
 	SchedulerDefaultAdapterCap int64 = 2
+	SchedulerUnlimitedCap      int64 = math.MaxInt64
 )
 
 // ErrAdmissionRequired 表示缺少启动所需的有效准入凭据。
@@ -51,13 +53,15 @@ type SchedulerPolicy struct {
 	MaxConcurrent int64
 	// ResourceLimitsDisabled 只关闭全局 CPU/RAM 门禁；零值保留旧策略的资源保护。
 	ResourceLimitsDisabled bool
-	CPURecoverPercent      int64
-	CPUSoftPercent         int64
-	CPUHardPercent         int64
-	RAMSoftPercent         int64
-	RAMHardPercent         int64
-	RAMFloorBytes          int64
-	Revision               int64
+	// ConcurrencyLimitsDisabled 只在全局策略中关闭全局及各 Harness 的数量限制，保留限额供重新开启。
+	ConcurrencyLimitsDisabled bool
+	CPURecoverPercent         int64
+	CPUSoftPercent            int64
+	CPUHardPercent            int64
+	RAMSoftPercent            int64
+	RAMHardPercent            int64
+	RAMFloorBytes             int64
+	Revision                  int64
 }
 
 // DefaultSchedulerPolicy 返回全局或单 Harness 的保守初始策略。
@@ -107,6 +111,7 @@ type AdmissionEvidence struct {
 	Resources                        ResourceSample
 	Capability                       HarnessCapabilitySnapshot
 	EffectiveGlobalCap               int64
+	ConcurrencyLimitsDisabled        bool
 	ReservationNanos                 *int64
 	ReservationBasis, ReservationRef string
 	Now                              time.Time

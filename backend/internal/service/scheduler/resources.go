@@ -77,6 +77,9 @@ func (s *Service) RefreshResources(ctx context.Context) error {
 // evaluate 从原始 ticks 判定资源；同一时间戳绝不重复累加恢复样本。
 func (w *resourceWindow) evaluate(r domain.ResourceSample, now time.Time, p domain.SchedulerPolicy) Capacity {
 	if p.ResourceLimitsDisabled {
+		if p.ConcurrencyLimitsDisabled {
+			return Capacity{Limit: domain.SchedulerUnlimitedCap, MaxNewClaims: ClaimLimit, ReasonCode: "RESOURCE_LIMITS_DISABLED"}
+		}
 		return Capacity{Limit: min(p.MaxConcurrent, domain.SchedulerHardCap), MaxNewClaims: ClaimLimit, ReasonCode: "RESOURCE_LIMITS_DISABLED"}
 	}
 	if !w.initialized {
@@ -114,6 +117,9 @@ func (w *resourceWindow) evaluate(r domain.ResourceSample, now time.Time, p doma
 		} else {
 			w.healthy = 0
 		}
+	}
+	if p.ConcurrencyLimitsDisabled && w.healthy == 3 && w.limit >= p.MaxConcurrent {
+		return Capacity{Limit: domain.SchedulerUnlimitedCap, MaxNewClaims: ClaimLimit, ReasonCode: "RESOURCE_READY"}
 	}
 	return Capacity{Limit: w.limit, MaxNewClaims: ClaimLimit, ReasonCode: "RESOURCE_READY"}
 }

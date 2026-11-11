@@ -4693,32 +4693,34 @@ type RecoverExpiredWorkflowsRequest struct {
 
 // SchedulerPolicyResponse 返回资源策略及其 CAS 版本。
 type SchedulerPolicyResponse struct {
-	ID                     string `json:"id"`
-	Scope                  string `json:"scope" enum:"global,adapter"`
-	ScopeID                string `json:"scopeId"`
-	MaxConcurrent          int64  `json:"maxConcurrent"`
-	ResourceLimitsDisabled bool   `json:"resourceLimitsDisabled"`
-	CPURecoverPercent      int64  `json:"cpuRecoverPercent"`
-	CPUSoftPercent         int64  `json:"cpuSoftPercent"`
-	CPUHardPercent         int64  `json:"cpuHardPercent"`
-	RAMSoftPercent         int64  `json:"ramSoftPercent"`
-	RAMHardPercent         int64  `json:"ramHardPercent"`
-	RAMFloorBytes          int64  `json:"ramFloorBytes"`
-	Revision               int64  `json:"revision"`
+	ID                        string `json:"id"`
+	Scope                     string `json:"scope" enum:"global,adapter"`
+	ScopeID                   string `json:"scopeId"`
+	MaxConcurrent             int64  `json:"maxConcurrent"`
+	ResourceLimitsDisabled    bool   `json:"resourceLimitsDisabled"`
+	ConcurrencyLimitsDisabled bool   `json:"concurrencyLimitsDisabled"`
+	CPURecoverPercent         int64  `json:"cpuRecoverPercent"`
+	CPUSoftPercent            int64  `json:"cpuSoftPercent"`
+	CPUHardPercent            int64  `json:"cpuHardPercent"`
+	RAMSoftPercent            int64  `json:"ramSoftPercent"`
+	RAMHardPercent            int64  `json:"ramHardPercent"`
+	RAMFloorBytes             int64  `json:"ramFloorBytes"`
+	Revision                  int64  `json:"revision"`
 }
 
 // PutSchedulerPolicyRequest 提交资源限额和预期版本，供服务端校验。
 type PutSchedulerPolicyRequest struct {
 	OperatorChangeRequest
-	Harness                string `json:"harness,omitempty" description:"Empty selects the global policy; otherwise the exact adapter harness."`
-	MaxConcurrent          int64  `json:"maxConcurrent" minimum:"1" maximum:"10"`
-	ResourceLimitsDisabled bool   `json:"resourceLimitsDisabled" description:"Disable CPU and memory admission limits in the global policy; concurrency and authorization still apply."`
-	CPURecoverPercent      int64  `json:"cpuRecoverPercent"`
-	CPUSoftPercent         int64  `json:"cpuSoftPercent"`
-	CPUHardPercent         int64  `json:"cpuHardPercent"`
-	RAMSoftPercent         int64  `json:"ramSoftPercent"`
-	RAMHardPercent         int64  `json:"ramHardPercent"`
-	RAMFloorBytes          int64  `json:"ramFloorBytes"`
+	Harness                   string `json:"harness,omitempty" description:"Empty selects the global policy; otherwise the exact adapter harness."`
+	MaxConcurrent             int64  `json:"maxConcurrent" minimum:"1" maximum:"10"`
+	ResourceLimitsDisabled    bool   `json:"resourceLimitsDisabled" description:"Disable CPU and memory admission limits in the global policy; concurrency and authorization still apply."`
+	ConcurrencyLimitsDisabled bool   `json:"concurrencyLimitsDisabled" description:"Disable global and per-harness concurrency limits in the global policy; resource, budget and authorization checks still apply."`
+	CPURecoverPercent         int64  `json:"cpuRecoverPercent"`
+	CPUSoftPercent            int64  `json:"cpuSoftPercent"`
+	CPUHardPercent            int64  `json:"cpuHardPercent"`
+	RAMSoftPercent            int64  `json:"ramSoftPercent"`
+	RAMHardPercent            int64  `json:"ramHardPercent"`
+	RAMFloorBytes             int64  `json:"ramFloorBytes"`
 }
 
 // SchedulerPolicyEnvelope 包装已保存的资源策略。
@@ -4729,18 +4731,19 @@ type SchedulerPolicyEnvelope struct {
 
 // SchedulerStatusResponse 不返回 owner、租约能力或机器路径，只投影资源与调度事实。
 type SchedulerStatusResponse struct {
-	Epoch            int64                     `json:"epoch"`
-	LeaderLeaseUntil time.Time                 `json:"leaderLeaseUntil"`
-	Recovered        bool                      `json:"recovered"`
-	ObservedAt       time.Time                 `json:"observedAt"`
-	TotalBytes       uint64                    `json:"totalBytes"`
-	AvailableBytes   uint64                    `json:"availableBytes"`
-	Limit            int64                     `json:"limit"`
-	MaxNewClaims     int64                     `json:"maxNewClaims"`
-	ReasonCode       string                    `json:"reasonCode"`
-	Occupied         int64                     `json:"occupied"`
-	ByHarness        map[string]int64          `json:"byHarness"`
-	Policies         []SchedulerPolicyResponse `json:"policies"`
+	Epoch                     int64                     `json:"epoch"`
+	LeaderLeaseUntil          time.Time                 `json:"leaderLeaseUntil"`
+	Recovered                 bool                      `json:"recovered"`
+	ObservedAt                time.Time                 `json:"observedAt"`
+	TotalBytes                uint64                    `json:"totalBytes"`
+	AvailableBytes            uint64                    `json:"availableBytes"`
+	Limit                     int64                     `json:"limit"`
+	ConcurrencyLimitsDisabled bool                      `json:"concurrencyLimitsDisabled"`
+	MaxNewClaims              int64                     `json:"maxNewClaims"`
+	ReasonCode                string                    `json:"reasonCode"`
+	Occupied                  int64                     `json:"occupied"`
+	ByHarness                 map[string]int64          `json:"byHarness"`
+	Policies                  []SchedulerPolicyResponse `json:"policies"`
 }
 
 // WorkflowSchedulerResponse 返回工作流调度开关及版本。

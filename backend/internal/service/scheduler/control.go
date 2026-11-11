@@ -60,6 +60,9 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	now := s.deps.Clock().UTC()
 	if global.ResourceLimitsDisabled {
 		out.Capacity = Capacity{Limit: global.MaxConcurrent, MaxNewClaims: ClaimLimit, ReasonCode: "RESOURCE_LIMITS_DISABLED"}
+		if global.ConcurrencyLimitsDisabled {
+			out.Capacity.Limit = domain.SchedulerUnlimitedCap
+		}
 	} else if out.Resources.ObservedAt.IsZero() || out.Resources.ObservedAt.After(now) || now.Sub(out.Resources.ObservedAt) > 3*SampleInterval {
 		out.Capacity = Capacity{ReasonCode: "RESOURCE_UNKNOWN"}
 	}

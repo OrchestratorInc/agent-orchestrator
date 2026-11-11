@@ -99,6 +99,10 @@ func (f *AdmissionFixture) PrepareWorkflowAdmission(ctx context.Context, task do
 		e.ExpectedPolicyRevisions[p.ID] = p.Revision
 		if p.Scope == "global" {
 			e.EffectiveGlobalCap = p.MaxConcurrent
+			if p.ResourceLimitsDisabled && p.ConcurrencyLimitsDisabled {
+				e.EffectiveGlobalCap = domain.SchedulerUnlimitedCap
+			}
+			e.ConcurrencyLimitsDisabled = p.ConcurrencyLimitsDisabled
 		}
 	}
 	budgets, err := f.Store.ListBudgetPolicies(ctx)

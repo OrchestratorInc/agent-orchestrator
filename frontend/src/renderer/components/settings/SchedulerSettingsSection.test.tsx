@@ -37,10 +37,10 @@ beforeEach(() => {
 	useWorkflowUi.setState({ requests: {}, drafts: {} });
 	client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	const global: S["SchedulerPolicyResponse"] = { id: "global", scope: "global", scopeId: "", revision: 3, maxConcurrent: 5,
-		resourceLimitsDisabled: false, cpuRecoverPercent: 65, cpuSoftPercent: 75, cpuHardPercent: 85,
+		resourceLimitsDisabled: false, concurrencyLimitsDisabled: false, cpuRecoverPercent: 65, cpuSoftPercent: 75, cpuHardPercent: 85,
 		ramSoftPercent: 25, ramHardPercent: 15, ramFloorBytes: 2 * 2 ** 30 };
 	status = { availableBytes: 4 * 2 ** 30, totalBytes: 16 * 2 ** 30, byHarness: {}, epoch: 1, leaderLeaseUntil: "2099-01-01T00:00:00Z",
-		limit: 5, maxNewClaims: 1, observedAt: "2026-11-10T00:00:00Z", occupied: 2, reasonCode: "RESOURCE_SOFT_LIMIT", recovered: true,
+		limit: 5, concurrencyLimitsDisabled: false, maxNewClaims: 1, observedAt: "2026-11-10T00:00:00Z", occupied: 2, reasonCode: "RESOURCE_SOFT_LIMIT", recovered: true,
 		policies: [global, { ...global, id: "adapter:codex", scope: "adapter", scopeId: "codex", revision: 0, maxConcurrent: 2 }] };
 	transport.get.mockImplementation(async () => ({ data: structuredClone(status) }));
 });
@@ -105,6 +105,7 @@ it("校验实际输入，保留刷新中的草稿，经真实 Operator IPC 保�
 	edit("内存绝对保留量（GiB）", ""); expect(save()).toBeDisabled();
 	edit("内存绝对保留量（GiB）", "1.5");
 	fireEvent.click(screen.getByRole("switch", { name: "CPU 与内存资源限制" }));
+	fireEvent.click(screen.getByRole("switch", { name: "并发限制" }));
 	await act(async () => { await client.invalidateQueries({ queryKey: ["workflows"] }); });
 	expect(field("CPU 恢复阈值（%）")).toHaveValue(55);
 	expect(field("内存绝对保留量（GiB）")).toHaveValue(1.5);
@@ -112,7 +113,7 @@ it("校验实际输入，保留刷新中的草稿，经真实 Operator IPC 保�
 	fireEvent.click(save());
 	await screen.findByText("策略已保存并生效，无需重启。");
 	const raw = transport.run.mock.calls[0][0].body;
-	expect(JSON.parse(raw)).toEqual({ harness: "", expectedRevision: 3, maxConcurrent: 10, resourceLimitsDisabled: true,
+	expect(JSON.parse(raw)).toEqual({ harness: "", expectedRevision: 3, maxConcurrent: 10, resourceLimitsDisabled: true, concurrencyLimitsDisabled: true,
 		cpuRecoverPercent: 55, cpuSoftPercent: 70, cpuHardPercent: 90, ramSoftPercent: 30, ramHardPercent: 20,
 		ramFloorBytes: 1610612736, reason: "SCHEDULER_POLICY_UPDATE", idempotencyKey: expect.any(String) });
 	expect(confirmOperation).toHaveBeenCalledExactlyOnceWith({ verb: "scheduler-policy", method: "PUT", operationPath: "/api/v1/scheduler/policy", body: raw });

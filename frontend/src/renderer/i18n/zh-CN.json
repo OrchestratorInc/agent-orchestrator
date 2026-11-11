@@ -14,6 +14,8 @@
 	"settings.scheduler.maxConcurrent": "并发上限",
 	"settings.scheduler.globalConcurrency": "所有 Harness 合计并发，范围 1～10。",
 	"settings.scheduler.adapterConcurrency": "当前 Harness 并发上限，范围 1～10，同时受全局上限约束。",
+	"settings.scheduler.concurrencyLimits": "并发限制",
+	"settings.scheduler.concurrencyLimitsDescription": "关闭后，资源正常时新建会话可超过全局及各 Harness 的并发上限。资源压力和调度恢复期间仍会限制新增，重新开启后恢复已保存的上限。",
 	"settings.scheduler.resourceLimits": "CPU 与内存资源限制",
 	"settings.scheduler.resourceLimitsDescription": "关闭后，资源压力不再阻止新建会话；并发上限仍生效，阈值保留供重新开启。",
 	"settings.scheduler.cpuRecoverPercent": "CPU 恢复阈值（%）",

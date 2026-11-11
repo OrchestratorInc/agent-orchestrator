@@ -24980,6 +24980,10 @@ components:
       type: object
     PutSchedulerPolicyRequest:
       properties:
+        concurrencyLimitsDisabled:
+          description: Disable global and per-harness concurrency limits in the global
+            policy; resource, budget and authorization checks still apply.
+          type: boolean
         cpuHardPercent:
           format: int64
           type: integer
@@ -25029,6 +25033,7 @@ components:
       - reason
       - maxConcurrent
       - resourceLimitsDisabled
+      - concurrencyLimitsDisabled
       - cpuRecoverPercent
       - cpuSoftPercent
       - cpuHardPercent
@@ -25918,6 +25923,8 @@ components:
       type: object
     SchedulerPolicyResponse:
       properties:
+        concurrencyLimitsDisabled:
+          type: boolean
         cpuHardPercent:
           format: int64
           type: integer
@@ -25959,6 +25966,7 @@ components:
       - scopeId
       - maxConcurrent
       - resourceLimitsDisabled
+      - concurrencyLimitsDisabled
       - cpuRecoverPercent
       - cpuSoftPercent
       - cpuHardPercent
@@ -25979,6 +25987,8 @@ components:
           type:
           - object
           - "null"
+        concurrencyLimitsDisabled:
+          type: boolean
         epoch:
           format: int64
           type: integer
@@ -26016,6 +26026,7 @@ components:
       - totalBytes
       - availableBytes
       - limit
+      - concurrencyLimitsDisabled
       - maxNewClaims
       - reasonCode
       - occupied

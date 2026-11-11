@@ -8142,6 +8142,8 @@ export interface components {
             refreshTokenExpiresIn?: number;
         };
         PutSchedulerPolicyRequest: {
+            /** @description Disable global and per-harness concurrency limits in the global policy; resource, budget and authorization checks still apply. */
+            concurrencyLimitsDisabled: boolean;
             /** Format: int64 */
             cpuHardPercent: number;
             /** Format: int64 */
@@ -8524,6 +8526,7 @@ export interface components {
             policy: components["schemas"]["SchedulerPolicyResponse"];
         };
         SchedulerPolicyResponse: {
+            concurrencyLimitsDisabled: boolean;
             /** Format: int64 */
             cpuHardPercent: number;
             /** Format: int64 */
@@ -8551,6 +8554,7 @@ export interface components {
             byHarness: {
                 [key: string]: number;
             } | null;
+            concurrencyLimitsDisabled: boolean;
             /** Format: int64 */
             epoch: number;
             /** Format: date-time */

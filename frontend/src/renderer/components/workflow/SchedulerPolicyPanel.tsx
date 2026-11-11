@@ -19,6 +19,7 @@ function policyDraft(policy: S["SchedulerPolicyResponse"]) {
 		expectedRevision: policy.revision,
 		maxConcurrent: String(policy.maxConcurrent),
 		resourceLimitsDisabled: policy.resourceLimitsDisabled,
+		concurrencyLimitsDisabled: policy.concurrencyLimitsDisabled,
 		cpuRecoverPercent: String(policy.cpuRecoverPercent),
 		cpuSoftPercent: String(policy.cpuSoftPercent),
 		cpuHardPercent: String(policy.cpuHardPercent),
@@ -63,6 +64,7 @@ function SchedulerPolicyEditor({ policy }: { policy: S["SchedulerPolicyResponse"
 		expectedRevision: values.expectedRevision,
 		maxConcurrent: Number(values.maxConcurrent),
 		resourceLimitsDisabled: values.resourceLimitsDisabled,
+		concurrencyLimitsDisabled: values.concurrencyLimitsDisabled,
 		cpuRecoverPercent: Number(values.cpuRecoverPercent),
 		cpuSoftPercent: Number(values.cpuSoftPercent),
 		cpuHardPercent: Number(values.cpuHardPercent),
@@ -87,6 +89,9 @@ function SchedulerPolicyEditor({ policy }: { policy: S["SchedulerPolicyResponse"
 				<Input aria-label={t("settings.scheduler.maxConcurrent")} aria-invalid={!validLimit} className="w-24" type="number" min="1" max="10" step="1" value={values.maxConcurrent} onChange={e => change({ maxConcurrent: e.target.value })} />
 			</SettingsRow>
 			{global && <>
+				<SettingsRow label={t("settings.scheduler.concurrencyLimits")} description={t("settings.scheduler.concurrencyLimitsDescription")}>
+					<Switch aria-label={t("settings.scheduler.concurrencyLimits")} checked={!values.concurrencyLimitsDisabled} onCheckedChange={checked => change({ concurrencyLimitsDisabled: !checked })} />
+				</SettingsRow>
 				<SettingsRow label={t("settings.scheduler.resourceLimits")} description={t("settings.scheduler.resourceLimitsDescription")}>
 					<Switch aria-label={t("settings.scheduler.resourceLimits")} checked={!values.resourceLimitsDisabled} onCheckedChange={checked => change({ resourceLimitsDisabled: !checked })} />
 				</SettingsRow>

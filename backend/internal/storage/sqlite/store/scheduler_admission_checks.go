@@ -45,25 +45,24 @@ func checkAdmission(ctx context.Context, q *gen.Queries, a domain.SchedulerAdmis
 			return nil, domain.ErrSchedulerPolicy
 		}
 	}
-	if !global.ResourceLimitsDisabled && !validResourceSample(e.Resources, e.Now, global) || e.EffectiveGlobalCap < 1 || e.EffectiveGlobalCap > global.MaxConcurrent || e.EffectiveGlobalCap > domain.SchedulerHardCap {
+	unlimited := e.ConcurrencyLimitsDisabled && e.EffectiveGlobalCap == domain.SchedulerUnlimitedCap
+	if !global.ResourceLimitsDisabled && !validResourceSample(e.Resources, e.Now, global) || e.EffectiveGlobalCap < 1 || !unlimited && (e.EffectiveGlobalCap > global.MaxConcurrent || e.EffectiveGlobalCap > domain.SchedulerHardCap) {
 		return nil, domain.ErrSchedulerCapacity
 	}
-	replacingSessionID := a.SessionID
-	if replacingSessionID == "" {
-		replacingSessionID = e.ReplacingSessionID
-	}
-	occupied, err := q.ListSchedulerOccupancy(ctx, replacingSessionID)
-	if err != nil {
-		return nil, err
-	}
-	var harnessCount int64
-	for _, h := range occupied {
-		if h == string(a.Harness) || h == "" {
-			harnessCount++
+	if !e.ConcurrencyLimitsDisabled || !unlimited {
+		occupied, err := q.ListSchedulerOccupancy(ctx, a.SessionID)
+		if err != nil {
+			return nil, err
 		}
-	}
-	if int64(len(occupied)) >= e.EffectiveGlobalCap || harnessCount >= adapter.MaxConcurrent {
-		return nil, domain.ErrSchedulerCapacity
+		var harnessCount int64
+		for _, h := range occupied {
+			if h == string(a.Harness) || h == "" {
+				harnessCount++
+			}
+		}
+		if int64(len(occupied)) >= e.EffectiveGlobalCap || !e.ConcurrencyLimitsDisabled && harnessCount >= adapter.MaxConcurrent {
+			return nil, domain.ErrSchedulerCapacity
+		}
 	}
 	return checkAdmissionBudgets(ctx, q, a, e)
 }

@@ -233,6 +233,7 @@ func (s *Service) prepareLaunchAdmission(ctx context.Context, request ports.Capa
 	e.Resources = s.sample
 	s.capacity = s.window.evaluate(s.sample, e.Now, global)
 	e.EffectiveGlobalCap = s.capacity.Limit
+	e.ConcurrencyLimitsDisabled = global.ConcurrencyLimitsDisabled
 	s.resourceMu.Unlock()
 	if e.EffectiveGlobalCap == 0 {
 		return e, nil, domain.ErrSchedulerCapacity
