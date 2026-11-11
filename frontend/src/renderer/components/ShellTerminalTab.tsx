@@ -69,6 +69,12 @@ export function ShellTerminalTab({
 	// An agent's name is display only, so renaming starts from the real title.
 	const renameBase = terminalTitle ?? shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
+	// An ended shell's tab stays so it can be reopened; its tooltip says so.
+	const hoverTitle = shell.endedAt
+		? `${title} · ${t("terminal.shellEndedTab")}`
+		: isTruncated
+			? title
+			: t("terminal.renameHintDoubleClick", { workingDir: shell.workingDir });
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
 	}, [isActive, markSeen, shell.handleId, unseenDone]);
@@ -183,9 +189,7 @@ export function ShellTerminalTab({
 						...renameKeyProps,
 						role: "tab",
 						tabIndex: isActive ? 0 : -1,
-						title: isTruncated
-							? title
-							: t("terminal.renameHintDoubleClick", { workingDir: shell.workingDir }),
+						title: hoverTitle,
 						type: "button",
 					}}
 					buttonRef={ref}
@@ -195,7 +199,7 @@ export function ShellTerminalTab({
 						agent ? (
 							<ShellAgentIcon agent={agent} done={unseenDone && !isActive} />
 						) : (
-							<SquareTerminal aria-hidden="true" className="size-icon-sm" />
+							<SquareTerminal aria-hidden="true" className={cn("size-icon-sm", shell.endedAt && "opacity-50")} />
 						)
 					}
 					label={title}
@@ -243,11 +247,7 @@ export function ShellTerminalTab({
 					{...renameKeyProps}
 					role="tab"
 					tabIndex={isActive ? 0 : -1}
-					title={
-						isTruncated
-							? title
-							: t("terminal.renameHintDoubleClick", { workingDir: shell.workingDir })
-					}
+					title={hoverTitle}
 					type="button"
 				>
 					<span className="inline-flex min-w-0 -translate-y-px items-center">
