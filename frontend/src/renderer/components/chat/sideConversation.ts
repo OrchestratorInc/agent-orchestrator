@@ -55,10 +55,11 @@ export function sideConversationMessage(message: SideMessage, turns: readonly Si
 		content: user
 			? (turns.find((turn) => turn.id === message.turnId)?.references ?? []).map((ref) => ({
 					type: "excerpt",
+					annotationId: ref.id, annotationOrder: ref.order,
 					text: ref.selection,
 					sourceConversationId: ref.conversationId,
 					sourceMessageId: ref.messageId,
-					sourceRevision: ref.revision,
+					sourceRevision: ref.revision, snapshot: ref.snapshot,
 				}))
 			: undefined,
 	};

@@ -288,6 +288,15 @@ func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
 	router.Get("/busy", func(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, apierr.Unavailable("SERVICE_UNAVAILABLE", "busy"))
 	})
+	// An unfinished Codex sign-in is user setup state, even after a deadline.
+	router.Post("/codex-setup", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, apierr.Unavailable("CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete"))
+	})
+	router.Post("/codex-setup-hang", func(w http.ResponseWriter, r *http.Request) {
+		setup := apierr.Unavailable("CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete")
+		setup.Cause = context.DeadlineExceeded
+		envelope.WriteError(w, r, setup)
+	})
 	for _, req := range []*http.Request{
 		httptest.NewRequest(http.MethodPost, "/fault", nil),
 		httptest.NewRequest(http.MethodPost, "/git", nil),
@@ -295,6 +304,8 @@ func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "/missing", nil),
 		httptest.NewRequest(http.MethodGet, "/hang", nil),
 		httptest.NewRequest(http.MethodGet, "/busy", nil),
+		httptest.NewRequest(http.MethodPost, "/codex-setup", nil),
+		httptest.NewRequest(http.MethodPost, "/codex-setup-hang", nil),
 	} {
 		router.ServeHTTP(httptest.NewRecorder(), req)
 	}

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { aoBridge } from "../lib/bridge";
 import { connectHost, connectedHosts, disconnectHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
-import { listAccountRemoteHosts } from "../lib/account-remote-hosts";
 import { useSettings } from "./useSettings";
 import { useUiStore } from "../stores/ui-store";
 
@@ -55,10 +54,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; refres
 		let saved = await aoBridge.remotes.list();
 		if (cloudBaseUrl) {
 			try {
-				const accountHosts = await listAccountRemoteHosts(cloudBaseUrl);
-				if (!current()) return;
-				for (const host of accountHosts) await aoBridge.remotes.importAccountHost(accountId, { ...host, password: host.token });
-				await aoBridge.remotes.pruneAccountHosts(accountId, accountHosts.map((host) => host.hostId));
+				await aoBridge.remotes.syncAccountHosts(accountId);
 				saved = await aoBridge.remotes.list();
 			} catch { /* Cloud outage must not hide locally paired machines. */ }
 		}

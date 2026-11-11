@@ -226,6 +226,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newSpawnCommand(ctx))
 	root.AddCommand(newSendCommand(ctx))
 	root.AddCommand(newReportCommand(ctx))
+	root.AddCommand(newArtifactCommand(ctx))
 	root.AddCommand(newPreviewCommand(ctx))
 	root.AddCommand(newRenderCommand(ctx))
 	root.AddCommand(newMCPCommand(ctx))
@@ -363,7 +364,7 @@ func atMostOneArg(cmd *cobra.Command, args []string) error {
 func newDaemonCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:    "daemon",
-		Short:  "Run the AO backend daemon",
+		Short:  "Run the Orchestrator backend daemon",
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

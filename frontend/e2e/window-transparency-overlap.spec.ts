@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { expect, test, type Locator } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
@@ -17,7 +18,28 @@ async function expectSurfaceTransparency(target: Locator, transparent: boolean) 
 	expect(alpha).toBe(transparent ? 0 : 255);
 }
 
-async function expectOccludes(surface: Locator, underneath: Locator) {
+// Keep captures in test-results, which CI uploads on failure.
+async function saveCaptures(captures: [name: string, image: Buffer][]) {
+	for (const [name, image] of captures) {
+		const path = test.info().outputPath(`${name}.png`);
+		await writeFile(path, image);
+		await test.info().attach(name, { path, contentType: "image/png" });
+	}
+}
+
+const setVisibility = (underneath: Locator, hidden: boolean) => underneath.evaluateAll((elements, hidden) => {
+	for (const element of elements) {
+		if (hidden) (element as HTMLElement).style.visibility = "hidden";
+		else (element as HTMLElement).style.removeProperty("visibility");
+	}
+}, hidden);
+
+// Bracket the capture with the content hidden between two captures with it
+// shown. If those two differ, the surface changed on its own (still settling
+// after it opened, for example), so the attempt says nothing about what is
+// underneath and is retried. If they match but the hidden capture differs, the
+// content underneath shows through.
+async function expectOccludes(surface: Locator, underneath: Locator, occludes = true) {
 	const bounds = await surface.boundingBox();
 	expect(bounds).not.toBeNull();
 	const cards = await underneath.evaluateAll((elements) => elements.map((element) => {
@@ -26,20 +48,62 @@ async function expectOccludes(surface: Locator, underneath: Locator) {
 	}));
 	expect(cards.some((rect) => rect.top < bounds!.y + bounds!.height && rect.bottom > bounds!.y
 		&& rect.left < bounds!.x + bounds!.width && rect.right > bounds!.x)).toBe(true);
-	const before = await surface.screenshot({ animations: "disabled" });
-	await underneath.evaluateAll((elements) => {
-		for (const element of elements) (element as HTMLElement).style.visibility = "hidden";
-	});
-	const after = await surface.screenshot({ animations: "disabled" });
-	expect(before.equals(after), "content underneath must not affect the surface's pixels").toBe(true);
-	await underneath.evaluateAll((elements) => {
-		for (const element of elements) (element as HTMLElement).style.removeProperty("visibility");
-	});
+	try {
+		const attempts = 5;
+		for (let attempt = 1; attempt <= attempts; attempt++) {
+			const shown = await surface.screenshot({ animations: "disabled" });
+			await setVisibility(underneath, true);
+			const hidden = await surface.screenshot({ animations: "disabled" });
+			await setVisibility(underneath, false);
+			const shownAgain = await surface.screenshot({ animations: "disabled" });
+			const captures: [string, Buffer][] = [
+				["surface-with-content-underneath", shown],
+				["surface-with-content-hidden", hidden],
+				["surface-with-content-underneath-again", shownAgain],
+			];
+			if (shown.equals(shownAgain)) {
+				const changedPixels = await surface.evaluate(async (_, images) => {
+					const decode = async (png: string) => {
+						const image = new Image();
+						image.src = `data:image/png;base64,${png}`;
+						await image.decode();
+						const canvas = document.createElement("canvas");
+						canvas.width = image.width; canvas.height = image.height;
+						const context = canvas.getContext("2d")!;
+						context.drawImage(image, 0, 0);
+						return context.getImageData(0, 0, canvas.width, canvas.height);
+					};
+					const [before, after] = await Promise.all([decode(images.before), decode(images.after)]);
+					if (before.width !== after.width || before.height !== after.height) throw new Error("surface dimensions changed");
+					let changed = 0;
+					for (let i = 0; i < before.data.length; i += 4) {
+						// Repainting the hidden layer can change icon/edge antialiasing by
+						// up to 5/255 per channel (under 2%). Every pixel must stay within that tolerance.
+						if ([0, 1, 2, 3].some((channel) => Math.abs(before.data[i + channel] - after.data[i + channel]) > 5)) changed++;
+					}
+					return changed;
+				}, { before: shown.toString("base64"), after: hidden.toString("base64") });
+				if (occludes && changedPixels) await saveCaptures(captures.slice(0, 2));
+				const drifted = attempt > 1 ? ` (after ${attempt - 1} attempt${attempt > 2 ? "s" : ""} where the surface changed on its own)` : "";
+				if (occludes) expect(changedPixels, `content underneath must not affect the surface's pixels${drifted}`).toBe(0);
+				else expect(changedPixels, "the comparison must detect content when clipping is removed").toBeGreaterThan(0);
+				return;
+			}
+			test.info().annotations.push({ type: "surface changed on its own", description: `attempt ${attempt} of ${attempts}` });
+			if (attempt === attempts) {
+				await saveCaptures(captures);
+				throw new Error(`surface kept changing on its own: the captures before and after hiding the content underneath differed in all ${attempts} attempts`);
+			}
+			await surface.page().waitForTimeout(100);
+		}
+	} finally {
+		await setVisibility(underneath, false);
+	}
 }
 
 for (const theme of ["dark", "light"]) {
 	for (const transparency of [false, true]) {
-		test(`@P0 sticky project and archive occlude sessions: ${theme}, transparency ${transparency}`, async ({ page }) => {
+		test(`@P0 sticky project occludes sessions and the archive opens: ${theme}, transparency ${transparency}`, async ({ page }) => {
 			await page.setViewportSize({ width: 1400, height: 650 });
 			await page.emulateMedia({ reducedMotion: "reduce" });
 			await installFakeAgent(page, {
@@ -59,19 +123,13 @@ for (const theme of ["dark", "light"]) {
 			await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
 			if (transparency) await expect(page.locator("html")).toHaveAttribute("data-window-translucent", "true");
 
-			const toggle = page.getByRole("button", { name: "Archive, 8 sessions", exact: true });
-			const archive = toggle.locator("../..");
-			// Light keeps the center panel solid in a translucent window (only the
-			// sidebar chrome is frosted), so the board's archive is opaque there.
-			const centerClear = transparency && theme === "dark";
-			await expectSurfaceTransparency(archive, centerClear);
-			await toggle.click();
-			await expect(toggle).toHaveAttribute("aria-expanded", "true");
-			await expect(page.getByRole("list", { name: "Archived sessions" })).toBeVisible();
-			await expectSurfaceTransparency(archive, centerClear);
-			await expectOccludes(archive, page.locator('[data-testid="board-column"] [data-session-id]'));
-			await toggle.click();
-			await expect(toggle).toHaveAttribute("aria-expanded", "false");
+			// The archive is a modal now, not a sheet over the lanes.
+			await page.getByRole("button", { name: "Archive, 8 sessions", exact: true }).click();
+			const archive = page.getByRole("dialog", { name: "Archived sessions" });
+			await expect(archive).toBeVisible();
+			await expect(archive.getByText("Archived session 0")).toBeVisible();
+			await page.keyboard.press("Escape");
+			await expect(archive).toBeHidden();
 
 			const scroller = page.getByTestId("sidebar-projects-scroller");
 			await scroller.getByRole("button", { name: /Show .* more/ }).click();

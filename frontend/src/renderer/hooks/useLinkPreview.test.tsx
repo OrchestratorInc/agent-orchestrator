@@ -1,6 +1,6 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useLinkPreview } from "./useLinkPreview";
+import { LINK_PREVIEW_SETTLE_MS, useLinkPreview } from "./useLinkPreview";
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
 
@@ -13,6 +13,7 @@ vi.mock("../lib/api-client", () => ({
 // uses distinct URLs to stay isolated.
 
 afterEach(() => {
+	vi.useRealTimers();
 	getMock.mockReset();
 });
 
@@ -76,44 +77,76 @@ describe("useLinkPreview", () => {
 		expect(getMock).toHaveBeenCalledTimes(2);
 	});
 
-	it("suppresses repeated 502 responses for one URL and keeps other URLs available", async () => {
-		const failed = "https://bad-gateway.example.test/";
-		const good = "https://good-gateway.example.test/";
-		getMock.mockImplementation(async (_path: string, opts: { params: { query: { url: string } } }) =>
-			opts.params.query.url === failed
-				? { error: { message: "upstream failed" }, response: { status: 502 } }
-				: { data: { url: good, title: "Good" } },
-		);
-		const { result, rerender } = renderHook(({ url, enabled }) => useLinkPreview(url, enabled), {
-			initialProps: { url: failed, enabled: true },
-		});
-		await waitFor(() => expect(result.current.isError).toBe(true));
-		rerender({ url: failed, enabled: false });
-		rerender({ url: failed, enabled: true });
-		expect(result.current.isError).toBe(true);
-		expect(getMock).toHaveBeenCalledTimes(1);
-		rerender({ url: good, enabled: true });
-		await waitFor(() => expect(result.current.data?.url).toBe(good));
-		expect(getMock).toHaveBeenCalledTimes(2);
-	});
-
-	it("retries a 502 after the negative cache expires", async () => {
-		const now = vi.spyOn(Date, "now");
-		now.mockReturnValue(1_000_000);
+	it("asks the daemon again on every hover of a failed URL so a recovery shows at once", async () => {
 		const url = "https://recovering-gateway.example.test/";
 		getMock.mockResolvedValueOnce({ error: { message: "upstream failed" }, response: { status: 502 } })
 			.mockResolvedValueOnce({ data: { url, title: "Recovered" } });
-		try {
-			const { result, rerender } = renderHook(({ enabled }) => useLinkPreview(url, enabled), { initialProps: { enabled: true } });
-			await waitFor(() => expect(result.current.isError).toBe(true));
-			rerender({ enabled: false });
-			now.mockReturnValue(1_000_000 + 2 * 60_000 + 1);
-			rerender({ enabled: true });
-			await waitFor(() => expect(result.current.data?.title).toBe("Recovered"));
-			expect(getMock).toHaveBeenCalledTimes(2);
-		} finally {
-			now.mockRestore();
-		}
+		const { result, rerender } = renderHook(({ enabled }) => useLinkPreview(url, enabled), { initialProps: { enabled: true } });
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		rerender({ enabled: false });
+		rerender({ enabled: true });
+		await waitFor(() => expect(result.current.data?.title).toBe("Recovered"));
+		expect(getMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("settles to the fallback when the daemon never answers, then upgrades if it does", async () => {
+		vi.useFakeTimers();
+		const url = "https://never-answers.example.test/";
+		let resolveRequest!: (value: unknown) => void;
+		getMock.mockImplementation(() => new Promise((resolve) => { resolveRequest = resolve; }));
+		const { result } = renderHook(() => useLinkPreview(url, true));
+		await act(async () => { await vi.advanceTimersByTimeAsync(LINK_PREVIEW_SETTLE_MS - 1); });
+		expect(result.current).toMatchObject({ isPending: true, isError: false });
+		await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+		expect(result.current).toMatchObject({ isPending: false, isError: true });
+		await act(async () => {
+			resolveRequest({ data: { url, title: "Late" } });
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		expect(result.current).toMatchObject({ isPending: false, isError: false, data: { title: "Late" } });
+	});
+
+	it("aborts the request when the hover ends so passed-over links free their connection", async () => {
+		const url = "https://passed-over.example.test/";
+		getMock.mockImplementation((_path: string, opts: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+			opts.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+		}));
+		const { rerender } = renderHook(({ enabled }) => useLinkPreview(url, enabled), { initialProps: { enabled: true } });
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+		const signal = getMock.mock.calls[0][1].signal as AbortSignal;
+		expect(signal.aborted).toBe(false);
+		rerender({ enabled: false });
+		expect(signal.aborted).toBe(true);
+	});
+
+	it("keeps the request while another hover on the same URL is still open", async () => {
+		const url = "https://shared-hover.example.test/";
+		getMock.mockImplementation(() => new Promise(() => undefined));
+		const first = renderHook(() => useLinkPreview(url, true));
+		const second = renderHook(() => useLinkPreview(url, true));
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+		const signal = getMock.mock.calls[0][1].signal as AbortSignal;
+		first.unmount();
+		expect(signal.aborted).toBe(false);
+		second.unmount();
+		expect(signal.aborted).toBe(true);
+	});
+
+	it("ignores a slow response for a URL the hook has moved on from", async () => {
+		const slow = "https://rapid-a.example.test/";
+		const fast = "https://rapid-b.example.test/";
+		let finishSlow!: (value: unknown) => void;
+		getMock.mockImplementation((_path: string, opts: { params: { query: { url: string } } }) =>
+			opts.params.query.url === slow
+				? new Promise((resolve) => { finishSlow = resolve; })
+				: Promise.resolve({ data: { url: fast, title: "Fast" } }),
+		);
+		const { result, rerender } = renderHook(({ url }) => useLinkPreview(url, true), { initialProps: { url: slow } });
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+		rerender({ url: fast });
+		await waitFor(() => expect(result.current.data?.title).toBe("Fast"));
+		await act(async () => { finishSlow({ data: { url: slow, title: "Slow" } }); });
+		expect(result.current.data?.title).toBe("Fast");
 	});
 
 	it("serves a succeeded URL from cache when re-enabled without refetching", async () => {

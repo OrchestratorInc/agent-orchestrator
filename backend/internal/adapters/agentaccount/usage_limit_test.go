@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -99,5 +102,20 @@ func TestCodexLimitsPreservesPrivateSafeReset(t *testing.T) {
 		if err != nil || strings.Contains(string(encoded), "AutoResume") || strings.Contains(string(encoded), "autoResume") {
 			t.Fatalf("private reset leaked into account JSON: %s, %v", encoded, err)
 		}
+	}
+}
+
+func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub")
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	reply := `{"type":"control_response","response":{"subtype":"success","request_id":"ao-usage","response":{"rate_limits_available":true,"rate_limits":null}}}`
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nread -r _\necho '"+reply+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
+	if _, err := c.Limits(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "could not fetch") {
+		t.Fatalf("Limits error = %v, want could not fetch", err)
 	}
 }

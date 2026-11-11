@@ -76,7 +76,7 @@ describe("active turn controls", () => {
 		// Serially, so a read slower than the poll interval is never superseded (see serialPoll.test.ts).
 		expect(screenSource).toContain("return startSerialPoll(refreshConversation, STARTUP_POLL_MS);");
 		expect(screenSource).not.toContain("setInterval(() => void refreshConversation()");
-		expect(screenSource).toContain('disabled={interfaceTransitionActive || Boolean(failedStart)}');
+		expect(screenSource).toContain('disabled={switchingToTerminal || Boolean(failedStart)}');
 	});
 
 	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
@@ -125,5 +125,15 @@ describe("the composer and the keyboard", () => {
 		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
 		expect(follower).toBeGreaterThan(root);
 		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
+	});
+});
+
+// iOS 26's glass blurred only the status bar over the conversation and left
+// the title over sharp text; iOS 27's covers the whole bar.
+describe("the bar over the conversation", () => {
+	it("is the clear glass bar on iOS 27 and later only, and the stack's own bar on every other iOS", () => {
+		expect(screenSource).toContain('const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";');
+		expect(screenSource).toContain("if (!CLEAR_HEADER) return;");
+		expect(screenSource).not.toContain("headerBlurEffect");
 	});
 });

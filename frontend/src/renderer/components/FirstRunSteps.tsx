@@ -1,12 +1,13 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, FolderClosed, MessageSquarePlus } from "lucide-react";
+import { ChevronLeft, FolderClosed, MessageSquarePlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import aoLogo from "../assets/ao-mascot.png";
+import aoMascot from "../../../assets/ao-mascot.svg";
 import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
+import { completeOnboardingStepIfViewed, reportOnboardingStep } from "../lib/onboarding-telemetry";
 import { useShellMaybe } from "../lib/shell-context";
 import { useResolvedTheme } from "../stores/ui-store";
 import { TerminalPane } from "./TerminalPane";
@@ -23,7 +24,7 @@ function FirstRunHeader({ onBack, onClose, disabled, title, description }: { onB
 	const { t } = useTranslation();
 	return (
 		<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
-			<Button type="button" variant="outline" size="icon" aria-label={t("createProject.cloneBack")} disabled={disabled} onClick={onBack}>
+			<Button type="button" variant="secondary" size="icon" aria-label={t("createProject.cloneBack")} disabled={disabled} onClick={onBack}>
 				<ChevronLeft className="size-4" aria-hidden="true" />
 			</Button>
 			<div className="min-w-0 flex-1 pr-8">
@@ -44,7 +45,7 @@ export function FirstRunWelcome({ disabled, onNext }: { disabled?: boolean; onNe
 	}, []);
 	return (
 		<div className="flex flex-col items-center px-6 pb-6 pt-8 text-center">
-			<img alt="" className="size-16" draggable={false} src={aoLogo} />
+			<img alt="" className="size-16" draggable={false} src={aoMascot} />
 			<Dialog.Title className="mt-5 text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.welcomeTitle")}</Dialog.Title>
 			<Dialog.Description className="mt-2 max-w-[34ch] text-pretty text-[13px] leading-5 text-muted-foreground">{t("firstRun.welcomeBody")}</Dialog.Description>
 			<Button type="button" variant="primary" className="mt-6 w-full" autoFocus disabled={disabled} onClick={onNext}>{t("firstRun.getStarted")}</Button>
@@ -82,6 +83,9 @@ export function WithGitHubState({ children }: { children: (state: GitHubState) =
 	const known = answered || gaveUp;
 	const installed = requirements.find((requirement) => requirement.id === "gh")?.satisfied !== false;
 	const hasGitHub = known && installed && auth.data?.satisfied === true;
+	useEffect(() => {
+		if (hasGitHub) completeOnboardingStepIfViewed("github_auth");
+	}, [hasGitHub]);
 	const needsSetup = !installed || auth.data?.satisfied === false;
 	return <>{children({ known, hasGitHub, needsSetup })}</>;
 }
@@ -116,10 +120,22 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 		if (cliMissing) void inspect("gh");
 	}, [cliMissing, inspect]);
 
+	// The onboarding funnel's GitHub step: viewed while setup is actually
+	// needed, abandoned if the window goes away first, completed once signed in.
+	const needsSetup = cliMissing || auth.data?.satisfied === false;
+	useEffect(() => {
+		if (!needsSetup) return;
+		reportOnboardingStep("github_auth", "viewed");
+		const onHide = () => reportOnboardingStep("github_auth", "abandoned");
+		window.addEventListener("pagehide", onHide);
+		return () => window.removeEventListener("pagehide", onHide);
+	}, [needsSetup]);
+
 	// Signed in, from the login terminal or from outside the app: nothing left to do.
 	const signedIn = auth.data?.satisfied === true;
 	useEffect(() => {
 		if (!signedIn) return;
+		completeOnboardingStepIfViewed("github_auth");
 		if (terminal) closeTerminal(terminal.handleId, { onSuccess: terminalQuery.clear });
 		readyRef.current();
 	}, [signedIn, terminal, closeTerminal, terminalQuery.clear]);
@@ -260,8 +276,8 @@ export function FirstRunSources({
 			</div>
 			<p className="px-4 pb-2 text-[13px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.orStart")}</p>
 			<div className="grid grid-cols-2 gap-3 px-4 pb-4 max-[520px]:grid-cols-1">
-				{tile(<FolderClosed className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
-				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
+				{tile(<FolderClosed className="size-6" aria-hidden="true" />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
+				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
 			</div>
 		</div>
 	);

@@ -8,7 +8,7 @@
 
 import { cn } from "../../lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy } from "@/components/app-icons";
 import { aoBridge } from "../../lib/bridge";
 import { Button, type ButtonProps } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";

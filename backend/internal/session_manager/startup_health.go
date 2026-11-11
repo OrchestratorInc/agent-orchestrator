@@ -15,7 +15,8 @@ import (
 // checkSessionHealth observes existing controllers. Startup must never create a
 // provider, restore a worktree, or replay a task to discover whether it is alive.
 func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionRecord) error {
-	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
+	// An imported history has no workspace until it is opened; it is not an interrupted spawn.
+	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady || rec.NeedsImportResume() {
 		return nil
 	}
 	project, err := m.loadProject(ctx, rec.ProjectID)

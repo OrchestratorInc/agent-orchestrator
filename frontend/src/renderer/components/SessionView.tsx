@@ -1,9 +1,9 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { BrowserIcon } from "./icons";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
+import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, PanelRight, Plus, SquareTerminal } from "lucide-react";
+import { Loader2, PanelRight, Plus, SquareTerminal } from "@/components/app-icons";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
@@ -76,7 +76,7 @@ import { SessionTopbarActions } from "./SessionTopbarActions";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
 import { useBrowserView } from "../hooks/useBrowserView";
@@ -89,7 +89,9 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
-import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
+import { SESSION_WORKSPACE_ID } from "../hooks/useHeldSession";
+import { canResumeAgent, resumeAgentOnOpen, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
+import { trackImportFirstOpen, useImportedAgentBlock } from "../lib/session-import";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
@@ -146,6 +148,7 @@ import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
 import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
+import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
@@ -279,6 +282,8 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 
 /** How often the startup screen reads the session's events while their stream is down or still opening. */
 const STARTUP_EVENTS_POLL_MS = 2_000;
+
+const CHAT_VIEW_LEASE_MS = 30_000;
 
 /**
  * The furthest startup step a session's events confirm, with when it was
@@ -474,6 +479,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const uiSessionId = sessionUiKey(sessionId, hostId);
+	const sessionTopbarRoute = useMemo(() => ({ hostId, projectId, sessionId }), [hostId, projectId, sessionId]);
 	const { baseUrl: remoteBase, label: hostLabel } = useHostConnection(hostId);
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
@@ -583,7 +589,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
-	const inspectorView = useUiStore((state) => browserOnly ? "browser" : state.inspectorSessions[uiSessionId]?.view ?? "summary");
+	const inspectorView = useUiStore((state) => state.inspectorSessions[uiSessionId]?.view ?? "summary");
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
@@ -599,6 +605,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const { daemonStatus } = useShell();
 	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
 	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
+	const importBlock = useImportedAgentBlock(session, hostId);
 	const openedSession = useRef({ key: uiSessionId, checked: false });
 	const autoResume = useMutation({
 		mutationKey: ["resume-agent", "local", sessionId],
@@ -618,22 +625,25 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// workspace query catches up with the new activity state.
 	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
 		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
-		!resumeStatus.statusError && openedSession.current.key === uiSessionId && !openedSession.current.checked);
+		!resumeStatus.statusError && !importBlock.block && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
+	// This session's background resume failed; the chat shows why.
+	const autoResumeFailed = !hostId && autoResume.variables === sessionId && autoResume.isError;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
 		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
-		if (!sessionAgentExited(session)) {
+		if (!session.needsResume && !sessionAgentExited(session)) {
 			openedSession.current.checked = true;
 			return;
 		}
-		if (!canResume) return;
+		if (!canResume || importBlock.block || importBlock.checking) return;
 		// One attempt per route opening; a failed resume or a later agent exit
 		// stays stopped rather than entering an automatic restart loop.
 		openedSession.current.checked = true;
+		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id));
 		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, resumeOnOpen, session, uiSessionId]);
+	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
@@ -1532,15 +1542,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		session && !isOrchestrator ? (
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<TopbarButton
+					<Button size="icon-sm"
 						aria-label={t("shortcut.new-shell-terminal")}
 						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
 						type="button"
-						variant="icon"
+						variant="quiet"
 					>
 						<Plus aria-hidden="true" className="size-icon-md" />
-					</TopbarButton>
+					</Button>
 				</TooltipTrigger>
 				<TooltipContent shortcut={newTerminalError ? undefined : "new-shell-terminal"} side="bottom">
 					{newTerminalError ?? t("terminal.new")}
@@ -1657,14 +1667,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// only preview work arriving afterward may reveal Browser automatically.
 	useLayoutEffect(() => {
 		if (!session) return;
-		if (browserOnly) {
-			const current = useUiStore.getState().inspectorSessions[uiSessionId];
-			if (!current) setInspectorOpenForSession(uiSessionId, false);
-			if (current?.view !== "browser") setInspectorViewForSession(uiSessionId, "browser");
-			return;
-		}
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
-	}, [browserOnly, hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession, setInspectorOpenForSession, setInspectorViewForSession]);
+	}, [hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession]);
 
 	// Keep rejecting another session's shell/reviewer handle here as well, so it
 	// can never be cached under the destination session.
@@ -1678,7 +1682,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const renderedSessionMode = interfaceUi.renderedMode;
 	const showChatSurface =
 		session !== undefined &&
-		renderedSessionMode === "chat" &&
+		(renderedSessionMode === "chat" || session.needsResume) &&
 		(chatTargetKind === "worker" || chatTargetKind === "reviewer" || chatTargetKind === "shell");
 	const chatViewActive =
 		session?.mode === "chat" &&
@@ -1984,6 +1988,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const viewId = crypto.randomUUID();
 		let left = false;
 		let refreshed = false;
+		let renewedAt = Date.now();
 		let pending = Promise.resolve();
 		const setViewActive = async (active: boolean) => {
 			try {
@@ -1992,6 +1997,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					body: { viewId, active },
 				});
 				if (error) throw error;
+				if (active) renewedAt = Date.now();
 				// Remote conversations already refresh every two seconds. A ready or
 				// working chat hears every change through events, and a wake emits
 				// one, so only a chat still waking or stopped is refreshed here;
@@ -2018,11 +2024,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			if (left || hostId) return;
 			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 		};
+		const leaseLapsed = () => Date.now() - renewedAt > CHAT_VIEW_LEASE_MS;
 		void renewView().catch(refreshAfterWakeError);
-		const renewal = window.setInterval(() => { void renewView().catch(refreshAfterWakeError); }, 10_000);
+		const renewal = window.setInterval(() => {
+			if (document.hidden && leaseLapsed()) return;
+			void renewView().catch(refreshAfterWakeError);
+		}, 10_000);
+		const renewOnReturn = () => {
+			if (!document.hidden && leaseLapsed()) void renewView().catch(refreshAfterWakeError);
+		};
+		document.addEventListener("visibilitychange", renewOnReturn);
 		return () => {
 			left = true;
 			window.clearInterval(renewal);
+			document.removeEventListener("visibilitychange", renewOnReturn);
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
@@ -2064,7 +2079,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					projectName={workspaces.find((workspace) => workspace.id === session.workspaceId)?.name}
 				/>
 			) : null}
-			<SessionTopbarActions />
+			<SessionTopbarActions route={sessionTopbarRoute} />
 		</div>
 	);
 	// While an interface switch runs, its status replaces the tab menu and stays visible.
@@ -2096,7 +2111,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleOpenArtifact = useCallback(
 		(target: { feedback?: boolean; path: string }) => {
-			if (browserOnly) return;
 			setBrowserPopOutState({ sessionId, phase: "docked" });
 			setFilesPoppedOut(false);
 			transitionInspectorView("artifacts");
@@ -2106,7 +2120,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				[uiSessionId]: { feedback: target.feedback, path: target.path, key: (current[uiSessionId]?.key ?? 0) + 1 },
 			}));
 		},
-		[browserOnly, sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
+		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
 
 	// A file written moments ago, or one past the artifact list cap, is not in
@@ -2114,8 +2128,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// artifacts. Refresh once before deciding it cannot be opened.
 	const revealResolvedArtifact = useCallback(
 		async (path: string) => {
-			if (browserOnly) return false;
-			const listed = (artifacts: SessionArtifact[] | undefined) => artifacts?.some((artifact) => artifact.path === path) ?? false;
+			const listed = (artifacts: SessionArtifact[] | undefined) => artifactAtPath(artifacts, path) !== undefined;
 			if (!listed(session?.artifactFiles)) {
 				await refreshWorkspaces();
 				const refreshed = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))
@@ -2126,7 +2139,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			handleOpenArtifact({ path });
 			return true;
 		},
-		[browserOnly, handleOpenArtifact, hostId, queryClient, refreshWorkspaces, session?.artifactFiles, sessionId],
+		[handleOpenArtifact, hostId, queryClient, refreshWorkspaces, session?.artifactFiles, sessionId],
 	);
 
 	const revealResolvedWorkspaceFile = useCallback(
@@ -2348,14 +2361,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
 
 	const handleToggleInspector = useCallback(() => {
-		if (browserOnly) setBrowserContentRevealed(uiSessionId, true);
+		if (browserOnly && inspectorView === "browser") setBrowserContentRevealed(uiSessionId, true);
 		toggleInspector(uiSessionId);
-	}, [browserOnly, uiSessionId, toggleInspector, setBrowserContentRevealed]);
+	}, [browserOnly, inspectorView, uiSessionId, toggleInspector, setBrowserContentRevealed]);
 
 	// Keyboard commands scoped to the session on screen. The main process matches
 	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
 	// native Browser view.
 	useSessionShortcut("toggle-inspector", handleToggleInspector, hasInspector);
+	useSessionMenuAvailable("toggle-inspector", hasInspector);
+	useSessionMenuAvailable("new-shell-terminal", Boolean(session) && !isOrchestrator);
 	useSessionShortcut(
 		"toggle-diff",
 		() => {
@@ -2493,7 +2508,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				className="session-split relative flex min-h-0 flex-1 overflow-hidden"
 				data-testid="panel-group"
 				data-workspace-mode={sizing.mode}
-				id="session-workspace"
+				id={SESSION_WORKSPACE_ID}
 				ref={sessionSplitRef}
 				style={
 					{
@@ -2552,6 +2567,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
 									onOpenFile={openCenterFile}
+									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
 									session={session}
 									sessionTabAction={sessionTabActions}
 									reviewerTerminal={reviewerTerminal}
@@ -2613,10 +2629,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceFileActive={Boolean(mainActiveFilePath)}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
-									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
-										? apiErrorMessage(autoResume.error) : undefined}
+									controllerResumeError={autoResumeFailed ? apiErrorMessage(autoResume.error) : undefined}
+									controllerResumeOpenElsewhere={autoResumeFailed && resumeOpenElsewhere(autoResume.error)}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									accountMoving={Boolean(interfaceUi.accountMoveTarget)}
+									accountMoveQueues={interfaceUi.accountMoveQueues}
 									arriving={interfaceUi.optimisticTarget === "chat"}
 									agentResuming={quietResume}
 									newWorkDisabled={interfaceUi.newWorkDisabled}
@@ -2629,6 +2646,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									}
 									onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 									onOpenFile={handleOpenFile}
+									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
          onOpenFileAnnotation={(reference,resolution)=>{
           if(reference.sessionId!==sessionId || resolution.state==="unavailable")return;
           const path=resolution.path??reference.path;
@@ -2822,7 +2840,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						<SessionInspector
 							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
-							browserOnly={browserOnly}
+							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
 							browserPoppedOut={browserPoppedOut}
 							filesView={
@@ -2846,7 +2864,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							isInspectorVisible={inspectorPanelVisible}
 							artifactRequest={artifactRequestsBySession[uiSessionId] ?? null}
 							onArtifactRequestConsumed={handleArtifactRequestConsumed}
-							onOpenArtifact={browserOnly ? undefined : handleOpenArtifact}
+							onOpenArtifact={handleOpenArtifact}
 							onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 							onOpenReviewFile={handleOpenReviewFile}
 							onOpenReviewerTerminal={selectReviewerTerminal}
@@ -2864,40 +2882,30 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<PageTopbarTrailingAction>
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
-						<TopbarButton
-							aria-label={
-								browserOnly
-									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
-							}
+						<Button type="button" size="icon-sm"
+							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {
 								captureTopbarAction("inspector", isOrchestrator ? "orchestrator" : "worker");
 								handleToggleInspector();
 							}}
 							style={noDragStyle}
-							variant="icon"
+							variant="quiet"
 						>
-							{browserOnly ? (
-								<span className="relative inline-flex">
-									<BrowserIcon aria-hidden="true" className="size-icon-md" />
-									{!isInspectorOpen && browserUnseen ? (
-										<span
-											aria-hidden="true"
-											className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-											data-testid="orchestrator-browser-unseen-indicator"
-										/>
-									) : null}
-								</span>
-							) : (
+							<span className="relative inline-flex">
 								<PanelRight className="size-icon-md" aria-hidden="true" />
-							)}
-						</TopbarButton>
+								{browserOnly && !isInspectorOpen && browserUnseen ? (
+									<span
+										aria-hidden="true"
+										className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+										data-testid="orchestrator-browser-unseen-indicator"
+									/>
+								) : null}
+							</span>
+						</Button>
 					</TooltipTrigger>
-					<TooltipContent shortcut={browserOnly ? undefined : "toggle-inspector"} side="bottom">
-						{browserOnly
-							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-							: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
+					<TooltipContent shortcut="toggle-inspector" side="bottom">
+						{isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 					</TooltipContent>
 				</Tooltip> : null}
 			</PageTopbarTrailingAction>

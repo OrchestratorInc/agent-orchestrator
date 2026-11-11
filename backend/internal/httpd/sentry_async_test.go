@@ -32,7 +32,7 @@ func (transport *blockedHTTPTransport) SendEvent(event *sentry.Event) {
 
 func TestRequestLoggerDoesNotWaitForSentryAndBoundsSends(t *testing.T) {
 	transport := &blockedHTTPTransport{events: make(chan *sentry.Event, 4), release: make(chan struct{})}
-	if err := sentryobs.Init(sentryobs.Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+	if err := sentryobs.Init(sentryobs.Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	sentryobs.SetPolicyCheck(func(context.Context) bool { return true })

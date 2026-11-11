@@ -451,7 +451,7 @@ func reviewThreadIDs(threads []domain.PullRequestReviewThread, comments []domain
 
 // GetPRLastNudgeSignature returns the persisted nudge-dedup JSON payload for a
 // PR (empty string when the PR has no row or no signatures yet). The payload is
-// opaque to storage; lifecycle.Manager owns its shape.
+// written by lifecycle.Manager; Kanban queries read its review-delivery entries.
 func (s *Store) GetPRLastNudgeSignature(ctx context.Context, url string) (string, error) {
 	sig, err := s.qr.GetPRLastNudgeSignature(ctx, url)
 	if errors.Is(err, sql.ErrNoRows) {

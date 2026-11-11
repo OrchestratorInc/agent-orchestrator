@@ -21,7 +21,7 @@ import {
 	Lock,
 	MessageSquarePlus,
 	XCircle,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { components } from "../../api/schema";
@@ -563,7 +563,7 @@ export function CreateProjectFlow({
 			const message = cloneSelection
 				? t("createProject.cloneRegistrationFailed", {
 					path: selectedPath,
-					message: safeProjectCreationError(apiErrorMessage(err), t("createProject.createFailedBody", { defaultValue: "AO could not create this project. Try again." })),
+					message: safeProjectCreationError(apiErrorMessage(err), t("createProject.createFailedBody", { defaultValue: "Orchestrator could not create this project. Try again." })),
 				})
 				: apiErrorMessage(err, t("createProject.couldNotAdd"));
 			if (!cloneSelection && selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) {
@@ -575,7 +575,7 @@ export function CreateProjectFlow({
 			}
 			else if (selectedKind === "single_repo") reportProjectError(safeProjectCreationError(
 				message,
-				t("createProject.createFailedBody", { defaultValue: "AO could not create this project. Try again." }),
+				t("createProject.createFailedBody", { defaultValue: "Orchestrator could not create this project. Try again." }),
 				code,
 			));
 			else reportProjectError(message);
@@ -1115,7 +1115,7 @@ function importValidationMessage(result: ImportValidationResult): string {
 function importBlockingErrorLabel(code: string): string {
 	switch (code) {
 		case "INVALID_PATH":
-			return "Choose a folder AO can read.";
+			return "Choose a folder Orchestrator can read.";
 		case "PATH_NOT_DIRECTORY":
 			return "Choose a folder, not a file.";
 		case "BARE_REPOSITORY":
@@ -1123,9 +1123,9 @@ function importBlockingErrorLabel(code: string): string {
 		case "UNSUPPORTED_GIT_METADATA":
 			return "Repair the Git metadata or choose a different folder.";
 		case "CHILD_REPO_SCAN_FAILED":
-			return "AO could not inspect the repositories under this folder.";
+			return "Orchestrator could not inspect the repositories under this folder.";
 		case "IMPORT_PATH_UNSAFE":
-			return "Choose a specific project folder outside AO's own state directories.";
+			return "Choose a specific project folder outside Orchestrator's own state directories.";
 		case "DETACHED_HEAD":
 			return "This repository is checked out in detached HEAD state. Check out a named branch before importing it.";
 		case "WORKSPACE_CHILD_REPO_REQUIRED":
@@ -1331,7 +1331,7 @@ function CloudSignInPanel({
 	const { t } = useTranslation();
 	return (
 		<div className={cn(onboardingPanelClass, "flex flex-col items-center gap-4 px-4 py-6 text-center")}>
-			<Button type="button" variant="outline" size="icon" className="absolute left-3 top-3" aria-label={t("createProject.backToSource")} onClick={onBack}>
+			<Button type="button" variant="secondary" size="icon" className="absolute left-3 top-3" aria-label={t("createProject.backToSource")} onClick={onBack}>
 				<ChevronRight className="size-4 rotate-180" aria-hidden="true" />
 			</Button>
 			<Cloud className="size-6 text-foreground" aria-hidden="true" />
@@ -1448,7 +1448,7 @@ function CloudAgentSetupStep({
 					</p>
 					<Button
 						type="button"
-						variant="outline"
+						variant="secondary"
 						size="sm"
 						className="shrink-0"
 						onClick={() => openGlobalSettings("harness", { harnessView: "cloud", preserveProject: true })}
@@ -1463,7 +1463,7 @@ function CloudAgentSetupStep({
 				</p>
 			) : null}
 			<div className={onboardingFooterActionsClass}>
-				<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
+				<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
 					{t("createProject.back", { defaultValue: "Back" })}
 				</Button>
 				<Button
@@ -1908,7 +1908,7 @@ function CloudProjectCard({
 								<span className="mt-0.5 block text-[12px] leading-5 text-muted-foreground">
 									{githubOAuthBusy
 										? t("createProject.githubCompleteInBrowser", { defaultValue: "Install the app on your repositories in the browser, then return here." })
-										: t("createProject.connectRepositoryHint", { defaultValue: "Choose the GitHub repositories AO can work on" })}
+										: t("createProject.connectRepositoryHint", { defaultValue: "Choose the GitHub repositories Orchestrator can work on" })}
 								</span>
 							</span>
 							{githubOAuthBusy && (
@@ -2096,7 +2096,7 @@ function CloudProjectCard({
 				{/* The agent step carries its own Back; show one here until it appears. */}
 				{!standalone && selectedRepo === undefined ? (
 					<div className={onboardingFooterActionsClass}>
-						<Button type="button" variant="outline" onClick={onBack} disabled={isCreating}>
+						<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
 							{t("createProject.back", { defaultValue: "Back" })}
 						</Button>
 					</div>
@@ -2215,19 +2215,19 @@ function ImportSourcePicker({
 	const localSources: Array<{ source: ProjectSource; icon: ReactNode; label: string; description: string }> = [
 		{
 			source: "clone",
-			icon: <GitFork className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <GitFork className="size-6" aria-hidden="true" />,
 			label: t("createProject.cloneFromGit"),
 			description: t("createProject.cloneFromGitDesc"),
 		},
 		{
 			source: "local",
-			icon: <FolderClosed className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <FolderClosed className="size-6" aria-hidden="true" />,
 			label: t("createProject.openLocal"),
 			description: hostLabel ? t("remote.openExistingProjectDesc", { label: hostLabel }) : t("createProject.openLocalDesc"),
 		},
 		{
 			source: "workspace",
-			icon: <Folders className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+			icon: <Folders className="size-6" aria-hidden="true" />,
 			label: t("createProject.addWorkspace"),
 			description: t("createProject.workspaceDesc"),
 		},
@@ -2270,13 +2270,13 @@ function ImportSourcePicker({
 				<motion.div key="placement" data-step="placement" {...fade} className="grid grid-cols-2 gap-3 px-4 pb-4">
 					{tile(
 						"local",
-						<Laptop className="size-6" aria-hidden="true" strokeWidth={1.6} />,
+						<Laptop className="size-6" aria-hidden="true" />,
 						// With remote machines connected, the machine picker lives behind this tile.
 						hasRemoteHosts ? t("createProject.placementMachines") : t("createProject.placementLocal"),
 						hasRemoteHosts ? t("createProject.placementMachinesDesc") : t("createProject.placementLocalDesc"),
 						() => onLocalChosenChange(true),
 					)}
-					{tile("cloud", <Cloud className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
+					{tile("cloud", <Cloud className="size-6" aria-hidden="true" />, t("createProject.placementCloud"), t("createProject.placementCloudDesc"), onCloudSelect)}
 				</motion.div>
 			) : (
 				<motion.div key="sources" data-step="sources" {...fade}>
@@ -2293,7 +2293,7 @@ function ImportSourcePicker({
 					<div className="grid grid-cols-2 gap-3 px-4 pb-4">
 						{localSources.map(({ source, icon, label, description }) => tile(source, icon, label, description, () => onSelect(source)))}
 						{onCreateStandaloneAgent
-							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" strokeWidth={1.6} />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
+							? tile("standalone", <MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), createStandaloneAgent)
 							: null}
 					</div>
 				</motion.div>
@@ -2444,7 +2444,7 @@ function ProjectImportDialog({
 					onPointerDownOutside={(event) => event.preventDefault()}
 				>
 					<div className="relative flex shrink-0 items-center gap-3 px-4 pt-3">
-						<Button type="button" variant="outline" size="icon" aria-label={t("createProject.backToSource")} disabled={disabled} onClick={onBack}>
+						<Button type="button" variant="secondary" size="icon" aria-label={t("createProject.backToSource")} disabled={disabled} onClick={onBack}>
 							<ChevronRight className="size-4 rotate-180" aria-hidden="true" />
 						</Button>
 						<div className="min-w-0 flex-1 pr-8">
@@ -2522,7 +2522,7 @@ function ProjectImportDialog({
 														onChangeRemote(githubRepositoryRemoteUrl(next));
 													}}
 												>
-													<SelectTrigger id="githubRepoOwner" size="sm" className="h-8 w-full bg-[var(--color-bg-import-card)] font-mono text-[12px]" aria-label={t("createProject.githubOwner")}>
+													<SelectTrigger id="githubRepoOwner" size="sm" className="h-8 w-full font-mono text-[12px]" aria-label={t("createProject.githubOwner")}>
 														<SelectValue placeholder={t("createProject.githubOwner")}>
 															{customGitHubOwner ? (
 																<span className="flex items-center gap-2">
@@ -2697,7 +2697,7 @@ function ProjectImportDialog({
 							<Button type="button" variant="primary" disabled={disabled} onClick={onTryWorkspace}>{t("createProject.importAsWorkspace")}</Button>
 						) : step === "blocked" ? (
 							<>
-								<Button type="button" variant="outline" disabled={disabled} onClick={onBack}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onBack}>
 									{t("createProject.back")}
 								</Button>
 								{hasChildRepos || Boolean(validation.warning) ? <Button type="button" variant="primary" disabled={disabled} onClick={onContinueProject}>{t("createProject.cloneContinue")}</Button> : null}
@@ -2705,7 +2705,7 @@ function ProjectImportDialog({
 						) : null}
 						{step === "prepare_git" ? (
 							<>
-								<Button type="button" variant="outline" disabled={disabled} onClick={onBack}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onBack}>
 									{t("createProject.back")}
 								</Button>
 								<Button type="button" variant="primary" disabled={continueDisabled} onClick={onContinue}>
@@ -2782,7 +2782,7 @@ function CreateProjectFolderDialog({
 					<div className="relative flex shrink-0 items-start gap-3 px-4 pt-3">
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							size="icon"
 							aria-label={t("createProject.backToType")}
 							disabled={disabled}
@@ -2858,7 +2858,7 @@ function CreateProjectFolderDialog({
 					</div>
 					<div className="flex shrink-0 justify-end gap-2 px-4 pb-4 pt-3">
 						<div className="flex flex-wrap items-center justify-end gap-3">
-							<Button type="button" variant="outline" disabled={disabled} onClick={workspaceHasNoChildGitRepos ? onBack : () => onOpenChange(false)}>
+							<Button type="button" variant="secondary" disabled={disabled} onClick={workspaceHasNoChildGitRepos ? onBack : () => onOpenChange(false)}>
 								{workspaceHasNoChildGitRepos ? "Go Back" : t("createProject.cancel")}
 							</Button>
 							{hasScan && workspaceRootIsProject && !error ? (
@@ -2866,7 +2866,7 @@ function CreateProjectFolderDialog({
 									{t("createProject.importAsProject")}
 								</Button>
 							) : hasScan && workspaceHasNoChildGitRepos && !error ? (
-								<Button type="button" variant="outline" disabled={disabled} onClick={onContinueAsProject}>
+								<Button type="button" variant="secondary" disabled={disabled} onClick={onContinueAsProject}>
 									{t("createProject.importAsProject")}
 								</Button>
 							) : hasScan && !workspaceValidationBlocked && failedRepos.length === 0 && (!error || isWorkspace) ? (

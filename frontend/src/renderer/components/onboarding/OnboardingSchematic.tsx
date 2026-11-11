@@ -1,31 +1,4 @@
-import {
-	ArrowUp,
-	Bell,
-	CalendarClock,
-	Check,
-	ChevronDown,
-	Cloud,
-	Code,
-	Coffee,
-	Cog,
-	EllipsisVertical,
-	File,
-	Folder,
-	GitPullRequest,
-	Layers,
-	LayoutDashboard,
-	ListFilter,
-	LogIn,
-	PanelLeft,
-	PanelRight,
-	Play,
-	Plus,
-	Search,
-	Settings,
-	ShieldCheck,
-	Smartphone,
-	SquarePen,
-} from "lucide-react";
+import { ArrowUp, Bell, CalendarClock, Check, ChevronDown, Cloud, Code2, Coffee, Cog, EllipsisVertical, File, Folder, GitPullRequest, Layers, LayoutDashboard, ListFilter, LogIn, PanelLeft, PanelRight, Play, Plus, Search, Settings, ShieldCheck, Smartphone, SquarePen } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion, type TargetAndTransition, type Transition } from "motion/react";
 import { createContext, useContext, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -752,8 +725,8 @@ function ChatPage({ agent }: { agent?: { id: string; label: string } }) {
 				actions={
 					<>
 						<TopbarAction icon={<Plus className="size-3" {...ICON} />}>{t("newTask.task")}</TopbarAction>
-						<TopbarAction icon={<LayoutDashboard className="size-3" {...ICON} />}>{t("shell.openKanban")}</TopbarAction>
-						<Code className="size-3.5" {...ICON} />
+						<TopbarAction icon={<LayoutDashboard className="size-3" {...ICON} />}>{t("shell.board")}</TopbarAction>
+						<Code2 className="size-3.5" {...ICON} />
 						<Play className="size-3.5" {...ICON} />
 						<PanelRight className="size-3.5" {...ICON} />
 						<Bell className="size-3.5" {...ICON} />

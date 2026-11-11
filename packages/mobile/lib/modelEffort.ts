@@ -23,6 +23,23 @@ export function spawnEffortChoices(model: { efforts?: readonly string[]; default
 }
 
 /**
+ * The effort a new task sends: a level picked here, or the fallback the
+ * speedometer shows for a model that names no default, so the task runs at the
+ * level shown. Never the model's own default, which is left to the model.
+ *
+ * Nor a fallback drawn from a stand-in, the model whose levels are shown when
+ * nothing is picked and the catalog names no default: no model is sent then,
+ * and an effort with no model has nothing to resolve against (#7979). Picking
+ * a level pins the stand-in, so a pick is still sent.
+ */
+export function spawnEffortToSend(choices: readonly EffortChoice[], picked: string | undefined, model: { efforts?: readonly string[]; defaultEffort?: string } | undefined, standIn: boolean): string | undefined {
+	const shown = choices.find((choice) => choice.selected)?.value;
+	if (!shown) return undefined;
+	if (shown === picked) return shown;
+	return !standIn && shown !== model?.defaultEffort ? shown : undefined;
+}
+
+/**
  * The level to show when nothing names one, neither a pick nor the model's
  * default: Medium where the model has it, else the middle level, the lower of
  * the two middles for an even count.

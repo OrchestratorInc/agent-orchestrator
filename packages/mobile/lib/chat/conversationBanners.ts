@@ -8,8 +8,8 @@ import type { McpServer } from "./types";
  * it was a paragraph that pushed the conversation off screen.
  *
  * Every banner carries a `key` built from what it is reporting. Closing a banner
- * hides that key for the visit; when the underlying state changes — another
- * server fails, the quota crosses into critical — the key changes and the banner
+ * hides that key for the visit; when the underlying state changes — the quota
+ * crosses into critical, another turn is rolled back — the key changes and the banner
  * comes back, because that is news.
  */
 export type BannerTone = "warning" | "danger" | "muted";
@@ -20,14 +20,24 @@ export type BannerCopy = {
 	body?: string;
 };
 
-export function mcpBanner(servers: readonly McpServer[], reloadError?: string): BannerCopy | undefined {
+/**
+ * Which run of a session the tool-server note belongs to: the machine, the
+ * session, and when it was created, as the desktop keys on `session.createdAt`.
+ * A restarted session starts its tool servers again, so it gets its own note.
+ */
+export function mcpNoticeKey(hostId: string | undefined, sessionId: string, createdAt: string | undefined): string {
+	return `${hostId ?? ""}:${sessionId}:${createdAt ?? ""}`;
+}
+
+/**
+ * The desktop's one-line tool-server note (`chat.mcpNotice.unavailable`): which
+ * servers did not start, and that the agent carries on without them. There is
+ * nothing to do from the conversation, so no reason text and no action.
+ */
+export function mcpNoticeText(servers: readonly McpServer[]): string | undefined {
 	if (servers.length === 0) return undefined;
-	const names = servers.map((server) => server.failureReason ? `${server.name} · ${server.failureReason}` : server.name);
-	return {
-		key: `mcp:${servers.map((server) => `${server.name}/${server.status}`).sort().join(",")}`,
-		title: servers.length === 1 ? "A tool server did not start" : `${servers.length} tool servers did not start`,
-		body: reloadError ? `Reload failed: ${reloadError}` : `${names.join(", ")}. The agent works around them silently.`,
-	};
+	const names = servers.map((server) => server.name.charAt(0).toUpperCase() + server.name.slice(1)).join(", ");
+	return `${names} didn’t start. Continuing without ${servers.length === 1 ? "it" : "them"}.`;
 }
 
 export function reauthBanner(reauthRequiredAt: string, command?: string): BannerCopy {

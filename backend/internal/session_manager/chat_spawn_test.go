@@ -66,6 +66,9 @@ func (d fixedSessionModeDefaults) DefaultSessionMode(context.Context) domain.Ses
 // chat launcher. Anything else means two writers on one conversation.
 
 type recordingLauncher struct {
+	// Empty preserves the default identity used by ordinary Chat fixtures.
+	providerConversationID string
+
 	permissionModes  []ports.PermissionMode
 	preflightErr     error
 	startErr         error
@@ -198,6 +201,9 @@ func (l *recordingLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatS
 		ProviderConversationID: "thread-1",
 		ControllerGeneration:   "gen-1",
 		ProviderBoundary:       l.providerBoundary,
+	}
+	if l.providerConversationID != "" {
+		started.ProviderConversationID = l.providerConversationID
 	}
 	if cfg.ControllerGeneration != "" {
 		started.ControllerGeneration = cfg.ControllerGeneration
@@ -932,6 +938,34 @@ func TestWakeHibernatedChatDoesNotRestoreMarkerAfterNativeResumeFailure(t *testi
 	}
 	if got := store.sessions[rec.ID]; got.HibernatedAt != nil || got.Metadata.ProviderConversationID != rec.Metadata.ProviderConversationID {
 		t.Fatalf("failed wake must remain stopped with its native identity: %+v", got)
+	}
+}
+
+func TestResumeChatRefusedLoginAsksForSignIn(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		startErr error
+		moving   bool
+		want     []string
+	}{
+		{"login refused", fmt.Errorf("%w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired), false, []string{"mer-1: agent requires authentication"}},
+		{"chat login refused", fmt.Errorf("resume thread: %w", ports.ErrChatAuthRequired), false, []string{"mer-1: " + ports.ErrChatAuthRequired.Error()}},
+		{"account move refused", fmt.Errorf("%w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired), true, nil},
+		{"provider down", fmt.Errorf("%w: persistent ACP host: exit status 1", ports.ErrChatDriverUnavailable), false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, store, _ := newChatManager(&recordingLauncher{startErr: tc.startErr})
+			seedChatResumeSession(store, domain.ActivityExited)
+			if tc.moving {
+				mgr.setAccountOverride("mer-1", "acct-b")
+			}
+			if _, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1"); !errors.Is(err, tc.startErr) {
+				t.Fatalf("resume error = %v, want %v", err, tc.startErr)
+			}
+			if !slices.Equal(store.loginDemands, tc.want) {
+				t.Fatalf("login demands = %v, want %v", store.loginDemands, tc.want)
+			}
+		})
 	}
 }
 

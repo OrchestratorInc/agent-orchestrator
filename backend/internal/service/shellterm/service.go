@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -315,6 +317,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
 			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
 	}
+	// Clients that already show a tab pass its numbered default here.
+	titleExplicit := title != "" && !defaultShellTerminalTitle.MatchString(title)
 	if in.SessionID != "" {
 		if s.sessions == nil {
 			return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
@@ -370,6 +374,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	// from an unusual daemon launch environment.
 	env["AO_BROWSER_CAPABILITY"] = ""
 	env["AO_PREVIEW_CAPABILITY"] = ""
+	// What the user types here is theirs, not the agent's turn's (see cli caller header).
+	env[caller.ShellTerminalEnv] = "1"
 	var verifier string
 	if in.SessionID != "" {
 		env["AO_SESSION_ID"] = string(in.SessionID)
@@ -392,7 +398,7 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	}
 	return s.openTerminal(ctx, openTerminalConfig{
 		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
-		workingDir: workingDir, title: title,
+		workingDir: workingDir, title: title, titleExplicit: titleExplicit,
 		previewVerifier: verifier,
 		startOnAttach:   in.StartOnAttach,
 		cols:            in.Cols,
@@ -434,6 +440,7 @@ func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTermina
 		env:                      in.Env,
 		workingDir:               workingDir,
 		title:                    in.Title,
+		titleExplicit:            true,
 		transient:                true,
 		commandOwner:             in.Owner,
 		cleanupWorkingDirOnError: cleanupWorkingDirOnError,
@@ -677,6 +684,7 @@ type openTerminalConfig struct {
 	sessionID                domain.SessionID
 	workingDir               string
 	title                    string
+	titleExplicit            bool
 	transient                bool
 	commandOwner             string
 	cleanupWorkingDirOnError bool
@@ -734,6 +742,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		SessionID:                 cfg.sessionID,
 		WorkingDir:                cfg.workingDir,
 		Title:                     cfg.title,
+		TitleExplicit:             cfg.titleExplicit,
 		AppRunID:                  s.appRunID,
 		Transient:                 cfg.transient,
 		CommandOwner:              cfg.commandOwner,
@@ -758,6 +767,8 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 	}
 	return shellTerminalFromRecord(rec), nil
 }
+
+var defaultShellTerminalTitle = regexp.MustCompile(`^Terminal( \d+)?$`)
 
 // nextShellTerminalTitle assigns a name at creation time. It never depends on
 // a tab's current UI position, so closing or reordering another tab cannot
@@ -1154,13 +1165,18 @@ func newShellTerminalHandleID() (string, error) {
 }
 
 func shellTerminalFromRecord(rec ShellTerminalRecord) ShellTerminal {
+	terminalTitle := ""
+	if !rec.TitleExplicit {
+		terminalTitle = domain.MeaningfulTerminalTitle(rec.AppTitle, rec.WorkingDir)
+	}
 	return ShellTerminal{
-		HandleID:   rec.HandleID,
-		ProjectID:  rec.ProjectID,
-		SessionID:  rec.SessionID,
-		WorkingDir: rec.WorkingDir,
-		Title:      rec.Title,
-		CreatedAt:  rec.CreatedAt,
+		TerminalTitle: terminalTitle,
+		HandleID:      rec.HandleID,
+		ProjectID:     rec.ProjectID,
+		SessionID:     rec.SessionID,
+		WorkingDir:    rec.WorkingDir,
+		Title:         rec.Title,
+		CreatedAt:     rec.CreatedAt,
 	}
 }
 

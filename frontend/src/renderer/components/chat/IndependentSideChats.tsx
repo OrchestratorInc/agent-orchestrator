@@ -1,9 +1,12 @@
+import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
+import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
+import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { apiErrorException } from "../../lib/api-error-exception";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
 import type { PendingSideClose } from "../../../shared/side-close";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "@/components/app-icons";
 import type { components } from "../../../api/schema";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
@@ -34,11 +37,17 @@ import { useUiStore } from "../../stores/ui-store";
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
 
-function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference) {
+function appendReference(draft: SideChatDraft, excerpt: ChatDraftExcerptReference): { draft: SideChatDraft; error?: string } {
 	const duplicate = draft.references.some(ref => ref.conversationId === excerpt.conversationId &&
-		ref.messageId === excerpt.messageId && ref.revision === excerpt.revision && ref.text === excerpt.text);
-	const referenceLimit = !duplicate && draft.references.length >= 8;
-	return { referenceLimit, draft: duplicate || referenceLimit ? draft : { ...draft, references: [...draft.references, excerpt] } };
+		ref.messageId === excerpt.messageId && ref.revision === excerpt.revision && ref.text === excerpt.text &&
+		JSON.stringify(ref.snapshot?.sourceRange) === JSON.stringify(excerpt.snapshot?.sourceRange) &&
+		JSON.stringify(ref.snapshot?.renderedRange) === JSON.stringify(excerpt.snapshot?.renderedRange) &&
+		JSON.stringify(ref.snapshot?.diagramRange) === JSON.stringify(excerpt.snapshot?.diagramRange));
+	if (duplicate) return { draft };
+	const error = excerptSizeError([...draft.references, excerpt]);
+	if (error) return { draft, error };
+	const order = excerpt.order ?? Math.max(Date.now(), ...draft.references.map(ref => (ref.order ?? 0) + 1));
+	return { draft: { ...draft, references: [...draft.references, { ...excerpt, order }] } };
 }
 
 export function SideComposer({
@@ -367,6 +376,7 @@ export function useIndependentSideChats(
 	canCreate = true,
 ) {
 	const { t } = useTranslation();
+	const translateDraft = useChatDraftTranslation();
 	const [sides, setSides] = useState<Side[]>([]);
 	const [activeId, setActiveId] = useState<string>();
 	const [visible, setVisible] = useState(false);
@@ -613,8 +623,12 @@ export function useIndependentSideChats(
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID(),
 			options?: { isCurrent?: () => boolean; shouldActivate: () => boolean }) => {
-			if (!enabled) throw new Error("Side chats are currently available only for local AO sessions.");
+			if (!enabled) throw new Error("Side chats are currently available only for local Orchestrator-managed sessions.");
 			if (!canCreate) throw new Error("The current provider does not support resumable side chats.");
+			if (excerpt) {
+				const sizeError = excerptSizeError([excerpt]);
+				if (sizeError) throw new Error(sizeError);
+			}
 			const owned = () => creationScope.active && creationScopeRef.current === creationScope && sessionRef.current === sessionId;
 			const current = () => owned() && (options?.isCurrent?.() ?? true);
 			if (!current()) throw new Error("Side chat is no longer active.");
@@ -638,6 +652,7 @@ export function useIndependentSideChats(
 										messageId: excerpt.messageId,
 										revision: excerpt.revision,
 										text: excerpt.text,
+										snapshot: excerpt.snapshot,
 									}
 								: undefined,
 						},
@@ -663,17 +678,17 @@ export function useIndependentSideChats(
 					// one) may have an edit queued in the same React batch as the read.
 					const loadedDraft = draft;
 					let nextDraft = loadedDraft;
-					let referenceLimit = false;
+					let appendError: string | undefined;
 					flushSync(() => setDrafts(currentDrafts => {
 						const latest = currentDrafts[data.side.id] ?? loadedDraft;
 						const result = appendReference(latest, excerpt);
-						referenceLimit = result.referenceLimit;
-						if (referenceLimit) return currentDrafts;
+						appendError = result.error;
+						if (appendError) return currentDrafts;
 						nextDraft = result.draft;
 						return { ...currentDrafts, [data.side.id]: nextDraft };
 					}));
 					if (!available()) throw new Error("Side chat is no longer active.");
-					if (referenceLimit) throw new Error(t("sideChat.referenceLimit"));
+					if (appendError) throw new Error(appendError);
 					const { error: draftError } = await saveSideChatDraft(sessionId, data.side.id, JSON.stringify(nextDraft));
 					if (draftError) throw draftError;
 					if (!available()) throw new Error("Side chat is no longer active.");
@@ -697,7 +712,7 @@ export function useIndependentSideChats(
 				if (owned()) setPending(creationScope.pending.size > 0);
 			}
 		},
-		[sessionId, enabled, canCreate, creationScope, t],
+		[sessionId, enabled, canCreate, creationScope],
 	);
 
 	const updateDraft = useCallback((sideId: string, text: string) => {
@@ -726,19 +741,17 @@ export function useIndependentSideChats(
 		[sessionId],
 	);
 
-	const addReference = useCallback((sideId: string, excerpt: ChatDraftExcerptReference) => {
-		setDrafts((current) => {
-			const draft = current[sideId] ?? emptySideChatDraft();
-			const result = appendReference(draft, excerpt);
-			if (result.referenceLimit) {
-				queueMicrotask(() => setError(t("sideChat.referenceLimit")));
-				return current;
-			}
-			if (result.draft === draft) return current;
-			return { ...current, [sideId]: result.draft };
-		});
-		setFocusKey((key) => key + 1);
-	}, [t]);
+	const addReference = useCallback(async (sideId: string, excerpt: ChatDraftExcerptReference) => {
+		const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
+		const result = appendReference(draft, excerpt);
+		if (result.error) throw new Error(result.error);
+		draftsRef.current = { ...draftsRef.current, [sideId]: result.draft };
+		setDrafts(current => ({ ...current, [sideId]: result.draft }));
+		const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(result.draft));
+		if (requestError) throw requestError;
+		setFocusKey(key => key + 1);
+	}, [sessionId]);
+
 	const attachFiles = useCallback(
 		async (sideId: string, files: File[]) => {
 			if (files.length === 0) return;
@@ -889,7 +902,7 @@ export function useIndependentSideChats(
 					if (draft.pendingDelivery || (command && text && text !== command.receipt.submitted.text))
 						throw new Error("Retry the original handoff before sending another question.");
 					if (!command) {
-						const submitted = { text, attachments: [...draft.attachments], references: [...(overrideReferences ?? draft.references)] };
+						const submitted = { text, attachments: [...draft.attachments], references: fitExcerptContext((overrideReferences ?? draft.references).map(upgradeExcerpt), text, LOCAL_CHAT_MESSAGE_BYTES) };
 						const parentId = sides.find((side) => side.id === sideId)?.mainConversationId;
 						if (submitted.references.some((ref) => ref.conversationId !== parentId))
 							throw new Error("References from another side cannot be transferred. Remove them before creating a new side.");
@@ -906,7 +919,7 @@ export function useIndependentSideChats(
 									text: text.slice(btw?.[0].length ?? 0).trim(),
 									resources: [...submitted.attachments.map((file) => file.path), ...staged].map((path) => ({ uri: path, name: path.split(/[\\/]/).at(-1) || "Attachment" })),
 									attachments: nativeImages ? images : [],
-									references: submitted.references.map(({ conversationId, messageId, revision, text }) => ({ conversationId, messageId, revision, text })),
+									references: submitted.references.map(({ conversationId, messageId, revision, text, snapshot, id, order }) => ({ conversationId, messageId, revision, text, snapshot, id, order })),
 								},
 							},
 						};
@@ -1016,11 +1029,11 @@ export function useIndependentSideChats(
 							})),
 							clientMessageId,
 							attachments: nativeImages ? imagePayloads : [],
-							references: (overrideReferences ?? draft.references).map((ref) => ({
+							references: fitExcerptContext((overrideReferences ?? draft.references).map(upgradeExcerpt), text, LOCAL_CHAT_MESSAGE_BYTES).map((ref) => ({
 								conversationId: ref.conversationId,
 								messageId: ref.messageId,
 								revision: ref.revision,
-								text: ref.text,
+								text: ref.text, snapshot: ref.snapshot, id: ref.id, order: ref.order,
 							})),
 						},
 					};
@@ -1495,7 +1508,7 @@ export function useIndependentSideChats(
 					<Button type="button" size="sm" onClick={() => void resolveInput(activeId, requestId, "accept")}>
 						{t("sideChat.submit")}
 					</Button>
-					<Button type="button" size="sm" variant="outline" onClick={() => void resolveInput(activeId, requestId, "decline")}>
+					<Button type="button" size="sm" variant="secondary" onClick={() => void resolveInput(activeId, requestId, "decline")}>
 						{t("sideChat.decline")}
 					</Button>
 				</div>
@@ -1505,6 +1518,7 @@ export function useIndependentSideChats(
 	const panel =
 		enabled && currentActiveId && visible ? (
 			<aside
+				data-chat-find-scope=""
 				aria-label={t("sideChat.sideChats")}
 				className="cursor-chat-surface relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background [font-size:14px]"
 			>
@@ -1513,7 +1527,7 @@ export function useIndependentSideChats(
 				{pendingCloses.some((side) => side.id === activeId) ? (
 					<div className="p-4" role="status">
 						<p>{t("sideChat.closing")}</p>
-						<Button type="button" variant="outline" size="sm" disabled={closing} onClick={() => {
+						<Button type="button" variant="secondary" size="sm" disabled={closing} onClick={() => {
 							if (!currentActiveId) return;
 							setClosing(true);
 							void close(currentActiveId).catch((cause) => setError(String(cause))).finally(() => setClosing(false));
@@ -1537,6 +1551,7 @@ export function useIndependentSideChats(
 									</div>
 								) : null}
 								<Timeline
+									sideChat
 									key={activeId}
 									snapshot={conversation}
 									annotationNavigationRef={timelineNavigationRef}
@@ -1564,7 +1579,7 @@ export function useIndependentSideChats(
 						{snapshot.side.state === "failed" && snapshot.side.recreateRequired ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() => void create(undefined, true).catch(() => undefined)}
 								disabled={!canCreate || pending}
@@ -1574,7 +1589,7 @@ export function useIndependentSideChats(
 						) : snapshot.side.state === "failed" ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() =>
 									void apiClient
@@ -1745,7 +1760,7 @@ export function useIndependentSideChats(
 						{error ? (
 							<Button
 								type="button"
-								variant="outline"
+								variant="secondary"
 								size="sm"
 								onClick={() => {
 									setError(undefined);
@@ -1759,7 +1774,7 @@ export function useIndependentSideChats(
 				)}
 				{error ? (
 					<div className="shrink-0 border-t border-border bg-surface px-4 py-3 text-xs" role="alert">
-						<p className="break-words text-destructive">{error}</p>
+						<p className="break-words text-destructive">{translateDraft(error)}</p>
 					</div>
 				) : null}
 			</aside>
@@ -1771,7 +1786,7 @@ export function useIndependentSideChats(
 					<p>
 						{enabled ? t("sideChat.noneOpen") : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
 					</p>
-					{error ? <p role="alert">{error}</p> : null}
+					{error ? <p role="alert">{translateDraft(error)}</p> : null}
 				</div>
 			</div>
 		);

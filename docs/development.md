@@ -280,7 +280,7 @@ go run ./cmd/ao --help
 
 ### Code generation drift
 
-If CI fails on `sqlc-drift`, run the pinned generator from the repository root
+If CI fails on the storage drift step of `codegen-drift`, run the pinned generator from the repository root
 and commit the generated storage changes together with their SQL/config source:
 
 ```bash
@@ -294,7 +294,7 @@ authoritative. Review any unexpected query or generated type changes before
 committing. The storage tests also check that the config is valid YAML and keeps
 the boolean override for `app_settings.cloud_offering`.
 
-If CI fails on the `api-drift` check, the OpenAPI-generated files are out of sync with source. Regenerate them locally and commit the updated files:
+If CI fails on the schema.ts drift step of `codegen-drift`, the OpenAPI-generated files are out of sync with source. Regenerate them locally and commit the updated files:
 
 ```bash
 npm run api

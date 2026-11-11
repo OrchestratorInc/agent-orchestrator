@@ -1,7 +1,7 @@
 ---
 name: ao-setup
 description: >-
-  First run of Orchestrator Bot: find every computer that runs AO, save them as
+  First run of Orchestrator Bot: find every computer that runs Orchestrator, save them as
   AO hosts, add a remote AO host that has no Grok Bot desktop app, and turn on
   optional routines. On a computer without Orchestrator.inc it helps install it
   and get it ready: a coding agent, a first project and the first orchestrator.
@@ -11,7 +11,7 @@ description: >-
 ---
 Follow the ao-rules skill. Detection is read-only. Nothing is written until the user says yes.
 
-Open with one line: "Give me a few seconds to look for AO on your computers."
+Open with one line: "Give me a few seconds to look for Orchestrator on your computers."
 
 ## 1. Detect
 1. ListMachines. Use desktops only. If none is connected, say: "Install the Grok Bot desktop app on the computer where you run Orchestrator.inc (or want to), sign in, and tell me when it shows up," then stop.
@@ -119,32 +119,34 @@ Ask: "Want me to start the orchestrator for <project>? Tell me what you'd like d
 Then continue with section 2.
 
 ## 2. Report and ask once
-One message, at most 6 lines: per computer, AO found or not, its projects, and how many sessions are live. For a computer without a working AO, add the one next step from "Missing pieces". Then:
-"Reply **yes** and I'll save these as your AO hosts. Is AO also running on a computer without the Grok Bot desktop app? Say **add remote host** and I'll connect to it from one of these."
+One message, at most 6 lines: per computer, Orchestrator found or not, its projects, and how many sessions are live. For a computer without a working Orchestrator, add the one next step from "Missing pieces". Then:
+"Reply **yes** and I'll save these as your AO hosts. Is Orchestrator also running on a computer without the Grok Bot desktop app? Say **add remote host** and I'll connect to it from one of these."
 
 On yes, save the **AO hosts** note (ao-rules "AO hosts") with `reach: local` and `via` = the same computer. Name each host with its short name (ao-rules `name`) and say the names in one line: "I'll call them Pro and Air. Say if you want other names."
 
 ## 3. Remote host (optional)
-Use this when AO runs on a computer that has no Grok Bot desktop app, for example a Mac mini host that a laptop's AO app already connects to.
+Use this when Orchestrator runs on a computer that has no Grok Bot desktop app, for example a Mac mini host that a laptop's Orchestrator app already connects to.
 
 1. Ask for a short host name (letters, digits, `-`) and which connected computer to use as `via`. Default: the one the user's message came from.
 2. Tell the user, in one message:
-   "On the host, open AO, go to remote access (Connect Mobile) and turn on network access. It shows an address and a password. Send me the **address** here. You'll type the password on <via> in a window I open, so it never passes through this chat."
-   On the host's own terminal, `ao remote-host enable` turns on the same network access, and `ao remote-host status` shows the address and the password.
-3. When the address arrives, check it looks like `http://<ip or name>:<port>`. Then, on `via`, write a one-time password window and open it. Replace `<name>` with the host name you checked: run "Password window" below.
-   Tell the user: "A Terminal window opened on <via>. Type the password there and press Return."
+   "On the host, open Orchestrator, go to remote access (Connect Mobile) and turn on network access. It shows an address and a pairing code. Send me the **address** here. You'll type the pairing code on <via> in a window I open, so it never passes through this chat."
+   On the host's own terminal, `ao remote-host enable` turns on the same network access, and `ao remote-host pair` shows the address and a pairing code. A code works once, within 10 minutes.
+3. When the address arrives, check it looks like `http://<ip or name>:<port>`. Then, on `via`, write a one-time pairing window and open it. Replace `<name>` with the host name you checked and `<address>` with the address: run "Pairing window" below.
+   Tell the user: "A Terminal window opened on <via>. Type the pairing code there and press Return."
    On Linux, `open` doesn't run `.command` files: write the same lines to `~/.ao-grok/add-<name>.sh` and ask the user to run `zsh ~/.ao-grok/add-<name>.sh` in a terminal on `via`.
 4. When they say done, test it from `via`: run "Connection test" below.
-   HTTP 401 means a wrong password: open the window again. A timeout means the host is not reachable from `via` (another network, asleep, or access off).
+   HTTP 401 means a wrong, used or expired code: ask for a new code and open the window again. A timeout means the host is not reachable from `via` (another network, asleep, or access off).
 5. Add the host to the **AO hosts** note with `reach: remote`, `via`, `base` and `header`.
 
-### Password window
+### Pairing window
+The host swaps the code for this computer's own token, which the host can revoke by itself. A host from before pairing codes takes its password, typed the same way, and that is saved as is.
 ```sh
 f(){ mkdir -p ~/.ao-grok/out && cat > ~/.ao-grok/add-<name>.command <<'EOF'
 #!/bin/zsh
 umask 077
-read -rs "p?AO password for <name>: "; echo
-printf 'Authorization: Bearer %s\n' "$p" > ~/.ao-grok/<name>.header
+read -rs "p?Orchestrator pairing code for <name>: "; echo
+t="$(curl -fsS -m 10 -X POST -H "Authorization: Bearer $p" -H 'Content-Type: application/json' -d '{"name":"Grok Bot","platform":"'"$(uname -s | tr A-Z a-z)"'"}' '<address>/api/v1/remote-host/devices' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)"
+printf 'Authorization: Bearer %s\n' "${t:-$p}" > ~/.ao-grok/<name>.header
 echo "Saved. You can close this window."; rm -- "$0"
 EOF
 chmod +x ~/.ao-grok/add-<name>.command && open ~/.ao-grok/add-<name>.command; }; f
@@ -155,7 +157,7 @@ chmod +x ~/.ao-grok/add-<name>.command && open ~/.ao-grok/add-<name>.command; };
 f(){ <aoapi helper>; AO_REMOTE_BASE='<address>' AO_REMOTE_HEADER="$HOME/.ao-grok/<name>.header" aoapi GET 'sessions?active=true' | python3 -c 'import json,sys; print("live_sessions=%d" % len(json.load(sys.stdin)["sessions"]))'; }; f
 ```
 
-Limits of a remote host, said once: keep-awake, browser screenshots and starting a review work only on local hosts. For those, ask the host's orchestrator (ao-orchestrator). Quick-tunnel addresses change when the tunnel restarts, so prefer the LAN address or a named tunnel. If the user presses Regenerate in AO, run this section again.
+Limits of a remote host, said once: keep-awake, browser screenshots and starting a review work only on local hosts. For those, ask the host's orchestrator (ao-orchestrator). Quick-tunnel addresses change when the tunnel restarts, so prefer the LAN address or a named tunnel. If the user removes this computer from the host's devices, or revokes all devices, run this section again.
 
 ## 4. Mode and routines
 1. Save **Mode: default** in memory (ao-rules "Decisions"). Say in one line that away mode exists: "Say 'I'm away till 6' and I'll keep routine work moving."
@@ -163,7 +165,7 @@ Limits of a remote host, said once: keep-awake, browser screenshots and starting
    - **AO waiting check**: every 30 minutes, 9:00 to 19:00 on weekdays. Runs ao-answer "Find what's waiting" and messages only when something new is waiting.
    - **AO daily digest**: weekdays at 9:00. Runs ao-status "Digest".
    Create the picked routines, then save "Routines on: <names>" in memory. Never create a second copy.
-3. Say once: "AO's mobile app pushes questions to your phone the moment they happen. These routines check on a schedule."
+3. Say once: "Orchestrator's mobile app pushes questions to your phone the moment they happen. These routines check on a schedule."
 
 ## 5. Finish
 One line: the hosts saved (local and remote), the mode and the routines on. Then run ao-status as a first look, then:

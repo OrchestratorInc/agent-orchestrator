@@ -711,3 +711,24 @@ func (r *Runtime) WatchTerminalForeground(ctx context.Context, handle ports.Runt
 		fn(ports.TerminalForeground{PGID: state.PGID, Argv: state.Argv, Busy: state.Busy})
 	})
 }
+
+var _ ports.TerminalTitleWatcher = (*Runtime)(nil)
+
+// WatchTerminalTitle streams the title the host's program last set.
+func (r *Runtime) WatchTerminalTitle(ctx context.Context, handle ports.RuntimeHandle, fn func(string)) error {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return fmt.Errorf("conpty: resolve runtime %q for title: %w", handle.ID, err)
+	}
+	if sess == nil {
+		return fmt.Errorf("conpty: session %q not found: %w", handle.ID, ports.ErrTerminalTitleUnavailable)
+	}
+	protocolVersion, err := r.resolveHostProtocol(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if protocolVersion < conPTYTitleProtocolVersion {
+		return fmt.Errorf("conpty: pty-host protocol version %d: %w", protocolVersion, ports.ErrTerminalTitleUnavailable)
+	}
+	return clientWatchTitle(ctx, sess.addr, func(state TitlePayload) { fn(state.Title) })
+}

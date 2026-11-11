@@ -2443,7 +2443,7 @@ describe("ensureNativeActiveTab automation-runtime resync", () => {
 
 		await expect(invoke("browser:selectTab", { viewId, tabId: "t1" })).rejects.toMatchObject({
 			code: "BROWSER_TARGET_MISMATCH",
-			message: "Browser automation could not target AO tab t1",
+			message: "Browser automation could not target Orchestrator tab t1",
 		});
 		await expect(host.execute("sess-1", "click", { ref: "e1" })).rejects.toMatchObject({
 			code: "BROWSER_TARGET_MISMATCH",

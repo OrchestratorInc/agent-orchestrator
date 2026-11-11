@@ -1,3 +1,5 @@
+import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
+import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
@@ -50,7 +52,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "@/components/app-icons";
 import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
 import { DictationMeter } from "./DictationMeter";
@@ -74,6 +76,7 @@ import {
 	type ComposerPromptSuggestion,
 	type ComposerTrigger,
 } from "./ComposerEditor";
+import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import {
 	isSupportedImageAttachment,
@@ -82,7 +85,7 @@ import {
 	MAX_ATTACHMENTS,
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
-import { File } from "lucide-react";
+import { File } from "@/components/app-icons";
 import type { ChatSkill, ChatSteerOutcome } from "../../types/conversation";
 import {
 	acknowledgeChatComposerMutation,
@@ -117,7 +120,10 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
+import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
+import { AttachmentFileText, AttachmentThumbnail } from "./StagedAttachmentItems";
+import { rememberAttachmentName } from "../../lib/chat-attachment-names";
+import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
@@ -173,17 +179,6 @@ const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
 
-/**
- * Tell the agent to open the attached files. Mirrors the wording spawn uses for a task
- * brief, so the same instruction reaches the agent whether a file was attached at
- * spawn or mid-conversation.
- */
-function withAttachmentReferences(text: string, paths: string[]): string {
-	if (paths.length === 0) return text;
-	const lead = text.trim() === "" ? "" : `${text}\n\n`;
-	return `${lead}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
-}
-
 /** How long a discarded unsent message can be brought back. */
 const UNSENT_UNDO_MS = 5000;
 
@@ -216,6 +211,19 @@ export type ChatComposerHandle = {
 	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
 	setDraft(text: string): void;
 };
+
+/**
+ * Whether a dock above the composer slides in. One already up when the composer
+ * mounts (a chat switched to with a queued message, a question or an unsent
+ * message waiting) was on screen before the switch, so it is drawn in place;
+ * whatever takes its slot afterwards slides in. `shown` names what the dock
+ * holds, or null when it is down.
+ */
+function useDockEntrance(shown: string | null): boolean {
+	const quiet = useRef(shown);
+	if (quiet.current !== null && quiet.current !== shown) quiet.current = null;
+	return quiet.current === null;
+}
 
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
@@ -280,6 +288,7 @@ export const ChatComposer = memo(function ChatComposer({
 	sentMessagesScope,
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
+	messageByteLimit = LOCAL_CHAT_MESSAGE_BYTES,
 	parkUnsentSends = true,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
@@ -289,6 +298,8 @@ export const ChatComposer = memo(function ChatComposer({
 	sentMessagesScope?: string;
 	fileReferencesEnabled?: boolean;
 	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
+	/** Complete prepared annotation payload budget for the destination transport. */
+	messageByteLimit?: number;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
@@ -631,10 +642,12 @@ export const ChatComposer = memo(function ChatComposer({
 			if (paths.length !== attachments.length) {
 				throw new Error("Attachment staging returned an incomplete result");
 			}
-			return attachments.map((attachment, index) => ({
-				...attachment,
-				stagedPath: paths[index],
-			}));
+			return attachments.map((attachment, index) => {
+				const stagedPath = paths[index];
+				// Staging renames the file, and the sent message keeps only that path.
+				if (stagedPath) rememberAttachmentName(stagedPath, attachment.name);
+				return { ...attachment, stagedPath };
+			});
 		},
 		[onStageAttachments],
 	);
@@ -716,8 +729,40 @@ export const ChatComposer = memo(function ChatComposer({
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
 
 	const staged = fileAttachments.attachments.length > 0 || visibleRetainedAttachments.length > 0;
+	// A plain send already shows its echo in the timeline. Its text stays held in the
+	// editor until the daemon accepts, so a rejection or lost response can restore it,
+	// but it is not drawn meanwhile: the composer reads as sent, not stranded.
+	// A steer is never cleared before the daemon answers (a refusal hands it back to
+	// be sent as a new message), but its echo is already in the turn too, so its text
+	// and files are hidden the same way.
+	const steerInFlight = Boolean(
+		submitting &&
+			!deliveryUncertain &&
+			durableDelivery?.kind === "steer" &&
+			durableDelivery.state === "dispatching",
+	);
+	const sendInFlight = steerInFlight || Boolean(
+		submitting &&
+			!staged &&
+			!deliveryUncertain &&
+			durableDelivery?.kind === "send" &&
+			durableDelivery.state === "dispatching",
+	);
+	// The request has no timeout. If the daemon stalls, bring the text back so a stuck
+	// send never reads as a vanished draft.
+	const [concealExpired, setConcealExpired] = useState(false);
+	useEffect(() => {
+		if (!sendInFlight) {
+			setConcealExpired(false);
+			return;
+		}
+		const timer = window.setTimeout(() => setConcealExpired(true), SEND_CONCEAL_MS);
+		return () => window.clearTimeout(timer);
+	}, [sendInFlight]);
+	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
-	const stripAttachments = (optimisticSend || nextDraftHasChanged ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
+	const stripConcealed = steerInFlight && sendConcealed;
+	const stripAttachments = (optimisticSend || nextDraftHasChanged || stripConcealed ? [] : [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
 		// A cloud file's reference is no daemon path: it previews from its bytes
@@ -757,28 +802,6 @@ export const ChatComposer = memo(function ChatComposer({
 			draftScope &&
 			!submitting,
 	);
-	// A plain send already shows its echo in the timeline. Its text stays held in the
-	// editor until the daemon accepts, so a rejection or lost response can restore it,
-	// but it is not drawn meanwhile: the composer reads as sent, not stranded.
-	const sendInFlight = Boolean(
-		submitting &&
-			!staged &&
-			!deliveryUncertain &&
-			durableDelivery?.kind === "send" &&
-			durableDelivery.state === "dispatching",
-	);
-	// The request has no timeout. If the daemon stalls, bring the text back so a stuck
-	// send never reads as a vanished draft.
-	const [concealExpired, setConcealExpired] = useState(false);
-	useEffect(() => {
-		if (!sendInFlight) {
-			setConcealExpired(false);
-			return;
-		}
-		const timer = window.setTimeout(() => setConcealExpired(true), SEND_CONCEAL_MS);
-		return () => window.clearTimeout(timer);
-	}, [sendInFlight]);
-	const sendConcealed = sendInFlight && !concealExpired;
 	const canSend =
 		hasDraft &&
 		(savingQueuedEdit || !busy) &&
@@ -1545,6 +1568,15 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.pruneImages(attachedPaths);
 		currentText = textRef.current;
 		body = proseBesideImages(currentText.trim(), attachedPaths);
+		// The message carries only each chip's text; remember the chips so its bubble
+		// can draw them again. A first message sent before its session exists is
+		// found by its text.
+		if (!recoveringDelivery) {
+			const tokens = editor.current?.getTokens() ?? [];
+			if (tokens.length > 0) {
+				recordSentComposerTokens(boundarySessionId ? sessionTokenScope(boundarySessionId) : messageTokenScope(body), tokens);
+			}
+		}
 		const hasAttachments = settledAttachments.length > 0 || visibleRetainedAttachments.length > 0;
 		const canSubmitNow =
 			(body.length > 0 || hasAttachments || contextReferences.length > 0 || Boolean(recoveringDelivery)) &&
@@ -1573,7 +1605,12 @@ export const ChatComposer = memo(function ChatComposer({
 			return all.length > 0 ? all : undefined;
 		};
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit && contextReferences.length === 0);
-		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} ${fileReferences.length ? "annotation(s)" : "chat excerpt(s)"} as context` : "");
+		// The bytes are still here: leave them for the sent message's tiles, which would
+		// otherwise draw empty until they read each file back from the daemon.
+		// A cloud file is kept under its reference, which its message's tile looks up.
+		rememberSentAttachments(settledAttachments.flatMap(({ stagedPath, mimeType, bytes, file, data }) =>
+			stagedPath ? [{ path: stagedPath, mimeType, bytes, file, data }] : []));
+		const message =withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} ${fileReferences.length ? "annotation(s)" : "chat excerpt(s)"} as context` : "");
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
@@ -1682,9 +1719,31 @@ export const ChatComposer = memo(function ChatComposer({
    setSendError("chat.draft.fileReferencesUnsupported");
    return;
   }
-  const requestText = recoveringDelivery
+		const sizeError = !recoveringDelivery && excerptSizeError(chatReferences);
+		if (sizeError) {
+			setSendError(sizeError);
+			return;
+		}
+		const requestText = recoveringDelivery
 			? recoveringDelivery.requestText
 			: message;
+		const capturedFiles = recoveringDelivery?.fileReferences ?? fileReferences.map(ref => ({ ...ref, referenceFormat: "numbered-v1" as const }));
+		let capturedReferences = recoveringDelivery?.excerpts ?? chatReferences.map(upgradeExcerpt);
+		if (!recoveringDelivery && (capturedReferences.length || capturedFiles.length)) {
+			try {
+				capturedReferences = fitExcerptContext(capturedReferences, requestText, messageByteLimit, capturedFiles);
+			} catch (error) {
+				setSendError(apiErrorMessage(error));
+				return;
+			}
+			if (draftScope && JSON.stringify(capturedReferences) !== JSON.stringify(chatReferences)) {
+				const saved = writeChatExcerptReferences(draftScope, capturedReferences);
+				if (!saved.ok) {
+					setTextDraftPersistenceError("chat.draft.saveFailed");
+					return;
+				}
+			}
+		}
 		const prepared = prepareChatComposerDelivery(draftScope, {
 			kind: recoveringDelivery?.kind ?? (shouldSteer ? "steer" : "send"),
 			optimistic: !shouldSteer,
@@ -1701,8 +1760,8 @@ export const ChatComposer = memo(function ChatComposer({
 						}]
 					: [],
 			),
-			excerpts: recoveringDelivery?.excerpts ?? chatReferences,
-			fileReferences: recoveringDelivery?.fileReferences ?? fileReferences,
+			excerpts: capturedReferences,
+			fileReferences: capturedFiles,
 			requestText,
 			clientMessageId: recoveringDelivery?.clientMessageId ?? crypto.randomUUID(),
 		});
@@ -1865,7 +1924,7 @@ export const ChatComposer = memo(function ChatComposer({
 			void submit(undefined, wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, enterSends, fileAttachments, onCompact, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, enterSends, fileAttachments, messageByteLimit, onCompact, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -2031,12 +2090,15 @@ export const ChatComposer = memo(function ChatComposer({
 	) : discardedUnsent ? (
 		<UnsentMessageStrip discarded onUndo={undoDiscardUnsent} />
 	) : null;
+	const queueEnters = useDockEntrance(queuedDock ? "queue" : null);
+	const elicitationEnters = useDockEntrance(elicitation ? String((isValidElement(elicitation) && elicitation.key) || "elicitation") : null);
+	const unsentEnters = useDockEntrance(unsentStrip ? (stripDelivery?.draft ? "unsent" : "discarded") : null);
 	const withQueueStack = (form: ReactElement) =>
 		(
 			<div className="relative mx-auto flex w-full max-w-3xl flex-col">
 				{queuedDock ? (
 				<div
-					className="cursor-chat-composer-queue queue-dock-enter relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]"
+					className={cn("cursor-chat-composer-queue relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]", queueEnters && "queue-dock-enter")}
 					data-testid="queued-composer-dock"
 				>
 					{queuedDockWithSteer}
@@ -2044,14 +2106,15 @@ export const ChatComposer = memo(function ChatComposer({
 				) : null}
 				{elicitation ? (
 					<div
-						className="queue-dock-enter relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]"
+						className={cn("relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]", elicitationEnters && "queue-dock-enter")}
 						data-testid="elicitation-composer-dock"
+						data-dock-quiet={elicitationEnters ? undefined : ""}
 					>
 						{elicitation}
 					</div>
 				) : null}
 				{unsentStrip ? (
-					<div className="queue-dock-enter relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]">
+					<div className={cn("relative z-10 mx-auto mb-2 w-[calc(100%-2rem)]", unsentEnters && "queue-dock-enter")}>
 						{unsentStrip}
 					</div>
 				) : null}
@@ -2136,29 +2199,32 @@ export const ChatComposer = memo(function ChatComposer({
 						</Button>
 					</div>
 				) : null}
-				{staged || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
+				{(staged && !stripConcealed) || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
 					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
-						{staged || pendingAttachments.length > 0 ? (
+						{(staged && !stripConcealed) || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
 								{stripAttachments.map(({ file, path, preview }) => {
 									return (
 									<li
 										key={file.id}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
+										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
 										{preview ? (
-											<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
+											<AttachmentThumbnail src={preview} name={file.name} />
 										) : (
 											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
 												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
 											</div>
 										)}
-										<span
-											className="max-w-[120px] truncate text-xs text-muted-foreground"
-											title={file.name}
-										>
-											{file.name}
-										</span>
+										{preview ? (
+											<span className="max-w-[120px] truncate text-xs text-muted-foreground" title={file.name}>
+												{file.name}
+											</span>
+										) : (
+											<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={file.name}>
+												<AttachmentFileText name={file.name} bytes={"bytes" in file ? file.bytes : undefined} nameClassName="max-w-[120px]" />
+											</span>
+										)}
 										<Button
 											type="button"
 											variant="destructive-ghost"
@@ -2192,7 +2258,7 @@ export const ChatComposer = memo(function ChatComposer({
 										key={file.id}
 										role="status"
 										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
+										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
 									>
 										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
 										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
@@ -2287,7 +2353,7 @@ export const ChatComposer = memo(function ChatComposer({
 					<div className="px-1.5">
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							size="sm"
 							onClick={abandonUncertainSteer}
 						>
@@ -2338,7 +2404,7 @@ export const ChatComposer = memo(function ChatComposer({
 											if (open && box && origin) setAddMenuBox({ lift: origin.top - box.top + 6, shift: box.left - origin.left, width: box.width });
 										}}
 									>
-										<OptionMenuTrigger
+										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
 											disabled={controlsDisabled}

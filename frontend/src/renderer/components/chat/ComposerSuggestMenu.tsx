@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CornerDownLeft } from "lucide-react";
+import { CornerDownLeft } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import { composerFileIcon } from "./composerFileIcon";
@@ -196,5 +196,5 @@ export function ComposerSuggestMenu({
 
 function displayBadge(badge?: string): string | undefined {
 	if (!badge || badge.toLowerCase() === "agent") return undefined;
-	return badge.toLowerCase() === "ao" ? "AO" : badge;
+	return badge.toLowerCase() === "ao" ? "Orchestrator" : badge;
 }

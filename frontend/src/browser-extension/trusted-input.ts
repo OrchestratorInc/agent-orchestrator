@@ -268,7 +268,7 @@ export class TrustedInput {
 	async dialog(tabId: number, operation: "status" | "accept" | "dismiss", promptText?: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
 		const pending = this.pendingDialogs.get(tabId);
 		if (operation === "status") return pending ? { open: true, ...pending } : { open: false };
-		if (!pending) throw new BridgeError("DIALOG_NOT_OPEN", "No dialog opened by an AO action is waiting on this page");
+		if (!pending) throw new BridgeError("DIALOG_NOT_OPEN", "No dialog opened by an Orchestrator action is waiting on this page");
 		return this.withDebugger(tabId, async (send) => {
 			await send("Page.handleJavaScriptDialog", { accept: operation === "accept", ...(promptText !== undefined ? { promptText } : {}) });
 			this.pendingDialogs.delete(tabId);

@@ -1,3 +1,5 @@
+import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
+import { CLOUD_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
 import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
@@ -335,7 +337,7 @@ describe("send keys", () => {
 			undefined,
 			expect.any(String),
 			undefined,
-			excerpts,
+			excerpts.map(upgradeExcerpt),
 		));
 	});
 
@@ -451,12 +453,12 @@ describe("send keys", () => {
 	it("uses a circular primary send control that enables when armed", async () => {
 		const { field } = renderComposer();
 		const send = screen.getByRole("button", { name: "Send message" });
-		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
+		expect(send).toHaveClass("rounded-full", "button-raised", "[--button-color:var(--primary)]", "text-primary-foreground");
 		expect(send).toBeDisabled();
 
 		await typeInComposer(field, "hello");
 		expect(send).toBeEnabled();
-		expect(send).toHaveClass("rounded-full", "bg-primary", "text-primary-foreground");
+		expect(send).toHaveClass("rounded-full", "button-raised", "[--button-color:var(--primary)]", "text-primary-foreground");
 	});
 
 	it("keeps ordinary typing local after the draft becomes nonempty", async () => {
@@ -834,7 +836,7 @@ describe("send keys", () => {
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("reselect it"));
 		const draft = readChatSessionDraft(sessionId).composer;
 		expect(draft.delivery).toBeUndefined();
-		expect(draft.excerpts).toEqual(excerpts);
+		expect(draft.excerpts).toEqual(excerpts.map(upgradeExcerpt));
 		expect(screen.queryByRole("button", { name: "Retry message safely" })).not.toBeInTheDocument();
 	});
 
@@ -850,7 +852,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		expect(onSteer).not.toHaveBeenCalled();
-		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts);
+		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts.map(upgradeExcerpt));
 	});
 
 	it.each([
@@ -1982,7 +1984,7 @@ describe("slash commands", () => {
 		await typeInComposer(field, "/");
 
 		expect(screen.queryByText("agent", { exact: true })).toBeNull();
-		expect(screen.getByText("AO", { exact: true })).toBeInTheDocument();
+		expect(screen.getByText("Orchestrator", { exact: true })).toBeInTheDocument();
 	});
 
 	it("filters as the user types", async () => {
@@ -2621,6 +2623,26 @@ describe("attachments", () => {
 		expect(field.textContent).toBe("");
 	});
 
+	it("opens an attached image at full size from the strip", async () => {
+		const { field } = renderComposer({
+			draftSessionId: "composer-strip-image",
+			onStageAttachments: vi.fn().mockResolvedValue([".ao/attachments/shot.png"]),
+		});
+		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
+		await userEvent.click(await screen.findByRole("button", { name: "Open image: shot.png" }));
+		expect(within(await screen.findByRole("dialog")).getByRole("img", { name: "shot.png" })).toBeInTheDocument();
+	});
+
+	it("labels an attached file in the strip with its type and size", async () => {
+		const { field } = renderComposer({
+			draftSessionId: "composer-strip-file",
+			onStageAttachments: vi.fn().mockResolvedValue([".ao/attachments/notes.txt"]),
+		});
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
+		expect(await screen.findByText("TXT · 5 B")).toBeInTheDocument();
+		expect(screen.getByText("notes.txt")).toBeInTheDocument();
+	});
+
 	it("retains retry attachments while the next draft is typed and removes them after acceptance", async () => {
 		const sessionId = "composer-accepted-attachment-send";
 		let acceptSend!: () => void;
@@ -3057,6 +3079,28 @@ describe("unavailable states", () => {
 	});
 });
 
+it("keeps oversized excerpt sends in the draft and translates the error", async () => {
+	const sessionId = "composer-excerpt-size-localized";
+	const refs = [{ id: "large", conversationId: "c", messageId: "m", revision: 1, text: "文".repeat(8200), role: "assistant" as const }];
+	writeChatExcerptReferences(sessionId, refs);
+	const onSend = vi.fn();
+	const view = render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
+	try {
+		const field = screen.getByLabelText("Message the agent");
+		await typeInComposer(field, "explain this");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(await screen.findByRole("alert")).toHaveTextContent("Selected text exceeds 24 KiB");
+		await act(async () => { await appI18n.changeLanguage("fr"); });
+		expect(screen.getByRole("alert")).toHaveTextContent("Le texte sélectionné dépasse 24 Kio");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(readChatSessionDraft(sessionId).composer).toMatchObject({ text: "explain this", excerpts: refs });
+		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
+	} finally {
+		view.unmount();
+		await appI18n.changeLanguage("en");
+	}
+});
+
 it("shows restored composer recovery notices and actions in the selected language", async () => {
 	const sessionId = "composer-localized-recovery";
 	prepareChatComposerDelivery(sessionId, { kind: "send", composerText: "bonjour", attachments: [], requestText: "bonjour", clientMessageId: "fr-recovery" });
@@ -3248,6 +3292,46 @@ it.each([
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
 		.toHaveAttribute("src", attachmentURL(assetBaseUrl ?? getApiBaseUrl(), assetSessionId ?? draftSessionId, path));
 	expect(props.onStageAttachments).toHaveBeenCalledOnce();
+});
+
+it.each([
+	{ destination: "local", messageByteLimit: undefined, accepts: true },
+	{ destination: "cloud", messageByteLimit: CLOUD_CHAT_MESSAGE_BYTES, accepts: false },
+].flatMap(destination => ["excerpt", "file"].map(annotation => ({ ...destination, annotation }))))(
+	"uses the $destination budget for a 70 KiB question with a captured $annotation", async ({ destination, messageByteLimit, accepts, annotation }) => {
+		const sessionId = `budget-${destination}-${annotation}`;
+		const text = "q".repeat(70 * 1024);
+		writeChatComposerText(sessionId, text);
+		if (annotation === "excerpt") writeChatExcerptReferences(sessionId, EXCERPTS);
+		else writeChatFileReferences(sessionId, [captureFileReference({ path: "code.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "code();" }] }, sessionId)]);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} messageByteLimit={messageByteLimit} fileReferencesEnabled />);
+		fireEvent.keyDown(screen.getByLabelText("Message the agent"), { key: "Enter" });
+		if (accepts) {
+			await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+			expect(onSend.mock.calls[0][0]).toBe(text);
+		} else {
+			await screen.findByText(appI18n.t("chat.draft.excerptMessageLimit"));
+			expect(onSend).not.toHaveBeenCalled();
+			expect(readChatSessionDraft(sessionId).composer.text).toBe(text);
+		}
+	},
+);
+
+it("keeps a frozen retry unchanged after the destination budget is lowered", async () => {
+	const sessionId = "budget-frozen-retry";
+	const text = "q".repeat(70 * 1024);
+	writeChatComposerText(sessionId, text);
+	writeChatExcerptReferences(sessionId, EXCERPTS);
+	prepareChatComposerDelivery(sessionId, { kind: "send", composerText: text, requestText: text, attachments: [], excerpts: EXCERPTS, clientMessageId: "frozen-budget-receipt" });
+	const onSend = vi.fn().mockResolvedValue(undefined);
+	const frozen = structuredClone(readChatSessionDraft(sessionId).composer.delivery);
+	render(<ChatComposer parkUnsentSends={false} draftSessionId={sessionId} onSend={onSend} messageByteLimit={CLOUD_CHAT_MESSAGE_BYTES} />);
+	await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+	expect(onSend.mock.calls[0][0]).toBe(frozen!.requestText);
+	expect(onSend.mock.calls[0][2]).toBe(frozen!.clientMessageId);
+	expect(onSend.mock.calls[0][4]).toEqual(frozen!.excerpts);
 });
 
 it("keeps cloud captures in shared drafts through reload and retries with the same delivery", async () => {

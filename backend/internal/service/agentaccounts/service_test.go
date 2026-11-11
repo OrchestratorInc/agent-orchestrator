@@ -57,6 +57,7 @@ type fakeClaude struct {
 	apiKey     map[string]bool   // folders logged in with an API key
 	failing    map[string]bool   // folders whose check fails (a timeout)
 	windows    []domain.AgentAccountLimitWindow
+	limitsErr  error
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
@@ -75,6 +76,9 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email}, nil
 }
 func (f *fakeClaude) Limits(context.Context, string) (domain.AgentAccountLimits, error) {
+	if f.limitsErr != nil {
+		return domain.AgentAccountLimits{}, f.limitsErr
+	}
 	return domain.AgentAccountLimits{Windows: f.windows}, nil
 }
 func (*fakeClaude) LoginArgv(context.Context) ([]string, error) {
@@ -770,5 +774,34 @@ func TestAReadingThatReachesTheProviderConfirmsTheLogin(t *testing.T) {
 	read()
 	if len(confirmed) != 1 || confirmed[0] != domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude) {
 		t.Fatalf("confirmed = %v", confirmed)
+	}
+}
+
+func TestFailedLimitsRefreshKeepsTheLastReading(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com"},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 40}},
+	}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	device := func() AccountView {
+		t.Helper()
+		views, err := svc.List(ctx, true)
+		if err != nil || len(views) == 0 {
+			t.Fatalf("List = %v, %v", views, err)
+		}
+		return views[0]
+	}
+	device()
+
+	claude.limitsErr = errors.New("claude could not fetch its usage limits")
+	if view := device(); view.LimitsErr == "" || view.Limits == nil || len(view.Limits.Windows) != 1 || view.Limits.Windows[0].UsedPercent != 40 {
+		t.Fatalf("failed refresh = %+v, want the last windows and the error", view)
+	}
+
+	claude.signedInAs[""] = "b@example.com"
+	if view := device(); view.Limits != nil {
+		t.Fatalf("another login kept the last login's limits: %+v", view.Limits)
 	}
 }

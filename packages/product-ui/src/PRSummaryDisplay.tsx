@@ -33,7 +33,7 @@ export function PRSummaryMeta({
 	countNounLabel = defaultCountNounLabel,
 	externalLink: ExternalLink,
 	leading,
-	openedViaLabel = "via AO",
+	openedViaLabel = "via Orchestrator",
 	pr,
 }: {
 	className?: string;

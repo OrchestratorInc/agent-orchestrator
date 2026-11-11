@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+import { Bot } from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { cn } from "../../lib/utils";
 

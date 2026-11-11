@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock3 } from "lucide-react";
+import { AlertTriangle, Clock3 } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { DaemonStatus } from "../../shared/daemon-status";

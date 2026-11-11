@@ -104,7 +104,7 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 	if err != nil {
 		return ports.ChatUserMessage{}, fmt.Errorf("encode pending messages: %w", err)
 	}
-	combined.Text = "AO pending messages in enqueue order. Each JSON item is one complete message; kind steer identifies active-turn guidance. Content blocks follow the same item order, using contentStart and contentCount indices.\n" + string(encoded)
+	combined.Text = "Orchestrator pending messages in enqueue order. Each JSON item is one complete message; kind steer identifies active-turn guidance. Content blocks follow the same item order, using contentStart and contentCount indices.\n" + string(encoded)
 	return combined, nil
 }
 

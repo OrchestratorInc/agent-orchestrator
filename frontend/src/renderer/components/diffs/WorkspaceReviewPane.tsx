@@ -3,7 +3,7 @@ import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { parsePatchFiles, type CodeViewItem, type FileDiffMetadata } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
-import { ChevronRight, FileCode2, GitCompareArrows, MessageSquarePlus, MoreVertical, Pencil, SearchX } from "lucide-react";
+import { ChevronRight, FileCode2, GitCompareArrows, MessageSquarePlus, MoreVertical, Pencil, SearchX } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import {
 	fetchWorkspaceFileRevision,
@@ -667,7 +667,7 @@ export function WorkspaceReviewPane({
 								) : (
 									<p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p>
 								)}
-								{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
+								{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="secondary">{t("files.loadDiff")}</Button> : null}
 								{unavailable ? <RetryButton onClick={retryAll} /> : null}
 							</div>
 						) : null}
@@ -692,8 +692,8 @@ export function WorkspaceReviewPane({
 				<PanelMessage
 					action={(
 						<div className="flex flex-wrap items-center justify-center gap-2">
-							{onIncludeCommitsBetween ? <Button onClick={onIncludeCommitsBetween} size="sm" type="button" variant="outline">{t("files.changes.includeBetween")}</Button> : null}
-							{onShowAllCommits ? <Button onClick={onShowAllCommits} size="sm" type="button" variant="outline">{t("files.changes.showAllCommits")}</Button> : null}
+							{onIncludeCommitsBetween ? <Button onClick={onIncludeCommitsBetween} size="sm" type="button" variant="secondary">{t("files.changes.includeBetween")}</Button> : null}
+							{onShowAllCommits ? <Button onClick={onShowAllCommits} size="sm" type="button" variant="secondary">{t("files.changes.showAllCommits")}</Button> : null}
 						</div>
 					)}
 				>
@@ -705,9 +705,9 @@ export function WorkspaceReviewPane({
 				<>
 			{pageCount > 1 ? (
 				<nav aria-label={t("files.reviewPages")} className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs">
-					<Button disabled={pageIndex === 0} onClick={() => setPage({ key: pageKey, index: pageIndex - 1 })} size="sm" type="button" variant="outline">{t("files.previousPage")}</Button>
+					<Button disabled={pageIndex === 0} onClick={() => setPage({ key: pageKey, index: pageIndex - 1 })} size="sm" type="button" variant="secondary">{t("files.previousPage")}</Button>
 					<span role="status">{t("files.pageRange", { start: pageStart + 1, end: pageStart + files.length, total: filteredFiles.length })}</span>
-					<Button disabled={pageIndex === pageCount - 1} onClick={() => setPage({ key: pageKey, index: pageIndex + 1 })} size="sm" type="button" variant="outline">{t("files.nextPage")}</Button>
+					<Button disabled={pageIndex === pageCount - 1} onClick={() => setPage({ key: pageKey, index: pageIndex + 1 })} size="sm" type="button" variant="secondary">{t("files.nextPage")}</Button>
 				</nav>
 			) : null}
 			{firstError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{firstError.message}</PanelMessage> : null}

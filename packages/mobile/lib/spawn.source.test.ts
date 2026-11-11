@@ -78,6 +78,13 @@ describe("spawn effort", () => {
 		expect(spawn).toContain("const effortModel = aliasModel ?? runningModel ?? (displayedModel ? undefined : defaultEffortModel(harness, currentModels));");
 		expect(spawn).toContain("if (!runningModel && effortModel) {");
 	});
+
+	// With no model sent, the stand-in's fallback level is not sent either: the
+	// daemon has no model to check it against (#7979).
+	it("sends no stand-in fallback effort with the default model", () => {
+		expect(spawn).toContain("const usingStandIn = !runningModel && effortModel !== undefined;");
+		expect(spawn).toContain("const chosenEffort = spawnEffortToSend(effortChoices, effort, effortModel, usingStandIn);");
+	});
 });
 
 describe("spawn approval mode", () => {

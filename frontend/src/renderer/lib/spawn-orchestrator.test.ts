@@ -97,7 +97,7 @@ describe("spawnOrchestrator", () => {
 		});
 		await spawnOrchestrator("proj", "sidebar");
 		expect(captureMock).not.toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_requested", expect.anything());
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_succeeded", {
+		expect(captureMock).toHaveBeenCalledWith("ao.orchestrators.spawned", {
 			project_id: "proj",
 			source: "sidebar",
 		});
@@ -120,13 +120,13 @@ describe("spawnOrchestrator", () => {
 			response: { status: 500 },
 		});
 		await expect(spawnOrchestrator("proj", "topbar")).rejects.toThrow("boom");
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_failed", {
+		expect(captureMock).toHaveBeenCalledWith("ao.orchestrators.spawn_failed", {
 			project_id: "proj",
 			source: "topbar",
 			error_code: undefined,
 			http_status: 500,
 		});
-		expect(captureMock).not.toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_succeeded", expect.anything());
+		expect(captureMock).not.toHaveBeenCalledWith("ao.orchestrators.spawned", expect.anything());
 	});
 
 	it("surfaces daemon spawn error messages and codes", async () => {
@@ -225,7 +225,7 @@ describe("resumeOrchestrator", () => {
 		expect(notificationShowMock).toHaveBeenCalledWith({
 			id: expect.stringMatching(/^resume-agent-fallback:proj-1-orch:/),
 			title: "Started from saved prompt",
-			body: "AO could not resume the native agent session, so it started a new conversation from the saved prompt.",
+			body: "The native agent session could not be resumed, so a new conversation was started from the saved prompt.",
 		});
 	});
 

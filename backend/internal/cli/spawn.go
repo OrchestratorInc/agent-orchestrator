@@ -42,19 +42,20 @@ type spawnOptions struct {
 // spawnRequest mirrors the daemon's SpawnSessionRequest body for
 // POST /api/v1/sessions. The CLI keeps its own copy so it need not import httpd.
 type spawnRequest struct {
-	ProjectID       string `json:"projectId,omitempty"`
-	IssueID         string `json:"issueId,omitempty"`
-	ParentSessionID string `json:"parentSessionId,omitempty"`
-	TrackerProvider string `json:"trackerProvider,omitempty"`
-	Kind            string `json:"kind,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	Harness         string `json:"harness,omitempty"`
-	Branch          string `json:"branch,omitempty"`
-	Prompt          string `json:"prompt,omitempty"`
-	Model           string `json:"model,omitempty"`
-	Effort          string `json:"effort,omitempty"`
-	RequestedOutput string `json:"requestedOutput,omitempty"`
-	DisplayName     string `json:"displayName"`
+	ProjectID           string `json:"projectId,omitempty"`
+	IssueID             string `json:"issueId,omitempty"`
+	ParentSessionID     string `json:"parentSessionId,omitempty"`
+	TrackerProvider     string `json:"trackerProvider,omitempty"`
+	Kind                string `json:"kind,omitempty"`
+	Mode                string `json:"mode,omitempty"`
+	Harness             string `json:"harness,omitempty"`
+	Branch              string `json:"branch,omitempty"`
+	Prompt              string `json:"prompt,omitempty"`
+	Model               string `json:"model,omitempty"`
+	Effort              string `json:"effort,omitempty"`
+	RequestedOutput     string `json:"requestedOutput,omitempty"`
+	DisplayName         string `json:"displayName"`
+	DisplayNameExplicit bool   `json:"displayNameExplicit,omitempty"`
 	// Async publishes a Chat session as starting, with its prompt queued, before
 	// the worktree and agent are up, as the desktop's new task does. The CLI
 	// then waits for the start to settle so failures still reach the caller.
@@ -83,7 +84,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 		Short: "Spawn an agent session",
 		Long: "Spawn an agent session in a registered project, or a standalone worker with --standalone.\n\n" +
 			"The session runs the chosen agent in a\n" +
-			"fresh isolated workspace. Git projects use worktrees; standalone agents use an AO-managed plain directory.",
+			"fresh isolated workspace. Git projects use worktrees; standalone agents use an Orchestrator-managed plain directory.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.standalone && strings.TrimSpace(opts.project) != "" {
@@ -174,20 +175,21 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				}
 			}
 			req := spawnRequest{
-				ProjectID:       opts.project,
-				IssueID:         opts.issue,
-				ParentSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
-				TrackerProvider: opts.trackerProvider,
-				Kind:            opts.kind,
-				Harness:         opts.harness,
-				Mode:            opts.mode,
-				Branch:          opts.branch,
-				Prompt:          opts.prompt,
-				Model:           strings.TrimSpace(opts.model),
-				Effort:          strings.TrimSpace(opts.effort),
-				RequestedOutput: opts.output,
-				DisplayName:     name,
-				Async:           !opts.standalone,
+				ProjectID:           opts.project,
+				IssueID:             opts.issue,
+				ParentSessionID:     strings.TrimSpace(os.Getenv("AO_SESSION_ID")),
+				TrackerProvider:     opts.trackerProvider,
+				Kind:                opts.kind,
+				Harness:             opts.harness,
+				Mode:                opts.mode,
+				Branch:              opts.branch,
+				Prompt:              opts.prompt,
+				Model:               strings.TrimSpace(opts.model),
+				Effort:              strings.TrimSpace(opts.effort),
+				RequestedOutput:     opts.output,
+				DisplayName:         name,
+				DisplayNameExplicit: true,
+				Async:               !opts.standalone,
 			}
 			var res spawnResult
 			if err := ctx.postSetupJSON(cmd.Context(), "sessions", req, &res); err != nil {
@@ -246,7 +248,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 		return pflag.NormalizedName(name)
 	})
 	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or the current registered repo)")
-	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an AO-managed plain directory (requires --agent)")
+	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an Orchestrator-managed plain directory (requires --agent)")
 	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, mimo-code, deepseek-harness, openhands, command-code, memcode, hermes (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; required if the project has none)")
 	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")

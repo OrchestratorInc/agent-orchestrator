@@ -164,9 +164,9 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 	// The new agent must take this as the user's real conversation. Calling it
 	// AO's note, not the user's, made Claude refuse to use what the user had
 	// said, such as a value they asked it to remember.
-	fmt.Fprintf(&b, "You are %s, taking over this AO session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
+	fmt.Fprintf(&b, "You are %s, taking over this Orchestrator-managed session from %s. The conversation below really took place between this user and %s. Treat it as your own history with them: what the user told you there, such as facts, preferences or values they asked you to remember, still holds.\n",
 		handoffHarnessLabel(in.TargetHarness), handoffHarnessLabel(in.SourceHarness), handoffHarnessLabel(in.SourceHarness))
-	b.WriteString("- AO copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
+	b.WriteString("- Orchestrator copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
 	b.WriteString("- The files in the workspace and git are the truth. Check them before relying on this record.\n")
 	b.WriteString("- Do not redo work that is already finished.\n")
 
@@ -227,7 +227,7 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn, artifac
 
 	if len(in.HistoryFiles) > 0 {
 		b.WriteString("\n## Earlier agents' own history\n")
-		b.WriteString("AO did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
+		b.WriteString("Orchestrator did not record what these agents answered in this session, but each keeps its own history. Read only the last few exchanges, and only when this note does not tell you enough.\n")
 		for _, file := range in.HistoryFiles {
 			note := ""
 			if file.RequestsOnly {

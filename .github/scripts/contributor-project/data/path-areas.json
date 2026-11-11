@@ -39,7 +39,6 @@
   {"glob": "backend/internal/observe/usage/*", "area": "auth-accounts-usage"},
   {"glob": "backend/internal/pricing/*", "area": "auth-accounts-usage"},
   {"glob": "pricing/*", "area": "auth-accounts-usage"},
-  {"glob": "backend/cmd/pricingcatalog/*", "area": "auth-accounts-usage"},
   {"glob": "backend/internal/adapters/agent/modelcatalog/*", "area": "agent-models"},
   {"glob": "backend/internal/service/agent/model_*", "area": "agent-models"},
   {"glob": "backend/internal/service/agent/catalog*", "area": "agent-models"},

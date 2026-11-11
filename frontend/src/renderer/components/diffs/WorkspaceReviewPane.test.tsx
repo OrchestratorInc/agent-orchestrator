@@ -314,7 +314,7 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByRole("button", { name: "Collapse shot.png" })).toContainElement(screen.getByText("A"));
 		const open = screen.getByRole("button", { name: "Open full file" });
 		expect(open.querySelector("svg")).not.toBeNull();
-		expect(open).toHaveClass("border-transparent");
+		expect(open).toHaveClass("border-0");
 		await userEvent.click(open);
 		expect(onOpenFile).toHaveBeenCalledWith("shot.png", expect.objectContaining({ mode: "file", scope: "combined" }));
 	});

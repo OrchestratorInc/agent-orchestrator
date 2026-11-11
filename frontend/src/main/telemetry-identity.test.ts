@@ -362,3 +362,59 @@ describe("TelemetryIdentityController across app restarts", () => {
 		expect(fetcher).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe("TelemetryIdentityController sign-out without the daemon", () => {
+	it("retires the binding itself, rotating the anonymous ID first", async () => {
+		const { mkdir, writeFile, access } = await import("node:fs/promises");
+		// The daemon is down: nothing answers the hand-off.
+		const { ctl, dir } = await controller(vi.fn(async () => { throw new Error("connection refused"); }));
+		await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
+		await writeFile(path.join(dir, "telemetry_anonymous_id"), "anon_linked\n");
+		await mkdir(path.join(dir, "telemetry"), { recursive: true });
+		await writeFile(path.join(dir, "telemetry", "cli-usage-daily.json"), "{}\n");
+
+		expect(await ctl.setCloudUser(null)).toBe(false);
+
+		await expect(access(path.join(dir, "telemetry_bound_user"))).rejects.toThrow();
+		await expect(access(path.join(dir, "telemetry", "cli-usage-daily.json"))).rejects.toThrow();
+		const anonymous = (await readFile(path.join(dir, "telemetry_anonymous_id"), "utf8")).trim();
+		expect(anonymous).toMatch(/^anon_[0-9a-f-]{36}$/);
+		expect(anonymous).not.toBe("anon_linked");
+	});
+
+	it("leaves an unbound install's anonymous ID alone", async () => {
+		const { writeFile } = await import("node:fs/promises");
+		const { ctl, dir } = await controller();
+		await writeFile(path.join(dir, "telemetry_anonymous_id"), "anon_unlinked\n");
+		await ctl.setCloudUser(null);
+		expect((await readFile(path.join(dir, "telemetry_anonymous_id"), "utf8")).trim()).toBe("anon_unlinked");
+	});
+});
+
+describe("TelemetryIdentityController sign-out then sign-in", () => {
+	it("never removes the binding of an account that signed in after the sign-out", async () => {
+		const { writeFile, access } = await import("node:fs/promises");
+		const { ctl, dir } = await controller();
+		await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
+		const signOut = ctl.setCloudUser(null);
+		const signIn = ctl.setCloudUser("user_B");
+		// The daemon records B's binding when it applies B's hand-off.
+		await writeFile(path.join(dir, "telemetry_bound_user"), "user_B\n");
+		await Promise.all([signOut, signIn]);
+		await expect(access(path.join(dir, "telemetry_bound_user"))).resolves.toBeUndefined();
+	});
+});
+
+describe("TelemetryIdentityController after the app quit mid sign-out", () => {
+  it("a fresh controller retires a binding the daemon never cleared", async () => {
+    const { writeFile, access } = await import("node:fs/promises");
+    const { dir } = await controller(vi.fn(async () => { throw new Error("connection refused"); }));
+    // Left behind: signed out while the daemon was down, then the app quit.
+    await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
+    await writeFile(path.join(dir, "telemetry_anonymous_id"), "anon_linked\n");
+    const relaunched = new TelemetryIdentityController(dir, () => null);
+    await relaunched.retireSignedOutBinding();
+    await expect(access(path.join(dir, "telemetry_bound_user"))).rejects.toThrow();
+    expect((await readFile(path.join(dir, "telemetry_anonymous_id"), "utf8")).trim()).not.toBe("anon_linked");
+  });
+});

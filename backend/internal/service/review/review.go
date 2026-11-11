@@ -613,12 +613,12 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 		// Nothing is tracked, so the review cannot go ahead; say the lookup
 		// failed rather than that the branch has no PR.
 		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
-		return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
+		return false, fmt.Errorf("%w: Orchestrator is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
 	}
 	switch len(found.Own) {
 	case 0:
 		if len(found.OtherAuthor) > 0 {
-			return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet; found a PR from another author on its branch, which AO does not attach automatically; to review it anyway, run %s", ErrInvalid, workerID, retryCommands(workerID, found.OtherAuthor))
+			return false, fmt.Errorf("%w: Orchestrator is not tracking an open PR for worker %q yet; found a PR from another author on its branch, which Orchestrator does not attach automatically; to review it anyway, run %s", ErrInvalid, workerID, retryCommands(workerID, found.OtherAuthor))
 		}
 		return true, nil
 	case 1:
@@ -630,7 +630,7 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 		}
 		return false, nil
 	}
-	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that AO does not track yet; name one: %s", ErrInvalid, workerID, len(found.Own), retryCommands(workerID, found.Own))
+	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that Orchestrator does not track yet; name one: %s", ErrInvalid, workerID, len(found.Own), retryCommands(workerID, found.Own))
 }
 
 // retryCommands lists the `ao review trigger --pr` command for each URL.
@@ -670,7 +670,7 @@ func (s *Service) triggerWithOptions(
 	triggeredPayload := map[string]any{"trigger": string(source), "rerun": opts.Rerun}
 	if err := config.Validate(); err != nil {
 		err = fmt.Errorf("%w: reviewer config: %w", ErrInvalid, err)
-		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{
+		s.emit(ctx, "ao.reviews.trigger_failed", workerID, map[string]any{
 			"error_kind": reviewErrorKind(err),
 			"trigger":    string(source),
 		})
@@ -688,7 +688,7 @@ func (s *Service) triggerWithOptions(
 	}
 	result, err := s.engineTrigger(ctx, workerID, opts)
 	if err != nil {
-		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{
+		s.emit(ctx, "ao.reviews.trigger_failed", workerID, map[string]any{
 			"error_kind": reviewErrorKind(err),
 			"trigger":    string(source),
 		})
@@ -704,7 +704,7 @@ func (s *Service) triggerWithOptions(
 		return result, nil
 	}
 	triggeredPayload["created_runs"] = len(result.CreatedRuns)
-	s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
+	s.emit(ctx, "ao.reviews.triggered", workerID, triggeredPayload)
 	return result, nil
 }
 
@@ -714,7 +714,7 @@ func (s *Service) Cancel(ctx context.Context, workerID domain.SessionID) (review
 	if err != nil {
 		return result, err
 	}
-	s.emit(ctx, "ao.review.cancelled", workerID, map[string]any{
+	s.emit(ctx, "ao.reviews.cancelled", workerID, map[string]any{
 		"cancelled_runs": len(result.CancelledRuns),
 	})
 	return result, nil
@@ -931,7 +931,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		// Only on the real running -> complete transition. Re-submitting an
 		// already-complete run returns early below, so telemetry stays idempotent
 		// the same way the store does.
-		s.emit(ctx, "ao.review.submitted", workerID, map[string]any{
+		s.emit(ctx, "ao.reviews.submitted", workerID, map[string]any{
 			"harness":            string(run.Harness),
 			"verdict":            string(verdict),
 			"duration_ms":        s.clock().Sub(run.CreatedAt).Milliseconds(),

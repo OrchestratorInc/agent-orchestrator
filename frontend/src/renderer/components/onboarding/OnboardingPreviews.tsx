@@ -6,35 +6,7 @@ import {
 	type KanbanColumn,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import {
-	Archive,
-	ArrowUp,
-	Bell,
-	CalendarClock,
-	ChevronDown,
-	ChevronRight,
-	Coffee,
-	Copy,
-	EllipsisVertical,
-	File,
-	FlaskConical,
-	Folder,
-	FolderOpen,
-	LayoutDashboard,
-	LogIn,
-	PanelLeft,
-	PanelRight,
-	Play,
-	Plus,
-	Route,
-	ScanSearch,
-	Search,
-	Settings,
-	ShieldCheck,
-	Smartphone,
-	Undo2,
-	WandSparkles,
-} from "lucide-react";
+import { Archive, ArrowUp, Bell, CalendarClock, ChevronDown, ChevronRight, Coffee, Copy, EllipsisVertical, File, FlaskConical, Folder, FolderOpen, LayoutDashboard, LogIn, PanelLeft, PanelRight, Play, Plus, Route, ScanSearch, Search, Settings, ShieldCheck, Smartphone, Undo2, WandSparkles } from "@/components/app-icons";
 import { AnimatePresence, animate as animateElement, motion, useIsPresent, useReducedMotion } from "motion/react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
@@ -53,12 +25,12 @@ import { topbarTitleClass } from "../PageTopbar";
 import { ProductExternalLink } from "../ProductExternalLink";
 import { sessionsBoardLabels } from "../SessionsBoardAdapters";
 import { TargetIcon } from "../TopbarOpenEditorButton";
-import { TopbarButton } from "../TopbarButton";
+import { Button } from "../ui/button";
 
 // The right half of each onboarding step: the real desktop window, drawn at
 // the app's true size (1320x860 CSS px) and scaled down as one piece so every
 // proportion matches the app. Views that render without app state are the
-// real components (SessionsBoardGridView, SessionCardView, TopbarButton,
+// real components (SessionsBoardGridView, SessionCardView, Button,
 // AgentAvatar, AOMascot, NavRowHighlight, OrchestratorIcon); the stateful
 // shell pieces are static copies of the markup the app renders, with the
 // class strings taken verbatim from the named source. Only the macOS
@@ -406,14 +378,14 @@ function PanelTrailingControls({ inspector }: { inspector: boolean }) {
 	return (
 		<div className="workspace-topbar-actions shrink-0 panel-topbar-controls">
 			{inspector ? (
-				<button type="button" tabIndex={-1} className="topbar-control topbar-control--disabled-affordance items-center topbar-control--icon grid size-control-md place-items-center rounded-md border-0 bg-transparent text-muted-foreground relative isolate">
+				<Button type="button" size="icon-sm" variant="quiet" tabIndex={-1}>
 					<PanelRight className="size-icon-md" aria-hidden="true" />
-				</button>
+				</Button>
 			) : null}
 			<span className="inline-flex shrink-0">
-				<button type="button" tabIndex={-1} className="topbar-control topbar-control--disabled-affordance items-center topbar-control--icon grid size-control-md place-items-center rounded-md border-0 bg-transparent text-muted-foreground isolate relative">
+				<Button type="button" size="icon-sm" variant="quiet" tabIndex={-1}>
 					<Bell className="size-icon-base" aria-hidden="true" />
-				</button>
+				</Button>
 			</span>
 		</div>
 	);
@@ -842,16 +814,16 @@ export function PreviewBoard({
 				</div>
 				<div className="workspace-topbar-actions shrink-0">
 					<span className="inline-flex">
-						<TopbarButton className="topbar-control--labeled" data-priority="primary" tabIndex={-1} variant="action">
+						<Button type="button" size="sm" variant="quiet" data-priority="primary" tabIndex={-1}>
 							<Plus className="size-icon-md" aria-hidden="true" />
 							<span data-compact-label="">{t("newTask.task")}</span>
-						</TopbarButton>
+						</Button>
 					</span>
 					<span className="inline-flex">
-						<TopbarButton className="topbar-control--labeled" data-priority="secondary" tabIndex={-1} variant="primary">
+						<Button type="button" size="sm" variant="primary" data-priority="secondary" tabIndex={-1}>
 							<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 							<span data-compact-label="">{t("shell.orchestrator")}</span>
-						</TopbarButton>
+						</Button>
 					</span>
 				</div>
 			</header>
@@ -863,16 +835,16 @@ export function PreviewBoard({
 						actions={
 							<div className="mt-5 flex items-center gap-2">
 								<span className="inline-flex">
-									<TopbarButton tabIndex={-1} variant="primary">
+									<Button type="button" size="sm" variant="primary" tabIndex={-1}>
 										<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 										<span>{t("shell.orchestrator")}</span>
-									</TopbarButton>
+									</Button>
 								</span>
 								<span className="inline-flex">
-									<TopbarButton tabIndex={-1} variant="accent">
+									<Button type="button" size="sm" variant="secondary" tabIndex={-1}>
 										<Plus className="size-icon-md" aria-hidden="true" />
 										<span>{t("shell.newTask")}</span>
-									</TopbarButton>
+									</Button>
 								</span>
 							</div>
 						}
@@ -972,31 +944,31 @@ function OrchestratorTopbarActions() {
 		<div className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center">
 			<div className="workspace-topbar-actions shrink-0">
 				<span className="inline-flex">
-					<TopbarButton className="topbar-control--labeled" data-priority="primary" tabIndex={-1} variant="primary">
+					<Button type="button" size="sm" variant="primary" data-priority="primary" tabIndex={-1}>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label="">{t("newTask.task")}</span>
-					</TopbarButton>
+					</Button>
 				</span>
-				<TopbarButton className="topbar-control--labeled" data-priority="secondary" tabIndex={-1} variant="action">
+				<Button type="button" size="sm" variant="quiet" data-priority="secondary" tabIndex={-1}>
 					<LayoutDashboard className="size-icon-md" aria-hidden="true" />
-					<span data-compact-label="">{t("shell.openKanban")}</span>
-				</TopbarButton>
-				<div className="relative topbar-control-group isolate inline-flex items-center gap-0 rounded-md bg-transparent">
+					<span data-compact-label="">{t("shell.board")}</span>
+				</Button>
+				<div className="relative isolate inline-flex items-center gap-0 rounded-md bg-transparent">
 					<span className="inline-flex">
-						<button type="button" tabIndex={-1} className="topbar-control topbar-control--disabled-affordance items-center topbar-control--icon grid size-control-md place-items-center rounded-md border-0 text-muted-foreground bg-transparent">
+						<Button type="button" size="icon-sm" variant="quiet" tabIndex={-1}>
 							<TargetIcon className="size-icon-md" />
-						</button>
+						</Button>
 					</span>
 					<span className="inline-flex">
-						<button type="button" tabIndex={-1} className="topbar-control topbar-control--disabled-affordance items-center topbar-control--icon grid size-control-md place-items-center rounded-md border-0 text-muted-foreground bg-transparent">
+						<Button type="button" size="icon-sm" variant="quiet" tabIndex={-1}>
 							<ChevronDown className="size-icon-sm" aria-hidden="true" />
-						</button>
+						</Button>
 					</span>
 				</div>
 				<span className="inline-flex">
-					<TopbarButton className="topbar-control--static-press" data-priority="secondary" tabIndex={-1} variant="icon">
+					<Button type="button" size="icon-sm" variant="quiet" data-priority="secondary" tabIndex={-1}>
 						<Play className="size-icon-md" aria-hidden="true" />
-					</TopbarButton>
+					</Button>
 				</span>
 			</div>
 		</div>

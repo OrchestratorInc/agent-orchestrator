@@ -270,3 +270,54 @@ describe("cloud artifact thumbnails", () => {
 	});
 
 });
+
+describe("local video artifact thumbnails", () => {
+	const RAW = "http://127.0.0.1:3001/api/v1/sessions/session-1/preview/files/renders/clip.mp4?source=artifact&raw=true";
+	const local = (path: string, rawUrl: string): ArtifactRow => ({ path, name: path, kind: "file", updatedAt: VERSION, sessionId: "session-1", sessionTitle: "Local output", rawUrl });
+
+	beforeEach(() => {
+		mocks.fetch.mockReset();
+		vi.stubGlobal("IntersectionObserver", class {
+			constructor(private callback: (entries: { isIntersecting: boolean }[]) => void) {}
+			observe() { this.callback([{ isIntersecting: true }]); }
+			disconnect() {}
+		});
+		vi.stubGlobal("ResizeObserver", class {
+			observe() {}
+			unobserve() {}
+			disconnect() {}
+		});
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	it.each(["renders/clip.mp4", "take.webm", "screen.mov"])("streams a poster frame for %s with a metadata-only preload", async (path) => {
+		const { container } = renderThumbnails([local(path, RAW)]);
+
+		const video = await waitFor(() => {
+			const element = container.querySelector("video");
+			expect(element).not.toBeNull();
+			return element as HTMLVideoElement;
+		});
+		expect(video).toHaveAttribute("src", RAW);
+		expect(video).toHaveAttribute("preload", "metadata");
+		expect(video).toHaveAttribute("crossorigin", "anonymous");
+		expect(video.muted).toBe(true);
+		expect(video).not.toHaveAttribute("controls");
+		expect(video).not.toHaveAttribute("autoplay");
+		expect(screen.queryByTitle("No preview available")).not.toBeInTheDocument();
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the placeholder when the video cannot be decoded", async () => {
+		const { container } = renderThumbnails([local("renders/clip.mp4", RAW)]);
+
+		const video = await waitFor(() => {
+			const element = container.querySelector("video");
+			expect(element).not.toBeNull();
+			return element as HTMLVideoElement;
+		});
+		fireEvent.error(video);
+		expect(await screen.findByTitle("No preview available")).toBeInTheDocument();
+		expect(container.querySelector("video")).toBeNull();
+	});
+});

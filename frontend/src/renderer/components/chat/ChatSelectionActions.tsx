@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { apiErrorMessage } from "../../lib/api-client";
+import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import {
 	selectionRangesEqual,
 	selectionToolbarClass,
@@ -29,6 +30,7 @@ export function ChatSelectionActions({
 	checkingSide?: boolean;
 }) {
 	const { t } = useTranslation();
+	const translateDraft = useChatDraftTranslation();
 	const buttonRef = useRef<HTMLDivElement>(null);
 	const position = useChatSelectionPosition(
 		selection.range,
@@ -154,7 +156,7 @@ export function ChatSelectionActions({
 					role="alert"
 					className="max-w-full px-2 text-xs text-destructive break-words"
 				>
-					{error}
+					{translateDraft(error)}
 				</span>
 			) : null}
 		</div>

@@ -9,7 +9,7 @@ import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbn
 import { artifactVisual } from "../../lib/artifactVisual";
 import { headerTitleWidth } from "../../lib/pagerTitle";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, stableArtifactOrder, type SessionArtifact } from "../../lib/artifacts";
+import { artifactCommentTarget, artifactLanguage, artifactPageAt, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, artifactViewerPages, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
@@ -52,7 +52,7 @@ const MAX_HIGHLIGHTED_BYTES = 100 * 1024;
  * to the session's review, the same one the Files screen keeps.
  *
  * A listed artifact opens as one page of a gallery: swiping sideways moves
- * through the session's other artifacts, in the gallery's order when it opened
+ * through the other artifacts the list shows, in the gallery's order when it opened
  * (a file rewritten or written later never moves the page on screen). The header and
  * its actions follow the page on screen.
  */
@@ -85,10 +85,10 @@ function ArtifactViewerContent() {
 	const pageOrder = useRef<string[]>(undefined);
 	const pages = useMemo(() => {
 		if (!artifacts) return undefined;
-		const next = stableArtifactOrder(pageOrder.current, artifacts);
+		const next = artifactViewerPages(pageOrder.current, artifacts, currentPath);
 		pageOrder.current = next.map((page) => page.path);
 		return next;
-	}, [artifacts]);
+	}, [artifacts, currentPath]);
 	const artifact = pages?.find((candidate) => candidate.path === currentPath);
 	const pageIndex = artifact && pages ? pages.indexOf(artifact) : -1;
 	const pageCount = pages?.length ?? 0;

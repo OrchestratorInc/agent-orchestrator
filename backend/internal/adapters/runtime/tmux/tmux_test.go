@@ -1219,6 +1219,141 @@ func TestDestroyIsIdempotentWhenDetachOnDestroySettingReportsSessionMissing(t *t
 	}
 }
 
+// tmux >= 3.5 words a missing session "no such session: <target>" (with the
+// "=" exact-match prefix echoed back) instead of "can't find session" (issue
+// #6099). It must read as confirmed absence, while transient server failures
+// stay unconfirmed so the #4223 fail-closed guard holds.
+func TestSessionMissingOutputRecognizesTmux35Wording(t *testing.T) {
+	tests := []struct {
+		output      string
+		wantMissing bool
+		wantAbsent  bool
+	}{
+		{output: "no such session: =review-x:", wantMissing: true, wantAbsent: true},
+		{output: "can't find session: sess-1", wantMissing: true, wantAbsent: true},
+		{output: "session not found: sess-1", wantMissing: true, wantAbsent: true},
+		{output: "no server running on /tmp/tmux-1000/default", wantAbsent: true},
+		{output: "error connecting to /tmp/tmux-1000/default (No such file or directory)", wantAbsent: true},
+		{output: "error connecting to /tmp/tmux-1000/default (Connection refused)"},
+		{output: "protocol version mismatch (client 8, server 7)"},
+		{output: "server exited unexpectedly"},
+	}
+	for _, tt := range tests {
+		if got := sessionMissingOutput(tt.output); got != tt.wantMissing {
+			t.Errorf("sessionMissingOutput(%q) = %v, want %v", tt.output, got, tt.wantMissing)
+		}
+		if got := confirmedAbsentOutput(&exec.ExitError{}, tt.output); got != tt.wantAbsent {
+			t.Errorf("confirmedAbsentOutput(%q) = %v, want %v", tt.output, got, tt.wantAbsent)
+		}
+	}
+}
+
+// The reviewer launcher destroys any stale pane before every launch, so a
+// missing session on tmux >= 3.5 must be a no-op success rather than failing
+// the pre-kill detach-on-destroy reassertion (issue #6099).
+func TestDestroyIsIdempotentWhenSessionMissingTmux35Wording(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{nil, []byte("no such session: =review-x:"), []byte("no such session: =review-x:")}
+	fr.err = &exec.ExitError{}
+
+	if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "review-x"}); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if len(fr.calls) != 3 || fr.calls[0].args[0] != "list-panes" || fr.calls[1].args[0] != "set-option" || fr.calls[2].args[0] != "kill-session" {
+		t.Fatalf("calls = %#v, want list-panes, set-option, then kill-session", fr.calls)
+	}
+}
+
+// Recognizing the tmux >= 3.5 wording must not widen confirmed absence:
+// transient failures at either Destroy step still fail closed (issue #4223).
+func TestDestroyFailsClosedOnTransientFailuresAlongsideTmux35Wording(t *testing.T) {
+	transient := []string{
+		"error connecting to /tmp/tmux-1000/default (Connection refused)",
+		"protocol version mismatch (client 8, server 7)",
+		"server exited unexpectedly",
+	}
+	for _, output := range transient {
+		t.Run("set-option/"+output, func(t *testing.T) {
+			r, _ := newTestRuntime(0)
+			fr := &fakeRunnerSelectiveErr{exitErrOn: "set-option", errOutput: []byte(output)}
+			r.runner = fr
+
+			if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "review-x"}); err == nil {
+				t.Fatal("Destroy: got nil, want error on a transient set-option failure")
+			}
+			for _, c := range fr.calls {
+				if len(c.args) > 0 && c.args[0] == "kill-session" {
+					t.Fatal("Destroy reached kill-session despite an unconfirmed detach-on-destroy guard")
+				}
+			}
+		})
+		t.Run("kill-session/"+output, func(t *testing.T) {
+			r, _ := newTestRuntime(0)
+			r.runner = &fakeRunnerSelectiveErr{exitErrOn: "kill-session", errOutput: []byte(output)}
+
+			if err := r.Destroy(context.Background(), ports.RuntimeHandle{ID: "review-x"}); err == nil {
+				t.Fatal("Destroy: got nil, want error on a transient kill-session failure")
+			}
+		})
+	}
+}
+
+func TestIsAliveReturnsFalseNilOnTmux35NoSuchSession(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("no such session: =sess-1:")}
+	fr.err = &exec.ExitError{}
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil {
+		t.Fatalf("IsAlive: %v", err)
+	}
+	if alive {
+		t.Fatal("alive = true, want false")
+	}
+}
+
+func TestProcessRootPIDsTreatsTmux35NoSuchSessionAsNoPIDs(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	fr.outputs = [][]byte{[]byte("no such session: =sess-1:")}
+	fr.err = &exec.ExitError{}
+
+	pids, err := r.ProcessRootPIDs(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || len(pids) != 0 {
+		t.Fatalf("ProcessRootPIDs = (%v, %v), want (nil, nil)", pids, err)
+	}
+}
+
+// The legacy-socket migration probe must cross to the system socket when the
+// private server reports the session missing in tmux >= 3.5 wording, exactly as
+// it does for "can't find session".
+func TestIsAliveAdoptsLegacySessionWhenPrivateSocketReportsTmux35NoSuchSession(t *testing.T) {
+	r := New(Options{
+		Binary:       "bundled-tmux-test",
+		LegacyBinary: "system-tmux-test",
+		SocketName:   "ao",
+		Timeout:      time.Second,
+	})
+	fr := &fakeRunnerSequence{results: []fakeRunnerResult{
+		{out: []byte("no such session: =sess-1:"), err: &exec.ExitError{}}, // private probe: missing
+		{},                    // legacy default-socket discovery
+		{},                    // enforceDetachOnDestroy: set-option
+		{out: []byte("on\n")}, // enforceDetachOnDestroy: show-options verify
+		{},                    // has-session on the adopted legacy socket
+	}}
+	r.runner = fr
+
+	alive, err := r.IsAlive(context.Background(), ports.RuntimeHandle{ID: "sess-1"})
+	if err != nil || !alive {
+		t.Fatalf("IsAlive = (%v, %v), want (true, nil)", alive, err)
+	}
+	if len(fr.calls) != 5 {
+		t.Fatalf("calls = %d, want 5: %+v", len(fr.calls), fr.calls)
+	}
+	if got, want := fr.calls[1].args, append([]string{"-L", "default"}, hasSessionArgs("sess-1")...); !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy discovery args = %#v, want %#v", got, want)
+	}
+}
+
 func TestIsSupervisedProcessAliveFindsExactDescendant(t *testing.T) {
 	r, fr := newTestRuntime(0)
 	fr.outputs = [][]byte{

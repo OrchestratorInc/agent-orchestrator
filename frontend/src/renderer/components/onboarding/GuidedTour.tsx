@@ -1,5 +1,5 @@
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
-import { ArrowRight, X } from "lucide-react";
+import { ArrowRight, X } from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";

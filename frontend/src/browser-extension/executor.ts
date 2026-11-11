@@ -278,7 +278,7 @@ export class Executor {
 			try {
 				await this.deps.chrome.scripting.executeScript({ target: { tabId: page.tabId, frameIds: [frameId] }, files: ["content.js"] });
 			} catch (error) {
-				throw new BridgeError("BROWSER_PAGE_RESTRICTED", `AO cannot work on this page: ${error instanceof Error ? error.message : String(error)}`);
+				throw new BridgeError("BROWSER_PAGE_RESTRICTED", `Orchestrator cannot work on this page: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			response = await send();
 		}
@@ -461,7 +461,7 @@ export class Executor {
 			if (matches.length !== 1) {
 				throw new BridgeError(
 					"FRAME_NOT_FOUND",
-					matches.length === 0 ? "That frame has not loaded" : "Several frames load the same address; AO cannot tell them apart",
+					matches.length === 0 ? "That frame has not loaded" : "Several frames load the same address; Orchestrator cannot tell them apart",
 				);
 			}
 			const current = ctx.extras.frame && ctx.extras.frame.logicalTabId === page.logicalId ? ctx.extras.frame.chain : [];
@@ -835,7 +835,7 @@ export class Executor {
 			const dataUrl = await this.captureOwnTab(ctx, page);
 			let png = base64ToBytes(dataUrl.slice(dataUrl.indexOf(",") + 1));
 			if (annotate && items.length > 0) png = await annotatePng(png, items, dpr);
-			if (png.length > MAX_SCREENSHOT_BYTES) throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded AO's size limit");
+			if (png.length > MAX_SCREENSHOT_BYTES) throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Browser screenshot exceeded Orchestrator's size limit");
 			const { width, height } = pngSize(png);
 			return {
 				data: bytesToBase64(png),
