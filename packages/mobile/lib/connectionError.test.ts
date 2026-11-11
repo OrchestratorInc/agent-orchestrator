@@ -123,9 +123,10 @@ describe("describeConnectionFailure", () => {
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
 
-	it("blames the password, not the network, on a 401", () => {
+	it("blames the credential, not the network, on a 401", () => {
 		const d = describeConnectionFailure("auth", target());
-		expect(d.message).toContain("rotated");
+		// A removed phone and a changed password have the same fix.
+		expect(d.message).toContain("Scan a new code");
 		expect(d.message).not.toContain("Wi-Fi");
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
