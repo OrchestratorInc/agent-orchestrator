@@ -6,13 +6,34 @@ vi.mock("./config", () => ({ authHeaders: () => ({ Authorization: "Bearer aod_x"
 vi.mock("./e2ee/host", () => ({
 	hostFetch: (...args: unknown[]) => hostFetch(...args),
 	hostPath: (url: string) => new URL(url).pathname,
-	bytesToDataUri: (bytes: Uint8Array, type: string) => `data:${type};base64,${btoa(String.fromCharCode(...bytes))}`,
 }));
+
+// An in-memory stand-in for the app's cache folder.
+const { disk } = vi.hoisted(() => ({ disk: new Map<string, Uint8Array>() }));
+vi.mock("expo-file-system", () => {
+	const join = (...parts: (string | { uri: string })[]) => parts.map((part) => typeof part === "string" ? part : part.uri).join("/");
+	return {
+		Paths: { cache: { uri: "file:///cache" } },
+		Directory: class {
+			uri: string;
+			constructor(...parts: (string | { uri: string })[]) { this.uri = join(...parts); }
+			get exists() { return [...disk.keys()].some((key) => key.startsWith(`${this.uri}/`)); }
+			create() {}
+			delete() { for (const key of [...disk.keys()]) if (key.startsWith(`${this.uri}/`)) disk.delete(key); }
+		},
+		File: class {
+			uri: string;
+			constructor(...parts: (string | { uri: string })[]) { this.uri = join(...parts); }
+			write(bytes: Uint8Array) { disk.set(this.uri, bytes); }
+			delete() { disk.delete(this.uri); }
+		},
+	};
+});
 
 const { useEncryptedFile } = await import("./useEncryptedFile");
 
 const config = { host: "h", httpPort: "1", muxPort: "", password: "aod_x", hostKey: "k".repeat(43) };
-let result: { uri?: string; failed: boolean } = { failed: false };
+let result: { uri?: string; readAccess?: string; failed: boolean } = { failed: false };
 function Probe() {
 	result = useEncryptedFile(config, "http://h:1/api/v1/sessions/s/artifacts/report.pdf", "v1");
 	return null;
@@ -34,12 +55,17 @@ afterEach(() => {
 });
 
 describe("useEncryptedFile", () => {
-	it("reads the file through the channel as a data URI", async () => {
+	it("reads the file through the channel into the cache, and deletes it on unmount", async () => {
 		hostFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers({ "content-type": "application/pdf" }), arrayBuffer: async () => Uint8Array.of(37, 80).buffer, body: null });
 		act(() => { renderer = create(<Probe />); });
 		await settle();
-		expect(result).toEqual({ key: expect.any(String), uri: "data:application/pdf;base64,JVA=", failed: false });
 		expect(hostFetch).toHaveBeenCalledWith(config, "/api/v1/sessions/s/artifacts/report.pdf", { headers: { Authorization: "Bearer aod_x" } });
+		expect(result.uri).toMatch(/^file:\/\/\/cache\/encrypted-files\/.+\.pdf$/);
+		expect(result.readAccess).toBe("file:///cache/encrypted-files");
+		expect(disk.get(result.uri!)).toEqual(Uint8Array.of(37, 80));
+		act(() => renderer.unmount());
+		expect(disk.size).toBe(0);
+		act(() => { renderer = create(<Probe />); });
 	});
 
 	it("fails without reading a file over the size cap", async () => {

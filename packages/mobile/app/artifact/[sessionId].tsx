@@ -483,6 +483,8 @@ function ArtifactWeb({ config, url, version, page }: {
 				// Inlined, the page loads from memory with no origin: it needs no
 				// cookie, and it cannot reach the daemon.
 				source={html ? { html } : file.uri ? { uri: file.uri } : { uri: url, headers: authHeaders(config) }}
+				// A file read through the encrypted channel loads from the app's cache.
+				{...(file.uri ? { originWhitelist: ["file://*"], allowFileAccess: true, allowingReadAccessToURL: file.readAccess } : {})}
 				style={styles.web}
 				// Under the clear glass bar, the page scrolls on beneath it.
 				contentInsetAdjustmentBehavior="automatic"
