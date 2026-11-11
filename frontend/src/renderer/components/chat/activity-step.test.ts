@@ -5,6 +5,7 @@ import {
 	activityToolStep,
 	describeCommandStep,
 	isExploratoryTool,
+	isOrchestratorPlumbing,
 	type CommandStep,
 } from "./activity-step";
 
@@ -284,6 +285,39 @@ describe("describeCommandStep", () => {
 		expect(done("[ -f a.ts ]")).toBe("Checked condition");
 		// Setup in front of real work does not name it.
 		expect(done("cd frontend && npm test")).toBe("Ran tests");
+	});
+});
+
+describe("Orchestrator CLI", () => {
+	it("names ao commands for what they do, never as ao", () => {
+		expect(done("ao preview /data/artifacts/s-1/hello.html")).toBe("Previewed hello.html");
+		expect(done("ao browser console | grep -c 'Button clicked'")).toBe("Checked the browser console for Button clicked");
+		expect(done("ao browser console --json | python3 -c 'print(1)'")).toBe("Checked the browser console");
+		expect(done("ao browser errors | head -20")).toBe("Checked the page for errors");
+		expect(done('ao browser act "Click me button" --expect-dom-change')).toBe("Interacted with the page");
+		expect(done("ao artifact add /data/artifacts/s-1/hello.html")).toBe("Saved deliverable hello.html");
+		expect(done('ao report --checkpoint --note "tests pass"')).toBe("Shared progress");
+		expect(done('ao report --done --note "shipped"')).toBe("Marked the task done");
+		expect(done("ao session claim-pr https://github.com/o/r/pull/12")).toBe("Took over PR #12");
+		expect(done("/Users/me/app/daemon/ao frobnicate")).toBe("Used Orchestrator");
+		expect(live("ao preview README.md")).toBe("Previewing README.md");
+	});
+
+	it("names a chain of browser steps by the step that acts", () => {
+		expect(done('ao preview a.html && ao browser wait --load && ao browser act "Click me" ; ao browser console')).toBe(
+			"Interacted with the page",
+		);
+	});
+
+	it("treats reading Orchestrator's guides and ao --help as plumbing", () => {
+		const guide = "/Users/me/.ao/data/skills/using-ao/commands/preview.md";
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cat ${guide}` } }))).toBe(true);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `sed -n 1,80p ${guide}` } }))).toBe(true);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: "ao browser --help" } }))).toBe(true);
+		expect(isOrchestratorPlumbing(toolActivity("Read", "read", { file_path: "/Users/me/.ao/data/skills/using-ao/SKILL.md" }))).toBe(true);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cat ${guide} README.md` } }))).toBe(false);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: "ao preview README.md" } }))).toBe(false);
+		expect(isOrchestratorPlumbing(toolActivity("Read", "read", { file_path: "/w/app/README.md" }))).toBe(false);
 	});
 });
 
