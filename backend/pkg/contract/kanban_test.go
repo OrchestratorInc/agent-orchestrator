@@ -171,7 +171,7 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 			want: contract.KanbanNeedsReview,
 		},
 		{
-			name:    "auto review keeps a changes-requested head, even without auto-inject",
+			name:    "auto review keeps a changes-requested head in validating without auto-inject",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
@@ -192,17 +192,25 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 			want: contract.KanbanValidating,
 		},
 		{
-			name:    "without auto review, a changes-requested pass hands off to a person",
+			name:    "without auto review, a changes-requested pass stays in validating",
 			session: contract.KanbanSessionFacts{},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
 			},
-			want: contract.KanbanNeedsReview,
+			want: contract.KanbanValidating,
 		},
 		{
-			name:    "auto review keeps a mergeable pr validating until its pass approves",
+			name:    "a changes-requested pass keeps a mergeable pr in validating",
 			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Mergeability: contract.MergeMergeable,
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
+			},
+			want: contract.KanbanValidating,
+		},
+		{
+			name: "without auto review, a changes-requested pass keeps a mergeable pr in validating",
 			pr: contract.KanbanPRFacts{
 				URL: "pr/1", Mergeability: contract.MergeMergeable,
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
@@ -240,11 +248,76 @@ func TestDeriveKanbanColumnSinglePR(t *testing.T) {
 			want: contract.KanbanValidating,
 		},
 		{
-			name:    "auto review still owns a head whose pass was cancelled",
+			name:    "auto review keeps a head whose pass was cancelled in validating",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Cancelled: true},
+			},
+			want: contract.KanbanValidating,
+		},
+		{
+			name:    "auto review keeps a cancelled pass in validating even when another harness approved the head",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Mergeability: contract.MergeMergeable,
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, Cancelled: true},
+			},
+			want: contract.KanbanValidating,
+		},
+		{
+			name: "without auto review, a cancelled pass hands the pr to a person",
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Mergeability: contract.MergeMergeable,
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Cancelled: true},
+			},
+			want: contract.KanbanNeedsReview,
+		},
+		{
+			name: "without auto review, a failed pass hands the pr to a person",
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Mergeability: contract.MergeMergeable,
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Failed: true},
+			},
+			want: contract.KanbanNeedsReview,
+		},
+		{
+			name:    "auto review keeps a head whose retries are used up in validating",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL:       "pr/1",
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Failed: true, RetryExhausted: true},
+			},
+			want: contract.KanbanValidating,
+		},
+		{
+			name: "human approval with merge conflicts is not ready",
+			pr: contract.KanbanPRFacts{
+				URL:            "pr/1",
+				Review:         contract.ReviewApproved,
+				Mergeability:   contract.MergeConflicting,
+				ExternalReview: contract.KanbanExternalReviewFacts{Approved: true},
+			},
+			want: contract.KanbanNeedsReview,
+		},
+		{
+			name: "human approval with failing ci is not ready",
+			pr: contract.KanbanPRFacts{
+				URL:            "pr/1",
+				Review:         contract.ReviewApproved,
+				CI:             contract.CIFailing,
+				ExternalReview: contract.KanbanExternalReviewFacts{Approved: true},
+			},
+			want: contract.KanbanNeedsReview,
+		},
+		{
+			name:    "human approval with failing ci ao is fixing is validating",
+			session: contract.KanbanSessionFacts{AutoInjectCI: true},
+			pr: contract.KanbanPRFacts{
+				URL:            "pr/1",
+				Review:         contract.ReviewApproved,
+				CI:             contract.CIFailing,
+				ExternalReview: contract.KanbanExternalReviewFacts{Approved: true},
 			},
 			want: contract.KanbanValidating,
 		},
@@ -365,14 +438,14 @@ func TestDeriveKanbanPresentationBuilding(t *testing.T) {
 	}{
 		{"active worker is working", sessionAt(contract.ActivityActive), contract.DisplayWorking},
 		{"blocked worker is blocked", sessionAt(contract.ActivityBlocked), contract.DisplayBlocked},
-		{"a worker waiting on input is blocked", sessionAt(contract.ActivityWaitingInput), contract.DisplayBlocked},
+		{"a worker waiting on input needs input", sessionAt(contract.ActivityWaitingInput), contract.DisplayNeedsInput},
 		{"exited worker has exited", sessionAt(contract.ActivityExited), contract.DisplayExited},
 		{
 			name:    "a silent worker past the grace period has no signal",
 			session: contract.KanbanSessionFacts{SessionFacts: silent},
 			want:    contract.DisplayNoSignal,
 		},
-		{"an idle worker is awaiting its pr", sessionAt(contract.ActivityIdle), contract.DisplayAwaitingPR},
+		{"an idle worker is idle", sessionAt(contract.ActivityIdle), contract.DisplayIdle},
 		{"an idle worker the person stopped is interrupted", interruptedAt(contract.ActivityIdle), contract.DisplayInterrupted},
 		{"a new turn after an interrupt is working", interruptedAt(contract.ActivityActive), contract.DisplayWorking},
 		{"an interrupted worker that exited has exited", interruptedAt(contract.ActivityExited), contract.DisplayExited},
@@ -386,6 +459,52 @@ func TestDeriveKanbanPresentationBuilding(t *testing.T) {
 			}
 			if got.DisplayStatus != tc.want {
 				t.Fatalf("display status = %q, want %q", got.DisplayStatus, tc.want)
+			}
+		})
+	}
+}
+
+// An AO changes request with auto-inject on reads "Addressing comments" only
+// while the worker is busy; once it is idle the card shows the outcome it is
+// sitting on, even though AO already delivered the feedback.
+func TestDeriveKanbanPresentationAOChangesRequestedNeedsActiveWorker(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name     string
+		activity contract.ActivityState
+		autoFix  bool
+		running  bool
+		ci       contract.CIState
+		noSignal bool
+		want     contract.DisplayStatus
+	}{
+		{name: "idle worker after delivered feedback requests changes", activity: contract.ActivityIdle, autoFix: true, want: contract.DisplayChangesRequested},
+		{name: "idle worker without auto fix requests changes", activity: contract.ActivityIdle, want: contract.DisplayChangesRequested},
+		{name: "active worker with auto fix addresses comments", activity: contract.ActivityActive, autoFix: true, want: contract.DisplayAddressingComments},
+		{name: "active worker without auto fix is working", activity: contract.ActivityActive, want: contract.DisplayWorking},
+		{name: "a running reviewer outranks the idle changes request", activity: contract.ActivityIdle, autoFix: true, running: true, want: contract.DisplayReviewing},
+		{name: "failing CI keeps its precedence", activity: contract.ActivityIdle, autoFix: true, ci: contract.CIFailing, want: contract.DisplayCIFailing},
+		{name: "blocked worker still needs attention", activity: contract.ActivityBlocked, autoFix: true, want: contract.DisplayBlocked},
+		{name: "waiting worker still needs input", activity: contract.ActivityWaitingInput, autoFix: true, want: contract.DisplayNeedsInput},
+		{name: "exited worker is still exited", activity: contract.ActivityExited, autoFix: true, want: contract.DisplayExited},
+		{name: "silent worker still has no signal", activity: contract.ActivityIdle, autoFix: true, noSignal: true, want: contract.DisplayNoSignal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := contract.DeriveKanbanPresentation(contract.KanbanSessionFacts{
+				SessionFacts: contract.SessionFacts{
+					Activity: tc.activity, HasSignal: !tc.noSignal, SignalExpected: tc.noSignal,
+					LastActivityAt: now.Add(-time.Hour),
+				},
+				AutoInjectReview: tc.autoFix,
+			}, []contract.KanbanPRFacts{{
+				URL: "pr/1", CI: tc.ci,
+				ReviewRun: contract.KanbanReviewRunFacts{
+					Present: true, ChangesRequested: true, Outcome: true, Running: tc.running,
+				},
+			}}, now, time.Minute)
+			if got.Column != contract.KanbanValidating || got.DisplayStatus != tc.want {
+				t.Fatalf("presentation = %+v, want %s/%s", got, contract.KanbanValidating, tc.want)
 			}
 		})
 	}
@@ -464,14 +583,14 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayAddressingComments,
 		},
 		{
-			name:    "an ao changes request with auto-inject on but worker idle needs review",
+			name:    "an ao changes request with auto-inject on but worker idle requests changes",
 			session: contract.KanbanSessionFacts{AutoInjectReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, ChangesRequested: true},
 			},
 			wantColumn: contract.KanbanValidating,
-			want:       contract.DisplayNeedsReview,
+			want:       contract.DisplayChangesRequested,
 		},
 		{
 			name: "a silent worker past grace has no signal",
@@ -488,14 +607,31 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayNoSignal,
 		},
 		{
-			name: "an ao changes request with auto-inject off needs review",
+			name: "an ao changes request on a draft with auto-inject off requests changes",
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				Draft:     true,
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, ChangesRequested: true},
 			},
 			wantColumn: contract.KanbanValidating,
-			want:       contract.DisplayNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
+			name:       "auto review never reviews a draft, so a draft says draft",
+			session:    contract.KanbanSessionFacts{AutoReview: true},
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Draft: true},
+			wantColumn: contract.KanbanValidating,
+			want:       contract.DisplayDraft,
+		},
+		{
+			name: "a working worker outranks a scheduled review",
+			session: contract.KanbanSessionFacts{
+				SessionFacts: contract.SessionFacts{Activity: contract.ActivityActive},
+				AutoReview:   true,
+			},
+			pr:         contract.KanbanPRFacts{URL: "pr/1"},
+			wantColumn: contract.KanbanValidating,
+			want:       contract.DisplayWorking,
 		},
 		{
 			name:       "auto review with no pass on this head has one scheduled",
@@ -514,32 +650,101 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayReviewing,
 		},
 		{
-			name:    "a failed pass remains validating and exposes the failure",
+			name:    "a failed pass with retries left is retrying",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Failed: true},
 			},
 			wantColumn: contract.KanbanValidating,
+			want:       contract.DisplayRetryingReview,
+		},
+		{
+			name:    "a failed pass with no retries left is validating and failed",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL:       "pr/1",
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Failed: true, RetryExhausted: true},
+			},
+			wantColumn: contract.KanbanValidating,
 			want:       contract.DisplayReviewFailed,
 		},
 		{
-			name:    "a cancelled pass leaves the review pending",
+			name: "a cancelled pass without auto review is in review and cancelled",
+			pr: contract.KanbanPRFacts{
+				URL:       "pr/1",
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Cancelled: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayReviewCancelled,
+		},
+		{
+			name:    "a cancelled pass under auto review is validating and cancelled",
 			session: contract.KanbanSessionFacts{AutoReview: true},
 			pr: contract.KanbanPRFacts{
 				URL:       "pr/1",
 				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Cancelled: true},
 			},
 			wantColumn: contract.KanbanValidating,
-			want:       contract.DisplayReviewPending,
+			want:       contract.DisplayReviewCancelled,
 		},
 
 		// In review: the loop seen from the person's side.
 		{
-			name:       "an open pr nobody is handling needs a human review",
+			name:       "an open pr nobody is handling is awaiting review",
 			pr:         contract.KanbanPRFacts{URL: "pr/1"},
 			wantColumn: contract.KanbanNeedsReview,
-			want:       contract.DisplayNeedsHumanReview,
+			want:       contract.DisplayAwaitingReview,
+		},
+		{
+			name:       "a working worker outranks an open review",
+			session:    sessionAt(contract.ActivityActive),
+			pr:         contract.KanbanPRFacts{URL: "pr/1"},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayWorking,
+		},
+		{
+			name:       "a worker waiting on input needs input while in review",
+			session:    sessionAt(contract.ActivityWaitingInput),
+			pr:         contract.KanbanPRFacts{URL: "pr/1"},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayNeedsInput,
+		},
+		{
+			name:       "merge conflicts are reported while awaiting review",
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Mergeability: contract.MergeConflicting},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayMergeConflicts,
+		},
+		{
+			name: "an approved pr with merge conflicts is in review with merge conflicts",
+			pr: contract.KanbanPRFacts{
+				URL:            "pr/1",
+				Review:         contract.ReviewApproved,
+				Mergeability:   contract.MergeConflicting,
+				ExternalReview: contract.KanbanExternalReviewFacts{Approved: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayMergeConflicts,
+		},
+		{
+			name: "an ao changes request with no ao loop is validating",
+			pr: contract.KanbanPRFacts{
+				URL:       "pr/1",
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanValidating,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
+			name:    "an auto review changes request without auto-inject is validating",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL:       "pr/1",
+				ReviewRun: contract.KanbanReviewRunFacts{Present: true, Outcome: true, ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanValidating,
+			want:       contract.DisplayChangesRequested,
 		},
 		{
 			name: "a blocked worker outranks an open review",
@@ -665,7 +870,7 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayApproved,
 		},
 		{
-			name: "an approved pr blocked by checks says ci failing",
+			name: "an approved pr blocked by checks is in review with ci failing",
 			pr: contract.KanbanPRFacts{
 				URL:            "pr/1",
 				Review:         contract.ReviewApproved,
@@ -673,8 +878,61 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 				CI:             contract.CIFailing,
 				ExternalReview: contract.KanbanExternalReviewFacts{Approved: true},
 			},
-			wantColumn: contract.KanbanReady,
+			wantColumn: contract.KanbanNeedsReview,
 			want:       contract.DisplayCIFailing,
+		},
+		{
+			name:       "a working worker outranks a mergeable pr",
+			session:    sessionAt(contract.ActivityActive),
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Mergeability: contract.MergeMergeable},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayWorking,
+		},
+		{
+			name:       "an exited worker outranks a mergeable pr",
+			session:    sessionAt(contract.ActivityExited),
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Mergeability: contract.MergeMergeable},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayExited,
+		},
+		{
+			name:    "an exited worker outranks an approved pr",
+			session: sessionAt(contract.ActivityExited),
+			pr: contract.KanbanPRFacts{
+				URL:            "pr/1",
+				Review:         contract.ReviewApproved,
+				Mergeability:   contract.MergeBlocked,
+				ExternalReview: contract.KanbanExternalReviewFacts{Approved: true},
+			},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayExited,
+		},
+		{
+			name: "a silent worker outranks a mergeable pr",
+			session: contract.KanbanSessionFacts{
+				SessionFacts: contract.SessionFacts{
+					Activity:       contract.ActivityIdle,
+					SignalExpected: true,
+					LastActivityAt: time.Unix(0, 0),
+				},
+			},
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Mergeability: contract.MergeMergeable},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayNoSignal,
+		},
+		{
+			name:       "a merged pr reports the merge after the worker exits",
+			session:    sessionAt(contract.ActivityExited),
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Merged: true},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayMerged,
+		},
+		{
+			name:       "a merged pr reports the merge while the worker is still working",
+			session:    sessionAt(contract.ActivityActive),
+			pr:         contract.KanbanPRFacts{URL: "pr/1", Merged: true},
+			wantColumn: contract.KanbanReady,
+			want:       contract.DisplayMerged,
 		},
 		{
 			name:       "a merged pr is merged",
@@ -799,7 +1057,7 @@ func TestDeriveKanbanPresentationSpeaksForTheChosenPR(t *testing.T) {
 			[]contract.KanbanPRFacts{{URL: "pr/1"}},
 			time.Unix(3600, 0), testGrace,
 		)
-		if got.Column == contract.KanbanBuilding || got.DisplayStatus == contract.DisplayWorking {
+		if got.Column == contract.KanbanBuilding {
 			t.Fatalf("presentation = %+v, want a pr-driven placement", got)
 		}
 	})

@@ -2845,12 +2845,40 @@ type MobileStatusResponse struct {
 	// TailscaleHost is this machine's 100.64.0.0/10 Tailscale address, or "" when
 	// Tailscale is not up. The renderer encodes it into the pairing QR when the
 	// user selects the Tailscale tab, and shows a hint instead when it is empty.
-	TailscaleHost string              `json:"tailscaleHost"`
-	Port          int                 `json:"port"`
-	Password      string              `json:"password"`
-	Warning       string              `json:"warning"`
-	SecurePairing SecurePairingStatus `json:"securePairing"`
-	KeepAwake     KeepAwakeStatus     `json:"keepAwake"`
+	TailscaleHost            string              `json:"tailscaleHost"`
+	Port                     int                 `json:"port"`
+	Password                 string              `json:"password"`
+	Warning                  string              `json:"warning"`
+	SecurePairing            SecurePairingStatus `json:"securePairing"`
+	KeepAwake                KeepAwakeStatus     `json:"keepAwake"`
+	RequireDeviceCredentials bool                `json:"requireDeviceCredentials"`
+	PasswordLastUsedAt       *time.Time          `json:"passwordLastUsedAt,omitempty"`
+}
+
+// PairingCodeResponse is a one-time pairing code.
+type PairingCodeResponse struct {
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// PairDeviceRequest names the device being paired. Both fields are optional.
+type PairDeviceRequest struct {
+	Name     string `json:"name,omitempty" description:"Name shown in the host's device list."`
+	Platform string `json:"platform,omitempty" description:"The device's platform, such as ios, android, darwin, win32 or linux."`
+}
+
+// PairDeviceResponse carries the device's own token, which is shown once.
+type PairDeviceResponse struct {
+	HostID   string `json:"hostId"`
+	DeviceID string `json:"deviceId"`
+	Token    string `json:"token"`
+	// Credential is what the device presented. Only the password stays usable as a fallback.
+	Credential string `json:"credential" enum:"pairing-code,password"`
+}
+
+// SetRequireDeviceCredentialsRequest turns the pairing password off or on.
+type SetRequireDeviceCredentialsRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 // KeepAwakeStatus describes the macOS-only option that stops the machine from
@@ -3356,6 +3384,12 @@ type ConversationTurnResponse struct {
 	// list is right here. It also keeps the changed-file view and the timeline from
 	// disagreeing, which two independently-timed fetches would eventually do.
 	Diff *ConversationTurnDiffResponse `json:"diff,omitempty"`
+	// Artifacts are the session artifact files this turn created or edited, as
+	// the daemon saw them in the artifact directory when the turn ended. Unlike
+	// Diff it does not depend on the provider, so it lists files an agent wrote
+	// through a shell command. Absent for a turn the daemon did not watch from its
+	// start, or one that changed no artifact.
+	Artifacts *ConversationTurnArtifactsResponse `json:"artifacts,omitempty"`
 	// Plan is the agent's plan for this turn, or absent when it made none. The
 	// provider re-sends the whole plan on every change, so this is the current answer
 	// rather than a history of one: the earlier versions are the same plan with fewer
@@ -3391,6 +3425,19 @@ type ConversationPlanResponse struct {
 type ConversationPlanStepResponse struct {
 	Text   string `json:"text"`
 	Status string `json:"status" enum:"pending,in_progress,completed"`
+}
+
+// ConversationTurnArtifactsResponse lists the session artifacts a turn changed.
+type ConversationTurnArtifactsResponse struct {
+	Files []ConversationTurnArtifactResponse `json:"files"`
+}
+
+// ConversationTurnArtifactResponse is one session artifact file a turn changed.
+type ConversationTurnArtifactResponse struct {
+	// Path is relative to the session's artifact directory, slash-separated, as
+	// the session's artifactFiles list it.
+	Path   string `json:"path"`
+	Status string `json:"status" enum:"added,modified"`
 }
 
 // ConversationTurnDiffResponse is a turn's changed-file summary.
@@ -3948,14 +3995,16 @@ type RequestRereviewResponse struct {
 	OK bool `json:"ok"`
 }
 
-// MobileDeviceResponse is one row of the desktop's mobile-device roster: the
-// stored registration plus whether that phone is running the app right now.
+// MobileDeviceResponse is one row of the device list: a device with its own token,
+// a phone on the pairing password, or the account's devices.
 type MobileDeviceResponse struct {
-	InstallID            string    `json:"installId"`
+	ID                   string    `json:"id" description:"What DELETE /api/v1/mobile/devices/{id} takes."`
+	Kind                 string    `json:"kind" enum:"device,password,account" description:"device: holds its own token. password: a phone that still uses the pairing password, so removing it only stops its notifications. account: every device signed in to the linked account; they share one token."`
+	InstallID            string    `json:"installId" description:"The phone's install id, or empty for a device that never registered for notifications."`
 	Token                string    `json:"token,omitempty"`
-	Platform             string    `json:"platform,omitempty" enum:"ios,android"`
+	Platform             string    `json:"platform,omitempty"`
 	DeviceName           string    `json:"deviceName,omitempty"`
-	Live                 bool      `json:"live" description:"True when the phone's app is open and polling."`
+	Live                 bool      `json:"live" description:"True when the device is connected, or the phone's app is open and polling."`
 	NotificationsEnabled bool      `json:"notificationsEnabled" description:"True when this device has a push token registered."`
 	CreatedAt            time.Time `json:"createdAt"`
 	LastSeenAt           time.Time `json:"lastSeenAt"`
@@ -3966,10 +4015,9 @@ type MobileDevicesResponse struct {
 	Devices []MobileDeviceResponse `json:"devices"`
 }
 
-// InstallIDParam is the {installId} path parameter for mobile-device roster
-// routes.
-type InstallIDParam struct {
-	InstallID string `path:"installId" description:"The device's stable install id."`
+// MobileDeviceIDParam is the {id} path parameter for the device list routes.
+type MobileDeviceIDParam struct {
+	ID string `path:"id" description:"The row's id from the device list."`
 }
 
 // CreateConversationSideChatRequest opens an independent launch-scoped side chat.

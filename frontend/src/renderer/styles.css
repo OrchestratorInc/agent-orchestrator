@@ -248,6 +248,7 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
 	--spacing-agent-shell-tab-max: var(--size-agent-shell-tab-max);
+	--spacing-session-tab-max: var(--size-session-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
 	--spacing-preview-max: var(--size-preview-max);
@@ -1615,12 +1616,10 @@ body {
 	user-select: none;
 }
 
-button,
-input,
-textarea,
-select {
-	font: inherit;
-}
+/* Form controls inherit their font from Tailwind's preflight, inside
+ * `@layer base`. Do not repeat that rule here: unlayered CSS beats every
+ * layered utility, so `text-*` and `font-*` on buttons and inputs would be
+ * ignored. */
 
 /* Error copy stays copyable under the app-wide `user-select: none` (#4268). */
 input,
@@ -4988,13 +4987,15 @@ html.sidebar-reordering * {
    hides the shell topbar; windowed mode reserves the native traffic-light band,
    while native fullscreen keeps a 0px top inset. Linux keeps its ShellTopbar
    offset below. */
-/* Maximized files use the same geometry as the maximized browser (backdrop,
-   titlebar band, inset frame) but their own rules, so the native-view
-   composition overrides for the browser never reach the files overlay. */
+/* Maximized files share the maximized browser's overlay geometry (backdrop,
+   titlebar band, full-width frame) but keep their own frame and composition
+   rules, so the native-view overrides for the browser never reach files.
+   Browser maximize switches geometry atomically. A live WebContentsView cannot
+   share a compositor timeline with DOM layout; animating its box would resize
+   Chromium over IPC every frame and make the controls visibly trail the page. */
+.browser-popout-overlay,
 .files-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
-	/* Maximized files use the window's full width: no inset strip beside the frame. */
-	--browser-popout-inline-inset: 0px;
 	box-sizing: border-box;
 	position: fixed;
 	inset: var(--browser-popout-top) 0 0;
@@ -5004,21 +5005,6 @@ html.sidebar-reordering * {
 	/* The macOS shell has a separate traffic-light drag strip. Keep the
 	   maximized surface interactive even if those regions overlap while the
 	   window is transitioning between layouts. */
-	-webkit-app-region: no-drag;
-}
-
-/* Browser maximize switches geometry atomically. A live WebContentsView cannot
-   share a compositor timeline with DOM layout; animating its box would resize
-   Chromium over IPC every frame and make the controls visibly trail the page. */
-.browser-popout-overlay {
-	--browser-popout-top: env(titlebar-area-height, 0px);
-	--browser-popout-inline-inset: var(--size-center-panel-inline-inset);
-	box-sizing: border-box;
-	position: fixed;
-	inset: var(--browser-popout-top) 0 0;
-	z-index: 40;
-	overflow: hidden;
-	background: transparent;
 	-webkit-app-region: no-drag;
 }
 
@@ -5034,8 +5020,8 @@ html.sidebar-reordering * {
 .browser-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
@@ -5054,8 +5040,8 @@ html.sidebar-reordering * {
 .files-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
@@ -5108,15 +5094,6 @@ html[data-shell-windows] body > .files-popout-overlay {
 	background: var(--bg);
 	border-bottom: 1px solid var(--border);
 	pointer-events: none;
-}
-
-.browser-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
-}
-
-/* Maximized files keep the full width on macOS too (see .files-popout-overlay). */
-.files-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: 0px;
 }
 
 .browser-popout-overlay .browser-panel__toolbar,

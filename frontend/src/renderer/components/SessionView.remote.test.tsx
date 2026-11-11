@@ -206,7 +206,7 @@ it("locks the last saved chat when the upstream daemon fails but its proxy remai
 });
 
 it.each([
-	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "Host rejected the password"],
+	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "The host rejected this device"],
 	[426, { error: "incompatible", code: "HOST_API_INCOMPATIBLE" }, "Orchestrator versions are incompatible"],
 	[502, { error: "unavailable", code: "HOST_IDENTITY_UNVERIFIED", message: "Host identity changed" }, "Host is offline"],
 ])("explains remote session HTTP %i failures while its proxy is still connected", async (status, body, message) => {

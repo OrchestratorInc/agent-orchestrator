@@ -186,6 +186,14 @@ describe("ShellTerminalTab rename", () => {
 		expect(onSelect).not.toHaveBeenCalled();
 	});
 
+	it("closes on a middle-click", () => {
+		const { onClose, onSelect } = renderTab({ appearance: "connected" });
+		const frame = screen.getByRole("tab", { name: "ao" }).closest("[data-terminal-tab-frame]")!;
+		fireEvent(frame, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(onSelect).not.toHaveBeenCalled();
+	});
+
 	it("optically centers the auxiliary terminal glyph with its label", () => {
 		renderTab({ appearance: "connected" });
 

@@ -19,6 +19,9 @@ import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSetting
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
 import { CloudProjectSharingSettings } from "./CloudProjectSharingSettings";
+import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { isCloudWorkspaceProject } from "../lib/cloud-project-repos";
 import { CloudProjectEnvironmentSettings, ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
@@ -36,6 +39,7 @@ import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, teamsPageFor, type TeamsPage, visibleGlobalSettings } from "./settings/settingsCatalog";
 import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
+import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../lib/mobile-pairing-code";
 import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
 import { useEdgeFade } from "../hooks/useEdgeFade";
 
@@ -99,6 +103,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// record of it. Resolve it here so its settings load from the control plane.
 	const explicitCloudOrgId = displaySettings?.scope === "project" ? displaySettings.cloudOrgId : undefined;
 	const localProjectScope = displaySettings?.scope === "project" && !remoteHostId && explicitCloudOrgId === undefined;
+	// Only a project the local daemon may hold needs the org's list to tell
+	// whether it is a Cloud project; one opened as a Cloud project is read on
+	// its own below.
 	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope });
 	const cloudProject = localProjectScope
 		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
@@ -117,6 +124,16 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
 	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
+	// The Cloud project itself, by the query its settings pages load it with,
+	// so they share one read: whichever org it is in, wherever it sits in the
+	// org's list.
+	const cloudCp = useCloudCp(isCloudProjectSettings);
+	const cloudProjectRecord = useQuery({
+		queryKey: cloudProjectSettingsQueryKey(cloudCp.baseUrl, cloudOrgId ?? "", projectId),
+		enabled: isCloudProjectSettings && cloudCp.ready,
+		retry: false,
+		queryFn: ({ signal }) => cloudCp.client.getProject(cloudOrgId ?? "", projectId, { signal }).then((response) => response.project),
+	});
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
@@ -131,7 +148,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// A Cloud project's repositories, where its agent starts, and the
 	// instructions added to its agents' prompts live on the control plane.
 	if (isCloudProjectSettings) {
-		projectSections.push({ id: "repositories", label: t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
+		// A workspace's repositories are all its own, side by side in its folder.
+		const workspace = isCloudWorkspaceProject(cloudProjectRecord.data ?? cloudProject);
+		projectSections.push({ id: "repositories", label: workspace ? t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" }) : t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
 		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
 	}
 	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
@@ -254,6 +273,8 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		// flips after it opens.
 		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
 		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
+		// Fails quietly while Connect Mobile is off; the page fetches it once on.
+		void queryClient.prefetchQuery({ queryKey: mobilePairingCodeQueryKey, queryFn: fetchPairingCode, staleTime: PAIRING_CODE_REFRESH_MS });
 	}, [queryClient, settingsModal?.scope]);
 
 	const selectProjectSection = (id: ProjectSettingsSection, navigate = () => projectHistory.visit(id)) => {

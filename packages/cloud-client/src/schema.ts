@@ -566,7 +566,8 @@ export interface paths {
         };
         get: operations["listGitHubRepositories"];
         put?: never;
-        post?: never;
+        /** @description Create an empty private GitHub repository, for a folder uploaded from the desktop, in an account the organization's GitHub App installation covers, and grant it to the organization. With several accounts connected, owner names the one (422 repository_owner_required without it). An empty private repository of that name that already exists is connected instead (200, created false); a public one is refused (422 repository_create_refused), as is a repository the member's own GitHub account cannot push to when the installation is user-scoped. Push the folder to pushPath, relative to the control plane, with the same bearer token. That endpoint only accepts pushes to a repository this operation returned for the organization, only pushes that create branches, and answers 403 otherwise; GitHub's own refusals (for example of .github/workflows changes the App may not make) reach git's output unchanged. 422 codes: repository_owner_required, github_installation_required, github_installation_ineligible, repository_create_on_github, repository_create_refused, validation_error. 502 SCM_BROKER_FAILED when GitHub could not be reached or did not grant the repository in time; retry later. */
+        post: operations["createGitHubRepository"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1817,6 +1818,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The release of each coding-agent CLI the organization's new Cloud sessions run, the newest release its publisher has, and how the last install of a release the organization chose went (any member). A harness runs the release AO tested (`defaultVersion`) until an organization admin chooses a newer one (`selectedVersion`). Each entry carries the local daemon's install plan, update advisory and install job shapes, so a client shows AO Cloud's harnesses the way it shows a computer's. `editable` says whether the caller may change them. */
+        get: operations["listOrgHarnessVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions/{agent}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Have the organization's new sessions run `expectedVersion` of this harness in place of the AO-tested release (organization admins). The version must be a stable release newer than the AO-tested one that the publisher has (the npm registry, or Cursor's download host). Only the harness's CLI moves: the tools it also runs (Claude Code's Chat adapter) keep the release AO tested. Each new session's worker installs the release and checks it against what the publisher listed; when that fails the session runs the AO-tested release and the failure shows as the entry's failed `job`. Sessions already running keep their release. */
+        post: operations["installOrgHarnessVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Have the organization's new sessions run the AO-tested release of this harness's CLI again (organization admins; 403 ORG_ADMIN_REQUIRED otherwise). */
+        delete: operations["resetOrgHarnessVersion"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/coder-config": {
         parameters: {
             query?: never;
@@ -2718,6 +2780,89 @@ export interface components {
             /** @description A provider from the organization's offering, or empty to clear the choice. */
             defaultProvider: string;
         };
+        CloudHarnessVersions: {
+            /** @description The caller administers the organization, so may change the versions. */
+            editable: boolean;
+            agents: components["schemas"]["CloudHarnessVersion"][];
+        };
+        /** @description One harness as the organization's new Cloud sessions run it. */
+        CloudHarnessVersion: {
+            /** @enum {string} */
+            agentId: "claude-code" | "codex" | "cursor";
+            /** @description The release of the harness's CLI that AO tested and its images bake. */
+            defaultVersion: string;
+            /** @description The newer release the organization chose in its place; absent while it runs the default. */
+            selectedVersion?: string;
+            /** @description A release the organization chose that AO's tested release has since caught up with or passed. New sessions run `defaultVersion` instead, never an older CLI than AO tests; absent otherwise. */
+            supersededVersion?: string;
+            plan: components["schemas"]["CloudHarnessInstallPlan"];
+            advisory: components["schemas"]["CloudHarnessUpdateAdvisory"];
+            job?: components["schemas"]["CloudHarnessInstallJob"];
+            /** @description Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter). They always run the release AO tested; clients show them read-only. */
+            components?: components["schemas"]["CloudHarnessComponent"][];
+        };
+        CloudHarnessComponent: {
+            tool: string;
+            version: string;
+            defaultVersion: string;
+        };
+        /** @description The local daemon's AgentInstallPlan shape. AO Cloud has one method, ao-cloud. */
+        CloudHarnessInstallPlan: {
+            agentId: string;
+            automatic: boolean;
+            available: boolean;
+            documentationUrl: string;
+            method: string;
+            methods: components["schemas"]["CloudHarnessInstallMethod"][];
+        };
+        /** @description The local daemon's AgentInstallMethod shape. updateAvailable is false for a caller who may not change the version, with updateReason saying why. */
+        CloudHarnessInstallMethod: {
+            id: string;
+            label: string;
+            available: boolean;
+            recommended: boolean;
+            reinstallAvailable: boolean;
+            updateAvailable: boolean;
+            updateReason?: string;
+        };
+        /** @description The local daemon's AgentUpdateAdvisory shape. currentVersion is the release new sessions run; latestVersion the newest the publisher has. */
+        CloudHarnessUpdateAdvisory: {
+            agentId: string;
+            /** Format: date-time */
+            checkedAt: string;
+            currentVersion?: string;
+            latestVersion?: string;
+            maintenanceMethod?: string;
+            source?: string;
+            /** @enum {string} */
+            reason?: "lookup_failed" | "build_unordered";
+            /** @enum {string} */
+            status: "unknown" | "current" | "behind_latest" | "ahead_of_latest";
+        };
+        /** @description The local daemon's InstallJob shape, for the latest install of the organization's chosen release a session's worker reported: failed when it could not be installed (that session ran the AO-tested release), succeeded once one installed it. */
+        CloudHarnessInstallJob: {
+            target: string;
+            /** @enum {string} */
+            status: "succeeded" | "failed";
+            method?: string;
+            error?: string;
+            /** @description The end of the installer's output. */
+            output?: string;
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            finishedAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CloudHarnessInstallInput: {
+            /** @enum {string} */
+            method?: "ao-cloud";
+            /** @enum {string} */
+            operation?: "update";
+            /** @description The release to run, as the advisory listed it (its latestVersion). */
+            expectedVersion: string;
+        };
         /** @description What an organization may use and how it is billed. The control plane is the source of truth; clients shape their UI from it and the server enforces the same rules on create. */
         Offering: {
             /** @description Sandbox providers the organization may use: coder and freestyle when the deployment offers them, and any other offered provider the capability gate allows. Freestyle sessions are billed; Coder sessions are billed unless the organization holds the coder capability. */
@@ -2851,9 +2996,15 @@ export interface components {
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
+            layout?: components["schemas"]["ProjectLayout"];
         } & {
             [key: string]: unknown;
         };
+        /**
+         * @description "workspace" lays the project out like a local workspace: every session checks the main repository and each additional one (repos) out side by side inside one workspace folder, and the agent starts in that folder (agentStartsIn is treated as parent). Set only when the project is created; any settings write that includes layout is refused (422), even with the project's current value. A standalone project has no repository, so creating one with this layout is refused (422).
+         * @enum {string}
+         */
+        ProjectLayout: "workspace";
         /** @description The project's additional repositories, beside its main repository (repositoryUrl). Every session clones each into its own folder beside the main checkout, named after the repository, and checks it out on the session branch, on every sandbox provider. Each must be a github.com repository granted to the organization's GitHub App through the same installation as the main one; none may repeat the main repository or share a folder name with another. Replaces the legacy coder.extraRepos, which is still read when repos is absent. A repository whose name starts with a dot is refused. Only organization owners and admins may set it. */
         ProjectAdditionalRepositories: components["schemas"]["ProjectRepository"][];
         ProjectRepository: {
@@ -3425,6 +3576,18 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             };
+        };
+        CreateGitHubRepositoryInput: {
+            name: string;
+            /** @description The GitHub account login to create the repository in. */
+            owner?: string;
+            description?: string;
+        };
+        CreateGitHubRepositoryResponse: {
+            repository: components["schemas"]["GitHubRepository"];
+            created: boolean;
+            /** @description The repository's push-only git smart HTTP endpoint, relative to the control plane (/api/cloud/v1/orgs/{orgId}/github/git/{owner}/{name}.git). */
+            pushPath: string;
         };
         CreateGitHubScratchProjectInput: {
             displayName: string;
@@ -5233,6 +5396,8 @@ export interface components {
         ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
         RemoteHostId: string;
+        /** @description A harness whose version AO Cloud manages. */
+        CloudHarnessAgent: "claude-code" | "codex" | "cursor";
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -6281,6 +6446,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitHubRepositoryPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createGitHubRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateGitHubRepositoryInput"];
+            };
+        };
+        responses: {
+            /** @description An existing empty repository was connected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateGitHubRepositoryResponse"];
+                };
+            };
+            /** @description The repository was created and granted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateGitHubRepositoryResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -8326,6 +8527,113 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Offering"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listOrgHarnessVersions: {
+        parameters: {
+            query?: {
+                /** @description Look up the newest releases again instead of reading the control plane's cache. */
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every harness whose version AO Cloud manages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersions"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installOrgHarnessVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloudHarnessInstallInput"];
+            };
+        };
+        responses: {
+            /** @description The harness as new sessions now run it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersion"];
+                };
+            };
+            /** @description ORG_ADMIN_REQUIRED. Only organization owners and admins change the version. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description INVALID_HARNESS_VERSION (not a stable release of the harness), HARNESS_VERSION_NOT_NEWER (not newer than the AO-tested release), UNKNOWN_HARNESS_VERSION (the publisher has no such release), or UNVERIFIABLE_HARNESS_VERSION (the release installs something AO Cloud cannot check against its publisher's listing). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RELEASE_LOOKUP_UNAVAILABLE. The publisher could not be reached; nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resetOrgHarnessVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The harness as new sessions now run it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersion"];
                 };
             };
             default: components["responses"]["Error"];

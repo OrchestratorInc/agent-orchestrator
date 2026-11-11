@@ -3474,6 +3474,37 @@ func (s *Store) SetTurnDiff(
 	return rows > 0, nil
 }
 
+// SetTurnArtifacts records the session artifacts a provider turn created or
+// edited, replacing any earlier list. It reports whether a turn matched.
+func (s *Store) SetTurnArtifacts(
+	ctx context.Context,
+	conversationID, providerTurnID string,
+	artifacts []domain.ConversationTurnArtifact,
+) (bool, error) {
+	if providerTurnID == "" {
+		return false, nil
+	}
+	encoded := ""
+	if len(artifacts) > 0 {
+		raw, err := json.Marshal(domain.ConversationTurnArtifacts{Files: artifacts})
+		if err != nil {
+			return false, fmt.Errorf("encode turn artifacts for %s: %w", providerTurnID, err)
+		}
+		encoded = string(raw)
+	}
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	rows, err := q.UpdateConversationTurnArtifacts(ctx, gen.UpdateConversationTurnArtifactsParams{
+		ArtifactsJson:  encoded,
+		ConversationID: conversationID,
+		ProviderTurnID: providerTurnID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("set turn artifacts for %s: %w", providerTurnID, err)
+	}
+	return rows > 0, nil
+}
+
 // ResolveApproval marks an approval answered. It only matches a still-pending
 // row, so a card the user left on screen cannot answer a newer request.
 func (s *Store) ResolveApproval(
@@ -4891,6 +4922,13 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 	if row.RolledBackAt.Valid {
 		rolledBack := row.RolledBackAt.Time
 		turn.RolledBackAt = &rolledBack
+	}
+	if row.ArtifactsJson != "" {
+		var artifacts domain.ConversationTurnArtifacts
+		// Dropped whole when unreadable, like the diff: a partial list would look complete.
+		if err := json.Unmarshal([]byte(row.ArtifactsJson), &artifacts); err == nil && len(artifacts.Files) > 0 {
+			turn.Artifacts = &artifacts
+		}
 	}
 	if row.PlanJson != "" {
 		var plan domain.ConversationPlan

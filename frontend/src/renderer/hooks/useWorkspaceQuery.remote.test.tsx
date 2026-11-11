@@ -39,7 +39,7 @@ async function prepareTwoHosts() {
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const url = input instanceof Request ? input.url : String(input);
 		return new Response(JSON.stringify(url.endsWith("/projects")
-			? { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] }
+			? { projects: [{ id: "project-1", name: "Remote", path: "/remote", autoSpawnPauses: [{ harness: "claude-code", model: "sonnet", effort: "high", kind: "worker", errorCode: "UNSUPPORTED_MODEL", failures: 3, message: "Unavailable", pausedAt: "now" }] }]  }
 			: { sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] }] }),
 		{ status: 200, headers: { "content-type": "application/json" } });
 	}));
@@ -52,6 +52,7 @@ it("lists remote projects separately so local actions cannot target a same-named
 	await waitFor(() => expect(result.current.remote.data).toHaveLength(1));
 	expect(result.current.local.data?.map((project) => project.name)).toEqual(["Local"]);
 	expect(result.current.remote.data?.map((project) => [project.name, project.sessions[0]?.hostId])).toEqual([["Remote", "box-a"]]);
+	expect(result.current.remote.data?.[0].autoSpawnPauses?.[0]).toMatchObject({ model: "sonnet", effort: "high", kind: "worker" });
 });
 
 it("reports a failed remote query instead of treating the host as empty and healthy", async () => {

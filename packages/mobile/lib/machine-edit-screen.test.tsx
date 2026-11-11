@@ -182,15 +182,15 @@ describe("editing a machine", () => {
 	});
 
 	it("keeps the editor and says what failed under the connection fields", async () => {
-		fixtures.save.mockRejectedValue(new MachineSaveError("That password was rejected. Check it and try again.", "password"));
+		fixtures.save.mockRejectedValue(new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password"));
 		await open();
 		await type("environment-password-a", "wrong");
 		await act(async () => save().props.onPress());
 		expect(fixtures.back).not.toHaveBeenCalled();
 		expect(fixtures.haptics.warning).toHaveBeenCalledOnce();
-		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: "That password was rejected. Check it and try again." });
+		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: "That code or password was rejected. Get a new code and try again." });
 		// A footer isn't read out as it appears, so the screen reader is told.
-		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
+		expect(fixtures.announce).toHaveBeenCalledWith("That code or password was rejected. Get a new code and try again.", { queue: true });
 		await type("environment-password-a", "right");
 		// Cleared but still mounted, so the field being typed in keeps focus.
 		expect(connectionSection().props.footer.props).toMatchObject({ error: false, children: undefined });

@@ -37,7 +37,7 @@ export type BoardSessionPresentation = {
 	kanbanColumn?: KanbanColumn;
 	/**
 	 * Daemon-derived phrase for what is happening inside {@link kanbanColumn}
-	 * ("Fixing CI failures", "Needs human review"), replacing {@link status} as
+	 * ("Fixing CI failures", "Awaiting review"), replacing {@link status} as
 	 * the card's status text. Translated via `getDisplayStatusLabel` for known
 	 * phrases (see {@link DisplayStatus}); an unrecognized one -- a newer
 	 * daemon that shipped a phrase before this build -- renders as the raw,
@@ -80,21 +80,11 @@ export type BoardPullRequestState = "closed" | "open" | "draft" | "merged";
 // AO-driven loop working the PR. Settled phrases ("Mergeable", "Approved",
 // "Merged") are deliberately absent — see #4725 and #5081.
 const IN_PROGRESS_DISPLAY_STATUSES = new Set<string>([
-	"Review pending",
+	"Working",
 	"Fixing CI failures",
 	"Addressing comments",
 	"Reviewing",
-]);
-
-// Display statuses whose PR is done for good. A live worker still reads
-// `status: working` under them (the agent can keep running after its PR
-// merges), but the delivery loop has nothing left to turn, so the loader stays
-// off. "Mergeable" and "Approved" are absent: the agent may still be working
-// on a PR that has not landed.
-const SETTLED_DISPLAY_STATUSES = new Set<string>([
-	"Merged",
-	"Closed without merge",
-	"Terminated",
+	"Retrying review",
 ]);
 
 export type BoardReviewerPresentation = {
@@ -316,23 +306,15 @@ export function SessionCardView({
 		prs.length > 0 && isFinishedForPullRequestProgress
 			? labels.pr.progress?.(countBoardPullRequests(prs))
 			: undefined;
+	// The loader follows the label: it spins only when the phrase itself names
+	// work in progress, so a card never spins beside a settled phrase. Fall back
+	// to `status` only for a daemon too old to send `displayStatus`.
 	const showStatusLoader =
 		session.statusReadiness === "checking" || (session.statusReadiness !== "unavailable" &&
 		!needsAttention &&
-		session.displayStatus !== "Needs human review" &&
-		// "Draft" describes the PR, not work AO is turning, so it gets no loader
-		// even while the worker is live.
-		session.displayStatus !== "Draft" &&
-		((session.status === "working" && (legacyStatus || !SETTLED_DISPLAY_STATUSES.has(session.displayStatus ?? ""))) ||
-			// The label reads `displayStatus`, so the loader must too. `status`
-			// aggregates the session's WORST open PR while `displayStatus` describes
-			// its BEST one, so keying the loader off `status` spun a settled
-			// "Mergeable" card forever whenever a sibling PR was still review-pending
-			// (#5081). Fall back to `status` only for a daemon too old to send
-			// `displayStatus`.
-			(session.displayStatus
-				? IN_PROGRESS_DISPLAY_STATUSES.has(session.displayStatus)
-				: session.status === "review_pending")));
+		(session.displayStatus
+			? IN_PROGRESS_DISPLAY_STATUSES.has(session.displayStatus)
+			: session.status === "working" || session.status === "review_pending"));
 
 	return (
 		<div
@@ -476,7 +458,9 @@ function boardSessionNeedsAttention(session: BoardSessionPresentation): boolean 
 	if (session.statusPresentation) return false;
 	switch (session.displayStatus) {
 		case "Blocked":
+		case "Needs input":
 		case "CI failing":
+		case "Merge conflicts":
 		case "Changes requested":
 			return true;
 		case undefined:

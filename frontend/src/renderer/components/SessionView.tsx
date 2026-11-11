@@ -283,6 +283,8 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 /** How often the startup screen reads the session's events while their stream is down or still opening. */
 const STARTUP_EVENTS_POLL_MS = 2_000;
 
+const CHAT_VIEW_LEASE_MS = 30_000;
+
 /**
  * The furthest startup step a session's events confirm, with when it was
  * reached. Events from before the cutoff are an earlier epoch's: one can hold
@@ -1986,6 +1988,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const viewId = crypto.randomUUID();
 		let left = false;
 		let refreshed = false;
+		let renewedAt = Date.now();
 		let pending = Promise.resolve();
 		const setViewActive = async (active: boolean) => {
 			try {
@@ -1994,6 +1997,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					body: { viewId, active },
 				});
 				if (error) throw error;
+				if (active) renewedAt = Date.now();
 				// Remote conversations already refresh every two seconds. A ready or
 				// working chat hears every change through events, and a wake emits
 				// one, so only a chat still waking or stopped is refreshed here;
@@ -2020,29 +2024,43 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			if (left || hostId) return;
 			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 		};
+		const leaseLapsed = () => Date.now() - renewedAt > CHAT_VIEW_LEASE_MS;
 		void renewView().catch(refreshAfterWakeError);
-		const renewal = window.setInterval(() => { void renewView().catch(refreshAfterWakeError); }, 10_000);
+		const renewal = window.setInterval(() => {
+			if (document.hidden && leaseLapsed()) return;
+			void renewView().catch(refreshAfterWakeError);
+		}, 10_000);
+		const renewOnReturn = () => {
+			if (!document.hidden && leaseLapsed()) void renewView().catch(refreshAfterWakeError);
+		};
+		document.addEventListener("visibilitychange", renewOnReturn);
 		return () => {
 			left = true;
 			window.clearInterval(renewal);
+			document.removeEventListener("visibilitychange", renewOnReturn);
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A local session's tab menus hold the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
+	// A session's tab menus hold the interface switch and, in a local terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	// The agent rows apply while there is a switch to offer, or a terminal's
-	// agent to pick and no switch running. Then the tab also shows its ⋮ button;
-	// otherwise the running switch's status takes the tab's action slot.
+	// The agent rows apply while there is a switch to offer, or a local
+	// terminal's agent to pick and no switch running.
 	const sessionTabAgentMenu = useMemo<SessionTabAgentMenu | undefined>(() => {
-		if (!session || session.cloud) return undefined;
-		const picksAgent = interfaceUi.target === "chat" && !interfaceUi.switchControl;
-		if (!interfaceUi.switchAction && !picksAgent) return undefined;
-		return { session, hostId, blocked: agentWorking, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
+		if (!session) return undefined;
+		const picksAgent = !session.cloud && interfaceUi.target === "chat";
+		if (!interfaceUi.switchAction && !(picksAgent && !interfaceUi.switchControl)) return undefined;
+		return { session, hostId, blocked: agentWorking, picksAgent, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
 	}, [agentWorking, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
-	const sessionTabActions = sessionTabAgentMenu
-		? <SessionTabMenuButton key={uiSessionId} />
-		: session ? (interfaceUi.switchControl ?? null) : null;
+	// The session tab always shows its ⋮ menu after the title; the other tabs
+	// show a close button on hover. While an interface switch is requested or
+	// running, the switch's status (cancel on hover) takes the ⋮'s place.
+	const sessionTabActionPinned = Boolean(session);
+	const sessionTabActions = !session
+		? null
+		: interfaceUi.switchPending
+			? interfaceUi.switchControl
+			: <SessionTabMenuButton key={uiSessionId} />;
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"
@@ -2069,8 +2087,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<SessionTopbarActions route={sessionTopbarRoute} />
 		</div>
 	);
-	// While an interface switch runs, its status replaces the tab menu and stays visible.
-	const sessionTabActionPinned = Boolean(interfaceUi.switchControl && !interfaceUi.switchAction);
 
 	// The pane shows one terminal at a time, so selecting a shell or the reviewer
 	// takes the agent's terminal off screen while the route still points here.
@@ -2554,8 +2570,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
 									onOpenFile={openCenterFile}
+									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
 									session={session}
 									sessionTabAction={sessionTabActions}
+									sessionTabActionPinned={sessionTabActionPinned}
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
@@ -2632,6 +2650,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									}
 									onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 									onOpenFile={handleOpenFile}
+									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
          onOpenFileAnnotation={(reference,resolution)=>{
           if(reference.sessionId!==sessionId || resolution.state==="unavailable")return;
           const path=resolution.path??reference.path;
