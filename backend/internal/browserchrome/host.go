@@ -23,6 +23,10 @@ const (
 	// daemon's runtime frame limit.
 	maxFromExtensionBytes = 8 << 20
 	extensionHelloTimeout = 10 * time.Second
+	// daemonWriteTimeout bounds one frame write to the daemon. A frame is small
+	// (a screenshot result is the largest), so a write that cannot drain in
+	// this window means the daemon stopped reading.
+	daemonWriteTimeout = 10 * time.Second
 )
 
 // hostFrame is a frame between the extension and the host. Command, cancel
@@ -93,6 +97,7 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 		return fmt.Errorf("connect to AO: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	daemon := &daemonWriter{conn: conn, timeout: daemonWriteTimeout}
 	daemonHello, err := json.Marshal(map[string]interface{}{
 		"type":          "hello",
 		"version":       browserruntime.ProtocolVersion,
@@ -103,7 +108,7 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 	if err != nil {
 		return err
 	}
-	if _, err := conn.Write(append(daemonHello, '\n')); err != nil {
+	if err := daemon.write(append(daemonHello, '\n')); err != nil {
 		_ = writer.write(hostFrame{Type: "error", Code: "DAEMON_UNAVAILABLE", Message: "Orchestrator closed the connection"})
 		return err
 	}
@@ -163,7 +168,7 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 			}
 			if len(line) > maxToExtensionBytes {
 				if probe.Type == "command" && probe.RequestID != "" {
-					writeDaemonError(conn, probe.RequestID, "BROWSER_COMMAND_TOO_LARGE", "Browser command is too large for Chrome")
+					writeDaemonError(daemon, probe.RequestID, "BROWSER_COMMAND_TOO_LARGE", "Browser command is too large for Chrome")
 				}
 				continue
 			}
@@ -187,7 +192,7 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 				continue
 			}
 			compact.WriteByte('\n')
-			if _, err := conn.Write(compact.Bytes()); err != nil {
+			if err := daemon.write(compact.Bytes()); err != nil {
 				done <- err
 				return
 			}
@@ -204,7 +209,31 @@ func RunHost(ctx context.Context, in io.Reader, out io.Writer, opts HostOptions)
 	}
 }
 
-func writeDaemonError(conn net.Conn, requestID, code, message string) {
+// daemonWriter is the only writer of the daemon connection. Both relay
+// goroutines use it: the extension-to-daemon relay writes commands, and the
+// daemon-to-extension relay answers an oversized command. Two unsynchronized
+// writers would interleave partial newline-delimited JSON frames, which the
+// daemon reads as malformed lines and drops silently.
+//
+// Each write is deadline-bounded: a daemon that stops reading must fail the
+// frame rather than block a relay goroutine until Chrome gives up on the host.
+type daemonWriter struct {
+	mu      sync.Mutex
+	conn    net.Conn
+	timeout time.Duration
+}
+
+func (w *daemonWriter) write(frame []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.conn.SetWriteDeadline(time.Now().Add(w.timeout)); err != nil {
+		return err
+	}
+	_, err := w.conn.Write(frame)
+	return err
+}
+
+func writeDaemonError(w *daemonWriter, requestID, code, message string) {
 	frame, err := json.Marshal(map[string]interface{}{
 		"type":      "result",
 		"requestId": requestID,
@@ -212,7 +241,7 @@ func writeDaemonError(conn net.Conn, requestID, code, message string) {
 		"error":     map[string]string{"code": code, "message": message},
 	})
 	if err == nil {
-		_, _ = conn.Write(append(frame, '\n'))
+		_ = w.write(append(frame, '\n'))
 	}
 }
 

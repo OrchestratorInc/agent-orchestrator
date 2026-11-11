@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -169,4 +170,45 @@ func TestBrokerClosesSubscriberOnControlOverflow(t *testing.T) {
 	// Further frames and unsubscribe must not panic after overflow teardown.
 	b.publish(1, Event{Frame: &Frame{Sequence: 1}})
 	b.unsubscribe("s1", 1)
+}
+
+// Close is called from the HTTP handler that owns the subscription and from
+// stream teardown, so it must be idempotent and safe from several goroutines.
+// A second unsubscribe used to panic on the already-closed event channels.
+func TestSubscriptionCloseIsIdempotent(t *testing.T) {
+	b := New(nil, "secret")
+	// A real stream without an Electron host would fail Subscribe, so set up the
+	// same state one subscriber leaves behind.
+	b.mu.Lock()
+	stream := &streamState{id: 1, sessionID: "s1", subs: map[uint64]*subscriber{}}
+	b.streams["s1"], b.byID[1] = stream, stream
+	b.mu.Unlock()
+
+	calls := make(chan struct{}, 8)
+	sub := &Subscription{StreamID: 1}
+	sub.close = func() {
+		b.unsubscribe("s1", 1)
+		calls <- struct{}{}
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sub.Close()
+		}()
+	}
+	wg.Wait()
+
+	if len(calls) != 1 {
+		t.Fatalf("close func ran %d times, want exactly 1", len(calls))
+	}
+}
+
+// A nil Subscription is a valid zero-cost target so deferred cleanup cannot
+// panic when a subscribe attempt failed.
+func TestNilSubscriptionClose(t *testing.T) {
+	var sub *Subscription
+	sub.Close()
 }
