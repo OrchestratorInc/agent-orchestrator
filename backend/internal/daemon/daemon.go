@@ -102,6 +102,13 @@ const chatHibernateSweepTick = 30 * time.Second
 // Its work is retry and bookkeeping, not anything a user waits on.
 const workspaceCleanupSweepTick = 10 * time.Minute
 
+// A finished reviewer keeps an agent process (about 130 MB) until its worker
+// ends. Release it after idleReviewerRelease; the next review resumes it.
+const (
+	idleReviewerSweepTick = 5 * time.Minute
+	idleReviewerRelease   = 30 * time.Minute
+)
+
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
 func sentryEnvironment(version string) string {
@@ -1399,6 +1406,30 @@ func Run(buildVersion string) error {
 					if err := sessMgr.HibernateIdleChats(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("idle Chat hibernation failed", "err", err)
 					}
+				}
+			}
+		}()
+		go func() {
+			defer sentryobs.RecoverBackground()
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return
+			}
+			ticker := time.NewTicker(idleReviewerSweepTick)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+				released, err := reviewSvc.ReleaseIdleReviewers(ctx, idleReviewerRelease)
+				if err != nil && ctx.Err() == nil {
+					log.Warn("release idle reviewers failed", "err", err)
+				}
+				if released > 0 {
+					log.Info("released idle reviewers", "count", released)
 				}
 			}
 		}()
