@@ -110,6 +110,10 @@ describe("session links", () => {
 		// Text (inline code, a report's artifact line): "#" is part of the name.
 		expect(artifactLinkForPath("w/issue#42.md", workspaces)).toBe("ao://sessions/p/w/artifacts/issue%2342.md");
 		expect(artifactLinkForPath("w/plan.md#L3", workspaces)).toBe("ao://sessions/p/w/artifacts/plan.md");
+		expect(artifactLinkForPath("w/plan.md#L3-L7", workspaces)).toBe("ao://sessions/p/w/artifacts/plan.md");
+		// An unlisted name with "#" or "?" in it is its own file, not the listed one before it.
+		expect(artifactLinkForPath("w/plan.md#draft", workspaces)).toBeUndefined();
+		expect(artifactLinkForPath("/tmp/ao/artifacts/w/plan.md?v2", workspaces)).toBeUndefined();
 		// A link target: "#" starts its fragment, which never names the file.
 		expect(artifactLinkForTarget("/tmp/ao/artifacts/w/issue%2342.md", workspaces)).toBe("ao://sessions/p/w/artifacts/issue%2342.md");
 		expect(artifactLinkForTarget("/tmp/ao/artifacts/w/issue#42.md", workspaces)).toBeUndefined();

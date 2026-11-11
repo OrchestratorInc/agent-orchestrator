@@ -97,8 +97,18 @@ export function artifactLinkForTarget(value: string, workspaces: ArtifactPathWor
  * a link target, for a line or query written after it.
  */
 export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
-	return listedArtifactLink(value.trim().replace(/\\/g, "/"), workspaces) ?? artifactLinkForTarget(value, workspaces);
+	const normalized = value.trim().replace(/\\/g, "/");
+	const listed = listedArtifactLink(normalized, workspaces);
+	if (listed) return listed;
+	// Read as a link only when what follows "#" or "?" is a reference to a
+	// place in the file: an unlisted `plan.md#draft` is its own file, never
+	// the listed plan.md.
+	const suffix = /[?#].*$/.exec(normalized)?.[0];
+	return suffix === undefined || FILE_REFERENCE_SUFFIX.test(suffix) ? artifactLinkForTarget(value, workspaces) : undefined;
 }
+
+/** A line reference (`#L10`, `#L3-L7`, `#L2C4`) or `?raw` after a file path. */
+const FILE_REFERENCE_SUFFIX = /^(?:#L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?|\?raw)$/i;
 
 function listedArtifactLink(normalized: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
 	const candidates = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) ? [] : [normalized];
