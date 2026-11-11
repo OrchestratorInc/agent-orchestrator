@@ -4290,6 +4290,8 @@
 	"settings.apiKeys.savedNotice": "Gespeichert.",
 	"settings.apiKeys.saveFailed": "Der Schlüssel konnte nicht gespeichert werden.",
 	"settings.apiKeys.removed": "Entfernt. Kopien, die ein Agent in seinen eigenen Einstellungen gespeichert hat, bleiben dort.",
+	"settings.apiKeys.savedWithdrawFailed": "Gespeichert, aber Apps außerhalb von AO sehen diesen Schlüssel noch, bis du dich abmeldest.",
+	"settings.apiKeys.removedWithdrawFailed": "Entfernt, aber Apps außerhalb von AO sehen diesen Schlüssel noch, bis du dich abmeldest.",
 	"settings.apiKeys.removeFailed": "Der Schlüssel konnte nicht entfernt werden.",
 	"settings.apiKeys.keepSaved": "Leer lassen, um den gespeicherten Schlüssel zu behalten",
 	"settings.apiKeys.device": "Mit anderen Apps teilen",

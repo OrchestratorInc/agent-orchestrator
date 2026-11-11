@@ -4272,6 +4272,8 @@
 	"settings.apiKeys.savedNotice": "已保存。",
 	"settings.apiKeys.saveFailed": "无法保存密钥。",
 	"settings.apiKeys.removed": "已移除。智能体保存在自身设置中的副本会保留。",
+	"settings.apiKeys.savedWithdrawFailed": "已保存，但在你注销前，AO 之外的应用仍能看到此密钥。",
+	"settings.apiKeys.removedWithdrawFailed": "已移除，但在你注销前，AO 之外的应用仍能看到此密钥。",
 	"settings.apiKeys.removeFailed": "无法移除密钥。",
 	"settings.apiKeys.keepSaved": "留空以保留已保存的密钥",
 	"settings.apiKeys.device": "与其他应用共享",

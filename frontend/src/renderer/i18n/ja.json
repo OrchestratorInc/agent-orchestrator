@@ -4290,6 +4290,8 @@
 	"settings.apiKeys.savedNotice": "保存しました。",
 	"settings.apiKeys.saveFailed": "キーを保存できませんでした。",
 	"settings.apiKeys.removed": "削除しました。エージェントが独自の設定に保存したコピーは残ります。",
+	"settings.apiKeys.savedWithdrawFailed": "保存しましたが、ログアウトするまで AO 以外のアプリからこのキーが見える状態です。",
+	"settings.apiKeys.removedWithdrawFailed": "削除しましたが、ログアウトするまで AO 以外のアプリからこのキーが見える状態です。",
 	"settings.apiKeys.removeFailed": "キーを削除できませんでした。",
 	"settings.apiKeys.keepSaved": "空のままにすると保存済みのキーを維持します",
 	"settings.apiKeys.device": "他のアプリと共有",

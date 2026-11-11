@@ -243,8 +243,13 @@ func TestDeviceWithdrawalNeverBlocksRemoval(t *testing.T) {
 	if err != nil || !key.DeviceAvailable {
 		t.Fatalf("save = %+v, %v", key, err)
 	}
-	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "", false); err != nil {
+	off, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "", false)
+	if err != nil {
 		t.Fatalf("turning sharing off failed: %v", err)
+	}
+	// The user hears that apps outside AO may still see it.
+	if !off.WithdrawFailed {
+		t.Fatal("turning sharing off did not report the failed withdrawal")
 	}
 	if withdrawnValue != "groq-secret" {
 		t.Fatalf("withdrew %q, want AO's copy", withdrawnValue)
@@ -252,8 +257,12 @@ func TestDeviceWithdrawalNeverBlocksRemoval(t *testing.T) {
 	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.RemoveProviderKey(t.Context(), "GROQ_API_KEY"); err != nil {
+	removed, err := svc.RemoveProviderKey(t.Context(), "GROQ_API_KEY")
+	if err != nil {
 		t.Fatalf("removal failed: %v", err)
+	}
+	if !removed.WithdrawFailed || removed.Configured {
+		t.Fatalf("removal = %+v, want it done and the failed withdrawal reported", removed)
 	}
 	keys, err := providerkeys.Load(dir)
 	if err != nil || keys["GROQ_API_KEY"] != "" {
@@ -349,5 +358,30 @@ func TestSharingNeverRemovesTheUsersIdenticalValue(t *testing.T) {
 	device, _ := providerkeys.DeviceNames(dir)
 	if users["GROQ_API_KEY"] || device["GROQ_API_KEY"] {
 		t.Fatalf("markers left after sharing was turned off: users=%v device=%v", users, device)
+	}
+}
+
+// A withdrawal that worked, or had nothing to withdraw, reports nothing.
+func TestSuccessfulWithdrawalReportsNoFailure(t *testing.T) {
+	stubDeviceEnvironment(t)
+	t.Setenv("GROQ_API_KEY", "")
+	svc := NewWithAgentResolver(nil, nil, nil, t.TempDir())
+	if key, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-secret", true); err != nil || key.WithdrawFailed {
+		t.Fatalf("save = %+v, %v", key, err)
+	}
+	if key, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "", false); err != nil || key.WithdrawFailed {
+		t.Fatalf("turning sharing off = %+v, %v", key, err)
+	}
+	if key, err := svc.RemoveProviderKey(t.Context(), "GROQ_API_KEY"); err != nil || key.WithdrawFailed {
+		t.Fatalf("removal = %+v, %v", key, err)
+	}
+	keys, err := svc.ProviderKeys(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range keys {
+		if key.WithdrawFailed {
+			t.Fatalf("the list reports a withdrawal for %s", key.Name)
+		}
 	}
 }

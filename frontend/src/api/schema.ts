@@ -7246,6 +7246,7 @@ export interface components {
             hint?: string;
             label: string;
             name: string;
+            withdrawFailed?: boolean;
         };
         ProviderKeyCheck: {
             models?: string[];

@@ -4484,6 +4484,8 @@
 	"settings.apiKeys.savedNotice": "Сохранено.",
 	"settings.apiKeys.saveFailed": "Не удалось сохранить ключ.",
 	"settings.apiKeys.removed": "Удалено. Копии, сохранённые агентом в его настройках, остаются там.",
+	"settings.apiKeys.savedWithdrawFailed": "Сохранено, но приложения вне AO будут видеть этот ключ, пока вы не выйдете из системы.",
+	"settings.apiKeys.removedWithdrawFailed": "Удалено, но приложения вне AO будут видеть этот ключ, пока вы не выйдете из системы.",
 	"settings.apiKeys.removeFailed": "Не удалось удалить ключ.",
 	"settings.apiKeys.keepSaved": "Оставьте поле пустым, чтобы сохранить текущий ключ",
 	"settings.apiKeys.device": "Поделиться с другими приложениями",

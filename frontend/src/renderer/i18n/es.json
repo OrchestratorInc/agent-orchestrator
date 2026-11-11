@@ -4386,6 +4386,8 @@
 	"settings.apiKeys.savedNotice": "Guardada.",
 	"settings.apiKeys.saveFailed": "No se pudo guardar la clave.",
 	"settings.apiKeys.removed": "Eliminada. Las copias que un agente guardó en su propia configuración se mantienen.",
+	"settings.apiKeys.savedWithdrawFailed": "Guardada, pero las apps fuera de AO pueden seguir viendo esta clave hasta que cierres sesión.",
+	"settings.apiKeys.removedWithdrawFailed": "Eliminada, pero las apps fuera de AO pueden seguir viendo esta clave hasta que cierres sesión.",
 	"settings.apiKeys.removeFailed": "No se pudo eliminar la clave.",
 	"settings.apiKeys.keepSaved": "Déjalo vacío para conservar la clave guardada",
 	"settings.apiKeys.device": "Compartir con otras apps",

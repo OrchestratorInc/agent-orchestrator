@@ -4173,6 +4173,8 @@
 	"settings.apiKeys.savedNotice": "Saved.",
 	"settings.apiKeys.saveFailed": "Could not save the key.",
 	"settings.apiKeys.removed": "Removed. Copies an agent saved in its own settings stay there.",
+	"settings.apiKeys.savedWithdrawFailed": "Saved, but apps outside AO can still see this key until you log out.",
+	"settings.apiKeys.removedWithdrawFailed": "Removed, but apps outside AO can still see this key until you log out.",
 	"settings.apiKeys.removeFailed": "Could not remove the key.",
 	"settings.apiKeys.keepSaved": "Leave empty to keep the saved key",
 	"settings.apiKeys.device": "Share with other apps",

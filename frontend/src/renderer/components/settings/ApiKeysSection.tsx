@@ -215,10 +215,13 @@ function ProviderKeyEditor({ providerKey: key, hostId, onDone }: { providerKey: 
 				setError(t("settings.apiKeys.rejected"));
 				return;
 			}
-			await saveProviderKey(key.name, typed, device, hostId);
+			const saved = await saveProviderKey(key.name, typed, device, hostId);
 			setSecret("");
 			await invalidate();
-			onDone(check?.status === "valid" ? { tone: "status", text: t("settings.apiKeys.savedAccepted") }
+			// Sharing is off in AO, but the copy AO put in the user environment
+			// could not be taken back: say so, and keep saying it.
+			onDone(saved.withdrawFailed ? { tone: "error", text: t("settings.apiKeys.savedWithdrawFailed") }
+				: check?.status === "valid" ? { tone: "status", text: t("settings.apiKeys.savedAccepted") }
 				: check?.status === "unreachable" ? { tone: "status", text: t("settings.apiKeys.savedUnchecked") }
 				: { tone: "status", text: t("settings.apiKeys.savedNotice") });
 		} catch (err) {
@@ -230,9 +233,9 @@ function ProviderKeyEditor({ providerKey: key, hostId, onDone }: { providerKey: 
 		setBusy(true);
 		setError("");
 		try {
-			await removeProviderKey(key.name, hostId);
+			const removed = await removeProviderKey(key.name, hostId);
 			await invalidate();
-			onDone({ tone: "status", text: t("settings.apiKeys.removed") });
+			onDone(removed.withdrawFailed ? { tone: "error", text: t("settings.apiKeys.removedWithdrawFailed") } : { tone: "status", text: t("settings.apiKeys.removed") });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("settings.apiKeys.removeFailed"));
 		} finally { setBusy(false); }

@@ -2,7 +2,7 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useConnectedHosts } from "../../hooks/useHostConnection";
-import { checkProviderKey, saveProviderKey, useProviderKeys, type ProviderKey } from "../../hooks/useProviderKeys";
+import { checkProviderKey, removeProviderKey, saveProviderKey, useProviderKeys, type ProviderKey } from "../../hooks/useProviderKeys";
 import { ApiKeysSection } from "./ApiKeysSection";
 
 vi.mock("../../hooks/useHostConnection", () => ({ useConnectedHosts: vi.fn(() => []) }));
@@ -126,5 +126,33 @@ describe("ApiKeysSection", () => {
 		expect(screen.getByRole("button", { name: "Edit · OpenAI" })).toBeDisabled();
 		await act(async () => { finish({ status: "valid" } as Awaited<ReturnType<typeof checkProviderKey>>); });
 		expect(screen.getByRole("button", { name: "Edit · OpenAI" })).toBeEnabled();
+	});
+
+	// The key is gone from AO, but its copy in the user environment could not
+	// be taken back: the row says so, and the warning stays.
+	it("warns when a removed key is still in the user environment", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+		vi.mocked(removeProviderKey).mockResolvedValue({ ...keys[0], configured: false, hint: undefined, withdrawFailed: true });
+		render(<ApiKeysSection titleHidden />);
+		await user.click(screen.getByRole("button", { name: "Edit · OpenAI" }));
+		await user.click(screen.getByRole("button", { name: "Remove" }));
+		await user.click(screen.getByRole("button", { name: "Confirm remove" }));
+		const warning = await screen.findByRole("alert");
+		expect(warning).toHaveTextContent("Removed, but apps outside AO can still see this key until you log out.");
+		await act(async () => { vi.advanceTimersByTime(6_000); });
+		expect(screen.getByRole("alert")).toHaveTextContent("apps outside AO can still see this key");
+	});
+
+	it("warns when turning sharing off leaves the key in the user environment", async () => {
+		const user = userEvent.setup();
+		vi.mocked(useProviderKeys).mockReturnValue({ data: keys.map((key) => key.name === "OPENAI_API_KEY" ? { ...key, device: true } : key), isPending: false, isError: false } as unknown as ReturnType<typeof useProviderKeys>);
+		vi.mocked(saveProviderKey).mockResolvedValue({ ...keys[0], withdrawFailed: true });
+		render(<ApiKeysSection titleHidden />);
+		await user.click(screen.getByRole("button", { name: "Edit · OpenAI" }));
+		await user.click(screen.getByRole("checkbox", { name: "Share with other apps" }));
+		await user.click(screen.getByRole("button", { name: "Save" }));
+		expect(saveProviderKey).toHaveBeenCalledWith("OPENAI_API_KEY", "", false, undefined);
+		expect(await screen.findByRole("alert")).toHaveTextContent("Saved, but apps outside AO can still see this key until you log out.");
 	});
 });

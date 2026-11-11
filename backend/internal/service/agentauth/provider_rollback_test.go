@@ -64,7 +64,7 @@ func TestStartupRepublicationSkipsKeysRemovedMeanwhile(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := &Service{dataDir: dir}
-	if err := svc.removeProviderKey(t.Context(), "OPENAI_API_KEY"); err != nil {
+	if _, err := svc.removeProviderKey(t.Context(), "OPENAI_API_KEY"); err != nil {
 		t.Fatal(err)
 	}
 	published = nil

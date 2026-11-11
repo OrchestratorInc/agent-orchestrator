@@ -20748,6 +20748,8 @@ components:
           type: string
         name:
           type: string
+        withdrawFailed:
+          type: boolean
       required:
       - name
       - label
