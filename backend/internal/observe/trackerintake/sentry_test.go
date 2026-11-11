@@ -29,7 +29,7 @@ func (*intakeTransport) Close()                                {}
 func (f *intakeTransport) SendEvent(event *sentry.Event)       { f.events <- event }
 func TestPollCapturesOnlyUnexpectedSpawnFaults(t *testing.T) {
 	transport := &intakeTransport{events: make(chan *sentry.Event, 1)}
-	if err := sentryobs.Init(sentryobs.Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+	if err := sentryobs.Init(sentryobs.Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	sentryobs.SetPolicyCheck(func(context.Context) bool { return true })

@@ -161,6 +161,7 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"DomainAutoSpawnPause":                                 "AutoSpawnPause",
 	"DomainChatExcerptSnapshot":                            "ChatExcerptSnapshot",
 	"DomainChatExcerptRange":                               "ChatExcerptRange",
 	"DomainChatExcerptTurnSnapshot":                        "ChatExcerptTurnSnapshot",
@@ -399,6 +400,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersArtifactVersionResponse":                  "ArtifactVersionResponse",
 	"ControllersRestoreArtifactVersionRequest":            "RestoreArtifactVersionRequest",
 	"ControllersSyncArtifactVersionsRequest":              "SyncArtifactVersionsRequest",
+	"ControllersRegisterArtifactsRequest":                 "RegisterArtifactsRequest",
+	"ControllersRegisterArtifactsResponse":                "RegisterArtifactsResponse",
 	"ControllersPRFileQuery":                              "PRFileQuery",
 	"ControllersPRFileRevisionQuery":                      "PRFileRevisionQuery",
 	"ControllersUpdateWorkspaceFileRequest":               "UpdateWorkspaceFileRequest",
@@ -657,7 +660,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersLinkPreviewResponse":           "LinkPreviewResponse",
 	"ControllersMobileDeviceResponse":          "MobileDeviceResponse",
 	"ControllersMobileDevicesResponse":         "MobileDevicesResponse",
-	"ControllersInstallIDParam":                "InstallIDParam",
+	"ControllersMobileDeviceIDParam":           "MobileDeviceIDParam",
 	"ControllersPushPairingIDParam":            "PushPairingIDParam",
 	// devimport report
 	"DevimportReport":   "DevImportProjectsReport",
@@ -2407,10 +2410,45 @@ func mobileOperations() []operation {
 	return []operation{
 		{
 			method: http.MethodPost, path: "/api/v1/remote-host/account-token", id: "issueRemoteHostAccountToken", tag: "mobile",
-			summary: "Issue a host-scoped account credential using the pairing password",
+			summary: "Issue a host-scoped account credential using the pairing password or a device token",
 			resps: []respUnit{
 				{http.StatusOK, controllers.RemoteHostAccountTokenResponse{}},
 				{http.StatusForbidden, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/remote-host/devices", id: "pairRemoteHostDevice", tag: "mobile",
+			summary:         "Exchange a one-time pairing code, or the pairing password, for this device's own token",
+			reqBody:         controllers.PairDeviceRequest{},
+			optionalReqBody: true,
+			resps: []respUnit{
+				{http.StatusOK, controllers.PairDeviceResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusUnauthorized, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/mobile/pairing-code", id: "createMobilePairingCode", tag: "mobile",
+			summary: "Make a one-time code a new device exchanges for its own token",
+			resps: []respUnit{
+				{http.StatusOK, controllers.PairingCodeResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/mobile/require-device-credentials", id: "setMobileRequireDeviceCredentials", tag: "mobile",
+			summary: "Refuse or accept the pairing password on the remote listener",
+			reqBody: controllers.SetRequireDeviceCredentialsRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MobileStatusResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 			},
 		},
 		{
@@ -2468,7 +2506,7 @@ func mobileOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/mobile/regenerate", id: "regenerateMobile", tag: "mobile",
-			summary: "Rotate the Connect Mobile password, dropping any connected phone",
+			summary: "Revoke every device: rotate the pairing password, remove all device tokens and unlink the account",
 			resps: []respUnit{
 				{http.StatusOK, controllers.MobileStatusResponse{}},
 				{http.StatusForbidden, envelope.APIError{}},
@@ -2520,7 +2558,7 @@ func mobileDeviceOperations() []operation {
 	return []operation{
 		{
 			method: http.MethodGet, path: "/api/v1/mobile/devices", id: "listMobileDevices", tag: "mobile",
-			summary: "List paired mobile devices with their live status",
+			summary: "List the devices that can reach this host, with their live status",
 			resps: []respUnit{
 				{http.StatusOK, controllers.MobileDevicesResponse{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -2528,9 +2566,9 @@ func mobileDeviceOperations() []operation {
 			},
 		},
 		{
-			method: http.MethodDelete, path: "/api/v1/mobile/devices/{installId}", id: "removeMobileDevice", tag: "mobile",
-			summary:    "Remove a paired device from the roster",
-			pathParams: []any{controllers.InstallIDParam{}},
+			method: http.MethodDelete, path: "/api/v1/mobile/devices/{id}", id: "removeMobileDevice", tag: "mobile",
+			summary:    "Remove a device: revoke its token and stop its notifications",
+			pathParams: []any{controllers.MobileDeviceIDParam{}},
 			resps: []respUnit{
 				{http.StatusNoContent, nil},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -3259,6 +3297,20 @@ func sessionOperations() []operation {
 				{http.StatusOK, controllers.ArtifactVersionResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/artifact-registrations", id: "registerSessionArtifacts", tag: "sessions",
+			summary:    "Register files in the session's artifact directory as its deliverables",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.RegisterArtifactsRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.RegisterArtifactsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

@@ -1739,6 +1739,30 @@ describe("SessionView", () => {
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
 	});
 
+	it("lets a hidden window's stalled Chat lease lapse and renews it on return", async () => {
+		workerSession("sess-1").mode = "chat";
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		let hidden = false;
+		Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+		const renewals = () => chatViewPostMock.mock.calls.filter(([, input]) => input.body.active).length;
+		try {
+			render(<SessionView sessionId="sess-1" />);
+			await waitFor(() => expect(renewals()).toBe(1));
+			hidden = true;
+			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+			expect(renewals()).toBe(2);
+			vi.setSystemTime(Date.now() + 60_000);
+			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+			expect(renewals()).toBe(2);
+			hidden = false;
+			act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+			await waitFor(() => expect(renewals()).toBe(3));
+		} finally {
+			Reflect.deleteProperty(document, "hidden");
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not wake Chat while restoring its selected shell tab", async () => {
 		workerSession("sess-1").mode = "chat";
 		shellTerminalsState.data = [{

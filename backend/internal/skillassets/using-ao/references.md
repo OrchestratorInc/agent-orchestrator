@@ -46,4 +46,5 @@ Natural-language-to-command mappings for common Orchestrator tasks.
 | Review someone else's PR | Spawn or use a normal review-only worker without claiming the target PR; submit the requested provider review directly |
 | Inspect, cancel, or rerun a review | `ao review ls [session-id]`, `ao review cancel [session-id]`, or `ao review trigger [session-id] --rerun` |
 | Configure a project's default branch or model | `ao project set-config <id> --default-branch <branch> --model <model>` |
+| Bring a repository's Conductor scripts, run actions, env, or prompt over | Read [commands/conductor.md](commands/conductor.md); then `ao project set-config` and `ao cue create` |
 | Import projects from a legacy Orchestrator install | `ao import --dry-run` (preview), then `ao import -y` |

@@ -3941,19 +3941,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: List paired mobile devices with their live status
+      summary: List the devices that can reach this host, with their live status
       tags:
       - mobile
-  /api/v1/mobile/devices/{installId}:
+  /api/v1/mobile/devices/{id}:
     delete:
       operationId: removeMobileDevice
       parameters:
-      - description: The device's stable install id.
+      - description: The row's id from the device list.
         in: path
-        name: installId
+        name: id
         required: true
         schema:
-          description: The device's stable install id.
+          description: The row's id from the device list.
           type: string
       responses:
         "204":
@@ -3970,7 +3970,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Remove a paired device from the roster
+      summary: 'Remove a device: revoke its token and stop its notifications'
       tags:
       - mobile
   /api/v1/mobile/disable:
@@ -4110,6 +4110,37 @@ paths:
       summary: Keep this Mac from idle-sleeping while Connect Mobile is on
       tags:
       - mobile
+  /api/v1/mobile/pairing-code:
+    post:
+      operationId: createMobilePairingCode
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPairingCodeResponse'
+          description: OK
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Make a one-time code a new device exchanges for its own token
+      tags:
+      - mobile
   /api/v1/mobile/regenerate:
     post:
       operationId: regenerateMobile
@@ -4132,7 +4163,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
-      summary: Rotate the Connect Mobile password, dropping any connected phone
+      summary: 'Revoke every device: rotate the pairing password, remove all device
+        tokens and unlink the account'
       tags:
       - mobile
   /api/v1/mobile/remote-access:
@@ -4158,6 +4190,43 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: Look for a connector again and start it, without rotating the password
+      tags:
+      - mobile
+  /api/v1/mobile/require-device-credentials:
+    post:
+      operationId: setMobileRequireDeviceCredentials
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersSetRequireDeviceCredentialsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Refuse or accept the pairing password on the remote listener
       tags:
       - mobile
   /api/v1/mobile/secure-pairing:
@@ -5476,7 +5545,57 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Forbidden
-      summary: Issue a host-scoped account credential using the pairing password
+      summary: Issue a host-scoped account credential using the pairing password or
+        a device token
+      tags:
+      - mobile
+  /api/v1/remote-host/devices:
+    post:
+      operationId: pairRemoteHostDevice
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersPairDeviceRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersPairDeviceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Exchange a one-time pairing code, or the pairing password, for this
+        device's own token
       tags:
       - mobile
   /api/v1/reports:
@@ -6717,6 +6836,63 @@ paths:
           description: Not Implemented
       summary: Serve a session artifact file sandboxed, an HTML page with the render
         theme bootstrap
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/artifact-registrations:
+    post:
+      operationId: registerSessionArtifacts
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterArtifactsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterArtifactsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Register files in the session's artifact directory as its deliverables
       tags:
       - sessions
   /api/v1/sessions/{sessionId}/artifact-versions:
@@ -14882,6 +15058,32 @@ components:
       required:
       - data
       type: object
+    AutoSpawnPause:
+      properties:
+        effort:
+          type: string
+        errorCode:
+          type: string
+        failures:
+          type: integer
+        harness:
+          type: string
+        kind:
+          type: string
+        message:
+          type: string
+        model:
+          type: string
+        pausedAt:
+          format: date-time
+          type: string
+      required:
+      - harness
+      - errorCode
+      - message
+      - failures
+      - pausedAt
+      type: object
     AutomationEnvelope:
       properties:
         automation:
@@ -16616,6 +16818,28 @@ components:
       - hostPath
       - channels
       type: object
+    ControllersConversationTurnArtifactResponse:
+      properties:
+        path:
+          type: string
+        status:
+          enum:
+          - added
+          - modified
+          type: string
+      required:
+      - path
+      - status
+      type: object
+    ControllersConversationTurnArtifactsResponse:
+      properties:
+        files:
+          items:
+            $ref: '#/components/schemas/ControllersConversationTurnArtifactResponse'
+          type: array
+      required:
+      - files
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -16646,6 +16870,46 @@ components:
           type: string
         deleteArtifacts:
           type: boolean
+      type: object
+    ControllersPairDeviceRequest:
+      properties:
+        name:
+          description: Name shown in the host's device list.
+          type: string
+        platform:
+          description: The device's platform, such as ios, android, darwin, win32
+            or linux.
+          type: string
+      type: object
+    ControllersPairDeviceResponse:
+      properties:
+        credential:
+          enum:
+          - pairing-code
+          - password
+          type: string
+        deviceId:
+          type: string
+        hostId:
+          type: string
+        token:
+          type: string
+      required:
+      - hostId
+      - deviceId
+      - token
+      - credential
+      type: object
+    ControllersPairingCodeResponse:
+      properties:
+        code:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+      required:
+      - code
+      - expiresAt
       type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
@@ -16769,22 +17033,24 @@ components:
           enum:
           - Working
           - Blocked
+          - Needs input
           - Exited
           - No signal
           - Interrupted
-          - Awaiting PR
+          - Idle
           - Fixing CI failures
           - Addressing comments
-          - Needs review
           - Review scheduled
           - Reviewing
-          - Review failed
-          - Review pending
+          - Retrying review
           - Draft
+          - Awaiting review
+          - Review failed
+          - Review cancelled
           - CI failing
+          - Merge conflicts
           - Commented
           - Changes requested
-          - Needs human review
           - Mergeable
           - Approved
           - Merged
@@ -16999,6 +17265,13 @@ components:
           type:
           - "null"
           - boolean
+      required:
+      - enabled
+      type: object
+    ControllersSetRequireDeviceCredentialsRequest:
+      properties:
+        enabled:
+          type: boolean
       required:
       - enabled
       type: object
@@ -17823,6 +18096,8 @@ components:
       type: object
     ConversationTurnResponse:
       properties:
+        artifacts:
+          $ref: '#/components/schemas/ControllersConversationTurnArtifactsResponse'
         completedAt:
           type:
           - "null"
@@ -19469,25 +19744,40 @@ components:
           type: string
         deviceName:
           type: string
+        id:
+          description: What DELETE /api/v1/mobile/devices/{id} takes.
+          type: string
         installId:
+          description: The phone's install id, or empty for a device that never registered
+            for notifications.
+          type: string
+        kind:
+          description: 'device: holds its own token. password: a phone that still
+            uses the pairing password, so removing it only stops its notifications.
+            account: every device signed in to the linked account; they share one
+            token.'
+          enum:
+          - device
+          - password
+          - account
           type: string
         lastSeenAt:
           format: date-time
           type: string
         live:
-          description: True when the phone's app is open and polling.
+          description: True when the device is connected, or the phone's app is open
+            and polling.
           type: boolean
         notificationsEnabled:
           description: True when this device has a push token registered.
           type: boolean
         platform:
-          enum:
-          - ios
-          - android
           type: string
         token:
           type: string
       required:
+      - id
+      - kind
       - installId
       - live
       - notificationsEnabled
@@ -19545,8 +19835,15 @@ components:
           type: boolean
         password:
           type: string
+        passwordLastUsedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         port:
           type: integer
+        requireDeviceCredentials:
+          type: boolean
         securePairing:
           $ref: '#/components/schemas/ControllersSecurePairingStatus'
         tailscaleHost:
@@ -19572,6 +19869,7 @@ components:
       - warning
       - securePairing
       - keepAwake
+      - requireDeviceCredentials
       type: object
     MobileTunnelStatus:
       properties:
@@ -19960,6 +20258,10 @@ components:
       type: object
     ProjectSummary:
       properties:
+        autoSpawnPauses:
+          items:
+            $ref: '#/components/schemas/AutoSpawnPause'
+          type: array
         folderMissing:
           type: boolean
         id:
@@ -20120,6 +20422,37 @@ components:
           type: integer
       required:
       - pat
+      type: object
+    RegisterArtifactsRequest:
+      properties:
+        paths:
+          description: 'Files or bundle directories in the session''s artifact directory:
+            absolute paths, or paths relative to it.'
+          items:
+            type: string
+          type: array
+      required:
+      - paths
+      type: object
+    RegisterArtifactsResponse:
+      properties:
+        otherFiles:
+          description: How many of the session's files are not registered.
+          type: integer
+        otherRootFiles:
+          description: The unregistered files at the root of the artifact directory.
+          items:
+            type: string
+          type: array
+        registered:
+          description: The requested paths, relative to the artifact directory.
+          items:
+            type: string
+          type: array
+      required:
+      - registered
+      - otherFiles
+      - otherRootFiles
       type: object
     RegisterPushDeviceRequest:
       properties:
@@ -20760,6 +21093,8 @@ components:
       type: object
     SessionArtifact:
       properties:
+        id:
+          type: string
         inlineUrl:
           type: string
         kind:
@@ -20774,8 +21109,14 @@ components:
           type: string
         previewUrl:
           type: string
+        previousPaths:
+          items:
+            type: string
+          type: array
         rawUrl:
           type: string
+        registered:
+          type: boolean
         shareUrl:
           type: string
         size:

@@ -1029,6 +1029,7 @@ export function CloudSessionChatSurface({
 	sessionTabActionPinned = false,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	controllerTransitioning,
 	newWorkDisabled,
 	onConversationWorkChange,
@@ -1091,6 +1092,8 @@ export function CloudSessionChatSurface({
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	controllerTransitioning?: boolean;
 	newWorkDisabled?: boolean;
 	onConversationWorkChange?: (state: {
@@ -1753,6 +1756,7 @@ export function CloudSessionChatSurface({
 			settingsLocked={settingsLocked}
 			onOpenFiles={onOpenFiles}
 			onOpenFile={openFileFromChat}
+			onOpenArtifact={onOpenArtifact}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
 			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
 				if (attachments?.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });

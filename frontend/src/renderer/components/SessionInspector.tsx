@@ -77,7 +77,7 @@ import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../typ
 import {
 	openPRs,
 	resolveNextNavigationAfterSessionKill,
-	sessionArtifacts,
+	sessionDeliverables,
 	sessionWorkspaceReady,
 	sortedPRs,
 	STANDALONE_WORKSPACE_ID,
@@ -419,7 +419,7 @@ const SummaryView = memo(function SummaryView({
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
-	const artifacts = sessionArtifacts(session);
+	const artifacts = sessionDeliverables(session);
 	const hasArtifacts = artifacts.length > 0;
 	const opensPR = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
 	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : opensPR ? t("inspector.pullRequest") : t("inspector.branch");
@@ -2931,6 +2931,8 @@ function BrowserView({
 	// second BrowserPanelView — it would fight the overlay over the shared native
 	// view slot). Exit is via the overlay's own minimize button.
 	const { t } = useTranslation();
+	// Stable, so the memoized panel skips this view's unrelated renders.
+	const togglePopOut = useCallback((next: boolean) => onTogglePopOut?.(next), [onTogglePopOut]);
 	if (browserPoppedOut) {
 		return (
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
@@ -2953,7 +2955,7 @@ function BrowserView({
 			active={isActive}
 			annotationQueue={browserAnnotationQueue}
 			browserView={browserView}
-			onTogglePopOut={(next) => onTogglePopOut?.(next)}
+			onTogglePopOut={togglePopOut}
 			poppedOut={false}
 			session={session}
 			topbarHost={topbarHost}

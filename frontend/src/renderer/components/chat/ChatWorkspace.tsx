@@ -140,7 +140,7 @@ import {
 	OriginMessage,
 	SteerMessage,
 	TurnActions,
-	TurnChangedFiles,
+	TurnResults,
 	TurnOutcome,
 	LiveResponseStatus,
 	LiveStepChoices,
@@ -222,6 +222,7 @@ import {
 	type ConversationMessage,
 	type ConversationTurn,
 	type ConversationUsageLimit,
+	type TurnArtifactChange,
 	type TurnDiff,
 	type TurnSettings,
 } from "../../types/conversation";
@@ -566,6 +567,8 @@ export interface ChatWorkspaceProps {
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	onOpenFileAnnotation?: OpenFileAnnotation;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
@@ -835,6 +838,7 @@ function ChatWorkspaceContent({
 	rollbackError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	onOpenFileAnnotation,
 	retryControl,
 	onEditMessage,
@@ -2086,7 +2090,7 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
@@ -2111,6 +2115,7 @@ function ChatWorkspaceContent({
 									onRollback={rollbackTarget}
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
+									onOpenArtifact={onOpenArtifact}
 									retryControl={retryControl}
 									composerRecoveryTurnId={retryControl ? limitedTurn?.id : undefined}
 									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
@@ -2936,6 +2941,7 @@ export function Timeline({
 	onRollback,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	retryControl,
 	composerRecoveryTurnId,
 	onEditHumanMessage,
@@ -2978,6 +2984,8 @@ export function Timeline({
 	onRollback?: (turnId: string) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	retryControl?: ChatRetryControl;
 	composerRecoveryTurnId?: string;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
@@ -3439,6 +3447,7 @@ export function Timeline({
 	const rollback = useStableCallback(onRollback);
 	const openFiles = useStableCallback(onOpenFiles);
 	const openFile = useStableCallback(onOpenFile);
+	const openArtifact = useStableCallback(onOpenArtifact);
 	const retryTurn = useStableCallback(retryControl?.retry);
 	const localBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const apiBaseUrl = remoteHost ? assetBaseUrl ?? null : assetBaseUrl ?? localBaseUrl;
@@ -4958,6 +4967,7 @@ export function Timeline({
 									onRollback={rollback}
 									onOpenFiles={onOpenFiles ? openFiles : undefined}
 									onOpenFile={onOpenFile ? openFile : undefined}
+									onOpenArtifact={onOpenArtifact ? openArtifact : undefined}
 									retry={retry}
 									onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
 									messageEdit={messageEdit}
@@ -4971,14 +4981,14 @@ export function Timeline({
 									editPending={inlineEditPending}
 									editSendBlocked={inlineEditSendBlocked}
 									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
-									editBusy={Boolean(editBusy || newWorkDisabled)}
+									editBusy={turnEditing(group, messageEdit) && Boolean(editBusy || newWorkDisabled)}
 									editError={translateDraft(editError ??
 										draftPersistenceError ??
 										inlineEditRecoveryNotice ??
 										inlineEditOutcomeNotice)}
 									branchPoints={branchPoints}
 									editableTurns={editableTurns}
-									newHumanMessageIds={newHumanMessageIds}
+									newHumanMessageIds={turnNewHumanMessageIds(group, newHumanMessageIds)}
 									onActivateBranch={canActivateBranch ? activateBranch : undefined}
 									activateBranchPending={activateBranchPending}
 									activateBranchError={activateBranchError}
@@ -4987,7 +4997,7 @@ export function Timeline({
 									// rather than hiding rows the agent still remembers.
 									canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
 									rollbackDisabled={rollbackDisabled}
-									busy={busy}
+									busy={turnShowsApproval(group) ? busy : undefined}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
 								</BatchedReportsContext.Provider>
@@ -5248,6 +5258,7 @@ const TurnGroup = memo(function TurnGroup({
 	onRollback,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	onEditHumanMessage,
 	messageEdit,
 	onStartMessageEdit,
@@ -5285,6 +5296,8 @@ const TurnGroup = memo(function TurnGroup({
 	onRollback: (turnId: string) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;
 	onStartMessageEdit: (message: ConversationMessage) => void;
@@ -5619,12 +5632,14 @@ const TurnGroup = memo(function TurnGroup({
 			{group.plan ? <TurnPlan plan={group.plan} live={group.live} /> : null}
 			{/* Changed-files review is a settled result, not live activity. Keep it
 			    below the completed assistant response and its bottom action row. */}
-			{group.diff && group.outcome?.state === "completed" && copyableMessageId ? (
-				<TurnChangedFiles
+			{(group.diff || group.artifacts?.length) && group.outcome?.state === "completed" && copyableMessageId ? (
+				<TurnResults
 					diff={group.diff}
+					reportedArtifacts={group.artifacts}
 					items={group.items}
 					onReview={onOpenFiles}
 					onOpenFile={onOpenFile}
+					onOpenArtifact={onOpenArtifact}
 				/>
 			) : null}
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
@@ -6058,6 +6073,8 @@ type TimelineGroup = {
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
+	/** The session artifacts the turn created or edited, whatever wrote them. */
+	artifacts?: TurnArtifactChange[];
 	/** The agent's plan for this turn, when it made one. */
 	plan?: ConversationPlan;
 	/** The turn is still running, so its diff and plan can still change. */
@@ -6247,6 +6264,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
+		group.artifacts = turn.artifacts;
 		// A later turn or run carries a newer copy of a list that spans turns.
 		group.plan = turn.plan?.steps.length && !turn.plan.superseded ? turn.plan : undefined;
 		group.live = turn.state === "running";
@@ -6360,6 +6378,24 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
+
+/**
+ * What a turn reads of the timeline-wide flags, so a send or steer redraws only
+ * the turns it changes. A turn uses the new-message ids only for its own human
+ * messages' entrance, `editBusy` only in the message being edited, and `busy`
+ * only on an approval card; other turns get the same value every time and keep
+ * their memoized render.
+ */
+const NO_NEW_HUMAN_MESSAGES: ReadonlySet<string> = new Set();
+function turnNewHumanMessageIds(group: TimelineGroup, ids: ReadonlySet<string>): ReadonlySet<string> {
+	return ids.size > 0 && group.items.some((item) => ids.has(itemKey(item))) ? ids : NO_NEW_HUMAN_MESSAGES;
+}
+function turnEditing(group: TimelineGroup, edit: MessageEditDraft | undefined): boolean {
+	return Boolean(edit && group.items.some((item) => item.kind === "message" && item.turnId === edit.turnId));
+}
+function turnShowsApproval(group: TimelineGroup): boolean {
+	return group.items.some((item) => item.kind === "activity" && item.activityKind === "approval");
+}
 
 const detachedActions = new WeakMap<ConversationItem, ConversationItem>();
 
