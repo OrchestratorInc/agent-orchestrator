@@ -31,30 +31,36 @@ a VM is a separate, larger project.
 
 ## How it works
 
-```text
-            HOST (trusted)                    │   VM (untrusted)
-                                              │
- agent ─ ao mcp ─ POST /computer-use/call     │
-                        │                     │
-              computeruse.Service             │
-        (switch, 8-tool allowlist, checks)    │
-            │                    │            │
-     local CLI backend    remote MCP backend ─┼─ MCP over SSH ─► cua-driver mcp
-     (today, unchanged)          │            │                        │
-            │             computervm.Service ─┼─ lume CLI ─► VM    guest desktop
-      host desktop        (boot, stop, reset) │
-                                              │
-        VM disks and SSH key: ~/.ao/vms/      │
+```mermaid
+flowchart LR
+  subgraph mac["Your Mac (trusted)"]
+    agent["Agent<br/>chat session"]
+    ao["Agent Orchestrator<br/>on/off switch, eight tools, action checks"]
+    desk["Your desktop<br/>never touched in VM mode"]
+    subgraph vm["Virtual machine (untrusted, agents only)"]
+      driver["Cua Driver<br/>serves MCP"]
+      vmdesk["VM desktop<br/>its own apps and sign-ins"]
+    end
+  end
+  agent -- "1 click" --> ao
+  ao -- "2 MCP over SSH" --> driver
+  driver -- "3 acts" --> vmdesk
+  driver -- "4 screenshot" --> ao
+  ao -- "screenshot" --> agent
+  ao -. "start, stop, reset" .-> vm
+  ao -. "host mode only" .-> desk
 ```
 
-1. The agent calls `click` on the `ao` tool server, as today.
-2. The service checks the on/off switch, the tool allowlist, and the action
-   checks, as today.
-3. The target is `vm`, so the service makes sure the VM is running (it boots
-   on demand) and forwards the call as MCP `tools/call`.
-4. The result comes back as MCP content: text plus the screenshot as an image.
-   AO saves the image under `~/.ao/computer-use/<session>` and returns both to
-   the agent.
+1. The agent calls `click` on the `ao` tool server, as today. AO checks the
+   on/off switch, the tool allowlist, and the action checks.
+2. AO makes sure the VM is running (it boots on demand) and forwards the call
+   as MCP `tools/call` over SSH.
+3. Cua Driver performs the click on the VM's desktop.
+4. Text and a screenshot come back. AO saves the image under
+   `~/.ao/computer-use/<session>` and returns both to the agent.
+
+Your own desktop is out of the path. AO keeps VM disks and its SSH key under
+`~/.ao/vms/`.
 
 ### Why MCP, and not the driver's CLI over SSH
 
