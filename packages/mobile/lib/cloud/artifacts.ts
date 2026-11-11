@@ -239,6 +239,8 @@ export function cloudArtifactsBackend({ client, orgId, sessionId, root, canChang
 			const uri = urlOf(path);
 			return uri ? { uri } : undefined;
 		},
+		// The signed address needs no header, so a native player or download reads it as a web view does.
+		streamSource: (_sessionId, path, version) => imageSource(path, version),
 		markdownImageSource: (_sessionId, documentPath, url, versionOf) => {
 			const trimmed = url.trim();
 			if (/^(https?:|data:)/i.test(trimmed)) return { uri: trimmed };

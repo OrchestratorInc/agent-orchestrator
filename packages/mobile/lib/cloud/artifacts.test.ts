@@ -93,6 +93,12 @@ describe("a cloud session's artifacts backend", () => {
 		expect(files.webSource("s1", "report/Q3 summary.html")).toEqual({ uri: `${ROOT}report/Q3%20summary.html` });
 		expect(files.imageSource("s1", "chart.png", "2026-11-08T10:00:00Z")).toEqual({ uri: `${ROOT}chart.png?v=2026-11-08T10%3A00%3A00Z` });
 		expect(files.webSource("s1", "../escape.html")).toBeUndefined();
+		// A native player or download reads the signed address with no header, versioned like an image.
+		expect(files.streamSource("s1", "clip.mp4", "v1")).toEqual({ uri: `${ROOT}clip.mp4?v=v1` });
+		expect(files.streamSource("s1", "../escape.mp4")).toBeUndefined();
+		// Cloud tells no size or file start beforehand: the viewers fall back to the page and the download's own check.
+		expect(files.size).toBeUndefined();
+		expect(files.textWithin).toBeUndefined();
 		expect(files.markdownImageSource("s1", "docs/readme.md", "img/a.png")).toEqual({ uri: `${ROOT}docs/img/a.png` });
 		expect(files.markdownImageSource("s1", "docs/readme.md", "https://example.com/a.png")).toEqual({ uri: "https://example.com/a.png" });
 	});

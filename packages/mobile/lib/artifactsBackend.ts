@@ -2,9 +2,13 @@ import {
 	artifactFileUrl,
 	artifactImageSource,
 	artifactMarkdownImageSource,
+	artifactStreamSource,
 	deleteArtifact,
+	getArtifactHead,
 	getArtifactPage,
+	getArtifactSize,
 	getArtifactText,
+	getArtifactTextWithin,
 	getArtifactVersion,
 	getSession,
 	listArtifactVersions,
@@ -14,7 +18,7 @@ import {
 import type { ArtifactAssetLoader } from "./artifactPageInliner";
 import type { SessionArtifact } from "./artifacts";
 import type { ArtifactVersion, ArtifactVersionSummary } from "./artifactVersions";
-import { authHeaders, type ServerConfig } from "./config";
+import { authHeaders, machineIdentity, type ServerConfig } from "./config";
 import { artifactAssetLoader } from "./useInlinedArtifactPage";
 
 export type ArtifactSource = { uri: string; headers?: Record<string, string> };
@@ -26,7 +30,7 @@ export type ArtifactSource = { uri: string; headers?: Record<string, string> };
  * from either; what one cannot do is left out here, and so on screen.
  */
 export type ArtifactsBackend = {
-	/** For caches: names the machine, or the Cloud account. */
+	/** For caches: names the machine (its stable host id), or the Cloud account. */
 	key: string;
 	cloud: boolean;
 	/** Whether this person may delete a file or restore a version (on Cloud, the session's creator). */
@@ -39,6 +43,17 @@ export type ArtifactsBackend = {
 	imageSource(sessionId: string, path: string, version?: string): ArtifactSource | undefined;
 	/** Where a web view loads a file by itself: a page, or media. */
 	webSource(sessionId: string, path: string): ArtifactSource | undefined;
+	/**
+	 * Where a native player or a download reads the file: every request it makes
+	 * (ranges included) carries what the source needs, unlike a web view's.
+	 */
+	streamSource(sessionId: string, path: string, version?: string): ArtifactSource | undefined;
+	/** A file's size without reading it, for one the list does not give; undefined when it cannot be learned. */
+	size?(sessionId: string, path: string, signal?: AbortSignal): Promise<number | undefined>;
+	/** The start of a file, to tell text from binary without reading it whole. */
+	head?(sessionId: string, path: string, bytes: number, signal?: AbortSignal): Promise<string>;
+	/** A file's text only if it is at most `maxBytes`; larger rejects with ArtifactTextTooLargeError. */
+	textWithin?(sessionId: string, path: string, maxBytes: number, signal?: AbortSignal): Promise<string>;
 	/** What an image a markdown artifact names loads from. */
 	markdownImageSource(sessionId: string, documentPath: string, url: string, versionOf?: (path: string) => string | undefined): ArtifactSource | undefined;
 	/** Reads the files a page links, to draw it whole. */
@@ -55,7 +70,8 @@ export type ArtifactsBackend = {
 
 export function daemonArtifactsBackend(config: ServerConfig): ArtifactsBackend {
 	return {
-		key: `${config.host}:${config.httpPort}`,
+		// The host id once known, so two machines that once shared an address never share a cache.
+		key: machineIdentity(config),
 		cloud: false,
 		canChange: true,
 		list: async (sessionId) => (await getSession(config, sessionId)).artifacts ?? [],
@@ -66,6 +82,10 @@ export function daemonArtifactsBackend(config: ServerConfig): ArtifactsBackend {
 			const uri = artifactFileUrl(config, sessionId, path);
 			return uri ? { uri, headers: authHeaders(config) } : undefined;
 		},
+		streamSource: (sessionId, path, version) => artifactStreamSource(config, sessionId, path, version),
+		size: (sessionId, path, signal) => getArtifactSize(config, sessionId, path, { signal }),
+		head: (sessionId, path, bytes, signal) => getArtifactHead(config, sessionId, path, bytes, { signal }),
+		textWithin: (sessionId, path, maxBytes, signal) => getArtifactTextWithin(config, sessionId, path, maxBytes, { signal }),
 		markdownImageSource: (sessionId, documentPath, url, versionOf) => artifactMarkdownImageSource(config, sessionId, documentPath, url, versionOf),
 		assetLoader: (sessionId) => artifactAssetLoader(config, sessionId),
 		remove: async (sessionId, path) => { await deleteArtifact(config, sessionId, path); },
