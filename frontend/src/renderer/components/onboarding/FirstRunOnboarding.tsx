@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, Cloud, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -54,6 +54,7 @@ import { GitHubOnboardingNotice } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { startGuidedTour } from "./GuidedTour";
 import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
@@ -527,6 +528,38 @@ function CheckRow({ icon, label, detail, trailing, below }: { icon?: ReactNode; 
 	);
 }
 
+/** Harnesses whose marks stand for "N more" (well-known ones, one per brand). */
+const MORE_HARNESS_MARKS = ["cursor", "gemini", "copilot", "opencode", "aider", "amp"];
+
+/** The last row of the harness list: three well-known marks and how many more
+ * harnesses AO can install, opening the full list. */
+function MoreHarnessesRow({ ids, onShow }: { ids: string[]; onShow: () => void }) {
+	const { t } = useTranslation();
+	const marks = [...MORE_HARNESS_MARKS.filter((id) => ids.includes(id)), ...ids.filter((id) => !MORE_HARNESS_MARKS.includes(id))].slice(0, 3);
+	return (
+		<li className="[&+&]:border-t [&+&]:border-border">
+			<Pressable
+				className="flex w-full items-center gap-3 px-4 py-3 transition-colors duration-fast hover:bg-muted/60 focus-visible:bg-muted/60"
+				aria-expanded={false}
+				onClick={onShow}
+			>
+				<span className="flex shrink-0 -space-x-1.5" aria-hidden="true">
+					{marks.map((id) => (
+						<span key={id} className="grid size-5 place-items-center rounded-full bg-(--schematic-solid) ring-2 ring-(--schematic-solid)">
+							<AgentAvatar provider={id} className="size-icon-base" decorative />
+						</span>
+					))}
+				</span>
+				<span className="min-w-0 flex-1 truncate text-sm text-foreground">{t("firstRun.moreHarnesses", { count: ids.length })}</span>
+				<span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+					{t("firstRun.showAllHarnesses")}
+					<ChevronDown className="size-icon-sm" aria-hidden="true" />
+				</span>
+			</Pressable>
+		</li>
+	);
+}
+
 /** Example work for the previews: clearly sample tasks, not the user's data. */
 function useExampleTasks() {
 	const { t } = useTranslation();
@@ -852,18 +885,22 @@ const AGENT_STATE_ORDER: Record<AgentRowState, number> = { ready: 0, signin: 1, 
 function useToolAgents() {
 	const readiness = useAgentReadinessQuery();
 	return useMemo(() => {
-		const agents = (readiness.data?.agents ?? [])
-			.filter((agent) => agent.installation.state !== "not_installed" || SUGGESTED_AGENTS.includes(agent.id))
+		const rows = (readiness.data?.agents ?? [])
 			.map((agent) => ({ agent, state: agentRowState(agent) }))
 			.sort((a, b) =>
 				AGENT_STATE_ORDER[a.state] - AGENT_STATE_ORDER[b.state] ||
 				(DEFAULT_AGENT_PRIORITY_RANK.get(a.agent.id) ?? 99) - (DEFAULT_AGENT_PRIORITY_RANK.get(b.agent.id) ?? 99) ||
-				a.agent.label.localeCompare(b.agent.label))
+				a.agent.label.localeCompare(b.agent.label));
+		const agents = rows
+			.filter(({ agent }) => agent.installation.state !== "not_installed" || SUGGESTED_AGENTS.includes(agent.id))
 			.slice(0, 6);
+		// Every other harness AO knows, behind "N more harnesses".
+		const shown = new Set(agents.map(({ agent }) => agent.id));
+		const more = rows.filter(({ agent }) => !shown.has(agent.id));
 		const anyReady = agents.some((row) => row.state === "ready");
 		const pickerAgents = (anyReady ? agents.filter((row) => row.state === "ready") : agents)
 			.map(({ agent }) => ({ id: agent.id, label: agent.label, dimmed: !anyReady }));
-		return { agents, anyReady, pickerAgents, selectedId: anyReady ? pickerAgents[0]?.id : undefined };
+		return { agents, more, anyReady, pickerAgents, selectedId: anyReady ? pickerAgents[0]?.id : undefined };
 	}, [readiness.data]);
 }
 
@@ -898,7 +935,8 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 	const ghChecking = gate.checking || ghAuth.isPending;
 	const ghView = ghInstall.view;
 
-	const { agents, anyReady } = useToolAgents();
+	const { agents, more, anyReady } = useToolAgents();
+	const [showAllAgents, setShowAllAgents] = useState(false);
 	const signingInAgent = workflow?.agentId;
 	const signingInReady = agents.some((row) => row.agent.id === signingInAgent && row.state === "ready");
 
@@ -945,6 +983,41 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 		void refresh();
 	};
 
+	const agentRow = ({ agent, state }: (typeof agents)[number]) => {
+		const view = agentInstalls.view(agent.id);
+		const plan = agentInstalls.planFor(agent.id);
+		const canInstall = agentInstalls.canInstall(agent.id);
+		const signingIn = signingInAgent === agent.id && !signingInReady;
+		const missing = state === "missing";
+		// Its plan says it can't be installed from here: say how instead. With no
+		// plan (not loaded, or none for it) Install is tried, and says why if it fails.
+		const manual = missing && plan !== undefined && !canInstall;
+		return (
+			<CheckRow
+				key={agent.id}
+				icon={<AgentAvatar provider={agent.id} className="size-icon-base" decorative />}
+				label={agent.label}
+				detail={manual && !view.ended ? plan?.reason : undefined}
+				trailing={view.busy || signingIn ? <RowSpinner />
+					: state === "ready" ? <RowState>{t("settings.harness.installed")}</RowState>
+					: state === "signin" ? (
+						<Button size="sm" variant="secondary" disabled={startAuth.isPending} onClick={() => void signIn(agent.id)}>{t("firstRun.signIn")}</Button>
+					)
+					: missing && !manual ? (
+						<Button size="sm" variant="secondary" disabled={!agentInstalls.plansReady} onClick={() => void agentInstalls.start(agent.id)}>
+							{view.ended ? t("startup.installTryAgain") : t("firstRun.install")}
+						</Button>
+					)
+					: manual && plan?.documentationUrl ? <InstallDocsLink url={plan.documentationUrl} label={t("firstRun.installHowTo")} />
+					: missing ? <RowState>{t("firstRun.agentMissing")}</RowState>
+					: <RowSpinner />}
+				below={view.busy && missing ? <InstallProgress job={view.job} label={agent.label} />
+					: view.ended && missing ? <InstallProblem view={view} docsUrl={plan?.documentationUrl} />
+					: undefined}
+			/>
+		);
+	};
+
 	const checkAgain = async () => {
 		setChecking(true);
 		try {
@@ -965,41 +1038,23 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 				<div className="flex flex-col gap-5">
 					<RowGroup title={t("firstRun.toolsAgentsHeading")} hint={t("firstRun.agentsBodyNone")}>
 						<ul className={ROW_LIST}>
-							{agents.map(({ agent, state }) => {
-								const view = agentInstalls.view(agent.id);
-								const plan = agentInstalls.planFor(agent.id);
-								const canInstall = agentInstalls.canInstall(agent.id);
-								const signingIn = signingInAgent === agent.id && !signingInReady;
-								const missing = state === "missing";
-								// Its plan says it can't be installed from here: say how instead. With no
-								// plan (not loaded, or none for it) Install is tried, and says why if it fails.
-								const manual = missing && plan !== undefined && !canInstall;
-								return (
-									<CheckRow
-										key={agent.id}
-										icon={<AgentAvatar provider={agent.id} className="size-icon-base" decorative />}
-										label={agent.label}
-										detail={manual && !view.ended ? plan?.reason : undefined}
-										trailing={view.busy || signingIn ? <RowSpinner />
-											: state === "ready" ? <RowState>{t("settings.harness.installed")}</RowState>
-											: state === "signin" ? (
-												<Button size="sm" variant="secondary" disabled={startAuth.isPending} onClick={() => void signIn(agent.id)}>{t("firstRun.signIn")}</Button>
-											)
-											: missing && !manual ? (
-												<Button size="sm" variant="secondary" disabled={!agentInstalls.plansReady} onClick={() => void agentInstalls.start(agent.id)}>
-													{view.ended ? t("startup.installTryAgain") : t("firstRun.install")}
-												</Button>
-											)
-											: manual && plan?.documentationUrl ? <InstallDocsLink url={plan.documentationUrl} label={t("firstRun.installHowTo")} />
-											: missing ? <RowState>{t("firstRun.agentMissing")}</RowState>
-											: <RowSpinner />}
-										below={view.busy && missing ? <InstallProgress job={view.job} label={agent.label} />
-											: view.ended && missing ? <InstallProblem view={view} docsUrl={plan?.documentationUrl} />
-											: undefined}
-									/>
-								);
-							})}
+							{agents.map(agentRow)}
+							{more.length > 0 && !showAllAgents ? (
+								<MoreHarnessesRow ids={more.map(({ agent }) => agent.id)} onShow={() => setShowAllAgents(true)} />
+							) : null}
 						</ul>
+						{showAllAgents && more.length > 0 ? (
+							<>
+								{/* Every other harness, installable from here too; scrolls past a few rows. */}
+								<ul className={cn(ROW_LIST, "max-h-80 overflow-y-auto")} aria-label={t("firstRun.moreHarnessesList")}>
+									{more.map(agentRow)}
+								</ul>
+								<Button type="button" variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => setShowAllAgents(false)}>
+									{t("firstRun.showFewerHarnesses")}
+									<ChevronUp aria-hidden="true" />
+								</Button>
+							</>
+						) : null}
 					</RowGroup>
 					{/* GitHub is optional: agents still work locally without it. */}
 					<RowGroup title={t("firstRun.toolsGithubHeading")} hint={t("firstRun.toolsGithubHint")}>
