@@ -166,8 +166,8 @@ function ProjectChats({ projectId, onClose, onImporting }: { projectId: string; 
 						))}
 					</div>
 				</PreviewState>
-				<ImportError error={error} failures={failures} />
 			</div>
+			<ImportError error={error} failures={failures} />
 			<div className={settingsDialogFooterClass}>
 				<Button variant="secondary" disabled={importing} onClick={onClose}>
 					{t("sessionImport.cancel")}
@@ -265,8 +265,8 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 						) : null}
 					</div>
 				</PreviewState>
-				<ImportError error={error} failures={failures} />
 			</div>
+			<ImportError error={error} failures={failures} />
 			<div className={settingsDialogFooterClass}>
 				<Button variant="secondary" disabled={importing} onClick={onClose}>
 					{t("sessionImport.cancel")}
@@ -293,7 +293,7 @@ function ImportError({ error, failures }: { error?: string; failures: { id: stri
 	const { t } = useTranslation();
 	if (!error) return null;
 	return (
-		<div role="alert" className="flex flex-col gap-1 text-sm text-destructive">
+		<div role="alert" className="flex flex-col gap-1 px-(--size-modal-padding) pb-(--size-modal-padding) text-sm text-destructive">
 			<p>{error}</p>
 			{failures.slice(0, MAX_LISTED_FAILURES).map((failure) => (
 				<p key={failure.id} className="truncate text-xs">
