@@ -1104,6 +1104,7 @@
 	"mobile.getApp": "Get the app",
 	"mobile.scanHint": "Scan with the Orchestrator mobile app",
 	"mobile.remoteAccessOn": "Remote access on",
+	"mobile.hostKeyUnavailable": "This computer's encryption key can't be read, so no code is shown. The Orchestrator log has the reason.",
 	"mobile.hideQR": "Hide App Store QR code",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "Get Orchestrator on the App Store",

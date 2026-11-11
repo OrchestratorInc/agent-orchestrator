@@ -2841,6 +2841,9 @@ type MobileStatusResponse struct {
 	// HostKey is the machine's Ed25519 public key, unpadded base64url, echoed
 	// into the pairing code. The phone encrypts its traffic to the key holder.
 	HostKey string `json:"hostKey,omitempty"`
+	// HostKeyUnavailable means the host key cannot be read. The desktop then
+	// shows no pairing code, since a code without the key pairs unencrypted.
+	HostKeyUnavailable bool `json:"hostKeyUnavailable,omitempty"`
 	// Tunnel is the managed remote-access connector's state, so the desktop can
 	// show progress during the tens of seconds before it is advertisable.
 	Tunnel mobilebridge.TunnelStatus `json:"tunnel"`

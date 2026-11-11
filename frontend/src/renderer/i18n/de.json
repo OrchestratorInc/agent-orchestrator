@@ -1107,6 +1107,7 @@
 	"mobile.getApp": "App holen",
 	"mobile.scanHint": "Mit der Orchestrator-Mobile-App scannen",
 	"mobile.remoteAccessOn": "Fernzugriff an",
+	"mobile.hostKeyUnavailable": "Der Verschlüsselungsschlüssel dieses Computers kann nicht gelesen werden, daher wird kein Code angezeigt. Den Grund findest du im Orchestrator-Protokoll.",
 	"mobile.hideQR": "App-Store-QR-Code ausblenden",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "Orchestrator im App Store herunterladen",

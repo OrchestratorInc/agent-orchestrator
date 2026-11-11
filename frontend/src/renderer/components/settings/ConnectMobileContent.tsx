@@ -238,6 +238,8 @@ interface MobileStatus {
 	hostId?: string;
 	/** The machine's Ed25519 public key, echoed into the pairing code. */
 	hostKey?: string;
+	/** The key cannot be read. No code is shown: without the key the phone would pair unencrypted. */
+	hostKeyUnavailable?: boolean;
 	/** Every advertised way to reach this daemon, in preference order. Optional
 	 * for the same reason as hostId. */
 	endpoints?: PairingEndpoint[];
@@ -772,6 +774,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const showRealQR =
 		enabled &&
 		!secureBlocked &&
+		!status.hostKeyUnavailable &&
 		pairingCode !== "" &&
 		qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
 	// Computed once so the rendered v2 QR and its data attribute cannot drift.
@@ -811,6 +814,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					<Button type="button" variant="primary" data-testid="mobile-pairing-code-retry" onClick={() => void pairing.refetch()}>
 						{t("mobile.generate")}
 					</Button>
+				</div>
+			) : status.hostKeyUnavailable ? (
+				<div className="absolute inset-0 flex items-center justify-center p-4" data-testid="mobile-host-key-unavailable" role="status">
+					<span className="rounded-(--radius-settings-action) bg-(--color-bg-secondary) px-3 py-2 text-center text-xs leading-5 text-settings-muted shadow-lg">
+						{t("mobile.hostKeyUnavailable")}
+					</span>
 				</div>
 			) : !qrValue && !unreachable ? (
 				<div

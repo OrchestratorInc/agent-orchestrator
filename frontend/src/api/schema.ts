@@ -6908,6 +6908,7 @@ export interface components {
             host: string;
             hostId: string;
             hostKey?: string;
+            hostKeyUnavailable?: boolean;
             keepAwake: components["schemas"]["ControllersKeepAwakeStatus"];
             loopbackOnly: boolean;
             noPublicTunnel: boolean;

@@ -1125,6 +1125,7 @@
 	"mobile.getApp": "Скачать приложение",
 	"mobile.scanHint": "Отсканируйте код в мобильном приложении Orchestrator",
 	"mobile.remoteAccessOn": "Удалённый доступ включён",
+	"mobile.hostKeyUnavailable": "Не удаётся прочитать ключ шифрования этого компьютера, поэтому код не показан. Причина указана в журнале Orchestrator.",
 	"mobile.remoteAccessEnabling": "Включение удалённого доступа",
 	"mobile.remoteAccessEnablingHint": "Пока доступно только в этой сети",
 	"mobile.remoteAccessEnablingHintTailscale": "Пока доступ извне возможен только через Tailscale",
