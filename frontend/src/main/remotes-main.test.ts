@@ -699,8 +699,9 @@ describe("registerRemotesIpc", () => {
 		});
 
 		it.each([
-			["a host that went back to a release without device tokens", undefined, "old"],
+			["a host that went back to a release without device tokens", "BAD_PASSWORD", "old"],
 			["a host that removed this device", "DEVICE_REVOKED", token],
+			["a host whose answer could not be read", undefined, token],
 		])("handles a refused token from %s", async (_name, code, expectedPassword) => {
 			const file = await tempFile();
 			await writeFile(file, JSON.stringify({ remotes: [{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, fallbackPassword: "old", accountUserId: TEST_ACCOUNT }] }));
@@ -712,7 +713,7 @@ describe("registerRemotesIpc", () => {
 				authErrorCode: async () => code,
 			});
 			const connected = ipc.invoke("remotes:connect", "http://192.0.2.1:1");
-			if (code === "DEVICE_REVOKED") {
+			if (code !== "BAD_PASSWORD") {
 				// Removed on purpose: the kept password must not bring the device back.
 				await expect(connected).rejects.toThrow(/is unauthorized$/);
 				expect(start).not.toHaveBeenCalled();
