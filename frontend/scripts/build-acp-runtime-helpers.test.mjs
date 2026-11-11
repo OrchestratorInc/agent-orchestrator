@@ -693,11 +693,12 @@ describe("archiveExtraction", () => {
 });
 
 describe("pruneRuntimePackages", () => {
-	it("removes declarations, source maps and docs and keeps code", () => {
+	it("removes declarations, source maps and docs and keeps code and license files", () => {
 		const nodeModules = temporaryDirectory();
 		const files = [
 			"pkg/index.js", "pkg/index.js.map", "pkg/index.d.ts", "pkg/esm/index.d.mts", "pkg/cjs/index.d.cts",
 			"pkg/README.md", "pkg/package.json", "pkg/lib/map.js", "@scope/sdk/dist/client.js",
+			"pkg/LICENSE.md", "ms/license.md", "pkg/NOTICE.md", "pkg/COPYING.md",
 		];
 		for (const file of files) {
 			mkdirSync(dirname(join(nodeModules, file)), { recursive: true });
@@ -710,6 +711,9 @@ describe("pruneRuntimePackages", () => {
 			.filter((entry) => entry.isFile())
 			.map((entry) => relative(nodeModules, join(entry.parentPath, entry.name)).split(sep).join("/"))
 			.sort();
-		expect(left).toEqual(["@scope/sdk/dist/client.js", "pkg/index.js", "pkg/lib/map.js", "pkg/package.json"]);
+		expect(left).toEqual([
+			"@scope/sdk/dist/client.js", "ms/license.md", "pkg/COPYING.md", "pkg/LICENSE.md", "pkg/NOTICE.md",
+			"pkg/index.js", "pkg/lib/map.js", "pkg/package.json",
+		]);
 	});
 });

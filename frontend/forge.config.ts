@@ -91,16 +91,21 @@ export function labelMacBundle(
 }
 
 // Chromium ships about 220 locale folders (49 MB). Keep the app's own UI
-// languages; for any other, macOS falls back to English, as the app's UI does.
-// Must run before signing.
-export function pruneChromiumLocales(buildPath: string): void {
-	const resources = path.join(
-		buildPath, `${PACKAGER_NAME}.app`, "Contents", "Frameworks", "Electron Framework.framework", "Resources",
-	);
+// languages, in the framework and in the app bundle: macOS picks the app's
+// language from the bundle's .lproj folders, and Chromium then needs that
+// language's locale.pak. Removing both makes any other language resolve to
+// English. Must run before signing.
+export function pruneLocales(buildPath: string): void {
+	const contents = path.join(buildPath, `${PACKAGER_NAME}.app`, "Contents");
 	const keep = new Set<string>(APP_LOCALES.map((locale) => locale.replace("-", "_")));
-	for (const entry of readdirSync(resources)) {
-		const locale = /^(.+?)(?:_(?:FEMININE|MASCULINE|NEUTER))?\.lproj$/.exec(entry)?.[1];
-		if (locale && !keep.has(locale)) rmSync(path.join(resources, entry), { recursive: true, force: true });
+	for (const resources of [
+		path.join(contents, "Frameworks", "Electron Framework.framework", "Resources"),
+		path.join(contents, "Resources"),
+	]) {
+		for (const entry of readdirSync(resources)) {
+			const locale = /^(.+?)(?:_(?:FEMININE|MASCULINE|NEUTER))?\.lproj$/.exec(entry)?.[1];
+			if (locale && !keep.has(locale)) rmSync(path.join(resources, entry), { recursive: true, force: true });
+		}
 	}
 }
 
@@ -230,8 +235,8 @@ const config: ForgeConfig = {
 		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
 			if (platform !== "darwin") return callback();
 			try {
+				pruneLocales(buildPath);
 				labelMacBundle(buildPath);
-				pruneChromiumLocales(buildPath);
 				callback();
 			} catch (error) {
 				callback(error as Error);

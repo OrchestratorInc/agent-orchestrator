@@ -446,12 +446,14 @@ export function pruneNodeDistribution(nodeRoot) {
 }
 
 // Type declarations, source maps and docs are never loaded at runtime: Node runs
-// the adapter without --enable-source-maps.
+// the adapter without --enable-source-maps. License and notice files stay, even
+// as markdown, because their licenses require them to ship with the code.
 const PACKAGE_DEV_FILE = /\.(d\.[cm]?ts|map|md)$/i;
+const PACKAGE_LEGAL_FILE = /^(licen[cs]e|notice|copying)/i;
 
 export function pruneRuntimePackages(nodeModules) {
 	for (const entry of readdirSync(nodeModules, { recursive: true, withFileTypes: true })) {
-		if (entry.isFile() && PACKAGE_DEV_FILE.test(entry.name)) {
+		if (entry.isFile() && PACKAGE_DEV_FILE.test(entry.name) && !PACKAGE_LEGAL_FILE.test(entry.name)) {
 			rmSync(join(entry.parentPath, entry.name));
 		}
 	}

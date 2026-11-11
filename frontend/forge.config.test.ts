@@ -31,7 +31,7 @@ vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
 	return { ...actual, checkMacDmgLayout };
 });
 
-import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, pruneChromiumLocales, WINDOWS_DISPLAY_NAME } from "./forge.config";
+import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, pruneLocales, WINDOWS_DISPLAY_NAME } from "./forge.config";
 
 // Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
 // two on-disk layouts the signing selector must tell apart. Full parser
@@ -459,32 +459,36 @@ describe("packaged native dependencies", () => {
 	});
 });
 
-describe("Chromium locale pruning", () => {
+describe("locale pruning", () => {
 	let buildPath: string;
 	beforeEach(() => {
 		buildPath = mkdtempSync(join(tmpdir(), "ao-locales-"));
 	});
 	afterEach(() => rmSync(buildPath, { recursive: true, force: true }));
 
-	it("keeps the app's UI languages and their variants and removes the rest", () => {
-		const resources = join(
-			buildPath, `${config.packagerConfig?.name}.app`, "Contents", "Frameworks", "Electron Framework.framework", "Resources",
-		);
-		const entries = [
+	it("keeps the app's UI languages in the framework and the app bundle and removes the rest", () => {
+		const contents = join(buildPath, `${config.packagerConfig?.name}.app`, "Contents");
+		const framework = join(contents, "Frameworks", "Electron Framework.framework", "Resources");
+		const app = join(contents, "Resources");
+		const write = (dir: string, entries: string[]) => {
+			mkdirSync(dir, { recursive: true });
+			for (const entry of entries) {
+				if (entry.endsWith(".lproj")) mkdirSync(join(dir, entry));
+				else writeFileSync(join(dir, entry), "");
+			}
+		};
+		write(framework, [
 			"en.lproj", "en_FEMININE.lproj", "zh_CN.lproj", "zh_CN_NEUTER.lproj", "pt_BR.lproj",
 			"en_GB.lproj", "zh_TW.lproj", "pt_PT_MASCULINE.lproj", "af.lproj", "Info.plist",
-		];
-		mkdirSync(resources, { recursive: true });
-		for (const entry of entries) {
-			if (entry.endsWith(".lproj")) mkdirSync(join(resources, entry));
-			else writeFileSync(join(resources, entry), "");
-		}
+		]);
+		write(app, ["en.lproj", "it.lproj", "ja.lproj", "zh_TW.lproj", "app.asar"]);
 
-		pruneChromiumLocales(buildPath);
+		pruneLocales(buildPath);
 
-		expect(readdirSync(resources).sort()).toEqual([
+		expect(readdirSync(framework).sort()).toEqual([
 			"Info.plist", "en.lproj", "en_FEMININE.lproj", "pt_BR.lproj", "zh_CN.lproj", "zh_CN_NEUTER.lproj",
 		]);
+		expect(readdirSync(app).sort()).toEqual(["app.asar", "en.lproj", "ja.lproj"]);
 	});
 });
 
