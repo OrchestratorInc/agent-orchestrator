@@ -117,8 +117,11 @@ export function SpawnComposerControls({
 			    trigger's touch target carries its own air above and below the
 			    text, so the rows need no gap. Compact and left-anchored: a
 			    max-width frame would make a Menu fill the row, which centers its
-			    popup over the whole screen. */}
-			<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.host}>
+			    popup over the whole screen. The dock rises over the keyboard by a
+			    transform, so SwiftUI places this host under the keyboard and
+			    would lift its rows by the overlap, over whatever the page shows
+			    above them (a notice, a button); it keeps out of the safe area. */}
+			<Host matchContents={{ vertical: true }} ignoreSafeArea="all" colorScheme={scheme} style={styles.host}>
 				<VStack alignment="leading" spacing={space.none} modifiers={[padding({ horizontal: space.xs })]}>
 					<HStack>
 						<Menu
