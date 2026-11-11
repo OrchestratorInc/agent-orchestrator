@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
 import { setPasswordCipher } from "./remotes-store";
-import { createLocalHostIdentity } from "./remote-request";
+import { createLocalHostIdentity, type RemoteHealth } from "./remote-request";
 import { ExpectedIpcError, installIpcErrorCapture, resetMainErrorCaptureForTests, setMainErrorSink } from "./main-error-capture";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
@@ -725,17 +725,26 @@ describe("registerRemotesIpc", () => {
 			}
 		});
 
-		it("keeps an issued token when the host does not answer the probe after pairing", async () => {
+		it("reuses an issued token when the probe after pairing failed, and saves only an online host", async () => {
 			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "pairing-code" }));
+			const answers: RemoteHealth[] = ["offline", "online", "offline", "online"];
 			const ipc = fakeIpc();
 			registerRemotes(ipc.ipcMain, {
 				file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async (entry) => entry.url === "https://new.example" ? "h_new" : "h_workbox",
-				probe: async () => "offline", pair: async () => ({ kind: "paired", token, credential: "pairing-code" }),
+				probe: async () => answers.shift()!, pair,
 			});
 			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("offline");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toBeUndefined();
+			// The retry sends the spent code again; the token issued for it is used instead.
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("online");
 			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toMatchObject({ password: token });
+			expect(pair).toHaveBeenCalledOnce();
 			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code5678" })).resolves.toBe("offline");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_workbox")).toMatchObject({ password: "old" });
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code5678" })).resolves.toBe("online");
 			expect((await saved(file)).find((entry) => entry.hostId === "h_workbox")).toMatchObject({ password: token });
+			expect(pair).toHaveBeenCalledTimes(2);
 		});
 
 		it("swaps a newly typed code when a saved host is edited", async () => {
