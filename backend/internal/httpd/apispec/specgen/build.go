@@ -18,7 +18,6 @@ import (
 	openapi "github.com/swaggest/openapi-go"
 	"github.com/swaggest/openapi-go/openapi31"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/conductorimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
@@ -2992,17 +2991,6 @@ func projectOperations() []operation {
 			reqBody:    projectsvc.SetConfigInput{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ProjectResponse{}},
-				{http.StatusBadRequest, envelope.APIError{}},
-				{http.StatusNotFound, envelope.APIError{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodGet, path: "/api/v1/projects/{id}/conductor", id: "getProjectConductorImport", tag: "projects",
-			summary:    "Preview the project's Conductor settings merged into its config",
-			pathParams: []any{controllers.ProjectIDParam{}},
-			resps: []respUnit{
-				{http.StatusOK, conductorimport.Plan{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
