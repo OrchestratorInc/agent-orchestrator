@@ -42,9 +42,6 @@ function SessionRouteContent() {
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
-	// A session can outlive its project; only a project still listed is worth starting in.
-	const listedProjectId = listed?.projectId && projects.some((project) => project.id === listed.projectId) ? listed.projectId : undefined;
-	useFocusEffect(useCallback(() => { rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, listedProjectId]));
 	const key = sessionLookupKey(machine, id);
 	const [stored, setStored] = useState<KeyedSessionLookup | null>(null);
 	const [attempt, setAttempt] = useState(0);
@@ -124,6 +121,11 @@ function SessionRouteContent() {
 	}, []);
 
 	const view = sessionRouteView({ listed, paired, connection, loading, lookup, routeHostId, currentHostId: currentHostId ?? undefined });
+	// The session on screen, listed or looked up. A session can outlive its
+	// project; only a project still listed is worth starting in.
+	const shownProjectId = view.kind === "screen" ? view.session.projectId : undefined;
+	const rememberedProjectId = shownProjectId && projects.some((project) => project.id === shownProjectId) ? shownProjectId : undefined;
+	useFocusEffect(useCallback(() => { rememberLastProject(currentHostId, rememberedProjectId); }, [currentHostId, rememberedProjectId]));
 
 	switch (view.kind) {
 		case "screen":
