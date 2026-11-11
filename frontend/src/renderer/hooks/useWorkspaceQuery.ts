@@ -951,6 +951,18 @@ export function useRemoteProjectQuery(hostId: string, projectId: string) {
 	});
 }
 
+/** Every project on one remote host, from the same cache as the board's
+ * project query. The archive modal reads it, only while it is open. */
+export function useRemoteHostWorkspacesQuery(hostId: string, options: WorkspaceSubscriptionOptions = {}) {
+	return useQuery({
+		queryKey: remoteWorkspaceQueryKey(hostId),
+		queryFn: () => fetchRemoteWorkspaces(hostId),
+		enabled: Boolean(hostId) && options.enabled !== false,
+		subscribed: options.subscribed,
+		retry: 1,
+	});
+}
+
 // Route-level recovery for a Cloud session that has just been created or whose
 // list cache is stale. The session screen must resolve it through the control
 // plane, never try the local daemon just because the list query has not caught
