@@ -704,6 +704,12 @@ export interface CloudCpSessionArtifact {
 	size: number;
 	sha256: string;
 	updatedAt: string;
+	/** Set on a file the agent registered with `ao artifact add`. */
+	registered?: boolean;
+	/** The artifact's identity, kept when its file is renamed. */
+	id?: string;
+	/** The paths the artifact had before it was renamed, latest last. */
+	previousPaths?: string[];
 }
 
 /** One kept version of a cloud artifact file, numbered per path; the newest is the committed file. */
@@ -1404,6 +1410,16 @@ export interface CloudCpChatEventsQuery {
 	 * it with 400; callers filter the page themselves either way.
 	 */
 	types?: readonly string[];
+	/**
+	 * Read back from this sequence instead of forward from `after`: the newest
+	 * `limit` events below it (and above `after`, which must be lower), extended
+	 * back once to where their turns start. 9007199254740991 reads the newest
+	 * page. An older control plane ignores it and reads forward; its page then
+	 * has no `hasOlder`.
+	 */
+	before?: number;
+	/** With `before` only: only events created at or after this ISO time. */
+	since?: string;
 }
 
 /** GET /orgs/{orgId}/sessions/{sessionId}/chat-events */
@@ -1411,6 +1427,10 @@ export interface CloudCpChatEventsResponse {
 	events: CloudCpClientEvent[];
 	hasMore: boolean;
 	nextAfter: number;
+	/** Only on a page read with `before`: older events remain above `after`. */
+	hasOlder?: boolean;
+	/** Only on a page read with `before`: the `before` of the next older page. */
+	nextBefore?: number;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion */

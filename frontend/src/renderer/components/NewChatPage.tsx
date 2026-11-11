@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { Cloud, Folder, Plus, Smartphone, StickyNote } from "lucide-react";
+import { Cloud, Folder, Plus, Smartphone, StickyNote } from "@/components/app-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -23,7 +23,7 @@ import { startingConversationSnapshot } from "./chat/OrchestratorStartingChat";
 import { LaunchSettingsBar, rememberLaunchSettings, rememberOpeningStart, type LaunchSettings } from "./chat/LaunchSettingsBar";
 import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar } from "./chat/TurnSettingsBar";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
+import { fetchDevices, isPhone, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
@@ -603,6 +603,7 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 			disabled={disabled}
 			menuAlign="start"
 			menuClassName="w-48 max-h-72"
+			triggerVariant="ghost"
 			triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
 			showCaret={false}
 			// Icon and label share the row's colour, so hover changes both together.
@@ -640,7 +641,7 @@ function MobileConnected() {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const { data } = useQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices, refetchInterval: 10_000, retry: false });
-	const live = data?.filter((device) => device.live) ?? [];
+	const live = data?.filter((device) => device.live && isPhone(device)) ?? [];
 	if (live.length === 0) return null;
 	return (
 		<Button

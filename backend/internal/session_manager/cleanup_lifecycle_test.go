@@ -235,7 +235,7 @@ func TestCleanupRefusalForClassifiesTeardownErrors(t *testing.T) {
 		{wrap(ports.ErrWorkspaceRepoUnavailable), domain.CleanupSkipMissingRepo, "project repository is missing; remove worktree manually"},
 		{wrap(ErrProjectNotResolvable), domain.CleanupSkipProjectUnresolvable, "project is archived or unregistered — remove worktree manually"},
 		{wrap(ports.ErrWorkspaceDeferred), domain.CleanupSkipWorktreeBusy, "worktree is in use; will retry on a later run"},
-		{wrap(ports.ErrWorkspaceUnsafePath), domain.CleanupSkipOutsideManagedRoot, "worktree is outside AO's managed folder; remove it manually"},
+		{wrap(ports.ErrWorkspaceUnsafePath), domain.CleanupSkipOutsideManagedRoot, "worktree is outside Orchestrator's managed folder; remove it manually"},
 		{wrap(&os.PathError{Op: "unlinkat", Path: "/ws/mer-1/f", Err: fs.ErrPermission}), domain.CleanupSkipPermissionDenied,
 			"permission denied removing the worktree; fix its file permissions, then retry cleanup"},
 		{&cleanupStepError{step: 2, cause: errors.New("boom")}, domain.CleanupSkipScriptFailed, "cleanup step 2 failed: command could not run"},
@@ -436,6 +436,28 @@ func TestDeleteSession_CleansUpFirst(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteSession_FlushesUsageBeforeTheRecordGoes(t *testing.T) {
+	m, st, _, _ := newManager()
+	seedTerminal(st, "mer-1", domain.SessionMetadata{})
+	recordAtFlush := false
+	m.SetUsageFlusher(usageFlusherFunc(func(context.Context) {
+		_, recordAtFlush = st.sessions["mer-1"]
+	}))
+	if err := m.DeleteSession(ctx, "mer-1", false); err != nil {
+		t.Fatalf("DeleteSession = %v", err)
+	}
+	if !recordAtFlush {
+		t.Fatal("usage was not flushed while the session record still existed")
+	}
+	if _, ok := st.sessions["mer-1"]; ok {
+		t.Fatal("session survived its delete")
+	}
+}
+
+type usageFlusherFunc func(context.Context)
+
+func (f usageFlusherFunc) Flush(ctx context.Context) { f(ctx) }
 
 func TestDeleteSession_RefusesWhileAnotherOperationRuns(t *testing.T) {
 	m, st, _, _ := newManager()

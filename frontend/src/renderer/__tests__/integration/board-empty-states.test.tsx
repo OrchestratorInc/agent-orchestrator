@@ -224,8 +224,6 @@ beforeEach(() => {
 	});
 	deleteMock.mockResolvedValue({ error: undefined });
 	useUiStore.setState({
-		// The simplified top bar is a Developer Mode preview; these tests cover it.
-		developerMode: true,
 		orchestratorReplacementErrors: {},
 		orchestratorStartupErrors: {},
 		provisioningProjectIds: new Set(),
@@ -493,7 +491,7 @@ describe("project board with no sessions", () => {
 
 		expect(await screen.findByText("No worker sessions yet")).toBeInTheDocument();
 		// Both launchers remain reachable from the empty-state invitation.
-		expect(screen.getAllByRole("button", { name: "Spawn Orchestrator" }).length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("button", { name: "Spawn orchestrator agent" }).length).toBeGreaterThan(0);
 		expect(screen.getAllByRole("button", { name: "New task" }).length).toBeGreaterThan(0);
 		expect(screen.queryByText("New project")).not.toBeInTheDocument();
 		expect(columnCount()).toBe(0);
@@ -505,7 +503,7 @@ describe("project board with no sessions", () => {
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 
 		expect(await screen.findByText(/branch is already checked out/)).toBeInTheDocument();
@@ -520,7 +518,7 @@ describe("project board with no sessions", () => {
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 		await userEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
 
@@ -534,7 +532,7 @@ describe("project board with no sessions", () => {
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
@@ -566,7 +564,7 @@ describe("project board with no sessions", () => {
 		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
 		expect(screen.getByLabelText("Message the agent").closest("form")).toHaveAttribute("data-starting", "true");
 		expect(screen.queryByTestId("board")).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Spawn Orchestrator" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Spawn orchestrator agent" })).not.toBeInTheDocument();
 		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
 		expect(await screen.findByTestId("project-board-empty")).toBeInTheDocument();
 		expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
@@ -584,7 +582,7 @@ describe("project board with no sessions", () => {
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText(/Project added, but orchestrator did not start/);
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 
 		await waitFor(() =>
@@ -640,7 +638,7 @@ describe("project board with no sessions", () => {
 		const { rerender } = renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		await screen.findByText("No worker sessions yet");
-		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 		await screen.findByText(/branch is already checked out/);
 
@@ -684,13 +682,13 @@ describe("shared project board actions", () => {
 		renderBoard(board());
 		const empty = await screen.findByTestId("project-board-empty");
 		const headerTask = screen.getAllByRole("button", { name: "New task" }).find((button) => !empty.contains(button))!;
-		const headerOrchestrator = screen.getAllByRole("button", { name: "Spawn Orchestrator" }).find((button) => !empty.contains(button))!;
-		expect(headerTask).toHaveClass("topbar-control--primary", "topbar-control--labeled");
-		expect(headerOrchestrator).toHaveClass("topbar-control--action", "topbar-control--labeled");
+		const headerOrchestrator = screen.getAllByRole("button", { name: "Spawn orchestrator agent" }).find((button) => !empty.contains(button))!;
+		expect(headerTask).toHaveClass("[--button-color:var(--primary)]");
+		expect(headerOrchestrator).toHaveClass("before:bg-interactive-hover");
 		expect(headerTask).toHaveAttribute("data-priority", "primary");
 		expect(headerTask.querySelector("[data-compact-label]")).not.toBeNull();
-		expect(within(empty).getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
-		expect(within(empty).getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
+		expect(within(empty).getByRole("button", { name: "Spawn orchestrator agent" })).toHaveClass("[--button-color:var(--primary)]");
+		expect(within(empty).getByRole("button", { name: "New task" })).toHaveClass("[--button-color:var(--secondary)]");
 
 		for (const button of screen.getAllByRole("button", { name: "New task" })) {
 			useUiStore.setState({ newTaskRequest: null });
@@ -705,12 +703,12 @@ describe("shared project board actions", () => {
 		for (const session of [worker, { ...worker, status: "terminated" as const, isTerminated: true }]) {
 			updateWorkers([session]);
 			await waitFor(() => expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument());
-			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary");
-			expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--action");
+			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("[--button-color:var(--primary)]");
+			expect(screen.getByRole("button", { name: "Spawn orchestrator agent" })).toHaveClass("before:bg-interactive-hover");
 		}
 		updateWorkers([]);
 		await screen.findByTestId("project-board-empty");
-		expect(headerTask).toHaveClass("topbar-control--primary");
+		expect(headerTask).toHaveClass("[--button-color:var(--primary)]");
 	});
 
 	it("shows the starting chat while a request is pending, then restores the board with Terminal UI recovery", async () => {
@@ -720,16 +718,16 @@ describe("shared project board actions", () => {
 		spawnOrchestratorMock.mockResolvedValueOnce("orch-retry");
 		renderBoard(board());
 		await screen.findByTestId("project-board-empty");
-		const buttons = screen.getAllByRole("button", { name: "Spawn Orchestrator" });
+		const buttons = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		expect(buttons).toHaveLength(2);
 		act(() => { buttons[0].click(); buttons[1].click(); });
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
 		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
 		// The header actions live inside the board, so they leave with it.
-		expect(screen.queryByRole("button", { name: "Spawn Orchestrator" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Spawn orchestrator agent" })).not.toBeInTheDocument();
 		act(() => rejectSpawn(Object.assign(new Error("Chat driver unavailable"), { code: "CHAT_DRIVER_UNAVAILABLE" })));
 		expect(await screen.findByText("Chat driver unavailable")).toBeInTheDocument();
-		for (const button of screen.getAllByRole("button", { name: "Spawn Orchestrator" })) expect(button).toBeEnabled();
+		for (const button of screen.getAllByRole("button", { name: "Spawn orchestrator agent" })) expect(button).toBeEnabled();
 		await userEvent.click(await screen.findByRole("button", { name: "Create as Terminal UI" }));
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(2));
 		expect(spawnOrchestratorMock).toHaveBeenLastCalledWith("proj-1", "board", false, "tui");
@@ -747,12 +745,12 @@ describe("shared project board actions", () => {
 		}));
 		const view = renderBoard(board());
 		await screen.findByTestId("project-board-empty");
-		await userEvent.click(screen.getAllByRole("button", { name: "Spawn Orchestrator" })[0]);
+		await userEvent.click(screen.getAllByRole("button", { name: "Spawn orchestrator agent" })[0]);
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
 		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
 		view.rerender(<QueryClientProvider client={lastQueryClient!}><ShellProvider value={lastShell!}>{board("proj-2")}</ShellProvider></QueryClientProvider>);
 		await waitFor(() => {
-			for (const button of screen.getAllByRole("button", { name: "Spawn Orchestrator" })) expect(button).toBeEnabled();
+			for (const button of screen.getAllByRole("button", { name: "Spawn orchestrator agent" })) expect(button).toBeEnabled();
 		});
 		act(() => outcome === "success" ? resolveSpawn("old-project-orchestrator") : rejectSpawn(new Error("Old project failed")));
 		await waitFor(() => expect(lastQueryClient!.isMutating()).toBe(0));
@@ -767,7 +765,7 @@ describe("shared project board actions", () => {
 		renderBoard(board());
 		if (state === "missing") await waitFor(() => expect(lastQueryClient!.getQueryState(workspaceQueryKey)?.status).toBe("success"));
 		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary");
-		expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--action");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("[--button-color:var(--primary)]");
+		expect(screen.getByRole("button", { name: "Spawn orchestrator agent" })).toHaveClass("before:bg-interactive-hover");
 	});
 });

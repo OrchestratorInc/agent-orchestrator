@@ -4,6 +4,7 @@ import { useIndependentSideChats } from "./IndependentSideChats";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "../ui/tooltip";
 import { emptySideChatDraft } from "./sideChatDraft";
+import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 
 const { get, post, put, capture } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), capture: vi.fn() }));
 vi.mock("../../lib/api-client", () => ({
@@ -53,6 +54,52 @@ async function setup() {
 	await act(async () => { await hook.result.current.replaceDraft("source", { ...emptySideChatDraft(), text: "/btw explain files", attachments: [{ id: "doc", path: "/staged/notes.txt", name: "notes.txt", mimeType: "text/plain", bytes: 10 }] }); });
 	return hook;
 }
+
+it("forwards the captured snapshot when creating a side from a chart-only excerpt", async () => {
+	const hook = await setup();
+	const excerpt: ChatDraftExcerptReference = { id: "chart", conversationId: "main", messageId: "answer", revision: 1, text: "", role: "assistant", snapshot: { version: 1, captureMode: "block", rawText: "```mermaid\nflowchart LR; A-->B\n```", containsFlowchart: true, badgeOnly: true } };
+	await act(async () => { await hook.result.current.create(excerpt); });
+	const creation = post.mock.calls.find(([path]) => path.endsWith("/side-chats"))![1].body;
+	expect(creation.reference).toMatchObject({ text: "", snapshot: excerpt.snapshot });
+	expect(creation.reference).not.toHaveProperty("role");
+	expect(JSON.parse(drafts.get("destination-1")!).references[0]).toMatchObject(excerpt);
+});
+
+it("accepts a 70 KiB question and captured excerpt when opening another local side", async () => {
+	const hook = await setup();
+	const text = "q".repeat(70 * 1024);
+	const excerpt: ChatDraftExcerptReference = { id: "quote", conversationId: "main", messageId: "answer", revision: 1, text: "quote", role: "assistant" };
+	await act(async () => { await hook.result.current.addReference("source", excerpt); });
+	await act(async () => { await hook.result.current.send("source", `/btw ${text}`); });
+	expect(creations.size).toBe(1);
+	expect(requests).toHaveLength(1);
+	expect(requests[0]).toMatchObject({ text, references: [{ text: "quote" }] });
+});
+
+it("reports an oversized recovered draft outside the React state updater", async () => {
+	const hook = await setup();
+	const references = Array.from({ length: 8 }, (_, index): ChatDraftExcerptReference => ({ id: `ref-${index}`, conversationId: "main", messageId: "answer", revision: 1, text: `quote ${index}`, role: "assistant" }));
+	drafts.set("destination-1", JSON.stringify({ ...emptySideChatDraft(), references }));
+	await act(async () => {
+		await expect(hook.result.current.create({ ...references[0], id: "ninth", text: "another quote" })).rejects.toThrow("chat.draft.annotationLimit");
+	});
+	expect(hook.result.current.activeId).toBe("source");
+	expect(JSON.parse(drafts.get("destination-1")!).references).toEqual(references);
+});
+
+it("deduplicates chart selections by their block anchor and sends only daemon reference fields", async () => {
+	const hook = await setup();
+	const ref: ChatDraftExcerptReference = { id: "chart-a", conversationId: "main", messageId: "answer", revision: 1, text: "", role: "assistant", snapshot: { version: 1, captureMode: "block", rawText: "diagramdiagram", containsFlowchart: true, badgeOnly: true, sourceRange: { start: 0, end: 14, offsetUnit: "utf-16" }, diagramRange: { start: 0, end: 7, offsetUnit: "utf-16" } } };
+	await act(async () => { await hook.result.current.addReference("source", ref); });
+	await act(async () => { await hook.result.current.addReference("source", { ...ref, id: "chart-b", snapshot: { ...ref.snapshot!, diagramRange: { start: 7, end: 14, offsetUnit: "utf-16" } } }); });
+	await act(async () => { await hook.result.current.addReference("source", ref); });
+	expect(JSON.parse(drafts.get("source")!).references).toHaveLength(2);
+	await act(async () => { await hook.result.current.send("source", "/btw explain charts"); });
+	const request = requests[0] as { references: { snapshot: object; role?: string }[] };
+	expect(request.references).toHaveLength(2);
+	expect(request.references[0]).not.toHaveProperty("role");
+	expect(request.references[0].snapshot).toMatchObject(ref.snapshot!);
+});
 
 it("reserves the source before a delayed create and preserves newer draft edits", async () => {
 	const hook = await setup();
@@ -135,7 +182,7 @@ it.each(["creation", "send"])("recovers a legacy /side handoff after a lost %s r
 
 it("refuses unsupported side references before creating a destination", async () => {
 	const hook = await setup();
-	act(() => hook.result.current.addReference("source", { id: "ref", conversationId: "source", messageId: "answer", revision: 1, text: "quote", role: "assistant" }));
+	await act(async () => hook.result.current.addReference("source", { id: "ref", conversationId: "source", messageId: "answer", revision: 1, text: "quote", role: "assistant" }));
 	await act(async () => { await hook.result.current.send("source", "/btw explain files"); });
 	expect(creations.size).toBe(0);
 	expect(requests).toHaveLength(0);

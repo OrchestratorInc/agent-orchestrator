@@ -13,7 +13,6 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useSimplifiedTopbar } from "../hooks/useSimplifiedTopbar";
 import { useTabListTabStop } from "../hooks/useTabListTabStop";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -35,7 +34,7 @@ import type { TerminalTarget } from "../types/terminal";
 import { isOrchestratorSession, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
-import { TerminalTabFrame } from "./TerminalTabFrame";
+import { TerminalTabFrame, terminalTabRenameInputClassName } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
 import { SessionTabsTopbar } from "./PageTopbar";
@@ -546,7 +545,6 @@ export function CenterPane({
 	);
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
-	const simplifiedTopbar = useSimplifiedTopbar();
 	const terminalTopbar = (
 		<SessionTabsTopbar
 			fullscreen={isFullscreen}
@@ -562,7 +560,7 @@ export function CenterPane({
 			tabs={
 					<div
 							aria-label={t("terminal.tabsAria")}
-							className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
+							className="flex h-full min-w-0 items-stretch"
 							onKeyDown={handleTerminalTabListKeyDown}
 							ref={tabListRef}
 							role="tablist"
@@ -708,7 +706,7 @@ export function CenterPane({
 // match the close and menu controls: a 16px box, 13px glyph, 28px hit area.
 const sessionTabActionClassName = cn(
 	"grid place-items-center [&_svg]:size-icon-sm",
-	"[&_.topbar-control--icon]:relative [&_.topbar-control--icon]:size-icon-base [&_.topbar-control--icon]:rounded-sm [&_.topbar-control--icon]:before:absolute [&_.topbar-control--icon]:before:-inset-1.5 [&_.topbar-control--icon]:before:content-['']",
+	"[&_[data-interface-switch]]:relative [&_[data-interface-switch]]:size-icon-base [&_[data-interface-switch]]:rounded-sm [&_[data-interface-switch]]:after:absolute [&_[data-interface-switch]]:after:-inset-1.5 [&_[data-interface-switch]]:after:content-['']",
 	"[&_[role=status]]:size-icon-base [&_[role=status]_button]:rounded-sm [&_[role=status]_button]:before:absolute [&_[role=status]_button]:before:-inset-1.5 [&_[role=status]_button]:before:content-['']",
 );
 
@@ -763,7 +761,7 @@ export function SessionPaneTab({
 		<input
 			aria-label={t("shell.renameSession", { title: renameSession.title })}
 			autoFocus
-			className="min-w-0 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
+			className={terminalTabRenameInputClassName}
 			maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 			onBlur={() => void rename.commit()}
 			onChange={(event) => rename.setDraft(event.target.value)}
@@ -814,6 +812,7 @@ export function SessionPaneTab({
 			}}
 			buttonRef={ref}
 			editingContent={editingContent}
+			editingValue={rename.draft}
 			icon={tabIcon}
 			label={label}
 		/>

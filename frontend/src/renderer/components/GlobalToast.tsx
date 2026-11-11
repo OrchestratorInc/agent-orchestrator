@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check } from "lucide-react";
+import { Check } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
 import { CloseButton } from "./ui/close-button";

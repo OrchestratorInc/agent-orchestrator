@@ -1,4 +1,4 @@
-import { Check, X } from "lucide-react";
+import { Check, X } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -84,7 +84,7 @@ export function SessionStartup({
 					{error ? <p className="text-xs leading-snug text-muted-foreground">{error}</p> : null}
 					<p className="text-xs leading-snug text-muted-foreground">{t("chat.startup.saved")}</p>
 					{onRetry ? (
-						<Button type="button" size="sm" variant="outline" onClick={onRetry} disabled={retrying}>
+						<Button type="button" size="sm" variant="secondary" onClick={onRetry} disabled={retrying}>
 							{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}
 						</Button>
 					) : null}

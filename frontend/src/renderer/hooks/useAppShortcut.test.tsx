@@ -66,7 +66,7 @@ describe("useAppShortcut", () => {
 
 describe("useSessionShortcut", () => {
 	beforeEach(() => appShortcutBus.reset());
-	afterEach(() => useUiStore.setState({ settingsModal: null }));
+	afterEach(() => useUiStore.setState({ settingsModal: null, archiveModal: null }));
 
 	it("runs when no settings page is open", () => {
 		const handler = vi.fn();
@@ -82,6 +82,17 @@ describe("useSessionShortcut", () => {
 		emit();
 		expect(handler).not.toHaveBeenCalled();
 		useUiStore.setState({ settingsModal: null });
+		emit();
+		expect(handler).toHaveBeenCalledTimes(1);
+	});
+
+	it("stands down while the archive modal covers the page", () => {
+		const handler = vi.fn();
+		render(<Session handler={handler} />);
+		act(() => useUiStore.getState().openArchive({ projectId: "p" }));
+		emit();
+		expect(handler).not.toHaveBeenCalled();
+		act(() => useUiStore.getState().closeArchive());
 		emit();
 		expect(handler).toHaveBeenCalledTimes(1);
 	});

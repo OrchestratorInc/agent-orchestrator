@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, FileCode2, Plus, Trash2 } from "lucide-react";
+import { Eye, EyeOff, FileCode2, Plus, Trash2 } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";

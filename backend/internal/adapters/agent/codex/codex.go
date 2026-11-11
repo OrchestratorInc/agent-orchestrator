@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
@@ -323,6 +324,13 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
+	if provider, ok := customModelProvider(); ok {
+		// `codex login status` only covers the OpenAI login, which this provider does not use.
+		if provider.EnvKey != "" && authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, provider.EnvKey) != "" {
+			return ports.AgentAuthStatusConfigured, nil
+		}
+		return ports.AgentAuthStatusUnknown, nil
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -357,15 +365,67 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 // codexLoginIdentity reads who a ChatGPT login belongs to from the id_token
 // Codex stores in CODEX_HOME/auth.json.
 func codexLoginIdentity(ctx context.Context) (email, name string) {
-	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	home := codexHomeDir()
 	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil || userHome == "" {
-			return "", ""
-		}
-		home = filepath.Join(userHome, ".codex")
+		return "", ""
 	}
 	return authprobe.CodexAuthFileIdentity(ctx, filepath.Join(home, "auth.json"))
+}
+
+// codexHomeDir is CODEX_HOME, or ~/.codex when it is unset.
+func codexHomeDir() string {
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return home
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil || userHome == "" {
+		return ""
+	}
+	return filepath.Join(userHome, ".codex")
+}
+
+type codexModelProvider struct {
+	EnvKey             string `toml:"env_key"`
+	RequiresOpenAIAuth bool   `toml:"requires_openai_auth"`
+}
+
+// UsesCustomModelProvider reports whether config.toml points Codex at a model
+// provider other than OpenAI, such as a LiteLLM proxy. Codex's own login and
+// AO's Codex accounts do not apply to that provider.
+func UsesCustomModelProvider() bool {
+	_, ok := customModelProvider()
+	return ok
+}
+
+func customModelProvider() (codexModelProvider, bool) {
+	home := codexHomeDir()
+	if home == "" {
+		return codexModelProvider{}, false
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		return codexModelProvider{}, false
+	}
+	var config struct {
+		ModelProvider string `toml:"model_provider"`
+		Profile       string `toml:"profile"`
+		Profiles      map[string]struct {
+			ModelProvider string `toml:"model_provider"`
+		} `toml:"profiles"`
+		ModelProviders map[string]codexModelProvider `toml:"model_providers"`
+	}
+	if toml.Unmarshal(data, &config) != nil {
+		return codexModelProvider{}, false
+	}
+	name := config.ModelProvider
+	if profile := config.Profiles[config.Profile].ModelProvider; profile != "" {
+		name = profile
+	}
+	provider := config.ModelProviders[name]
+	if name == "" || name == "openai" || provider.RequiresOpenAIAuth {
+		return codexModelProvider{}, false
+	}
+	return provider, true
 }
 
 // codexLoginMethod reads how `codex login status` says it is signed in. Only

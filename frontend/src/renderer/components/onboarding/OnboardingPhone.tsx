@@ -1,4 +1,4 @@
-import { Bell, CircleCheckBig, GitPullRequest, ListFilter, Loader, Menu, MessageSquare, Plus, type LucideIcon } from "lucide-react";
+import { Bell, CircleCheckBig, GitPullRequest, ListFilter, Loader2, Menu, MessageSquare, Plus, type AppIcon } from "@/components/app-icons";
 import { type CSSProperties, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { statusColor, type MobileTheme } from "../../lib/mobile-theme";
@@ -39,8 +39,8 @@ export type PhoneWorker = {
 };
 
 /** agentsView.ts workerStatusGlyph, as lucide's matches for the Feather names. */
-const STATUS_GLYPH: Record<PhoneWorkerStatus, LucideIcon> = {
-	working: Loader,
+const STATUS_GLYPH: Record<PhoneWorkerStatus, AppIcon> = {
+	working: Loader2,
 	needs_input: MessageSquare,
 	mergeable: CircleCheckBig,
 	review_pending: GitPullRequest,

@@ -22,6 +22,7 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 	// Gliding to the end (a new tab) holds the end fade off, so the tab being
 	// revealed is not faded on its way in.
 	const scrollingToEnd = useRef(false);
+	const attachedElement = useRef<HTMLDivElement | null>(null);
 	const updateEdges = useCallback(() => {
 		const element = scrollRef.current;
 		if (!element) return;
@@ -38,6 +39,19 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 
 	useEffect(() => {
 		if (!element) return;
+		// Where a strip sits as it mounts is not a change: its first fades apply
+		// at once, and only later ones ease (see `data-fade-instant`).
+		let settleFrame: number | null = null;
+		if (attachedElement.current !== element) {
+			attachedElement.current = element;
+			element.setAttribute("data-fade-instant", "");
+			settleFrame = window.requestAnimationFrame(() => {
+				settleFrame = window.requestAnimationFrame(() => {
+					settleFrame = null;
+					element.removeAttribute("data-fade-instant");
+				});
+			});
+		}
 		updateEdges();
 		// Drive the strip from every wheel event over it, whichever axis
 		// dominates. Left to the browser, a trackpad gesture that starts slightly
@@ -79,6 +93,10 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 			element.removeEventListener("wheel", handleWheel);
 			observer?.disconnect();
 			if (frame !== null) window.cancelAnimationFrame(frame);
+			if (settleFrame !== null) {
+				window.cancelAnimationFrame(settleFrame);
+				element.removeAttribute("data-fade-instant");
+			}
 		};
 	}, [element, updateEdges, ...dependencies]);
 

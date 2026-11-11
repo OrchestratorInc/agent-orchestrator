@@ -85,7 +85,7 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 			setCopyError(null);
 			return;
 		}
-		void captureRendererEvent("ao.renderer.support_opened");
+		void captureRendererEvent("ao.support.opened");
 		let cancelled = false;
 		void collectReportProblemDiagnostics().then((nextDiagnostics) => {
 			if (!cancelled) setDiagnostics(nextDiagnostics);

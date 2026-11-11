@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -60,6 +61,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	api := newAPIWithLogger(cfg, deps, log)
 
 	r.Use(middleware.RequestID)
+	r.Use(caller.Middleware)
 	r.Use(requestLogger(log, deps.Telemetry))
 	r.Use(recoverTelemetry(log, deps.Telemetry))
 	// Account-management and computer-use routes retain their exact
@@ -86,7 +88,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountMobile(r, deps.Mobile)
 	mountBrowserLive(r, deps.BrowserLive)
 	mountAwake(r, &controllers.AwakeController{Svc: deps.Awake})
-	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive})
+	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive, Access: deps.DeviceAccess})
 	api.Register(r)
 
 	return r
@@ -206,6 +208,9 @@ func mountMobile(r chi.Router, c *controllers.MobileController) {
 	r.Post("/api/v1/mobile/secure-pairing", c.SecurePairing)
 	r.Post("/api/v1/mobile/keep-awake", c.KeepAwake)
 	r.Post("/api/v1/remote-host/account-token", c.IssueAccountToken)
+	r.Post("/api/v1/remote-host/devices", c.PairDevice)
+	r.Post("/api/v1/mobile/pairing-code", c.NewPairingCode)
+	r.Post("/api/v1/mobile/require-device-credentials", c.RequireDeviceCredentials)
 	r.Post("/api/v1/mobile/browser-control", c.BrowserRemoteAccess)
 }
 
@@ -226,7 +231,7 @@ func mountMobileDevices(r chi.Router, c *controllers.MobileDevicesController) {
 		return
 	}
 	r.Get("/api/v1/mobile/devices", c.List)
-	r.Delete("/api/v1/mobile/devices/{installId}", c.Remove)
+	r.Delete("/api/v1/mobile/devices/{id}", c.Remove)
 }
 
 type cliInvokedRequest struct {
@@ -245,7 +250,7 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 	if sink == nil {
 		return
 	}
-	// CLI telemetry is capped to bounded uniques: ao.app.active once per UTC day
+	// CLI telemetry is capped to bounded uniques: ao.cli.active once per UTC day
 	// for user-context CLI activity (matching the renderer
 	// heartbeat) and ao.cli.invoked once per actor type + command path per UTC
 	// day. Scripts and agent sessions invoke read-only commands (status, ls,
@@ -302,7 +307,7 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 		if actorType == "user" {
 			if now := time.Now(); cliTelemetry.reserveActive(now) {
 				sink.Emit(req.Context(), ports.TelemetryEvent{
-					Name:       "ao.app.active",
+					Name:       "ao.cli.active",
 					Source:     "cli",
 					OccurredAt: now.UTC(),
 					Level:      ports.TelemetryLevelInfo,
@@ -340,7 +345,7 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 		}
 
 		sink.Emit(req.Context(), ports.TelemetryEvent{
-			Name:       "ao.cli.usage_errors",
+			Name:       "ao.usage.cli_usage_errors",
 			Source:     "cli",
 			OccurredAt: time.Now().UTC(),
 			Level:      ports.TelemetryLevelWarn,

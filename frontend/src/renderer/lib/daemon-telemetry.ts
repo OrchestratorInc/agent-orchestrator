@@ -24,7 +24,7 @@ function reportStatus(status: DaemonStatus): void {
 	}
 	if (key === lastFailureKey) return;
 	lastFailureKey = key;
-	void captureRendererEvent("ao.renderer.daemon_failure", {
+	void captureRendererEvent("ao.daemon.failed", {
 		daemon_state: status.state,
 		code: status.code,
 		exit_code: typeof status.exitCode === "number" ? status.exitCode : undefined,

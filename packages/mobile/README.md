@@ -5,7 +5,7 @@ Projects, Pull Requests — with Settings and Notifications in their headers, pl
 Chat-first spawn flow, a native conversation surface, the existing live terminal, and a
 preview browser. Chat sessions expose durable history,
 streaming activity, approvals, provider controls, attachments, voice input, and a plain
-worktree-shell escape hatch. It is a **thin client**: it talks to the AO daemon running on your
+worktree-shell escape hatch. It is a **thin client**: it talks to the Orchestrator daemon running on your
 computer through the endpoints advertised by the desktop pairing offer. It never runs agents itself.
 
 > **Development builds only — Expo Go is not supported.** The app depends on native modules,
@@ -66,7 +66,7 @@ must be removed from the desktop, rather than sending credentials to an unverifi
 
 | For             | You need                                                                              |
 | --------------- | ------------------------------------------------------------------------------------- |
-| Everything      | Node 20+, and AO running on your machine (desktop app, or the daemon from source)     |
+| Everything      | Node 20+, and Orchestrator running on your machine (desktop app, or the daemon from source)     |
 | Phone ↔ machine | Same Wi-Fi network for LAN, or a reachable HTTPS endpoint for remote access         |
 | iOS build       | macOS, Xcode 16+, an Apple ID (a free one gives a 7-day signing profile), a USB cable |
 | Android build   | Android Studio (SDK + platform-tools for `adb`), a USB cable                          |
@@ -91,7 +91,7 @@ Two rules worth knowing before you fight an install:
 
 Nothing on the phone works until the desktop opens the LAN bridge. Do this first.
 
-**1. Start the desktop app.** Either launch the packaged AO app, or run it from source
+**1. Start the desktop app.** Either launch the packaged Orchestrator app, or run it from source
 (it starts its own daemon):
 
 ```bash
@@ -407,7 +407,7 @@ Play Store** checks on demand.
 | Crash at launch, _"main has not been registered"_ | Two React copies. Keep `metro.config.js` intact, reinstall with plain `npm install` (never `--force`), then `npx expo prebuild --clean`.                     |
 | **Connect** fails, everything times out            | Connect Mobile is off on the desktop, wrong port (`3011`, not `3001`), phone on a different network, or the macOS firewall is blocking incoming connections. |
 | 401 / invalid password                            | The password was regenerated on the desktop. Re-scan the QR.                                                                                                 |
-| Locked out after repeated failures                | The bridge locks out a source after 5 failed attempts. Wait it out, or toggle Connect Mobile off and on.                                                     |
+| Locked out after repeated failures                | The bridge locks out a source after 5 wrong passwords. Wait it out, or toggle Connect Mobile off and on.                                                     |
 | `adb devices` shows `unauthorized`                | Re-accept the USB debugging prompt on the phone.                                                                                                             |
 | iOS app installs, then closes immediately         | Untrusted developer profile: **Settings → General → VPN & Device Management → trust your Apple ID**.                                                         |
 | App runs but can't reach the daemon (iOS)         | The Local Network prompt was denied: **Settings → Privacy & Security → Local Network → Orchestrator** → on.                                                            |

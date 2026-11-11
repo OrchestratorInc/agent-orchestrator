@@ -325,7 +325,7 @@ func hookLaunchID(payload []byte) string {
 func hookUsageMetadata(agent string, payload []byte) *usageHookMetadata {
 	payload = normalizeHookPayload(payload)
 	harness := domain.AgentHarness(agent)
-	if harness != domain.HarnessClaudeCode && harness != domain.HarnessCodex {
+	if harness != domain.HarnessClaudeCode && harness != domain.HarnessCodex && harness != domain.HarnessPi {
 		return nil
 	}
 	var native struct {
@@ -343,6 +343,15 @@ func hookUsageMetadata(agent string, payload []byte) *usageHookMetadata {
 		ModelID:                strings.TrimSpace(native.Model),
 		SubagentID:             strings.TrimSpace(native.SubagentID),
 		SubagentTranscriptPath: strings.TrimSpace(native.SubagentTranscriptPath),
+	}
+	if harness == domain.HarnessPi {
+		meta.ModelID = ""
+		meta.SubagentID = ""
+		meta.SubagentTranscriptPath = ""
+		if meta.TranscriptPath == "" {
+			return nil
+		}
+		return meta
 	}
 	if meta.TranscriptPath == "" && meta.SubagentTranscriptPath == "" && meta.ModelID == "" {
 		return nil
@@ -564,7 +573,7 @@ type claudePreToolUseDenyOutput struct {
 
 const artifactToolName = "Artifact"
 
-const artifactNudgeReason = "AO does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
+const artifactNudgeReason = "Orchestrator does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
 	"in a chat session, use html_render."
 
 // claimArtifactNudge reports whether this is the session's first Artifact tool
@@ -620,7 +629,7 @@ var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewer
 	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
 	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews -)$`)
 
-const reviewerPermissionDenyMessage = "AO headless reviewer: no human can answer permission prompts. " +
+const reviewerPermissionDenyMessage = "Orchestrator headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
 	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
 
@@ -781,6 +790,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		domain.HarnessOMP, domain.HarnessPi,
 		domain.HarnessAmp, domain.HarnessPrimeAgent:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
+		if domain.AgentHarness(agent) == domain.HarnessPi {
+			conversation.TranscriptPath = hookConversationFacts(domain.HarnessPi, event, payload).TranscriptPath
+		}
 	}
 	// Every agent's turn text feeds the terminal turn history. It never becomes a replay checkpoint.
 	history := hookConversationFacts(domain.AgentHarness(agent), event, payload)

@@ -2,7 +2,7 @@ import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo,
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Code2, Eye, FolderOpen, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, Code2, Eye, FolderOpen, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal, ZoomIn, ZoomOut } from "@/components/app-icons";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
@@ -25,6 +25,7 @@ import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
+import { artifactAtPath, deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
 import { ShareArtifactButton } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
@@ -483,7 +484,7 @@ function ArtifactViewerBody({
 						artifactRoot={artifactRoot}
 						cloud={cloud}
 						onAccessRefused={onAccessRefused}
-						feedbackRequestKey={feedbackRequestKey}
+						feedbackRequestKey={showingPage ? undefined : feedbackRequestKey}
 						hostId={hostId}
 						onFeedbackRequestConsumed={onFeedbackRequestConsumed}
 						path={artifact.path}
@@ -500,7 +501,18 @@ function ArtifactViewerBody({
 				</div>}
 				{showingPage && page ? (
 					<ArtifactZoomContext.Provider value={zoomController}>
-						<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						<ArtifactPageFeedback
+							feedbackRequestKey={feedbackRequestKey}
+							hostId={hostId}
+							menuActions={menuActions}
+							name={artifact.name}
+							onFeedbackRequestConsumed={onFeedbackRequestConsumed}
+							path={artifact.path}
+							sendMessage={sendMessage}
+							sessionId={sessionId}
+						>
+							<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						</ArtifactPageFeedback>
 					</ArtifactZoomContext.Provider>
 				) : null}
 				{previewing ? (
@@ -526,10 +538,56 @@ function ArtifactViewerBody({
 }
 
 /**
- * A cloud session's HTML artifact with whole-file feedback for its worker.
- * The framed page is in another origin, so feedback is on the file, not a
- * selection in it.
+ * A rendered page with whole-file feedback for its worker, for an HTML
+ * artifact shown as its page. The framed page is in another origin, so
+ * feedback is on the file, not a selection in it.
  */
+function ArtifactPageFeedback({
+	children,
+	feedbackRequestKey,
+	hostId,
+	menuActions,
+	name,
+	onFeedbackRequestConsumed,
+	path,
+	sendMessage,
+	sessionId,
+}: {
+	children: ReactNode;
+	feedbackRequestKey?: number;
+	hostId?: string;
+	/** The header's file menu, which takes the feedback action. */
+	menuActions: ArtifactMenuActions;
+	name: string;
+	onFeedbackRequestConsumed?: (key: number) => void;
+	path: string;
+	/** Sends feedback to the worker; without it feedback goes through the daemon. */
+	sendMessage?: (message: string) => Promise<void>;
+	sessionId: string;
+}) {
+	const { t } = useTranslation();
+	const annotation = useFileAnnotation(sessionId, { hostId, source: name, sendMessage });
+	const begin = annotation.begin;
+	useEffect(() => {
+		if (feedbackRequestKey === undefined) return;
+		begin({ path, side: "file", surface: "focused" });
+		onFeedbackRequestConsumed?.(feedbackRequestKey);
+	}, [feedbackRequestKey, onFeedbackRequestConsumed, path]);
+	const feedbackLabel = t("files.addFeedback");
+	useLayoutEffect(() => {
+		menuActions.current = [{ id: "feedback", label: feedbackLabel, icon: <MessageSquarePlus aria-hidden="true" />, onSelect: () => begin({ path, side: "file", surface: "focused" }) }];
+		return () => { menuActions.current = []; };
+	}, [begin, feedbackLabel, menuActions, path]);
+	const target = annotation.targets.find((item) => item.surface !== "review" && item.path === path && item.side === "file" && item.line == null && item.quote == null);
+	return (
+		<div className="flex h-full min-h-0 flex-col">
+			{target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null}
+			<div className="relative min-h-0 flex-1 overflow-hidden">{children}</div>
+		</div>
+	);
+}
+
+/** A cloud session's HTML artifact, framed from the control plane. */
 function CloudHtmlArtifactView({
 	artifact,
 	feedbackRequestKey,
@@ -553,31 +611,21 @@ function CloudHtmlArtifactView({
 	sessionId: string;
 	url: string;
 }) {
-	const { t } = useTranslation();
-	const annotation = useFileAnnotation(sessionId, { source: artifact.name, sendMessage });
-	const begin = annotation.begin;
-	const path = artifact.path;
 	// The page is in the control plane's opaque origin, so the frame itself
 	// zooms: from the viewer's buttons and shortcuts, not a pinch inside it.
 	const { zoom } = useArtifactZoomTarget();
-	useEffect(() => {
-		if (feedbackRequestKey === undefined) return;
-		begin({ path, side: "file", surface: "focused" });
-		onFeedbackRequestConsumed?.(feedbackRequestKey);
-	}, [feedbackRequestKey, onFeedbackRequestConsumed, path]);
-	const feedbackLabel = t("files.addFeedback");
-	useLayoutEffect(() => {
-		menuActions.current = [{ id: "feedback", label: feedbackLabel, icon: <MessageSquarePlus aria-hidden="true" />, onSelect: () => begin({ path, side: "file", surface: "focused" }) }];
-		return () => { menuActions.current = []; };
-	}, [begin, feedbackLabel, menuActions, path]);
-	const target = annotation.targets.find((item) => item.surface !== "review" && item.path === path && item.side === "file" && item.line == null && item.quote == null);
 	return (
-		<div className="flex h-full min-h-0 flex-col">
-			{target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null}
-			<div className="relative min-h-0 flex-1 overflow-hidden">
-				<CloudArtifactFrame onAccessRefused={onAccessRefused} onNavigate={onNavigate} title={artifact.name} url={url} zoom={zoom} />
-			</div>
-		</div>
+		<ArtifactPageFeedback
+			feedbackRequestKey={feedbackRequestKey}
+			menuActions={menuActions}
+			name={artifact.name}
+			onFeedbackRequestConsumed={onFeedbackRequestConsumed}
+			path={artifact.path}
+			sendMessage={sendMessage}
+			sessionId={sessionId}
+		>
+			<CloudArtifactFrame onAccessRefused={onAccessRefused} onNavigate={onNavigate} title={artifact.name} url={url} zoom={zoom} />
+		</ArtifactPageFeedback>
 	);
 }
 
@@ -610,12 +658,15 @@ export function SessionArtifactsView({
 			),
 		[cloud, cloudRoot, session.artifactFiles],
 	);
+	// The grid lists deliverables only. `artifacts` stays whole, so a link to any
+	// other file of the session still opens below.
+	const listedArtifacts = useMemo(() => deliverableArtifacts(artifacts), [artifacts]);
 	const livePreviewPaths = useMemo(() => new Set(
-		artifacts.filter((artifact) =>
+		listedArtifacts.filter((artifact) =>
 			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
 			|| (/\.pdf$/i.test(artifact.path) && (cloud || artifact.rawUrl)),
 		).slice(0, 4).map((artifact) => artifact.path),
-	), [artifacts, cloud]);
+	), [listedArtifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
 	// Share hides while the open file is being edited.
@@ -703,7 +754,12 @@ export function SessionArtifactsView({
 		}
 	}, [request]);
 
-	const listed = artifacts.find((artifact) => artifact.path === selectedPath);
+	// A file renamed while it is open, or opened by a link from before its
+	// rename, is found by the path it had.
+	const listed = selectedPath === null ? undefined : artifactAtPath(artifacts, selectedPath);
+	useEffect(() => {
+		if (listed && listed.path !== selectedPath) setSelectedPath(listed.path);
+	}, [listed, selectedPath]);
 	// An open cloud file keeps the URL it opened with while the access prefix
 	// is refreshed, so the refresh does not reload it.
 	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
@@ -745,7 +801,8 @@ export function SessionArtifactsView({
 	// A page that opens another file of its session selects it, so the header
 	// names the file shown.
 	const followFrame = useCallback((path: string) => {
-		if (session.artifactFiles?.some((artifact) => artifact.path === path)) setSelectedPath(path);
+		const artifact = artifactAtPath(session.artifactFiles, path);
+		if (artifact) setSelectedPath(artifact.path);
 	}, [session.artifactFiles]);
 	const readRefused = selectedFile.error instanceof CloudArtifactAccessError;
 	useEffect(() => {
@@ -807,13 +864,15 @@ export function SessionArtifactsView({
 						    session publishes its files. */}
 						{editingFile || session.cloud?.shared ? null : session.cloud ? (!cloudOwner ? null : (
 							<ShareArtifactButton
-								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "" }}
+								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
+								revision={listed?.updatedAt}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
-								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
+								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId, ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
+								revision={listed?.updatedAt}
 							/>
 						) : null}
 						<Tooltip>
@@ -885,7 +944,7 @@ export function SessionArtifactsView({
 	}
 
 	return (
-		<div className="@container/session-artifacts flex h-full min-h-0 min-w-0 flex-col" role="tabpanel">
+		<div className="flex h-full min-h-0 min-w-0 flex-col" role="tabpanel">
 			<div className="flex h-8 shrink-0 items-center gap-0.5 pl-3 pr-1 text-sm text-muted-foreground">
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
 				{/* The artifact directory is on this machine only for a local session. */}
@@ -895,17 +954,19 @@ export function SessionArtifactsView({
 			{artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
-				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-1 content-start gap-4 overflow-y-auto px-3 pb-3 pt-1 @[30rem]/session-artifacts:grid-cols-2">
-					{artifacts.map((artifact) => {
+				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
+					{listedArtifacts.map((artifact) => {
 						const row = artifactRow(artifact);
 						return (
 							<ArtifactGalleryCard
 								key={artifact.path}
 								row={row}
 								previewLive={livePreviewPaths.has(artifact.path)}
-								context={session.title ?? ""}
+								// Every card here belongs to this session, so only its time shows.
+								context=""
 								onPreview={() => openArtifact(artifact)}
-								actions={<ArtifactActionsMenu
+								// File actions would reach only the one file a bundle's row opens.
+								actions={artifact.bundle ? null : <ArtifactActionsMenu
 									artifact={artifact}
 									hostId={hostId}
 									session={session}

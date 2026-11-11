@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, RefreshCw, Smartphone, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -780,7 +780,7 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 // ── 1. Sign in (optional) ───────────────────────────────────────────────────
 
 /** Why an account is worth it: what only an account unlocks. */
-const SIGN_IN_PERKS: Array<{ icon: LucideIcon; title: MessageKey; detail: MessageKey }> = [
+const SIGN_IN_PERKS: Array<{ icon: AppIcon; title: MessageKey; detail: MessageKey }> = [
 	{ icon: Cloud, title: "firstRun.signInPerkCloud", detail: "firstRun.signInPerkCloudDetail" },
 	{ icon: Smartphone, title: "firstRun.signInPerkMobile", detail: "firstRun.signInPerkMobileDetail" },
 ];

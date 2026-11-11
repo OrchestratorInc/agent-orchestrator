@@ -1,4 +1,4 @@
-import { GitPullRequest, TerminalSquare, X } from "lucide-react";
+import { GitPullRequest, TerminalSquare, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
@@ -9,7 +9,7 @@ import { useOnboardingStep } from "../lib/onboarding-telemetry";
 import { useShellMaybe } from "../lib/shell-context";
 import { useResolvedTheme, useUiStore } from "../stores/ui-store";
 import { TerminalPane } from "./TerminalPane";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 
 const GITHUB_CLI_INSTALL_URL = "https://cli.github.com/";
 
@@ -127,7 +127,7 @@ export function GitHubOnboardingNotice({ embedded = false }: { embedded?: boolea
 							</p>
 						</>}
 						<div className={embedded ? "flex flex-wrap items-center gap-2" : "mt-2 flex flex-wrap items-center gap-2"}>
-							<TopbarButton
+							<Button type="button" size="sm"
 								disabled={!cliMissing && (startLogin.isPending || Boolean(terminal && !loginEnded))}
 								onClick={() => cliMissing
 									? void aoBridge.app.openExternal(GITHUB_CLI_INSTALL_URL)
@@ -144,15 +144,15 @@ export function GitHubOnboardingNotice({ embedded = false }: { embedded?: boolea
 										: loginEnded
 											? t("startup.githubLoginTryAgain")
 											: t("startup.githubLogin")}
-							</TopbarButton>
+							</Button>
 							{loginRunning ? null : (
-								<TopbarButton
+								<Button type="button" size="sm"
 									disabled={manualCheckPending}
 									onClick={() => void checkAgain()}
-									variant="accent"
+									variant="secondary"
 								>
 									{manualCheckPending ? t("startup.checkingAgain") : t("startup.checkAgain")}
-								</TopbarButton>
+								</Button>
 							)}
 						</div>
 						{startLogin.isError ? <p className="mt-2 text-xs text-destructive" role="alert">{startLogin.error.message}</p> : null}
@@ -165,9 +165,9 @@ export function GitHubOnboardingNotice({ embedded = false }: { embedded?: boolea
 											{t(loginEnded ? "startup.githubLoginStopped" : "startup.githubLoginRunning")}
 										</p>
 									</div>
-									<TopbarButton aria-label={t("common.close")} className="!size-7 shrink-0" onClick={closeLogin} variant="icon">
+									<Button type="button" size="icon-sm" variant="quiet" aria-label={t("common.close")} className="!size-7 shrink-0" onClick={closeLogin}>
 										<X className="size-4" aria-hidden="true" />
-									</TopbarButton>
+									</Button>
 								</div>
 								<div className="h-[240px] min-h-0">
 									<TerminalPane daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={loginFocusRequested && terminalState === "attached"} fontSize={12} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: terminal.handleId, generation: terminal.createdAt, title: terminal.title }} theme={theme} />

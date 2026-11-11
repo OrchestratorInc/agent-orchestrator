@@ -96,6 +96,8 @@ type SessionService interface {
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	DeleteArtifacts(ctx context.Context, id domain.SessionID) error
+	RegisterArtifacts(ctx context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error)
+	UnregisterArtifact(ctx context.Context, id domain.SessionID, path string) error
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)
 	Rename(ctx context.Context, id domain.SessionID, displayName string) error
@@ -230,6 +232,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
 	r.Delete("/sessions/{sessionId}/artifact-files", c.deleteArtifactFile)
 	r.Put("/sessions/{sessionId}/artifact-files", c.updateArtifactFile)
+	r.Post("/sessions/{sessionId}/artifact-registrations", c.registerArtifacts)
 	r.Get("/sessions/{sessionId}/artifact-versions", c.listArtifactVersions)
 	r.Get("/sessions/{sessionId}/artifact-versions/{version}", c.getArtifactVersion)
 	r.Post("/sessions/{sessionId}/artifact-versions/restore", c.restoreArtifactVersion)
@@ -394,7 +397,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	}
 	// A standalone worker has no project to start in the background.
 	async := in.Async && in.ProjectID != ""
-	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
+	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -3029,11 +3032,15 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 	out := make([]SessionArtifactView, 0, len(s.ArtifactFiles))
 	for _, artifact := range s.ArtifactFiles {
 		view := SessionArtifactView{
-			Path:      artifact.Path,
-			Name:      artifact.Name,
-			Kind:      artifact.Kind,
-			Size:      artifact.Size,
-			UpdatedAt: artifact.UpdatedAt,
+			ID:            artifact.ID,
+			Path:          artifact.Path,
+			Name:          artifact.Name,
+			Kind:          artifact.Kind,
+			Size:          artifact.Size,
+			UpdatedAt:     artifact.UpdatedAt,
+			ShareURL:      artifact.ShareURL,
+			Registered:    artifact.Registered,
+			PreviousPaths: artifact.PreviousPaths,
 		}
 		// A distinct host (not a shared path-prefix marker) gives every
 		// artifact link an unambiguous source identity: it can never collide

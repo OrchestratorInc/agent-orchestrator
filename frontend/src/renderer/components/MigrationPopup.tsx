@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useTranslation } from "react-i18next";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
@@ -34,7 +34,7 @@ export function MigrationPopup() {
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	if (!open) return null;
 
-	const legacyRoot = offer.data?.legacyRoot || "your earlier AO";
+	const legacyRoot = offer.data?.legacyRoot || "your earlier Orchestrator install";
 	const nowIso = () => new Date().toISOString();
 
 	const proceed = async () => {
@@ -95,14 +95,14 @@ export function MigrationPopup() {
 						<p className="text-caption text-settings-muted">{t("migration.againLater")}</p>
 					</div>
 					<div className={`${settingsDialogFooterClass} justify-between`}>
-						<Button type="button" variant="footer" className="text-destructive" onClick={dontMigrate} disabled={busy}>
+						<Button type="button" variant="destructive-ghost" onClick={dontMigrate} disabled={busy}>
 							{t("migration.dontMigrate")}
 						</Button>
 						<div className="flex flex-wrap items-center justify-end gap-3">
-							<Button type="button" variant="footer" onClick={() => setSkipped(true)} disabled={busy}>
+							<Button type="button" variant="secondary" onClick={() => setSkipped(true)} disabled={busy}>
 								{t("migration.skip")}
 							</Button>
-							<Button type="button" variant="footer-primary" onClick={proceed} disabled={busy}>
+							<Button type="button" variant="primary" onClick={proceed} disabled={busy}>
 								{busy ? <Loader2 className="size-icon-base animate-spin" aria-hidden="true" /> : null}
 								{error ? t("migration.retry") : t("migration.proceed")}
 							</Button>
