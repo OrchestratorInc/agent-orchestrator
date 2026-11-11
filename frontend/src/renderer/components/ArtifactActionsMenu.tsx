@@ -389,8 +389,8 @@ export function ArtifactActionsMenu({
 							) : null}
 							{local || copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 							<DropdownMenuItem
-								className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
 								onSelect={confirmDelete}
+								variant="destructive"
 							>
 								<Trash2 aria-hidden="true" />
 								{t("artifacts.delete")}
