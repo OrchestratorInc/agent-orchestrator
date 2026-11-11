@@ -4223,6 +4223,10 @@ export interface components {
         StartSessionInterfaceTransitionInput: {
             targetMode: components["schemas"]["SessionInterfaceMode"];
             policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+            /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. */
+            model?: string;
+            /** @description The effort the terminal agent starts at, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's effort. */
+            reasoningEffort?: string;
         };
         Session: {
             /** Format: uuid */

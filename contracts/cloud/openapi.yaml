@@ -7586,6 +7586,16 @@ components:
           $ref: "#/components/schemas/SessionInterfaceMode"
         policy:
           $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
+        model:
+          type: string
+          description: >-
+            The model the terminal agent starts with, as the Chat ran it.
+            Chat to terminal handoff only; validated as a Chat turn's model.
+        reasoningEffort:
+          type: string
+          description: >-
+            The effort the terminal agent starts at, as the Chat ran it. Chat
+            to terminal handoff only; validated as a Chat turn's effort.
     Session:
       type: object
       additionalProperties: false
