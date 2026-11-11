@@ -1,5 +1,5 @@
 import type { AppIcon } from "./icons";
-import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench } from "@/components/app-icons";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, Share2, TriangleAlert, Wrench } from "@/components/app-icons";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +18,7 @@ import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
+import { CloudProjectSharingSettings } from "./CloudProjectSharingSettings";
 import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { isCloudWorkspaceProject } from "../lib/cloud-project-repos";
@@ -157,6 +158,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
+	// Sharing the whole project, as a session's Share does: only the project's
+	// own organization shares it, and only once WorkOS enables sharing for it.
+	const canShareProject = isCloudProjectSettings && cloudOrgId === offering.org?.id && offering.features?.includes(SHARE_FEATURE) === true;
+	if (canShareProject) projectSections.push({ id: "sharing", label: t("settings.project.sharing"), icon: Share2 });
 
 	const isProjectSettings = displaySettings?.scope === "project";
 	const globalHistory = useSectionHistory<GlobalSettingsSection>("general");
@@ -304,7 +309,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			else if (!isProjectSettings) { globalHistory.forward(); setFocusAgentId(undefined); }
 		},
 	};
-	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" &&
+	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" && activeProjectSection !== "sharing" &&
 		(projectSaveState.phase === "failed" ||
 			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
 			projectSaveState.phase === "saving" ||
@@ -339,6 +344,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			}
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
 				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && canShareProject && cloudOrgId !== undefined && activeProjectSection === "sharing") {
+				return <CloudProjectSharingSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} />;
 			}
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
 				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
