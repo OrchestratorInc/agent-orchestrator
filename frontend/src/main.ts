@@ -4321,6 +4321,7 @@ app.on("before-quit", (event) => {
 		}
 		return;
 	}
+	desktopQuit.startCleanupDeadline();
 	if (!agentQuitCleanupComplete) {
 		event.preventDefault();
 		// Quit has started: a pending crash respawn must not race the agent

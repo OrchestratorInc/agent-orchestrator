@@ -93,9 +93,36 @@ describe("desktop quit", () => {
 		vi.useFakeTimers();
 		const { options, controller, event } = setup({ externalQuitDeadlineMs: 5_000 });
 		controller.handleBeforeQuit(event);
+		controller.startCleanupDeadline();
 		vi.advanceTimersByTime(4_999);
 		expect(options.exit).not.toHaveBeenCalled();
 		vi.advanceTimersByTime(1);
+		expect(options.exit).toHaveBeenCalledOnce();
+	});
+
+	it("gives cleanup the full deadline after a slow draft confirmation", () => {
+		vi.useFakeTimers();
+		const { options, controller, event } = setup();
+		controller.handleBeforeQuit(event);
+		vi.advanceTimersByTime(60_000);
+		expect(options.exit).not.toHaveBeenCalled();
+		controller.handleBeforeQuit(event);
+		controller.startCleanupDeadline();
+		vi.advanceTimersByTime(4_999);
+		expect(options.exit).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(options.exit).toHaveBeenCalledOnce();
+	});
+
+	it("does not extend the deadline on cleanup continuations", () => {
+		vi.useFakeTimers();
+		const { options, controller, event } = setup();
+		controller.handleBeforeQuit(event);
+		controller.startCleanupDeadline();
+		vi.advanceTimersByTime(4_000);
+		controller.handleBeforeQuit(event);
+		controller.startCleanupDeadline();
+		vi.advanceTimersByTime(1_000);
 		expect(options.exit).toHaveBeenCalledOnce();
 	});
 
@@ -103,11 +130,24 @@ describe("desktop quit", () => {
 		vi.useFakeTimers();
 		const { options, controller, event, inAppQuit } = setup();
 		controller.handleBeforeQuit(event);
+		controller.startCleanupDeadline();
 		controller.cancelQuit();
+		controller.startCleanupDeadline();
 		vi.advanceTimersByTime(60_000);
 		expect(options.exit).not.toHaveBeenCalled();
 		expect(inAppQuit()).toBe(true);
 		expect(options.closeWindow).toHaveBeenCalledOnce();
+	});
+
+	it("does not arm a canceled outside quit when later full-quit cleanup starts", () => {
+		vi.useFakeTimers();
+		const { options, controller, event } = setup();
+		controller.handleBeforeQuit(event);
+		controller.cancelQuit();
+		controller.quitCompletely();
+		controller.startCleanupDeadline();
+		vi.advanceTimersByTime(60_000);
+		expect(options.exit).not.toHaveBeenCalled();
 	});
 
 	it("does not leave the in-app mark set when before-quit never ran", () => {

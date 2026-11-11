@@ -25,6 +25,7 @@ export function createDesktopQuitController(options: {
 	externalQuitDeadlineMs?: number;
 }) {
 	let quitCompletelyRequested = false;
+	let externalQuitRequested = false;
 	let backgroundQuitRequested = false;
 	let hideDockOnWindowClosed = false;
 	let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -46,12 +47,8 @@ export function createDesktopQuitController(options: {
 			if (!backgroundQuitRequested) {
 				// Not AO's own Quit: really exit, and never hang the caller.
 				quitCompletelyRequested = true;
+				externalQuitRequested = true;
 				options.externalQuitStarted?.();
-				clearDeadline();
-				deadline = setTimeout(() => {
-					deadline = undefined;
-					options.exit();
-				}, options.externalQuitDeadlineMs ?? EXTERNAL_QUIT_DEADLINE_MS);
 				return false;
 			}
 			backgroundQuitRequested = false;
@@ -67,6 +64,13 @@ export function createDesktopQuitController(options: {
 				options.hideDock();
 			}
 			return true;
+		},
+		/** Start the outside-quit budget after the synchronous draft guard passes. */
+		startCleanupDeadline(): void {
+			if (!externalQuitRequested || deadline !== undefined) return;
+			deadline = setTimeout(() => {
+				options.exit();
+			}, options.externalQuitDeadlineMs ?? EXTERNAL_QUIT_DEADLINE_MS);
 		},
 		/** AO's own Quit: on macOS with the tray this only closes the window. */
 		backgroundQuit(): void {
@@ -93,6 +97,7 @@ export function createDesktopQuitController(options: {
 		},
 		cancelQuit(): void {
 			quitCompletelyRequested = false;
+			externalQuitRequested = false;
 			clearDeadline();
 		},
 	};

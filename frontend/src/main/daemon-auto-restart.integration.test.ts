@@ -85,7 +85,7 @@ function setup() {
 		RUN_FILE_FRESHNESS_SKEW_MS: 1000, RUN_FILE_POLL_MS: 100, PORT_DISCOVERY_TIMEOUT_MS: 5000,
 		DAEMON_RESTART_STOP_TIMEOUT_MS: 5000, appendDaemonOutput: vi.fn(), slowDaemonStartupStatus: () => ({ state: "starting" }),
 		planDaemonAutoRestart, daemonExitWasUngraceful, disposeBrowserRuntimeLink: vi.fn(), captureSideChatState: async () => undefined,
-		desktopQuit: { handleBeforeQuit: () => false }, chatDraftRisks: [], browserCleanupComplete: true,
+		desktopQuit: { handleBeforeQuit: () => false, startCleanupDeadline: vi.fn() }, chatDraftRisks: [], browserCleanupComplete: true,
 		disposeBrowserStreamLink: vi.fn(), trayLifecycle: { dispose: vi.fn() },
 		agentQuitCleanupComplete: false, agentQuitCleanupPromise: null, shutdownDaemonForDesktopQuit: async () => undefined,
 	});
