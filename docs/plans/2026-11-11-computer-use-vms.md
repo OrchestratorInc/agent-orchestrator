@@ -1,117 +1,104 @@
-# Plan: Computer-use tools that run in a local VM
+# Plan: Computer use on a remote host
 
 Status: proposed (2026-11-11). Not implemented yet.
 
 ## The idea
 
-The agent stays where it runs today. Only its computer-use tool calls run in
-a virtual machine on the same machine.
+The agent stays on the user's machine. Its computer-use tool calls run on a
+remote host: any machine or VM that already runs AO.
 
-- **The agent does not move.** Same session, same repositories, same logins,
-  on the host.
-- **The tool runs in the VM.** When the agent calls `click`, the click happens
-  on the VM's desktop, done by Cua Driver there. The host desktop is never
-  touched.
-- **Built from existing parts.** The VM runs AO with Cua Driver, using the
-  installer and the computer-use code that exist today. The host's AO forwards
-  each tool call to it over the paired connection remote hosts already use.
-- **No Cloudflare.** The host reaches the VM on its private address.
-
-## What it protects
-
-| | Today | With the VM |
-| --- | --- | --- |
-| The user's screen, apps, sign-ins | Computer use acts on them | Never touched |
-| Host privacy grants for Cua Driver | Required | Not needed |
-| The agent process (shell, repositories) | On the host | **Still on the host** |
-| The local network | Reachable | **Still reachable from the VM** |
+- **The agent does not move.** Same session, same repositories, same logins.
+- **The tool runs on the remote host.** When the agent calls `click`, the
+  click happens on that host's desktop, done by Cua Driver there. The user's
+  own desktop is never touched.
+- **Built from existing parts.** Remote hosts, their Cloudflare tunnel and
+  pairing, and the computer-use code are all in the product today. The new
+  part is forwarding the call.
+- **Any host.** A cloud VM, another computer, or a VM on the same machine.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-  subgraph mac["Your Mac"]
+  subgraph you["Your machine"]
     agent["Agent<br/>shell, repositories, logins"]
     ao["AO<br/>on/off switch"]
     desk["Your desktop<br/>computer use never touches it"]
-    subgraph vm["Virtual machine"]
-      vmao["AO in the VM<br/>existing computer-use code"]
-      vmdesk["VM desktop<br/>its own apps and sign-ins"]
-    end
+  end
+  cf["Cloudflare tunnel"]
+  subgraph host["Remote host (any machine or VM)"]
+    hostao["AO on the host<br/>existing computer-use code"]
+    hostdesk["Host desktop<br/>its own apps and sign-ins"]
   end
   agent -- "1 click" --> ao
-  ao -- "2 forwards" --> vmao
-  vmao -- "3 Cua Driver" --> vmdesk
-  vmao -- "4 result" --> ao
+  ao -- "2 forwards" --> cf --> hostao
+  hostao -- "3 Cua Driver" --> hostdesk
+  hostao -- "4 result" --> cf
+  cf --> ao
   ao -- "result" --> agent
 ```
 
-1. The agent, on the host, calls `click` as it does today.
-2. The host's AO sees that computer use is set to the VM and forwards the
-   call to AO in the VM, over the VM's private address with a pairing
-   credential.
-3. AO in the VM runs the call through the existing computer-use code. Cua
-   Driver clicks on the VM's desktop.
-4. The result and screenshot come back. The host's AO saves the screenshot
-   and returns both to the agent.
+1. The agent, on the user's machine, calls `click` as it does today.
+2. AO sees that computer use is set to a remote host and forwards the call to
+   AO on that host, over the connection remote hosts already use.
+3. AO on the host runs the call through the existing computer-use code. Cua
+   Driver clicks on the host's desktop.
+4. The result and screenshot come back. AO saves the screenshot and returns
+   both to the agent.
+
+Nothing changes for the agent: the same `ao` tool server, the same eight
+tools, the same guide.
 
 ## What exists and what is missing
 
 | Need | Exists today | Gap |
 | --- | --- | --- |
-| AO and Cua Driver in the VM | `scripts/setup-self-hosted.sh` (macOS and Linux; without `--tunnel` it starts the direct listener only), Cua's installer, the computer-use service | A command to turn computer use on inside the VM: `ao computer-use on`. Today only the Settings page can. |
-| A secure link from host to VM | The remote listener, one-time pairing codes, per-device tokens, the host-ID check | The host's daemon must store the VM's address and credential. Today only the desktop app holds remote credentials. |
-| Calling computer use on another AO | `POST /computer-use/call` and `GET /computer-use/agent-tools` | Both are blocked on the remote listener by design. Allow these two only on a VM that opts in. Needs an ADR. |
-| Screenshots | The VM's AO saves them as files | Send the image bytes back with the call; the host saves them. |
-| Choosing where computer use runs | The on/off switch | A new setting: this computer or the VM, read on every call. |
-| The VM | Nothing | Phase 1: the user creates it with Lume from a recipe. Phase 2: AO creates and manages it. |
+| Computer use on the host | Cua Driver, the computer-use service, the Settings page | A command, `ao computer-use on`, for hosts set up over SSH. A Linux server also needs a desktop session. |
+| A link to the host | Remote hosts: the tunnel, pairing codes, per-device tokens, the host-ID check | The daemon must hold the host's address and credential. Today only the desktop app does. |
+| Calling computer use on another AO | `POST /computer-use/call`, `GET /computer-use/agent-tools` | Both are blocked on the remote listener by design. Accept them only on a host where someone turned this on at the machine itself. Needs an ADR. |
+| Screenshots | The host's AO saves them as files | Send the image bytes back with the call. |
+| Choosing where computer use runs | The on/off switch | A new setting: this computer or one remote host, read on every call. |
 
-Nothing changes for the agent: the same `ao` tool server, the same eight
-tools, the same guide.
+## Risks
+
+- **Cloudflare can read the calls and screenshots**, as it can already read
+  chat and terminal traffic on remote hosts. Phase 2 fixes this.
+- **Anyone with the host's credential can use it**, as they can already open
+  a terminal there. What computer use adds is the screen and signed-in apps,
+  so the host only accepts these calls after it is turned on at the machine
+  itself.
+- **The agent is still on the user's machine**, with its shell and files.
+- **It needs the connection.** No internet means no computer use, and each
+  action is slower because the screenshot travels back.
+- **Use a host set aside for agents.** Accounts signed in on its desktop are
+  available to every agent that uses it.
 
 ## Phases
 
-1. **Recipe.** Close the gaps above. The VM is set up by hand:
-   1. Install Lume, create a macOS VM, and start it.
-   2. In the VM, run `setup-self-hosted.sh` without `--tunnel`. It prints an
-      address and a pairing code.
-   3. In the VM, install Cua Driver, approve its privacy prompts in the VM
-      window, and run `ao computer-use on`.
-   4. On the host, in **Settings > Computer use agents**, choose the VM and
-      enter that address and code.
-2. **One button.** AO creates the VM with Lume under `~/.ao/vms`, runs the
-   recipe, pairs itself, keeps the address current, and offers start, stop,
-   and reset.
-3. **Linux hosts.** An Ubuntu x64 guest with a desktop session.
-
-## Risks that remain
-
-- **The agent is still on the host**, with its shell and files. This plan
-  moves desktop control only.
-- **Network.** The VM can reach the internet, the user's network, and host
-  services that listen beyond loopback.
-- **Plain HTTP between host and VM.** It stays on the machine's private
-  virtual network and needs the pairing credential.
-- **Shared VM.** Every session's computer use lands in the same VM, and
-  accounts signed in there are available to all of them.
+1. **Forwarding.** Close the gaps above. Any remote host can be the
+   computer-use target.
+2. **End-to-end encryption.** The two AOs encrypt each call and result with
+   keys exchanged at pairing, so the tunnel carries only ciphertext.
+   Computer use is a simple request and response, which makes it the easiest
+   remote traffic to encrypt first.
+3. **Easier hosts.** A desktop session in the Linux installer, and a
+   one-button local VM.
 
 ## Alternatives
 
-- **Move the whole agent into the VM.** Use the VM as an ordinary remote
-  host. Stronger isolation and no forwarding code, but repositories and
-  logins move into the VM.
-- **No AO in the VM.** The host talks straight to Cua Driver in the VM, over
-  MCP on SSH. A lighter VM, but more new code on the host.
+- **Run the whole agent on the remote host.** Works today with no new code,
+  but repositories and logins move to the host.
+- **No AO on the host.** Talk straight to Cua Driver over MCP on SSH. Lighter
+  host, more new code, and none of the existing pairing.
 
 ## Open questions
 
-1. Is it acceptable to open the two computer-use routes on a VM's remote
-   listener, opt-in only?
-2. Which host and guest does the customer need: macOS, Linux, or Windows?
-3. Is network reach from the VM acceptable for the first release?
+1. Is it acceptable to accept computer-use calls on the remote listener, when
+   turned on at the machine itself?
+2. Is end-to-end encryption needed in the first release, or can it follow?
+3. One target for every session, or a choice per project?
 4. Does the original proposal differ from this? It was not available when
    this was written.
 
-Facts about Cua Driver and Lume come from Cua's documentation source
-(`trycua/cua` at `f9a2768`). Nothing here was tested on a real VM; the first
-step of Phase 1 is to run the recipe by hand.
+Nothing here was tested on a real host. Facts about Cua Driver come from
+Cua's documentation source (`trycua/cua` at `f9a2768`).
