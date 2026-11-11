@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Globe, Share } from "@/components/app-icons";
 import { type CloudShareFile, type CloudShareInspection, type CloudShareLink, type CloudShareLinks, type CloudSharePublishResult, artifactShareUrl } from "../../shared/cloud-share";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import type { ArtifactRow } from "../lib/artifacts";
@@ -104,6 +106,34 @@ export function useShareAvailable(): boolean {
 	return available;
 }
 
+/**
+ * Brings this computer's publish records up to date with the person's link
+ * list, then reads the artifact list again. Records from before links were
+ * kept with their URL name only the link's ID, and a link unpublished
+ * elsewhere keeps its URL until the list says otherwise; the daemon serves
+ * each artifact's shareUrl from those records, so until they are reconciled
+ * a published file reads as not shared, or an unpublished one as public.
+ * Runs once per mount, and again when sign-in or the control plane changes.
+ */
+export function useReconciledShareLinks(): void {
+	const available = useShareAvailable();
+	const { baseUrl, signedIn } = useShareAccess();
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		if (!available || !signedIn) return;
+		let cancelled = false;
+		aoBridge.cloudShare.list(baseUrl)
+			.then(() => {
+				if (!cancelled) void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
+			})
+			// Offline or signed out: the records stay as they are until the next list.
+			.catch(() => undefined);
+		return () => {
+			cancelled = true;
+		};
+	}, [available, signedIn, baseUrl, queryClient]);
+}
+
 /** The control plane URL and whether the person is signed in to share. */
 export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 	const { settings } = useSettings();
@@ -131,19 +161,23 @@ export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" 
 	return { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? STANDALONE_WORKSPACE_ID, ...artifactId };
 }
 
-/** The share panel a menu's Share item opens, anchored to the menu's trigger. */
-export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, children }: {
+/**
+ * The publish panel a menu's Publish or Unpublish item opens, anchored to the
+ * menu's trigger. Unpublish opens on its confirmation and never publishes.
+ */
+export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, intent = "publish", children }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
+	intent?: "publish" | "unpublish";
 	children: ReactElement;
 }) {
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
 			<PopoverAnchor asChild>{children}</PopoverAnchor>
 			<PopoverContent align="end" className="w-[min(20rem,90vw)] p-4" data-browser-native-overlay="true">
-				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} /> : null}
+				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} unpublishOnOpen={intent === "unpublish"} /> : null}
 			</PopoverContent>
 		</Popover>
 	);
@@ -267,6 +301,7 @@ function SharePanel({
 	onClose,
 	onPublished,
 	republishOnOpen = false,
+	unpublishOnOpen = false,
 }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
@@ -275,8 +310,16 @@ function SharePanel({
 	onPublished?: () => void;
 	/** Opened from a Republish button: put the newer version on the link at once. */
 	republishOnOpen?: boolean;
+	/** Opened from Unpublish: ask to unpublish the file's link, and close once it is done or cancelled. */
+	unpublishOnOpen?: boolean;
 }) {
 	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	/**
+	 * Reads the artifact list again after a publish or an unpublish: the daemon
+	 * serves each artifact's shareUrl from the publish records this panel changed.
+	 */
+	const refreshArtifacts = () => void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
 	const { baseUrl, signedIn } = useShareAccess();
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
 	const [phase, setPhase] = useState<Phase>({ kind: "loading" });
@@ -293,6 +336,7 @@ function SharePanel({
 				const published = result.share;
 				setPhase({ kind: "published", share: published });
 				onPublished?.();
+				refreshArtifacts();
 				// The plan count now includes this link; it shows once the list says so.
 				void aoBridge.cloudShare.list(baseUrl)
 					.then((latest) => setPhase((current) => current.kind === "published" && current.share.id === published.id && !current.links ? { ...current, links: latest } : current))
@@ -349,6 +393,7 @@ function SharePanel({
 				const outdated = Boolean(current && (current.name !== inspection.name ||
 					(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint)));
 				if (current) {
+					if (unpublishOnOpen) return setPhase({ kind: "published", share: current, links, unpublishing: "confirm" });
 					// The Republish click, like Publish, needs no second one, unless the newer version looks like it holds a credential.
 					if (publishNow && republishOnOpen && outdated && inspection.secretFindings.length === 0) return void publish(inspection, links, current);
 					return setPhase({ kind: "published", share: current, links, outdated: outdated ? { inspection, links } : undefined });
@@ -371,7 +416,7 @@ function SharePanel({
 		};
 	}, [signedIn, baseUrl, key, file.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-	useEffect(() => load(), [load]);
+	useEffect(() => load({ publishNow: !unpublishOnOpen }), [load]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	useEffect(() => {
 		if (phase.kind !== "uploading") return;
@@ -415,6 +460,8 @@ function SharePanel({
 		setPhase({ kind: "published", share, links, outdated, unpublishing: "busy" });
 		try {
 			await aoBridge.cloudShare.unpublish(baseUrl, share.id);
+			refreshArtifacts();
+			if (unpublishOnOpen) return onClose();
 			load({ publishNow: false });
 		} catch (error) {
 			setPhase({ kind: "published", share, links, outdated, error: t("artifacts.share.unpublishFailed", { message: errorMessage(error) }) });
@@ -434,11 +481,13 @@ function SharePanel({
 	// one line, as with three actions in German, wrap with the actions at the right.
 	const footer = (left: React.ReactNode, right: React.ReactNode) => (
 		<div className="mt-4 flex min-h-control-md flex-wrap items-center justify-between gap-2 text-xs">
-			<div className="min-w-0 truncate">{left}</div>
+			{/* Not clipped: Unpublish sits a little outside it, so its label lines up with the title. */}
+			<div className="min-w-0">{left}</div>
 			<div className="ml-auto flex shrink-0 items-center gap-1.5">{right}</div>
 		</div>
 	);
-	const meta = (text: string) => <span className="text-caption text-muted-foreground tabular-nums">{text}</span>;
+	/** Secondary footer text, such as the plan usage or upload progress. */
+	const meta = (text: string) => <span className="block truncate text-caption text-muted-foreground tabular-nums">{text}</span>;
 
 	switch (phase.kind) {
 		case "loading":
@@ -515,7 +564,7 @@ function SharePanel({
 						{footer(
 							null,
 							<>
-								<Button disabled={busy} onClick={() => setPhase({ kind: "published", share, links, outdated })} size="sm" type="button" variant="ghost">
+								<Button disabled={busy} onClick={() => unpublishOnOpen ? onClose() : setPhase({ kind: "published", share, links, outdated })} size="sm" type="button" variant="ghost">
 									{t("artifacts.share.cancel")}
 								</Button>
 								<Button disabled={busy} onClick={() => void unpublish(phase)} size="sm" type="button" variant="destructive">
@@ -580,7 +629,7 @@ function SharePanel({
 				<>
 					{title}
 					{status(t("artifacts.share.failed", { message: phase.message }), "alert")}
-					{footer(null, <Button onClick={() => load()} size="sm" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>)}
+					{footer(null, <Button onClick={() => load({ publishNow: !unpublishOnOpen })} size="sm" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>)}
 				</>
 			);
 	}
