@@ -420,3 +420,21 @@ func TestRegenerateRevokesEveryDevice(t *testing.T) {
 	h.pair(password, "Phone")
 	h.pair(h.code(), "Laptop")
 }
+
+// A rotation that fails before the new password is saved revokes nothing.
+func TestAFailedRegenerateKeepsEveryDevice(t *testing.T) {
+	h := newPairingHost(t)
+	_, phone := h.pair(h.code(), "Phone")
+	// The listener is bound to loopback, so starting it for the LAN fails.
+	if err := mobilebridge.Save(h.bridge.ConfigPath, mobilebridge.State{Enabled: true, Password: "secret12"}); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := h.local(http.MethodPost, "/api/v1/mobile/regenerate", nil); status == http.StatusOK {
+		t.Fatalf("regenerate succeeded: %v", body)
+	}
+	for name, credential := range map[string]string{"device token": phone, "password": "secret12"} {
+		if got := h.sessions(credential); got != http.StatusOK {
+			t.Fatalf("%s after a failed regenerate: %d", name, got)
+		}
+	}
+}
