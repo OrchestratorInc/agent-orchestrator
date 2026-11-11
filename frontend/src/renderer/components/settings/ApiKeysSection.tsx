@@ -1,11 +1,15 @@
 import { LoaderCircle } from "@/components/app-icons";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useConnectedHosts } from "../../hooks/useHostConnection";
 import { checkProviderKey, removeProviderKey, saveProviderKey, useInvalidateProviderKeys, useProviderKeys, type ProviderKey } from "../../hooks/useProviderKeys";
 import { agentLabel } from "../../lib/agent-options";
+import { labelForHost } from "../../lib/host-clients";
+import { LOCAL_HOST } from "../../lib/hosts";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { DeviceEnvToggle, KEY_FIELD_CLASS, KeyStatusDot, savedKeySummary } from "./providerKeyUi";
+import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsSearch } from "./SettingsSearch";
 import { SettingsSection } from "./SettingsSection";
 
@@ -16,10 +20,33 @@ const NOTICE_MS = 6_000;
 // An armed "Confirm remove" disarms itself after this long.
 const CONFIRM_MS = 4_000;
 
-/** Provider keys AO saves once and passes to every agent session it starts. */
-export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
+/** Provider keys AO saves once and passes to every agent session it starts.
+ * Each host keeps its own keys: with remote hosts connected, a picker like
+ * Harness's chooses whose keys this page lists and changes, starting at the
+ * host Settings was opened for. */
+export function ApiKeysSection({ titleHidden, hostId }: { titleHidden?: boolean; hostId?: string }) {
 	const { t } = useTranslation();
-	const keys = useProviderKeys();
+	const connected = useConnectedHosts();
+	const [selectedHostId, setSelectedHostId] = useState(hostId ?? LOCAL_HOST);
+	useEffect(() => setSelectedHostId(hostId ?? LOCAL_HOST), [hostId]);
+	const remoteOffline = selectedHostId !== LOCAL_HOST && !connected.includes(selectedHostId);
+	const hostPicker = connected.length > 0 || remoteOffline ? <SettingsOptionMenu
+		aria-label={t("remote.host")}
+		value={selectedHostId}
+		options={[{ value: LOCAL_HOST, label: t("settings.harness.thisComputer") }, ...connected.map((id) => ({ value: id, label: labelForHost(id) ?? id })), ...(remoteOffline ? [{ value: selectedHostId, label: t("remote.hostLabel", { hostId: selectedHostId }) }] : [])]}
+		onChange={setSelectedHostId}
+		triggerClassName="w-fit max-w-full shrink-0"
+	/> : null;
+	if (remoteOffline) return <SettingsSection title={t("settings.apiKeys")} titleHidden={titleHidden} toolbar={hostPicker}>
+		<p role="alert" className="px-(--settings-row-inset) text-control text-error">{t("remote.hostOffline")}</p>
+	</SettingsSection>;
+	// Keyed by host, so an open editor or a notice never carries over to another host's keys.
+	return <HostApiKeys key={selectedHostId} titleHidden={titleHidden} hostId={selectedHostId === LOCAL_HOST ? undefined : selectedHostId} hostPicker={hostPicker} />;
+}
+
+function HostApiKeys({ titleHidden, hostId, hostPicker }: { titleHidden?: boolean; hostId?: string; hostPicker: ReactNode }) {
+	const { t } = useTranslation();
+	const keys = useProviderKeys(hostId);
 	const [editing, setEditing] = useState<string>();
 	const [query, setQuery] = useState("");
 	const [notices, setNotices] = useState<Record<string, Notice>>({});
@@ -37,10 +64,10 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 	// The order never changes on save, so a row never moves under the pointer.
 	const visible = all.filter(matches);
 
-	if (keys.isPending) return <SettingsSection title={t("settings.apiKeys")} titleHidden={titleHidden}>
+	if (keys.isPending) return <SettingsSection title={t("settings.apiKeys")} titleHidden={titleHidden} toolbar={hostPicker}>
 		<p role="status" className="flex items-center gap-2 px-(--settings-row-inset) text-control text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{t("settings.apiKeys.loading")}</p>
 	</SettingsSection>;
-	if (keys.isError) return <SettingsSection title={t("settings.apiKeys")} titleHidden={titleHidden}>
+	if (keys.isError) return <SettingsSection title={t("settings.apiKeys")} titleHidden={titleHidden} toolbar={hostPicker}>
 		<p role="alert" className="px-(--settings-row-inset) text-control text-error">{keys.error.message}</p>
 	</SettingsSection>;
 	return <SettingsSection
@@ -49,8 +76,11 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 		titleHidden={titleHidden}
 		grouped
 		// The search stays mounted while typing, even when nothing matches.
-		toolbar={<SettingsSearch aria-label={t("settings.apiKeys.search")} placeholder={t("settings.apiKeys.search")} value={query} onChange={setQuery}
-			trailing={<span className="shrink-0 px-1 text-xs text-settings-muted tabular-nums">{t("settings.apiKeys.savedCount", { saved, total: all.length })}</span>} />}
+		toolbar={<div className="flex flex-col gap-2">
+			{hostPicker}
+			<SettingsSearch aria-label={t("settings.apiKeys.search")} placeholder={t("settings.apiKeys.search")} value={query} onChange={setQuery}
+				trailing={<span className="shrink-0 px-1 text-xs text-settings-muted tabular-nums">{t("settings.apiKeys.savedCount", { saved, total: all.length })}</span>} />
+		</div>}
 	>
 		{visible.length === 0 ? <p role="status" className="settings-content-row text-control text-settings-muted">{t("settings.apiKeys.noMatches")}</p> : null}
 		{visible.map((key) => {
@@ -60,6 +90,7 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 			return <div key={key.name} data-editing={open ? "" : undefined}>
 				<ProviderKeyRow
 					providerKey={key}
+					hostId={hostId}
 					editing={open}
 					notice={notices[key.name]}
 					onEdit={() => { notify(key.name); setEditing(open ? undefined : key.name); }}
@@ -67,6 +98,7 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 				/>
 				{open ? <ProviderKeyEditor
 					providerKey={key}
+					hostId={hostId}
 					onDone={(notice) => { setEditing(undefined); notify(key.name, notice); }}
 				/> : null}
 			</div>;
@@ -74,8 +106,9 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 	</SettingsSection>;
 }
 
-function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }: {
+function ProviderKeyRow({ providerKey: key, hostId, editing, notice, onEdit, onNotice }: {
 	providerKey: ProviderKey;
+	hostId?: string;
 	editing: boolean;
 	notice?: Notice;
 	onEdit: () => void;
@@ -103,7 +136,7 @@ function ProviderKeyRow({ providerKey: key, editing, notice, onEdit, onNotice }:
 		setChecking(true);
 		onNotice(undefined);
 		try {
-			const result = await checkProviderKey(key.name, "");
+			const result = await checkProviderKey(key.name, "", hostId);
 			switch (result.status) {
 			case "valid": onNotice({ tone: "status", text: t("settings.apiKeys.accepted") }); break;
 			case "invalid": onNotice({ tone: "error", text: t("settings.apiKeys.rejected") }); break;
@@ -151,10 +184,10 @@ function SavedKeyBadge({ providerKey: key }: { providerKey: ProviderKey }) {
 	</span>;
 }
 
-function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: ProviderKey; onDone: (notice?: Notice) => void }) {
+function ProviderKeyEditor({ providerKey: key, hostId, onDone }: { providerKey: ProviderKey; hostId?: string; onDone: (notice?: Notice) => void }) {
 	const { t } = useTranslation();
 	const inputId = useId();
-	const invalidate = useInvalidateProviderKeys();
+	const invalidate = useInvalidateProviderKeys(hostId);
 	const [secret, setSecret] = useState("");
 	const [device, setDevice] = useState(key.device);
 	const [busy, setBusy] = useState(false);
@@ -175,12 +208,12 @@ function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: Provider
 		setError("");
 		try {
 			// A new key is checked first so a mistyped key is never saved.
-			const check = typed && key.checkable ? await checkProviderKey(key.name, typed) : undefined;
+			const check = typed && key.checkable ? await checkProviderKey(key.name, typed, hostId) : undefined;
 			if (check?.status === "invalid") {
 				setError(t("settings.apiKeys.rejected"));
 				return;
 			}
-			await saveProviderKey(key.name, typed, device);
+			await saveProviderKey(key.name, typed, device, hostId);
 			setSecret("");
 			await invalidate();
 			onDone(check?.status === "valid" ? { tone: "status", text: t("settings.apiKeys.savedAccepted") }
@@ -195,7 +228,7 @@ function ProviderKeyEditor({ providerKey: key, onDone }: { providerKey: Provider
 		setBusy(true);
 		setError("");
 		try {
-			await removeProviderKey(key.name);
+			await removeProviderKey(key.name, hostId);
 			await invalidate();
 			onDone({ tone: "status", text: t("settings.apiKeys.removed") });
 		} catch (err) {

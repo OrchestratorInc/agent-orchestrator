@@ -1,8 +1,11 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkProviderKey, useProviderKeys, type ProviderKey } from "../../hooks/useProviderKeys";
+import { useConnectedHosts } from "../../hooks/useHostConnection";
+import { checkProviderKey, saveProviderKey, useProviderKeys, type ProviderKey } from "../../hooks/useProviderKeys";
 import { ApiKeysSection } from "./ApiKeysSection";
+
+vi.mock("../../hooks/useHostConnection", () => ({ useConnectedHosts: vi.fn(() => []) }));
 
 vi.mock("../../hooks/useProviderKeys", () => ({
 	useProviderKeys: vi.fn(),
@@ -19,6 +22,7 @@ const keys: ProviderKey[] = [
 
 beforeEach(() => {
 	vi.mocked(useProviderKeys).mockReturnValue({ data: keys, isPending: false, isError: false } as unknown as ReturnType<typeof useProviderKeys>);
+	vi.mocked(useConnectedHosts).mockReturnValue([]);
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
@@ -82,5 +86,33 @@ describe("ApiKeysSection", () => {
 		await user.click(screen.getByRole("button", { name: /Writes the key to your user environment/ }));
 		expect(await screen.findByRole("tooltip")).toHaveTextContent(/Writes the key to your user environment/);
 		expect(screen.getByRole("checkbox", { name: "Share with other apps" })).not.toBeChecked();
+	});
+
+	it("uses this computer's daemon when no host is chosen", () => {
+		render(<ApiKeysSection titleHidden />);
+		expect(useProviderKeys).toHaveBeenLastCalledWith(undefined);
+		expect(screen.queryByRole("button", { name: "Host" })).toBeNull();
+	});
+
+	// Settings opened for a remote host's harness: its keys live on that host.
+	it("lists, checks and saves the keys of the host Settings was opened for", async () => {
+		const user = userEvent.setup();
+		vi.mocked(useConnectedHosts).mockReturnValue(["host-a"]);
+		vi.mocked(checkProviderKey).mockResolvedValue({ status: "valid" } as Awaited<ReturnType<typeof checkProviderKey>>);
+		vi.mocked(saveProviderKey).mockResolvedValue(keys[1]);
+		render(<ApiKeysSection titleHidden hostId="host-a" />);
+		expect(useProviderKeys).toHaveBeenLastCalledWith("host-a");
+		await user.click(screen.getByRole("button", { name: "Check" }));
+		expect(checkProviderKey).toHaveBeenCalledWith("OPENAI_API_KEY", "", "host-a");
+		await user.click(screen.getByRole("button", { name: "Add key · Tavily" }));
+		await user.type(screen.getByLabelText("Tavily"), "tv-secret");
+		await user.click(screen.getByRole("button", { name: "Save" }));
+		expect(saveProviderKey).toHaveBeenCalledWith("TAVILY_API_KEY", "tv-secret", false, "host-a");
+	});
+
+	it("says so instead of showing this computer's keys when the chosen host is offline", () => {
+		render(<ApiKeysSection titleHidden hostId="host-gone" />);
+		expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+		expect(screen.queryByRole("button", { name: "Add key · Tavily" })).toBeNull();
 	});
 });

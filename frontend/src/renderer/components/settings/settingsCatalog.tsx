@@ -105,7 +105,9 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "apiKeys",
 		icon: KeyRound,
 		label: (t) => t("settings.apiKeys"),
-		render: (_t, titleHidden) => <ApiKeysSection titleHidden={titleHidden} />,
+		// The same host the Harness page opens for, so a key saved for a remote
+		// host's harness lands on that host's daemon.
+		render: (_t, titleHidden, { hostId }) => <ApiKeysSection titleHidden={titleHidden} {...(hostId ? { hostId } : {})} />,
 	},
 	{
 		id: "teams",
