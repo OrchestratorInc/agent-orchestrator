@@ -146,7 +146,7 @@ function ProjectChats({ projectId, onClose, onImporting }: { projectId: string; 
 			</div>
 			<div className={settingsDialogBodyClass}>
 				<PreviewState pending={preview.isPending} error={preview.error} empty={!chats.length} emptyText={t("sessionImport.projectEmpty")}>
-					<div className="overflow-hidden rounded-md border border-border">
+					<div className="shrink-0 overflow-hidden rounded-md border border-border">
 						{chats.map((chat) => (
 							<ChatRow
 								key={chat.id}
