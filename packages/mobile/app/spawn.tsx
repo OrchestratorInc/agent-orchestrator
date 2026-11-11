@@ -511,6 +511,12 @@ export default function SpawnScreen() {
 	}, [busy, navigation]);
 
 	const harnessLabel = agents.find((item) => item.id === harness)?.label;
+	// Before the list lands the seed can name a project the picker doesn't list
+	// yet. It shows under its id, the name it was created with, so Start never
+	// sends a task somewhere the picker calls "Choose project".
+	const unlistedProject = projectId && projectId !== STANDALONE_PROJECT && !projects.some((item) => item.id === projectId)
+		? [{ id: projectId, label: projectId, icon: "folder" as const }]
+		: [];
 
 	return (
 		<KeyboardAvoidingView
@@ -535,7 +541,7 @@ export default function SpawnScreen() {
 					hosts={hostOptions}
 					hostId={selectedHostId}
 					onSelectHost={chooseHost}
-					projects={[...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
+					projects={[...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={changeProject}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
