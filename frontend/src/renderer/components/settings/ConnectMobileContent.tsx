@@ -641,7 +641,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		if (codeExpired) void queryClient.invalidateQueries({ queryKey: mobilePairingCodeQueryKey });
 	}, [codeExpired, queryClient]);
 	const pairingCode = pairing.data && !codeExpired ? pairing.data.code : "";
-	const pairingCodeFailed = pairing.isError && pairingCode === "";
+	// Offered only once the QR could be drawn: before that, the address is what is missing.
+	const pairingCodeFailed = pairing.isError && pairingCode === "" && qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
 	// A code is spent when a device pairs, and a new password drops unused
 	// codes: either change fetches the next one.
 	const codeSpentBy = devices.data === undefined || !status ? null : `${status.password}|${devices.data.map((device) => device.id).join(",")}`;
