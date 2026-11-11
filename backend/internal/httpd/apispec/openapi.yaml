@@ -19827,6 +19827,10 @@ components:
           type: string
         hostId:
           type: string
+        hostKey:
+          type: string
+        hostKeyUnavailable:
+          type: boolean
         keepAwake:
           $ref: '#/components/schemas/ControllersKeepAwakeStatus'
         loopbackOnly:

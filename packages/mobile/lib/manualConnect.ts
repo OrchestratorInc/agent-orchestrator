@@ -116,7 +116,7 @@ export async function persistManualHostEdit(
 	if (connectionChanged) {
 		const { hostId } = await deps.probe(after);
 		if (host.id && hostId !== host.id) throw new DifferentMachineError();
-		let credential = { ...target, hostId: host.id || hostId };
+		let credential = { ...target, hostId: host.id || hostId, ...(host.hostKey ? { hostKey: host.hostKey } : {}) };
 		let saved = edited;
 		if (deps.pair && host.token !== target.password && isPairingSecret(target.password)) {
 			const paired = await deps.pair(credential);

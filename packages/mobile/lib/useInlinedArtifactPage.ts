@@ -3,6 +3,7 @@ import { artifactBytesUrl, getArtifactPage, getArtifactText } from "./api";
 import { FULL_PAGE_LIMITS, inlineArtifactPage, type ArtifactAssetLoader, type InlineLimits } from "./artifactPageInliner";
 import { cachedArtifactPage } from "./artifactPageCache";
 import { authHeaders, type ServerConfig } from "./config";
+import { bytesToDataUri, hostFetch, hostPath, secureTarget } from "./e2ee/host";
 
 /** Reads the files a session's artifact pages link, with the Bearer header. */
 export function artifactAssetLoader(config: ServerConfig, sessionId: string): ArtifactAssetLoader {
@@ -12,6 +13,18 @@ export function artifactAssetLoader(config: ServerConfig, sessionId: string): Ar
 			const url = artifactBytesUrl(config, sessionId, path);
 			if (!url) return undefined;
 			try {
+				if (secureTarget(config)) {
+					const res = await hostFetch(config, hostPath(url), { headers: authHeaders(config) });
+					if (!res.ok) return undefined;
+					const declared = Number(res.headers.get("content-length"));
+					if (declared > maxBytes) {
+						void res.body?.cancel();
+						return { uri: "", bytes: declared };
+					}
+					const bytes = new Uint8Array(await res.arrayBuffer());
+					if (bytes.length > maxBytes) return { uri: "", bytes: bytes.length };
+					return { uri: bytesToDataUri(bytes, res.headers.get("content-type") ?? ""), bytes: bytes.length };
+				}
 				const res = await fetch(url, { headers: authHeaders(config) });
 				if (!res.ok) return undefined;
 				const declared = Number(res.headers.get("content-length"));

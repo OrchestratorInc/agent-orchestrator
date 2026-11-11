@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ServerConfig } from "./config";
 import { isPairingSecret, pairDevice, releaseDeviceToken } from "./deviceToken";
+import type { hostFetch } from "./e2ee/host";
 
 const config: ServerConfig = { host: "192.168.1.42", httpPort: "3011", muxPort: "14801", secure: false, password: "Code1234", hostId: "h_paired" };
 const device = { name: "Test phone", platform: "ios" };
@@ -8,14 +9,14 @@ const token = "aod_" + "a".repeat(64);
 
 function answer(status: number, body: unknown = {}) {
 	const calls: [string, RequestInit | undefined][] = [];
-	const fetchImpl = (async (url: string, init?: RequestInit) => {
-		calls.push([url, init]);
+	const fetchImpl = (async (cfg: ServerConfig, path: string, init?: RequestInit) => {
+		calls.push([`http://${cfg.host}:${cfg.httpPort}${path}`, init]);
 		return new Response(JSON.stringify(body), { status });
-	}) as unknown as typeof fetch;
+	}) as typeof hostFetch;
 	return Object.assign(fetchImpl, { calls });
 }
 
-const unreachable = (async () => { throw new TypeError("Network request failed"); }) as unknown as typeof fetch;
+const unreachable = (async () => { throw new TypeError("Network request failed"); }) as typeof hostFetch;
 
 describe("isPairingSecret", () => {
 	it("is a pairing password or code, not an account token or a device token", () => {

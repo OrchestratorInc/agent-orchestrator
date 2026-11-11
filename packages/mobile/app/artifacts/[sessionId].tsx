@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
 import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactImageSource } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
@@ -11,7 +11,7 @@ import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { relativeTime } from "../../lib/notificationView";
-import { imageSourceForPlatform } from "../../lib/imageSource";
+import { HostImage } from "../../lib/hostImage";
 import type { ServerConfig } from "../../lib/config";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -168,9 +168,9 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 					</>}
 					{preview && config ? <ArtifactThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} versionOf={versionOf} onFailed={onPreviewFailed} /> : null}
 					{picture ? (
-						<Image
+						<HostImage
 							accessibilityIgnoresInvertColors
-							source={imageSourceForPlatform(picture)}
+							source={picture}
 							resizeMode="cover"
 							onError={() => setFailedUri(picture.uri)}
 							style={StyleSheet.absoluteFill}

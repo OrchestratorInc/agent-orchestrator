@@ -52,6 +52,7 @@ import { useFileActions } from "../../../lib/files/useFileActions";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
+import { HostImage } from "../../../lib/hostImage";
 import { SegmentedChoice, type SegmentedChoiceOption } from "../../../lib/files/SegmentedChoice";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
@@ -521,7 +522,7 @@ function ImageCompare({ detail, name, sources }: { detail: WorkspaceFileDetail; 
 						android_ripple={feedback.android_ripple}
 						style={({ pressed }) => [styles.imageFrame, pressed && feedback.pressed]}
 					>
-						<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [pane.source] : pane.source} resizeMode="contain" style={styles.image} />
+						<HostImage accessibilityIgnoresInvertColors source={pane.source} resizeMode="contain" style={styles.image} />
 					</Pressable>
 				</View>
 			))}

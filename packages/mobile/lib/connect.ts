@@ -12,7 +12,7 @@ import type { RaceOutcome } from "./race";
  * ServerConfig, so the race hands back one of those rather than threading a new
  * type through every call site.
  */
-export function configForEndpoint(endpoint: Endpoint, token: string, hostId = ""): ServerConfig {
+export function configForEndpoint(endpoint: Endpoint, token: string, hostId = "", hostKey?: string): ServerConfig {
 	return {
 		...DEFAULT_CONFIG,
 		host: endpoint.host,
@@ -22,6 +22,7 @@ export function configForEndpoint(endpoint: Endpoint, token: string, hostId = ""
 		// Carried so per-machine state — the chat event cursor above all — keys on
 		// the machine rather than whichever address won the race.
 		...(hostId ? { hostId } : {}),
+		...(hostKey ? { hostKey } : {}),
 		// Carried so the poll can speed up on paths where the event stream
 		// cannot deliver. See pollInterval.ts.
 		endpointKind: endpoint.kind,
@@ -62,7 +63,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };
 
 	const hostKeyForConfig = host.id === "" ? outcome.hostId : host.id;
-	let config = configForEndpoint(outcome.endpoint, host.token, hostKeyForConfig);
+	let config = configForEndpoint(outcome.endpoint, host.token, hostKeyForConfig, host.hostKey);
 
 	// A machine migrated from the single-server config has no id until it
 	// connects once. This is where it learns one, and it is verified from here on.
@@ -79,7 +80,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		if (paired.kind !== "paired") return paired.kind;
 		await deps.saveToken(hostKey, paired.token, paired.credential === "password" ? token : undefined);
 		token = paired.token;
-		config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+		config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig, host.hostKey);
 		return paired.kind;
 	};
 	const refreshEndpoints = async () => {
@@ -114,7 +115,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		if (deps.saveToken && host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && status === 401 && code === "BAD_PASSWORD") {
 			const deviceToken = token;
 			token = host.fallbackToken;
-			config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+			config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig, host.hostKey);
 			try {
 				// The device token is replaced only once the kept password works.
 				await refreshEndpoints();
@@ -122,7 +123,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 				await swapPairingPassword();
 			} catch {
 				token = deviceToken;
-				config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+				config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig, host.hostKey);
 			}
 		}
 	}

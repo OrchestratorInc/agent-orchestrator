@@ -85,6 +85,7 @@ export function qrValueFor(input: {
 	platform: string;
 	password: string;
 	endpoints: readonly PairingEndpoint[];
+	hostKey?: string;
 }): string {
 	// v2 only. The phone no longer accepts v1: those codes predate the identity
 	// probe the race uses to verify a machine before sending it a credential, so
@@ -98,6 +99,7 @@ export function qrValueFor(input: {
 			hostId: input.hostId,
 			name: input.host,
 			platform: input.platform,
+			hostKey: input.hostKey,
 		}),
 		PAIRING_LINK_BASE,
 	);
@@ -234,6 +236,10 @@ interface MobileStatus {
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
 	hostId?: string;
+	/** The machine's Ed25519 public key, echoed into the pairing code. */
+	hostKey?: string;
+	/** The key cannot be read. No code is shown: without the key the phone would pair unencrypted. */
+	hostKeyUnavailable?: boolean;
 	/** Every advertised way to reach this daemon, in preference order. Optional
 	 * for the same reason as hostId. */
 	endpoints?: PairingEndpoint[];
@@ -768,6 +774,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const showRealQR =
 		enabled &&
 		!secureBlocked &&
+		!status.hostKeyUnavailable &&
 		pairingCode !== "" &&
 		qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
 	// Computed once so the rendered v2 QR and its data attribute cannot drift.
@@ -778,6 +785,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				platform: "",
 				password: pairingCode,
 				endpoints: status?.endpoints ?? [],
+				hostKey: status?.hostKey,
 			})
 		: null;
 	const secureReasonText = reasonMessage(status.securePairing?.reason ?? "", t);
@@ -800,6 +808,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					>
 						{t("mobile.generate")}
 					</Button>
+				</div>
+			) : status.hostKeyUnavailable ? (
+				<div className="absolute inset-0 flex items-center justify-center p-4" data-testid="mobile-host-key-unavailable" role="status">
+					<span className="rounded-(--radius-settings-action) bg-(--color-bg-secondary) px-3 py-2 text-center text-xs leading-5 text-settings-muted shadow-lg">
+						{t("mobile.hostKeyUnavailable")}
+					</span>
 				</div>
 			) : pairingCodeFailed ? (
 				<div className="absolute inset-0 flex items-center justify-center">

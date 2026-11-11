@@ -11,6 +11,7 @@
 import { type ConnectDeps, connectHost, type ConnectResult } from "./connect";
 import { deviceTokenConnectDeps } from "./deviceTokenRuntime";
 import type { ServerConfig } from "./config";
+import { hostFetch } from "./e2ee/host";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
@@ -152,8 +153,7 @@ export async function fetchAdvertisedEndpoints(config: ServerConfig): Promise<En
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), ENDPOINT_REFRESH_TIMEOUT_MS);
 	try {
-		const base = `${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}`;
-		const res = await fetch(`${base}/api/v1/endpoints`, {
+		const res = await hostFetch(config, "/api/v1/endpoints", {
 			headers: {
 				...(config.password ? { Authorization: `Bearer ${config.password}` } : {}),
 				...(config.hostId ? { "X-AO-Expected-Host-ID": config.hostId } : {}),

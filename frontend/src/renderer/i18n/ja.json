@@ -1107,6 +1107,7 @@
 	"mobile.getApp": "アプリを入手",
 	"mobile.scanHint": "Orchestrator モバイルアプリでスキャン",
 	"mobile.remoteAccessOn": "リモートアクセス有効",
+	"mobile.hostKeyUnavailable": "このコンピューターの暗号化キーを読み取れないため、コードは表示されません。理由は Orchestrator のログで確認できます。",
 	"mobile.hideQR": "App Store の QR コードを隠す",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "App Store で Orchestrator を入手",

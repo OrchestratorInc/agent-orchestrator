@@ -1,5 +1,6 @@
 import { ApiError, apiRequest } from "./api";
 import { authHeaders, type ServerConfig } from "./config";
+import { hostSocket } from "./e2ee/host";
 import { browserLiveURL, decodeBrowserFrame, type BrowserLiveFrame } from "./browserLiveProtocol";
 
 export { browserLiveURL, decodeBrowserFrame, type BrowserLiveFrame } from "./browserLiveProtocol";
@@ -58,12 +59,7 @@ export class BrowserLiveClient {
 		this.reportedError = false;
 		this.handlers.onStatus("connecting");
 		try {
-			const Socket = WebSocket as unknown as {
-				new (url: string, protocols?: string | string[], options?: { headers?: Record<string, string> }): WebSocket;
-			};
-			const socket = new Socket(browserLiveURL(this.config, this.sessionID), undefined, {
-				headers: { Origin: "http://localhost", ...authHeaders(this.config) },
-			});
+			const socket = hostSocket(this.config, browserLiveURL(this.config, this.sessionID), { Origin: "http://localhost", ...authHeaders(this.config) });
 			socket.binaryType = "arraybuffer";
 			this.socket = socket;
 			socket.onopen = () => this.handlers.onStatus("open");

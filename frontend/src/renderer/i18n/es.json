@@ -1117,6 +1117,7 @@
 	"mobile.getApp": "Obtener la aplicación",
 	"mobile.scanHint": "Escanea con la app móvil de Orchestrator",
 	"mobile.remoteAccessOn": "Acceso remoto activado",
+	"mobile.hostKeyUnavailable": "No se puede leer la clave de cifrado de este ordenador, así que no se muestra ningún código. El registro de Orchestrator indica el motivo.",
 	"mobile.hideQR": "Ocultar código QR del App Store",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "Obtén Orchestrator en el App Store",

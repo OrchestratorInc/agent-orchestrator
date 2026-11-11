@@ -25,6 +25,8 @@ import { useReviewSender } from "../../lib/files/useReviewSender";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
+import { HostImage, useHostImage } from "../../lib/hostImage";
+import { staysInCache, useEncryptedFile } from "../../lib/useEncryptedFile";
 import { imageSourceForPlatform } from "../../lib/imageSource";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -395,7 +397,7 @@ function ArtifactFilmstrip({ config, sessionId, artifacts, index, versionOf, onS
 								style={[styles.tile, { backgroundColor: visual.tint }, selected ? styles.tileSelected : { opacity: 0.6 }]}
 							>
 								{picture ? (
-									<Image accessibilityIgnoresInvertColors source={imageSourceForPlatform(picture)} resizeMode="cover" onError={() => markPreviewFailed(item.path, item.updatedAt)} style={StyleSheet.absoluteFill} />
+									<HostImage accessibilityIgnoresInvertColors source={picture} resizeMode="cover" onError={() => markPreviewFailed(item.path, item.updatedAt)} style={StyleSheet.absoluteFill} />
 								) : previewing ? (
 									<ArtifactThumbnail config={config} sessionId={sessionId} artifact={item} visible={visiblePaths.has(item.path)} versionOf={versionOf} onFailed={() => markPreviewFailed(item.path, item.updatedAt)} />
 								) : (
@@ -454,6 +456,7 @@ function ArtifactWeb({ config, url, version, page }: {
 	const web = useRef<WebView>(null);
 	const [error, setError] = useState<string>();
 	const inlined = useInlinedArtifactPage({ enabled: Boolean(page), config, sessionId: page?.sessionId ?? "", path: page?.path ?? "", version });
+	const file = useEncryptedFile(config.hostKey && !page ? config : null, url, version);
 	// An inlined page carries AO's theme bootstrap; it takes the app's live theme, as a chat frame does.
 	const theme = useRenderTheme();
 	const themeRef = useRef(theme);
@@ -466,15 +469,28 @@ function ArtifactWeb({ config, url, version, page }: {
 	}, [inlined.html, theme]);
 	// Inlining failed: the page still opens from its URL.
 	if (page && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	// A URL load would send the token in plaintext to a machine whose traffic is encrypted.
+	if (!html && config.hostKey && !file.uri) {
+		if (!page && !file.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+		return <Unavailable title="This file didn't load" message="Open it on the machine instead." />;
+	}
 	return (
 		<View style={styles.screen}>
 			<WebView
 				// A new version of the file reloads the page.
-				key={`${version}|${inlined.html ? "inline" : "url"}`}
+				key={`${version}|${inlined.html ? "inline" : file.uri ? "file" : "url"}`}
 				ref={web}
 				// Inlined, the page loads from memory with no origin: it needs no
 				// cookie, and it cannot reach the daemon.
-				source={html ? { html } : { uri: url, headers: authHeaders(config) }}
+				source={html ? { html } : file.uri ? { uri: file.uri } : { uri: url, headers: authHeaders(config) }}
+				// A file read through the encrypted channel loads from the app's cache.
+				// Every URL passes the whitelist so none is handed to the system browser; staysInCache decides.
+				{...(file.uri && file.readAccess ? {
+					originWhitelist: ["*"],
+					allowFileAccess: true,
+					allowingReadAccessToURL: file.readAccess,
+					onShouldStartLoadWithRequest: (request: { url: string }) => staysInCache(request.url, file.readAccess ?? ""),
+				} : {})}
 				style={styles.web}
 				// Under the clear glass bar, the page scrolls on beneath it.
 				contentInsetAdjustmentBehavior="automatic"
@@ -507,24 +523,26 @@ function ArtifactImage({ source, name }: { source: { uri: string; headers: Recor
 	const styles = useThemedStyles(makeStyles);
 	const [failed, setFailed] = useState(false);
 	const [ratio, setRatio] = useState(1);
+	const shown = useHostImage(source);
 	useEffect(() => {
+		if (!shown) return;
 		let live = true;
-		Image.getSizeWithHeaders(source.uri, source.headers).then(({ width, height }) => { if (live && width > 0 && height > 0) setRatio(width / height); }).catch(() => {});
+		("headers" in shown ? Image.getSizeWithHeaders(shown.uri, shown.headers) : Image.getSize(shown.uri)).then(({ width, height }) => { if (live && width > 0 && height > 0) setRatio(width / height); }).catch(() => {});
 		return () => { live = false; };
 		// The source is rebuilt on each render; its URI (with the file's version) is what changes.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [source.uri]);
+	}, [shown?.uri]);
 	if (failed) return <Unavailable title="This image didn't load" message="The phone may not support its format. Open it on the machine instead." />;
 	return (
 		<ScrollView style={styles.screen} contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.imageContent} maximumZoomScale={4} minimumZoomScale={1} centerContent>
-			<Image
-				source={imageSourceForPlatform(source)}
+			{shown ? <Image
+				source={imageSourceForPlatform(shown)}
 				accessibilityLabel={name}
 				accessibilityIgnoresInvertColors
 				resizeMode="contain"
 				onError={() => setFailed(true)}
 				style={[styles.image, { aspectRatio: ratio }]}
-			/>
+			/> : null}
 		</ScrollView>
 	);
 }

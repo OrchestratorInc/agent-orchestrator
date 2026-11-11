@@ -34,6 +34,11 @@ describe("buildPairingOffer", () => {
 	it("refuses to build an offer with nothing to connect to", () => {
 		expect(() => buildPairingOffer({ ...base, endpoints: [] })).toThrow();
 	});
+
+	it("carries the host key only when the daemon reports one", () => {
+		expect(buildPairingOffer({ ...base, hostKey: "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0" }).hostKey).toBe("JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0");
+		expect("hostKey" in buildPairingOffer(base)).toBe(false);
+	});
 });
 
 describe("pairingCodeUrl", () => {

@@ -18,7 +18,9 @@ import {
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { AppSymbol } from "../AppSymbol";
-import { authHeaders, httpBase } from "../config";
+import { httpBase } from "../config";
+import { useHostImage } from "../hostImage";
+import { hostImageSource } from "../hostImageSource";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
@@ -683,7 +685,7 @@ function StagedAttachments({ sessionId, paths, spaced }: { sessionId: string; pa
 	return <View style={[styles.attachments, spaced && styles.attachmentsSpaced]}>
 		{paths.map((path) => {
 			const source = config && isImageAttachment(path)
-				? { uri: `${httpBase(config)}${previewFilePath(sessionId, path)}`, headers: authHeaders(config) }
+				? hostImageSource(config, `${httpBase(config)}${previewFilePath(sessionId, path)}`)
 				: undefined;
 			return <StagedAttachment key={path} name={attachmentName(path)} source={source} tileSize={tileSize} />;
 		})}
@@ -700,6 +702,8 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 	// or a rotated password retries on its own; tapping the chip retries in place.
 	const [failedLoad, setFailedLoad] = useState<AttachmentImageSource>();
 	const [viewerOpen, setViewerOpen] = useState(false);
+	const [attempt, setAttempt] = useState(0);
+	const shown = useHostImage(source, attempt);
 	if (!source) {
 		return <View style={styles.attachmentChip}><Feather name="file-text" size={iconSize.xs} color={t.textTertiary} /><Text numberOfLines={1} style={styles.attachmentName}>{name}</Text></View>;
 	}
@@ -707,12 +711,12 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 		// Cover-cropping a square reads as a deliberate thumbnail; the viewer shows the whole image.
 		return <>
 			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => setViewerOpen(true)} android_ripple={tileFeedback.android_ripple} style={({ pressed }) => [styles.attachmentTile, { width: tileSize, height: tileSize }, pressed && tileFeedback.pressed]}>
-				<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
+				{shown ? <Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [shown] : shown} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} /> : null}
 			</Pressable>
 			<ImageViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
 		</>;
 	}
-	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={space.md} onPress={() => setFailedLoad(undefined)} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
+	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={space.md} onPress={() => { setFailedLoad(undefined); setAttempt((n) => n + 1); }} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
 		<AppSymbol name="refresh" size={iconSize.xs} color={t.textTertiary} />
 		<Text numberOfLines={1} style={styles.attachmentName}>{name}</Text>
 		<Text style={styles.attachmentRetry}>Tap to retry</Text>

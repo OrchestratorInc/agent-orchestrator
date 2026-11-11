@@ -1,3 +1,4 @@
+import { decodeHostKey } from "./e2ee/handshake";
 import type { Endpoint, EndpointKind } from "./endpoints";
 
 /**
@@ -15,6 +16,8 @@ export type PairingOffer = {
 	platform: string;
 	endpoints: Endpoint[];
 	token: string;
+	/** The machine's Ed25519 public key, from a desktop that encrypts. */
+	hostKey?: string;
 };
 
 const KINDS: readonly EndpointKind[] = ["lan", "tailscale", "tunnel", "relay"];
@@ -132,6 +135,8 @@ export function parsePairingCode(input: string): PairingOffer | null {
 	const endpoints = o.endpoints.filter(isEndpoint);
 	// A code with nothing to connect to is not usable.
 	if (endpoints.length === 0) return null;
+	// A damaged key must not turn into an unencrypted pairing.
+	if ("hostKey" in o && (typeof o.hostKey !== "string" || !decodeHostKey(o.hostKey))) return null;
 
 	const offer: PairingOffer = {
 		v: 2,
@@ -140,6 +145,7 @@ export function parsePairingCode(input: string): PairingOffer | null {
 		platform: typeof o.platform === "string" ? o.platform : "",
 		endpoints,
 		token: typeof o.token === "string" ? o.token : "",
+		...(typeof o.hostKey === "string" ? { hostKey: o.hostKey } : {}),
 	};
 	// Log the parsed endpoints for debugging pairing issues
 	if (typeof __DEV__ !== "undefined" && __DEV__) {

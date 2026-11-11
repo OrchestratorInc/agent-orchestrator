@@ -1,5 +1,6 @@
 import { apiRequest } from "../api";
-import { authHeaders, httpBase, type ServerConfig } from "../config";
+import { httpBase, type ServerConfig } from "../config";
+import { hostImageSource } from "../hostImageSource";
 import { formatFileAnnotationMessages, type FileAnnotationComment } from "../../../shared/files/file-annotations";
 
 const API = "/api/v1";
@@ -124,7 +125,7 @@ export async function searchWorkspaceFiles(cfg: ServerConfig, sessionId: string,
  */
 export function workspaceImageSource(cfg: ServerConfig, sessionId: string, path: string, side: "before" | "after", version: string): { uri: string; headers: Record<string, string> } {
 	const query = new URLSearchParams({ path, side, v: version });
-	return { uri: `${httpBase(cfg)}${sessionPath(sessionId, "workspace/file/blob")}?${query}`, headers: authHeaders(cfg) };
+	return hostImageSource(cfg, `${httpBase(cfg)}${sessionPath(sessionId, "workspace/file/blob")}?${query}`);
 }
 
 /**

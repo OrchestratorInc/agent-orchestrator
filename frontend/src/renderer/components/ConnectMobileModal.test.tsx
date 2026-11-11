@@ -22,6 +22,8 @@ const { mobileStatus } = vi.hoisted(() => ({
 		// from that list — there is no v1 form left to fall back to when it is
 		// missing, so a fixture without it is not a realistic daemon.
 		hostId: "h_fixture",
+		hostKey: undefined as string | undefined,
+		hostKeyUnavailable: undefined as boolean | undefined,
 		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
 		tunnel: undefined as
 			| undefined
@@ -134,6 +136,8 @@ beforeEach(() => {
 	mobileStatus.noPublicTunnel = false;
 	mobileStatus.host = "192.168.1.42";
 	mobileStatus.hostId = "h_fixture";
+	mobileStatus.hostKey = undefined;
+	mobileStatus.hostKeyUnavailable = undefined;
 	mobileStatus.tunnel = undefined;
 	mobileStatus.endpoints = [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }];
 	mobileStatus.tailscaleHost = "100.72.46.7";
@@ -201,6 +205,22 @@ test("shows the tunnel-only QR without a LAN address and preserves pairing crede
 	expect(await screen.findByTestId("mobile-pairing-address")).toHaveTextContent("host.example.net:443");
 	expect(screen.queryByText(/No network address found/i)).not.toBeInTheDocument();
 	expect(apiClient.POST).not.toHaveBeenCalled();
+});
+
+test("puts the host key in the QR so the phone encrypts to it", async () => {
+	mobileStatus.hostKey = "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0";
+	renderMobileSettings();
+
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+	expect(decodeQr(qrPayload()!).hostKey).toBe("JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0");
+});
+
+test("withholds the QR when the host key cannot be read", async () => {
+	mobileStatus.hostKeyUnavailable = true;
+	renderMobileSettings();
+
+	expect(await screen.findByTestId("mobile-host-key-unavailable")).toBeVisible();
+	expect(qrPayload()).toBeNull();
 });
 
 test("waits for a tunnel-only endpoint instead of reporting a missing LAN address", async () => {

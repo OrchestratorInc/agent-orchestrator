@@ -7,6 +7,8 @@ import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
 import { UnreachableError } from "./connectionError";
+import { hostFetch, type HostResponse } from "./e2ee/host";
+import { hostImageSource } from "./hostImageSource";
 import type { AttentionLevel } from "./theme";
 import type { ApprovalMode } from "./spawnApproval";
 
@@ -439,7 +441,6 @@ export class ApiError extends Error {
 }
 
 async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
-	const url = `${httpBase(cfg)}${path}`;
 	// Without a timeout a sleeping/unreachable host (common over Tailscale) hangs
 	// the call for the OS TCP timeout (~75-120s), freezing Kill/send and the poll.
 	const controller = new AbortController();
@@ -453,12 +454,12 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		controller.signal.addEventListener("abort", rejectAbort);
 	});
 	const timer = setTimeout(cancel, timeoutMs);
-	let received: Response | undefined;
+	let received: HostResponse | undefined;
 	let bodyText = "";
 	try {
 		const installId = cachedInstallId();
 		await Promise.race([aborted, (async () => {
-			received = await fetch(url, {
+			received = await hostFetch(cfg, path, {
 				...init,
 				signal: controller.signal,
 				headers: {
@@ -702,7 +703,7 @@ export function artifactBytesUrl(cfg: ServerConfig, sessionId: string, path: str
 export function artifactImageSource(cfg: ServerConfig, sessionId: string, path: string, version?: string): { uri: string; headers: Record<string, string> } | undefined {
 	const url = artifactBytesUrl(cfg, sessionId, path);
 	if (!url) return undefined;
-	return { uri: version ? `${url}?v=${encodeURIComponent(version)}` : url, headers: authHeaders(cfg) };
+	return hostImageSource(cfg, version ? `${url}?v=${encodeURIComponent(version)}` : url);
 }
 
 /**

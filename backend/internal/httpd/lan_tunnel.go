@@ -30,11 +30,16 @@ func (m *LANManager) serveTunnel(w http.ResponseWriter, r *http.Request) {
 	_, port, _ := net.SplitHostPort(r.RemoteAddr)
 	// No message size limit: NetConn lifts it, and streams each message into
 	// the HTTP/2 framer, whose own frame size cap bounds what it holds.
-	conn := &tunnelConn{
+	m.serveTunnelConn(r, &tunnelConn{
 		Conn:   websocket.NetConn(context.WithoutCancel(r.Context()), ws, websocket.MessageBinary),
 		remote: tunnelAddr(net.JoinHostPort(clientSource(r), port)),
 		closed: make(chan struct{}),
-	}
+	})
+}
+
+// serveTunnelConn serves the LAN chain over conn until it closes, for requests
+// that arrived inside the upgrade r.
+func (m *LANManager) serveTunnelConn(r *http.Request, conn *tunnelConn) {
 	// Inner requests end with the upgrade (Stop cancels it) and record their
 	// credential on the TCP connection that carries them, which a password
 	// rotation closes. They inherit nothing else from the upgrade request.
@@ -52,6 +57,7 @@ func (m *LANManager) serveTunnel(w http.ResponseWriter, r *http.Request) {
 		BaseContext:       func(net.Listener) context.Context { return base },
 	}
 	srv.Protocols = new(http.Protocols)
+	srv.Protocols.SetHTTP1(true)
 	srv.Protocols.SetUnencryptedHTTP2(true)
 	_ = srv.Serve(&oneConnListener{conn: conn})
 }

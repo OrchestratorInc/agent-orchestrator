@@ -116,7 +116,8 @@ describe("pairFromCode", () => {
 
 		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Prod" } });
 
-		expect(d.findHost).not.toHaveBeenCalled();
+		// Read once, for a saved key; the name comes from the machine being reconnected.
+		expect(d.findHost).toHaveBeenCalledTimes(1);
 		expect(got).toMatchObject({ ok: true, kind: "reconnected" });
 		expect(got).not.toHaveProperty("instead");
 	});
@@ -154,6 +155,47 @@ describe("pairFromCode", () => {
 				token: "pw",
 			}),
 		);
+	});
+
+	it("pins the code's host key on the machine and encrypts the exchange to it", async () => {
+		const hostKey = "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0";
+		const keyed = encodePairingCode({ v: 2, hostId: "h_paired", name: "prasad-mbp", platform: "darwin", endpoints: [lan], token: "pw", hostKey });
+		const pair = vi.fn(async () => ({ kind: "paired" as const, token: "aod_t", credential: "pairing-code" as const }));
+		const d = deps({ pair });
+		const got = await pairFromCode(`aomobile://pair#${keyed}`, d);
+
+		expect(got.ok && got.config.hostKey).toBe(hostKey);
+		expect(pair).toHaveBeenCalledWith(expect.objectContaining({ hostKey, password: "pw" }));
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ hostKey, token: "aod_t" }));
+	});
+
+	it("refuses a code without a key for a machine paired with one, before contacting it", async () => {
+		const pair = vi.fn();
+		const d = deps({ pair, findHost: vi.fn(async () => ({ id: "h_paired", name: "Studio", hostKey: "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0" })) });
+		const got = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(got).toEqual({ ok: false, reason: "outdated-desktop" });
+		expect(d.race).not.toHaveBeenCalled();
+		expect(pair).not.toHaveBeenCalled();
+		expect(d.saveHost).not.toHaveBeenCalled();
+	});
+
+	it("refuses a code without a key when only the saved record has one, not the reconnect screen's copy", async () => {
+		const d = deps({ findHost: vi.fn(async (id: string) => ({ id, name: "Studio", hostKey: "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0" })) });
+		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Studio" } });
+
+		expect(got).toEqual({ ok: false, reason: "outdated-desktop" });
+		expect(d.race).not.toHaveBeenCalled();
+	});
+
+	it("refuses a code without a machine id when the machine that answers is paired with a key", async () => {
+		const idless = encodePairingCode({ v: 2, hostId: "", name: "prasad-mbp", platform: "darwin", endpoints: [lan], token: "pw" });
+		const pair = vi.fn();
+		const d = deps({ pair, findHost: vi.fn(async (id: string) => id === "h_paired" ? { id, name: "Studio", hostKey: "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0" } : null) });
+
+		expect(await pairFromCode(`aomobile://pair#${idless}`, d)).toEqual({ ok: false, reason: "outdated-desktop" });
+		expect(pair).not.toHaveBeenCalled();
+		expect(d.verify).not.toHaveBeenCalled();
 	});
 
 	it("returns a config for the endpoint that won the race", async () => {

@@ -513,6 +513,8 @@ func (b *BridgeService) Status() MobileStatusResponse {
 		HostID:                   b.HostID,
 		RequireDeviceCredentials: st.RequireDeviceCredentials,
 	}
+	hostKey, keyErr := mobilebridge.HostPublicKey(b.ConfigPath)
+	res.HostKey, res.HostKeyUnavailable = hostKey, keyErr != nil
 	if b.Devices != nil {
 		if used := b.Devices.SharedLastUsed(mobilebridge.SharedPassword); !used.IsZero() {
 			res.PasswordLastUsedAt = &used

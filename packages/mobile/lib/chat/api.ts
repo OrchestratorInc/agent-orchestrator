@@ -1,6 +1,7 @@
 import { fetch as expoFetch } from "expo/fetch";
 import { ApiError, ATTACHMENT_REQUEST_TIMEOUT_MS, apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
+import { hostFetch, secureTarget, type HostResponse } from "../e2ee/host";
 import { resolveDefaultChoices } from "./turnSettingsModel";
 import type {
 	ActivityDetail,
@@ -431,10 +432,9 @@ export async function streamGlobalConversationEvents(
 	onCursorReset?: (cursor: number) => void,
 	options?: ConversationStreamOptions,
 ): Promise<number> {
-	const res = await expoFetch(`${httpBase(cfg)}${API}/events?after=${Math.max(0, after)}`, {
-		headers: { ...authHeaders(cfg), Accept: "text/event-stream" },
-		signal,
-	});
+	const path = `${API}/events?after=${Math.max(0, after)}`;
+	const init = { headers: { ...authHeaders(cfg), Accept: "text/event-stream" }, signal };
+	const res: HostResponse = secureTarget(cfg) ? await hostFetch(cfg, path, init) : await expoFetch(`${httpBase(cfg)}${path}`, init);
 	if (!res.ok) throw await streamError(res);
 	if (!res.body) throw new Error("Couldn't open live updates from your machine.");
 	const advertisedAfterHeader = res.headers.get("X-AO-Event-After");
@@ -537,7 +537,7 @@ function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {
 	return decisions.length > 0 ? decisions : undefined;
 }
 
-async function streamError(res: Response): Promise<ApiError> {
+async function streamError(res: HostResponse): Promise<ApiError> {
 	let message = `${res.status} ${res.statusText}`;
 	let code: string | undefined;
 	let detail: string | undefined;
