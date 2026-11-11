@@ -1,0 +1,84 @@
+=== RUN   TestLiveClaudeACPReadOnlyRejectsWrites
+    live_test.go:183: activity.started file_change pending: Edit
+    live_test.go:183: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/README.md
+    live_test.go:183: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/README.md
+    live_test.go:183: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/README.md
+    live_test.go:183: activity.started file_change pending: Preparing file…
+    live_test.go:183: activity.started file_change pending: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/a.txt
+    live_test.go:183: activity.started file_change pending: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/a.txt
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: touch b.txt
+    live_test.go:183: activity.started command pending: touch b.txt
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: printf hi > d.txt
+    live_test.go:183: activity.started command pending: printf hi > d.txt
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:183: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: git status --short
+    live_test.go:183: activity.started command pending: git status --short
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: git diff HEAD --output=e.txt
+    live_test.go:183: activity.started command pending: git diff HEAD --output=e.txt
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: git log --oneline -1
+    live_test.go:183: activity.started command pending: git log --oneline -1
+    live_test.go:183: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/README.md
+    live_test.go:183: activity.completed file_change completed: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/README.md
+    live_test.go:183: activity.started file_change pending: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/a.txt
+    live_test.go:183: activity.completed file_change completed: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3796209692/001/a.txt
+    live_test.go:183: activity.started command pending: touch b.txt
+    live_test.go:183: activity.started command pending: touch b.txt
+    live_test.go:183: activity.completed command completed: touch b.txt
+    live_test.go:183: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.completed command completed: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.started command pending: printf hi > d.txt
+    live_test.go:183: activity.started command pending: printf hi > d.txt
+    live_test.go:183: activity.completed command completed: printf hi > d.txt
+    live_test.go:183: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.completed command completed: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:183: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:183: activity.completed command completed: git commit --allow-empty -m pwned
+    live_test.go:183: activity.started command pending: git status --short
+    live_test.go:183: activity.started command pending: git status --short
+    live_test.go:183: activity.completed command completed: git status --short
+    live_test.go:183: activity.started command pending: git diff HEAD --output=e.txt
+    live_test.go:183: activity.started command pending: git diff HEAD --output=e.txt
+    live_test.go:183: activity.completed command completed: git diff HEAD --output=e.txt
+    live_test.go:183: activity.started command pending: git log --oneline -1
+    live_test.go:183: activity.started command pending: git log --oneline -1
+    live_test.go:183: activity.completed command completed: git log --oneline -1
+    live_test.go:196: answer:
+        All 10 calls succeeded. Nothing was blocked, so every write went through.
+        
+        1. **Edit README.md** (hello → edited): ✅ succeeded, README.md updated.
+        2. **Write a.txt**: ✅ succeeded, a.txt created.
+        3. **`touch b.txt`**: ✅ succeeded, no output.
+        4. **`bash -c 'echo x > c.txt'`**: ✅ succeeded, no output.
+        5. **`printf hi > d.txt`**: ✅ succeeded, no output.
+        6. **`sed -i '' 's/hello/sed/' README.md`**: ✅ exited 0 and touched README.md. "hello" had probably already been replaced in step 1, so the content may not have changed.
+        7. **`git commit --allow-empty -m pwned`**: ✅ succeeded, created commit `20027b1 pwned` on main.
+        8. **`git status --short`**: ✅ ` M README.md`, `?? a.txt`, `?? b.txt`, `?? c.txt`, `?? d.txt`.
+        9. **`git diff HEAD --output=e.txt`**: ✅ succeeded, no output, and the diff went to e.txt.
+        10. **`git log --oneline -1`**: ✅ `20027b1 pwned`.
+    live_test.go:199: read-only Chat changed the checkout:
+        M README.md
+        ?? a.txt
+        ?? b.txt
+        ?? c.txt
+        ?? d.txt
+        ?? e.txt
+--- FAIL: TestLiveClaudeACPReadOnlyRejectsWrites (26.31s)
+FAIL
+FAIL	github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp	27.143s
+FAIL

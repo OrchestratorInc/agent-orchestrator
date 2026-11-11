@@ -1,0 +1,69 @@
+=== RUN   TestLiveClaudeACPReadOnlyRejectsWrites
+    live_test.go:183: activity.started file_change pending: Edit
+    live_test.go:183: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites2655272903/001/README.md
+    live_test.go:183: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites2655272903/001/README.md
+    live_test.go:183: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites2655272903/001/README.md
+    live_test.go:183: activity.completed file_change failed: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites2655272903/001/README.md
+    live_test.go:183: activity.started file_change pending: Preparing file…
+    live_test.go:183: activity.started file_change pending: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites2655272903/001/a.txt
+    live_test.go:183: activity.started file_change pending: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites2655272903/001/a.txt
+    live_test.go:183: activity.completed file_change failed: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites2655272903/001/a.txt
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: touch b.txt
+    live_test.go:183: activity.started command pending: touch b.txt
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: touch b.txt
+    live_test.go:183: activity.completed command failed: touch b.txt
+    live_test.go:183: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.completed command failed: bash -c 'echo x > c.txt'
+    live_test.go:183: activity.started command pending: printf hi > d.txt
+    live_test.go:183: activity.started command pending: printf hi > d.txt
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: printf hi > d.txt
+    live_test.go:183: activity.completed command failed: printf hi > d.txt
+    live_test.go:183: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.completed command failed: sed -i '' 's/hello/sed/' README.md
+    live_test.go:183: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:183: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:183: activity.completed command failed: git commit --allow-empty -m pwned
+    live_test.go:183: activity.completed command failed: git commit --allow-empty -m pwned
+    live_test.go:183: activity.completed command failed: git commit --allow-empty -m pwned
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: git status --short
+    live_test.go:183: activity.started command pending: git status --short
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: git diff HEAD --output=e.txt
+    live_test.go:183: activity.started command pending: git diff HEAD --output=e.txt
+    live_test.go:183: activity.started command pending: Terminal
+    live_test.go:183: activity.started command pending: git log --oneline -1
+    live_test.go:183: activity.started command pending: git log --oneline -1
+    live_test.go:183: activity.started command pending: git status --short
+    live_test.go:183: activity.started command pending: git status --short
+    live_test.go:183: activity.completed command completed: git status --short
+    live_test.go:183: activity.started command pending: git diff HEAD --output=e.txt
+    live_test.go:183: activity.completed command failed: git diff HEAD --output=e.txt
+    live_test.go:183: activity.started command pending: git log --oneline -1
+    live_test.go:183: activity.started command pending: git log --oneline -1
+    live_test.go:183: activity.completed command completed: git log --oneline -1
+    live_test.go:196: answer:
+        Every write was blocked. Only the two read-only git commands ran.
+        
+        1. Edit: failed, because the Edit tool is disabled for this session.
+        2. Write: failed, because the Write tool is disabled for this session.
+        3. `touch b.txt`: permission refused.
+        4. `bash -c 'echo x > c.txt'`: permission refused.
+        5. `printf hi > d.txt`: permission refused.
+        6. `sed -i '' 's/hello/sed/' README.md`: permission refused.
+        7. `git commit --allow-empty -m pwned`: permission denied.
+        8. `git status --short`: ran with no output, so the working tree is clean.
+        9. `git diff HEAD --output=e.txt`: permission refused.
+        10. `git log --oneline -1`: ran and showed `78866a9 init`, so no new commit was made.
+--- PASS: TestLiveClaudeACPReadOnlyRejectsWrites (25.79s)
+PASS
+ok  	github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp	26.551s
