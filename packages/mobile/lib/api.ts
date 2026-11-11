@@ -1,4 +1,4 @@
-import { artifactFilePath, artifactFilesPath, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
+import { artifactFilePath, artifactFilesPath, contentRangeTotal, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
 import { resolveArtifactReference } from "./artifactPageInliner";
 import { parseVersion, parseVersionSummaries, type ArtifactVersion, type ArtifactVersionSummary } from "./artifactVersions";
 import type { ArchiveSummary } from "./archive/archiveSummary";
@@ -705,6 +705,26 @@ export async function getArtifactHead(cfg: ServerConfig, sessionId: string, path
 	if (!route) throw new Error("This artifact's path can't be opened.");
 	const res = await req(cfg, route, { ...init, headers: { Range: `bytes=0-${Math.max(0, bytes - 1)}` } });
 	return res.text();
+}
+
+/**
+ * An artifact's size, for a file the session does not list (whose size the list
+ * would give): one byte is read, and the range response names the whole. An
+ * empty file has no byte to send: the daemon answers it whole (200, length 0);
+ * a server that refuses the range instead (416) is read as 0 bytes too.
+ */
+export async function getArtifactSize(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<number | undefined> {
+	const route = artifactFilePath(sessionId, path, { raw: true });
+	if (!route) return undefined;
+	try {
+		const res = await req(cfg, route, { ...init, headers: { Range: "bytes=0-0" } });
+		if (res.status === 206) return contentRangeTotal(res.headers.get("content-range"));
+		const length = Number(res.headers.get("content-length"));
+		return Number.isFinite(length) && length >= 0 ? length : undefined;
+	} catch (cause) {
+		if (cause instanceof ApiError && cause.status === 416) return 0;
+		throw cause;
+	}
 }
 
 /** The URL the app reads one artifact's bytes from, with the Bearer header (see artifactFilesPath). */

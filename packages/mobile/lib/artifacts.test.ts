@@ -6,6 +6,7 @@ import {
 	artifactCommentTarget,
 	artifactExtensionLabel,
 	artifactFormatLabel,
+	contentRangeTotal,
 	openOnMachineHint,
 	artifactFilePath,
 	artifactMenuActions,
@@ -148,6 +149,19 @@ describe("artifactFormatLabel", () => {
 
 	it("leaves out a size that is not known", () => {
 		expect(artifactFormatLabel({ path: "clip.webm", size: 0 })).toBe("WEBM file");
+	});
+});
+
+describe("contentRangeTotal", () => {
+	it("reads the whole size from a range response", () => {
+		expect(contentRangeTotal("bytes 0-0/4182")).toBe(4182);
+		expect(contentRangeTotal("bytes 0-0/3145728 ")).toBe(3145728);
+	});
+
+	it("gives nothing when the size is not stated", () => {
+		expect(contentRangeTotal("bytes 0-0/*")).toBeUndefined();
+		expect(contentRangeTotal(null)).toBeUndefined();
+		expect(contentRangeTotal("")).toBeUndefined();
 	});
 });
 

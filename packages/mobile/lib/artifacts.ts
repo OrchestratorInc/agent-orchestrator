@@ -298,6 +298,15 @@ export function openOnMachineHint(machineName: string | undefined, platform: str
 }
 
 /**
+ * A file's full size from a range response's `Content-Range` ("bytes 0-0/4182"),
+ * or undefined when the header does not give it ("bytes 0-0/*", missing).
+ */
+export function contentRangeTotal(header: string | null | undefined): number | undefined {
+	const total = /\/(\d+)\s*$/.exec(header ?? "")?.[1];
+	return total === undefined ? undefined : Number(total);
+}
+
+/**
  * How much of a file too large to load as text the viewer reads to tell text
  * from binary, as the desktop decides from the start of the file.
  */

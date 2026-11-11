@@ -4,7 +4,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffec
 import { AccessibilityInfo, ActivityIndicator, FlatList, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ViewToken } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
-import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, artifactStreamSource, getArtifactHead, getArtifactText } from "../../lib/api";
+import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, artifactStreamSource, getArtifactHead, getArtifactSize, getArtifactText } from "../../lib/api";
 import { ArtifactMedia } from "../../lib/ArtifactMedia";
 import { ArtifactPdf } from "../../lib/ArtifactPdf";
 import { ArtifactTable } from "../../lib/ArtifactTable";
@@ -49,6 +49,12 @@ const MAX_HIGHLIGHTED_BYTES = 100 * 1024;
 
 /** Kinds an unlisted file opens in their own viewer: a page would not show them (or would start a download). */
 const UNLISTED_VIEWERS: ReadonlySet<string> = new Set(["video", "audio", "pdf", "image", "binary"]);
+
+/**
+ * Kinds an unlisted file opens in their own viewer once its size is known: a
+ * table or a diagram is read into the app, which a file too large must not be.
+ */
+const UNLISTED_SIZED_VIEWERS: ReadonlySet<string> = new Set(["table", "diagram"]);
 
 /**
  * One artifact, full screen: the phone's counterpart of the desktop's artifact
@@ -230,7 +236,9 @@ function ArtifactViewerContent() {
 		// an image or a binary file gets its own viewer; anything else opens as
 		// the page the daemon renders.
 		const unlisted: SessionArtifact = { path: currentPath, name: currentPath.split("/").pop() || currentPath, kind: /\.html?$/i.test(currentPath) ? "html" : "file", size: 0, updatedAt: openedAt };
-		if (UNLISTED_VIEWERS.has(artifactViewKind(unlisted))) return <ArtifactBody config={config} sessionId={sessionId} artifact={unlisted} active versionOf={versionOf} onAsk={() => {}} />;
+		const unlistedKind = artifactViewKind(unlisted);
+		if (UNLISTED_VIEWERS.has(unlistedKind)) return <ArtifactBody config={config} sessionId={sessionId} artifact={unlisted} active versionOf={versionOf} onAsk={() => {}} />;
+		if (UNLISTED_SIZED_VIEWERS.has(unlistedKind)) return <UnlistedSized config={config} sessionId={sessionId} artifact={unlisted} versionOf={versionOf} />;
 		const url = artifactFileUrl(config, sessionId, currentPath);
 		return url ? <ArtifactWeb config={config} url={url} version="" page={/\.html?$/i.test(currentPath) ? { sessionId, path: currentPath } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
@@ -506,6 +514,31 @@ function useOpenOnMachineHint(): string {
 	const saved = host?.id === currentHostId ? host : undefined;
 	const name = saved?.name || hostStates.find((state) => state.hostId === currentHostId)?.name;
 	return openOnMachineHint(name, saved?.platform);
+}
+
+/**
+ * An unlisted table or diagram: its size is asked first (the list would have
+ * given it), so a large file takes the large-file path instead of being read
+ * whole. If the size cannot be learned, the file opens as the daemon's page.
+ */
+function UnlistedSized({ config, sessionId, artifact, versionOf }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; versionOf: (path: string) => string | undefined }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const key = `${sessionId}|${artifact.path}|${artifact.updatedAt}`;
+	const [size, setSize] = useState<{ key: string; bytes?: number }>();
+	useEffect(() => {
+		const controller = new AbortController();
+		getArtifactSize(config, sessionId, artifact.path, { signal: controller.signal })
+			.then((bytes) => setSize({ key, bytes }))
+			.catch(() => { if (!controller.signal.aborted) setSize({ key }); });
+		return () => controller.abort();
+	}, [artifact.path, config, key, sessionId]);
+	if (size?.key !== key) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	if (size.bytes === undefined) {
+		const url = artifactFileUrl(config, sessionId, artifact.path);
+		return url ? <ArtifactWeb config={config} url={url} version="" /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+	}
+	return <ArtifactBody config={config} sessionId={sessionId} artifact={{ ...artifact, size: size.bytes }} active versionOf={versionOf} onAsk={() => {}} />;
 }
 
 /**
