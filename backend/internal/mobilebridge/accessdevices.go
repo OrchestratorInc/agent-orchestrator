@@ -66,11 +66,14 @@ func AccessDevicesPath(dataDir string) string {
 
 // AccessDevices is the registry of device tokens the remote listener accepts.
 type AccessDevices struct {
-	mu      sync.RWMutex
-	path    string
-	devices map[string]AccessDevice
-	byHash  map[string]string
-	shared  map[string]time.Time
+	mu   sync.RWMutex
+	path string
+	// writeErr is set when a damaged or unreadable file could not be moved
+	// aside. Every write then fails, so none can replace the file.
+	writeErr error
+	devices  map[string]AccessDevice
+	byHash   map[string]string
+	shared   map[string]time.Time
 }
 
 // LoadAccessDevices reads the registry. A missing file is an empty registry.
@@ -84,13 +87,13 @@ func LoadAccessDevices(path string) (*AccessDevices, error) {
 		return r, nil
 	}
 	if err != nil {
-		_ = os.Rename(path, path+".bad")
-		return r, fmt.Errorf("read access devices: %w", err)
+		err = r.moveAside(fmt.Errorf("read access devices: %w", err))
+		return r, err
 	}
 	var file accessDevicesFile
 	if err := json.Unmarshal(raw, &file); err != nil {
-		_ = os.Rename(path, path+".bad")
-		return r, fmt.Errorf("parse access devices: %w", err)
+		err = r.moveAside(fmt.Errorf("parse access devices: %w", err))
+		return r, err
 	}
 	for _, device := range file.Devices {
 		if device.ID == "" || device.TokenHash == "" {
@@ -103,6 +106,16 @@ func LoadAccessDevices(path string) (*AccessDevices, error) {
 		r.shared[kind] = at
 	}
 	return r, nil
+}
+
+// moveAside renames the registry file to .bad. If that fails, the registry
+// refuses every write.
+func (r *AccessDevices) moveAside(cause error) error {
+	if err := os.Rename(r.path, r.path+".bad"); err != nil {
+		r.writeErr = fmt.Errorf("%w; moving it aside failed: %w", cause, err)
+		return r.writeErr
+	}
+	return cause
 }
 
 // Issue registers a new device and returns it with its token, which is shown
@@ -266,6 +279,9 @@ func (r *AccessDevices) List() []AccessDevice {
 }
 
 func (r *AccessDevices) persistLocked() error {
+	if r.writeErr != nil {
+		return r.writeErr
+	}
 	file := accessDevicesFile{Devices: make([]AccessDevice, 0, len(r.devices)), SharedLastUsed: r.shared}
 	for _, device := range r.devices {
 		file.Devices = append(file.Devices, device)
