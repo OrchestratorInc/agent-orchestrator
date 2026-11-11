@@ -10,7 +10,7 @@ import type { components } from "../../api/schema";
 import { interfaceTransitionPollDelay } from "../../../../packages/shared/session/interface-transition-poll";
 import { apiErrorCode, apiErrorMessage, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
-import type { CloudCpInterfaceTransition } from "../lib/cloud-cp";
+import { CloudCpAuthError, type CloudCpInterfaceTransition } from "../lib/cloud-cp";
 import { conversationQueryKey } from "./useConversation";
 import { useCloudCp } from "./useCloudCp";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -205,6 +205,8 @@ export function interfaceTransitionRefetchInterval(query: InterfaceTransitionPol
 		budget.readinessBase = state.dataUpdateCount;
 	}
 	const consecutiveFailures = state.errorUpdateCount - budget.failureBase;
+	// Sign-in-required failures cannot recover through timer retries.
+	if (state.error instanceof CloudCpAuthError) return false;
 	const delay = interfaceTransitionPollDelay({
 		blocked: interfaceTransitionNeedsRestart(status?.transition),
 		live: interfaceTransitionIsActive(status?.transition),

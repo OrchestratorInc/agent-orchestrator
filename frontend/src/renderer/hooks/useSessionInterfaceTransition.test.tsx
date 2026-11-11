@@ -33,6 +33,8 @@ vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => cloudCpMock,
 }));
 
+import { CloudCpAuthError, CloudCpError } from "../lib/cloud-cp";
+
 import {
 	interfaceTransitionRefetchInterval,
 	useSessionInterfaceTransition,
@@ -1093,6 +1095,26 @@ describe("interface transition poll budget", () => {
 		expect(delays.at(-1)).toBe(8_000);
 	});
 
+	it.each([draining, waiting])("stops on Cloud authentication refusal and recovers after a successful read (%#)", (status) => {
+		const poll = fakeQuery(status);
+		expect(poll.fail(new CloudCpAuthError("Sign in again", { status: 401 }))).toBe(false);
+		expect(poll.next()).toBe(false);
+		expect(poll.answer()).toBe(status === draining ? 250 : 1_000);
+	});
+
+	it("stops when the first scheduler check sees a cached authentication error", () => {
+		expect(interfaceTransitionRefetchInterval({ state: {
+			data: draining as never, dataUpdateCount: 1, dataUpdatedAt: 1,
+			error: new CloudCpAuthError("Sign in again", { status: 401 }), errorUpdateCount: 1,
+		} })).toBe(false);
+	});
+
+	it("keeps retrying ordinary Cloud failures during a live handoff", () => {
+		const poll = fakeQuery(draining);
+		const error = new CloudCpError("Unavailable", { status: 503 });
+		expect(Array.from({ length: 6 }, () => poll.fail(error))).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 8_000]);
+	});
+
 	it("stops polling once the daemon says the session is gone", () => {
 		const live = fakeQuery(draining);
 		expect(live.fail({ code: "SESSION_NOT_FOUND" })).toBe(false);
@@ -1138,6 +1160,41 @@ describe("interface transition polling through react-query", () => {
 		renderHook(() => useSessionInterfaceTransition("session-1"), { wrapper });
 		await elapse(30_000);
 		expect(getMock).toHaveBeenCalledTimes(11);
+	});
+
+	it.each(["getSession", "getInterfaceTransition"] as const)("stops a cached live Cloud handoff when %s refuses authentication", async (refusingRead) => {
+		const transition = {
+			id: "cloud-transition", sessionId: "session-1", sourceMode: "tui", targetMode: "chat",
+			policy: "drain", phase: "draining", createdAt: "2026-11-11T00:00:00Z", updatedAt: "2026-11-11T00:00:00Z",
+		};
+		const getSession = vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } });
+		const getInterfaceTransition = vi.fn().mockResolvedValue({ supported: true, targetMode: "chat", transition });
+		const reads = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+		cloudCpMock.client = reads;
+		const { result } = renderHook(() => useSessionInterfaceTransition("session-1", { orgId: "org-1" }), { wrapper });
+		await elapse(0);
+		expect(result.current.transition?.phase).toBe("draining");
+		reads[refusingRead].mockRejectedValue(new CloudCpAuthError("Sign in again", { status: 401 }));
+		await elapse(251);
+		expect(result.current.statusError).toBe("request failed");
+		expect(result.current.transition?.phase).toBe("draining");
+		expect(getSession).toHaveBeenCalledTimes(2);
+		expect(getInterfaceTransition).toHaveBeenCalledTimes(2);
+		await elapse(60_000);
+		expect(getSession).toHaveBeenCalledTimes(2);
+		expect(getInterfaceTransition).toHaveBeenCalledTimes(2);
+
+		// A successful explicit refresh after sign-in can settle the handoff.
+		getSession.mockResolvedValue({ session: { interfaceMode: "chat" } });
+		getInterfaceTransition.mockResolvedValue({ supported: true, targetMode: "chat", transition: { ...transition, phase: "completed" } });
+		await act(async () => { await result.current.refreshStatus(); });
+		await elapse(1);
+		expect(result.current.transition?.phase).toBe("completed");
+		expect(result.current.statusError).toBeUndefined();
+		await elapse(30_000);
+		expect(getSession).toHaveBeenCalledTimes(3);
+		expect(getInterfaceTransition).toHaveBeenCalledTimes(3);
 	});
 
 	it("backs off a failing poll and gives up after five failures", async () => {
