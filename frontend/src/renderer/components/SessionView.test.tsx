@@ -262,7 +262,7 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 		{ id: "proj-1", name: "my-app", path: "/p", type: "main", sessions: [worker, secondWorker, orchestrator] },
 		{ id: "proj-2", name: "other-app", path: "/q", type: "main", sessions: [crossProjectWorker] },
 	];
-	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean; dataUpdatedAt?: number } = {
+	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean; isStale?: boolean } = {
 		data: workspaces,
 		isLoading: false,
 	};
@@ -847,7 +847,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 			?.flatMap((workspace) => workspace.sessions)
 			.find((session) => session.id === sessionId),
 		isLoading: workspaceQueryState.directLoading ?? workspaceQueryState.isLoading,
-		dataUpdatedAt: workspaceQueryState.dataUpdatedAt ?? 0,
+		isStale: workspaceQueryState.isStale ?? false,
 		});
 	},
 }));
@@ -1002,7 +1002,7 @@ describe("SessionView", () => {
 		workspaceQueryState.data = workspaces;
 		workspaceQueryState.isLoading = false;
 		workspaceQueryState.directLoading = undefined;
-		workspaceQueryState.dataUpdatedAt = undefined;
+		workspaceQueryState.isStale = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
 			workspaceFileOpenRequest: null,
@@ -5814,24 +5814,40 @@ describe("SessionView", () => {
 		}
 	});
 
-	it("does not reveal a remote host's artifact that only its first read after entry lists", () => {
+	it("does not reveal a remote host's artifact that only its refetch after entry lists", () => {
 		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
 		worker.artifactFiles = [];
-		workspaceQueryState.dataUpdatedAt = 1;
+		// The sidebar's kept list from an earlier visit is stale and predates the artifact.
+		workspaceQueryState.isStale = true;
 		try {
-			// The sidebar's kept list from an earlier visit predates the artifact.
 			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
 			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
-			workspaceQueryState.dataUpdatedAt = Date.now() + 1;
+			workspaceQueryState.isStale = false;
 			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
-			expect(useUiStore.getState().inspectorSessions[sessionUiKey("sess-1", "box-a")]?.view).not.toBe("artifacts");
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).not.toBe("artifacts");
 
 			worker.artifactFiles = [
 				...worker.artifactFiles,
 				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
 			];
 			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
-			expect(useUiStore.getState().inspectorSessions[sessionUiKey("sess-1", "box-a")]?.view).toBe("artifacts");
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("reveals the next registration at once when a remote host's data is fresh on entry", () => {
+		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
+		worker.artifactFiles = [];
+		workspaceQueryState.isStale = false;
+		try {
+			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
 		} finally {
 			delete worker.artifactFiles;
 		}
