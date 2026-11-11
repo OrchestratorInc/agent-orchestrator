@@ -141,7 +141,7 @@ func TestCueCommandPreservesNativeEvalEOFAndOptionBehavior(t *testing.T) {
 		t.Run(shell, func(t *testing.T) {
 			path, err := exec.LookPath(shell)
 			if err != nil {
-				t.Fatal(err)
+				t.Skipf("%s unavailable: %v", shell, err)
 			}
 			for _, tc := range []struct {
 				name, command, want string
@@ -188,11 +188,18 @@ func TestCueCommandPreservesNativeEvalEOFAndOptionBehavior(t *testing.T) {
 					}
 					want := tc.want
 					if tc.name == "EOF backslash" {
-						if shell == "zsh" {
+						switch shell {
+						case "zsh":
 							want = "foo"
-						}
-						if shell == "fish" {
+						case "fish":
 							want = "not executed"
+						default:
+							// bash before 4 drops a trailing backslash at EOF, so ask the shell.
+							native, err := exec.Command(path, "-c", `f() { printf '%s' "$1"; }; eval 'f foo\'`).Output()
+							if err != nil {
+								t.Fatalf("native %s eval: %v", shell, err)
+							}
+							want = string(native)
 						}
 					}
 					rt := &cuePTYRuntime{fakeShellRuntime: newFakeShellRuntime(), t: t}
