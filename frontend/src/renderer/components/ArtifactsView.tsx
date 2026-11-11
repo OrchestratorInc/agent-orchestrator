@@ -480,8 +480,10 @@ function ArtifactSection({ sectionId, name, icon, updatedAt, children, view, col
 	const expanded = useArtifactsViewStore((state) => !collapsible || !state.collapsedSections.includes(sectionId));
 	const toggleSection = useArtifactsViewStore((state) => state.toggleSection);
 	const gridId = useId();
+	// A section heading, as in Settings: one step above the card titles and
+	// below the page title, so it reads as a sibling of the scope tabs.
 	const headerContent = <>
-		<span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-brand font-semibold leading-none tracking-tight text-foreground">
+		<span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-sm font-medium leading-5 text-foreground">
 			{icon}
 			<span className="truncate">{name}</span>
 		</span>
