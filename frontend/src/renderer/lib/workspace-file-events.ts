@@ -118,6 +118,22 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 				});
 		}, 2000);
 	};
+	const remoteRefreshes = new Map<string, { dirty: boolean }>();
+	const refreshRemote = (queryKey: string[]) => {
+		const id = JSON.stringify(queryKey);
+		const running = remoteRefreshes.get(id);
+		if (running) {
+			running.dirty = true;
+			return;
+		}
+		const state = { dirty: queryClient.isFetching({ queryKey }) > 0 };
+		remoteRefreshes.set(id, state);
+		const settled = () => {
+			remoteRefreshes.delete(id);
+			if (state.dirty && !stream.disposed) refreshRemote(queryKey);
+		};
+		void Promise.resolve(queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false })).then(settled, settled);
+	};
 	const scheduleInvalidation = (names: readonly string[]) => {
 		if (names.includes("session-workspace-file")) scheduleAnnotations();
 		for (const name of names) stream.pendingInvalidations.add(name);
@@ -129,7 +145,9 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 			const pending = [...stream.pendingInvalidations];
 			stream.pendingInvalidations.clear();
 			for (const name of pending) {
-				void queryClient.invalidateQueries({ queryKey: queryPrefix(hostId && name === "workspace-file-paths" ? "remote-workspace-file-paths" : name) });
+				const queryKey = queryPrefix(hostId && name === "workspace-file-paths" ? "remote-workspace-file-paths" : name);
+				if (hostId) refreshRemote(queryKey);
+				else void queryClient.invalidateQueries({ queryKey });
 			}
 		}, INVALIDATE_DEBOUNCE_MS);
 	};
@@ -195,21 +213,37 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 			setWorkspaceFileConnectionState(key, "connecting");
 		}
 		if (hostId) {
-			if (stream.sourceBaseUrl === baseUrl) return;
+			if (stream.phase !== "idle") return;
 			stream.sourceBaseUrl = baseUrl;
+			stream.phase = "connecting";
+			const generation = ++stream.generation;
 			invalidate();
 			stream.poll = setInterval(invalidate, 2_000);
-			setWorkspaceFileConnectionState(key, "connected");
+			if (stream.failures === 0) setWorkspaceFileConnectionState(key, "connected");
+			const stopPolling = () => {
+				if (stream.poll !== undefined) clearInterval(stream.poll);
+				stream.poll = undefined;
+			};
 			stream.stopRemote = probeRemoteSse(
 				`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
 				["workspace_changed"],
 				invalidate,
 				() => {
-					if (stream.poll !== undefined) clearInterval(stream.poll);
-					stream.poll = undefined;
+					stopPolling();
+					stream.phase = "open";
+					stream.failures = 0;
+					stream.retries = 0;
+					setWorkspaceFileConnectionState(key, "connected");
 					invalidate();
 				},
-				invalidate,
+				() => {
+					stopPolling();
+					stream.stopRemote = undefined;
+					stream.failures += 1;
+					setWorkspaceFileConnectionState(key, stream.failures >= 3 ? "degraded" : "connecting");
+					invalidate();
+					scheduleRetry(generation);
+				},
 			);
 			return;
 		}

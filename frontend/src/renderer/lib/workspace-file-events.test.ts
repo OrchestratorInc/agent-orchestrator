@@ -169,7 +169,7 @@ describe("subscribeWorkspaceFileChanges", () => {
 		expect(EventSourceStub.instances).toHaveLength(1);
 		expect(getWorkspaceFileConnectionState("session-a", "host-a")).toBe("connected");
 		vi.advanceTimersByTime(2_150);
-		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-a", "session-a"] });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-a", "session-a"] }, { cancelRefetch: false });
 		EventSourceStub.instances[0].dispatch("ready");
 		vi.advanceTimersByTime(150);
 		vi.mocked(queryClient.invalidateQueries).mockClear();
@@ -179,7 +179,52 @@ describe("subscribeWorkspaceFileChanges", () => {
 		expect(EventSourceStub.instances[0].closed).toBe(true);
 	});
 
-	it("isolates equal session IDs on remote A and B and closes only the disconnected host", () => {
+	it("stops polling a remote host whose stream fails and reopens it with backoff", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
+		const queryClient = fakeQueryClient();
+		const stop = subscribeWorkspaceFileChanges("failing", queryClient, "host-a");
+		const paths = () => vi.mocked(queryClient.invalidateQueries).mock.calls.filter(([filters]) => filters?.queryKey?.[0] === "remote-workspace-file-paths").length;
+		await vi.advanceTimersByTimeAsync(4_150);
+		expect(paths()).toBeGreaterThanOrEqual(3);
+		EventSourceStub.instances[0].onerror?.();
+		await vi.advanceTimersByTimeAsync(150);
+		const afterFailure = paths();
+		const retryMs = computeSseRetryDelayMs(1, () => 0.5);
+		await vi.advanceTimersByTimeAsync(retryMs - 151);
+		expect(paths()).toBe(afterFailure);
+		expect(EventSourceStub.instances).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(EventSourceStub.instances).toHaveLength(2);
+		EventSourceStub.instances[1].dispatch("ready");
+		await vi.advanceTimersByTimeAsync(150);
+		const afterReady = paths();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(paths()).toBe(afterReady);
+		expect(EventSourceStub.instances).toHaveLength(2);
+		expect(getWorkspaceFileConnectionState("failing", "host-a")).toBe("connected");
+		stop();
+	});
+
+	it("never restarts a slow remote read while polling", async () => {
+		vi.useFakeTimers();
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
+		const queryClient = fakeQueryClient();
+		const pending: Array<() => void> = [];
+		vi.mocked(queryClient.invalidateQueries).mockImplementation(() => new Promise<void>((resolve) => { pending.push(resolve); }));
+		const stop = subscribeWorkspaceFileChanges("slow-host", queryClient, "host-a");
+		const paths = () => vi.mocked(queryClient.invalidateQueries).mock.calls.filter(([filters]) => filters?.queryKey?.[0] === "remote-workspace-file-paths");
+		await vi.advanceTimersByTimeAsync(14_000);
+		expect(paths()).toHaveLength(1);
+		expect(paths()[0][1]).toEqual({ cancelRefetch: false });
+		for (const resolve of pending.splice(0)) resolve();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(paths()).toHaveLength(2);
+		stop();
+	});
+
+	it("isolates equal session IDs on remote A and B and closes only the disconnected host", async () => {
 		vi.useFakeTimers();
 		baseUrlForHostMock.mockImplementation((hostId: string) => `http://127.0.0.1:4000/${hostId}`);
 		const queryClient = fakeQueryClient();
@@ -189,14 +234,14 @@ describe("subscribeWorkspaceFileChanges", () => {
 			"http://127.0.0.1:4000/host-a/api/v1/sessions/same/workspace/events",
 			"http://127.0.0.1:4000/host-b/api/v1/sessions/same/workspace/events",
 		]);
-		vi.advanceTimersByTime(150);
+		await vi.advanceTimersByTimeAsync(150);
 		vi.mocked(queryClient.invalidateQueries).mockClear();
 		EventSourceStub.instances[0].dispatch("workspace_changed");
-		vi.advanceTimersByTime(150);
-		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-a", "same"] });
-		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspace-file-paths", "host-a", "same"] });
-		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-b", "same"] });
-		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspace-file-paths", "host-b", "same"] });
+		await vi.advanceTimersByTimeAsync(150);
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-a", "same"] }, { cancelRefetch: false });
+		expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspace-file-paths", "host-a", "same"] }, { cancelRefetch: false });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "host-b", "same"] }, { cancelRefetch: false });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspace-file-paths", "host-b", "same"] }, { cancelRefetch: false });
 		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-workspace-files", "same"] });
 		baseUrlForHostMock.mockImplementation((hostId: string) => hostId === "host-a" ? undefined : `http://127.0.0.1:4000/${hostId}`);
 		for (const listener of hostListeners) listener();
