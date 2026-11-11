@@ -64,38 +64,85 @@ export function voiceLevel(value: number): number {
 // supports, and fall back to the same language in another region before giving up
 // on en-US.
 let resolvedLang: string | null = null;
+// One lookup in flight at a time, shared by the warm-up kick and any start().
+let langLookup: Promise<string | null> | null = null;
+// Bumped when start() gives up on a lookup, so that lookup can neither cache a
+// late answer over a newer one nor keep blocking retries.
+let langLookupGeneration = 0;
+
+// How long start() waits on an unfinished locale lookup before giving up on it
+// for this phrase. The lookup is a native callback on Android that a misbehaving
+// recognition service may never answer; dictation must not hang on it.
+const LANG_LOOKUP_TIMEOUT_MS = 2000;
 
 const normalizeLocale = (s: string) => s.replace(/_/g, "-").toLowerCase();
 
-async function resolveLang(): Promise<string> {
-	if (resolvedLang) return resolvedLang;
+// The recogniser locale, or null when the lookup itself failed. Only a completed
+// lookup is cached (including "nothing matched", which genuinely resolves to
+// en-US); a failure or timeout is retried on the next press rather than pinning en-US.
+function resolveLang(): Promise<string | null> {
+	if (resolvedLang) return Promise.resolve(resolvedLang);
+	if (langLookup) return langLookup;
+	const generation = langLookupGeneration;
+	const lookup = (async () => {
+		let device = "en-US";
+		try {
+			device = Intl.DateTimeFormat().resolvedOptions().locale || "en-US";
+		} catch {
+			// No Intl (unexpected on Hermes) - keep the default.
+		}
 
-	let device = "en-US";
-	try {
-		device = Intl.DateTimeFormat().resolvedOptions().locale || "en-US";
-	} catch {
-		// No Intl (unexpected on Hermes) - keep the default.
-	}
+		try {
+			const { locales } = await ExpoSpeechRecognitionModule.getSupportedLocales({});
+			// Abandoned after a timeout: a newer lookup owns the cache now.
+			if (generation !== langLookupGeneration) return null;
+			const want = normalizeLocale(device);
+			const exact = locales.find((l) => normalizeLocale(l) === want);
+			if (exact) return (resolvedLang = exact);
 
-	try {
-		const { locales } = await ExpoSpeechRecognitionModule.getSupportedLocales({});
-		const want = normalizeLocale(device);
-		const exact = locales.find((l) => normalizeLocale(l) === want);
-		if (exact) return (resolvedLang = exact);
-
-		// e.g. device is en-IN but only en-GB is installed - still far closer than en-US.
-		const language = want.split("-")[0];
-		const sameLanguage = locales.find((l) => normalizeLocale(l).split("-")[0] === language);
-		if (sameLanguage) return (resolvedLang = sameLanguage);
-	} catch {
-		// Locale enumeration is best-effort; en-US is the safe fallback.
-	}
-
-	return (resolvedLang = "en-US");
+			// e.g. device is en-IN but only en-GB is installed - still far closer than en-US.
+			const language = want.split("-")[0];
+			const sameLanguage = locales.find((l) => normalizeLocale(l).split("-")[0] === language);
+			return (resolvedLang = sameLanguage ?? "en-US");
+		} catch {
+			return null;
+		}
+	})();
+	langLookup = lookup;
+	// Cleared by identity, after assignment, so neither a synchronous native throw
+	// nor a stale lookup settling late can clobber the current one.
+	void lookup.then(() => {
+		if (langLookup === lookup) langLookup = null;
+	});
+	return lookup;
 }
 
-// LAST-RESORT segment detection, for a recognition service that emits neither a
-// final result nor `speechstart` at a boundary. The real boundaries come from
+// The locale to start a recording with. Waits for the lookup (normally already
+// finished by the warm-up kick) so the first phrase is not recognised in the
+// wrong accent; en-US only once the lookup has failed or timed out.
+async function langForStart(): Promise<string> {
+	const timedOut = Symbol("timedOut");
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<typeof timedOut>((resolve) => {
+		timer = setTimeout(() => resolve(timedOut), LANG_LOOKUP_TIMEOUT_MS);
+	});
+	try {
+		const lang = await Promise.race([resolveLang(), timeout]);
+		if (lang === timedOut) {
+			// Abandon the hung lookup so the next press asks the recogniser again.
+			langLookupGeneration++;
+			langLookup = null;
+			return "en-US";
+		}
+		return lang ?? "en-US";
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+// LAST-RESORT Android segment detection, for a recognition service that emits
+// neither a final result nor `speechstart` at a boundary. Never used on iOS, whose
+// boundaries come from native audio timings (see the result listener). The real boundaries come from
 // those two events; this only catches a partial that has obviously rolled over
 // without one.
 //
@@ -115,6 +162,24 @@ function isSameSegment(prev: string, next: string): boolean {
 	// and short, so this separates them without being fooled by re-transcription.
 	const firstWord = (s: string) => s.slice(0, s.indexOf(" ") === -1 ? s.length : s.indexOf(" "));
 	return firstWord(a) === firstWord(b) && b.length >= a.length;
+}
+
+// Where in the recording a result's words were spoken, from its segments' native
+// timings (SFTranscriptionSegment timestamp/duration, measured from the start of
+// the task's audio). Null when there is nothing usable: no segments, or the
+// zeroed timings iOS can report on interim results.
+function audioSpan(
+	segments: readonly { startTimeMillis: number; endTimeMillis: number }[] | undefined,
+): { start: number; end: number } | null {
+	if (!segments?.length) return null;
+	let start = Infinity;
+	let end = -Infinity;
+	for (const s of segments) {
+		if (!Number.isFinite(s.startTimeMillis) || !Number.isFinite(s.endTimeMillis)) return null;
+		start = Math.min(start, s.startTimeMillis);
+		end = Math.max(end, s.endTimeMillis);
+	}
+	return end > start ? { start, end } : null;
 }
 
 // A "no speech" error is what you get from a mis-tap or a silent room. It is the
@@ -145,8 +210,7 @@ export function getDeviceVoiceProvider(): VoiceProvider {
 
 export function createDeviceVoiceProvider(): VoiceProvider {
 	// Kick locale resolution off now rather than on the first press: warm-up is
-	// already the sore point, and this must not add to it. If it hasn't finished by
-	// the time the user speaks, start() falls back to en-US for that one phrase.
+	// already the sore point, and this keeps start()'s wait on it near zero.
 	void resolveLang();
 
 	// Everything about one recording lives in a single object, so ending a
@@ -167,6 +231,15 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 		partial: string;
 		// Set by stop(); fires only if `end` never arrives. See stop().
 		settleTimer?: ReturnType<typeof setTimeout>;
+		// False while start() is still resolving the locale: nothing native is
+		// running for this session yet, so there is nothing to stop or abort.
+		nativeStarted: boolean;
+		// iOS only: the utterance a timed final result closed, and the audio it
+		// covers. Banked once a later result is shown to cover audio after it.
+		closed?: { text: string; start: number; end: number };
+		// iOS only: the audio each `finalized` entry covers, index for index, so a
+		// later result restating that audio can replace it rather than repeat it.
+		finalizedSpans: { start: number; end: number }[];
 	};
 	let session: Session | null = null;
 	// Sticky once granted. Permission can only be revoked from Settings, which
@@ -207,7 +280,11 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 	// Drop listeners before aborting so the resulting "aborted" error event can't
 	// settle a session the caller has already walked away from.
 	function abortSession() {
+		const current = session;
 		close();
+		// Cancelled during locale lookup: the native recogniser was never asked to
+		// start, and start() sees the session is gone and won't start it.
+		if (current && !current.nativeStarted) return;
 		try {
 			ExpoSpeechRecognitionModule.abort();
 		} catch {
@@ -257,32 +334,86 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 			// When there is no live session the native side is already stopped (every
 			// settle path follows a native end/error), so don't abort for nothing.
 			if (session) abortSession();
-			const current: Session = { cb, subscriptions: [], finalized: [], partial: "" };
+			const current: Session = {
+				cb,
+				subscriptions: [],
+				finalized: [],
+				partial: "",
+				nativeStarted: false,
+				finalizedSpans: [],
+			};
 			session = current;
+
+			// Resolve the locale BEFORE starting: it cannot be changed once the
+			// recogniser is running. The session may be aborted, stopped or replaced
+			// while this waits; if so, start nothing and attach nothing.
+			const lang = await langForStart();
+			if (session !== current) return;
 
 			current.subscriptions.push(
 				ExpoSpeechRecognitionModule.addListener("result", (e) => {
 					if (session !== current) return;
 					const transcript = e.results?.[0]?.transcript ?? "";
 
-					// iOS is ONE cumulative stream, not a sequence of segments. A single
-					// recognition task runs over the whole recording and every result —
-					// `isFinal` ones included — restates everything said so far. Banking
-					// those the way Android's segments are banked appends the entire
-					// phrase again on each final, and then the next cumulative partial
-					// adds it a third time, which is why a long dictation snowballed into
+					// iOS runs one recognition task per start(). Within an utterance every
+					// result restates it, so it replaces the last one whether it grew,
+					// shortened, gained punctuation, re-spelled its first word ("How the"
+					// -> "How's the" -> "How is the") or repeated a final. Guessing
+					// boundaries from the text is what snowballed a dictation into
 					// "How the How's the system system turning How is the system turning?".
 					//
-					// So iOS keeps its whole stream in `partial` and never banks on a
-					// final. The one case that does bank is a task restart (iOS caps how
-					// long a single recognition task may run): its first result starts
-					// from scratch and shares no opening with what came before, so the
-					// finished task has to be preserved or the earlier speech is lost.
+					// But on iOS 18+ the module reports "final-like" results (isFinal) in
+					// the middle of a continuous task, and what follows can be a NEW
+					// utterance rather than a restatement. The evidence for that is the
+					// audio itself: a result whose segments start at or after the end of
+					// the utterance a final closed covers different speech, so the closed
+					// one is banked. Overlapping audio is a revision and replaces it.
+					// Without usable timings there is no evidence either way, so the
+					// result replaces what is shown but keeps the closed utterance on
+					// hand, banking it only once a timed result proves the gap.
 					if (Platform.OS === "ios") {
-						if (!isSameSegment(current.partial, transcript) && current.partial.trim()) {
-							current.finalized.push(current.partial.trim());
+						const text = transcript.trim();
+						// An empty result carries no transcript (iOS 18 sends a trailing
+						// `isFinal` with no results); it must not wipe what was heard.
+						if (!text) return;
+						const span = audioSpan(e.results?.[0]?.segments);
+						if (span) {
+							// A result restating audio already banked (a cumulative revision)
+							// supersedes exactly the utterances it covers. Speech before or
+							// after it is untouched.
+							for (let i = current.finalizedSpans.length - 1; i >= 0; i--) {
+								const b = current.finalizedSpans[i];
+								if (b.start < span.end && span.start < b.end) {
+									current.finalized.splice(i, 1);
+									current.finalizedSpans.splice(i, 1);
+								}
+							}
 						}
-						current.partial = transcript;
+						const closed = current.closed;
+						if (closed && span) {
+							if (span.start >= closed.end) {
+								current.finalized.push(closed.text);
+								current.finalizedSpans.push({ start: closed.start, end: closed.end });
+								current.closed = undefined;
+							} else if (span.end <= closed.start) {
+								// Revises only earlier, already-banked speech: put it back in
+								// its place in time and leave the current utterance alone.
+								const at = current.finalizedSpans.findIndex((b) => b.start > span.start);
+								const i = at === -1 ? current.finalized.length : at;
+								current.finalized.splice(i, 0, text);
+								current.finalizedSpans.splice(i, 0, span);
+								cb.onPartial(transcriptOf(current));
+								return;
+							} else {
+								closed.text = text;
+								closed.start = Math.min(closed.start, span.start);
+								closed.end = Math.max(closed.end, span.end);
+							}
+						}
+						current.partial = text;
+						if (e.isFinal && span && !current.closed) {
+							current.closed = { text, start: span.start, end: span.end };
+						}
 						cb.onPartial(transcriptOf(current));
 						return;
 					}
@@ -310,15 +441,15 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 				// The authoritative segment boundary on Android, and the reason its
 				// transcripts can now match iOS's.
 				//
-				// iOS runs ONE recognition task over the whole stream, so each result
-				// restates everything said so far - pauses included. Android's
+				// iOS runs one recognition task and signals only its initial speech
+				// start here; its utterance boundaries use result timings above. Android's
 				// SpeechRecognizer is built for a single utterance, so it emits a
 				// sequence of independent chunks that have to be stitched.
 				// `onBeginningOfSpeech` fires at the start of each new utterance, so
 				// anything still held as a partial belongs to the previous one.
 				//
 				// iOS is excluded deliberately: it fires `speechstart` once after a
-				// result, and its partials are cumulative, so banking there would
+				// result, so treating that callback as a new utterance would
 				// duplicate the text rather than segment it.
 				ExpoSpeechRecognitionModule.addListener("speechstart", () => {
 					if (session !== current || Platform.OS !== "android") return;
@@ -367,10 +498,9 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 			);
 
 			try {
+				current.nativeStarted = true;
 				ExpoSpeechRecognitionModule.start({
-					// Synchronous read of the pre-resolved value - awaiting here would add
-					// to the warm-up the user is already waiting through.
-					lang: resolvedLang ?? "en-US",
+					lang,
 					interimResults: true,
 					// Push-to-talk: the user's finger decides when the phrase ends, not a
 					// silence timer. Unsupported on Android 12 and below, where it falls
@@ -421,6 +551,12 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 
 		stop() {
 			const current = session;
+			// Stopped while the locale was still resolving: nothing was recorded and
+			// nothing native is running, so finish now with an empty transcript.
+			if (current && !current.nativeStarted) {
+				settle();
+				return;
+			}
 			try {
 				ExpoSpeechRecognitionModule.stop();
 			} catch {
