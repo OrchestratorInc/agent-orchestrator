@@ -248,16 +248,13 @@ describe("password encryption", () => {
 		const token = "aod_" + "a".repeat(64);
 		const path = await tempFile(JSON.stringify({ remotes: [{ label: "vm", url: "https://vm.example", password: token, fallbackPassword: "pairing1" }] }));
 		const stored = async () => JSON.parse(await readFile(path, "utf8")).remotes[0];
-		// An existing plaintext fallback is encrypted with the password.
 		setPasswordCipher(() => cipher);
 		await sealSavedPasswords(path);
 		expect(await stored()).toEqual({ label: "vm", url: "https://vm.example", sealedPassword: `sealed:${token}`, sealedFallbackPassword: "sealed:pairing1" });
 		await expect(readRemotes(path)).resolves.toEqual([{ label: "vm", url: "https://vm.example", password: token, fallbackPassword: "pairing1" }]);
-		// Neither is lost when it cannot be decrypted.
 		setPasswordCipher(() => null);
 		await updateRemote(path, "https://vm.example", { label: "renamed" });
 		expect(await stored()).toEqual({ label: "renamed", url: "https://vm.example", sealedPassword: `sealed:${token}`, sealedFallbackPassword: "sealed:pairing1" });
-		// A new password replaces the fallback with the one the change names, or none.
 		setPasswordCipher(() => cipher);
 		await updateRemote(path, "https://vm.example", { password: "pairing2" });
 		expect(await stored()).toEqual({ label: "renamed", url: "https://vm.example", sealedPassword: "sealed:pairing2" });

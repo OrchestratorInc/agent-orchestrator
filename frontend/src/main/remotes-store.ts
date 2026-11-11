@@ -46,7 +46,6 @@ export function setPasswordCipher(resolve: () => PasswordCipher | null): void {
 
 type StoredRemote = Omit<RemoteEntry, "password"> & { password?: string };
 
-// Stored like the password: encrypted when possible, and kept encrypted when it cannot be decrypted.
 function unsealFallback(plain: string | undefined, sealed: string | undefined, cipher: PasswordCipher | null): Pick<RemoteEntry, "fallbackPassword" | "sealedFallbackPassword"> {
 	if (sealed === undefined) return plain ? { fallbackPassword: plain } : {};
 	if (cipher) {
@@ -188,7 +187,6 @@ export function applyRemoteChanges(entry: RemoteEntry, changes: RemoteChanges): 
 		accountUserId: changes.accountUserId ?? entry.accountUserId,
 		sealedPassword: changes.password === undefined ? entry.sealedPassword : undefined,
 		accountToken: changes.password === undefined ? entry.accountToken : undefined,
-		// A new password replaces the fallback too, with the one the change names or none.
 		fallbackPassword: changes.password === undefined ? entry.fallbackPassword : changes.fallbackPassword,
 		sealedFallbackPassword: changes.password === undefined ? entry.sealedFallbackPassword : undefined,
 	};

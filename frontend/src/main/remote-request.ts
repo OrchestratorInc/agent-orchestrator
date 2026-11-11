@@ -108,7 +108,6 @@ function remoteUrl(entry: Pick<RemoteEntry, "url">, path: string): URL {
 
 export type PairDeviceResult =
 	| { kind: "paired"; token: string; credential: "pairing-code" | "password" }
-	/** No device token: keep the credential as it is. */
 	| { kind: "unsupported" }
 	| { kind: "unauthorized" }
 	| { kind: "offline" };

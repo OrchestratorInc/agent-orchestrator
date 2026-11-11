@@ -57,7 +57,6 @@ vi.mock("../hooks/useAwake", () => ({
 }));
 
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
-// Each fetch makes a new code, as the daemon does.
 vi.mock("../lib/mobile-pairing-code", () => {
 	let made = 0;
 	return { mobilePairingCodeQueryKey: ["mobile-pairing-code"], PAIRING_CODE_REFRESH_MS: 540_000, fetchPairingCode: async () => `Next${++made}` };
@@ -161,7 +160,6 @@ test("encodes the LAN address by default", async () => {
 	expect(offer.endpoints).toContainEqual(
 		expect.objectContaining({ kind: "lan", host: "192.168.1.42" }),
 	);
-	// The code carries a one-time pairing code, never the password.
 	expect(offer.token).toBe("Code1234");
 	expect(offer.hostId).toBe("h_fixture");
 	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.42:3011");
@@ -1257,7 +1255,6 @@ test("requiring device credentials posts the choice and takes the password off t
 	await userEvent.click(toggle);
 	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/require-device-credentials", { body: { enabled: true } });
 	await waitFor(() => expect(screen.queryByTestId("mobile-pairing-password")).not.toBeInTheDocument());
-	// A new device still pairs with the code.
 	expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent("Code1234");
 });
 
