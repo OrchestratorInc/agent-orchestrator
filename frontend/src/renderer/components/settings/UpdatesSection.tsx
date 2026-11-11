@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, CheckCircle2, Download, Info, Loader2, RefreshCw } from "@/components/app-icons";
+import { AlertTriangle, ArrowRight, CheckCircle2, Download, Info, Loader2, RefreshCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
@@ -434,6 +434,14 @@ function UpdateActions({
 	// the status row resumes with the updater's terminal result.
 	const displayState: UpdateState = checking && !downloading && status.state !== "error" && status.state !== "downloaded" ? "checking" : status.state;
 	const showStatusState = displayState !== "checking";
+	// The headline names the move an incoming build makes ("v1 → v2"), so the
+	// status needs no second line for it. A nightly keeps that line: its base
+	// alone does not identify the build, and two nightlies can share one base.
+	const incoming = status.state === "available" || downloading || status.state === "downloaded" || Boolean(status.staged);
+	const incomingVersion = incoming ? (status.version ?? status.staged?.version)?.replace(/^v/, "") : undefined;
+	const incomingBase = incomingVersion ? (parseNightlyVersion(incomingVersion)?.base ?? incomingVersion) : undefined;
+	const targetBase = incomingBase && incomingBase !== installedBase ? incomingBase : undefined;
+	const headlineNamesTarget = targetBase !== undefined && targetBase === incomingVersion;
 	const downloadedBytes = status.transferred !== undefined && status.total !== undefined
 		? t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })
 		: null;
@@ -484,13 +492,19 @@ function UpdateActions({
 			    the left, actions vertically centred on the right. */}
 			<div className="update-hero settings-content-row flex min-w-0 items-center justify-between gap-6">
 				<div className="min-w-0 flex-1">
-				<p className="update-hero-version tabular-nums">
+				<p className="update-hero-version flex min-w-0 flex-wrap items-center gap-x-2 tabular-nums">
 					<span
 						aria-label={t("settings.updates.currentVersion", { version: version.data ? `v${version.data}` : "…" })}
 						data-testid="app-version"
 					>
 						{version.data ? `v${installedBase}` : "…"}
 					</span>
+					{targetBase && (
+						<>
+							<ArrowRight className="size-icon-sm shrink-0 text-settings-muted" aria-hidden="true" />
+							<span className="text-settings-muted" data-testid="update-target-version">v{targetBase}</span>
+						</>
+					)}
 				</p>
 				<div className="mt-2 flex min-w-0 flex-col gap-1.5 text-control leading-4 text-settings-muted">
 						{installed && (
@@ -525,15 +539,17 @@ function UpdateActions({
 							{/* Status on the left, bytes at the far end of the track below. */}
 							{(showStatusState || downloadedBytes) && (
 								<div className="flex min-w-0 items-end justify-between gap-4">
-									{showStatusState && <UpdateStatusLine state={displayState} status={status} />}
+									{showStatusState && <UpdateStatusLine state={displayState} status={status} detailHidden={headlineNamesTarget} />}
 									{downloadedBytes && <p className="shrink-0 tabular-nums">{downloadedBytes}</p>}
 								</div>
 							)}
 							{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} className="update-progress" />}
 							{channelSwitchMessage && <p>{channelSwitchMessage}</p>}
-							{checkedAt ? (
-								<p className="tabular-nums" data-testid="update-checked-at">
-									<span title={new Date(status.checkedAt!).toISOString()}>{now - status.checkedAt! < 60_000 ? t("settings.updates.checkedJustNow", { defaultValue: "Checked just now" }) : t("settings.updates.checkedMinutesAgo", { defaultValue: "Checked {{count}} minutes ago", count: Math.floor((now - status.checkedAt!) / 60_000) })} · {checkedAt}</span>
+							{/* Relative time only; the exact moment is the tooltip. Left out
+							    while a build is on its way in, where it is beside the point. */}
+							{checkedAt && !incoming ? (
+								<p className="tabular-nums" data-testid="update-checked-at" title={checkedAt}>
+									{now - status.checkedAt! < 60_000 ? t("settings.updates.checkedJustNow", { defaultValue: "Checked just now" }) : t("settings.updates.checkedMinutesAgo", { defaultValue: "Checked {{count}} minutes ago", count: Math.floor((now - status.checkedAt!) / 60_000) })}
 								</p>
 							) : null}
 						</div>
@@ -551,9 +567,7 @@ function UpdateActions({
 				{/* Actions. Fixed to the right and never widened by a version string:
 				    the primary label used to carry the full nightly stamp and grew
 				    across the version. The target build is named in the status line. */}
-				{/* -mr-2.5 cancels the quiet button's own padding, so its label ends
-				    on the edge the switch and channel picker sit on below. */}
-				<div className="-mr-2.5 flex shrink-0 flex-wrap items-center justify-end gap-2">
+				<div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
 					{/* Reflect every download, including automatic and channel-switch work. */}
 					{(status.state === "available" || downloading) && (
 						<Button
@@ -585,14 +599,19 @@ function UpdateActions({
 					{/* Always rendered. Hiding it whenever something was available or
 					    staged left no way to re-check at all: a user sitting on a build
 					    that will not install had a single dead Restart button and no
-					    other action on the page. */}
-					<Button
+					    other action on the page. Only a running download drops it:
+					    it is disabled for the whole of one, so it was a dead label. */}
+					{!downloading && <Button
 						ref={checkButtonRef}
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
 						aria-describedby={showStatusState ? "update-status-line" : undefined}
 						variant="quiet"
 						size="sm"
+						// Cancels the quiet button's own padding, so its label ends on
+						// the edge the switch and channel picker sit on below. A filled
+						// button keeps its box on that edge instead.
+						className="-mr-2.5"
 						onClick={() => void checkNow()}
 						disabled={busy}
 					>
@@ -602,7 +621,7 @@ function UpdateActions({
 							<RefreshCw className="size-icon-sm" aria-hidden="true" />
 						)}
 						{checking ? t("settings.updates.checking") : t("settings.updates.check")}
-					</Button>
+					</Button>}
 				</div>
 			</div>
 
@@ -654,9 +673,12 @@ function DownloadProgressIcon({ percent }: { percent: number }) {
 function UpdateStatusLine({
 	state,
 	status,
+	detailHidden = false,
 }: {
 	state: UpdateState;
 	status: UpdateStatus;
+	/** The headline already shows the target: keep the detail for assistive tech only. */
+	detailHidden?: boolean;
 }) {
 	const { t } = useTranslation();
 	let className = "text-settings-muted";
@@ -728,7 +750,7 @@ function UpdateStatusLine({
 				<p className="min-w-0 text-pretty">{label}</p>
 			</div>
 			{detail !== null && (
-				<p className="truncate text-settings-muted">{detail}</p>
+				<p className={detailHidden && state !== "error" ? "sr-only" : "truncate text-settings-muted"}>{detail}</p>
 			)}
 		</div>
 	);

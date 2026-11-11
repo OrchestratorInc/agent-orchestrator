@@ -65,7 +65,9 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 	await expect(page.getByTestId("sidebar-update-downloading")).toContainText("Downloading… 42%");
 	await expect(page.getByTestId("update-status-line")).toContainText("42.0 / 100.0 MB");
 	await expect(page.getByTestId("app-version")).toHaveText("v1.0.0");
-	await expect(page.getByText("Updating to v2.0.0")).toBeVisible();
+	// The headline names the target; the status line keeps it for assistive tech.
+	await expect(page.getByTestId("update-target-version")).toHaveText("v2.0.0");
+	await expect(page.getByTestId("update-status-line")).toContainText("Updating to v2.0.0");
 
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "preparing", version: "2.0.0", percent: 100, staged: { version: "2.0.0", stagedAt: 10, escalated: false, ready: false } });

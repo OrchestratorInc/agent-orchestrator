@@ -870,7 +870,10 @@ describe("GlobalSettingsForm", () => {
 		renderForm();
 
 		const formatted = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "medium" }).format(checkedAt);
-		expect(await screen.findByTestId("update-checked-at")).toHaveTextContent(formatted);
+		// The line reads as a relative time; the exact moment is its tooltip.
+		const checked = await screen.findByTestId("update-checked-at");
+		expect(checked).toHaveTextContent(/^Checked \d+ minutes ago$/);
+		expect(checked).toHaveAttribute("title", formatted);
 		expect(screen.getByTestId("update-status-line")).toHaveTextContent("You're on the latest version.");
 	});
 
@@ -1095,7 +1098,7 @@ it("keeps running version separate while live download progress becomes install 
 	act(() => emit({ state: "downloading", version: "2.0.0", percent: 42, transferred: 42_000_000, total: 100_000_000 }));
 	expect(statusLine.getByText("Downloading… 42%")).toBeVisible();
 	expect(screen.getByText("42.0 / 100.0 MB")).toBeVisible();
-	expect(screen.getByText("Updating to v2.0.0")).toBeVisible();
+	expect(screen.getByTestId("update-target-version")).toHaveTextContent("v2.0.0");
 	expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0");
 	act(() => emit({ state: "preparing", version: "2.0.0", percent: 100, staged: { version: "2.0.0", stagedAt: 10, escalated: false, ready: false } }));
 	expect(statusLine.getByText("Preparing update…")).toBeVisible();
