@@ -18,7 +18,7 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md) before choosing an issue or starting w
 From the repo root unless noted:
 
 ```bash
-npm run lint                         # backend go test ./... + golangci-lint v2.13.2
+npm run lint                         # backend go test ./... + golangci-lint v2.14.0
 npm run frontend:typecheck           # frontend TypeScript check
 npm run sqlc                         # regenerate backend/internal/storage/sqlite/gen from queries/schema
 npm run api                          # regenerate OpenAPI spec + frontend TS types (see API contract changes below)
