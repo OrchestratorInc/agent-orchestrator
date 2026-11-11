@@ -15,6 +15,7 @@ const fixtures = vi.hoisted(() => ({
 vi.mock("expo-router", () => ({
 	useLocalSearchParams: () => ({}),
 	useRouter: () => ({ back: vi.fn(), canGoBack: () => true, push: vi.fn(), replace: vi.fn() }),
+	useNavigation: () => ({ addListener: () => () => {}, isFocused: () => true, setOptions: vi.fn() }),
 }));
 vi.mock("expo-document-picker", () => ({ getDocumentAsync: vi.fn() }));
 vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: vi.fn(), UIImagePickerPreferredAssetRepresentationMode: {} }));
@@ -26,6 +27,7 @@ vi.mock("react-native", async () => {
 		React.createElement(name, props, children);
 	return {
 		InteractionManager: { runAfterInteractions: vi.fn() },
+		Keyboard: { dismiss: vi.fn() },
 		Platform: { OS: "ios", select: (options: { ios?: unknown }) => options.ios },
 		Pressable: host("Pressable"),
 		StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
@@ -33,10 +35,22 @@ vi.mock("react-native", async () => {
 		View: host("View"),
 	};
 });
+vi.mock("react-native-reanimated", () => ({
+	default: { View: "AnimatedView" },
+	useAnimatedStyle: () => ({}),
+}));
 vi.mock("react-native-keyboard-controller", () => ({
+	KeyboardAvoidingView: "KeyboardAvoidingView",
 	KeyboardStickyView: "KeyboardStickyView",
 	useKeyboardState: (select: (state: { height: number }) => number) => select({ height: 0 }),
+	useReanimatedKeyboardAnimation: () => ({ height: { value: 0 }, progress: { value: 0 } }),
 }));
+vi.mock("./chat/useChatKeyboard", () => ({
+	useChatKeyboard: () => ({ restingInset: 0, dockRiseOverride: undefined, rootStyle: {}, behavior: "padding", keyboardVerticalOffset: 0 }),
+}));
+vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0 }));
+vi.mock("./stackScreenOptions", () => ({ SYSTEM_GLASS_HEADER: false }));
+vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./api", () => ({
 	ApiError: class ApiError extends Error {},
