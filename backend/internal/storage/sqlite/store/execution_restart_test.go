@@ -184,3 +184,59 @@ func TestExitedAdmissionRecoveryKeepsWorkflowAndDriftedGenerationUncertain(t *te
 		})
 	}
 }
+
+// A daemon restart adopts both live sessions and abandoned reservations. The
+// latter never crossed the durable spawn boundary and otherwise hold capacity
+// in uncertain forever.
+func TestAbandonedSessionAdmissionReleasesDuringRecovery(t *testing.T) {
+	dir := t.TempDir()
+	x := &restartFixture{s: sqlitetest.MustOpenAt(t, dir), now: workflowStoreTime()}
+	x.f = sqlitetest.NewAdmissionFixture(t, x.s, func() time.Time { return x.now })
+	x.proof, _ = x.f.PrepareSessionAdmission(context.Background(), ports.SpawnConfig{Harness: domain.HarnessCodex})
+	var err error
+	x.ad, _, err = x.s.ReserveSessionAdmission(context.Background(), domain.SessionAdmissionInput{Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, ClientRequestID: "abandoned-source", ClientRequestHash: strings.Repeat("a", 64), Evidence: x.proof})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	empty, applied, err := x.s.AdoptSchedulerAdmission(ctx, x.ad.ID, x.ad.Revision, x.ad.Fence, x.now)
+	if err != nil || !applied {
+		t.Fatalf("adopt: applied=%v err=%v", applied, err)
+	}
+	empty.SessionID = ""
+	empty.AttemptID = ""
+	if err := x.s.ReleaseAbandonedExecutionAdmission(ctx, empty, x.now); err != nil {
+		t.Fatal(err)
+	}
+	kept, _, err := x.s.GetSchedulerAdmission(ctx, empty.ID)
+	if err != nil || kept.State != domain.AdmissionReleased {
+		t.Fatalf("abandoned admission = %+v err=%v", kept, err)
+	}
+}
+
+// A resumed Chat publishes its Session owner and execution slot in one commit;
+// splitting these writes leaves the previous generation to strand every restart.
+func TestChatSpawnCommitPublishesControllerGenerationToAdmission(t *testing.T) {
+	x := newRestartFixture(t)
+	ctx := context.Background()
+	conversation, err := x.s.CreateConversation(ctx, "conversation-resume-commit", domain.ConversationScopeSession, x.rec.ProjectID, x.rec.ID, x.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary := domain.ConversationBranch{
+		ID: "boundary-resume-commit", ConversationID: conversation.ID, SessionID: x.rec.ID,
+		ProviderConversationID: "thread-resume-commit", ProviderScopeID: "boundary-resume-commit",
+		ParentBranchID: conversation.ActiveBranchID, CreatedAt: x.now,
+	}
+	x.rec.Metadata.ProviderConversationID = boundary.ProviderConversationID
+	x.rec.Metadata.ControllerGeneration = "resumed-commit"
+	x.rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: x.now}
+	x.rec.UpdatedAt = x.now.Add(time.Second)
+	if err := x.s.CommitChatSpawn(ctx, x.rec, boundary); err != nil {
+		t.Fatal(err)
+	}
+	ad, _, err := x.s.GetSchedulerAdmission(ctx, x.ad.ID)
+	if err != nil || ad.ControllerGeneration != "resumed-commit" {
+		t.Fatalf("admission generation=%q err=%v, want resumed-commit", ad.ControllerGeneration, err)
+	}
+}

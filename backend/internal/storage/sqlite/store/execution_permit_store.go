@@ -207,3 +207,27 @@ func (s *Store) ReleaseExecutionAdmission(ctx context.Context, ad domain.Schedul
 		return err
 	})
 }
+
+// ReleaseAbandonedExecutionAdmission releases a boot-adopted reservation that
+// never materialized a Session or Attempt. The revision CAS fences a concurrent
+// materializer from having its reservation removed out from under it.
+func (s *Store) ReleaseAbandonedExecutionAdmission(ctx context.Context, ad domain.SchedulerAdmission, now time.Time) error {
+	if ad.ID == "" || ad.SessionID != "" || ad.AttemptID != "" || ad.State != domain.AdmissionUncertain {
+		return domain.ErrSchedulerAdmissionConflict
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inSchedulerTx(ctx, "release abandoned execution admission", func(q *gen.Queries) error {
+		if err := schedulerFence(ctx, q, ad.Fence, now, false); err != nil {
+			return err
+		}
+		n, err := q.ReleaseAbandonedExecutionAdmission(ctx, gen.ReleaseAbandonedExecutionAdmissionParams{ID: ad.ID, Revision: ad.Revision, OwnerID: ad.Fence.OwnerID, Epoch: ad.Fence.Epoch, Now: now.UTC()})
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return domain.ErrSchedulerAdmissionConflict
+		}
+		return nil
+	})
+}

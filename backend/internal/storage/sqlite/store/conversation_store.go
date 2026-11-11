@@ -823,6 +823,9 @@ func (s *Store) commitChatSpawn(
 		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
 			return fmt.Errorf("commit Chat session owner: %w", err)
 		}
+		if err := acceptChatSpawnAdmission(ctx, q, rec.ID, rec.Metadata.ControllerGeneration, rec.UpdatedAt); err != nil {
+			return fmt.Errorf("accept Chat execution admission: %w", err)
+		}
 		return nil
 	})
 }

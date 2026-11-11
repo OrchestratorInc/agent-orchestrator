@@ -14,6 +14,14 @@ UPDATE scheduler_admissions SET state='released',revision=revision+1,updated_at=
 WHERE id=sqlc.arg(id) AND revision=sqlc.arg(revision) AND owner_id=sqlc.arg(owner_id) AND epoch=sqlc.arg(epoch)
 AND session_id=sqlc.arg(session_id) AND state<>'released';
 
+-- An adopted reservation with no Session and no Attempt never crossed the
+-- durable spawn boundary. Its exact revision keeps a concurrent materializer
+-- fenced while boot recovery drops the stale capacity reservation.
+-- name: ReleaseAbandonedExecutionAdmission :execrows
+UPDATE scheduler_admissions SET state='released',revision=revision+1,updated_at=sqlc.arg(now)
+WHERE id=sqlc.arg(id) AND revision=sqlc.arg(revision) AND owner_id=sqlc.arg(owner_id) AND epoch=sqlc.arg(epoch)
+AND session_id IS NULL AND attempt_id IS NULL AND state='uncertain';
+
 -- name: FreezeExecutionBudgetReservations :exec
 UPDATE budget_reservations SET state='uncertain',revision=revision+1
 WHERE admission_id=sqlc.arg(admission_id) AND state='reserved';

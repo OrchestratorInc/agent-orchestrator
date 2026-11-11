@@ -160,6 +160,33 @@ func adoptSessionAdmissionGeneration(ctx context.Context, q *gen.Queries, id dom
 	return nil
 }
 
+// acceptChatSpawnAdmission publishes a restarted Chat controller's generation on
+// its existing execution slot in the same transaction as the Session owner.
+// Workflow slots remain governed exclusively by their Attempt permit.
+func acceptChatSpawnAdmission(ctx context.Context, q *gen.Queries, id domain.SessionID, generation string, now time.Time) error {
+	if strings.TrimSpace(generation) == "" {
+		return nil
+	}
+	ad, err := q.GetOccupiedSessionAdmission(ctx, schedulerString(string(id)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if ad.AttemptID.Valid || ad.State != domain.AdmissionActive {
+		return nil
+	}
+	n, err := q.AcceptSessionRestart(ctx, gen.AcceptSessionRestartParams{ID: ad.ID, Revision: ad.Revision, OwnerID: ad.OwnerID, Epoch: ad.Epoch, Generation: generation, Now: now.UTC()})
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return domain.ErrSchedulerAdmissionConflict
+	}
+	return nil
+}
+
 // releaseDeletedSessionAdmission 只在同事务持久终止且代际一致时释放槽；未知费用继续保留。
 func releaseDeletedSessionAdmission(ctx context.Context, q *gen.Queries, id domain.SessionID) error {
 	row, err := q.GetSession(ctx, id)

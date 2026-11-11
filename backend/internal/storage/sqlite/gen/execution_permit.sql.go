@@ -284,6 +284,37 @@ func (q *Queries) RecoverExecutionAdmissionSession(ctx context.Context, arg Reco
 	return result.RowsAffected()
 }
 
+const releaseAbandonedExecutionAdmission = `-- name: ReleaseAbandonedExecutionAdmission :execrows
+UPDATE scheduler_admissions SET state='released',revision=revision+1,updated_at=?1
+WHERE id=?2 AND revision=?3 AND owner_id=?4 AND epoch=?5
+AND session_id IS NULL AND attempt_id IS NULL AND state='uncertain'
+`
+
+type ReleaseAbandonedExecutionAdmissionParams struct {
+	Now      time.Time
+	ID       string
+	Revision int64
+	OwnerID  string
+	Epoch    int64
+}
+
+// An adopted reservation with no Session and no Attempt never crossed the
+// durable spawn boundary. Its exact revision keeps a concurrent materializer
+// fenced while boot recovery drops the stale capacity reservation.
+func (q *Queries) ReleaseAbandonedExecutionAdmission(ctx context.Context, arg ReleaseAbandonedExecutionAdmissionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, releaseAbandonedExecutionAdmission,
+		arg.Now,
+		arg.ID,
+		arg.Revision,
+		arg.OwnerID,
+		arg.Epoch,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const releaseDeletedSessionAdmissions = `-- name: ReleaseDeletedSessionAdmissions :exec
 UPDATE scheduler_admissions SET state='released',revision=revision+1,updated_at=CURRENT_TIMESTAMP
 WHERE session_id=? AND state<>'released'

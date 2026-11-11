@@ -19,6 +19,7 @@ type recoveryStore interface {
 	RecoverExecutionAdmissionSession(context.Context, domain.SchedulerAdmission, ports.SessionObservation, time.Time) error
 	RenewExecutionLease(context.Context, domain.ExecutionPermit, ports.SessionObservation, time.Time, time.Time) error
 	ReleaseExecutionAdmission(context.Context, domain.SchedulerAdmission, ports.SessionObservation, time.Time) error
+	ReleaseAbandonedExecutionAdmission(context.Context, domain.SchedulerAdmission, time.Time) error
 }
 
 // RecoverAdmissions 在新 Leader 开放准入前恢复旧占位和 Session 事实；缺失或未知证据保留占位。
@@ -48,6 +49,11 @@ func (c *Coordinator) RecoverAdmissions(ctx context.Context, fence domain.Schedu
 		}
 		observation, found, observeErr := c.admissionObservation(ctx, ad)
 		if observeErr != nil || !found {
+			if ad.AttemptID == "" && ad.SessionID == "" && ad.State == domain.AdmissionUncertain {
+				if err := store.ReleaseAbandonedExecutionAdmission(ctx, ad, c.now().UTC()); err != nil && !expectedObservationConflict(err) {
+					return err
+				}
+			}
 			continue
 		}
 		if err := store.RecoverExecutionAdmissionSession(ctx, ad, observation, c.now().UTC()); err != nil {
