@@ -43,7 +43,8 @@ export function ArtifactMedia({ source, kind, active, name, label, hint }: {
 	if (status === "error") {
 		return <View style={styles.center}><EmptyState icon={kind === "video" ? { ios: "video.slash", android: "videocam_off" } : { ios: "speaker.slash", android: "music_off" }} title={kind === "video" ? "This video can't play on the phone" : "This audio can't play on the phone"} message={hint ? `${label}\n${hint}` : label} /></View>;
 	}
-	if (kind === "audio") return <AudioPlayer player={player} name={name} ready={status === "readyToPlay"} />;
+	// A rewritten file is a new source: fresh controls, so none of the last player's state (playing) carries over.
+	if (kind === "audio") return <AudioPlayer key={source.uri} player={player} name={name} ready={status === "readyToPlay"} />;
 	return (
 		<View style={[styles.screen, { paddingTop: glassInset }]}>
 			<VideoView player={player} nativeControls contentFit="contain" fullscreenOptions={{ enable: true }} allowsPictureInPicture={false} style={styles.video} />

@@ -39,7 +39,8 @@ export function ArtifactTable({ content, path }: { content: string; path: string
 	const totalWidth = widths.reduce((sum, width) => sum + width, 0);
 	if (header.length === 0) return <View style={styles.center}><EmptyState icon="file" title="This file has no rows" /></View>;
 	return (
-		<ScrollView horizontal style={styles.screen} contentContainerStyle={styles.scroll} showsHorizontalScrollIndicator>
+		// Android: a sideways drag scrolls the table's columns, not the artifact pager it sits in.
+		<ScrollView horizontal nestedScrollEnabled style={styles.screen} contentContainerStyle={styles.scroll} showsHorizontalScrollIndicator>
 			<View style={[styles.table, { width: Math.max(totalWidth, 0) }]}>
 				<View accessibilityRole="header" style={[styles.row, styles.header]}>
 					{header.map((label, column) => {
