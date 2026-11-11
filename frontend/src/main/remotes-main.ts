@@ -172,7 +172,8 @@ export function registerRemotesIpc(
 		if (paired.result === "unauthorized") return "unauthorized" as RemoteHealth;
 		const entry = paired.entry;
 		const health = await checkedProbe(entry, account);
-		if (health === "online") {
+		// An issued token is saved even when the probe fails: the code it replaced is spent.
+		if (health === "online" || paired.result === "paired") {
 			const previous = (await owned()).find((saved) => saved.hostId === hostId);
 			await addRemote(file, entry);
 			if (previous && previous.url !== entry.url) await disconnect(previous.url);
@@ -202,6 +203,11 @@ export function registerRemotesIpc(
 			if (paired.result === "unauthorized") return "unauthorized";
 			editable.password = paired.entry.password;
 			editable.fallbackPassword = paired.entry.fallbackPassword;
+			if (paired.result === "paired") {
+				const saved = await updateRemote(file, url, editable);
+				await disconnect(url);
+				return checkedProbe(saved, account);
+			}
 		}
 		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
 	}));
@@ -229,10 +235,10 @@ export function registerRemotesIpc(
 			throw error;
 		}
 		let current = entry;
-		// Unless the host says the device was removed, a refused token means a release
-		// without device tokens, as after a rollback: the kept password works there.
+		// Only a release without device tokens, as after a rollback, refuses a token with
+		// BAD_PASSWORD; the kept password works there. Any other answer, or none, keeps it out.
 		if (health === "unauthorized" && current.fallbackPassword && current.password.startsWith(DEVICE_TOKEN_PREFIX)
-			&& await authErrorCode(current) !== "DEVICE_REVOKED") {
+			&& await authErrorCode(current) === "BAD_PASSWORD") {
 			const previous: RemoteEntry = { ...current, password: current.fallbackPassword, fallbackPassword: undefined };
 			if (await checkedProbe(previous, account) === "online") {
 				current = await updateRemote(file, url, { password: previous.password });

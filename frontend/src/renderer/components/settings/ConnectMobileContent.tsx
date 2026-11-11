@@ -621,13 +621,27 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const enabled = optimisticEnabled ?? status?.enabled ?? false;
 	const devices = useQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices, enabled: active && status?.enabled === true });
 	// The QR carries this one-time code, not the password. Settings prefetches it for the first paint.
-	const pairingCode = useQuery({
+	const pairing = useQuery({
 		queryKey: mobilePairingCodeQueryKey,
 		queryFn: fetchPairingCode,
 		enabled: active && status?.enabled === true,
 		refetchInterval: PAIRING_CODE_REFRESH_MS,
+		refetchIntervalInBackground: true,
 		staleTime: PAIRING_CODE_REFRESH_MS,
-	}).data ?? "";
+	});
+	// A hidden window or a sleeping Mac can outlive a code, so its expiry is checked every 30 seconds.
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!active) return;
+		const timer = setInterval(() => setNow(Date.now()), 30_000);
+		return () => clearInterval(timer);
+	}, [active]);
+	const codeExpired = pairing.data !== undefined && now >= pairing.data.expiresAt;
+	useEffect(() => {
+		if (codeExpired) void queryClient.invalidateQueries({ queryKey: mobilePairingCodeQueryKey });
+	}, [codeExpired, queryClient]);
+	const pairingCode = pairing.data && !codeExpired ? pairing.data.code : "";
+	const pairingCodeFailed = pairing.isError && pairingCode === "";
 	// A code is spent when a device pairs, and a new password drops unused
 	// codes: either change fetches the next one.
 	const codeSpentBy = devices.data === undefined || !status ? null : `${status.password}|${devices.data.map((device) => device.id).join(",")}`;
@@ -728,6 +742,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
 		(setRequireDeviceCredentials.error instanceof Error && setRequireDeviceCredentials.error.message) ||
+		(pairingCodeFailed && pairing.error instanceof Error && pairing.error.message) ||
 		stayAwake.error ||
 		linkError ||
 		null;
@@ -802,6 +817,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						onClick={startBridge}
 						disabled={busy || enabled}
 					>
+						{t("mobile.generate")}
+					</Button>
+				</div>
+			) : pairingCodeFailed ? (
+				<div className="absolute inset-0 flex items-center justify-center">
+					<Button type="button" variant="primary" data-testid="mobile-pairing-code-retry" onClick={() => void pairing.refetch()}>
 						{t("mobile.generate")}
 					</Button>
 				</div>

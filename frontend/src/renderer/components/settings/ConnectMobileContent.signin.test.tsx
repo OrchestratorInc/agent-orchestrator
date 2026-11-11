@@ -49,7 +49,7 @@ vi.mock("../../lib/account-remote-hosts", async (original) => ({
 	...(await original<typeof import("../../lib/account-remote-hosts")>()),
 	deleteAccountRemoteHost: vi.fn(async () => undefined),
 }));
-vi.mock("../../lib/mobile-pairing-code", () => ({ mobilePairingCodeQueryKey: ["mobile-pairing-code"], PAIRING_CODE_REFRESH_MS: 540_000, fetchPairingCode: async () => "Code1234" }));
+vi.mock("../../lib/mobile-pairing-code", () => ({ mobilePairingCodeQueryKey: ["mobile-pairing-code"], PAIRING_CODE_REFRESH_MS: 540_000, fetchPairingCode: async () => ({ code: "Code1234", expiresAt: Date.now() + 600_000 }) }));
 vi.mock("../../lib/link-this-computer", () => ({ linkThisComputer: vi.fn(async () => ({ hostId: "h_fixture", added: true })) }));
 vi.mock("../../lib/api-client", () => ({
 	apiClient: {

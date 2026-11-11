@@ -699,8 +699,9 @@ describe("registerRemotesIpc", () => {
 		});
 
 		it.each([
-			["a host that went back to a release without device tokens", undefined, "old"],
+			["a host that went back to a release without device tokens", "BAD_PASSWORD", "old"],
 			["a host that removed this device", "DEVICE_REVOKED", token],
+			["a host whose answer could not be read", undefined, token],
 		])("handles a refused token from %s", async (_name, code, expectedPassword) => {
 			const file = await tempFile();
 			await writeFile(file, JSON.stringify({ remotes: [{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, fallbackPassword: "old", accountUserId: TEST_ACCOUNT }] }));
@@ -712,7 +713,7 @@ describe("registerRemotesIpc", () => {
 				authErrorCode: async () => code,
 			});
 			const connected = ipc.invoke("remotes:connect", "http://192.0.2.1:1");
-			if (code === "DEVICE_REVOKED") {
+			if (code !== "BAD_PASSWORD") {
 				// Removed on purpose: the kept password must not bring the device back.
 				await expect(connected).rejects.toThrow(/is unauthorized$/);
 				expect(start).not.toHaveBeenCalled();
@@ -722,6 +723,19 @@ describe("registerRemotesIpc", () => {
 				expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: "old" }));
 				expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: expectedPassword, accountUserId: TEST_ACCOUNT }]);
 			}
+		});
+
+		it("keeps an issued token when the host does not answer the probe after pairing", async () => {
+			const file = await tempFile();
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async (entry) => entry.url === "https://new.example" ? "h_new" : "h_workbox",
+				probe: async () => "offline", pair: async () => ({ kind: "paired", token, credential: "pairing-code" }),
+			});
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("offline");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toMatchObject({ password: token });
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code5678" })).resolves.toBe("offline");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_workbox")).toMatchObject({ password: token });
 		});
 
 		it("swaps a newly typed code when a saved host is edited", async () => {
