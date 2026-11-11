@@ -5720,6 +5720,14 @@ export interface components {
             extensionVersion?: string;
             hostPath: string;
         };
+        ControllersConversationTurnArtifactResponse: {
+            path: string;
+            /** @enum {string} */
+            status: "added" | "modified";
+        };
+        ControllersConversationTurnArtifactsResponse: {
+            files: components["schemas"]["ControllersConversationTurnArtifactResponse"][];
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -6166,6 +6174,7 @@ export interface components {
             truncated?: boolean;
         };
         ConversationTurnResponse: {
+            artifacts?: components["schemas"]["ControllersConversationTurnArtifactsResponse"];
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
