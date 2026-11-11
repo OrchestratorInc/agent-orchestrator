@@ -3127,6 +3127,12 @@ func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.Sessio
 // terminal identity, and provider-native conversation remain available for an
 // exact ResumeAgentWithMode call.
 func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.SessionRecord, error) {
+	return m.exitAgent(ctx, id, nil)
+}
+
+// exitAgent runs then, if set, before it lets go of the session, so nothing can
+// resume the agent between the exit and then.
+func (m *Manager) exitAgent(ctx context.Context, id domain.SessionID, then func() error) (domain.SessionRecord, error) {
 	if err := m.beginAgentOperation(ctx, id, agentOperationExit); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrAgentExitInProgress
@@ -3171,6 +3177,9 @@ func (m *Manager) ExitAgent(ctx context.Context, id domain.SessionID) (domain.Se
 	}
 	if exited.Activity.State != domain.ActivityExited {
 		return domain.SessionRecord{}, fmt.Errorf("exit agent %s: %w", id, ErrSwitchSourceStopUnconfirmed)
+	}
+	if then != nil {
+		return exited, then()
 	}
 	return exited, nil
 }

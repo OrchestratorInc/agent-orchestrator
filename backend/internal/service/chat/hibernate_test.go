@@ -1454,4 +1454,13 @@ func TestSettleAbandonedWorkLeavesARunningControllerAlone(t *testing.T) {
 	if got := h.storedTurnStates(t); len(got) != 1 || got[0] != domain.TurnStateRunning {
 		t.Fatalf("live turn = %v, want running", got)
 	}
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.SettleAbandonedWork(ctx, testSession); err != nil {
+		t.Fatalf("settle after the controller stopped: %v", err)
+	}
+	if got := h.storedTurnStates(t); len(got) != 1 || got[0] == domain.TurnStateRunning {
+		t.Fatalf("turn after stop = %v, want settled", got)
+	}
 }

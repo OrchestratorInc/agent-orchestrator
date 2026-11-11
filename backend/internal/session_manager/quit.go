@@ -40,10 +40,12 @@ func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 					}
 				}
 			} else {
-				_, stopErr = m.ExitAgent(ctx, rec.ID)
-				if stopErr == nil && canSleepStoppedChat(rec) {
-					stopErr = m.sleepStoppedChat(ctx, rec)
-				}
+				_, stopErr = m.exitAgent(ctx, rec.ID, func() error {
+					if canSleepStoppedChat(rec) && m.settleAbandonedChatWork(ctx, rec.ID) {
+						return m.sleepStoppedChat(ctx, rec)
+					}
+					return nil
+				})
 				if errors.Is(stopErr, ErrAgentExited) {
 					stopErr = nil
 				}

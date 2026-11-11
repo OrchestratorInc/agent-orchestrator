@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -41,7 +42,19 @@ func TestStopAgentsForQuitPreservesResumableSession(t *testing.T) {
 
 type quitStopLauncher struct {
 	recordingLauncher
-	store *fakeStore
+	store     *fakeStore
+	manager   *Manager
+	settled   []domain.SessionID
+	settleErr error
+	resumeErr error
+}
+
+func (l *quitStopLauncher) SettleAbandonedWork(ctx context.Context, id domain.SessionID) error {
+	l.settled = append(l.settled, id)
+	if l.resumeErr = l.manager.beginAgentResume(ctx, id); l.resumeErr == nil {
+		l.manager.endAgentResume(id)
+	}
+	return l.settleErr
 }
 
 func (l *quitStopLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
@@ -67,7 +80,7 @@ func TestStopAgentsForQuitLeavesChatsAsleep(t *testing.T) {
 	} {
 		t.Run(string(tc.id), func(t *testing.T) {
 			manager, store, _, _ := newManager()
-			launcher := &quitStopLauncher{store: store}
+			launcher := &quitStopLauncher{store: store, manager: manager}
 			manager.chat = launcher
 			store.sessions[tc.id] = domain.SessionRecord{
 				ID: tc.id, ProjectID: "mer", Kind: tc.kind, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
@@ -89,9 +102,29 @@ func TestStopAgentsForQuitLeavesChatsAsleep(t *testing.T) {
 				if got.HibernatedAt == nil || got.Activity.State != domain.ActivityIdle || got.IsTerminated {
 					t.Fatalf("must be asleep so opening it wakes it: %+v", got)
 				}
+				if len(launcher.settled) != 1 || !errors.Is(launcher.resumeErr, ErrResumeInProgress) {
+					t.Fatalf("must settle open work while still holding the session: settled=%v resume=%v", launcher.settled, launcher.resumeErr)
+				}
 			} else if got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited || got.IsTerminated {
 				t.Fatalf("must stay stopped: %+v", got)
 			}
 		})
+	}
+}
+
+func TestStopAgentsForQuitKeepsChatStoppedWhenItsOpenWorkCannotSettle(t *testing.T) {
+	manager, store, _, _ := newManager()
+	launcher := &quitStopLauncher{store: store, manager: manager, settleErr: errors.New("database is locked")}
+	manager.chat = launcher
+	store.sessions["mer-busy"] = domain.SessionRecord{
+		ID: "mer-busy", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{ProviderConversationID: "native-mer-busy", ControllerGeneration: "gen-1"},
+	}
+	if err := manager.StopAgentsForQuit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.sessions["mer-busy"]; got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited {
+		t.Fatalf("a chat whose open work could not settle must stay stopped: %+v", got)
 	}
 }
