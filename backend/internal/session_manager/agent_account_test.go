@@ -542,3 +542,27 @@ func TestExitAgentsOnAccountRefusesWhileAResumeIsStarting(t *testing.T) {
 		t.Fatalf("an exited session with nothing starting: %v", err)
 	}
 }
+
+// An account move restarts the agent in the session's workspace, so it is
+// refused while that workspace is still provisioning (#7594), before any
+// controller stops.
+func TestAccountTransitionRefusedWhileProvisioning(t *testing.T) {
+	manager, store, _, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
+	ctx := context.Background()
+	rec, _, err := store.GetSession(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.ProvisionState = domain.SessionProvisionProvisioning
+	if err := store.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	before := len(*log)
+	_, err = manager.StartAccountTransition(ctx, "session-1", "acct-b", domain.SessionInterfaceTransitionDrain)
+	if !errors.Is(err, ErrInterfaceWorkspaceProvisioning) {
+		t.Fatalf("StartAccountTransition = %v, want ErrInterfaceWorkspaceProvisioning", err)
+	}
+	if len(*log) != before || accounts.boundTo("session-1") != "device-claude" {
+		t.Fatalf("refusal touched the session: log=%v binding=%q", (*log)[before:], accounts.boundTo("session-1"))
+	}
+}

@@ -147,18 +147,23 @@ func TestInterfaceTransitionRollbackStartsNeverStartedChatFresh(t *testing.T) {
 	}
 }
 
-// A start that failed before the workspace existed leaves nothing for either
-// controller to run in. The switch is refused up front, with the reason shown
-// on the control, instead of stopping the source and failing into recovery.
+// A session whose workspace is missing or not ready leaves nothing for either
+// controller to run in. A start that failed before the workspace existed, and a
+// start still provisioning it (#7594), are refused up front with the reason
+// shown on the control, instead of stopping the source and failing into
+// recovery.
 func TestInterfaceTransitionRefusesSessionWithoutWorkspace(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		provision domain.SessionProvisionState
-		refused   bool
+		name          string
+		provision     domain.SessionProvisionState
+		keepWorkspace bool
+		code          string
+		want          error
 	}{
-		{"start failed", domain.SessionProvisionFailed, true},
-		{"no provisioning record", "", true},
-		{"still provisioning", domain.SessionProvisionProvisioning, false},
+		{name: "start failed", provision: domain.SessionProvisionFailed, code: "WORKSPACE_UNAVAILABLE", want: ErrInterfaceWorkspaceUnavailable},
+		{name: "no provisioning record", code: "WORKSPACE_UNAVAILABLE", want: ErrInterfaceWorkspaceUnavailable},
+		{name: "still provisioning", provision: domain.SessionProvisionProvisioning, code: "WORKSPACE_PROVISIONING", want: ErrInterfaceWorkspaceProvisioning},
+		{name: "setup running in a recorded workspace", provision: domain.SessionProvisionProvisioning, keepWorkspace: true, code: "WORKSPACE_PROVISIONING", want: ErrInterfaceWorkspaceProvisioning},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manager, store, _, log, id := neverStartedChatOrchestrator(t, func(store *sqlite.Store) lifecycleRecorder {
@@ -169,9 +174,11 @@ func TestInterfaceTransitionRefusesSessionWithoutWorkspace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rec.Metadata.WorkspacePath = ""
-			if err := store.UpdateSession(ctx, rec); err != nil {
-				t.Fatal(err)
+			if !tc.keepWorkspace {
+				rec.Metadata.WorkspacePath = ""
+				if err := store.UpdateSession(ctx, rec); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if tc.provision != "" {
 				if _, err := store.SetSessionProvisionState(ctx, id, tc.provision, "", time.Now()); err != nil {
@@ -182,20 +189,47 @@ func TestInterfaceTransitionRefusesSessionWithoutWorkspace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := status.ReasonCode == "WORKSPACE_UNAVAILABLE"; got != tc.refused || (tc.refused && status.Supported) {
-				t.Fatalf("status = %+v, want refused=%v", status, tc.refused)
-			}
-			if !tc.refused {
-				return
+			if status.ReasonCode != tc.code || status.Supported || status.Reason == "" {
+				t.Fatalf("status = %+v, want refused with %s", status, tc.code)
 			}
 			_, err = manager.StartInterfaceTransition(ctx, id, domain.SessionModeTUI,
 				domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
-			if !errors.Is(err, ErrInterfaceWorkspaceUnavailable) {
-				t.Fatalf("StartInterfaceTransition = %v, want ErrInterfaceWorkspaceUnavailable", err)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("StartInterfaceTransition = %v, want %v", err, tc.want)
 			}
 			if _, found, err := store.GetLatestSessionInterfaceTransition(ctx, id); err != nil || found || len(*log) != 0 {
 				t.Fatalf("refusal touched the session: transition=%v err=%v log=%v", found, err, *log)
 			}
 		})
+	}
+}
+
+// Once provisioning finishes and records the workspace, the same session
+// switches normally: the refusal is temporary, not a stuck state.
+func TestInterfaceTransitionAllowedOnceProvisioningFinishes(t *testing.T) {
+	manager, store, _, _, id := neverStartedChatOrchestrator(t, func(store *sqlite.Store) lifecycleRecorder {
+		return &sqliteTransitionLifecycle{store: store}
+	})
+	ctx := context.Background()
+	if _, err := store.SetSessionProvisionState(ctx, id, domain.SessionProvisionProvisioning, "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := manager.InterfaceTransitionStatus(ctx, id); err != nil || status.ReasonCode != "WORKSPACE_PROVISIONING" {
+		t.Fatalf("status while provisioning = %+v, %v", status, err)
+	}
+	if _, err := store.SetSessionProvisionState(ctx, id, domain.SessionProvisionReady, "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	status, err := manager.InterfaceTransitionStatus(ctx, id)
+	if err != nil || status.ReasonCode == "WORKSPACE_PROVISIONING" || status.ReasonCode == "WORKSPACE_UNAVAILABLE" {
+		t.Fatalf("status after provisioning = %+v, %v", status, err)
+	}
+	transition, err := manager.StartInterfaceTransition(ctx, id, domain.SessionModeTUI,
+		domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+	if err != nil {
+		t.Fatalf("StartInterfaceTransition: %v", err)
+	}
+	if settled := settleSQLiteTransition(t, store, transition.ID); settled.Phase != domain.SessionInterfaceTransitionCompleted {
+		t.Fatalf("switch = %s (%s): %s", settled.Phase, settled.ErrorCode, settled.ErrorDetail)
 	}
 }
