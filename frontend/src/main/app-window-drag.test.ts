@@ -77,4 +77,23 @@ describe("dragInAppWindow", () => {
 		await expect(dragInAppWindow([window] as never, { windowId: 1, fromX: 1, fromY: 40, toX: 2, toY: 40 })).rejects.toMatchObject({ code: "APP_WINDOW_NOT_FOUND" });
 		await expect(dragInAppWindow([window] as never, { windowId: 4242, fromX: 1, fromY: 10, toX: 2, toY: 40 })).rejects.toMatchObject({ code: "APP_DRAG_OUTSIDE" });
 	});
+
+	it("runs overlapping drags one after the other, release and detach included", async () => {
+		const shell = view({ x: 0, y: 0, width: 800, height: 572 }, () => {});
+		const window = windowWith([shell.view]);
+		const drag = (fromX: number, signal?: AbortSignal) =>
+			dragInAppWindow([window] as never, { windowId: 4242, fromX, fromY: 48, toX: fromX + 20, toY: 68, durationMs: 20, steps: 2 }, signal);
+		const cancelled = new AbortController();
+		const results = Promise.all([drag(10), drag(100), drag(200, cancelled.signal).catch((error) => error)]);
+		cancelled.abort();
+		const [first, second, third] = await results;
+		expect([first.route, second.route]).toEqual(["cdp", "cdp"]);
+		expect(third).toMatchObject({ code: "APP_DRAG_ABORTED" });
+		const mouse = shell.cdp.filter(({ method }) => method === "Input.dispatchMouseEvent").map(({ params }) => `${params.type}@${params.x}`);
+		expect(mouse).toEqual([
+			"mouseMoved@5", "mousePressed@5", "mouseMoved@10", "mouseMoved@15", "mouseReleased@15",
+			"mouseMoved@50", "mousePressed@50", "mouseMoved@55", "mouseMoved@60", "mouseReleased@60",
+		]);
+		expect(shell.sent).toEqual([]);
+	});
 });
