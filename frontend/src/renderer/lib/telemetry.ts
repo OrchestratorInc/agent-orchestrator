@@ -1015,7 +1015,7 @@ const OPEN_TARGET_KIND_SET = new Set(["editor", "file_manager", "terminal"]);
 const TOPBAR_ACTION_SET = new Set<string>(TOPBAR_ACTIONS);
 const TOPBAR_VIEW_SET = new Set<string>(TOPBAR_VIEWS);
 const SESSION_IMPORT_SURFACE_SET = new Set(["onboarding", "project_board"]);
-const SESSION_IMPORT_SOURCE_SET = new Set(["home_folders", "project_offer", "project_dialog", "settings"]);
+const SESSION_IMPORT_SOURCE_SET = new Set(["home_folders", "onboarding", "project_offer", "project_dialog", "settings"]);
 const SESSION_IMPORT_OPEN_OUTCOME_SET = new Set(["succeeded", "failed", "open_elsewhere"]);
 
 function agentList(value: unknown): string | undefined {

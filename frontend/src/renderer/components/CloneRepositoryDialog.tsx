@@ -9,7 +9,7 @@ import type { MessageKey } from "../i18n/messages";
 import { apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, WithGitHubState } from "./FirstRunSteps";
+import { AnimatedStepBody, FirstRunGitHubStep, type GitHubState, FirstRunImport, FirstRunSources, FirstRunWelcome, NO_GITHUB_STATE, WithGitHubState, WithImportOffer } from "./FirstRunSteps";
 import { GitHubRepoPicker } from "./GitHubRepoPicker";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
@@ -38,7 +38,7 @@ export default function CloneRepositoryDialog({
 	firstRun = false,
 	onOpenLocalFolder,
 	onStartStandaloneAgent,
-	onImportChats,
+	onChatsImported,
 	cloning = false,
 	disabled,
 	error,
@@ -62,7 +62,8 @@ export default function CloneRepositoryDialog({
 	firstRun?: boolean;
 	onOpenLocalFolder?: () => void;
 	onStartStandaloneAgent?: () => void;
-	onImportChats?: () => void;
+	/** Set when first run may offer the import step; runs once the import finished. */
+	onChatsImported?: () => void;
 	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
@@ -98,7 +99,9 @@ export default function CloneRepositoryDialog({
 	const [choosingDestination, setChoosingDestination] = useState(false);
 	const [repositoryFieldTouched, setRepositoryFieldTouched] = useState(false);
 	const [shake, setShake] = useState(false);
-	const [firstRunStep, setFirstRunStep] = useState<"welcome" | "github" | "sources" | "clone">(firstRun ? "welcome" : "clone");
+	const [firstRunStep, setFirstRunStep] = useState<"welcome" | "import" | "github" | "sources" | "clone">(firstRun ? "welcome" : "clone");
+	// Back from the project step returns to the import step only if it was shown.
+	const [importOffered, setImportOffered] = useState(false);
 	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
 	const repositoryName = repositoryNameFromGitUrl(value.remoteUrl);
 	const repositoryAvatar = repositoryAvatarFromGitUrl(value.remoteUrl);
@@ -282,7 +285,29 @@ export default function CloneRepositoryDialog({
 						};
 						const stepContent = (<>
 					{firstRun && firstRunStep === "welcome" ? (
-						<FirstRunWelcome disabled={disabled} onNext={() => setFirstRunStep("sources")} />
+						onChatsImported ? (
+							<WithImportOffer>
+								{(offer) => (
+									<FirstRunWelcome
+										disabled={disabled}
+										onNext={() => {
+											setImportOffered(offer);
+											setFirstRunStep(offer ? "import" : "sources");
+										}}
+									/>
+								)}
+							</WithImportOffer>
+						) : (
+							<FirstRunWelcome disabled={disabled} onNext={() => setFirstRunStep("sources")} />
+						)
+					) : null}
+					{firstRun && firstRunStep === "import" && onChatsImported ? (
+						<FirstRunImport
+							onBack={() => setFirstRunStep("welcome")}
+							onClose={onClose}
+							onSkip={() => setFirstRunStep("sources")}
+							onImported={onChatsImported}
+						/>
 					) : null}
 					{firstRun && firstRunStep === "github" ? <FirstRunGitHubStep
 						onBack={() => setFirstRunStep("sources")}
@@ -293,7 +318,7 @@ export default function CloneRepositoryDialog({
 						<FirstRunSources
 							disabled={disabled}
 							gh={gh}
-							onBack={() => setFirstRunStep("welcome")}
+							onBack={() => setFirstRunStep(importOffered ? "import" : "welcome")}
 							onClose={onClose}
 							onPickRepo={(remoteUrl) => {
 								onChange({ ...value, remoteUrl });
@@ -305,7 +330,6 @@ export default function CloneRepositoryDialog({
 							}}
 							onOpenLocalFolder={onOpenLocalFolder}
 							onStartStandaloneAgent={onStartStandaloneAgent}
-							onImportChats={onImportChats}
 						/>
 					) : null}
 					{!firstRun || firstRunStep === "clone" ? <>

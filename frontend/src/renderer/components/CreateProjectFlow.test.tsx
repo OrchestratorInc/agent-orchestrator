@@ -5,7 +5,6 @@ import { useState, type ComponentProps, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { useUiStore } from "../stores/ui-store";
-import { useSessionImportStore } from "../stores/session-import-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 import { TooltipProvider } from "./ui/tooltip";
@@ -256,7 +255,7 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 // These tests only care whether the clone flow is on screen and that the
 // droppedPath guard leaves it alone, so a thin stub keeps the suite focused.
 vi.mock("./CloneRepositoryDialog", () => ({
-	default: ({ disabled, error, firstRun, open, onBack, onChange, onClose, onContinue, onOpenLocalFolder, onStartStandaloneAgent, onImportChats, onUseExisting, progress, value }: {
+	default: ({ disabled, error, firstRun, open, onBack, onChange, onClose, onContinue, onOpenLocalFolder, onStartStandaloneAgent, onChatsImported, onUseExisting, progress, value }: {
 		disabled?: boolean;
 		error?: string | null;
 		firstRun?: boolean;
@@ -266,7 +265,7 @@ vi.mock("./CloneRepositoryDialog", () => ({
 		onContinue?: (selection: { remoteUrl: string; destinationParent: string; targetPath: string }) => void;
 		onOpenLocalFolder?: () => void;
 		onStartStandaloneAgent?: () => void;
-		onImportChats?: () => void;
+		onChatsImported?: () => void;
 		onUseExisting?: (path: string) => void;
 		open: boolean;
 		progress?: { phase: string } | null;
@@ -284,7 +283,7 @@ vi.mock("./CloneRepositoryDialog", () => ({
 				<button type="button" onClick={onClose}>Close clone</button>
 				{firstRun ? <button type="button" onClick={onOpenLocalFolder}>Open a local folder</button> : null}
 				{firstRun ? <button type="button" onClick={onStartStandaloneAgent}>Start a standalone agent</button> : null}
-				{onImportChats ? <button type="button" onClick={onImportChats}>Import earlier chats</button> : null}
+				{onChatsImported ? <button type="button" onClick={onChatsImported}>Chats imported</button> : null}
 				<button type="button" disabled={disabled} onClick={() => onUseExisting?.("/repo/existing")}>Use existing checkout</button>
 				<button type="button" onClick={() => onContinue?.({ remoteUrl: "file:///source/empty-repository.git", destinationParent: "/repo", targetPath: "/repo/empty-repository" })}>
 					Continue clone
@@ -495,15 +494,13 @@ describe("first run project actions", () => {
 		expect(apiMocks.POST).not.toHaveBeenCalled();
 	});
 
-	it("hands importing earlier chats to the folder import and reports it", async () => {
+	it("ends the first run prompt once earlier chats were imported, and reports it", async () => {
 		const onFirstRunDismiss = vi.fn();
-		useSessionImportStore.setState({ dialog: null });
 		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss };
 		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
 		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
-		fireEvent.click(await screen.findByRole("button", { name: "Import earlier chats" }));
+		fireEvent.click(await screen.findByRole("button", { name: "Chats imported" }));
 		expect(onFirstRunDismiss).toHaveBeenCalledExactlyOnceWith("import");
-		expect(useSessionImportStore.getState().dialog).toEqual({ kind: "folders" });
 		await waitFor(() => expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument());
 		expect(apiMocks.POST).not.toHaveBeenCalled();
 	});

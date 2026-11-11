@@ -52,7 +52,6 @@ import { CODER_PROVIDER, FREESTYLE_PROVIDER, projectSandboxProvider } from "../l
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useCloudSession } from "../lib/cloud-session";
-import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
 import { useShellMaybe } from "../lib/shell-context";
 import {
@@ -212,7 +211,6 @@ export function CreateProjectFlow({
 	const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
 	const [cloneRegistrationFailed, setCloneRegistrationFailed] = useState(false);
 	const preparedClone = usePreparedClone(hostId);
-	const openFolderImport = useSessionImportStore((state) => state.openFolderImport);
 	const [remoteBrowse, setRemoteBrowse] = useState<RemoteBrowseRequest | null>(null);
 	const folderPickerOpen = activeView === "folder";
 	const [childTransitioning, setChildTransitioning] = useState(false);
@@ -867,10 +865,9 @@ export function CreateProjectFlow({
 								setCloneDialogOpen(false);
 								onCreateStandaloneAgent?.();
 							}}
-							onImportChats={firstRunClone ? () => {
+							onChatsImported={firstRunClone ? () => {
 								onFirstRunDismiss?.("import");
 								setCloneDialogOpen(false);
-								openFolderImport();
 							} : undefined}
 							remote={Boolean(hostId)}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}

@@ -1,20 +1,22 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, Download, FolderClosed, MessageSquarePlus } from "@/components/app-icons";
+import { ChevronLeft, FolderClosed, MessageSquarePlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import aoMascot from "../../../assets/ao-mascot.svg";
 import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
 import { completeOnboardingStepIfViewed, reportOnboardingStep } from "../lib/onboarding-telemetry";
-import { useImportableAgents, useImportOfferShown } from "../lib/session-import";
+import { sessionImportPreviewQuery, useImportableAgents, useImportOfferShown } from "../lib/session-import";
 import { useShellMaybe } from "../lib/shell-context";
 import { useResolvedTheme } from "../stores/ui-store";
 import { TerminalPane } from "./TerminalPane";
 import { GitHubRepoPicker, preloadGitHubRepos } from "./GitHubRepoPicker";
 import { GitHubIcon } from "./GitHubIcon";
 import { InstallAction, useInstallRunner } from "./InstallDependencyDialog";
+import { FolderImport } from "./SessionImportDialog";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { Input } from "./ui/input";
@@ -208,12 +210,41 @@ export function FirstRunGitHubStep({ onDone, onBack, onClose }: { onDone: () => 
 	);
 }
 
-/** Importing earlier chats is a one-time step for a new user, so it is offered
- * here rather than on Home, and only while an agent with chats is installed. */
-function WithImportableAgents({ children }: { children: (canImport: boolean) => ReactNode }) {
-	const canImport = useImportableAgents(true).length > 0;
-	useImportOfferShown("onboarding", canImport);
-	return <>{children(canImport)}</>;
+/**
+ * Whether first run offers the import step: an agent whose chats can be imported
+ * is installed, and the scan of this computer has not come back empty. The scan
+ * starts here, so the folder list is usually ready when the step opens.
+ */
+export function WithImportOffer({ children }: { children: (offer: boolean) => ReactNode }) {
+	const agents = useImportableAgents(true);
+	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000, enabled: agents.length > 0 });
+	const nothingToImport = preview.isError || (preview.isSuccess && !preview.data.candidates.some((chat) => !chat.sessionId && (chat.projectId || chat.folder)));
+	return <>{children(agents.length > 0 && !nothingToImport)}</>;
+}
+
+/**
+ * Importing earlier chats is a one-time step for a new user, so it sits in first
+ * run, between the welcome screen and setting up a project. Each picked folder
+ * becomes a project, so a finished import ends the first-run prompt.
+ */
+export function FirstRunImport({ onBack, onClose, onSkip, onImported }: { onBack: () => void; onClose: () => void; onSkip: () => void; onImported: () => void }) {
+	const { t } = useTranslation();
+	const [importing, setImporting] = useState(false);
+	useImportOfferShown("onboarding", true);
+	return (
+		<div>
+			<FirstRunHeader onBack={onBack} onClose={onClose} disabled={importing} title={t("sessionImport.offerTitle")} description={t("sessionImport.foldersDescription")} />
+			<FolderImport
+				source="onboarding"
+				cancelLabel={t("firstRun.skip")}
+				onCancel={onSkip}
+				onImported={onImported}
+				onImporting={setImporting}
+				bodyClassName="flex max-h-[min(360px,calc(100svh-240px))] min-h-0 flex-col gap-4 overflow-y-auto px-4 pt-4 settings-thin-scrollbar"
+				footerClassName="flex items-center justify-end gap-3 p-4"
+			/>
+		</div>
+	);
 }
 
 /** The "what do you want to start with" step. Same borderless tiles as the Add Project modal. */
@@ -226,7 +257,6 @@ export function FirstRunSources({
 	onSubmitUrl,
 	onOpenLocalFolder,
 	onStartStandaloneAgent,
-	onImportChats,
 }: {
 	disabled?: boolean;
 	gh: GitHubState;
@@ -236,8 +266,6 @@ export function FirstRunSources({
 	onSubmitUrl: (remoteUrl: string) => void;
 	onOpenLocalFolder?: () => void;
 	onStartStandaloneAgent?: () => void;
-	/** Offered only while an agent with chats to import is installed. */
-	onImportChats?: () => void;
 }) {
 	const { t } = useTranslation();
 	const [url, setUrl] = useState("");
@@ -254,13 +282,6 @@ export function FirstRunSources({
 				<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
 			</span>
 		</Pressable>
-	);
-	const tiles = (canImport: boolean) => (
-		<div className={`grid gap-3 px-4 pb-4 max-[520px]:grid-cols-1 ${canImport ? "grid-cols-3" : "grid-cols-2"}`}>
-			{tile(<FolderClosed className="size-6" aria-hidden="true" />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
-			{tile(<MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
-			{canImport ? tile(<Download className="size-6" aria-hidden="true" />, t("sessionImport.offerTitle"), t("sessionImport.offerDescription"), onImportChats) : null}
-		</div>
 	);
 	return (
 		<div>
@@ -294,7 +315,10 @@ export function FirstRunSources({
 				)}
 			</div>
 			<p className="px-4 pb-2 text-[13px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.orStart")}</p>
-			{onImportChats ? <WithImportableAgents>{(canImport) => tiles(canImport)}</WithImportableAgents> : tiles(false)}
+			<div className="grid grid-cols-2 gap-3 px-4 pb-4 max-[520px]:grid-cols-1">
+				{tile(<FolderClosed className="size-6" aria-hidden="true" />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
+				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
+			</div>
 		</div>
 	);
 }

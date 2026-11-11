@@ -182,6 +182,47 @@ function ProjectChats({ projectId, onClose, onImporting }: { projectId: string; 
 
 function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (importing: boolean) => void }) {
 	const { t } = useTranslation();
+	return (
+		<FolderImport
+			header={
+				<div className={settingsDialogHeaderClass}>
+					<DialogTitle>{t("sessionImport.foldersTitle")}</DialogTitle>
+					<DialogDescription>{t("sessionImport.foldersDescription")}</DialogDescription>
+				</div>
+			}
+			source="home_folders"
+			cancelLabel={t("sessionImport.cancel")}
+			onCancel={onClose}
+			onImported={onClose}
+			onImporting={onImporting}
+		/>
+	);
+}
+
+/**
+ * The folder picker: every folder with chats that can be imported, the suggested
+ * ones checked. `onImported` runs once an import finished without failures.
+ */
+export function FolderImport({
+	header,
+	source,
+	cancelLabel,
+	onCancel,
+	onImported,
+	onImporting,
+	bodyClassName = settingsDialogBodyClass,
+	footerClassName = settingsDialogFooterClass,
+}: {
+	header?: ReactNode;
+	source: ImportSource;
+	cancelLabel: string;
+	onCancel: () => void;
+	onImported: () => void;
+	onImporting?: (importing: boolean) => void;
+	bodyClassName?: string;
+	footerClassName?: string;
+}) {
+	const { t } = useTranslation();
 	const workspaces = useQuery(workspaceQueryOptions);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
 	const blockOf = useAgentBlocks();
@@ -227,10 +268,10 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 			}
 			return next;
 		});
-	const { importing, error, failures, run } = useImportRun("home_folders", (results) => {
+	const { importing, error, failures, run } = useImportRun(source, (results) => {
 		const imported = showImported(results);
 		for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
-		if (!results.some((result) => result.status === "failed")) onClose();
+		if (!results.some((result) => result.status === "failed")) onImported();
 	}, onImporting);
 	const otherOpen = showOther || !suggested.length;
 	const row = (folder: Folder) => (
@@ -238,11 +279,8 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 	);
 	return (
 		<>
-			<div className={settingsDialogHeaderClass}>
-				<DialogTitle>{t("sessionImport.foldersTitle")}</DialogTitle>
-				<DialogDescription>{t("sessionImport.foldersDescription")}</DialogDescription>
-			</div>
-			<div className={settingsDialogBodyClass}>
+			{header}
+			<div className={bodyClassName}>
 				<PreviewState pending={preview.isPending} error={preview.error} empty={!folders.length} emptyText={t("sessionImport.foldersEmpty")}>
 					<div className="flex flex-col gap-3">
 						{suggested.length ? <div className="overflow-hidden rounded-md border border-border">{suggested.map(row)}</div> : null}
@@ -265,9 +303,9 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 				</PreviewState>
 				<ImportError error={error} failures={failures} />
 			</div>
-			<div className={settingsDialogFooterClass}>
-				<Button variant="secondary" disabled={importing} onClick={onClose}>
-					{t("sessionImport.cancel")}
+			<div className={footerClassName}>
+				<Button variant="secondary" disabled={importing} onClick={onCancel}>
+					{cancelLabel}
 				</Button>
 				<Button
 					variant="primary"

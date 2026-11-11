@@ -35,7 +35,7 @@ export const sessionImportPreviewQuery = queryOptions({
 	},
 });
 
-export type ImportSource = "home_folders" | "project_offer" | "project_dialog" | "settings";
+export type ImportSource = "home_folders" | "onboarding" | "project_offer" | "project_dialog" | "settings";
 
 const reportedThisRun = new Set<string>();
 

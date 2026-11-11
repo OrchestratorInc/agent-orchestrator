@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import CloneRepositoryDialog, { joinCloneDestination, repositoryNameFromGitUrl, sameProjectPath } from "./CloneRepositoryDialog";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
+import { sessionImportPreviewQuery } from "../lib/session-import";
 
 // The first run prompt reads the GitHub CLI state from the daemon; drive it directly.
 const gitHub = vi.hoisted(() => ({
@@ -87,25 +88,29 @@ describe("clone repository input", () => {
 	});
 
 	it.each([
-		["offers", [{ id: "codex", installation: { state: "installed" }, authentication: { state: "authorized" } }], true],
-		["does not offer", [{ id: "codex", installation: { state: "not_installed" }, authentication: { state: "authorized" } }], false],
-	] as const)("%s importing earlier chats in the first run sources", (_, agents, offered) => {
-		const onImportChats = vi.fn();
+		["offers the import step", "installed", [{ id: "a", harness: "codex", title: "Fix login", lastActivity: "2026-11-10T00:00:00Z", messageCount: 4, folder: "/code/app" }], true],
+		["skips the import step without an installed agent", "not_installed", [{ id: "a", harness: "codex", title: "Fix login", lastActivity: "2026-11-10T00:00:00Z", messageCount: 4, folder: "/code/app" }], false],
+		["skips the import step when nothing was found", "installed", [], false],
+	] as const)("%s in the first run prompt", (_, installation, candidates, offered) => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(agentReadinessQueryKey, { agents });
+		client.setQueryData(agentReadinessQueryKey, { agents: [{ id: "codex", installation: { state: installation }, authentication: { state: "authorized" } }] });
+		client.setQueryData(sessionImportPreviewQuery.queryKey, { candidates: [...candidates] });
 		render(React.createElement(QueryClientProvider, { client }, React.createElement(CloneRepositoryDialog, cloneDialogProps({
 			firstRun: true,
 			value: { remoteUrl: "", destinationParent: "/code" },
-			onImportChats,
+			onChatsImported: vi.fn(),
 		}))));
 		fireEvent.click(screen.getByRole("button", { name: "Get started" }));
-		const tile = screen.queryByRole("button", { name: "Import earlier chats" });
 		if (!offered) {
-			expect(tile).not.toBeInTheDocument();
+			expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
 			return;
 		}
-		fireEvent.click(tile!);
-		expect(onImportChats).toHaveBeenCalledOnce();
+		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
+		expect(screen.getByText("app")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+		expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));
+		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
 	});
 
 	it("cannot dismiss the first run welcome step, but the close button works afterwards", () => {
