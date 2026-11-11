@@ -29,10 +29,10 @@ export function EndedShellTerminal({ shell, hostId }: { shell: ShellTerminal; ho
 			data-testid="ended-shell-terminal"
 			role="region"
 		>
-			<div className="flex max-w-content-max flex-col items-start gap-3">
+			<div className="flex flex-col items-start gap-3">
 				<div>
 					<h2 className="text-sm font-medium text-foreground">{t("terminal.shellEnded")}</h2>
-					<p className="mt-1 text-xs text-muted-foreground">{t("terminal.shellEndedHelp")}</p>
+					<p className="mt-1 max-w-content-max text-xs text-muted-foreground">{t("terminal.shellEndedHelp")}</p>
 				</div>
 				<div className="flex flex-wrap items-center gap-2">
 					<Button
