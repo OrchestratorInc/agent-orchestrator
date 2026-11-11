@@ -31,6 +31,7 @@
 // so ordering with the initial replay is preserved for free.
 
 import type { TerminalMux } from "./terminal-mux";
+import { isMouseHoverReport } from "./terminal-mouse";
 
 /**
  * Kill switch for line-buffered local input on cloud terminals. There is no
@@ -489,6 +490,15 @@ export function withLineBufferedLocalInput(
 			// any replay) will arrive much later, so predicting here would just
 			// guarantee a rollback. Pass through untouched.
 			if (!connectionOpen) {
+				inner.sendInput(id, input);
+				return;
+			}
+			// Pointer movement over a program that tracks every mouse event is a
+			// position update, not input that belongs after the typed line. Sending
+			// it through the controller would flush the unsent draft upstream without
+			// Enter on every hover. The draft has not reached the program yet, so
+			// passing the report straight through reorders nothing already sent.
+			if (isMouseHoverReport(input)) {
 				inner.sendInput(id, input);
 				return;
 			}
