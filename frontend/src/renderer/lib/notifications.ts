@@ -20,6 +20,9 @@ const EVENTSOURCE_CLOSED = 2;
 // HTTP responses and SSE deletes can arrive in either order. Keep recent
 // confirmations for deduplication, but never let that session state grow without bound.
 const MAX_CONFIRMED_NOTIFICATION_DELETIONS = 256;
+// Per-transport memory of seen resolutions, used only as a replay guard.
+// Live toasts are tracked separately and never capped.
+const MAX_REMEMBERED_RESOLUTIONS = 256;
 
 /**
  * Only these two kinds describe something still waiting on the user.
@@ -62,6 +65,11 @@ const notificationDeletionStates = new WeakMap<QueryClient, Map<string, Notifica
 
 export function notificationsQueryKey(status: NotificationListStatus): NotificationsQueryKey {
 	return status === "unread" ? unreadNotificationsQueryKey : recentNotificationsQueryKey;
+}
+
+/** Whether a notification of this type can later be resolved by AO. */
+export function isResolvableNotificationType(type: string): boolean {
+	return UNRESOLVABLE_TYPES.has(type);
 }
 
 function isUnresolved(notification: NotificationDTO): boolean {
@@ -152,12 +160,17 @@ export function applyResolvedNotification(queryClient: QueryClient, notification
 			const existing = getCachedNotifications(current).find((item) => item.id === notification.id);
 			if (!existing) return current;
 			found = true;
-			const unresolvedDelta = Number(isUnresolved(notification)) - Number(isUnresolved(existing));
+			// Patch only the resolution. The event's copy of the row can be older
+			// than the cache on the seen axis (a buffered event replayed after a
+			// snapshot in which the user already read it), so it must not
+			// overwrite `status`.
+			const patched = { ...existing, resolvedAt: notification.resolvedAt ?? existing.resolvedAt };
+			const unresolvedDelta = Number(isUnresolved(patched)) - Number(isUnresolved(existing));
 			return {
 				...current,
 				pages: current.pages.map((page) => ({
 					...page,
-					notifications: page.notifications.map((item) => (item.id === notification.id ? notification : item)),
+					notifications: page.notifications.map((item) => (item.id === notification.id ? patched : item)),
 					unresolvedCount: Math.max(0, page.unresolvedCount + unresolvedDelta),
 				})),
 			};
@@ -291,10 +304,22 @@ export function rollbackOptimisticNotificationDelete(queryClient: QueryClient, i
 function mergeNotificationIntoCache(
 	queryClient: QueryClient,
 	queryKey: NotificationsQueryKey,
-	notification: NotificationDTO,
+	incoming: NotificationDTO,
 ): boolean {
 	let inserted = false;
 	queryClient.setQueryData<NotificationsCache>(queryKey, (current) => {
+		// A replayed or late `created` copy is older than the cache on both
+		// monotonic axes: AO never reopens a resolved notification, and nothing
+		// marks a read row unread again. Keep what the cache already knows.
+		const existing = current ? getCachedNotifications(current).find((item) => item.id === incoming.id) : undefined;
+		const notification =
+			existing && ((existing.resolvedAt && !incoming.resolvedAt) || (existing.status === "read" && incoming.status !== "read"))
+				? {
+						...incoming,
+						resolvedAt: incoming.resolvedAt ?? existing.resolvedAt,
+						status: existing.status === "read" ? existing.status : incoming.status,
+					}
+				: incoming;
 		if (!current || current.pages.length === 0) {
 			inserted = true;
 			return {
@@ -309,7 +334,6 @@ function mergeNotificationIntoCache(
 			};
 		}
 
-		const existing = getCachedNotifications(current).find((item) => item.id === notification.id);
 		const unreadDelta = (notification.status === "unread" ? 1 : 0) - (existing?.status === "unread" ? 1 : 0);
 		const unresolvedDelta =
 			(isUnresolved(notification) ? 1 : 0) - (existing && isUnresolved(existing) ? 1 : 0);
@@ -520,9 +544,91 @@ export function createNotificationsTransport(
 				  }
 				| undefined;
 			let pendingLiveEvents: Promise<void> | undefined;
+			let disposed = false;
+			// OS toasts this transport raised for a resolvable notification that
+			// AO has not resolved yet. Deliberately uncapped: dropping a live id
+			// would leave its banner up after a missed resolution. It only holds
+			// resolvable rows and shrinks on resolution, delete, and clear.
+			const liveNativeIds = new Set<string>();
+			// Resolutions already seen, so a replayed or late create cannot
+			// reopen a row or raise a banner. A bounded replay guard only.
+			const resolvedAtById = new Map<string, string>();
+			const noteResolved = (notification: NotificationDTO) => {
+				if (!notification.resolvedAt) return;
+				resolvedAtById.delete(notification.id);
+				resolvedAtById.set(notification.id, notification.resolvedAt);
+				if (resolvedAtById.size > MAX_REMEMBERED_RESOLUTIONS) resolvedAtById.delete(resolvedAtById.keys().next().value!);
+			};
+			// Withdraw the OS banner for exactly this id. Never marks the row read.
+			const dismissNative = (id: string) => {
+				liveNativeIds.delete(id);
+				void aoBridge.notifications.dismiss(id);
+			};
+			// Pages the daemon's history for live ids the cached first page could
+			// not account for (an older or already-read row). Only a row that
+			// reads resolved dismisses; a missing row or a failed fetch proves
+			// nothing, so its banner stays and the next reconnect tries again.
+			let historyReconcile: Promise<void> | undefined;
+			let historyReconcileAgain = false;
+			const reconcileLiveToastsFromHistory = (): Promise<void> => {
+				if (historyReconcile) {
+					historyReconcileAgain = true;
+					return historyReconcile;
+				}
+				if (liveNativeIds.size === 0 || disposed) return Promise.resolve();
+				// Start on a microtask so `historyReconcile` is set before the body
+				// can reach `finally` and clear it (see the remote counterpart).
+				const run = Promise.resolve().then(async () => {
+					try {
+						do {
+							historyReconcileAgain = false;
+							const pending = new Set(liveNativeIds);
+							const visited = new Set<string>();
+							let cursor = "";
+							while (pending.size > 0 && !disposed && !visited.has(cursor)) {
+								visited.add(cursor);
+								const page = await fetchNotificationsPage("all", cursor);
+								for (const item of page.notifications) {
+									if (!pending.delete(item.id) || !item.resolvedAt || !liveNativeIds.has(item.id)) continue;
+									noteResolved(item);
+									dismissNative(item.id);
+								}
+								if (!page.nextCursor) break;
+								cursor = page.nextCursor;
+							}
+						} while (historyReconcileAgain && !disposed);
+					} catch {
+						// Unknown is not resolved: keep the banner.
+					} finally {
+						if (historyReconcile === run) historyReconcile = undefined;
+					}
+				});
+				historyReconcile = run;
+				return run;
+			};
+			// After a snapshot (reconnect or reconciliation), settle live toasts
+			// whose row the snapshot shows; look further back for the rest.
+			const reconcileLiveToastsFromSnapshot = () => {
+				if (liveNativeIds.size === 0) return;
+				const accounted = new Set<string>();
+				for (const queryKey of [unreadNotificationsQueryKey, recentNotificationsQueryKey] as const) {
+					for (const item of getCachedNotifications(queryClient.getQueryData<NotificationsCache>(queryKey))) {
+						if (!liveNativeIds.has(item.id)) continue;
+						if (item.resolvedAt) {
+							noteResolved(item);
+							dismissNative(item.id);
+						} else {
+							accounted.add(item.id);
+						}
+					}
+				}
+				if ([...liveNativeIds].some((id) => !accounted.has(id))) void reconcileLiveToastsFromHistory();
+			};
 
 			const applyLiveNotificationEvent = (event: LiveNotificationEvent): Promise<void> | void => {
 				if (event.kind === "cleared") {
+					// The rows are gone, so nothing can resolve them any more.
+					liveNativeIds.clear();
 					return queryClient
 						.cancelQueries({ queryKey: ["notifications", "history"] }, { revert: false })
 						.catch(() => undefined)
@@ -531,6 +637,7 @@ export function createNotificationsTransport(
 						});
 				}
 				if (event.kind === "deleted") {
+					liveNativeIds.delete(event.notification.id);
 					return queryClient
 						.cancelQueries({ queryKey: ["notifications", "history"] }, { revert: false })
 						.catch(() => undefined)
@@ -539,14 +646,31 @@ export function createNotificationsTransport(
 						});
 				}
 				if (event.kind === "resolved") {
+					// Only the daemon's resolution is authoritative: lifecycle publishes
+					// it once the session stops waiting on the user, which the backend
+					// derives from the provider and its pending requests. A failed or
+					// rejected answer, or one of several concurrent requests, sends no
+					// such event, so the banner stays.
+					if (event.notification.resolvedAt) {
+						noteResolved(event.notification);
+						dismissNative(event.notification.id);
+					}
 					if (!applyResolvedNotification(queryClient, event.notification)) {
 						void invalidateNotifications();
 					}
 					return;
 				}
-				const inserted = mergeUnreadNotification(queryClient, event.notification);
-				mergeRecentNotification(queryClient, event.notification);
-				if (inserted) {
+				const lateResolvedAt = resolvedAtById.get(event.notification.id);
+				const created =
+					lateResolvedAt && !event.notification.resolvedAt
+						? { ...event.notification, resolvedAt: lateResolvedAt }
+						: event.notification;
+				const inserted = mergeUnreadNotification(queryClient, created);
+				mergeRecentNotification(queryClient, created);
+				// A create replayed or delivered after its resolution must not
+				// raise a banner for a prompt that is already answered.
+				if (inserted && !created.resolvedAt) {
+					if (isResolvableNotificationType(created.type)) liveNativeIds.add(created.id);
 					void aoBridge.notifications.show({
 						id: event.notification.id,
 						title: event.notification.title,
@@ -611,6 +735,7 @@ export function createNotificationsTransport(
 						snapshotRefresh = undefined;
 						for (const event of refresh.events) enqueueLiveNotificationEvent(event);
 						await pendingLiveEvents;
+						reconcileLiveToastsFromSnapshot();
 						if (refresh.dirty) await invalidateNotifications();
 					} finally {
 						refresh.resolve();
@@ -698,6 +823,7 @@ export function createNotificationsTransport(
 			connectSource();
 
 			return () => {
+				disposed = true;
 				if (retryTimer) clearTimeout(retryTimer);
 				if (notificationReconcilers.get(queryClient) === invalidateNotifications) {
 					notificationReconcilers.delete(queryClient);

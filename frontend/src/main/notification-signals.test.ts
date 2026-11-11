@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	createToastRegistry,
 	dockBounceType,
 	osToastChimeControllable,
 	shouldReplaceBounce,
@@ -107,5 +108,67 @@ describe("dockBounceType", () => {
 	it("bounces once for unknown or missing types", () => {
 		expect(dockBounceType("some_future_type")).toBe("informational");
 		expect(dockBounceType(undefined)).toBe("informational");
+	});
+});
+
+describe("createToastRegistry", () => {
+	const toast = () => ({ close: vi.fn() });
+
+	it("dismisses only the toast shown for the exact id", () => {
+		const registry = createToastRegistry();
+		const local = toast();
+		const remote = toast();
+		const other = toast();
+		registry.retain("ntf_1", local);
+		// Another machine reusing the same daemon id is a different toast.
+		registry.retain("remote-notification:host-b:ntf_1", remote);
+		registry.retain("ntf_2", other);
+
+		expect(registry.dismiss("ntf_1")).toBe(true);
+
+		expect(local.close).toHaveBeenCalledTimes(1);
+		expect(remote.close).not.toHaveBeenCalled();
+		expect(other.close).not.toHaveBeenCalled();
+		expect(registry.size).toBe(2);
+	});
+
+	it("treats a replayed or unknown dismissal as a no-op", () => {
+		const registry = createToastRegistry();
+		const shown = toast();
+		registry.retain("ntf_1", shown);
+
+		expect(registry.dismiss("ntf_1")).toBe(true);
+		expect(registry.dismiss("ntf_1")).toBe(false);
+		expect(registry.dismiss("never-shown")).toBe(false);
+		expect(shown.close).toHaveBeenCalledTimes(1);
+	});
+
+	it("forgets a toast the user closed without letting a stale release drop its replacement", () => {
+		const registry = createToastRegistry();
+		const first = toast();
+		const second = toast();
+		registry.retain("ntf_1", first);
+		registry.release("ntf_1", first);
+		expect(registry.dismiss("ntf_1")).toBe(false);
+
+		registry.retain("ntf_1", first);
+		registry.retain("ntf_1", second);
+		expect(first.close).toHaveBeenCalledTimes(1);
+		registry.release("ntf_1", first);
+		expect(registry.dismiss("ntf_1")).toBe(true);
+		expect(second.close).toHaveBeenCalledTimes(1);
+	});
+
+	it("can still dismiss the oldest of more than 256 live toasts", () => {
+		const registry = createToastRegistry();
+		const oldest = toast();
+		registry.retain("ntf_0", oldest);
+		for (let i = 1; i <= 300; i++) registry.retain(`ntf_${i}`, toast());
+
+		expect(registry.size).toBe(301);
+		expect(oldest.close).not.toHaveBeenCalled();
+		expect(registry.dismiss("ntf_0")).toBe(true);
+		expect(oldest.close).toHaveBeenCalledTimes(1);
+		expect(registry.size).toBe(300);
 	});
 });

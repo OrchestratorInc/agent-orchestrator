@@ -335,6 +335,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				notifications: {
 					show: async () => undefined,
+					dismiss: async (_id: string) => undefined,
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
 					onClick: unsubscribe,
@@ -1286,6 +1287,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				notifications: {
 					show: async () => undefined,
+					dismiss: async (_id: string) => undefined,
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
 					onClick: unsubscribe,

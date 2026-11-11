@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { notificationAction, notificationsAcrossHosts, notificationRowsForHost, notificationSections, notificationTarget, notificationVisual, relativeTime } from "./notificationView";
+import { notificationAction, notificationNeedsAttention, notificationsAcrossHosts, notificationRowsForHost, notificationSections, notificationTarget, notificationVisual, relativeTime } from "./notificationView";
 import { darkTheme } from "./theme";
 
 describe("notificationVisual", () => {
@@ -113,6 +113,55 @@ describe("notificationSections", () => {
 			{ key: "earlier", data: [read] },
 		]);
 		expect(notificationSections([])).toEqual([]);
+	});
+
+	// Seen and resolved are separate axes. An approval the user has already
+	// looked at is still waiting on them; one AO resolved is not, even unseen.
+	it("keys needs_input attention on resolution, not on the seen state", () => {
+		const openSeen = { id: "open-seen", type: "needs_input", status: "read" };
+		const resolvedUnseen = { id: "resolved-unseen", type: "needs_input", status: "unread", resolvedAt: "2026-10-08T10:05:00Z" };
+		const resolvedSeen = { id: "resolved-seen", type: "needs_input", status: "read", resolvedAt: "2026-10-08T10:05:00Z" };
+
+		expect(notificationSections([openSeen, resolvedUnseen, resolvedSeen])).toEqual([
+			{ key: "attention", title: "Needs attention", data: [openSeen] },
+			{ key: "earlier", data: [resolvedUnseen, resolvedSeen] },
+		]);
+		// History is kept, and the row still reads as unseen.
+		expect(resolvedUnseen.status).toBe("unread");
+	});
+
+	it("resolves two concurrent approvals independently", () => {
+		const first = { id: "a", type: "needs_input", status: "read", resolvedAt: "2026-10-08T10:05:00Z" };
+		const second = { id: "b", type: "needs_input", status: "read" };
+
+		expect(notificationSections([first, second])).toEqual([
+			{ key: "attention", title: "Needs attention", data: [second] },
+			{ key: "earlier", data: [first] },
+		]);
+	});
+
+	it("keeps the unread rule for informational types", () => {
+		const merged = { id: "merged", type: "pr_merged", status: "unread" };
+		const ready = { id: "ready", type: "ready_to_merge", status: "read" };
+
+		expect(notificationSections([merged, ready])).toEqual([
+			{ key: "attention", title: "Needs attention", data: [merged] },
+			{ key: "earlier", data: [ready] },
+		]);
+	});
+
+	// A daemon without resolvedAt cannot prove a prompt was answered, so its old
+	// prompts must not be pinned to the top forever.
+	it("falls back to the unread rule for a daemon that does not track resolution", () => {
+		const openSeen = { id: "open-seen", type: "needs_input", status: "read" };
+		const unseen = { id: "unseen", type: "needs_input", status: "unread" };
+
+		expect(notificationSections([openSeen, unseen], () => false)).toEqual([
+			{ key: "attention", title: "Needs attention", data: [unseen] },
+			{ key: "earlier", data: [openSeen] },
+		]);
+		expect(notificationNeedsAttention(openSeen, false)).toBe(false);
+		expect(notificationNeedsAttention(openSeen)).toBe(true);
 	});
 });
 

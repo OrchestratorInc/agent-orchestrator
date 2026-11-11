@@ -50,12 +50,32 @@ export function notificationRowsForHost<T>(items: readonly T[], itemsHostId: str
 }
 
 /**
- * Keeps actionable unread history ahead of settled items without disturbing
- * the daemon's newest-first order inside either group.
+ * Whether a row still needs the user. Seen state and resolution are separate
+ * axes: an agent waiting on input needs attention until AO resolves it, even
+ * after the user has looked at it, and stops needing it once resolved, even if
+ * the user never saw it (the row keeps its unread look). Every other type keeps
+ * the unread rule. `tracksResolution` is false for a daemon that predates
+ * `resolvedAt`, whose rows can never prove they were resolved.
  */
-export function notificationSections<T extends { status: string }>(items: readonly T[]): NotificationSection<T>[] {
-	const attention = items.filter((item) => item.status === "unread");
-	const earlier = items.filter((item) => item.status !== "unread");
+export function notificationNeedsAttention(
+	item: { status: string; type?: string; resolvedAt?: string },
+	tracksResolution = true,
+): boolean {
+	if (item.type === "needs_input" && tracksResolution) return !item.resolvedAt;
+	return item.status === "unread";
+}
+
+/**
+ * Keeps rows that still need the user ahead of settled items without
+ * disturbing the daemon's newest-first order inside either group.
+ */
+export function notificationSections<T extends { status: string; type?: string; resolvedAt?: string }>(
+	items: readonly T[],
+	tracksResolution: (item: T) => boolean = () => true,
+): NotificationSection<T>[] {
+	const needsAttention = (item: T) => notificationNeedsAttention(item, tracksResolution(item));
+	const attention = items.filter(needsAttention);
+	const earlier = items.filter((item) => !needsAttention(item));
 	const sections: NotificationSection<T>[] = [];
 	if (attention.length > 0) sections.push({ key: "attention", title: "Needs attention", data: attention });
 	if (earlier.length > 0) sections.push({ key: "earlier", data: earlier });
