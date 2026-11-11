@@ -6236,6 +6236,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if kind == domain.KindWorker && requestedOutput == domain.RequestedOutputArtifact {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactOutputPrompt)
 	}
+	cfg.TimeZone = localTimeZone()
 	return buildSystemPromptText(cfg), nil
 }
 
