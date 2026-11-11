@@ -81,7 +81,8 @@ type AgentAccountLimits struct {
 	// unambiguous future deadline. Nil does not establish available capacity.
 	AutoResumeResetsAt *time.Time `json:"-"`
 	// Incomplete is set when the provider reported a window without a valid
-	// utilization, so Windows cannot establish available capacity.
+	// utilization, or a limit state Windows does not show, so Windows alone
+	// cannot establish available capacity.
 	Incomplete bool `json:"-"`
 	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
 	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`

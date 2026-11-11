@@ -29,8 +29,11 @@ func TestCapacityNormalizationIncludesBucketsAndRejectsMalformedWindows(t *testi
 	if observed.Plan == nil || *observed.Plan != "pro" || observed.Overall == nil || observed.Overall.Primary == nil {
 		t.Fatalf("overall = %#v", observed)
 	}
-	if observed.Overall.Secondary != nil {
-		t.Fatalf("out-of-range window was accepted: %#v", observed.Overall.Secondary)
+	if observed.Overall.Secondary != nil || !observed.Overall.InvalidWindow {
+		t.Fatalf("out-of-range window was accepted or not flagged: %#v", observed.Overall)
+	}
+	if observed.AdditionalBuckets[0].InvalidWindow {
+		t.Fatalf("absent window was flagged invalid: %#v", observed.AdditionalBuckets[0])
 	}
 	if len(observed.AdditionalBuckets) != 2 || observed.AdditionalBuckets[0].LimitID != "alpha" || observed.AdditionalBuckets[1].LimitID != "spark" || observed.AdditionalBuckets[1].Reached != domain.CodexCapacityNotReached {
 		t.Fatalf("additional buckets = %#v", observed.AdditionalBuckets)

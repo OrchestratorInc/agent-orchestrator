@@ -72,6 +72,27 @@ func TestClaudeLimitsIncompleteWindow(t *testing.T) {
 	}
 }
 
+func TestCodexLimitsIncomplete(t *testing.T) {
+	window := &domain.CodexCapacityWindow{UsedPercent: 2}
+	for _, tc := range []struct {
+		name       string
+		capacity   ports.CodexCapacityObservation
+		incomplete bool
+	}{
+		{"complete", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached}}, false},
+		{"partial read", ports.CodexCapacityObservation{Partial: true, Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached}}, true},
+		{"dropped window", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached, InvalidWindow: true}}, true},
+		{"reached bucket", ports.CodexCapacityObservation{Overall: &domain.CodexCapacityBucket{LimitID: "codex", Primary: window, Reached: domain.CodexCapacityNotReached},
+			AdditionalBuckets: []domain.CodexCapacityBucket{{LimitID: "spark", Primary: window, Reached: domain.CodexCapacityReached}}}, true},
+	} {
+		cli := &Codex{Accounts: &limitsAccountFactory{client: &limitsAccountClient{capacity: tc.capacity}}}
+		limits, err := cli.Limits(context.Background(), "/bound-codex")
+		if err != nil || limits.Incomplete != tc.incomplete {
+			t.Fatalf("%s: incomplete = %v, want %v, err = %v", tc.name, limits.Incomplete, tc.incomplete, err)
+		}
+	}
+}
+
 type limitsAccountFactory struct {
 	ports.CodexAccountClientFactory
 	client *limitsAccountClient

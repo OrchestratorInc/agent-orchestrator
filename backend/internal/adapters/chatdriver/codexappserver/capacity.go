@@ -135,10 +135,11 @@ func normalizeCapacityBucket(wire capacityWireBucket, fallbackID string, partial
 		(wire.SpendControlReached != nil && *wire.SpendControlReached) {
 		reached = domain.CodexCapacityReached
 	}
+	primary, secondary := normalizeCapacityWindow(wire.Primary), normalizeCapacityWindow(wire.Secondary)
 	return &domain.CodexCapacityBucket{
 		LimitID: id, DisplayName: safeOptionalCapacityText(wire.LimitName, 160),
-		Primary: normalizeCapacityWindow(wire.Primary), Secondary: normalizeCapacityWindow(wire.Secondary),
-		Reached: reached,
+		Primary: primary, Secondary: secondary, Reached: reached,
+		InvalidWindow: (wire.Primary != nil && primary == nil) || (wire.Secondary != nil && secondary == nil),
 	}
 }
 
