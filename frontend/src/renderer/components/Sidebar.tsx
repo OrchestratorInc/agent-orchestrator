@@ -13,6 +13,9 @@ import {
 	useSensors,
 	type Modifier,
 	type DragEndEvent,
+	type CollisionDetection,
+	type ClientRect,
+	type KeyboardCoordinateGetter,
 } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -140,7 +143,7 @@ import { AwakeControl } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
-import { applyOrder } from "../lib/sidebar-order";
+import { applyOrder, groupSidebarSessions } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -225,11 +228,12 @@ const KEYBOARD_SENSOR_OPTIONS = {
 	coordinateGetter: sortableKeyboardCoordinates,
 	keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
 };
+const GROUP_KEYBOARD_SENSOR_OPTIONS = { ...KEYBOARD_SENSOR_OPTIONS, coordinateGetter: sortableHeaderCoordinates };
 
-function useReorderSensors() {
+function useReorderSensors(grouped = false) {
 	return useSensors(
 		useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
-		useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS),
+		useSensor(KeyboardSensor, grouped ? GROUP_KEYBOARD_SENSOR_OPTIONS : KEYBOARD_SENSOR_OPTIONS),
 	);
 }
 
@@ -282,13 +286,36 @@ function sortableRowStyle({ transform, transition, isDragging, dropTransitionDis
 const restrictToListBounds: Modifier = ({ activeNodeRect, containerNodeRect, transform }) => {
 	if (!activeNodeRect || !containerNodeRect) return transform;
 	const minY = containerNodeRect.top - activeNodeRect.top;
-	const maxY = containerNodeRect.bottom - activeNodeRect.bottom;
+	// 分组拖动以 32px 标题行限制边界，整组高度会使展开的编排器无法越过短行。
+	const maxY = containerNodeRect.bottom - activeNodeRect.top - Math.min(activeNodeRect.height, 32);
 	return {
 		...transform,
 		x: 0,
 		y: Math.min(maxY, Math.max(minY, transform.y)),
 	};
 };
+
+/** 统一鼠标碰撞与键盘目标的标题几何，保留实际节点高度供列表布局使用。 */
+function sessionHeaderRect(rect: ClientRect): ClientRect {
+	const height = Math.min(rect.height, 32);
+	return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.top + height, width: rect.width, height };
+}
+
+/** 键盘排序不以整组底边对齐短行，否则标题仍停留在原来的落点。 */
+function sortableHeaderCoordinates(event: KeyboardEvent, args: Parameters<KeyboardCoordinateGetter>[1]) {
+	return sortableKeyboardCoordinates(event, { ...args, context: {
+		...args.context,
+		collisionRect: args.context.collisionRect ? sessionHeaderRect(args.context.collisionRect) : null,
+		droppableRects: new Map([...args.context.droppableRects].map(([id, rect]) => [id, sessionHeaderRect(rect)])),
+	} });
+}
+
+/** 分组以标题行的中心判定落点，避免 worker 数量改变父级向上或向下排序的门槛。 */
+const closestSessionHeaders: CollisionDetection = (args) => closestCenter({
+	...args,
+	collisionRect: sessionHeaderRect(args.collisionRect),
+	droppableRects: new Map([...args.droppableRects].map(([id, rect]) => [id, sessionHeaderRect(rect)])),
+});
 
 type ProjectDropPlacement = "before" | "after";
 
@@ -371,6 +398,7 @@ function useShowMoreCap<T extends { id: string }>(
 	limit: number,
 	activeId: string | undefined,
 	isCollapsed = false,
+	revealKey = activeId,
 ) {
 	const [showAll, setShowAll] = useState(false);
 	const [showAllDismissed, setShowAllDismissed] = useState(false);
@@ -378,7 +406,7 @@ function useShowMoreCap<T extends { id: string }>(
 		if (showAll || items.length <= limit || !activeId) return false;
 		return items.findIndex((item) => item.id === activeId) >= limit;
 	}, [activeId, items, limit, showAll]);
-	useEffect(() => setShowAllDismissed(false), [activeId]);
+	useEffect(() => setShowAllDismissed(false), [revealKey]);
 	useEffect(() => {
 		if (activeBeyondLimit && !showAllDismissed) setShowAll(true);
 	}, [activeBeyondLimit, showAllDismissed]);
@@ -1532,18 +1560,42 @@ const ProjectItem = memo(function ProjectItem({
 		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
 		[sessionOrder, visibleSessions],
 	);
+	const { roots, childrenByParent } = useMemo(() => groupSidebarSessions(sessions), [sessions]);
+	const orderedSessions = useMemo(
+		() => roots.flatMap((session) => [session, ...(childrenByParent.get(session.id) ?? [])]),
+		[roots, childrenByParent],
+	);
+	const [collapsedParents, setCollapsedParents] = useState<ReadonlySet<string>>(() => new Set());
+	const activeParentId = roots.find((session) => childrenByParent.get(session.id)?.some((child) => child.id === selection.activeSessionId))?.id;
+	useEffect(() => {
+		if (!activeParentId) return;
+		setCollapsedParents((current) => {
+			if (!current.has(activeParentId)) return current;
+			const next = new Set(current);
+			next.delete(activeParentId);
+			return next;
+		});
+	}, [activeParentId, selection.activeSessionId]);
+	const toggleChildren = useCallback((parentId: string) => {
+		setCollapsedParents((current) => {
+			const next = new Set(current);
+			if (next.has(parentId)) next.delete(parentId);
+			else next.add(parentId);
+			return next;
+		});
+	}, []);
 	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
-		const sessionIds = sessions.map((session) => session.id);
+		const sessionIds = orderedSessions.map((session) => session.id);
 		useSidebarOrderStore.getState().setSessionOrder(projectKey, sessionIds);
 		return () => useSidebarOrderStore.getState().clearSessionOrder(projectKey);
-	}, [projectKey, sessions]);
+	}, [projectKey, orderedSessions]);
 	const {
 		listed: listedSessions,
 		hiddenCount: hiddenSessionCount,
 		showAll: showAllSessions,
 		toggleShowAll: toggleShowAllSessions,
-	} = useShowMoreCap(sessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
+	} = useShowMoreCap(roots, SIDEBAR_PROJECT_SESSION_LIMIT, activeParentId ?? selection.activeSessionId, false, selection.activeSessionId);
 	useLayoutEffect(() => {
 		const header = projectHeaderRef.current;
 		const content = projectSessionsRef.current;
@@ -1571,13 +1623,17 @@ const ProjectItem = memo(function ProjectItem({
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
-			// Only the listed slice is draggable, so keep the still-hidden tail
-			// behind it rather than letting applyOrder float it to the front.
-			const listed = new Set(next);
-			setSessionOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)]);
+			// 编排器拖动时携带子会话，未展开显示的顶层会话仍保留在尾部。
+			setSessionOrder(applyOrder(roots, (session) => session.id, next, "end")
+				.flatMap((session) => [session.id, ...(childrenByParent.get(session.id) ?? []).map((child) => child.id)]));
 		},
-		[sessions],
+		[roots, childrenByParent],
 	);
+	const commitChildOrder = useCallback((parentId: string, next: string[] | null) => {
+		if (!next) return;
+		setSessionOrder(roots.flatMap((session) => [session.id, ...(session.id === parentId
+			? next : (childrenByParent.get(session.id) ?? []).map((child) => child.id))]));
+	}, [roots, childrenByParent]);
 	// Stable row handlers: selection changes on every session switch, and a new
 	// handler would re-render every row (with its menus, tooltips, and dialogs).
 	const openSession = useLatestCallback((sessionId: string) => {
@@ -1587,7 +1643,7 @@ const ProjectItem = memo(function ProjectItem({
 	});
 	const handleSessionKilled = useLatestCallback((killedSession: WorkspaceSession) => {
 		if (selection.activeSessionId !== killedSession.id) return;
-		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
+		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, orderedSessions);
 		if (nextRoute.target === "session") {
 			selection.goSession(workspace.id, nextRoute.sessionId);
 		} else if (workspace.id === STANDALONE_WORKSPACE_ID) {
@@ -2021,6 +2077,10 @@ const ProjectItem = memo(function ProjectItem({
 												)}
 												sessions={listedSessions}
 												sessionIds={listedSessionIds}
+												childrenByParent={childrenByParent}
+												collapsedParents={collapsedParents}
+												onToggleChildren={toggleChildren}
+												onReorderChildren={commitChildOrder}
 												activeSessionId={selection.activeSessionId}
 												plain={projectDragInProgress}
 												onReorder={commitSessionOrder}
@@ -2322,6 +2382,14 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 
 // A session row inside its project's drag context. The Pinned section renders
 // plain SessionRows instead: that list is ordered by pin time, not by hand.
+type SessionChildrenProps = {
+	children?: ReactNode;
+	childCount?: number;
+	childrenExpanded?: boolean;
+	childrenId?: string;
+	onToggleChildren?: () => void;
+};
+
 const SortableSessionRow = memo(function SortableSessionRow({
 	session,
 	active,
@@ -2332,6 +2400,11 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	dropTransitionDisabled,
 	onKilled,
 	onOpen,
+	children,
+	childCount,
+	childrenExpanded,
+	childrenId,
+	onToggleChildren,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
@@ -2342,7 +2415,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
-}) {
+} & SessionChildrenProps) {
 	const { isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
 		id: session.id,
 	});
@@ -2365,6 +2438,11 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
 			reorder={reorder}
+			childCount={childCount}
+			childrenExpanded={childrenExpanded}
+			childrenId={childrenId}
+			onToggleChildren={onToggleChildren}
+			children={children}
 		/>
 	);
 });
@@ -2384,6 +2462,11 @@ function SessionReorderList({
 	onReorder,
 	onKilled,
 	onOpen,
+	childrenByParent,
+	collapsedParents,
+	onToggleChildren,
+	onReorderChildren,
+	limit,
 }: {
 	dndId: string;
 	testId: string;
@@ -2399,7 +2482,15 @@ function SessionReorderList({
 	onReorder: (next: string[] | null) => void;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
+	childrenByParent?: ReadonlyMap<string, WorkspaceSession[]>;
+	collapsedParents?: ReadonlySet<string>;
+	onToggleChildren?: (parentId: string) => void;
+	onReorderChildren?: (parentId: string, next: string[] | null) => void;
+	limit?: number;
 }) {
+	const { t } = useTranslation();
+	const { listed, hiddenCount, showAll, toggleShowAll } = useShowMoreCap(sessions, limit ?? sessions.length, activeSessionId);
+	const visibleIds = useStableArray(useMemo(() => limit ? listed.map((session) => session.id) : sessionIds, [limit, listed, sessionIds]));
 	// Suppress the vertical glide for the first 500ms after the list mounts, so the
 	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
 	const [layoutSettled, setLayoutSettled] = useState(false);
@@ -2407,9 +2498,9 @@ function SessionReorderList({
 		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
 		return () => window.clearTimeout(timer);
 	}, []);
-	const orderKey = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
+	const orderKey = useMemo(() => visibleIds.join("\u0000"), [visibleIds]);
 	const layoutDependency = layoutSettled ? orderKey : undefined;
-	const sensors = useReorderSensors();
+	const sensors = useReorderSensors(Boolean(childrenByParent?.size));
 	const dragClickGuard = usePostDragClickGuard();
 	const [listDragging, setListDragging] = useState(false);
 	const [dropTransitionDisabledId, setDropTransitionDisabledId] = useState<string | null>(null);
@@ -2424,27 +2515,66 @@ function SessionReorderList({
 		}
 		// reorderById rejects any id that is not in THIS list, so a stray
 		// cross-list drop leaves both lists' orders untouched.
-		const next = reorderById(sessionIds, sessionId, String(over.id));
+		const next = reorderById(visibleIds, sessionId, String(over.id));
 		// Commit the destination DOM order before dnd-kit removes its live transform.
 		// Otherwise the row briefly snaps back to its derived (usually top) position,
 		// then Motion animates it forward to the persisted destination.
 		flushSync(() => {
-			onReorder(next);
+			onReorder(next && limit ? applyOrder(sessions, (session) => session.id, next, "end").map((session) => session.id) : next);
 			setListDragging(false);
 			setDropTransitionDisabledId(sessionId);
 		});
 		requestAnimationFrame(() => setDropTransitionDisabledId(null));
-	}, [dragClickGuard, onReorder, sessionIds]);
+	}, [dragClickGuard, limit, onReorder, sessions, visibleIds]);
 
 	const onDragCancel = useCallback(() => {
 		setListDragging(false);
 		setDropTransitionDisabledId(null);
 	}, []);
 
+	// 每个编排器的子列表独占拖拽上下文，排序不会改变 worker 的实际归属。
+	const childProps = (session: WorkspaceSession): SessionChildrenProps => {
+		const children = childrenByParent?.get(session.id);
+		if (!children?.length) return {};
+		const expanded = !collapsedParents?.has(session.id);
+		const childListId = `${testId}-${session.id}`;
+		return {
+			childCount: children.length,
+			childrenExpanded: expanded,
+			childrenId: childListId,
+			onToggleChildren: () => onToggleChildren?.(session.id),
+			children: expanded ? (
+				<SessionReorderList
+					dndId={`${dndId}-${session.id}`}
+					testId={childListId}
+					className="mx-0 ml-3.5 translate-x-0 gap-px border-l border-sidebar-border px-0 pl-1 py-px"
+					sessions={children}
+					sessionIds={children.map((child) => child.id)}
+					activeSessionId={activeSessionId}
+					limit={SIDEBAR_PROJECT_SESSION_LIMIT}
+					plain={plain || listDragging}
+					onReorder={(next) => onReorderChildren?.(session.id, next)}
+					onKilled={onKilled}
+					onOpen={onOpen}
+				/>
+			) : undefined,
+		};
+	};
+	const more = hiddenCount > 0 ? (
+		<div className="pl-5">
+			<ShowMoreRow
+				expanded={showAll}
+				label={showAll ? t("shell.showLessAgents") : t("shell.showMoreAgents", { count: hiddenCount })}
+				onClick={toggleShowAll}
+			/>
+		</div>
+	) : null;
+
 	if (plain) {
 		return (
-			<SidebarMenuSub className={className} data-testid={testId}>
-				{sessions.map((session) => (
+			<>
+			<SidebarMenuSub className={className} data-testid={testId} id={testId}>
+				{listed.map((session) => (
 					<SessionRow
 						key={session.id}
 						session={session}
@@ -2452,15 +2582,19 @@ function SessionReorderList({
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
+						{...childProps(session)}
 					/>
 				))}
 			</SidebarMenuSub>
+			{more}
+			</>
 		);
 	}
 
 	return (
+		<>
 		<DndContext
-			collisionDetection={closestCenter}
+			collisionDetection={childrenByParent?.size ? closestSessionHeaders : closestCenter}
 			modifiers={[restrictToListBounds]}
 			id={dndId}
 			onDragStart={() => setListDragging(true)}
@@ -2468,9 +2602,9 @@ function SessionReorderList({
 			onDragEnd={onDragEnd}
 			sensors={sensors}
 		>
-			<SortableContext items={sessionIds} strategy={verticalListSortingStrategy}>
-				<SidebarMenuSub className={className} data-testid={testId}>
-					{sessions.map((session) => (
+			<SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
+				<SidebarMenuSub className={className} data-testid={testId} id={testId}>
+					{listed.map((session) => (
 						<SortableSessionRow
 							key={session.id}
 							session={session}
@@ -2482,11 +2616,14 @@ function SessionReorderList({
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
 							onKilled={onKilled}
 							onOpen={onOpen}
+							{...childProps(session)}
 						/>
 					))}
 				</SidebarMenuSub>
 			</SortableContext>
 		</DndContext>
+		{more}
+		</>
 	);
 }
 
@@ -2507,6 +2644,11 @@ const SessionRow = memo(function SessionRow({
 	onKilled,
 	onOpen,
 	reorder,
+	children,
+	childCount,
+	childrenExpanded,
+	childrenId,
+	onToggleChildren,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
@@ -2521,7 +2663,7 @@ const SessionRow = memo(function SessionRow({
 	onOpen: () => void;
 	/** Present only for rows inside a reorderable project list. */
 	reorder?: SessionReorder;
-}) {
+} & SessionChildrenProps) {
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
@@ -2598,6 +2740,7 @@ const SessionRow = memo(function SessionRow({
 					/>
 					<SessionMessageAge session={session} />
 				</div>
+				{children}
 			</SidebarMenuSubItem>
 		);
 	}
@@ -2626,6 +2769,18 @@ const SessionRow = memo(function SessionRow({
 					data-dragging={reorder?.isDragging ? "true" : undefined}
 				>
 					<NavRowHighlight active={active} disabled={Boolean(reorder?.isDragging)} />
+					{childCount ? (
+						<button
+							type="button"
+							className="relative z-[1] flex h-8 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2"
+							aria-label={t("shell.toggleOrchestratorWorkers", { title: sessionDisplayTitle(session), count: childCount })}
+							aria-expanded={childrenExpanded}
+							aria-controls={childrenExpanded ? childrenId : undefined}
+							onClick={onToggleChildren}
+						>
+							<ChevronRight aria-hidden="true" className={cn("size-3.5", childrenExpanded && "rotate-90")} />
+						</button>
+					) : null}
 					<div className={cn("relative z-[1] flex min-w-0 flex-1", reorder?.isDragging && "cursor-grabbing")}>
 						<button
 							aria-current={active ? "page" : undefined}
@@ -2693,6 +2848,11 @@ const SessionRow = memo(function SessionRow({
 								>
 									{sessionDisplayTitle(session)}
 								</span>
+								{isOrchestratorSession(session) ? (
+									<Badge variant="outline" className="h-4 shrink-0 gap-1 px-1 text-2xs">
+										{t("shell.orchestrator")}{childCount ? <span>{childCount}</span> : null}
+									</Badge>
+								) : null}
 								{hostLabel ? <Badge variant="outline" className="h-4 shrink-0 px-1.5 text-2xs">{hostLabel}</Badge> : null}
 							</span>
 						</button>
@@ -2708,6 +2868,7 @@ const SessionRow = memo(function SessionRow({
 					/>
 				</div>
 			</motion.div>
+					{children}
 				</SidebarMenuSubItem>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">

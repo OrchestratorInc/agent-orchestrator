@@ -934,6 +934,7 @@ type Session struct {
 	TerminatedAt                     sql.NullTime
 	IndependentOrchestrator          int64
 	OrchestratorSessionID            string
+	SpawnParentSessionID             string
 }
 
 type SessionAgentAccount struct {

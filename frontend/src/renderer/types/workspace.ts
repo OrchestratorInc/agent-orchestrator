@@ -1,4 +1,5 @@
 import { attentionZone as presentationAttentionZone } from "../lib/session-presentation";
+import { appI18n } from "../i18n/instance";
 import {
 	AGENT_OPTIONS,
 	toKanbanColumn,
@@ -130,6 +131,8 @@ export type WorkspaceSession = {
 	kind?: SessionKind;
 	/** 独立管理的编排器，不参与项目主入口的选择。 */
 	independentOrchestrator?: boolean;
+	/** 真实创建归属的编排器 ID；缺失时不推测归属。 */
+	parentOrchestratorId?: string;
 	/**
 	 * Which controller is currently committed for this session. The session
 	 * surface renders from THIS value, never from the current creation default.
@@ -334,9 +337,13 @@ export function isPrimaryOrchestratorSession(session: Pick<WorkspaceSession, "id
 	return isOrchestratorSession(session) && !session.independentOrchestrator;
 }
 
-/** 同名独立会话保留稳定 ID，便于用户区分。 */
-export function sessionDisplayTitle(session: Pick<WorkspaceSession, "id" | "title" | "independentOrchestrator">): string {
-	return session.independentOrchestrator ? `${session.title} · ${session.id}` : session.title;
+/** 编排器只展示可读名称；未命名时隐藏映射层回退的 ID，身份由徽标和详情表达。 */
+export function sessionDisplayTitle(session: Pick<WorkspaceSession, "id" | "title" | "kind" | "independentOrchestrator">): string {
+	if (!session.independentOrchestrator && !isOrchestratorSession(session)) return session.title;
+	const title = session.title.trim();
+	return title && title !== session.id
+		? session.title
+		: appI18n.t(session.independentOrchestrator ? "shell.untitledTask" : "shell.orchestrator");
 }
 
 /**
@@ -415,9 +422,9 @@ export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSes
 	);
 }
 
-/** 侧栏同时展示普通任务和独立编排器，主编排器保留项目入口。 */
+/** 所有项目会话均在侧栏可见，主编排器仍保留项目快捷入口。 */
 export function sortedProjectSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
-	return sessions.filter((session) => !isPrimaryOrchestratorSession(session)).sort((a, b) =>
+	return [...sessions].sort((a, b) =>
 		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
 	);
 }

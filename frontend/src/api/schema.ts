@@ -6646,6 +6646,7 @@ export interface components {
             orchestratorSessionId?: string;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
+            parentOrchestratorId?: string;
             /** Format: date-time */
             pinnedAt?: null | string;
             /** Format: int64 */

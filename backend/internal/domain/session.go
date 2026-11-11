@@ -271,6 +271,8 @@ type SessionRecord struct {
 	IndependentOrchestrator bool `json:"independentOrchestrator,omitempty"`
 	// OrchestratorSessionID 固定独立编排器的任务归属；空值沿用项目主编排器。
 	OrchestratorSessionID SessionID `json:"orchestratorSessionId,omitempty"`
+	// SpawnParentSessionID 保留实际创建者，供无 Chat 事件的会话追溯归属，不参与汇报路由。
+	SpawnParentSessionID SessionID `json:"-"`
 	// AutomationRunID is the optional durable origin for an unattended spawn.
 	// It is internal lifecycle data, not part of the session API read model.
 	AutomationRunID *AutomationRunID `json:"-"`
@@ -531,6 +533,8 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // persisted.
 type Session struct {
 	SessionRecord
+	// ParentOrchestratorID 仅由持久创建关系推导，空值不代表归属项目主编排器。
+	ParentOrchestratorID SessionID `json:"parentOrchestratorId,omitempty"`
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
 	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an

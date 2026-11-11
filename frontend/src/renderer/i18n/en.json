@@ -2341,6 +2341,8 @@
 	"shell.orchestrator": "Orchestrator",
 	"shell.orchestratorPrimary": "Primary",
 	"shell.orchestratorIndependent": "Independent",
+	"shell.toggleOrchestratorWorkers": "{{title}} workers ({{count}})",
+	"shell.untitledTask": "Untitled task",
 	"shell.orchestratorBoard": "Orchestrator board",
 	"shell.orchestratorWithActivity": "Orchestrator, {{activity}}",
 	"shell.pinned": "Pinned",

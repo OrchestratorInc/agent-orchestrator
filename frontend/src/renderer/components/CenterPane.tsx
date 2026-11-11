@@ -286,7 +286,7 @@ export function CenterPane({
 			? (shellTerminals.find((shell) => shell.handleId === target.handleId)?.title ?? target.title)
 			: target.kind === "reviewer"
 				? `${t("terminal.reviewer")} · ${target.harness}`
-				: (session?.title ?? sessionTabLabel);
+				: sessionTabLabel;
 	const reorderAuxiliaryTabs = useCallback(
 		(nextKeys: string[]) => {
 			if (!sessionId) return;

@@ -1582,6 +1582,10 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 	if err != nil {
 		return nil, fmt.Errorf("list interrupted sessions: %w", err)
 	}
+	parents, err := s.parentOrchestrators(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	var cleanupBySession map[domain.SessionID]domain.SessionCleanupRecord
 	if len(archived) > 0 {
 		if cleanupBySession, err = s.store.ListSessionCleanupFactsForSessions(ctx, archived); err != nil {
@@ -1595,6 +1599,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 		if err != nil {
 			return nil, err
 		}
+		sess.ParentOrchestratorID = parents[rec.ID]
 		out = append(out, sess)
 	}
 	if s.statusRecoveryRevision() != recoveryRevision {
@@ -2098,7 +2103,13 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, fmt.Errorf("interrupted turn %s: %w", rec.ID, err)
 	}
-	return s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	parents, err := s.parentOrchestrators(ctx, []domain.SessionID{rec.ID})
+	if err != nil {
+		return domain.Session{}, err
+	}
+	sess, err := s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
+	sess.ParentOrchestratorID = parents[rec.ID]
+	return sess, err
 }
 
 // currentWorkspaceCleanup is the teardown recorded for an archived session,

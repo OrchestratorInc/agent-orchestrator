@@ -1,5 +1,6 @@
 import {
 	attentionZone,
+	isOrchestratorSession,
 	sessionNeedsAttention,
 	sortedProjectSessions,
 	STANDALONE_PROJECT_KIND,
@@ -30,6 +31,26 @@ export function applyOrder<T>(
 	return unplaced === "start" ? [...rest, ...placed] : [...placed, ...rest];
 }
 
+/** 只按同项目、同主机的真实编排归属分组；缺失父级的 worker 仍可独立打开。 */
+export function groupSidebarSessions(sessions: readonly WorkspaceSession[]) {
+	const byId = new Map(sessions.map((session) => [session.id, session]));
+	const roots: WorkspaceSession[] = [];
+	const childrenByParent = new Map<string, WorkspaceSession[]>();
+	for (const session of sessions) {
+		const parent = session.parentOrchestratorId ? byId.get(session.parentOrchestratorId) : undefined;
+		if (!isOrchestratorSession(session) && parent && isOrchestratorSession(parent)
+			&& parent.isTerminated !== true && parent.workspaceId === session.workspaceId
+			&& (parent.hostId ?? "") === (session.hostId ?? "")) {
+			const children = childrenByParent.get(parent.id) ?? [];
+			children.push(session);
+			childrenByParent.set(parent.id, children);
+		} else {
+			roots.push(session);
+		}
+	}
+	return { roots, childrenByParent };
+}
+
 export type SidebarNavSession = {
 	sessionId: string;
 	projectId: string;
@@ -52,7 +73,9 @@ function listedSessions(
 	sessionOrders: SidebarOrderInput["sessionOrders"],
 ): WorkspaceSession[] {
 	const visible = sortedProjectSessions(workspace.sessions).filter((session) => session.isTerminated !== true);
-	return applyOrder(visible, (session) => session.id, sessionOrders?.[sessionUiKey(workspace.id, workspace.hostId)] ?? [], "start");
+	const ordered = applyOrder(visible, (session) => session.id, sessionOrders?.[sessionUiKey(workspace.id, workspace.hostId)] ?? [], "start");
+	const { roots, childrenByParent } = groupSidebarSessions(ordered);
+	return roots.flatMap((session) => [session, ...(childrenByParent.get(session.id) ?? [])]);
 }
 
 /**

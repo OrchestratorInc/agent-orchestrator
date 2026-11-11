@@ -20972,6 +20972,8 @@ components:
           - artifact
           - pr_artifact
           type: string
+        parentOrchestratorId:
+          type: string
         pinnedAt:
           format: date-time
           type:

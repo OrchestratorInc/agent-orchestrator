@@ -315,29 +315,31 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 }
 
 // promoteTaskPreparation 允许许可消费事务一起发布已准备的隐藏 Session。
+// 正式创建时才确定实际父级，之后通用更新不覆盖该创建事实。
 func promoteTaskPreparation(ctx context.Context, q *gen.Queries, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	rows, err := q.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
-		IssueID:            rec.IssueID,
-		Kind:               rec.Kind,
-		Harness:            rec.Harness,
-		AutoReviewEnabled:  rec.AutoReviewEnabled,
-		DisplayName:        rec.DisplayName,
-		ActivityState:      activity.State,
-		ActivityLastAt:     activity.LastActivityAt,
-		SessionMode:        domain.NormalizeSessionMode(rec.Mode),
-		Model:              rec.Metadata.Model,
-		Effort:             rec.Metadata.Effort,
-		SessionPermissions: string(rec.Metadata.Permissions),
-		RequestedOutput:    string(rec.RequestedOutput),
-		CreatedAt:          rec.CreatedAt,
-		UpdatedAt:          rec.UpdatedAt,
-		AutoInjectReview:   rec.AutoInjectReview,
-		AutoInjectCI:       rec.AutoInjectCI,
-		ProvisionState:     rec.ProvisionState.WithDefault(),
-		ClientRequestID:    rec.ClientRequestID,
-		ClientRequestHash:  rec.ClientRequestHash,
-		ID:                 id,
+		SpawnParentSessionID: string(rec.SpawnParentSessionID),
+		IssueID:              rec.IssueID,
+		Kind:                 rec.Kind,
+		Harness:              rec.Harness,
+		AutoReviewEnabled:    rec.AutoReviewEnabled,
+		DisplayName:          rec.DisplayName,
+		ActivityState:        activity.State,
+		ActivityLastAt:       activity.LastActivityAt,
+		SessionMode:          domain.NormalizeSessionMode(rec.Mode),
+		Model:                rec.Metadata.Model,
+		Effort:               rec.Metadata.Effort,
+		SessionPermissions:   string(rec.Metadata.Permissions),
+		RequestedOutput:      string(rec.RequestedOutput),
+		CreatedAt:            rec.CreatedAt,
+		UpdatedAt:            rec.UpdatedAt,
+		AutoInjectReview:     rec.AutoInjectReview,
+		AutoInjectCI:         rec.AutoInjectCI,
+		ProvisionState:       rec.ProvisionState.WithDefault(),
+		ClientRequestID:      rec.ClientRequestID,
+		ClientRequestHash:    rec.ClientRequestHash,
+		ID:                   id,
 	})
 	if err != nil {
 		return false, fmt.Errorf("promote task preparation %s: %w", id, err)
@@ -1097,6 +1099,7 @@ func mapListAllSessionsRows(rows []gen.ListAllSessionsRow) []domain.SessionRecor
 	return out
 }
 
+// rowToRecord 统一还原持久事实，详情与列表保留相同的原始创建父级。
 func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 	return domain.SessionRecord{
 		Revision:                  row.Revision,
@@ -1111,6 +1114,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		Kind:                      row.Kind,
 		IndependentOrchestrator:   row.IndependentOrchestrator != 0,
 		OrchestratorSessionID:     domain.SessionID(row.OrchestratorSessionID),
+		SpawnParentSessionID:      domain.SessionID(row.SpawnParentSessionID),
 		Harness:                   row.Harness,
 		ReviewerHarness:           row.ReviewerHarness,
 		ReviewerConfig:            unmarshalAgentConfig(row.ReviewerAgentConfig),
@@ -1241,6 +1245,7 @@ func listAllSessionsRowToRecord(row gen.ListAllSessionsRow) domain.SessionRecord
 	return rowToRecord(gen.GetSessionRow(row))
 }
 
+// recordToInsert 在首条会话记录中写入创建父级，不依赖后续活动事件成功。
 func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams {
 	activity := normalActivity(rec.Activity, rec.CreatedAt)
 	return gen.InsertSessionParams{
@@ -1251,6 +1256,7 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		Kind:                             rec.Kind,
 		IndependentOrchestrator:          boolInt(rec.IndependentOrchestrator),
 		OrchestratorSessionID:            string(rec.OrchestratorSessionID),
+		SpawnParentSessionID:             string(rec.SpawnParentSessionID),
 		Harness:                          rec.Harness,
 		ReviewerHarness:                  rec.ReviewerHarness,
 		ReviewerAgentConfig:              mustMarshalAgentConfig(rec.ReviewerConfig),

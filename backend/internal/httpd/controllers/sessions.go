@@ -2662,9 +2662,10 @@ func (c *SessionsController) spawnOrchestrator(w http.ResponseWriter, r *http.Re
 	var sess domain.Session
 	var err error
 	if in.NewSession {
+		// 留空名称，让首次用户任务触发现有自动命名，避免固定默认名被当作手动改名。
 		sess, _, _, err = c.Svc.Spawn(r.Context(), ports.SpawnConfig{
 			ProjectID: in.ProjectID, Kind: domain.KindOrchestrator, IndependentOrchestrator: true,
-			DisplayName: "Orchestrator", RequestedMode: in.Mode, Async: true,
+			RequestedMode: in.Mode, Async: true,
 			AgentConfig: ports.AgentConfig{Permissions: in.ApprovalMode},
 		})
 	} else {

@@ -2003,6 +2003,8 @@
 	"shell.orchestrator": "编排器",
 	"shell.orchestratorPrimary": "主",
 	"shell.orchestratorIndependent": "独立",
+	"shell.toggleOrchestratorWorkers": "{{title}} 的子会话（{{count}}）",
+	"shell.untitledTask": "未命名任务",
 	"shell.orchestratorBoard": "编排器看板",
 	"shell.orchestratorWithActivity": "编排器，{{activity}}",
 	"shell.pinned": "已固定",

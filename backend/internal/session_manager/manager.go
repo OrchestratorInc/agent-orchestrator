@@ -5864,10 +5864,12 @@ func normalizeWorkspacePath(p string) string {
 
 // ---- helpers ----
 
+// seedRecord 在创建时保留原始父会话，使无 Chat 事件的创建链也能在重启后追溯。
 func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
 	return domain.SessionRecord{
 		IndependentOrchestrator: cfg.IndependentOrchestrator,
 		OrchestratorSessionID:   cfg.OrchestratorSessionID,
+		SpawnParentSessionID:    cfg.ParentSessionID,
 		ProjectID:               cfg.ProjectID,
 		IssueID:                 cfg.IssueID,
 		AutomationRunID:         cfg.AutomationRunID,
