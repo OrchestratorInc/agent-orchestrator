@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,11 +15,14 @@ import (
 // or cloud machine in another zone. Without a report (CLI-only use, before
 // any desktop request) it falls back to this machine's zone, which is the
 // user's own when the daemon runs locally.
-func userTimeZone(dataDir string) string {
+func userTimeZone(ctx context.Context, dataDir string) string {
+	if ctx.Err() != nil {
+		return ""
+	}
 	if zone := clienttz.Read(dataDir); zone != "" {
 		return zone
 	}
-	return localTimeZone()
+	return localTimeZone(ctx)
 }
 
 // localTimeZone returns the machine's IANA time zone name (for example
@@ -27,25 +31,34 @@ func userTimeZone(dataDir string) string {
 // symlink that macOS and most Linux distributions maintain, and finally
 // /etc/timezone, which Debian-style systems write when /etc/localtime is a
 // plain copy rather than a link.
-func localTimeZone() string {
-	return resolveTimeZone(os.Getenv("TZ"), os.Readlink, os.ReadFile)
+func localTimeZone(ctx context.Context) string {
+	return resolveTimeZone(ctx, os.Getenv("TZ"), os.Readlink, os.ReadFile)
 }
 
-func resolveTimeZone(tzEnv string, readlink func(string) (string, error), readFile func(string) ([]byte, error)) string {
+func resolveTimeZone(ctx context.Context, tzEnv string, readlink func(string) (string, error), readFile func(string) ([]byte, error)) string {
 	if name := strings.TrimPrefix(strings.TrimSpace(tzEnv), ":"); name != "" {
 		// TZ may also name a zone file directly, e.g. /usr/share/zoneinfo/Asia/Tokyo.
 		if filepath.IsAbs(name) {
-			return zoneFromPath(name)
+			zone, _ := zoneFromPath(name)
+			return zone
 		}
 		if validTimeZone(name) {
 			return name
 		}
 		return ""
 	}
+	if ctx.Err() != nil {
+		return ""
+	}
 	if target, err := readlink("/etc/localtime"); err == nil {
-		if name := zoneFromPath(target); name != "" {
-			return name
+		// A link into zoneinfo is authoritative even when it names an excluded
+		// UTC zone; /etc/timezone may be stale and must not override it.
+		if zone, identified := zoneFromPath(target); identified {
+			return zone
 		}
+	}
+	if ctx.Err() != nil {
+		return ""
 	}
 	if data, err := readFile("/etc/timezone"); err == nil {
 		if name := strings.TrimSpace(string(data)); validTimeZone(name) {
@@ -55,13 +68,18 @@ func resolveTimeZone(tzEnv string, readlink func(string) (string, error), readFi
 	return ""
 }
 
-// zoneFromPath extracts the IANA name from a path inside a zoneinfo directory.
-func zoneFromPath(path string) string {
+// zoneFromPath extracts the IANA name from a path inside a zoneinfo
+// directory. identified reports that the path names a zone at all; zone is
+// empty when that zone is invalid or an excluded server default such as UTC.
+func zoneFromPath(path string) (zone string, identified bool) {
 	_, name, ok := strings.Cut(filepath.ToSlash(path), "zoneinfo/")
-	if !ok || !validTimeZone(name) {
-		return ""
+	if !ok || name == "" {
+		return "", false
 	}
-	return name
+	if !validTimeZone(name) {
+		return "", true
+	}
+	return name, true
 }
 
 // serverDefaultZones are the UTC aliases servers, containers and CI runners

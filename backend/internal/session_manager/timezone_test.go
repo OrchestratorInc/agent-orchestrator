@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -40,11 +41,12 @@ func TestResolveTimeZone(t *testing.T) {
 		{"server UTC via TZ", "UTC", noLink, noFile, ""},
 		{"server Etc/UTC link", "", link("/usr/share/zoneinfo/Etc/UTC"), noFile, ""},
 		{"server Etc/UTC in /etc/timezone", "", noLink, file("Etc/UTC\n"), ""},
+		{"UTC link is not overridden by a stale /etc/timezone", "", link("/usr/share/zoneinfo/Etc/UTC"), file("Europe/Paris"), ""},
 		{"London is not treated as a server default", "Europe/London", noLink, noFile, "Europe/London"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := resolveTimeZone(tc.tz, tc.readlink, tc.readFile); got != tc.want {
+			if got := resolveTimeZone(context.Background(), tc.tz, tc.readlink, tc.readFile); got != tc.want {
 				t.Fatalf("resolveTimeZone(%q) = %q, want %q", tc.tz, got, tc.want)
 			}
 		})
@@ -69,11 +71,24 @@ func TestBuildSystemPrompt_TimeZoneSection(t *testing.T) {
 func TestUserTimeZonePrefersClientReport(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TZ", "Europe/Berlin")
-	if got := userTimeZone(dir); got != "Europe/Berlin" {
+	if got := userTimeZone(context.Background(), dir); got != "Europe/Berlin" {
 		t.Fatalf("without a client report userTimeZone = %q, want machine zone Europe/Berlin", got)
 	}
 	clienttz.NewRecorder(dir).Observe("Asia/Kolkata")
-	if got := userTimeZone(dir); got != "Asia/Kolkata" {
+	if got := userTimeZone(context.Background(), dir); got != "Asia/Kolkata" {
 		t.Fatalf("with a client report userTimeZone = %q, want Asia/Kolkata", got)
+	}
+}
+
+func TestTimeZoneLookupStopsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	read := func(string) (string, error) { t.Fatal("readlink after cancel"); return "", nil }
+	readFile := func(string) ([]byte, error) { t.Fatal("readFile after cancel"); return nil, nil }
+	if got := resolveTimeZone(ctx, "", read, readFile); got != "" {
+		t.Fatalf("cancelled resolveTimeZone = %q", got)
+	}
+	if got := userTimeZone(ctx, t.TempDir()); got != "" {
+		t.Fatalf("cancelled userTimeZone = %q", got)
 	}
 }
