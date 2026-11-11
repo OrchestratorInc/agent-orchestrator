@@ -1,11 +1,12 @@
 import { CLOUD_API_PREFIX, cloudWebSocketBase } from "./config";
-import { CloudAuthError, CloudError } from "./errors";
+import { CloudAuthError, CloudError, isPlanRefusal } from "./errors";
 import type {
 	CloudArtifact,
 	CloudArtifactAccess,
 	CloudArtifactShareList,
 	CloudArtifactVersionSummary,
 	CloudAttachment,
+	CloudBillingSummary,
 	CloudChatEventsPage,
 	CloudInterfaceTransition,
 	CloudInterfaceTransitionStatus,
@@ -61,6 +62,11 @@ export type CloudClientOptions = {
 	newKey: () => string;
 	/** A 403 usually means the selected organization is stale; the owner re-resolves it. */
 	onForbidden?: () => void;
+	/**
+	 * The organization's plan refused the request (402 PLAN_REQUIRED, a full
+	 * slot, a usage limit). Wherever it came from, the owner explains it once.
+	 */
+	onPlanRefused?: (error: CloudError) => void;
 };
 
 export type ListOptions = { cursor?: string; limit?: number; signal?: AbortSignal };
@@ -157,10 +163,17 @@ export function createCloudClient(options: CloudClientOptions) {
 			init.signal?.removeEventListener("abort", abort);
 		}
 		if (!response.ok) {
-			if (response.status === 403) options.onForbidden?.();
-			throw await errorFromResponse(response);
+			throw await refusal(response);
 		}
 		return response;
+	}
+
+	/** A refused request's error, once the owner has heard of the refusals it acts on. */
+	async function refusal(response: Response): Promise<CloudError> {
+		if (response.status === 403) options.onForbidden?.();
+		const error = await errorFromResponse(response);
+		if (isPlanRefusal(error)) options.onPlanRefused?.(error);
+		return error;
 	}
 
 	async function json<T>(method: string, path: string, init?: SendOptions): Promise<T> {
@@ -191,6 +204,11 @@ export function createCloudClient(options: CloudClientOptions) {
 			json<{ project: CloudProject }>("POST", `${org(orgId)}/github/projects`, { body: input, idempotencyKey }),
 		deleteProject: (orgId: string, projectId: string) =>
 			json<{ project: { id: string; deleted: boolean } }>("DELETE", `${org(orgId)}/projects/${seg(projectId)}`),
+
+		// ---- Billing
+		/** The organization's plan, its limits and usage. Any member may read it. */
+		getBilling: (orgId: string, signal?: AbortSignal) =>
+			json<CloudBillingSummary>("GET", `${org(orgId)}/billing`, { signal }),
 
 		// ---- GitHub App
 		listGitHubInstallations: (orgId: string) =>
@@ -230,8 +248,7 @@ export function createCloudClient(options: CloudClientOptions) {
 				throw new CloudError("Couldn't reach Orchestrator Cloud.", { status: 0, cause });
 			}
 			if (!response.ok) {
-				if (response.status === 403) options.onForbidden?.();
-				throw await errorFromResponse(response);
+				throw await refusal(response);
 			}
 			return response;
 		},
@@ -255,8 +272,7 @@ export function createCloudClient(options: CloudClientOptions) {
 				throw new CloudError("Couldn't reach Orchestrator Cloud.", { status: 0, cause });
 			}
 			if (!response.ok) {
-				if (response.status === 403) options.onForbidden?.();
-				throw await errorFromResponse(response);
+				throw await refusal(response);
 			}
 			const { attachment } = JSON.parse(await response.text()) as { attachment: CloudAttachment };
 			return attachment;

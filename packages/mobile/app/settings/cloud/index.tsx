@@ -8,9 +8,11 @@ import { CloudSignIn } from "../../../lib/cloud/components";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { CloudError, cloudErrorMessage } from "../../../lib/cloud/errors";
 import { installGitHubApp } from "../../../lib/cloud/githubInstall";
+import { cloudPlanView, FREE_PLAN_NOTE, PLAN_USAGE_NOTE } from "../../../lib/cloud/plan";
+import { useCloudPlan, type CloudPlanState } from "../../../lib/cloud/planStore";
 import type { CloudGitHubInstallation, CloudProviderConnection } from "../../../lib/cloud/types";
 import { haptics } from "../../../lib/haptics";
-import { SettingsButtonRow, SettingsForm, SettingsSection, SettingsStatusRow, SettingsValueRow, type SettingsTone } from "../../../lib/SettingsForm";
+import { SettingsButtonRow, SettingsForm, SettingsMeterRow, SettingsSection, SettingsStatusRow, SettingsValueRow, type SettingsTone } from "../../../lib/SettingsForm";
 import { Spinner } from "../../../lib/Spinner";
 import { useTheme } from "../../../lib/ThemeProvider";
 import { rowIconWidth } from "../../../lib/tokens";
@@ -150,15 +152,18 @@ export default function CloudSettingsScreen() {
 	const glassInset = useGlassBarInset();
 	const { status, org, error, client, connections, connectionsLoaded, refresh, refreshConnections } = useCloud();
 	const github = useGitHubAccess(client, org?.id);
+	const plan = useCloudPlan(client, org?.id);
 	const [retrying, setRetrying] = useState(false);
 	const { load: loadGitHub } = github;
+	const reloadPlan = plan?.reload;
 
 	// Read again on every return, so an agent connected on its page, or on
-	// another device, shows at once.
+	// another device, shows at once; the plan's usage moves while sessions run.
 	useFocusEffect(useCallback(() => {
 		void refreshConnections();
 		void loadGitHub();
-	}, [loadGitHub, refreshConnections]));
+		void reloadPlan?.();
+	}, [loadGitHub, refreshConnections, reloadPlan]));
 
 	if (status === "signed-out") {
 		return <View style={styles.fill}><CloudSignIn /></View>;
@@ -191,6 +196,8 @@ export default function CloudSettingsScreen() {
 					<SettingsValueRow icon="organization" label={org.displayName} value={role} testID="cloud-settings-organization" />
 				</SettingsSection>
 
+				{planSection(plan)}
+
 				<SettingsSection title="Coding agents" footer={!connectionsLoaded && error ? `${AGENTS_FOOTER}\n\n${error}` : AGENTS_FOOTER}>
 					{CLOUD_AGENTS.map((agent) => {
 						const line = agentStatus(connections, connectionsLoaded, Boolean(error), agent);
@@ -216,6 +223,77 @@ export default function CloudSettingsScreen() {
 				</SettingsSection>
 			</SettingsForm>
 		</View>
+	);
+}
+
+/**
+ * The organization's plan and its usage, as the desktop's Plans page shows
+ * them; nothing where plans don't apply (no Stripe, or nothing billed).
+ * Placed as the section itself, as GitHub's is, so the form never holds an
+ * empty slot.
+ */
+function planSection(plan: CloudPlanState | undefined): ReactElement | null {
+	if (!plan) return null;
+	if (plan.status === "loading") {
+		return (
+			<SettingsSection title="Plan">
+				<SettingsValueRow icon="plan" label="Plan" loading testID="cloud-settings-plan-loading" />
+			</SettingsSection>
+		);
+	}
+	if (plan.status === "failed" || !plan.summary) {
+		return (
+			<SettingsSection title="Plan" footer={cloudErrorMessage(plan.error)}>
+				<SettingsButtonRow icon="refresh" label="Check the plan again" onPress={() => void plan.reload()} testID="cloud-settings-plan-retry" />
+			</SettingsSection>
+		);
+	}
+	const view = cloudPlanView(plan.summary);
+	if (view.kind === "none") return null;
+	if (view.kind === "free") {
+		return (
+			<SettingsSection title="Plan" footer={FREE_PLAN_NOTE}>
+				<SettingsValueRow icon="plan" label="Free" value="No cloud agents" testID="cloud-settings-plan" />
+			</SettingsSection>
+		);
+	}
+	return (
+		<SettingsSection title="Plan" footer={[view.note, PLAN_USAGE_NOTE].filter(Boolean).join("\n\n")}>
+			{/* A meter row without a bar, so every row of the card shares one layout. */}
+			<SettingsMeterRow icon="plan" label={view.name} value={view.status ?? ""} tone={view.tone === "bad" ? "bad" : undefined} testID="cloud-settings-plan" />
+			{view.meters.map((meter) => (
+				<SettingsMeterRow
+					key={meter.key}
+					icon={meter.key === "window" ? "usageWindow" : "usageWeek"}
+					label={meter.label}
+					value={meter.value}
+					fraction={meter.fraction}
+					severity={meter.severity}
+					detail={meter.detail}
+					testID={`cloud-settings-plan-${meter.key}`}
+				/>
+			))}
+			{view.running ? (
+				<SettingsMeterRow
+					icon="runningSessions"
+					label="Running sessions"
+					value={view.running.value}
+					tone={view.running.full ? "bad" : undefined}
+					detail={view.running.detail}
+					testID="cloud-settings-plan-running"
+				/>
+			) : null}
+			{view.total ? (
+				<SettingsMeterRow
+					icon="totalSessions"
+					label="Total sessions"
+					value={view.total.value}
+					tone={view.total.full ? "bad" : undefined}
+					detail="Running and paused. Archive one to free a slot."
+					testID="cloud-settings-plan-total"
+				/>
+			) : null}
+		</SettingsSection>
 	);
 }
 

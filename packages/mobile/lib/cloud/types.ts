@@ -437,6 +437,60 @@ export type CloudProviderConnection = {
 	updatedAt: string;
 };
 
+// ---- Billing (GET /orgs/{orgId}/billing) -------------------------------------
+
+/** A plan's limits, from its Stripe product. Session-hours are counted per running session. */
+export type CloudPlanLimits = {
+	plan: string;
+	/** Sessions with a sandbox, running or paused, orchestrators included. */
+	maxActiveSandboxes: number;
+	/** How many of them may run at once; 0 on a plan set up before running caps. */
+	maxRunningSandboxes?: number;
+	/** Running slots kept for orchestrators. */
+	orchestratorSlots: number;
+	windowHours: number;
+	windowSessionHours: number;
+	weeklySessionHours: number;
+	manualResetsPerMonth: number;
+};
+
+/** Usage against the plan, in session-minutes of running billed sandbox time. */
+export type CloudBillingUsage = {
+	windowUsedMinutes: number;
+	windowLimitMinutes: number;
+	windowHours: number;
+	windowResetsAt?: string;
+	weeklyUsedMinutes: number;
+	weeklyLimitMinutes: number;
+	weeklyResetsAt?: string;
+	manualResetsAllowed: number;
+	manualResetsUsed: number;
+	manualResetsRenewAt?: string;
+	activeOrchestrators: number;
+	activeWorkers: number;
+	runningOrchestrators: number;
+	runningWorkers: number;
+};
+
+/**
+ * The organization's plan. Plans apply only when `enabled` and `billingMode` is
+ * self_serve; without an entitled subscription the organization is on Free,
+ * which runs no cloud sessions (402 PLAN_REQUIRED).
+ */
+export type CloudBillingSummary = {
+	enabled: boolean;
+	billingMode?: "self_serve" | "contract" | "off";
+	exempt?: boolean;
+	plan: string;
+	subscriptionStatus?: string;
+	entitled: boolean;
+	currentPeriodEnd?: string;
+	/** When a plan set to cancel ends and the organization moves to Free. */
+	cancelAt?: string;
+	limits?: CloudPlanLimits;
+	usage?: CloudBillingUsage;
+};
+
 // ---- Notifications ----------------------------------------------------------
 
 export type CloudNotification = {

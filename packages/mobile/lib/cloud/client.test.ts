@@ -7,19 +7,21 @@ type Call = { url: string; init: RequestInit };
 function harness(respond: (call: Call) => Response | Promise<Response>, token: string | null = "access") {
 	const calls: Call[] = [];
 	const onForbidden = vi.fn();
+	const onPlanRefused = vi.fn();
 	let keys = 0;
 	const client = createCloudClient({
 		baseUrl: "https://api.example.test/",
 		getToken: async () => token,
 		newKey: () => `key-${++keys}`,
 		onForbidden,
+		onPlanRefused,
 		fetch: (async (url: string, init: RequestInit) => {
 			const call = { url, init };
 			calls.push(call);
 			return respond(call);
 		}) as unknown as typeof fetch,
 	});
-	return { client, calls, onForbidden };
+	return { client, calls, onForbidden, onPlanRefused };
 }
 
 const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -98,6 +100,30 @@ describe("cloud client", () => {
 		const forbidden = harness(() => ok({ code: "forbidden", message: "Not a member." }, 403));
 		await expect(forbidden.client.listProjects("o")).rejects.toMatchObject({ status: 403 });
 		expect(forbidden.onForbidden).toHaveBeenCalledOnce();
+	});
+
+	// One sheet explains every plan refusal, wherever the request came from,
+	// as the desktop's Upgrade page opens on any of them.
+	it("tells its owner when the organization's plan refuses a request, and nothing else", async () => {
+		const plan = harness(() => ok({ code: "PLAN_REQUIRED", message: "Choose a plan to use AO Cloud." }, 402));
+		const error = await plan.client.createSession("o", { projectId: "p", kind: "worker", harness: "codex", displayName: "x", prompt: "x" }).catch((cause: unknown) => cause);
+		expect(error).toMatchObject({ status: 402, code: "PLAN_REQUIRED" });
+		expect(plan.onPlanRefused).toHaveBeenCalledExactlyOnceWith(error);
+
+		const slots = harness(() => ok({ code: "WORKER_SLOTS_FULL", message: "All your plan's running sessions are in use." }, 409));
+		const stream = await slots.client.openEventStream("o", "s", { after: 0, signal: new AbortController().signal }).catch((cause: unknown) => cause);
+		expect(slots.onPlanRefused).toHaveBeenCalledExactlyOnceWith(stream);
+
+		const conflict = harness(() => ok({ code: "conflict", message: "Already archived." }, 409));
+		await conflict.client.resumeSession("o", "s").catch(() => undefined);
+		expect(conflict.onPlanRefused).not.toHaveBeenCalled();
+	});
+
+	it("reads the organization's plan", async () => {
+		const { client, calls } = harness(() => ok({ enabled: true, billingMode: "self_serve", plan: "free", entitled: false, exempt: false, features: [], plans: [] }));
+		await expect(client.getBilling("org 1")).resolves.toMatchObject({ plan: "free", entitled: false });
+		expect(calls[0].url).toBe("https://api.example.test/api/cloud/v1/orgs/org%201/billing");
+		expect(calls[0].init.method).toBe("GET");
 	});
 
 	it("never calls the network without a token", async () => {

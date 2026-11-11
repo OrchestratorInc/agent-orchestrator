@@ -1,7 +1,8 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
-import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, RNHostView, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, RNHostView, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityAddTraits,
+	accessibilityElement,
 	accessibilityHidden,
 	background,
 	buttonStyle,
@@ -16,6 +17,7 @@ import {
 	listRowBackground,
 	listRowInsets,
 	listRowSeparator,
+	monospacedDigit,
 	pickerStyle,
 	scrollContentBackground,
 	tag,
@@ -27,6 +29,7 @@ import { Children, Fragment, isValidElement, type ReactNode } from "react";
 import { StyleSheet } from "react-native";
 import {
 	settingsIcons,
+	settingsMeterColor,
 	settingsStatusDotColor,
 	settingsToneColor,
 	type SettingsAccountRowProps,
@@ -35,6 +38,7 @@ import {
 	type SettingsFormProps,
 	type SettingsIconName,
 	type SettingsLinkRowProps,
+	type SettingsMeterRowProps,
 	type SettingsPickerRowProps,
 	type SettingsSectionProps,
 	type SettingsStatusRowProps,
@@ -276,6 +280,30 @@ export function SettingsAccountRow({ name, email, avatar, loading = false, testI
 		>
 			<Text modifiers={[foregroundStyle(t.textPrimary), lineLimit(1)]}>{name}</Text>
 		</ListItem>
+	);
+}
+
+/**
+ * A measured amount: the label and the amount on one line, as a value row
+ * has them, then SwiftUI's own linear progress bar and the detail under the
+ * label. Laid out as the list-item rows are (glyph column, then 12pt), so the
+ * labels line up. VoiceOver reads it as one element.
+ */
+export function SettingsMeterRow({ icon, label, value, fraction, severity, tone, detail, testID }: SettingsMeterRowProps) {
+	const t = useTheme();
+	return (
+		<HStack alignment="top" spacing={12} testID={testID} modifiers={[...rowModifiers(t), accessibilityElement("combine")]}>
+			<RowIcon icon={icon} />
+			<VStack alignment="leading" spacing={space.xs}>
+				<HStack spacing={space.sm}>
+					<Text modifiers={[foregroundStyle(t.textPrimary), lineLimit(1)]}>{label}</Text>
+					<Spacer />
+					<Text modifiers={[foregroundStyle(settingsToneColor(t, tone)), monospacedDigit(), lineLimit(1)]}>{value}</Text>
+				</HStack>
+				{fraction !== undefined ? <ProgressView value={Math.min(1, Math.max(0, fraction))} modifiers={[tint(settingsMeterColor(t, severity))]} /> : null}
+				{detail ? <Text modifiers={[appFont("subheadline"), foregroundStyle(t.textSecondary)]}>{detail}</Text> : null}
+			</VStack>
+		</HStack>
 	);
 }
 

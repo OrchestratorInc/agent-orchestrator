@@ -32,6 +32,12 @@ export const settingsIcons = {
 	feature: { ios: "lightbulb", android: "lightbulb" },
 	// Orchestrator Cloud's page and its coding agents' pages.
 	organization: { ios: "building.2", android: "group" },
+	// The organization's plan and its usage, on Orchestrator Cloud's page.
+	plan: { ios: "gauge.medium", android: "speed" },
+	usageWindow: { ios: "clock", android: "history" },
+	usageWeek: { ios: "calendar", android: "data_usage" },
+	runningSessions: { ios: "play.circle", android: "play_arrow" },
+	totalSessions: { ios: "square.3.layers.3d", android: "stacks" },
 	github: { ios: "chevron.left.forwardslash.chevron.right", android: "code" },
 	credential: { ios: "key", android: "verified_user" },
 	status: symbols.checkCircle,
@@ -131,6 +137,28 @@ export type SettingsStatusRowProps = RowBase & {
 	leading?: ReactElement;
 	onPress(): void;
 };
+
+/**
+ * A measured amount, as the desktop's usage rows show it: the label, the
+ * amount beside it, and under them the platform's own progress bar and a line
+ * such as when the limit resets. Without `fraction` it draws no bar, for a
+ * count. Nothing to tap.
+ */
+export type SettingsMeterRowProps = RowBase & {
+	value: string;
+	/** 0–1. Leave it out for a count with no bar. */
+	fraction?: number;
+	/** The bar's colour: the accent, amber from 80%, red at the limit. */
+	severity?: "normal" | "warn" | "critical";
+	/** Colours the value too, for a count at its limit. */
+	tone?: SettingsTone;
+	detail?: string;
+};
+
+/** The meter's colour, as the conversation's usage meters draw theirs. */
+export function settingsMeterColor(t: Theme, severity: SettingsMeterRowProps["severity"]): string {
+	return severity === "critical" ? t.red : severity === "warn" ? t.amber : t.accent;
+}
 
 export type SettingsToggleRowProps = RowBase & {
 	value: boolean;

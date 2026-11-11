@@ -25,6 +25,8 @@ import { useApp } from "../lib/store";
 import { useCloud } from "../lib/cloud/CloudProvider";
 import { connectedAgents } from "../lib/cloud/agents";
 import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
+import { cloudPlanBlock } from "../lib/cloud/plan";
+import { useCloudPlan } from "../lib/cloud/planStore";
 import { agentModelCatalog } from "../lib/cloud/modelCatalog";
 import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
@@ -62,6 +64,15 @@ export default function SpawnScreen() {
 	const projectsKnown = cloudSelected ? Boolean(cloud) : selectedHost?.projectsKnown ?? false;
 	const connection = cloudSelected ? (cloud ? "open" : "closed") : selectedHost?.connection ?? "closed";
 	const cloudAgentsKey = connectedAgents(cloudState.connections).join(",");
+	// Known before anything is typed: a Free organization runs no cloud agents,
+	// and a spent session-hour window starts none until it resets. The control
+	// plane still decides on send; this only spares writing a task it would refuse.
+	const cloudPlan = useCloudPlan(cloudState.client, cloud ? cloudState.org?.id : undefined);
+	const planBlock = cloudSelected ? cloudPlanBlock(cloudPlan?.summary) : undefined;
+	const reloadCloudPlan = cloudPlan?.reload;
+	useEffect(() => {
+		if (cloudSelected) void reloadCloudPlan?.();
+	}, [cloudSelected, reloadCloudPlan]);
 	const unreachable = Boolean(selectedHost && selectedHost.connection === "closed");
 	const hostOptions = useMemo(() => {
 		if (!selectedHostId || connectedHosts.some((host) => host.id === selectedHostId)) return connectedHosts;
@@ -224,7 +235,10 @@ export default function SpawnScreen() {
 	const hostNotices = selectedHostId === null && hostSelectionInitialized.current
 		? [routeHostId ? "That machine is not connected." : "No connected machines are available."]
 		: [];
-	const cloudNotices = cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : [];
+	const cloudNotices = [
+		...(planBlock ? [planBlock.message] : []),
+		...(cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
+	];
 	const notices = [...hostNotices, ...cloudNotices, ...spawnNotices({
 		// Only when a reconnect can fix it: a rejected password stops the poll for
 		// good, and its catalog error already says to re-scan the pairing code.
@@ -595,6 +609,7 @@ export default function SpawnScreen() {
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
 					{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 					{offerTUI ? <Button title="Create as Terminal UI instead" variant="secondary" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
+					{planBlock ? <Button title="See plan" variant="secondary" icon="info" onPress={() => router.push("/sheets/cloud-plan")} /> : null}
 				</View> : null}
 
 				<SpawnComposerControls
@@ -638,7 +653,7 @@ export default function SpawnScreen() {
 					/>}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
+					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
 			</Animated.View>
 		</KeyboardAvoidingView>

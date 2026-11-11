@@ -5,11 +5,13 @@ import { getAccountAccessToken, loadAccount, onAccountChange, signInToAccount, s
 import { clearAccountHosts, syncAccountHosts } from "../accountHosts";
 import { shouldPoll } from "../appStatePoll";
 import { fetch as expoFetch } from "expo/fetch";
+import { router } from "expo-router";
 import { forgetCloudAccountCaches } from "./accountCaches";
 import { collectPages, createCloudClient, type CloudClient } from "./client";
 import { CLOUD_API_BASE_URL } from "./config";
 import { CloudAuthError, cloudErrorMessage } from "./errors";
 import { resolveOrganization } from "./org";
+import { presentPlanRefusal } from "./planRefusal";
 import { registerCloudPush, unregisterCloudPush } from "./push";
 import type { CloudMe, CloudOrganization, CloudProject, CloudProviderConnection, CloudSession } from "./types";
 
@@ -87,6 +89,11 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		newKey: () => Crypto.randomUUID(),
 		// Membership changed under us: re-resolve the organization.
 		onForbidden: () => { void resolveRef.current(); },
+		// Whatever asked (New task, a paused session, a review, a terminal),
+		// one sheet says why the plan refused it, over the plan's usage.
+		onPlanRefused: (refusal) => {
+			presentPlanRefusal(refusal, (params) => router.push({ pathname: "/sheets/cloud-plan", params }));
+		},
 	}), []);
 
 	const reset = useCallback(() => {
