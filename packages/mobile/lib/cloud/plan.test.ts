@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloudPlanBlock, cloudPlanView, formatPlanHours, planRefusalTitle } from "./plan";
+import { cloudAgentsOffered, cloudPlanBlock, cloudPlanView, formatPlanHours, planRefusalTitle } from "./plan";
 import type { CloudBillingSummary } from "./types";
 
 const NOW = Date.parse("2026-11-11T10:00:00Z");
@@ -36,7 +36,7 @@ describe("cloudPlanView", () => {
 			{ key: "window", label: "Last 5 hours", value: "1.4 of 5 h", fraction: 0.28, severity: "normal", detail: "Resets in 2 h 10 m" },
 			{ key: "week", label: "This week", value: "12 of 40 h", fraction: 0.3, severity: "normal", detail: expect.stringMatching(/^Resets /) },
 		]);
-		expect(view.running).toEqual({ value: "2 of 3", full: false, detail: "Orchestrator 1 of 1 · Workers 1 of 2" });
+		expect(view.running).toEqual({ value: "2 of 3", full: false });
 		expect(view.total).toEqual({ value: "4 of 10", full: false });
 	});
 
@@ -50,12 +50,12 @@ describe("cloudPlanView", () => {
 		expect(full.total).toMatchObject({ value: "10 of 10", full: true });
 	});
 
-	it("says when a payment failed, a trial runs, or a plan is set to end", () => {
+	it("says beside the name when a payment failed, a plan is set to end, or a trial runs", () => {
 		expect(cloudPlanView({ ...paid, subscriptionStatus: "past_due" }, NOW)).toMatchObject({ status: "Payment failed", tone: "bad" });
-		expect(cloudPlanView({ ...paid, subscriptionStatus: "trialing" }, NOW)).toMatchObject({ status: "Trial" });
-		const ending = cloudPlanView({ ...paid, cancelAt: "2026-11-24T00:00:00Z" }, NOW);
-		expect(ending).toMatchObject({ kind: "paid" });
-		expect(ending.kind === "paid" && ending.note).toMatch(/^Ends .+, then Free\.$/);
+		expect(cloudPlanView({ ...paid, subscriptionStatus: "trialing" }, NOW)).toMatchObject({ status: "Trial", tone: "default" });
+		expect(cloudPlanView({ ...paid, cancelAt: "2026-11-24T00:00:00Z" }, NOW)).toMatchObject({ status: expect.stringMatching(/^Ends \S/) });
+		expect(cloudPlanView({ ...paid, subscriptionStatus: "past_due", cancelAt: "2026-11-24T00:00:00Z" }, NOW)).toMatchObject({ status: "Payment failed" });
+		expect(cloudPlanView(paid, NOW)).not.toHaveProperty("status");
 	});
 
 	it("counts a plan set up before running caps as running all its sessions", () => {
@@ -94,6 +94,24 @@ describe("cloudPlanBlock", () => {
 		expect(cloudPlanBlock({ ...free, enabled: false }, NOW)).toBeUndefined();
 		expect(cloudPlanBlock({ ...free, billingMode: "off" }, NOW)).toBeUndefined();
 		expect(cloudPlanBlock(undefined, NOW)).toBeUndefined();
+	});
+});
+
+describe("cloudAgentsOffered", () => {
+	it("offers the coding agents only where the organization can run cloud agents", () => {
+		expect(cloudAgentsOffered({ status: "ready", summary: paid })).toBe(true);
+		expect(cloudAgentsOffered({ status: "ready", summary: free })).toBe(false);
+		// Plans that don't apply never take them away.
+		expect(cloudAgentsOffered({ status: "ready", summary: { ...free, enabled: false } })).toBe(true);
+	});
+
+	it("waits for the plan rather than showing them and taking them away", () => {
+		expect(cloudAgentsOffered({ status: "loading" })).toBeUndefined();
+	});
+
+	it("leaves them offered when the plan can't be read, since the control plane still decides", () => {
+		expect(cloudAgentsOffered({ status: "failed" })).toBe(true);
+		expect(cloudAgentsOffered(undefined)).toBe(true);
 	});
 });
 

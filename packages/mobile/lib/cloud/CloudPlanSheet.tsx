@@ -8,7 +8,7 @@ import { space, type } from "../tokens";
 import { SheetScreen } from "../ui";
 import { useCloud } from "./CloudProvider";
 import { planResetCopy } from "./errors";
-import { cloudPlanView, FREE_PLAN_NOTE, PLAN_USAGE_NOTE, planRefusalTitle } from "./plan";
+import { cloudPlanView, planRefusalTitle } from "./plan";
 import type { PlanSheetParams } from "./planRefusal";
 import { useCloudPlan } from "./planStore";
 
@@ -16,30 +16,31 @@ import { useCloudPlan } from "./planStore";
  * Why the organization's plan refused a request, in Cloud's own words and
  * with when it lifts, over the plan's usage: the same rows the conversation's
  * usage sheet draws. Opened by any refusal, and from New task without one.
- * It sells nothing: plans are chosen on the desktop.
+ * It sells nothing: plans are chosen on the desktop. No explainers: the
+ * reason and the numbers carry it.
  */
 export function CloudPlanSheet({ code, message, resetsAt }: PlanSheetParams) {
 	const styles = useThemedStyles(makeStyles);
 	const { client, org } = useCloud();
 	const plan = useCloudPlan(client, org?.id);
 	const view = plan?.summary ? cloudPlanView(plan.summary) : undefined;
-	const reason = code ? [message, planResetCopy(resetsAt)].filter(Boolean).join(" ") : undefined;
+	// The usage rows say when each window resets; without them the reason does.
+	const reason = code ? [message, view?.kind === "paid" ? undefined : planResetCopy(resetsAt)].filter(Boolean).join(" ") : undefined;
 	return (
 		<SheetScreen title={planRefusalTitle(code)} subtitle={code ? undefined : org?.displayName}>
 			{reason ? <Text style={styles.reason}>{reason}</Text> : null}
 			{plan?.status === "loading" ? (
 				<View style={styles.loading}><Spinner accessibilityLabel="Loading your plan" /></View>
 			) : null}
-			{plan?.status === "failed" ? <Text style={styles.note}>Couldn't load your plan's usage. Try again in a moment.</Text> : null}
+			{plan?.status === "failed" ? <Text style={styles.note}>Couldn't load your plan's usage.</Text> : null}
 			{view?.kind === "free" ? (
 				<View style={styles.rows}>
 					<UsageRow label="Free plan" value="No cloud agents" />
-					<Text style={styles.note}>{FREE_PLAN_NOTE}</Text>
 				</View>
 			) : null}
 			{view?.kind === "paid" ? (
 				<View style={styles.rows}>
-					<UsageRow label={`${view.name} plan`} value={view.status} detail={view.note} />
+					<UsageRow label={`${view.name} plan`} value={view.status} />
 					{view.meters.map((meter) => (
 						<UsageRow
 							key={meter.key}
@@ -49,9 +50,8 @@ export function CloudPlanSheet({ code, message, resetsAt }: PlanSheetParams) {
 							meter={{ percent: Math.round(meter.fraction * 100), fill: Math.max(2, meter.fraction * 100), severity: meter.severity }}
 						/>
 					))}
-					{view.running ? <UsageRow label="Running sessions" value={view.running.value} detail={view.running.detail} /> : null}
-					{view.total ? <UsageRow label="Total sessions" value={view.total.value} detail="Running and paused. Archive one to free a slot." /> : null}
-					<Text style={styles.note}>{PLAN_USAGE_NOTE}</Text>
+					{view.running ? <UsageRow label="Running sessions" value={view.running.value} /> : null}
+					{view.total ? <UsageRow label="Total sessions" value={view.total.value} /> : null}
 				</View>
 			) : null}
 		</SheetScreen>

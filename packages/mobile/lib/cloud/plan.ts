@@ -6,11 +6,6 @@ import type { CloudBillingSummary, CloudPlanLimits } from "./types";
 // or upgrades, so it stays a companion to the desktop under the App Store's
 // rules; plans are chosen on the desktop.
 
-/** Free, explained without selling anything: plans are chosen on the desktop. */
-export const FREE_PLAN_NOTE = "The Free plan doesn't include cloud agents. Plans are managed in Agent Orchestrator on a computer.";
-/** What a session-hour is, in the desktop's words. */
-export const PLAN_USAGE_NOTE = "Every running session counts, so two sessions running for an hour use 2 session hours. Paused sessions don't count.";
-
 /** How full a meter is: the desktop's thresholds, 80% and the limit. */
 export type PlanSeverity = "normal" | "warn" | "critical";
 
@@ -34,13 +29,11 @@ export type CloudPlanView =
 	| {
 		kind: "paid";
 		name: string;
-		/** Said beside the name when it changes what the plan does: a failed payment, a trial. */
+		/** Said beside the name when it changes what the plan does: a failed payment, an end date, a trial. */
 		status?: string;
 		tone: "default" | "bad";
-		/** A plan set to cancel: "Ends Tue, 24 Nov, then Free." */
-		note?: string;
 		meters: PlanMeter[];
-		running?: { value: string; full: boolean; detail?: string };
+		running?: { value: string; full: boolean };
 		total?: { value: string; full: boolean };
 	};
 
@@ -53,14 +46,17 @@ export function cloudPlanView(summary: CloudBillingSummary, now = Date.now()): C
 	if (!plansApply(summary)) return { kind: "none" };
 	if (!summary.entitled || !summary.limits) return { kind: "free" };
 	const { limits, usage } = summary;
-	const status = summary.subscriptionStatus === "past_due" ? "Payment failed" : summary.subscriptionStatus === "trialing" ? "Trial" : undefined;
+	const status = summary.subscriptionStatus === "past_due"
+		? "Payment failed"
+		: summary.cancelAt
+			? `Ends ${shortDay(summary.cancelAt)}`
+			: summary.subscriptionStatus === "trialing" ? "Trial" : undefined;
 	const view: CloudPlanView = {
 		kind: "paid",
 		name: planName(limits.plan || summary.plan),
 		tone: summary.subscriptionStatus === "past_due" ? "bad" : "default",
 		meters: [],
 		...(status ? { status } : {}),
-		...(summary.cancelAt ? { note: `Ends ${shortDay(summary.cancelAt)}, then Free.` } : {}),
 	};
 	if (!usage) return view;
 	view.meters = [
@@ -69,16 +65,22 @@ export function cloudPlanView(summary: CloudBillingSummary, now = Date.now()): C
 	];
 	const slots = runningSlots(limits);
 	const running = usage.runningOrchestrators + usage.runningWorkers;
-	view.running = {
-		value: `${running} of ${slots}`,
-		full: running >= slots,
-		...(limits.orchestratorSlots > 0
-			? { detail: `Orchestrator ${usage.runningOrchestrators} of ${limits.orchestratorSlots} · Workers ${usage.runningWorkers} of ${slots - limits.orchestratorSlots}` }
-			: {}),
-	};
+	view.running = { value: `${running} of ${slots}`, full: running >= slots };
 	const active = usage.activeOrchestrators + usage.activeWorkers;
 	view.total = { value: `${active} of ${limits.maxActiveSandboxes}`, full: active >= limits.maxActiveSandboxes };
 	return view;
+}
+
+/**
+ * Whether to offer the coding agents' sign-ins: they only matter where the
+ * organization can run cloud agents, so never on Free. Undefined until the
+ * plan is read, so the section neither flashes in on Free nor out on a paid
+ * plan; a plan that can't be read leaves them offered, as the control plane
+ * still decides.
+ */
+export function cloudAgentsOffered(plan: { status: "loading" | "ready" | "failed"; summary?: CloudBillingSummary } | undefined): boolean | undefined {
+	if (!plan || plan.status === "failed" || !plan.summary) return plan?.status === "loading" ? undefined : true;
+	return cloudPlanView(plan.summary).kind !== "free";
 }
 
 /**

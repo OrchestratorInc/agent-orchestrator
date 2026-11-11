@@ -8,7 +8,7 @@ import { CloudSignIn } from "../../../lib/cloud/components";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { CloudError, cloudErrorMessage } from "../../../lib/cloud/errors";
 import { installGitHubApp } from "../../../lib/cloud/githubInstall";
-import { cloudPlanView, FREE_PLAN_NOTE, PLAN_USAGE_NOTE } from "../../../lib/cloud/plan";
+import { cloudAgentsOffered, cloudPlanView } from "../../../lib/cloud/plan";
 import { useCloudPlan, type CloudPlanState } from "../../../lib/cloud/planStore";
 import type { CloudGitHubInstallation, CloudProviderConnection } from "../../../lib/cloud/types";
 import { haptics } from "../../../lib/haptics";
@@ -23,9 +23,6 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoun
 
 /** An agent's logo stands in the glyph column, so its name lines up with the other rows' titles. */
 const AGENT_LOGO_SIZE = rowIconWidth;
-
-const AGENTS_FOOTER =
-	"Cloud sessions run each agent with your own subscription or API key. Orchestrator Cloud checks it with the provider, stores it encrypted, and shares it across your devices: an agent connected on the desktop works here too.";
 
 /** A coding agent's line under its name. */
 function agentStatus(connections: readonly CloudProviderConnection[], loaded: boolean, failed: boolean, agent: CloudAgent): { label: string; tone: SettingsTone } {
@@ -192,33 +189,36 @@ export default function CloudSettingsScreen() {
 	return (
 		<View style={[styles.fill, { backgroundColor: t.bgBase }]}>
 			<SettingsForm testID="cloud-settings-form">
-				<SettingsSection title="Organization" footer="Cloud projects and sessions belong to this organization.">
+				<SettingsSection title="Organization">
 					<SettingsValueRow icon="organization" label={org.displayName} value={role} testID="cloud-settings-organization" />
 				</SettingsSection>
 
 				{planSection(plan)}
 
-				<SettingsSection title="Coding agents" footer={!connectionsLoaded && error ? `${AGENTS_FOOTER}\n\n${error}` : AGENTS_FOOTER}>
-					{CLOUD_AGENTS.map((agent) => {
-						const line = agentStatus(connections, connectionsLoaded, Boolean(error), agent);
-						return (
-							<SettingsStatusRow
-								key={agent}
-								icon="terminal"
-								leading={<AgentLogo harness={agent} size={AGENT_LOGO_SIZE} />}
-								label={CLOUD_AGENT_LABELS[agent]}
-								status={line.label}
-								tone={line.tone}
-								onPress={() => router.push({ pathname: "/settings/cloud/agent/[agent]", params: { agent } })}
-								testID={`cloud-settings-agent-${agent}`}
-							/>
-						);
-					})}
-				</SettingsSection>
+				{/* Their sign-ins only matter where the plan runs cloud agents. */}
+				{cloudAgentsOffered(plan) ? (
+					<SettingsSection title="Coding agents" footer={!connectionsLoaded && error ? error : undefined}>
+						{CLOUD_AGENTS.map((agent) => {
+							const line = agentStatus(connections, connectionsLoaded, Boolean(error), agent);
+							return (
+								<SettingsStatusRow
+									key={agent}
+									icon="terminal"
+									leading={<AgentLogo harness={agent} size={AGENT_LOGO_SIZE} />}
+									label={CLOUD_AGENT_LABELS[agent]}
+									status={line.label}
+									tone={line.tone}
+									onPress={() => router.push({ pathname: "/settings/cloud/agent/[agent]", params: { agent } })}
+									testID={`cloud-settings-agent-${agent}`}
+								/>
+							);
+						})}
+					</SettingsSection>
+				) : null}
 
 				{githubSection(github)}
 
-				<SettingsSection footer="From a repository the GitHub App can reach, or an empty folder.">
+				<SettingsSection>
 					<SettingsButtonRow icon="add" label="New cloud project" onPress={() => router.push("/cloud/new-project")} testID="cloud-settings-new-project" />
 				</SettingsSection>
 			</SettingsForm>
@@ -252,13 +252,13 @@ function planSection(plan: CloudPlanState | undefined): ReactElement | null {
 	if (view.kind === "none") return null;
 	if (view.kind === "free") {
 		return (
-			<SettingsSection title="Plan" footer={FREE_PLAN_NOTE}>
+			<SettingsSection title="Plan">
 				<SettingsValueRow icon="plan" label="Free" value="No cloud agents" testID="cloud-settings-plan" />
 			</SettingsSection>
 		);
 	}
 	return (
-		<SettingsSection title="Plan" footer={[view.note, PLAN_USAGE_NOTE].filter(Boolean).join("\n\n")}>
+		<SettingsSection title="Plan">
 			{/* A meter row without a bar, so every row of the card shares one layout. */}
 			<SettingsMeterRow icon="plan" label={view.name} value={view.status ?? ""} tone={view.tone === "bad" ? "bad" : undefined} testID="cloud-settings-plan" />
 			{view.meters.map((meter) => (
@@ -279,7 +279,6 @@ function planSection(plan: CloudPlanState | undefined): ReactElement | null {
 					label="Running sessions"
 					value={view.running.value}
 					tone={view.running.full ? "bad" : undefined}
-					detail={view.running.detail}
 					testID="cloud-settings-plan-running"
 				/>
 			) : null}
@@ -289,7 +288,6 @@ function planSection(plan: CloudPlanState | undefined): ReactElement | null {
 					label="Total sessions"
 					value={view.total.value}
 					tone={view.total.full ? "bad" : undefined}
-					detail="Running and paused. Archive one to free a slot."
 					testID="cloud-settings-plan-total"
 				/>
 			) : null}
@@ -321,11 +319,8 @@ function githubSection({ access, connecting, syncing, error, retry, connect, syn
 	// A removed installation is gone from GitHub; nothing to say about it.
 	const listed = access.installations.filter((item) => item.status !== "removed");
 	const installed = listed.some((item) => item.status === "active");
-	const footer = installed
-		? "Agents work in the repositories the Orchestrator GitHub App can reach. Add or remove repositories on GitHub; you'll come back here when you're done."
-		: "Install the Orchestrator GitHub App on the repositories agents should work in. You'll come back here when you're done.";
 	return (
-		<SettingsSection title="GitHub" footer={error ?? footer}>
+		<SettingsSection title="GitHub" footer={error ?? undefined}>
 			{listed.map((installation) => {
 				const line = installationStatus(installation);
 				return (
