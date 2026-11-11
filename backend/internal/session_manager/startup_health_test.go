@@ -16,8 +16,12 @@ import (
 
 type healthCheckLauncher struct {
 	recordingLauncher
-	checks []ChatStart
-	err    error
+	checks            []ChatStart
+	err               error
+	st                *fakeStore
+	settled           []domain.SessionID
+	settledAfterSleep bool
+	settleErr         error
 }
 
 func (l *healthCheckLauncher) StartChat(_ context.Context, cfg ChatStart) (ChatStarted, error) {
@@ -25,10 +29,20 @@ func (l *healthCheckLauncher) StartChat(_ context.Context, cfg ChatStart) (ChatS
 	return ChatStarted{}, l.err
 }
 
+func (l *healthCheckLauncher) SettleAbandonedWork(ctx context.Context, id domain.SessionID) error {
+	if l.st != nil {
+		if rec, _, _ := l.st.GetSession(ctx, id); rec.HibernatedAt != nil {
+			l.settledAfterSleep = true
+		}
+	}
+	l.settled = append(l.settled, id)
+	return l.settleErr
+}
+
 func TestStartupHealthNeverLaunchesStoppedSessions(t *testing.T) {
 	ctx := context.Background()
 	m, st, rt, ws := newLifecycleManager()
-	launcher := &healthCheckLauncher{err: ports.ErrChatHostNotRunning}
+	launcher := &healthCheckLauncher{err: ports.ErrChatHostNotRunning, st: st}
 	m.chat = launcher
 	st.sessions["mer-chat"] = domain.SessionRecord{
 		ID: "mer-chat", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
@@ -58,6 +72,9 @@ func TestStartupHealthNeverLaunchesStoppedSessions(t *testing.T) {
 	if chat := st.sessions["mer-chat"]; chat.HibernatedAt == nil || chat.Activity.State != domain.ActivityIdle || chat.IsTerminated {
 		t.Fatalf("a chat whose host died with AO must be asleep so opening it wakes it: %+v", chat)
 	}
+	if len(launcher.settled) != 1 || launcher.settled[0] != "mer-chat" || launcher.settledAfterSleep {
+		t.Fatalf("the dead host's open work must be settled before the chat sleeps: settled=%v afterSleep=%v", launcher.settled, launcher.settledAfterSleep)
+	}
 	if st.sessions["mer-tui"].Activity.State != domain.ActivityExited || st.sessions["mer-tui"].IsTerminated {
 		t.Fatalf("mer-tui must stay stopped and resumable: %+v", st.sessions["mer-tui"])
 	}
@@ -80,6 +97,23 @@ func TestStartupHealthKeepsUserStoppedChatStopped(t *testing.T) {
 	}
 	if got := st.sessions[rec.ID]; got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited {
 		t.Fatalf("a chat the user stopped must keep Resume, not wake on open: %+v", got)
+	}
+}
+
+func TestStartupHealthKeepsChatStoppedWhenItsOpenWorkCannotSettle(t *testing.T) {
+	m, st, _, _ := newLifecycleManager()
+	m.chat = &healthCheckLauncher{err: ports.ErrChatHostNotRunning, settleErr: errors.New("database is locked")}
+	rec := domain.SessionRecord{
+		ID: "mer-chat", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/chat", Branch: "ao/chat/root", ProviderConversationID: "thread-1"},
+		Activity: domain.Activity{State: domain.ActivityActive},
+	}
+	st.sessions[rec.ID] = rec
+	if err := m.checkSessionHealth(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions[rec.ID]; got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited {
+		t.Fatalf("a wake would fail messages sent to this chat, so it must stay stopped: %+v", got)
 	}
 }
 

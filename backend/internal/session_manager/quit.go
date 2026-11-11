@@ -97,3 +97,17 @@ func (m *Manager) sleepStoppedChat(ctx context.Context, rec domain.SessionRecord
 	}
 	return fmt.Errorf("sleep chat %s: session changed concurrently", rec.ID)
 }
+
+func (m *Manager) settleAbandonedChatWork(ctx context.Context, id domain.SessionID) bool {
+	settler, ok := m.chat.(interface {
+		SettleAbandonedWork(context.Context, domain.SessionID) error
+	})
+	if !ok {
+		return false
+	}
+	if err := settler.SettleAbandonedWork(ctx, id); err != nil {
+		m.logger.Warn("chat stays stopped: could not settle the work its host left open", "sessionID", id, "error", err)
+		return false
+	}
+	return true
+}
