@@ -146,14 +146,13 @@ export function SpawnComposerControls({
 				</VStack>
 			</Host>
 
-			{attachments}
-
 			{/* The effort slider floats just above the composer, over the rows. */}
 			{effortSlider.open ? <EffortSliderOverlay choices={effortChoices} onChoose={onSelectEffort} bottom={composerHeight} /> : null}
 
 			<View onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}>
 				<SpawnComposer
 					prompt={prompt}
+					attachments={attachments}
 					onChangePrompt={onChangePrompt}
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}
