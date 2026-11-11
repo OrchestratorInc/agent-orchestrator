@@ -134,6 +134,7 @@ import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
+	"CHAT_SETTINGS_NOT_SAVED",
 	// The new chat page could not create the session this brief would start.
 	"TASK_CREATE_FAILED",
 	"CHAT_FILE_REFERENCE_INVALID", "CHAT_ANNOTATION_LIMIT", "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED",

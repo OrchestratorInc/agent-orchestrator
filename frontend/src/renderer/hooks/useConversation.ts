@@ -551,14 +551,19 @@ function refreshConversationState(queryClient: QueryClient, sessionId: string, h
 
 const settingsWriteKey = (sessionId: string, hostId?: string) => ["conversation-settings-write", hostId ?? "", sessionId];
 
+export const CHAT_SETTINGS_NOT_SAVED = "CHAT_SETTINGS_NOT_SAVED";
+
 function settingsWritesSettled(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
-	const filters = { mutationKey: settingsWriteKey(sessionId, hostId) };
-	if (!queryClient.isMutating(filters)) return Promise.resolve();
-	return new Promise((resolve) => {
-		const stop = queryClient.getMutationCache().subscribe(() => {
-			if (queryClient.isMutating(filters)) return;
+	const cache = queryClient.getMutationCache();
+	const writes = cache.findAll({ mutationKey: settingsWriteKey(sessionId, hostId), status: "pending" });
+	if (writes.length === 0) return Promise.resolve();
+	return new Promise((resolve, reject) => {
+		const stop = cache.subscribe(() => {
+			if (writes.some((write) => write.state.status === "pending")) return;
 			stop();
-			resolve();
+			if (writes.some((write) => write.state.status === "error")) {
+				reject(Object.assign(new Error("The settings change before this message was not saved, so the message was not sent."), { code: CHAT_SETTINGS_NOT_SAVED }));
+			} else resolve();
 		});
 	});
 }

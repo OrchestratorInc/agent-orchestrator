@@ -23,6 +23,7 @@ import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
 	conversationQueryKey,
+	CHAT_SETTINGS_NOT_SAVED,
 	useConversation,
 	ProviderSwitchFailed,
 	useConversationCommands,
@@ -785,6 +786,32 @@ describe("a sleeping or waking agent", () => {
 			await sending;
 		});
 		expect(postMock).toHaveBeenCalledOnce();
+	});
+
+	it("does not send a message when the settings pick before it fails", async () => {
+		const write = deferred<{ data: undefined; error: { code: string; message: string } }>();
+		patchMock.mockReturnValue(write.promise);
+		const { result } = renderHook(() => ({
+			commands: useConversationCommands("ao-1"),
+			options: useConversationConfigOptions("ao-1", false),
+		}), { wrapper });
+
+		let picking!: Promise<unknown>;
+		act(() => {
+			picking = result.current.options.setOption("approvalMode", { value: "default" }).catch(() => undefined);
+		});
+		await waitFor(() => expect(patchMock).toHaveBeenCalledOnce());
+		let sending!: Promise<unknown>;
+		act(() => {
+			sending = result.current.commands.send("after the pick");
+		});
+
+		await act(async () => {
+			write.resolve({ data: undefined, error: { code: "CHAT_SETTINGS_FAILED", message: "refused" } });
+			await picking;
+		});
+		await expect(sending).rejects.toMatchObject({ code: CHAT_SETTINGS_NOT_SAVED });
+		expect(postMock).not.toHaveBeenCalled();
 	});
 });
 
