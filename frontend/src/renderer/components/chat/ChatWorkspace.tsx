@@ -1278,6 +1278,9 @@ function ChatWorkspaceContent({
 		},
 		[queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
+	// Messages and steers this composer sent that the guided tour waits to see
+	// arrive (GuidedTour): the chat holding one is what counts as delivered.
+	const tourAwaitedIds = useRef(new Set<string>());
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
@@ -1332,9 +1335,8 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			const sent = await onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
-			notifyComposerSent();
-			return sent;
+			if (clientMessageId) tourAwaitedIds.current.add(clientMessageId);
+			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1393,6 +1395,7 @@ function ChatWorkspaceContent({
 			recoverOnly?: boolean,
 		) => {
 			const id = clientMessageId ?? crypto.randomUUID();
+			tourAwaitedIds.current.add(id);
 			// A recovery re-asks about a steer sent before; the daemon may already have it.
 			const target = recoverOnly ? undefined : steerEchoTarget();
 			if (target) {
@@ -1437,6 +1440,19 @@ function ChatWorkspaceContent({
 			),
 		[snapshot.items],
 	);
+	// Tell the tour once the chat holds something this composer sent, whether
+	// its answer came back, was lost and recovered, or it went in as a steer.
+	// A send the chat never shows (a refused steer, a bare /btw) doesn't count.
+	useEffect(() => {
+		const awaited = tourAwaitedIds.current;
+		let arrived = false;
+		for (const id of awaited) {
+			if (!acceptedClientMessageIds.has(id)) continue;
+			awaited.delete(id);
+			arrived = true;
+		}
+		if (arrived) notifyComposerSent();
+	}, [acceptedClientMessageIds]);
 	// The turn a confirmation is open for. Undo is not reversible and it changes what
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
