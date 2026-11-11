@@ -4192,11 +4192,11 @@ app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
+	// Not awaited: launch must not wait on this network fetch (up to 10 s).
 	if (app.isPackaged) {
-		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");
-		await checkDesktopVersionFloor().catch((err) =>
-			console.warn("desktop version floor check failed:", err),
-		);
+		void import("./main/desktop-version-floor")
+			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor())
+			.catch((err) => console.warn("desktop version floor check failed:", err));
 	}
 	void refreshGitHubOwners();
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
