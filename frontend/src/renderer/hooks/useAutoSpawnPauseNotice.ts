@@ -29,7 +29,7 @@ export function useAutoSpawnPauseNotice(projects: { id: string; name: string; ho
 				active.add(dedupeKey);
 				if (seen.has(key) || useUiStore.getState().globalToasts.some((toast) => toast.dedupeKey === dedupeKey)) continue;
 				showGlobalToast(
-					t("autoSpawnPause.title", { defaultValue: "Automatic starts paused for {{project}}", project: project.name }),
+					t("autoSpawnPause.title", { defaultValue: "Automatic starts paused for {{project}}", project: project.hostId && project.hostId !== "local" ? `${project.name} (${project.hostId})` : project.name }),
 					t("autoSpawnPause.configurationBody", {
 						defaultValue: "{{failures}} starts with {{harness}} ({{kind}}, model {{model}}, effort {{effort}}) failed: {{message}} An automatic probe is allowed after a 30-minute cooldown.",
 						failures: pause.failures, harness: pause.harness, kind: pause.kind || "worker",
