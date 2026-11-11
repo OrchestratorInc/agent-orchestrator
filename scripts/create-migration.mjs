@@ -1,4 +1,4 @@
-import { realpathSync, writeFileSync } from "node:fs";
+import { readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,14 @@ export function createMigration(name, directory = fileURLToPath(new URL("../back
 	}
 
 	const version = new Date().toISOString().replace(/\D/g, "");
+	// A second migration created in the same millisecond gets the same version.
+	// goose refuses to start on a duplicate version, so report it here instead of
+	// letting the failure surface as a daemon that cannot boot.
+	const clash = readdirSync(directory).find((file) => file.startsWith(`${version}_`) && file !== `${version}_${name}.sql`);
+	if (clash) {
+		throw new Error(`Migration version ${version} is already claimed by ${clash}; rerun in a later millisecond so the version differs.`);
+	}
+
 	const filename = join(directory, `${version}_${name}.sql`);
 	writeFileSync(filename, "-- +goose Up\n\n-- +goose Down\n", { flag: "wx" });
 	return filename;

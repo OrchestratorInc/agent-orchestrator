@@ -67,6 +67,36 @@ test('a workflow edit runs every lane except native macOS', () => {
   assert.equal(pick.macos, false);
 });
 
+test('an integration skill change runs the config lane that verifies its manifest', () => {
+  assert.deepEqual(pickLanes(pr(['integrations/grok-bot/skills/ao-setup/SKILL.md'])).lanes, ['config']);
+  assert.deepEqual(pickLanes(pr(['integrations/grok-bot/manifest.json'])).lanes, ['config']);
+  // The test file itself: editing the check must run the check.
+  assert.deepEqual(pickLanes(pr(['integrations/grok-bot/manifest.test.mjs'])).lanes, ['config']);
+});
+
+test('integration files the config job does not read start no lane', () => {
+  // Broad integration/ coverage would start the config job for files it never
+  // reads. Only the skills, the manifest, and their test are verified.
+  for (const path of ['integrations/grok-bot/README.md', 'integrations/grok-bot/make-manifest.py', 'integrations/other/x.js']) {
+    assert.deepEqual(pickLanes(pr([path])).lanes, [], `${path} must not start a lane`);
+  }
+});
+
+test('every test file the CI config job runs is covered by a lane rule', () => {
+  // Drift guard: a test file added to the config job must also be reachable by
+  // a lane rule, or the job never runs for changes to that test.
+  const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  const command = workflow.split('\n').find(line => line.includes('node --test'));
+  const paths = command.split('node --test')[1].trim().split(/\s+/);
+  assert.ok(paths.length > 0);
+  for (const path of paths) {
+    assert.ok(
+      pickLanes(pr([path])).lanes.length > 0,
+      `${path} is run by the config job but matches no lane rule`,
+    );
+  }
+});
+
 test('labels select native coverage', () => {
   assert.deepEqual(pickLanes(pr(['frontend/src/main/a.ts'], { labels: ['ci:macos'] })).lanes, ['frontend', 'boundary', 'mac-native']);
   const full = pickLanes(pr(['README.md'], { labels: ['ci:full'] }));
