@@ -288,8 +288,8 @@ func TestGetLaunchCommandWritesExactModelTOML(t *testing.T) {
 	got := readVibeAgentConfig(t, filepath.Join(dataDir, "prompts", "mer-1", "vibe"))
 	want := strings.Join([]string{
 		`agent_type = "agent"`,
-		`display_name = "AO Session"`,
-		`description = "AO session standing instructions."`,
+		`display_name = "Orchestrator Session"`,
+		`description = "Orchestrator-managed session standing instructions."`,
 		`safety = "neutral"`,
 		`active_model = "mistral\n\u0007\u007F"`,
 		"",
@@ -326,8 +326,8 @@ func TestGetLaunchCommandBuildsCustomAgentForSystemPromptAndModel(t *testing.T) 
 	}
 	wantConfig := strings.Join([]string{
 		`agent_type = "agent"`,
-		`display_name = "AO Session"`,
-		`description = "AO session standing instructions."`,
+		`display_name = "Orchestrator Session"`,
+		`description = "Orchestrator-managed session standing instructions."`,
 		`safety = "neutral"`,
 		`instructions = "follow AO rules"`,
 		`active_model = "mistral \"medium\" \\ latest"`,

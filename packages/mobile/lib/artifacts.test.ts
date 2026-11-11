@@ -5,6 +5,8 @@ import {
 	artifactExtensionLabel,
 	artifactFilePath,
 	artifactMenuActions,
+	artifactPageAt,
+	artifactViewerPages,
 	artifactFilesPath,
 	artifactViewKind,
 	resolveArtifactAssetPath,
@@ -18,6 +20,7 @@ import {
 	looksBinary,
 	parseArtifacts,
 	sortArtifacts,
+	stableArtifactOrder,
 } from "./artifacts";
 
 describe("parseArtifacts", () => {
@@ -42,6 +45,25 @@ describe("parseArtifacts", () => {
 			"report.md",
 		])).toEqual([]);
 		expect(parseArtifacts(undefined)).toEqual([]);
+	});
+
+	it("keeps a published file's http(s) link and drops anything else", () => {
+		const link = "https://orchestrator.inc/s/3f2a9c";
+		expect(parseArtifacts([
+			{ path: "report.html", kind: "html", shareUrl: link },
+			{ path: "local.html", kind: "html", shareUrl: "http://localhost:8787/s/abc" },
+			{ path: "script.html", kind: "html", shareUrl: "javascript:alert(1)" },
+			{ path: "relative.html", kind: "html", shareUrl: "/s/abc" },
+			{ path: "long.html", kind: "html", shareUrl: `https://orchestrator.inc/s/${"a".repeat(600)}` },
+			{ path: "empty.html", kind: "html", shareUrl: "" },
+		]).map(({ path, shareUrl }) => ({ path, shareUrl }))).toEqual([
+			{ path: "report.html", shareUrl: link },
+			{ path: "local.html", shareUrl: "http://localhost:8787/s/abc" },
+			{ path: "script.html", shareUrl: undefined },
+			{ path: "relative.html", shareUrl: undefined },
+			{ path: "long.html", shareUrl: undefined },
+			{ path: "empty.html", shareUrl: undefined },
+		]);
 	});
 });
 
@@ -157,6 +179,12 @@ describe("artifactMenuActions", () => {
 		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 }, { inViewer: true })).toEqual(["ask", "copy", "history", "delete"]);
 		expect(artifactMenuActions({ path: "dump.txt", kind: "file", size: 5 << 20 })).toEqual(["open", "ask", "history", "delete"]);
 	});
+
+	it("offers Share link and Copy link for a published file, in the gallery and the viewer", () => {
+		const shareUrl = "https://orchestrator.inc/s/3f2a9c";
+		expect(artifactMenuActions({ path: "report.html", kind: "html", size: 10, shareUrl })).toEqual(["open", "share-link", "copy-link", "ask", "copy", "history", "delete"]);
+		expect(artifactMenuActions({ path: "chart.png", kind: "file", size: 10, shareUrl }, { inViewer: true })).toEqual(["share-link", "copy-link", "ask", "delete"]);
+	});
 });
 
 describe("artifactCommentTarget", () => {
@@ -196,5 +224,70 @@ describe("artifactFilesPath", () => {
 	it("names the route that serves an HTML artifact with AO's theme written in", () => {
 		expect(artifactFilesPath("ao-1", "deck/my page.html")).toBe("/api/v1/sessions/ao-1/artifact-files/deck/my%20page.html");
 		expect(artifactFilesPath("ao-1", "../x.html")).toBeUndefined();
+	});
+});
+
+describe("artifactPageAt", () => {
+	const pages = ["a.png", "b.md", "c.html"].map((path) => ({ path }));
+
+	it("picks the page a swipe settled on", () => {
+		expect(artifactPageAt(pages, 0, 390)?.path).toBe("a.png");
+		expect(artifactPageAt(pages, 390, 390)?.path).toBe("b.md");
+		// A fractional offset (rounding on Android) still lands on the nearest page.
+		expect(artifactPageAt(pages, 779.6, 390)?.path).toBe("c.html");
+	});
+
+	it("stays inside the list when the scroll overshoots", () => {
+		expect(artifactPageAt(pages, -40, 390)?.path).toBe("a.png");
+		expect(artifactPageAt(pages, 5_000, 390)?.path).toBe("c.html");
+	});
+
+	it("has no page before the pager is measured or when it is empty", () => {
+		expect(artifactPageAt(pages, 390, 0)).toBeUndefined();
+		expect(artifactPageAt([], 0, 390)).toBeUndefined();
+	});
+});
+
+describe("stableArtifactOrder", () => {
+	const files = (...paths: string[]) => paths.map((path) => ({ path, updatedAt: "" }));
+
+	it("starts in the list's order", () => {
+		expect(stableArtifactOrder(undefined, files("c", "b", "a")).map((f) => f.path)).toEqual(["c", "b", "a"]);
+	});
+
+	it("keeps a rewritten file's page when it moves to the front of the list", () => {
+		const rewritten = { path: "a", updatedAt: "later" };
+		const order = stableArtifactOrder(["c", "b", "a"], [rewritten, ...files("c", "b")]);
+		expect(order.map((f) => f.path)).toEqual(["c", "b", "a"]);
+		// The page carries the file's new version.
+		expect(order[2]).toBe(rewritten);
+	});
+
+	it("puts a new file at the end and drops a removed one", () => {
+		expect(stableArtifactOrder(["c", "b", "a"], files("new", "c", "a")).map((f) => f.path)).toEqual(["c", "a", "new"]);
+	});
+});
+
+describe("artifactViewerPages", () => {
+	const file = (path: string, registered?: boolean) => ({ path, name: path, kind: "file", size: 1, updatedAt: "2026-11-07T00:00:00Z", registered });
+	const files = [file("brand.html", true), file("deck.icon/icon.json", true), file("deck.icon/mark.png", true), file("draft.md"), file("assets/a.png")];
+	const paths = (pages: readonly { path: string }[]) => pages.map((page) => page.path);
+
+	it("pages through what the list shows, with a bundle as one page", () => {
+		expect(paths(artifactViewerPages(undefined, files, "brand.html"))).toEqual(["brand.html", "deck.icon/mark.png"]);
+	});
+
+	it("opens a hidden file on its own, with no way to swipe to the others", () => {
+		expect(paths(artifactViewerPages(undefined, files, "assets/a.png"))).toEqual(["assets/a.png"]);
+	});
+
+	it("keeps the root fallback when nothing is registered", () => {
+		const unregistered = [file("report.html"), file("assets/a.png")];
+		expect(paths(artifactViewerPages(undefined, unregistered, "report.html"))).toEqual(["report.html"]);
+	});
+
+	it("keeps the order the pages had on open", () => {
+		const reordered = [file("second.md", true), file("first.md", true)];
+		expect(paths(artifactViewerPages(["first.md", "second.md"], reordered, "first.md"))).toEqual(["first.md", "second.md"]);
 	});
 });

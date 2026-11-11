@@ -107,8 +107,33 @@ export function getSessionStatusDotView(
 	return dot(getKanbanColumnView(column, t).dotClassName);
 }
 
-// The dot before the new sidebar design: colour from the SCM section (merged
-// keeps its own tone), and a no-PR idle session blinks blue while it works.
+// The legacy dot's colour comes from the pull request the card's `displayStatus`
+// describes, so the dot and the phrase always talk about the same PR. A phrase
+// about the worker rather than the PR ("Working", "Blocked", …) has no entry and
+// falls back to the SCM state.
+const pullRequestToneByDisplayStatus: Partial<Record<string, SessionStatus>> = {
+	"Fixing CI failures": "ci_failed",
+	"CI failing": "ci_failed",
+	"Merge conflicts": "ci_failed",
+	"Addressing comments": "changes_requested",
+	"Changes requested": "changes_requested",
+	Commented: "commented",
+	Draft: "draft",
+	"Review scheduled": "pr_open",
+	Reviewing: "pr_open",
+	"Retrying review": "pr_open",
+	"Awaiting review": "review_pending",
+	"Review failed": "review_pending",
+	"Review cancelled": "review_pending",
+	Approved: "approved",
+	Mergeable: "mergeable",
+	Merged: "merged",
+	"Closed without merge": "exited",
+};
+
+// The dot before the new sidebar design: colour from the card's PR phrase or
+// else the SCM section (merged keeps its own tone), and a no-PR idle session
+// blinks blue while it works.
 function getLegacySessionStatusDotView(
 	session: {
 		activity?: SessionActivity | null;
@@ -121,7 +146,9 @@ function getLegacySessionStatusDotView(
 	const working = isAgentActivityWorking(session.activity);
 	const closedWithoutMerge = session.displayStatus === "Closed without merge";
 	const sectionStatus: SessionStatus =
-		closedWithoutMerge ? "exited" : (session.scmStatus ?? session.status);
+		pullRequestToneByDisplayStatus[session.displayStatus ?? ""] ??
+		session.scmStatus ??
+		session.status;
 	const toneStatus = sectionStatus === "idle" && working ? "working" : sectionStatus;
 	const className =
 		closedWithoutMerge
@@ -164,7 +191,7 @@ export function getSessionRowMarker(session: {
 	if (display === "Terminated" || sectionStatus === "terminated" || display === "Closed without merge") return null;
 
 	if (sessionNeedsInput(session)) return "attention";
-	if (display === "CI failing" || display === "Changes requested") return "attention";
+	if (display === "CI failing" || display === "Merge conflicts" || display === "Changes requested") return "attention";
 	if (!display && (session.status === "ci_failed" || session.status === "changes_requested")) {
 		return "attention";
 	}
@@ -187,6 +214,31 @@ export function getSessionRowMarker(session: {
 	}
 }
 
+/**
+ * A sidebar row spins while its agent works, from the moment it is set up.
+ * Working wins over any PR state: the agent may already be on its next PR, and
+ * the hover card has the PR detail.
+ */
+export function isSessionRowWorking(session: {
+	activity?: SessionActivity | null;
+	displayStatus?: string;
+	provisionState?: string;
+}): boolean {
+	if (session.displayStatus === "Terminated") return false;
+	return session.provisionState === "provisioning" || isAgentActivityWorking(session.activity);
+}
+
+/**
+ * The icon that leads a sidebar row: the working spinner while the agent works,
+ * then what the user has to act on (input, CI, review), then the PR state.
+ * Null leaves the quiet dot.
+ */
+export function getSessionRowIndicator(
+	session: Parameters<typeof getSessionRowMarker>[0] & Parameters<typeof isSessionRowWorking>[0],
+): "working" | SessionRowMarker | null {
+	return isSessionRowWorking(session) ? "working" : getSessionRowMarker(session);
+}
+
 // The agent has stopped and is waiting on the user (a question or a decision).
 export function sessionNeedsInput(session: {
 	activity?: SessionActivity | null;
@@ -197,7 +249,8 @@ export function sessionNeedsInput(session: {
 		session.status === "needs_input" ||
 		session.activity?.state === "waiting_input" ||
 		session.activity?.state === "blocked" ||
-		session.displayStatus === "Blocked"
+		session.displayStatus === "Blocked" ||
+		session.displayStatus === "Needs input"
 	);
 }
 
@@ -209,6 +262,7 @@ function sessionNeedsYou(session: {
 }): boolean {
 	switch (session.displayStatus) {
 		case "CI failing":
+		case "Merge conflicts":
 		case "Changes requested":
 			return true;
 		case undefined:

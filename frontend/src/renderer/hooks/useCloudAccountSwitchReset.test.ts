@@ -1,6 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cloudChatEventsKey, cloudChatHistoryKey } from "../lib/cloud-chat-history";
 import { useUiStore } from "../stores/ui-store";
 import { useCloudAccountSwitchReset } from "./useCloudAccountSwitchReset";
 
@@ -48,6 +49,20 @@ describe("useCloudAccountSwitchReset", () => {
 		expect(queryClient.getMutationCache().getAll()).toHaveLength(0);
 		expect(useUiStore.getState().orchestratorStartupErrors).toEqual({});
 		expect(leavePage).toHaveBeenCalledTimes(1);
+	});
+
+	it("drops the previous account's Cloud chats when another account signs in", () => {
+		queryClient.setQueryData(cloudChatEventsKey("org-1", "session-1"), [{ sessionId: "session-1", sequence: 1, type: "chat.user_message", payload: { text: "hi" }, createdAt: "2026-11-08T10:00:00Z" }]);
+		queryClient.setQueryData(cloudChatHistoryKey("org-1", "session-1"), { hasOlder: true, nextBefore: 1, recentPending: false, loadingOlder: false, generation: 1 });
+		queryClient.setQueryData(["cloud-script-steps", "org-1", "session-1"], []);
+		const { rerender } = render({ userId: "user-a" });
+		// A token refresh of the same account keeps them.
+		rerender({ userId: "user-a", ready: true, onLocalPage: false });
+		expect(queryClient.getQueryData(cloudChatEventsKey("org-1", "session-1"))).toBeDefined();
+		rerender({ userId: "user-b", ready: true, onLocalPage: false });
+		expect(queryClient.getQueryData(cloudChatEventsKey("org-1", "session-1"))).toBeUndefined();
+		expect(queryClient.getQueryData(cloudChatHistoryKey("org-1", "session-1"))).toBeUndefined();
+		expect(queryClient.getQueryData(["cloud-script-steps", "org-1", "session-1"])).toBeUndefined();
 	});
 
 	it("keeps a local page when another account signs in", async () => {

@@ -81,6 +81,32 @@ func TestTranscriptWatcherAddsOnlyRegisteredSources(t *testing.T) {
 	}
 }
 
+func TestTranscriptWatcherRefreshesWorkspaceRoot(t *testing.T) {
+	globalRoot := t.TempDir()
+	workspaceRoot := filepath.Join(t.TempDir(), ".qwen-runtime", "usage")
+	mustNoError(t, os.MkdirAll(workspaceRoot, 0o700))
+	source := filepath.Join(workspaceRoot, "token-usage-2026-08.jsonl")
+	mustNoError(t, os.WriteFile(source, []byte("{}\n"), 0o600))
+	watcher, err := NewTranscriptWatcher(context.Background(), []string{globalRoot})
+	mustNoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := watcher.Start(ctx)
+	t.Cleanup(func() { cancel(); <-done })
+
+	mustNoError(t, watcher.Rebuild(ctx, []string{source}))
+	watcher.mu.Lock()
+	_, watched := watcher.watched[source]
+	watcher.mu.Unlock()
+	if watched {
+		t.Fatal("workspace source was watched before its root was registered")
+	}
+	mustNoError(t, watcher.SetRoots(ctx, []string{globalRoot, workspaceRoot}))
+	mustNoError(t, watcher.Rebuild(ctx, []string{source}))
+	waitForWatchedPath(t, watcher, source)
+	mustNoError(t, os.WriteFile(source, []byte("{\"updated\":true}\n"), 0o600))
+	waitForTranscriptEvent(t, watcher.Events(), source)
+}
+
 func TestTranscriptWatcherResolvesSymlinkedRoot(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "transcripts")
@@ -172,6 +198,23 @@ func TestTranscriptWatcherMarksOnlyCreationEventsForDiscovery(t *testing.T) {
 	emit, discovery, err = watcher.handleEvent(context.Background(), fsnotify.Event{Name: path, Op: fsnotify.Write})
 	if err != nil || canonicalTranscriptPath(emit) != canonicalTranscriptPath(path) || discovery {
 		t.Fatalf("write event = path:%q discovery:%v err:%v", emit, discovery, err)
+	}
+}
+
+func TestTranscriptWatcherEmitsSnapshotSourceWrites(t *testing.T) {
+	root := t.TempDir()
+	grok := filepath.Join(root, "grok", "usage.json")
+	deepseek := filepath.Join(root, "deepseek", "session.v4.jsonl.zstd")
+	for _, path := range []string{grok, deepseek} {
+		mustNoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		mustNoError(t, os.WriteFile(path, []byte("{}"), 0o600))
+	}
+	watcher, cancel := startTranscriptWatcher(t, root, grok, deepseek)
+	defer stopTranscriptWatcher(t, watcher, cancel)
+
+	for _, path := range []string{grok, deepseek} {
+		mustNoError(t, os.WriteFile(path, []byte(`{"updated":true}`), 0o600))
+		waitForTranscriptEvent(t, watcher.Events(), path)
 	}
 }
 

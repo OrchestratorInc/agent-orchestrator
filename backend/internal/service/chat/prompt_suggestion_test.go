@@ -313,7 +313,7 @@ func suggestionPage(rows store.ConversationSnapshot) chatsvc.ConversationRows {
 func TestPromptSuggestionReadsBoundedPagesAcrossActivityHistory(t *testing.T) {
 	var h *harness
 	var reads int
-	h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, limit int64) (chatsvc.ConversationRows, error) {
+	h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, _, limit int64) (chatsvc.ConversationRows, error) {
 		if limit != 200 {
 			t.Fatalf("unbounded page limit: %d", limit)
 		}
@@ -360,7 +360,7 @@ func TestPromptSuggestionRevalidatesWithCallerContextAndPreservesReadErrors(t *t
 			var h *harness
 			var runCalls, reads int
 			readErr := errors.New("snapshot database unavailable")
-			h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, limit int64) (chatsvc.ConversationRows, error) {
+			h = newPagedSuggestionHarness(t, func(ctx context.Context, conversationID string, before, _, limit int64) (chatsvc.ConversationRows, error) {
 				reads++
 				if _, hasDeadline := ctx.Deadline(); hasDeadline {
 					t.Fatal("snapshot read inherited the provider deadline")

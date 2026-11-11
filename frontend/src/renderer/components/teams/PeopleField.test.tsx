@@ -128,6 +128,22 @@ describe("PeopleField", () => {
 		expect(await screen.findByRole("listbox")).toBeInTheDocument();
 	});
 
+	it("clears the delayed blur close when the field unmounts", () => {
+		const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+		const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+		try {
+			const view = renderField();
+			fireEvent.blur(screen.getByRole("combobox", { name: "Add people or teams" }));
+			const blurTimer = setTimeoutSpy.mock.results.at(-1)?.value;
+			expect(blurTimer).toBeDefined();
+			view.unmount();
+			expect(clearTimeoutSpy).toHaveBeenCalledWith(blurTimer);
+		} finally {
+			setTimeoutSpy.mockRestore();
+			clearTimeoutSpy.mockRestore();
+		}
+	});
+
 	it("offers New team with whoever is picked so far", async () => {
 		const onNewTeam = vi.fn();
 		renderField({ onNewTeam });

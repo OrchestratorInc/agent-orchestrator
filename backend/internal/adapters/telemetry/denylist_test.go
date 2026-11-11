@@ -29,7 +29,7 @@ func TestDenylistSinkPassesEverythingWhenUnconfigured(t *testing.T) {
 	if sink != ports.EventSink(next) {
 		t.Fatal("empty denylist should return the wrapped sink unchanged")
 	}
-	emitAll(sink, "ao.app.active", "ao.session.spawned")
+	emitAll(sink, "ao.app.active", "ao.sessions.spawned")
 	if len(next.events) != 2 {
 		t.Fatalf("names = %v, want both events forwarded", forwardedNames(next))
 	}
@@ -37,8 +37,8 @@ func TestDenylistSinkPassesEverythingWhenUnconfigured(t *testing.T) {
 
 func TestDenylistSinkDropsNamedEvents(t *testing.T) {
 	next := &recordingSink{}
-	sink := NewDenylistSink(next, []string{"ao.session.spawned"})
-	emitAll(sink, "ao.app.active", "ao.session.spawned", "ao.http.5xx")
+	sink := NewDenylistSink(next, []string{"ao.sessions.spawned"})
+	emitAll(sink, "ao.app.active", "ao.sessions.spawned", "ao.http.5xx")
 	if len(next.events) != 2 || forwardedNames(next)[0] != "ao.app.active" || forwardedNames(next)[1] != "ao.http.5xx" {
 		t.Fatalf("names = %v, want the denied event dropped", forwardedNames(next))
 	}
@@ -47,19 +47,23 @@ func TestDenylistSinkDropsNamedEvents(t *testing.T) {
 func TestDenylistSinkDropsRenamedEvents(t *testing.T) {
 	next := &recordingSink{}
 	sink := NewDenylistSink(next, []string{"ao.sessions.ended", "ao.prs.closed"})
-	emitAll(sink, "ao.sessions.ended", "ao.prs.closed", "ao.session.spawned")
-	if got := forwardedNames(next); len(got) != 1 || got[0] != "ao.session.spawned" {
+	emitAll(sink, "ao.sessions.ended", "ao.prs.closed", "ao.sessions.spawned")
+	if got := forwardedNames(next); len(got) != 1 || got[0] != "ao.sessions.spawned" {
 		t.Fatalf("forwarded = %v", got)
 	}
 }
 
-// An operator reading PostHog sees the exported alias, not the internal name.
-// Typing either one must silence the stream, or the switch is a trap.
-func TestDenylistSinkMatchesEitherInternalOrExportedName(t *testing.T) {
-	for _, denied := range []string{"ao.app.active", "ao.v2.app.active"} {
+// A kill switch configured before the event rename names the old stream. It
+// must still silence the renamed one, or the upgrade quietly re-enables it.
+func TestDenylistSinkMatchesCurrentAndLegacyNames(t *testing.T) {
+	for _, denied := range []string{"ao.cli.active", "ao.v2.app.active", "ao.session.*"} {
 		next := &recordingSink{}
 		sink := NewDenylistSink(next, []string{denied})
-		emitAll(sink, "ao.app.active")
+		event := "ao.cli.active"
+		if denied == "ao.session.*" {
+			event = "ao.sessions.spawned"
+		}
+		emitAll(sink, event)
 		if len(next.events) != 0 {
 			t.Fatalf("denylist %q forwarded %v, want dropped", denied, forwardedNames(next))
 		}
@@ -69,14 +73,31 @@ func TestDenylistSinkMatchesEitherInternalOrExportedName(t *testing.T) {
 func TestDenylistSinkSupportsPrefixWildcardAndIsCaseInsensitive(t *testing.T) {
 	next := &recordingSink{}
 	sink := NewDenylistSink(next, []string{"  AO.RENDERER.*  "})
-	emitAll(sink, "ao.renderer.route_viewed", "ao.renderer.api_error", "ao.session.spawned")
-	if len(next.events) != 1 || forwardedNames(next)[0] != "ao.session.spawned" {
+	emitAll(sink, "ao.renderer.route_viewed", "ao.renderer.api_error", "ao.sessions.spawned")
+	if len(next.events) != 1 || forwardedNames(next)[0] != "ao.sessions.spawned" {
 		t.Fatalf("names = %v, want only the non-renderer event forwarded", forwardedNames(next))
 	}
 }
 
 // A denylist of only blank or bare "*" entries must not silence everything by
 // accident, and must not add a pointless wrapper either.
+// ao.app.active is still a current name (the desktop heartbeat); silencing
+// it must not also silence CLI activity.
+func TestDesktopActiveDenyDoesNotSilenceCLIActive(t *testing.T) {
+	if EventDenied([]string{"ao.app.active"}, "ao.cli.active") {
+		t.Fatal("ao.app.active entry silenced ao.cli.active")
+	}
+}
+
+func TestEventDeniedHonorsLegacyNames(t *testing.T) {
+	if !EventDenied([]string{"ao.session.spawned"}, "ao.sessions.spawned") {
+		t.Fatal("legacy ao.session.spawned entry must deny ao.sessions.spawned")
+	}
+	if EventDenied(nil, "ao.sessions.spawned") || EventDenied([]string{"ao.http.5xx"}, "ao.sessions.spawned") {
+		t.Fatal("unrelated entries must not deny")
+	}
+}
+
 func TestDenylistSinkIgnoresEmptyEntries(t *testing.T) {
 	next := &recordingSink{}
 	sink := NewDenylistSink(next, []string{"", "   ", "*"})

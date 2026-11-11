@@ -80,6 +80,64 @@ describe("SharedProjectPanel", () => {
 		expect(container.textContent).toBe("");
 	});
 
+	it("is a header button naming the shared project that opens its list as a popover, never over the page", () => {
+		mocks.requests = [request];
+		render(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, guestWork]} />);
+		const button = screen.getByRole("button", { name: "Shared project: 1 pull request · 1 to approve" });
+		expect(button).toHaveAttribute("data-priority", "secondary");
+		expect(button.querySelector("[data-compact-label]")?.textContent).toBe("1 pull request · 1 to approve");
+		// Closed, nothing of the list is on the page to cover the conversation.
+		expect(document.querySelector("[data-shared-project-list]")).toBeNull();
+		fireEvent.click(button);
+		const list = document.querySelector("[data-shared-project-list]");
+		expect(list).not.toBeNull();
+		expect(button.contains(list)).toBe(false);
+		expect(list?.textContent).toContain("Shared project");
+	});
+
+	it("marks a request waiting on the owner even when the label is compacted, and not for a guest", () => {
+		mocks.requests = [request];
+		const view = render(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, guestWork]} />);
+		expect(view.container.querySelector("[data-shared-project-pending]")).not.toBeNull();
+		view.unmount();
+		const guestOrchestrator = { ...orchestrator, cloud: { orgId: "org-1", shared: true } };
+		const guestView = render(<SharedProjectPanel orchestrator={guestOrchestrator} sessions={[guestOrchestrator, guestWork]} />);
+		expect(guestView.container.querySelector("[data-shared-project-pending]")).toBeNull();
+		mocks.requests = [];
+		guestView.unmount();
+		const quiet = render(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, guestWork]} />);
+		expect(quiet.container.querySelector("[data-shared-project-pending]")).toBeNull();
+	});
+
+	it.each([
+		{ who: "the owner", shared: false },
+		{ who: "a guest", shared: true },
+	])("shows $who nothing until the project has a pull request, then the control", ({ shared }) => {
+		const viewer = shared ? { ...orchestrator, cloud: { orgId: "org-1", shared: true } } : orchestrator;
+		const quietWork = { ...guestWork, prs: [] as WorkspaceSession["prs"] };
+		const { container, rerender } = render(<SharedProjectPanel orchestrator={viewer} sessions={[viewer, quietWork]} />);
+		expect(container.textContent).toBe("");
+		expect(screen.queryByRole("button")).toBeNull();
+		mocks.projectPRs = [{ number: 500, url: "https://github.com/owner/repo/pull/500", headSha: "head-5" }];
+		rerender(<SharedProjectPanel orchestrator={viewer} sessions={[viewer, quietWork]} />);
+		expect(screen.getByRole("button", { name: "Shared project: 1 pull request" })).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it("closes its list when the last pull request goes, so it does not reopen on its own", () => {
+		mocks.projectPRs = [{ number: 500, url: "https://github.com/owner/repo/pull/500", headSha: "head-5" }];
+		const quietWork = { ...guestWork, prs: [] as WorkspaceSession["prs"] };
+		const { rerender } = render(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, quietWork]} />);
+		fireEvent.click(screen.getByRole("button", { name: "Shared project: 1 pull request" }));
+		expect(document.querySelector("[data-shared-project-list]")).not.toBeNull();
+		mocks.projectPRs = [];
+		rerender(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, quietWork]} />);
+		expect(screen.queryByRole("button")).toBeNull();
+		mocks.projectPRs = [{ number: 501, url: "https://github.com/owner/repo/pull/501", headSha: "head-6" }];
+		rerender(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, quietWork]} />);
+		expect(screen.getByRole("button", { name: "Shared project: 1 pull request" })).toHaveAttribute("aria-expanded", "false");
+		expect(document.querySelector("[data-shared-project-list]")).toBeNull();
+	});
+
 	it("lists who opened each pull request and in which session, and lets the owner approve or reject a request", () => {
 		mocks.requests = [request];
 		render(<SharedProjectPanel orchestrator={orchestrator} sessions={[orchestrator, guestWork]} />);

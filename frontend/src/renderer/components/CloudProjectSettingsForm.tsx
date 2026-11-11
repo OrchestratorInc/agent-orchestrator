@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProjectSettingsRow, ProjectSettingsSection as SettingsGroup, ProjectSettingsValueRow } from "@aoagents/product-ui";
-import { TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -94,6 +94,8 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 			{usesCoder ? <CloudProjectCoderSettings project={project} /> : null}
 		</> : undefined}
 		modelScope={(agent) => agent === "opencode" && opencodeCredential ? credentialModelScope(opencodeCredential) : ""}
+		// The models offered are Cloud's for the account, so a saved model is one its sessions run.
+		cloudOrgId={project.orgId}
 		// Without a project reviewer, the worker agent's default reviewer runs, as on local projects.
 		defaultReviewer={(draft) => defaultReviewerHarness(draft.workerAgent, true)}
 		autoReviewDescription={t("settings.cloudProject.autoReviewDescription")}
@@ -270,7 +272,8 @@ function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAge
 	// Show the agent a reviewer actually runs with when none is chosen.
 	const shown = value || (role === "reviewer" ? defaultReviewerHarness(draft.workerAgent, true) : "");
 	const agents = CLOUD_AGENT_PROVIDERS.map((agent) => ({ value: agent, label: agentLabel(agent), icon: <AgentAvatar provider={agent} className="size-icon-lg" decorative /> }));
-	return <SettingsOptionMenu aria-label={`${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`}
+	const label = role === "orchestrator" ? t("settings.project.defaultOrchestrator") : role === "worker" ? t("settings.project.defaultWorker") : `${t(`settings.models.${role}Role`)} ${t("settings.project.agent").toLocaleLowerCase()}`;
+	return <SettingsOptionMenu aria-label={label}
 		disabled={disabled} value={shown} placeholder={t("settings.cloudProject.sessionSelection")}
 		// The worker and orchestrator need an agent, as on local projects; a
 		// reviewer can follow the worker agent's default.

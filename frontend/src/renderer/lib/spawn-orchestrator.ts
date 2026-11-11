@@ -1,3 +1,4 @@
+import { apiErrorException } from "./api-error-exception";
 import { apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId } from "./api-client";
 import { appI18n } from "../i18n";
 import { aoBridge } from "./bridge";
@@ -83,10 +84,10 @@ export async function spawnOrchestrator(
 			);
 		}
 
-		void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", { project_id: projectId, source });
+		void captureRendererEvent("ao.orchestrators.spawned", { project_id: projectId, source });
 		return data.orchestrator.id;
 	} catch (err) {
-		void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", {
+		void captureRendererEvent("ao.orchestrators.spawn_failed", {
 			project_id: projectId, source,
 			...(err instanceof OrchestratorSpawnError ? { error_code: err.code, http_status: err.status } : {}),
 		});
@@ -117,7 +118,7 @@ async function requestOrchestratorResume(sessionId: string, hostId?: string): Pr
 		params: { path: { sessionId } },
 	});
 	if (error && apiErrorCode(error) !== "AGENT_NOT_EXITED") {
-		throw new Error(apiErrorMessage(error, `Could not resume the orchestrator (${response.status})`));
+		throw apiErrorException(error, `Could not resume the orchestrator (${response.status})`);
 	}
 	if (data?.resumeMode === "saved_prompt") {
 		void aoBridge.notifications

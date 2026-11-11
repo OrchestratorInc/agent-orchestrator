@@ -40,21 +40,21 @@ If AO is already installed on the machine, or the link expired, run `ao remote-h
 To connect a machine without linking it to your account, open Orchestrator on the machine you want to connect to. With the current `ao` CLI, show its existing connection address and password without changing remote access:
 
 ```bash
-ao remote-host status
+ao remote-host status --show-password
 ```
 
 If `status` reports **Remote host disabled**, run:
 
 ```bash
 ao remote-host enable --tunnel-only
-ao remote-host status
+ao remote-host status --show-password
 ```
 
 The tunnel starts asynchronously; run `status` again until an HTTPS address appears. On the other desktop, sign in to Orchestrator and open **Settings → Remote hosts → Add host**, then enter that address and connection password. Treat these details as credentials. Cloudflare terminates TLS and can read tunneled traffic. Until a signed-in desktop adds the machine, it uses a quick tunnel whose address changes on restart; once added, it moves to a fixed address that your devices follow.
 
 If the host already has LAN access enabled, its displayed HTTP address works only on a trusted reachable network. Use `ao remote-host enable --tunnel` to add HTTPS access while retaining that LAN listener; switching to tunnel-only mode requires disabling it first and invalidates the old password.
 
-If `ao` is missing from your Mac's PATH or points to an old install, use the current desktop app's bundled CLI instead: `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" remote-host status`. Adjust the app path if you installed or named it differently; the same binary supports `remote-host enable --tunnel-only`.
+If `ao` is missing from your Mac's PATH or points to an old install, use the current desktop app's bundled CLI instead: `"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" remote-host status --show-password`. Adjust the app path if you installed or named it differently; the same binary supports `remote-host enable --tunnel-only`.
 
 On macOS, **Quit / Cmd+Q** closes the desktop window and removes AO from the Dock while its tray, daemon, and enabled remote access keep running. Use the tray's **Quit AO Completely** to stop the app-owned server. The host must stay awake and reachable; closing the window does not enable remote access by itself.
 

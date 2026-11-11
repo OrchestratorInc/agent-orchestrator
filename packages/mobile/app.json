@@ -2,7 +2,7 @@
 	"expo": {
 		"name": "Orchestrator",
 		"slug": "ao-mobile",
-		"version": "2.2.0",
+		"version": "2.3.0",
 		"runtimeVersion": {
 			"policy": "fingerprint"
 		},
@@ -63,7 +63,7 @@
 				"foregroundImage": "./assets/android-icon-foreground.png",
 				"monochromeImage": "./assets/android-icon-monochrome.png"
 			},
-			"predictiveBackGestureEnabled": true,
+			"predictiveBackGestureEnabled": false,
 			"permissions": ["android.permission.CAMERA"],
 			"softwareKeyboardLayoutMode": "resize"
 		},
@@ -75,6 +75,9 @@
 			"expo-router",
 			"@sentry/react-native/expo",
 			"./plugins/withCircleDashedCheck",
+			"./plugins/withHarnessMenuIcons",
+			"./plugins/withAndroidDialogTheme",
+			"./plugins/withIosSoftScrollEdge",
 			[
 				"expo-navigation-bar",
 				{
@@ -86,6 +89,9 @@
 				{
 					"android": {
 						"usesCleartextTraffic": true
+					},
+					"ios": {
+						"enableSceneSupport": true
 					}
 				}
 			],
@@ -113,6 +119,7 @@
 			[
 				"expo-notifications",
 				{
+					"icon": "./assets/notification-icon.png",
 					"color": "#4d8dff"
 				}
 			],

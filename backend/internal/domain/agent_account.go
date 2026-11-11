@@ -52,10 +52,25 @@ func (a AgentAccount) Device() bool { return strings.TrimSpace(a.Home) == "" }
 // AgentAccountLimitWindow is one usage meter of an account, such as the
 // five-hour session or the weekly limit.
 type AgentAccountLimitWindow struct {
-	ID          string     `json:"id"`
-	Label       string     `json:"label"`
-	UsedPercent float64    `json:"usedPercent" minimum:"0" maximum:"100"`
-	ResetsAt    *time.Time `json:"resetsAt,omitempty"`
+	ID              string     `json:"id"`
+	Label           string     `json:"label"`
+	UsedPercent     float64    `json:"usedPercent" minimum:"0" maximum:"100"`
+	ResetsAt        *time.Time `json:"resetsAt,omitempty"`
+	DurationMinutes int        `json:"durationMinutes,omitempty" minimum:"0"`
+}
+
+// AgentLimitReading is one limit window's value as read at one moment.
+type AgentLimitReading struct {
+	AccountID       string
+	Provider        AgentAccountProvider
+	Email           string
+	Plan            string
+	WindowID        string
+	Label           string
+	DurationMinutes int
+	UsedPercent     float64
+	ResetsAt        *time.Time
+	ReadAt          time.Time
 }
 
 // AgentAccountLimits is what the provider's CLI reports about an account's

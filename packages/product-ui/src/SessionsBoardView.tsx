@@ -1,20 +1,11 @@
 import {
 	Fragment,
 	forwardRef,
-	memo,
-	startTransition,
-	useEffect,
-	useLayoutEffect,
-	useRef,
-	useState,
 	type HTMLAttributes,
-	type ReactElement,
 	type ReactNode,
 } from "react";
-import { motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
 import {
-	ChevronIcon,
 	GitBranchIcon,
 	GitPullRequestIcon,
 	LoaderCircleIcon,
@@ -46,7 +37,7 @@ export type BoardSessionPresentation = {
 	kanbanColumn?: KanbanColumn;
 	/**
 	 * Daemon-derived phrase for what is happening inside {@link kanbanColumn}
-	 * ("Fixing CI failures", "Needs human review"), replacing {@link status} as
+	 * ("Fixing CI failures", "Awaiting review"), replacing {@link status} as
 	 * the card's status text. Translated via `getDisplayStatusLabel` for known
 	 * phrases (see {@link DisplayStatus}); an unrecognized one -- a newer
 	 * daemon that shipped a phrase before this build -- renders as the raw,
@@ -67,6 +58,8 @@ export type BoardSessionPresentation = {
 	provider: string;
 	status: SessionStatus;
 	statusPresentation?: BoardSessionStatusPresentation;
+	/** Paint the plain card surface instead of the status's own tint, such as the terminated red. */
+	plainSurface?: boolean;
 	title: string;
 	trackerIssueId?: string;
 	updatedAt: string;
@@ -87,21 +80,11 @@ export type BoardPullRequestState = "closed" | "open" | "draft" | "merged";
 // AO-driven loop working the PR. Settled phrases ("Mergeable", "Approved",
 // "Merged") are deliberately absent — see #4725 and #5081.
 const IN_PROGRESS_DISPLAY_STATUSES = new Set<string>([
-	"Review pending",
+	"Working",
 	"Fixing CI failures",
 	"Addressing comments",
 	"Reviewing",
-]);
-
-// Display statuses whose PR is done for good. A live worker still reads
-// `status: working` under them (the agent can keep running after its PR
-// merges), but the delivery loop has nothing left to turn, so the loader stays
-// off. "Mergeable" and "Approved" are absent: the agent may still be working
-// on a PR that has not landed.
-const SETTLED_DISPLAY_STATUSES = new Set<string>([
-	"Merged",
-	"Closed without merge",
-	"Terminated",
+	"Retrying review",
 ]);
 
 export type BoardReviewerPresentation = {
@@ -323,23 +306,15 @@ export function SessionCardView({
 		prs.length > 0 && isFinishedForPullRequestProgress
 			? labels.pr.progress?.(countBoardPullRequests(prs))
 			: undefined;
+	// The loader follows the label: it spins only when the phrase itself names
+	// work in progress, so a card never spins beside a settled phrase. Fall back
+	// to `status` only for a daemon too old to send `displayStatus`.
 	const showStatusLoader =
 		session.statusReadiness === "checking" || (session.statusReadiness !== "unavailable" &&
 		!needsAttention &&
-		session.displayStatus !== "Needs human review" &&
-		// "Draft" describes the PR, not work AO is turning, so it gets no loader
-		// even while the worker is live.
-		session.displayStatus !== "Draft" &&
-		((session.status === "working" && (legacyStatus || !SETTLED_DISPLAY_STATUSES.has(session.displayStatus ?? ""))) ||
-			// The label reads `displayStatus`, so the loader must too. `status`
-			// aggregates the session's WORST open PR while `displayStatus` describes
-			// its BEST one, so keying the loader off `status` spun a settled
-			// "Mergeable" card forever whenever a sibling PR was still review-pending
-			// (#5081). Fall back to `status` only for a daemon too old to send
-			// `displayStatus`.
-			(session.displayStatus
-				? IN_PROGRESS_DISPLAY_STATUSES.has(session.displayStatus)
-				: session.status === "review_pending")));
+		(session.displayStatus
+			? IN_PROGRESS_DISPLAY_STATUSES.has(session.displayStatus)
+			: session.status === "working" || session.status === "review_pending"));
 
 	return (
 		<div
@@ -350,7 +325,7 @@ export function SessionCardView({
 					? // A hover preview: one elevated surface, no outline, no motion.
 						"relative w-full rounded-lg bg-popover text-left"
 					: "group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
-				!still && (badge.cardClassName ?? "border-border bg-surface"),
+				!still && ((session.plainSurface ? undefined : badge.cardClassName) ?? "border-border bg-surface"),
 				interactive &&
 					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100",
 				needsAttention &&
@@ -483,7 +458,9 @@ function boardSessionNeedsAttention(session: BoardSessionPresentation): boolean 
 	if (session.statusPresentation) return false;
 	switch (session.displayStatus) {
 		case "Blocked":
+		case "Needs input":
 		case "CI failing":
+		case "Merge conflicts":
 		case "Changes requested":
 			return true;
 		case undefined:
@@ -633,162 +610,6 @@ function lifecycleClassName(state: BoardPullRequestState): string {
 			return "text-success";
 	}
 }
-
-/**
- * Collapsed archive toggle height. The overlay bar and the board's bottom
- * padding must stay in lockstep so the archive neither overlaps lanes nor
- * leaves a gap.
- */
-export const ARCHIVE_TOGGLE_HEIGHT_PX = 58;
-export const archiveToggleHeightClassName = "h-[58px]";
-export const archiveToggleOffsetClassName = "pb-[58px]";
-
-/**
- * Archive lives in its own memo'd component so expand/collapse state does not
- * re-render the kanban columns. Card mount is deferred via startTransition on
- * first open; after that the sheet stays mounted and open/close only tweens
- * Motion height 0↔auto (collapsed: inert / non-interactive). Overlay
- * positioning keeps lane height stable while expanded.
- */
-export const SessionsArchiveView = memo(function SessionsArchiveView<
-	TSession extends BoardSessionPresentation,
->({
-	labels,
-	renderSessionCard,
-	resetKey,
-	sessions,
-	trailing,
-}: {
-	labels: {
-		archive: string;
-		archiveAria: string;
-		archivedSessions: string;
-	};
-	renderSessionCard: (session: TSession) => ReactNode;
-	/** Collapse and drop deferred cards when the board scope changes (e.g. projectId). */
-	resetKey?: string;
-	sessions: TSession[];
-	/** Right-aligned status in the bar, outside the toggle (e.g. memory pressure). */
-	trailing?: ReactNode;
-}) {
-	const prefersReducedMotion = useReducedMotion();
-	const [expanded, setExpanded] = useState(false);
-	const [cardsReady, setCardsReady] = useState(false);
-	const archiveRef = useRef<HTMLDivElement>(null);
-
-	// Clip the lanes behind the sheet without resizing their scroll viewports.
-	// A clear archive must reveal the window material, not the active cards.
-	useLayoutEffect(() => {
-		const archive = archiveRef.current;
-		const board = archive?.parentElement;
-		if (!archive || !board) return;
-		const updateHeight = () => {
-			board.style.setProperty("--sessions-archive-height", `${archive.getBoundingClientRect().height}px`);
-		};
-		updateHeight();
-		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateHeight);
-		observer?.observe(archive);
-		return () => {
-			observer?.disconnect();
-			board.style.removeProperty("--sessions-archive-height");
-		};
-	}, [sessions.length > 0 || Boolean(trailing)]);
-
-	useEffect(() => {
-		setExpanded(false);
-		setCardsReady(false);
-	}, [resetKey]);
-
-	useEffect(() => {
-		if (!expanded || cardsReady) return;
-		let cancelled = false;
-		const id = requestAnimationFrame(() => {
-			startTransition(() => {
-				if (!cancelled) setCardsReady(true);
-			});
-		});
-		return () => {
-			cancelled = true;
-			cancelAnimationFrame(id);
-		};
-	}, [expanded, cardsReady]);
-
-	if (sessions.length === 0 && !trailing) return null;
-
-	return (
-		<div ref={archiveRef} className="absolute inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background px-3">
-			<div className={cn("flex items-center gap-2", archiveToggleHeightClassName)}>
-				{/* Full-row hit target: the control stretches edge-to-edge so empty
-				    space beside the label toggles archive too. Height must match
-				    archiveToggleOffsetClassName on the board. */}
-				{sessions.length > 0 ? (
-					<button
-						aria-expanded={expanded}
-						aria-label={labels.archiveAria}
-						className={cn(
-							"group flex h-full min-w-0 flex-1 items-center gap-2 py-0 text-muted-foreground transition-colors hover:text-foreground",
-							expanded ? "min-h-11" : "min-h-row-md",
-						)}
-						onClick={() => setExpanded((open) => !open)}
-						type="button"
-					>
-						<ChevronIcon
-							className={cn(
-								"size-icon-2xs shrink-0 transition-transform duration-[140ms] ease-[cubic-bezier(0.25,0.46,0.45,0.94)]",
-								prefersReducedMotion && "transition-none",
-								expanded && "rotate-90",
-							)}
-							direction="right"
-						/>
-						<span className="text-2xs font-medium tracking-wide-sm">{labels.archive}</span>
-						<span className="ml-1.5 font-sans text-micro text-passive">{sessions.length}</span>
-					</button>
-				) : (
-					<div className="min-w-0 flex-1" />
-				)}
-				{trailing ? <div className="flex shrink-0 items-center">{trailing}</div> : null}
-			</div>
-			{/* Keep the sheet mounted after first open; height tracks `expanded`. */}
-			{cardsReady ? (
-				<motion.div
-					initial={prefersReducedMotion ? false : { height: 0 }}
-					animate={{ height: expanded ? "auto" : 0 }}
-					transition={
-						prefersReducedMotion
-							? { duration: 0 }
-							: { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }
-					}
-					style={{ overflow: "hidden" }}
-				>
-					<div
-						aria-hidden={!expanded}
-						aria-label={expanded ? labels.archivedSessions : undefined}
-						className={cn(
-							"scrollbar-none grid max-h-[28vh] grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-2 overflow-y-auto pb-3",
-							!expanded && "pointer-events-none",
-						)}
-						inert={!expanded ? true : undefined}
-						role="list"
-					>
-						{sessions.map((session) => (
-							<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
-						))}
-					</div>
-				</motion.div>
-			) : null}
-		</div>
-	);
-}) as <TSession extends BoardSessionPresentation>(props: {
-	labels: {
-		archive: string;
-		archiveAria: string;
-		archivedSessions: string;
-	};
-	renderSessionCard: (session: TSession) => ReactNode;
-	resetKey?: string;
-	sessions: TSession[];
-	trailing?: ReactNode;
-}) => ReactElement | null;
 
 function sameLabel(a: string, b: string): boolean {
 	const normalize = (value: string) =>

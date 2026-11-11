@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Folder, LogOut, MessageSquare, MoreHorizontal, Pencil, Plus, Trash2, UserPlus, Users } from "lucide-react";
+import { ChevronLeft, ChevronRight, Folder, LogOut, MessageSquare, MoreHorizontal, Pencil, Plus, Trash2, UserPlus, Users } from "@/components/app-icons";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
