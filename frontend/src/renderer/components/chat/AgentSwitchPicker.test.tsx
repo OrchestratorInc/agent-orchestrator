@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toggleModelFavorite } from "../../lib/model-favorites";
@@ -175,6 +175,23 @@ describe("AgentModelPicker", () => {
 			expect(await screen.findAllByRole("button", { name: "Remove from favourites" })).toHaveLength(2);
 		} finally {
 			toggleModelFavorite(saved);
+		}
+	});
+
+	it("names each favourite's agent when the same model is saved for different agents", async () => {
+		const user = userEvent.setup();
+		const favorites = [
+			{ harness: "claude-code", row: "opus", model: "opus", label: "Opus" },
+			{ harness: "cursor", row: "claude-opus-4-8", model: "claude-opus-4-8-high", label: "Opus" },
+		];
+		favorites.forEach(toggleModelFavorite);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			expect(screen.getByRole("menuitemradio", { name: /Opus Claude Code/ })).toBeInTheDocument();
+			expect(screen.getByRole("menuitemradio", { name: /Opus Cursor/ })).toBeInTheDocument();
+		} finally {
+			act(() => favorites.forEach(toggleModelFavorite));
 		}
 	});
 
