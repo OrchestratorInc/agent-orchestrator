@@ -211,7 +211,7 @@ func runtimeSettingsArgs(dataDir, sessionID string, mode ports.PermissionMode, m
 		return nil, nil
 	}
 	if strings.TrimSpace(dataDir) == "" {
-		return nil, fmt.Errorf("droid: AO data directory required for runtime settings")
+		return nil, fmt.Errorf("droid: Orchestrator data directory required for runtime settings")
 	}
 
 	settings := map[string]any{}

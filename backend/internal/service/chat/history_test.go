@@ -3018,3 +3018,51 @@ func awaitSessionName(t *testing.T, h *harness, want string) {
 		return err == nil && ok && rec.DisplayName == want
 	})
 }
+
+func TestEditLaterTurnReplaysEarlierFileCapture(t *testing.T) {
+	h, _, driver := newEditHarness(t, true)
+	ctx := context.Background()
+	n := 2
+	ref := ports.ChatFileReference{ID: "earlier-code", SessionID: string(testSession), Path: "deleted-demo.ts", Source: ports.ChatFileReferenceSource{Kind: "workspace"}, Side: "file", Line: 2, EndLine: 2, Lines: []ports.ChatFileReferenceLine{{Kind: "context", OldNo: &n, NewNo: &n, Text: "AO_CAPTURE_ORCHID_742"}}}
+	first, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "Reply only ACK", Origin: domain.MessageOriginHuman, Content: []ports.ChatContent{{Type: "file_reference", FileReference: &ref}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"}, ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-1", ProviderItemID: "capture-answer", Text: "ACK"}, ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, turn := range s.Turns {
+			if turn.ID == first.ID {
+				return turn.State == domain.TurnStateCompleted
+			}
+		}
+		return false
+	})
+	later := completeTurn(t, h, "NEXT", "provider-turn-2")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		if len(s.Messages) != 4 {
+			return false
+		}
+		for _, turn := range s.Turns {
+			if turn.ID == later {
+				return turn.State == domain.TurnStateCompleted
+			}
+		}
+		return false
+	})
+	if _, err := h.svc.EditMessage(ctx, testSession, later, ports.ChatUserMessage{Text: "What was the saved marker?", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatal(err)
+	}
+	sent := driver.fresh.sentMessages()
+	if len(sent) != 1 {
+		t.Fatalf("replay sends: %+v", sent)
+	}
+	replay := ""
+	for _, block := range sent[0].Content {
+		if block.Internal && block.Type == "resource" {
+			replay += block.Text
+		}
+	}
+	if strings.Count(replay, "AO_CAPTURE_ORCHID_742") != 1 || !strings.Contains(replay, `deleted-demo.ts\"#L2-L2`) {
+		t.Fatalf("lost earlier durable capture: %s", replay)
+	}
+}

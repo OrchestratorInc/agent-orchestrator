@@ -44,6 +44,9 @@ type MobileController struct{ Bridge mobileBridge }
 type RemoteHostAccountTokenResponse struct {
 	HostID string `json:"hostId"`
 	Token  string `json:"token"`
+	// HostKey is the machine's Ed25519 public key, unpadded base64url, for
+	// the account listing: AO Cloud then needs the machine's own signature.
+	HostKey string `json:"hostKey"`
 }
 
 // IssueAccountToken returns a credential for account discovery after the caller
@@ -220,8 +223,8 @@ type TunnelController interface {
 	Status() mobilebridge.TunnelStatus
 }
 
-// KeepAwakeController holds the machine awake while the bridge is on. Start and
-// Stop are idempotent.
+// KeepAwakeController holds the machine awake independently of the listener.
+// Start and Stop are idempotent.
 type KeepAwakeController interface {
 	Start() error
 	Stop()
@@ -271,8 +274,12 @@ type BridgeService struct {
 	// until AO was restarted. Nil in tests that set Tunnel directly.
 	ResolveTunnel func() TunnelController
 
-	// KeepAwake holds the machine awake while the bridge is on and the user has
-	// opted in. Nil where the platform has no way to do it (everything but
+	// ConnectorInstalling reports a cloudflared install in progress, for the
+	// status of a bridge that has no connector yet. Nil in tests.
+	ConnectorInstalling func() bool
+
+	// KeepAwake holds the machine awake while the user has opted in, independently
+	// of the listener. Nil where the platform has no way to do it (everything but
 	// macOS), which Status reports as unsupported.
 	KeepAwake KeepAwakeController
 
@@ -288,6 +295,18 @@ type BridgeService struct {
 
 	// Guards Tunnel, which ensureTunnel may replace while HTTP handlers read it.
 	tunnelMu sync.RWMutex
+
+	// refusedAccountHash is the account token digest AO Cloud last refused
+	// the machine's address publish for. AO Cloud answers one 401 for a link
+	// no account lists and for a listed one whose credential it does not
+	// accept, so this says only that AO Cloud refuses the link. Empty once a
+	// publish is accepted.
+	refusedMu          sync.Mutex
+	refusedAccountHash string
+	// listingNudge asks the address publisher to publish now instead of
+	// waiting out its backoff. Buffered so a nudge is never lost or blocks.
+	listingNudgeOnce sync.Once
+	listingNudge     chan struct{}
 	// tunnelResolving is closed once ResolveTunnelInBackground's lookup ends.
 	// Nil when no background lookup was started.
 	tunnelResolving chan struct{}
@@ -322,6 +341,42 @@ func first(hosts []string) string {
 	return hosts[0]
 }
 
+// NoteAccountListing records whether AO Cloud accepted the machine's address
+// publish under the account token digest hash, so Status can tell a link AO
+// Cloud accepts from one it refuses.
+func (b *BridgeService) NoteAccountListing(hash string, accepted bool) {
+	b.refusedMu.Lock()
+	defer b.refusedMu.Unlock()
+	if accepted {
+		if b.refusedAccountHash == hash {
+			b.refusedAccountHash = ""
+		}
+		return
+	}
+	b.refusedAccountHash = hash
+}
+
+func (b *BridgeService) accountLinkRefused(hash string) bool {
+	b.refusedMu.Lock()
+	defer b.refusedMu.Unlock()
+	return hash != "" && b.refusedAccountHash == hash
+}
+
+// ListingNudges delivers a value whenever the address publisher should
+// publish again at once, such as right after a device linked the machine.
+func (b *BridgeService) ListingNudges() <-chan struct{} {
+	b.listingNudgeOnce.Do(func() { b.listingNudge = make(chan struct{}, 1) })
+	return b.listingNudge
+}
+
+func (b *BridgeService) nudgeListing() {
+	b.listingNudgeOnce.Do(func() { b.listingNudge = make(chan struct{}, 1) })
+	select {
+	case b.listingNudge <- struct{}{}:
+	default:
+	}
+}
+
 // Status reports the current bridge state, host, and port. The plaintext
 // password is included only while the bridge is enabled (loopback route only).
 func (b *BridgeService) Status() MobileStatusResponse {
@@ -334,6 +389,8 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	}
 	res := MobileStatusResponse{
 		Enabled:             enabled,
+		AccountLinked:       st.AccountTokenHash != "",
+		AccountLinkRefused:  b.accountLinkRefused(st.AccountTokenHash),
 		LoopbackOnly:        st.LoopbackOnly,
 		NoPublicTunnel:      st.NoPublicTunnel,
 		Host:                first(lan),
@@ -478,7 +535,8 @@ func (b *BridgeService) tunnelStatus() mobilebridge.TunnelStatus {
 	b.awaitBootTunnel()
 	t := b.tunnel()
 	if t == nil {
-		return mobilebridge.TunnelStatus{} // Supported stays false: nothing to run.
+		// Supported stays false: nothing to run yet.
+		return mobilebridge.TunnelStatus{Installing: b.ConnectorInstalling != nil && b.ConnectorInstalling()}
 	}
 	st := t.Status()
 	st.Supported = true
@@ -580,14 +638,13 @@ func (b *BridgeService) keepAwakeStatus(on, lidClosed bool) KeepAwakeStatus {
 	return res
 }
 
-// applyKeepAwakeLocked holds the machine awake only while the user opted in
-// and the bridge is actually serving: there is no phone to stay reachable for
-// otherwise. The caller owns transitionMu.
+// applyKeepAwakeLocked applies the user's wake choice independently of the
+// mobile listener. The caller owns transitionMu.
 func (b *BridgeService) applyKeepAwakeLocked(on, lidClosed bool) error {
 	if b.KeepAwake == nil {
 		return nil
 	}
-	if on && b.LAN.Running() {
+	if on {
 		if err := b.KeepAwake.Start(); err != nil {
 			return err
 		}
@@ -612,12 +669,13 @@ func (b *BridgeService) SetKeepAwake(on bool) (MobileStatusResponse, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return MobileStatusResponse{}, err
 	}
+	previous := st
 	st.KeepAwake = on
 	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
 		return MobileStatusResponse{}, err
 	}
-	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
-		return MobileStatusResponse{}, err
+	if err := b.applyKeepAwakeLocked(on, st.KeepAwakeLid); err != nil {
+		return MobileStatusResponse{}, errors.Join(err, mobilebridge.Save(b.ConfigPath, previous))
 	}
 	return b.Status(), nil
 }
@@ -649,12 +707,13 @@ func (b *BridgeService) SetKeepAwakeLid(on, lidClosed bool) (MobileStatusRespons
 			return MobileStatusResponse{}, err
 		}
 	}
+	previous := st
 	st.KeepAwake, st.KeepAwakeLid = on, lidClosed
 	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
 		return MobileStatusResponse{}, err
 	}
-	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
-		return MobileStatusResponse{}, err
+	if err := b.applyKeepAwakeLocked(on, st.KeepAwakeLid); err != nil {
+		return MobileStatusResponse{}, errors.Join(err, mobilebridge.Save(b.ConfigPath, previous))
 	}
 	return b.Status(), nil
 }
@@ -764,6 +823,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
 			setter.SetAccountTokenHash(accountTokenHash)
 		}
+		b.nudgeTunnel() // the new password revoked the account link
 	}
 	// Re-point the proxy at the port Start actually bound. This runs on every
 	// listener start driven through this method — enable and password rotation
@@ -783,9 +843,6 @@ func (b *BridgeService) startConnectorsLocked(port int, st mobilebridge.State) {
 	if st.SecurePairing && !st.LoopbackOnly {
 		b.setServeError(b.applyServe(port))
 	}
-	// Best-effort like the proxy: a failed caffeinate leaves the bridge up and
-	// Status reports the assertion as inactive.
-	_ = b.applyKeepAwakeLocked(st.KeepAwake && st.Enabled, st.KeepAwakeLid)
 	// Point the connector at the port Start actually bound, not DefaultPort:
 	// Start falls back to an ephemeral port when the default is taken, and a
 	// connector aimed at the wrong port tunnels nothing. Start is idempotent
@@ -808,11 +865,18 @@ func (b *BridgeService) startConnectorsLocked(port int, st mobilebridge.State) {
 // LastPort is taken (e.g. by another AO instance), and a `tailscale serve`
 // config pinned to a stale port would proxy the tailnet at this machine's
 // hostname to whatever now holds that port. A failure to apply is recorded in
-// serveErr, never returned — the caller (restoreMobileOnBoot) treats this as
-// best-effort and must never block daemon boot on it.
+// serveErr, never returned. Saved wake ownership is restored separately from
+// listener availability. The caller treats restoration as best-effort.
 func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()
+
+	// Restore wake ownership even with mobile disabled or a failed listener bind.
+	// This path must not start listeners, connectors, or rotate credentials.
+	wakeErr := b.applyKeepAwakeLocked(state.KeepAwake, state.KeepAwakeLid)
+	if !state.Enabled {
+		return wakeErr
+	}
 
 	prevHash := b.LAN.PasswordHash()
 	accountSetter, hasAccountSetter := b.LAN.(interface {
@@ -840,10 +904,21 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 		if hasAccountSetter {
 			accountSetter.SetAccountTokenHash(previousAccountHash)
 		}
-		return err
+		return errors.Join(err, wakeErr)
 	}
 	b.startConnectorsLocked(port, state)
-	return nil
+	return wakeErr
+}
+
+// hostPublicKey is the machine's host key for the listing, or empty when it
+// cannot be read: the listing then has none, and the machine's requests keep
+// working with the digest alone.
+func (b *BridgeService) hostPublicKey() string {
+	key, err := mobilebridge.HostPublicKey(b.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	return key
 }
 
 // IssueAccountToken returns the existing credential for a retry by the same
@@ -862,7 +937,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// A current account token is already the desired credential. Returning it
 	// makes retries safe even when the cloud registration request was lost.
 	if state.AccountToken != "" && mobilebridge.PasswordMatches(state.AccountTokenHash, password) {
-		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken}, nil
+		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
 	if !mobilebridge.PasswordMatches(mobilebridge.HashPassword(state.Password), password) {
 		return RemoteHostAccountTokenResponse{}, errors.New("connection password required")
@@ -875,7 +950,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// durable token. A different account intentionally rotates it.
 	if accountID != "" && accountID == state.AccountTokenOwner && state.AccountToken != "" &&
 		mobilebridge.PasswordMatches(state.AccountTokenHash, state.AccountToken) {
-		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken}, nil
+		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
 	setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) })
 	if !ok {
@@ -893,7 +968,20 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 		return RemoteHostAccountTokenResponse{}, err
 	}
 	setter.SetAccountTokenHash(state.AccountTokenHash)
-	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token}, nil
+	// The connector asks AO Cloud now, so a machine another account took
+	// leaves the old account's tunnel. The device that asked lists the new
+	// token only after this returns; until then the connector reads AO
+	// Cloud's refusal as a link on its way and keeps serving.
+	b.nudgeTunnel()
+	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token, HostKey: b.hostPublicKey()}, nil
+}
+
+// nudgeTunnel has a running connector ask AO Cloud for its address now: the
+// account link it serves changed.
+func (b *BridgeService) nudgeTunnel() {
+	if n, ok := b.tunnel().(interface{ Nudge() }); ok {
+		n.Nudge()
+	}
 }
 
 // Enable generates a fresh password and starts the LAN listener. If it is
@@ -1024,9 +1112,33 @@ func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 		}
 	}
 	if t := b.ensureTunnel(); t != nil {
+		// The desktop links this machine just before it asks for remote
+		// access; a connector already running can move to the address the
+		// link gave it now. Sent first: a connector Start begins asks anyway.
+		b.nudgeTunnel()
 		t.Start(b.LAN.BoundPort())
 	}
+	// A link that just reached AO Cloud may follow a refused publish; publish
+	// again now so its status does not wait out the refusal backoff.
+	b.nudgeListing()
 	return b.Status(), nil
+}
+
+// ConnectorInstalled starts the connector once a cloudflared AO downloaded by
+// itself has landed, so remote access comes up without the user clicking
+// anything. It only finishes what the bridge already wanted: nothing while the
+// bridge is off or LAN-only, and the password is left alone.
+func (b *BridgeService) ConnectorInstalled() {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil || !st.Enabled || st.NoPublicTunnel || !b.LAN.Running() {
+		return
+	}
+	if t := b.ensureTunnel(); t != nil {
+		t.Start(b.LAN.BoundPort())
+	}
 }
 
 // Regenerate rotates the connection password on the running listener, which
@@ -1059,11 +1171,7 @@ func (b *BridgeService) Disable() error {
 	if t := b.tunnel(); t != nil {
 		t.Stop()
 	}
-	// No phone to stay reachable for once the bridge is off. The preference
-	// itself is kept, so turning the bridge back on resumes it.
-	if b.KeepAwake != nil {
-		b.KeepAwake.Stop()
-	}
+	// The independent wake choice remains active until explicitly turned off.
 	stopErr := b.LAN.Stop(ctx)
 	if stopErr != nil && b.LAN.Running() {
 		return stopErr

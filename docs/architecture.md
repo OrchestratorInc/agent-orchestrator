@@ -623,6 +623,17 @@ sequenceDiagram
     end
 ```
 
+Chat queues every message in SQLite while a provider turn is active. Completion
+claims the waiting messages in enqueue order and sends them as one provider
+input. A steer claims the same waiting queue and appends its guidance to one
+active turn input. Each source message keeps its own transcript row, origin,
+sender, and delivery handle. Messages arriving after the claim wait for the next
+turn. AO does not truncate a batch or impose a provider input size limit;
+provider limits and refusals are surfaced as delivery failures. An uncertain
+provider result closes the claimed receipts without automatically replaying
+input that the provider may already have accepted. Terminal sessions retain
+their existing delivery path.
+
 ---
 
 ## Persistence and CDC
@@ -1125,6 +1136,17 @@ sessions have no agent runtime handle and never attach their provider through
 tmux. They may still open session-scoped shell terminals as a worktree escape
 hatch; those shells are separate resources and do not become the agent
 controller.
+
+### Terminal titles
+
+The PTY host reads OSC 0/2 titles from terminal output without changing it,
+drops animated status glyphs, and keeps the latest title with or without viewers.
+`service/terminaltitle` watches live TUI sessions and shell terminals and stores
+changes at a bounded rate. Session titles use `session_terminal_titles` because
+every `sessions` update bumps the revision that fences observer writes. A label
+is resolved at read time: an explicit name wins, then a meaningful program title
+(`terminalTitle`), then the existing fallback. A title never changes session
+identity. Chat transports and legacy tmux handles have no titles.
 
 ### Terminal architecture
 

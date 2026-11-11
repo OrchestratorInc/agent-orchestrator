@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1109,7 +1110,7 @@ func TestPipelineStatusToCI(t *testing.T) {
 	}{
 		{"success", "passing"},
 		{"failed", "failing"},
-		{"canceled", "failing"},
+		{"canceled", "unknown"},
 		{"running", "pending"},
 		{"pending", "pending"},
 		{"created", "pending"},
@@ -1474,6 +1475,76 @@ func TestFetchPullRequests_PipelineJobsPagination(t *testing.T) {
 	}
 	if len(obs[0].CI.FailedChecks) != 50 {
 		t.Errorf("CI.FailedChecks = %d, want 50 (all from page 2)", len(obs[0].CI.FailedChecks))
+	}
+}
+
+func TestFetchPullRequests_CanceledPipeline(t *testing.T) {
+	cases := []struct {
+		name       string
+		jobs       []map[string]any
+		wantCI     domain.CIState
+		wantFailed []string
+	}{
+		{
+			name:   "only canceled jobs is not a failure",
+			jobs:   []map[string]any{{"id": 1, "name": "lint", "status": "canceled"}},
+			wantCI: domain.CIUnknown,
+		},
+		{
+			name: "a required job that already failed stays failing",
+			jobs: []map[string]any{
+				{"id": 1, "name": "lint", "status": "canceled"},
+				{"id": 2, "name": "build", "status": "failed"},
+			},
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"build"},
+		},
+		{
+			name:   "an optional failed job does not make it failing",
+			jobs:   []map[string]any{{"id": 2, "name": "build", "status": "failed", "allow_failure": true}},
+			wantCI: domain.CIUnknown,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{
+					"iid": 1, "title": "Fix bug", "state": "opened", "draft": false,
+					"web_url":       "https://gitlab.com/myorg/myrepo/-/merge_requests/1",
+					"source_branch": "fix-bug", "target_branch": "main", "sha": "abc123",
+					"merge_status": "mergeable", "detailed_merge_status": "mergeable",
+					"author": map[string]any{"username": "alice"},
+				})
+			})
+			mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode([]map[string]any{{"id": 100, "status": "canceled", "sha": "abc123"}})
+			})
+			mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines/100/jobs", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(tc.jobs)
+			})
+			mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1/approvals", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{"approved": false, "approvals_required": 0, "approved_by": []any{}})
+			})
+			_, p := testServer(t, mux)
+			repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
+			ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
+
+			obs, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if obs[0].CI.Summary != string(tc.wantCI) {
+				t.Fatalf("CI summary = %q, want %q", obs[0].CI.Summary, tc.wantCI)
+			}
+			var failed []string
+			for _, ch := range obs[0].CI.FailedChecks {
+				failed = append(failed, ch.Name)
+			}
+			if !slices.Equal(failed, tc.wantFailed) {
+				t.Fatalf("failed checks = %v, want %v", failed, tc.wantFailed)
+			}
+		})
 	}
 }
 
@@ -3233,5 +3304,39 @@ func TestFetchReviewThreads_FallsBackToApprovalsWhenMRDetailCacheCold(t *testing
 	// decision stands: approved (true + approvals_required=2 + 2 approvers).
 	if got, want := review.Decision, string(domain.ReviewApproved); got != want {
 		t.Errorf("Decision = %q, want %q (cold cache must fall back to approvals)", got, want)
+	}
+}
+
+// A branch lookup asks GitLab for the open MRs from that source branch only,
+// keeping each MR's author, which decides whether AO may attach it. A fork MR
+// with the same branch name is dropped, and a kept MR names the project as
+// both head and base.
+func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
+	var query url.Values
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests", func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.Query()
+		_ = json.NewEncoder(w).Encode([]map[string]any{{
+			"iid": 3, "state": "opened", "web_url": "https://gitlab.com/myorg/myrepo/-/merge_requests/3",
+			"source_branch": "fix-bug", "target_branch": "main", "author": map[string]any{"username": "alice"},
+			"source_project_id": 10, "target_project_id": 10,
+		}, {
+			"iid": 4, "state": "opened", "web_url": "https://gitlab.com/myorg/myrepo/-/merge_requests/4",
+			"source_branch": "fix-bug", "target_branch": "main", "author": map[string]any{"username": "alice"},
+			"source_project_id": 99, "target_project_id": 10,
+		}})
+	})
+	_, p := testServer(t, mux)
+	repo := ports.SCMRepo{Provider: "gitlab", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
+
+	prs, err := p.ListOpenPRsByBranch(context.Background(), repo, "fix-bug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.Get("source_branch") != "fix-bug" || query.Get("state") != "opened" {
+		t.Fatalf("query = %v, want source_branch=fix-bug state=opened", query)
+	}
+	if len(prs) != 1 || prs[0].Number != 3 || prs[0].SourceBranch != "fix-bug" || prs[0].Author != "alice" || prs[0].HeadRepo != "myorg/myrepo" || prs[0].BaseRepo != "myorg/myrepo" {
+		t.Fatalf("prs = %+v", prs)
 	}
 }

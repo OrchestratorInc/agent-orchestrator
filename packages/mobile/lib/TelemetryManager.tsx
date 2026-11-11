@@ -1,7 +1,8 @@
 import Constants from "expo-constants";
+import * as Updates from "expo-updates";
 import { useEffect, useRef } from "react";
 import { AppState, type AppStateStatus } from "react-native";
-import { captureMobileException, initMobileSentry } from "./sentry";
+import { captureMobileException, setMobileSentryContext } from "./sentry";
 import { useApp } from "./store";
 import { initMobileTelemetry, loadMobileOptOut, mobileTelemetry, syncDesktopTelemetryIdentity, telemetryActiveStorage } from "./telemetry/runtime";
 
@@ -26,12 +27,14 @@ export function TelemetryManager() {
 
 	useEffect(() => {
 		initMobileTelemetry();
+		const version = Constants.nativeAppVersion ?? Constants.expoConfig?.version ?? "unknown";
+		const build = Constants.nativeBuildVersion ?? "unknown";
+		setMobileSentryContext({ release: `${version}@${build}`, channel: Updates.channel ?? undefined });
 		// The persisted opt-out is restored before the first heartbeat can fire.
 		void loadMobileOptOut().then(() => mobileTelemetry()?.active(telemetryActiveStorage));
-		// Same consent gate as telemetry (only when the client is active). No-op
-		// unless EXPO_PUBLIC_SENTRY_DSN is set.
+		// The telemetry preference and authenticated desktop identity govern
+		// Sentry through the same runtime callbacks.
 		if (mobileTelemetry()) {
-			void initMobileSentry({ release: Constants.expoConfig?.version ?? undefined });
 			// Forward uncaught JS errors, preserving RN's own handler.
 			const errorUtils = (globalThis as unknown as { ErrorUtils?: ErrorUtilsLike }).ErrorUtils;
 			const prev = errorUtils?.getGlobalHandler?.();

@@ -69,7 +69,7 @@ describe("ChatComposer steering", () => {
 		expect(screen.queryByText(/steer/i)).not.toBeInTheDocument();
 	});
 
-	it("steers the next queued message on empty Enter and removes it immediately", async () => {
+	it("steers the next queued message on empty Enter", async () => {
 		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
 		render(
 			<ChatComposer
@@ -91,7 +91,6 @@ describe("ChatComposer steering", () => {
 		await userEvent.keyboard("{Enter}");
 
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
-		expect(screen.queryByTestId("queued-message-queued-1")).not.toBeInTheDocument();
 	});
 
 	it("drains every queued steer request that arrives while a promotion is pending", async () => {
@@ -125,6 +124,15 @@ describe("ChatComposer steering", () => {
 		);
 
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
+		rerender(
+			<QueuedMessageDock
+				messages={messages.slice(1)}
+				canSteer
+				canSteerNext
+				steerNextRequest={2}
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
 		resolveFirstPromotion?.();
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenNthCalledWith(2, "queued-2"));
 	});
@@ -406,7 +414,6 @@ describe("ChatWorkspace steering", () => {
 			}),
 		);
 		expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-2");
-		expect(screen.queryByTestId("queued-message-queued-2")).not.toBeInTheDocument();
 
 		await userEvent.click(within(screen.getByTestId("queued-message-queued-1")).getByRole("button", { name: "Edit queued message" }));
 		expect(onBeginQueuedEdit).toHaveBeenCalledWith("queued-1", "first queued");
@@ -486,6 +493,161 @@ describe("ChatWorkspace steering", () => {
 		expect(within(screen.getByTestId("queued-message-dock")).getByText("second queued")).toBeVisible();
 	});
 
+	it("lets the user steer or delete a queued browser annotation, but not edit it", async () => {
+		const annotationText = [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Download page",
+			"URL: https://example.test/download",
+			"Annotations: 1",
+			"",
+			"Annotation 1 (comment):",
+			"Comment: Rename this file",
+			"</browser_annotations>",
+		].join("\n");
+		const snapshot = {
+			...chatFixture,
+			turns: [
+				...chatFixture.turns,
+				{ id: "queued-annotation", state: "queued" as const, requestedAt: "2026-08-11T10:01:00Z" },
+				{ id: "queued-automation", state: "queued" as const, requestedAt: "2026-08-11T10:02:00Z" },
+			],
+			items: [
+				...chatFixture.items,
+				{
+					kind: "message" as const,
+					id: "queued-annotation-message",
+					turnId: "queued-annotation",
+					sequence: 100,
+					revision: 0,
+					role: "user" as const,
+					origin: "automation" as const,
+					authoredByUser: true,
+					text: annotationText,
+					streaming: false,
+					createdAt: "2026-08-11T10:01:00Z",
+				},
+				{
+					kind: "message" as const,
+					id: "queued-automation-message",
+					turnId: "queued-automation",
+					sequence: 101,
+					revision: 0,
+					role: "user" as const,
+					origin: "automation" as const,
+					text: "automation follow-up",
+					streaming: false,
+					createdAt: "2026-08-11T10:02:00Z",
+				},
+			],
+		};
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatWorkspace
+				snapshot={snapshot}
+				onSteer={vi.fn()}
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+				onEditQueuedTurn={vi.fn()}
+				onCancelQueuedTurn={onCancelQueuedTurn}
+			/>,
+		);
+
+		const row = screen.getByTestId("queued-message-queued-annotation");
+		expect(within(row).getByText("Rename this file · 1 annotation")).toBeVisible();
+		expect(within(row).queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
+		// The dock owns the queued annotation, as it does a typed message.
+		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
+		// Ordinary automation turns stay out of the user's queue controls.
+		expect(screen.queryByTestId("queued-message-queued-automation")).not.toBeInTheDocument();
+
+		expect(within(row).getByRole("button", { name: "Delete queued message" })).toBeVisible();
+		await userEvent.click(within(row).getAllByRole("button", {
+			name: "Steer this queued message into the running turn",
+		})[0]!);
+		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-annotation"));
+	});
+
+	it("tells queued annotation batches from the same page apart and steers the one clicked", async () => {
+		const batch = (comment: string) => [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Untitled page",
+			"Annotations: 1",
+			"",
+			"Annotation 1 (comment):",
+			`Comment: ${comment}`,
+			"</browser_annotations>",
+		].join("\n");
+		const queued = (turnId: string, sequence: number, comment: string) => ({
+			turnId,
+			message: {
+				kind: "message" as const,
+				id: `${turnId}-message`,
+				turnId,
+				sequence,
+				revision: 0,
+				role: "user" as const,
+				origin: "automation" as const,
+				authoredByUser: true,
+				text: batch(comment),
+				streaming: false,
+				createdAt: `2026-08-11T10:0${sequence - 99}:00Z`,
+			},
+		});
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<QueuedMessageDock
+				messages={[queued("queued-older", 100, "Connect mobile from settings"), queued("queued-newer", 101, "Rename the download")]}
+				canSteer
+				canSteerNext
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
+
+		const older = screen.getByText("Connect mobile from settings · 1 annotation").closest<HTMLElement>("[data-testid^='queued-message-']")!;
+		const newer = screen.getByText("Rename the download · 1 annotation").closest<HTMLElement>("[data-testid^='queued-message-']")!;
+		expect(older).toHaveAttribute("data-testid", "queued-message-queued-older");
+		expect(newer).toHaveAttribute("data-testid", "queued-message-queued-newer");
+
+		await userEvent.click(within(newer).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!);
+		expect(onPromoteQueuedTurn).toHaveBeenLastCalledWith("queued-newer");
+		await userEvent.click(within(older).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!);
+		expect(onPromoteQueuedTurn).toHaveBeenLastCalledWith("queued-older");
+	});
+
+	it("deletes a queued browser annotation from the dock", async () => {
+		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<QueuedMessageDock
+				messages={[{
+					turnId: "queued-annotation",
+					message: {
+						kind: "message",
+						id: "queued-annotation-message",
+						turnId: "queued-annotation",
+						sequence: 100,
+						revision: 0,
+						role: "user",
+						origin: "automation",
+						authoredByUser: true,
+						text: "<browser_annotations>\nPage: Download page\nAnnotations: 1\n\nAnnotation 1 (comment):\nComment: Rename this file\n</browser_annotations>",
+						streaming: false,
+						createdAt: "2026-08-11T10:01:00Z",
+					},
+				}]}
+				canSteer
+				onBeginQueuedEdit={vi.fn()}
+				onCancelQueuedTurn={onCancelQueuedTurn}
+			/>,
+		);
+
+		const row = screen.getByTestId("queued-message-queued-annotation");
+		expect(within(row).queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
+		await userEvent.click(within(row).getByRole("button", { name: "Delete queued message" }));
+		expect(onCancelQueuedTurn).toHaveBeenCalledWith("queued-annotation");
+	});
+
 	it("clears a queued edit when that message is deleted from the dock", async () => {
 		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
 		render(
@@ -503,6 +665,56 @@ describe("ChatWorkspace steering", () => {
 		await userEvent.click(within(screen.getByTestId("queued-message-queued-1")).getByRole("button", { name: "Delete queued message" }));
 		await waitFor(() => expect(onCancelQueuedTurn).toHaveBeenCalledWith("queued-1"));
 		await waitFor(() => expect(screen.queryByText(/editing/i)).not.toBeInTheDocument());
+	});
+
+	it("moves a steered message from the dock to the timeline before the daemon answers", async () => {
+		let refuse: ((error: Error) => void) | undefined;
+		const onPromoteQueuedTurn = vi.fn(() => new Promise((_resolve, reject) => { refuse = reject; }));
+		const queued = withQueuedMessages();
+		const snapshot = {
+			...queued,
+			turns: queued.turns.filter((turn) => turn.id !== "queued-2"),
+			items: queued.items.filter((item) => item.turnId !== "queued-2"),
+		};
+		render(<ChatWorkspace snapshot={snapshot} onSteer={vi.fn()} onPromoteQueuedTurn={onPromoteQueuedTurn} />);
+
+		await userEvent.click(
+			within(screen.getByTestId("queued-message-queued-1")).getByRole("button", {
+				name: "Steer this queued message into the running turn",
+			}),
+		);
+		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
+		expect(screen.getByText("first queued")).toBeVisible();
+
+		await act(async () => refuse?.(new Error("The running turn cannot take guidance.")));
+		const row = await screen.findByTestId("queued-message-queued-1");
+		expect(within(row).getByText("The running turn cannot take guidance.")).toBeVisible();
+	});
+
+	it("starts the steered segment at the click, not when the message was queued", async () => {
+		const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+		const queued = withQueuedMessages();
+		const snapshot = {
+			...queued,
+			turns: queued.turns
+				.filter((turn) => turn.id !== "queued-2")
+				.map((turn) => (turn.state === "running" ? { ...turn, requestedAt: minutesAgo(7), startedAt: minutesAgo(7) } : turn)),
+			items: queued.items
+				.filter((item) => item.turnId !== "queued-2" && item.id !== "a-steer-1")
+				.map((item) => (item.id === "queued-message-1" ? { ...item, createdAt: minutesAgo(3) } : item)),
+		};
+		render(
+			<ChatWorkspace snapshot={snapshot} onSteer={vi.fn()} onPromoteQueuedTurn={vi.fn(() => new Promise<void>(() => {}))} />,
+		);
+
+		await userEvent.click(
+			within(screen.getByTestId("queued-message-queued-1")).getByRole("button", {
+				name: "Steer this queued message into the running turn",
+			}),
+		);
+		const worked = [...document.querySelectorAll("[data-turn-worked]")].map((row) => row.textContent);
+		expect(worked).toEqual(expect.arrayContaining([expect.stringContaining("Worked for 7m")]));
+		expect(worked).not.toEqual(expect.arrayContaining([expect.stringContaining("Worked for 4m")]));
 	});
 
 	it("shows the queued dock while messages are still queued between turns", () => {
@@ -596,6 +808,37 @@ describe("ChatWorkspace steering", () => {
 	it("renders a landed steer as the user's own words", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
 		expect(screen.getByText(/Steered/)).toBeInTheDocument();
+	});
+
+	it("renders a steered browser annotation batch as its annotation card", () => {
+		const transport = [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Download page",
+			"URL: https://example.test/download",
+			"Annotations: 1",
+			"Task: Address the feedback below according to its wording.",
+			"",
+			"Annotation 1 (comment):",
+			"Comment: Rename this file",
+			"</browser_annotations>",
+		].join("\n");
+		const snapshot = {
+			...chatFixture,
+			items: chatFixture.items.map((item) =>
+				item.kind === "activity" && item.id === "a-steer-1"
+					? { ...item, summary: transport, detail: { ...item.detail, text: transport, origin: "automation" } }
+					: item,
+			),
+		};
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		const card = screen.getByTestId("steered-browser-feedback");
+		expect(within(card).getByText("Download page")).toBeVisible();
+		expect(within(card).getByText("Rename this file")).toBeVisible();
+		expect(within(card).getByText("Steered")).toBeVisible();
+		expect(screen.queryByText(/<browser_annotations>/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Address the feedback below/)).not.toBeInTheDocument();
 	});
 
 	it("renders a staged image reference on a landed steer in chat history", () => {

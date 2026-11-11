@@ -16,19 +16,19 @@ import (
 // returned, not the persisted port. That distinction matters: Start falls back
 // to an ephemeral port when the persisted one is taken, and a stale `serve`
 // config would otherwise keep proxying the tailnet at a dead (or, worse,
-// someone else's) port. A non-nil return means the listener failed to
-// (re)bind; the caller logs it as a warning and continues booting regardless —
-// Connect Mobile is best-effort, not load-bearing.
+// someone else's) port. Restoration errors are warnings and do not stop daemon
+// startup. Connect Mobile is best-effort, not load-bearing. Wake ownership is
+// restored independently, including when the listener was disabled.
 func restoreMobileOnBoot(path string, bs *controllers.BridgeService) error {
 	state, err := mobilebridge.Load(path)
 	if err != nil {
 		return fmt.Errorf("load mobile bridge state: %w", err)
 	}
-	if !state.Enabled {
+	if !state.Enabled && !state.KeepAwake {
 		return nil
 	}
 	if err := bs.RestoreOnBoot(state); err != nil {
-		return fmt.Errorf("restart mobile LAN listener: %w", err)
+		return fmt.Errorf("restore mobile and awake settings: %w", err)
 	}
 	return nil
 }

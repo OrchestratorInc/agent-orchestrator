@@ -438,9 +438,9 @@ func TestSideNumberingResetsAfterAllTabsCloseAndIgnoresLegacyCounters(t *testing
 	if two.Label != "Side Chat" {
 		t.Fatal(two.Label)
 	}
-	_, _, _ = store.ReserveSideTurn(ctx, domain.SideTurn{ID: "q", SideID: two.ID, Text: "Do not rename me", ClientMessageID: "q"}, "run")
+	_, _, _ = store.ReserveSideTurn(ctx, domain.SideTurn{ID: "q", SideID: two.ID, Text: "Name from first question", ClientMessageID: "q"}, "run")
 	two, _ = store.SideConversation(ctx, two.ID)
-	if two.Label != "Side Chat" {
+	if two.Label != "Name from first question" {
 		t.Fatal(two.Label)
 	}
 	_ = store.RenameSide(ctx, two.ID, "Side Chat 99", time.Now())

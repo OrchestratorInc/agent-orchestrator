@@ -31,6 +31,7 @@ var routineInternalCLICommands = []string{
 	"ao orchestrator ls",
 	"ao hooks",
 	"ao pty-host",
+	"ao browser-host",
 	"ao unreal-provider",
 	"ao codex-login",
 	"ao claude-login",
@@ -55,7 +56,8 @@ func CLIActorType(actorType, commandPath string) string {
 	if _, ok := legacyActorlessUserCLICommands[normalized]; ok {
 		return "user"
 	}
-	if normalized == "ao hooks" || normalized == "ao report" {
+	switch normalized {
+	case "ao hooks", "ao report", "ao artifact", "ao artifact add":
 		return "agent"
 	}
 	return "system"
@@ -64,6 +66,7 @@ func CLIActorType(actorType, commandPath string) string {
 var legacyActorlessSystemCLICommands = map[string]struct{}{
 	"ao agent-process":           {},
 	"ao agent-process supervise": {},
+	"ao browser-host":            {},
 	"ao chat-host":               {},
 	"ao completion":              {},
 	"ao daemon":                  {},
@@ -123,6 +126,11 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao browser tab select":     {},
 	"ao browser status":         {},
 	"ao browser tabs":           {},
+	"ao browser target":         {},
+	"ao browser chrome":         {},
+	"ao browser chrome remove":  {},
+	"ao browser chrome setup":   {},
+	"ao browser chrome status":  {},
 	"ao browser type":           {},
 	"ao browser uncheck":        {},
 	"ao browser unhighlight":    {},
@@ -153,6 +161,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao remote-host status":     {},
 	"ao remote-host enable":     {},
 	"ao remote-host disable":    {},
+	"ao remote-host link":       {},
 	"ao render":                 {},
 	"ao review":                 {},
 	"ao review cancel":          {},
@@ -163,6 +172,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao session":                {},
 	"ao session claim-pr":       {},
 	"ao session cleanup":        {},
+	"ao session delete":         {},
 	"ao session exit-agent":     {},
 	"ao session kill":           {},
 	"ao session rename":         {},

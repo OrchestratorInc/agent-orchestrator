@@ -1,11 +1,17 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, Coffee, Copy, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { Check, Coffee, Copy, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "@/components/app-icons";
+import { apiClient } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
+import { useUiStore } from "../../stores/ui-store";
 import { aoBridge } from "../../lib/bridge";
+import { useCloudSession } from "../../lib/cloud-session";
+import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
 import { reasonMessage, type SetupMode } from "./ConnectMobileSetup";
@@ -14,6 +20,7 @@ import { PairingQr } from "./PairingQr";
 import { scramblePairingCodes } from "./qrScramble";
 import { InstallCloudflared } from "./InstallCloudflared";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -124,7 +131,8 @@ function pairingIsPending(status: PairingReadinessStatus | undefined): boolean {
 	if (status.noPublicTunnel === true) return false;
 	const tunnel = status.tunnel;
 	if (!tunnel || tunnel.ready || tunnel.lastError) return false;
-	return tunnel.supported === true || tunnel.running;
+	// A cloudflared download counts: the connector starts when it lands.
+	return tunnel.supported === true || tunnel.running || tunnel.installing === true;
 }
 
 export function mobileStatusRefetchInterval(status: PairingReadinessStatus | undefined): number | false {
@@ -155,25 +163,27 @@ export function qrIsReady(status: PairingReadinessStatus): boolean {
 }
 
 /**
- * Why the code on screen has no public tunnel, or null when it has one (or
- * when there is no code to judge). Without the tunnel the code reaches this
- * machine from elsewhere only over Tailscale, if it carries a tailnet address.
- *
- * qrIsReady shows a LAN code while the tunnel is still starting, and the
- * phone races only what the code carries. A code scanned or photographed in
- * that window looks identical to a complete one, then fails away from home
- * with "is your phone on the same Wi-Fi?" — so the panel has to say so.
- * cloudflared being absent is stated separately (remoteAccessUnavailable), and
- * opting out of the tunnel is the user's own choice, so neither is reported.
+ * "failed" when the code on screen has no public tunnel because remote access
+ * could not start, or null. Without the tunnel the code reaches this machine
+ * from elsewhere only over Tailscale, if it carries a tailnet address, and a
+ * LAN-only code looks identical to a complete one, so the panel says so.
+ * While the tunnel is still starting nothing is said: the code refreshes by
+ * itself once it is up. cloudflared being absent is stated separately
+ * (remoteAccessUnavailable), and opting out of the tunnel is the user's own
+ * choice, so neither is reported.
  */
-export function localOnlyReason(status: PairingReadinessStatus): "starting" | "failed" | null {
+export function localOnlyReason(status: PairingReadinessStatus): "failed" | null {
 	if (!status.enabled || !status.endpoints || status.endpoints.length === 0) return null;
 	if (status.endpoints.some((e) => e.kind === "tunnel")) return null;
 	if (status.noPublicTunnel === true || status.tunnel?.supported === false) return null;
-	if (pairingIsPending(status)) return "starting";
 	if (status.tunnel?.lastError) return "failed";
 	return null;
 }
+
+/** The Settings opening the sidebar's auto-start last ran for. Settings makes a
+ * new object for every opening; kept outside the component, it survives the
+ * Mobile page unmounting when the user visits another page and comes back. */
+let pairingHandledFor: unknown = null;
 
 /** The app's registered scheme (app.json `expo.scheme`), not a universal link:
  * it works today, with no association files to host and no store listing
@@ -207,17 +217,14 @@ function AndroidIcon({ className }: { className?: string }) {
 	);
 }
 
-/** Quiet store link: platform icon, name and an outbound arrow, muted until
- *  hovered. The icons carry the "this is a link" cue, not an underline. */
-const STORE_LINK_CLASS =
-	"inline-flex items-center gap-1 rounded-sm text-settings-muted transition-colors duration-(--duration-fast) hover:text-settings-label focus-visible:text-settings-label focus-visible:outline-none";
-
-/** Icon actions beside the password. */
-const ICON_ACTION_CLASS =
-	"inline-flex size-6 items-center justify-center rounded-sm text-settings-muted transition-colors duration-(--duration-fast) hover:text-settings-label disabled:opacity-50";
+/** One store in the segmented control: platform icon and name. */
+const STORE_SEGMENT_CLASS =
+	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)]";
 
 interface MobileStatus {
 	enabled: boolean;
+	/** An AO account holds this machine's account token, listed or not. */
+	accountLinked?: boolean;
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
 	browserRemoteAccess?: boolean;
@@ -234,11 +241,15 @@ interface MobileStatus {
 		/** False when this machine has no connector at all — cloudflared is
 		 * absent. Distinct from "not started yet", which is running:false. */
 		supported?: boolean;
+		/** Set while no connector is installed but one is being installed. */
+		installing?: boolean;
 		running: boolean;
 		ready: boolean;
 		hostname: string;
 		location: string;
 		lastError: string;
+		/** Set while the connector serves the computer's fixed address. */
+		fixed?: boolean;
 	};
 	host: string;
 	tailscaleHost: string;
@@ -269,8 +280,38 @@ interface MobileStatus {
 
 export async function fetchMobileStatus(): Promise<MobileStatus> {
 	const { data, error } = await apiClient.GET("/api/v1/mobile/status");
-	if (error || !data) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw apiErrorException(error);
 	return data;
+}
+
+const TUNNEL_POLL_MS = 2_000;
+// A tunnel usually has its address within half a minute.
+const TUNNEL_WAIT_MS = 90_000;
+
+/** The tunnel address in the form the daemon's address publisher sends, so a
+ * later publish never rewrites the record and reconnects every device. */
+export function tunnelUrl(status: MobileStatus): string | null {
+	const tunnel = status.endpoints?.find((endpoint) => endpoint.kind === "tunnel" && endpoint.secure);
+	return tunnel ? `https://${tunnel.host}:${tunnel.port}` : null;
+}
+
+/** Polls until the tunnel has a public address; null when no connector is installed or on its way. */
+export async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileStatus; url: string } | null> {
+	let deadline = Date.now() + TUNNEL_WAIT_MS;
+	for (;;) {
+		const status = await fetchMobileStatus();
+		const url = tunnelUrl(status);
+		if (url) return { status, url };
+		if (status.tunnel?.supported === false) {
+			// No connector, and none on its way; one that is starts the tunnel by itself when it lands.
+			if (!status.tunnel.installing) return null;
+			// The download, tens of MB on a slow link, does not count against the tunnel's start.
+			deadline = Date.now() + TUNNEL_WAIT_MS;
+		}
+		if (status.tunnel?.lastError) throw new Error(status.tunnel.lastError);
+		if (Date.now() >= deadline) throw new Error(timeoutMessage);
+		await new Promise((resolve) => setTimeout(resolve, TUNNEL_POLL_MS));
+	}
 }
 
 type KeepAwakeStatus = NonNullable<MobileStatus["keepAwake"]>;
@@ -289,7 +330,7 @@ function readLastKeepAwake(): KeepAwakeStatus | null {
 		if (!raw) return null;
 		const saved = JSON.parse(raw) as Partial<KeepAwakeStatus> | null;
 		if (typeof saved?.supported !== "boolean" || typeof saved.enabled !== "boolean") return null;
-		return { supported: saved.supported, enabled: saved.enabled, active: false, hasBattery: saved.hasBattery === true };
+		return { supported: saved.supported, enabled: saved.enabled, active: false, hasBattery: saved.hasBattery === true, lidClosed: saved.lidClosed === true, lidSupported: saved.lidSupported === true };
 	} catch {
 		return null;
 	}
@@ -301,7 +342,7 @@ function rememberKeepAwake(keepAwake: KeepAwakeStatus | undefined) {
 		else
 			window.localStorage?.setItem(
 				KEEP_AWAKE_STORAGE_KEY,
-				JSON.stringify({ supported: keepAwake.supported, enabled: keepAwake.enabled, hasBattery: keepAwake.hasBattery }),
+				JSON.stringify({ supported: keepAwake.supported, enabled: keepAwake.enabled, hasBattery: keepAwake.hasBattery, lidClosed: keepAwake.lidClosed, lidSupported: keepAwake.lidSupported }),
 			);
 	} catch {
 		// Storage can be unavailable; the row then waits for the status.
@@ -333,10 +374,63 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		};
 	}, []);
 
+	// A signed-in computer is linked, and its code carries a fixed address that
+	// survives restarts. Signed out, pairing works as it always has, with a
+	// quick tunnel whose address changes on restart.
+	const { session, status: sessionStatus, configured: signInConfigured } = useCloudSession();
+	const { settings } = useSettings();
+	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
+	const accountId = session?.user.id ?? "";
+	const signedIn = Boolean(cloudBaseUrl && accountId);
+	// Why the last link left this computer out of the account.
+	const [linkError, setLinkError] = useState("");
+	const reportLinkError = (cause: unknown) =>
+		setLinkError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed"));
+	/** Returns the host id the account lists now and the one this call added, or "", and whether linking failed. */
+	const linkIfSignedIn = async (
+		password: string,
+		hostId: string,
+		options?: { ifListed?: boolean },
+	): Promise<{ linked: string; added: string; failed: boolean }> => {
+		setLinkError("");
+		if (!signedIn || !password) return { linked: "", added: "", failed: false };
+		// Not fatal: an unlinked computer still gets a quick tunnel, whose
+		// address changes on restart. Said, though: after a new password the
+		// account's devices hold the old one until a link lands. An AO Cloud
+		// without fixed addresses is not linked here, as before them.
+		return linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).then(
+			(linked) => ({ linked: linked.hostId, added: linked.added ? linked.hostId : "", failed: false }),
+			(cause: unknown) => {
+				// An account that uses all of its fixed addresses keeps this
+				// computer at its quick tunnel's address, as without them.
+				if (cause instanceof AccountHostSyncError && cause.status === 409) return { linked: "", added: "", failed: false };
+				reportLinkError(cause);
+				return { linked: "", added: "", failed: true };
+			},
+		);
+	};
+	/** Links this computer when signed in, then starts remote access, which moves a running connector to the fixed address the link gave it, so the code stays valid after restarts. */
+	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
+		const { added } = await linkIfSignedIn(password, hostId);
+		const started = await apiClient.POST("/api/v1/mobile/remote-access");
+		if (started.error) {
+			// Not left listed at an address nothing serves.
+			if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
+			throw apiErrorException(started.error);
+		}
+		return started.data;
+	};
+
+	// Opened from the sidebar's Connect mobile, the user asked to pair a phone.
+	const settingsModal = useUiStore((state) => state.settingsModal);
+	const startPairing = settingsModal?.scope === "global" && settingsModal.startPairing === true;
+
 	const query = useQuery({
 		queryKey: mobileStatusQueryKey,
 		queryFn: fetchMobileStatus,
 		enabled: active,
+		// The auto-start below acts only on a fresh read.
+		refetchOnMount: startPairing ? "always" : true,
 		// Keep refreshing through every enabled-but-not-advertisable startup
 		// state — see mobileStatusRefetchInterval.
 		refetchInterval: (q) => mobileStatusRefetchInterval(q.state.data),
@@ -353,7 +447,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		}
 		if (initialEnabled === undefined || reportedOpen.current) return;
 		reportedOpen.current = true;
-		void captureRendererEvent("ao.renderer.mobile_connect_opened", { bridge_enabled: initialEnabled });
+		void captureRendererEvent("ao.mobile.connect_opened", { bridge_enabled: initialEnabled });
 	}, [active, initialEnabled]);
 
 	const keepAwakeStatus = query.data?.keepAwake;
@@ -375,18 +469,29 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const enable = useMutation({
 		mutationFn: async () => {
+			// Signed in or not, it starts as before fixed addresses: an app that
+			// quits while the link runs leaves remote access on its quick tunnel,
+			// not a computer that only serves this network after a restart. The
+			// link usually lands before the quick tunnel's address is advertised.
 			const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
+			if (error) throw apiErrorException(error);
+			if (!signedIn) return data;
+			invalidate(); // the code shows while the computer is linked
+			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
 		},
-		onSuccess: invalidate,
+		// The first call can turn the bridge on before the second fails, so read back what is actually on.
+		onSettled: invalidate,
 		onError: () => setOptimisticEnabled(null),
 	});
 
+	// After cloudflared is installed. A bridge that started LAN-only, signed
+	// out, is linked first, as enable links it; one already serving remote
+	// access was linked when it started.
 	const startRemoteAccess = useMutation({
 		mutationFn: async () => {
+			if (query.data?.noPublicTunnel === true) return linkAndStartRemoteAccess(query.data.password, query.data.hostId ?? "");
 			const { data, error } = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: invalidate,
@@ -395,16 +500,37 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const regenerate = useMutation({
 		mutationFn: async () => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/regenerate");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
+			invalidate(); // the new password shows at once; linking can take a minute
+			// A new password revokes the account link with the old one; link
+			// again so the fixed address survives the next restart. Only while
+			// remote access is on and the account still lists this computer:
+			// a LAN-only computer, or one removed from the account, is not
+			// listed again. A lost device signed in to the account is cut off
+			// by signing it out of the account; a new password is for
+			// password-paired devices.
+			if (data && !data.noPublicTunnel) {
+				const { linked, failed } = await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
+				// An AO Cloud without fixed addresses, or an account that uses all of them,
+				// links nothing without a url, and the account would keep the old token:
+				// it lists the tunnel's address instead.
+				if (signedIn && !linked && !failed) {
+					void waitForTunnel(t("remote.shareThisComputerTimeout"))
+						.then((ready) => ready && linkThisComputer(cloudBaseUrl, accountId, data.hostId ?? "", data.password ?? "", { ifListed: true, url: ready.url }))
+						.catch(reportLinkError);
+				}
+			}
 			return data;
 		},
 		onSuccess: invalidate,
 	});
 
+	// Off is a pause: the computer stays in the account at its fixed address,
+	// and on brings it back there. Allow access is where it leaves the account.
 	const disable = useMutation({
 		mutationFn: async () => {
 			const { error } = await apiClient.POST("/api/v1/mobile/disable");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 		},
 		// Shutdown can finish before returning an error. Refresh the actual
 		// server state while retaining the mutation error for the user.
@@ -415,20 +541,20 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const setSecure = useMutation({
 		mutationFn: async (secureEnabled: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/secure-pairing", { body: { enabled: secureEnabled } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: invalidate,
 	});
 
-	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
+	// Share wake ownership with the sidebar; mobile also opts into lid-closed wake.
 	const stayAwake = useStayAwake(active);
 
 
 	const setBrowserRemoteAccess = useMutation({
 		mutationFn: async (browserRemoteAccess: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onMutate: async (browserRemoteAccess) => {
@@ -504,6 +630,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.reset();
 		setSecure.reset();
 		setBrowserRemoteAccess.reset();
+		setLinkError("");
 	};
 
 	const copyPassword = async () => {
@@ -519,19 +646,34 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	};
 
 	const reportToggle = (next: boolean, outcome: "succeeded" | "failed") => {
-		void captureRendererEvent("ao.renderer.mobile_bridge_toggled", { enabled: next, outcome });
+		void captureRendererEvent("ao.mobile.bridge_toggled", { enabled: next, outcome });
 	};
 
-	const startBridge = () => {
+	const turnOn = (report: boolean) => {
 		if (busy || enabled) return;
 		clearActionErrors();
 		setAnimateQr(true);
 		setOptimisticEnabled(true);
-		enable.mutate(undefined, {
+		enable.mutate(undefined, report ? {
 			onSuccess: () => reportToggle(true, "succeeded"),
 			onError: () => reportToggle(true, "failed"),
-		});
+		} : undefined);
 	};
+	const startBridge = () => turnOn(true);
+
+	// From the sidebar, Connect Mobile turns on without a second click, once
+	// per opening, and only if a fresh read says it is off: every enable makes
+	// a new password, so a cached "off" for a running bridge would disconnect
+	// its phones. Sign-in must have loaded, since enable links a signed-in
+	// computer. Not a toggle the user made, so not reported as one. Browsing
+	// to this page from Settings turns nothing on.
+	useEffect(() => {
+		if (!startPairing || pairingHandledFor === settingsModal) return;
+		if (!active || !query.isFetchedAfterMount || query.isFetching || query.isError || busy) return;
+		if (sessionStatus === "loading" || settings === undefined) return;
+		pairingHandledFor = settingsModal;
+		if (query.data?.enabled === false) turnOn(false);
+	});
 
 	const actionError =
 		(enable.error instanceof Error && enable.error.message) ||
@@ -541,12 +683,16 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
 		stayAwake.error ||
+		linkError ||
 		null;
 
 	const turnOff = () => {
 		clearActionErrors();
 		setOptimisticEnabled(false);
-		disable.mutate();
+		disable.mutate(undefined, {
+			onSuccess: () => reportToggle(false, "succeeded"),
+			onError: () => reportToggle(false, "failed"),
+		});
 	};
 
 	// Each return is one or more direct children of the settings card: the
@@ -558,7 +704,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		const lastKeepAwake = readLastKeepAwake();
 		return (
 			<>
-				<PairingLayout panel={<QrPlaceholder value={placeholderQrValue()} />}>
+				<PairingLayout panel={<PairingPanel code={<QrPlaceholder value={placeholderQrValue()} />} />}>
 					<ScanIntro />
 					<p className="sr-only" role="status">
 						{t("mobile.checkingStatus")}
@@ -593,19 +739,19 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		: null;
 	const secureReasonText = reasonMessage(status.securePairing?.reason ?? "", t);
 	const unreachable = enabled && !qrValue && noEndpointAvailable;
+	const remoteAccessOn = qrValue !== null && (status.endpoints?.some((e) => e.kind === "tunnel") ?? false);
 
 	// One object throughout: the blurred placeholder sits at the back, the real
 	// code crossfades in over it (and over the previous code on a change), and
 	// the overlay says what is happening while there is no code.
-	const panel = (
+	const code = (
 		<QrPlaceholder value={placeholderQrValue({ ...status, host: activeHost || status.host })}>
 			<PairingQr value={qrValue} size={QR_CODE_SIZE} animate={animateQr} />
 			{!enabled ? (
 				<div className="absolute inset-0 flex items-center justify-center">
 					<Button
 						type="button"
-						variant="footer-primary"
-						className="rounded-md shadow-lg"
+						variant="primary"
 						onClick={startBridge}
 						disabled={busy || enabled}
 					>
@@ -625,6 +771,29 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				</div>
 			) : null}
 		</QrPlaceholder>
+	);
+	// "Remote access on" under the code once it carries the internet address.
+	// While that address is still starting nothing is said: the code already
+	// works on this network and gains the address by itself. A tunnel that
+	// failed is a warning, stated in the details column.
+	const panel = (
+		<PairingPanel
+			code={code}
+			note={
+				remoteAccessOn ? (
+					<div
+						className="flex flex-col items-center text-center text-xs leading-5 text-settings-muted"
+						data-testid="mobile-remote-access-on"
+						role="status"
+					>
+						<p className="flex items-center gap-1.5">
+							<Globe className="size-3.5 shrink-0" aria-hidden="true" />
+							{t("mobile.remoteAccessOn", "Remote access on")}
+						</p>
+					</div>
+				) : null
+			}
+		/>
 	);
 
 	return (
@@ -646,29 +815,24 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<dd className="flex min-w-0 items-center">
 							<span className="min-w-0 truncate font-mono text-settings-label">{status.password}</span>
 							<span className="ml-2 flex shrink-0 items-center">
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-											className={ICON_ACTION_CLASS}
-											onClick={() => void copyPassword()}
-										>
-											{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-										</button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">
-										{copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-									</TooltipContent>
-								</Tooltip>
+								<Button
+									type="button"
+									variant="quiet"
+									size="icon-xs"
+									aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
+									onClick={() => void copyPassword()}
+								>
+									{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+								</Button>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										{/* Span so the tooltip still opens while the button is disabled. */}
 										<span className="inline-flex">
-											<button
+											<Button
 												type="button"
+												variant="quiet"
+												size="icon-xs"
 												aria-label={t("mobile.regenerate")}
-												className={ICON_ACTION_CLASS}
 												disabled={busy}
 												onClick={() => {
 													clearActionErrors();
@@ -681,7 +845,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 												) : (
 													<RotateCcw className="size-3.5" aria-hidden="true" />
 												)}
-											</button>
+											</Button>
 										</span>
 									</TooltipTrigger>
 									<TooltipContent side="bottom">{t("mobile.regenerate")}</TooltipContent>
@@ -705,36 +869,31 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					</p>
 				)}
 
-				{qrValue && localOnly && (
-					// The code refreshes itself once the tunnel is advertised; until
-					// then it is a LAN-only code that looks exactly like a full one.
+				{qrValue && localOnly === "failed" && (
+					// A LAN-only code looks exactly like a full one, so say what it
+					// cannot reach.
 					<p
 						className="mt-4 flex items-start gap-1.5 text-xs leading-5 text-settings-muted"
 						data-testid="mobile-local-only"
 						role="status"
 					>
-						{localOnly === "starting" && <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
 						{/* A tailnet address does reach this machine from elsewhere, once
 						    both devices are on the tailnet; only the public tunnel is missing. */}
-						{localOnly === "starting"
-							? viaTailscale
-								? t(
-										"mobile.remoteAccessStartingTailscale",
-										"No public tunnel yet — away from this network the code works only over Tailscale. Remote access is still starting; wait for the code to update.",
-									)
-								: t(
-										"mobile.remoteAccessStarting",
-										"Works on this network only for now — remote access is still starting. Wait for the code to update before using it away from here.",
-									)
-							: viaTailscale
-								? t(
-										"mobile.remoteAccessFailedTailscale",
-										"No public tunnel — remote access couldn't start, so away from this network the code works only over Tailscale.",
-									)
-								: t(
-										"mobile.remoteAccessFailed",
-										"Works on this network only — remote access couldn't start, so this machine can't be reached from elsewhere.",
-									)}
+						{viaTailscale
+							? t(
+									"mobile.remoteAccessFailedTailscale",
+									"No public tunnel — remote access couldn't start, so away from this network the code works only over Tailscale.",
+								)
+							: t(
+									"mobile.remoteAccessFailed",
+									"Works on this network only — remote access couldn't start, so this machine can't be reached from elsewhere.",
+								)}
+					</p>
+				)}
+
+				{qrValue && signInConfigured && !signedIn && !status?.tunnel?.fixed && (
+					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-hint" role="status">
+						{t("mobile.signInForFixedAddress", "Sign in to Orchestrator to give this computer an address that stays the same after restarts.")}
 					</p>
 				)}
 
@@ -744,12 +903,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					// error. Without it the QR looks entirely normal and the user
 					// discovers the gap only by being away from home.
 					<div className="mt-4">
-						<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
-							{t(
-								"mobile.remoteAccessUnavailable",
-								"Works on this network only — cloudflared isn't installed, so this machine can't be reached from elsewhere.",
-							)}
-						</p>
+						{/* While the daemon downloads it, the row below says so instead. */}
+						{!status.tunnel?.installing && (
+							<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
+								{t(
+									"mobile.remoteAccessUnavailable",
+									"Works on this network only — cloudflared isn't installed, so this machine can't be reached from elsewhere.",
+								)}
+							</p>
+						)}
 						{/* Deliberately not enable(): that mints a fresh password, so
 						    installing remote access would invalidate the phone the user
 						    had already paired. This re-checks for the binary and starts
@@ -759,41 +921,28 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				)}
 				{actionError && <p className="mt-3 text-xs text-error">{actionError}</p>}
 
-				{/* Bottom of the details column, level with the code's bottom edge:
-				    the off switch belongs to the connection the details describe,
-				    not to the code, and here it costs no extra row. Pulled left by its
-				    padding plus its 1px transparent border so the label starts on the
-				    column's text edge. */}
-				{enabled && (
-					<div className="mt-auto pt-4">
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							className="-ml-[calc(--spacing(2.5)+1px)] text-settings-muted hover:text-settings-label"
-							disabled={busy}
-							onClick={turnOff}
-						>
-							{t("mobile.disable", "Turn off mobile connection")}
-						</Button>
-					</div>
-				)}
 			</PairingLayout>
 
-			{/* macOS only — the daemon reports it unsupported elsewhere. Shown
-			    whether or not the bridge is on: the choice is remembered and takes
-			    effect whenever the mobile connection is. */}
+			{/* The mobile connection's on and off, as one switch beside the code it makes. */}
+			<SettingsRow icon={Smartphone} label={t("settings.connectMobile", "Connect mobile")} data-testid="mobile-connection">
+				<Switch
+					aria-label={t("settings.connectMobile", "Connect mobile")}
+					disabled={busy}
+					checked={enabled}
+					onCheckedChange={(next) => (next ? startBridge() : turnOff())}
+				/>
+			</SettingsRow>
+
+			{/* macOS wake ownership is independent of the mobile connection. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
 					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
 					disabled={busy || !stayAwake.supported}
+					confirming={stayAwake.busy}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						stayAwake.set(next, true);
-					}}
-					onLidChange={(next) => {
-						clearActionErrors();
-						stayAwake.setLid(next);
+						if (next) stayAwake.setLid(true);
+						else stayAwake.set(false, true);
 					}}
 				/>
 			)}
@@ -817,83 +966,72 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	);
 }
 
-/** Keep this Mac awake, and (when the daemon reports it) keep it awake with the
- *  lid closed. Disabled while it shows a remembered state rather than the
- *  daemon's, so it cannot be toggled on a guess; the lid row appears only for a
- *  live status, since the remembered one does not carry the lid fields. */
+/** One mobile wake switch includes closed-lid mode on supported Macs.
+ * Remembered status stays disabled until the daemon confirms it. */
 function KeepAwakeRow({
 	keepAwake,
 	disabled = false,
+	confirming = false,
 	onCheckedChange,
-	onLidChange,
 }: {
 	keepAwake: KeepAwakeStatus;
 	disabled?: boolean;
+	/** A wake request is in flight; the helper may not have acknowledged it yet. */
+	confirming?: boolean;
 	onCheckedChange?: (next: boolean) => void;
-	onLidChange?: (next: boolean) => void;
 }) {
 	const { t } = useTranslation();
+	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
+	// While a request is in flight the switch already shows it, so hide the
+	// transient "starting" line. Once it settles, a lease that never armed
+	// stays visible: closing the lid would otherwise sleep the Mac silently.
+	const lidStarting = !keepAwake.lidActive && !lidUnavailable && (!keepAwake.lidReason || keepAwake.lidReason === "starting");
 	const lidNeedsAttention =
-		(keepAwake.enabled && keepAwake.lidClosed) ||
+		lidUnavailable ||
+		(keepAwake.enabled && keepAwake.lidClosed && !(confirming && lidStarting)) ||
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
 		keepAwake.lidReason === "helper_upgrade_required";
+	const status = keepAwake.lidActive && keepAwake.enabled
+		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
+		: keepAwake.lidReason || lidUnavailable
+			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason || "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the Orchestrator desktop app to retry.")
+			: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
 	return (
-		<>
-			<SettingsRow
-				data-testid="mobile-keep-awake"
-				icon={Coffee}
-				label={t("mobile.keepAwake.label")}
-				description={
-					<>
-						{t("mobile.keepAwake.help")}
-						{keepAwake.hasBattery && (!keepAwake.lidClosed || !keepAwake.lidSupported || !keepAwake.enabled) && (
-							<span data-testid="mobile-keep-awake-laptop"> {t("mobile.keepAwake.laptopNote")}</span>
-						)}
-					</>
-				}
-			>
-				<Switch
-					aria-label={t("mobile.keepAwake.label")}
-					checked={keepAwake.enabled}
-					disabled={disabled}
-					onCheckedChange={onCheckedChange}
-				/>
-			</SettingsRow>
-			{onLidChange && (keepAwake.lidSupported || keepAwake.lidClosed) && (
-				<SettingsRow
-					data-testid="mobile-lid-awake"
-					label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
-					description={
-						<>
-							{t(
-								"mobile.keepAwake.lidHelp",
-								"Works while mobile access is on, even when your phone disconnects. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
-							)}
-							{lidNeedsAttention && (
-								<span className="mt-1 block" role="status">
-									{keepAwake.lidActive && keepAwake.enabled
-										? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
-										: keepAwake.lidReason
-											? t(
-													`mobile.keepAwake.lidReason.${keepAwake.lidReason}`,
-													"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
-												)
-											: t("mobile.keepAwake.lidIdle", "Starts when mobile access is on.")}
-								</span>
-							)}
-						</>
-					}
-				>
-					<Switch
-						aria-label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
-						checked={keepAwake.enabled && (keepAwake.lidClosed ?? false)}
-						disabled={disabled}
-						onCheckedChange={onLidChange}
-					/>
-				</SettingsRow>
-			)}
-		</>
+		<SettingsRow
+			data-testid="mobile-keep-awake"
+			icon={Coffee}
+			label={t("mobile.keepAwake.label")}
+			description={
+				<>
+					{t("mobile.keepAwake.combinedHelp")}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Pressable
+								aria-label={t("mobile.keepAwake.details")}
+								className="ml-1 inline-flex align-[-0.125em] text-settings-muted hover:text-foreground"
+							>
+								<Info className="size-3.5" aria-hidden="true" />
+							</Pressable>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-72">
+							{t("mobile.keepAwake.lidHelp")}
+							{keepAwake.lidReason === "isolated_data_dir" && <p className="mt-1">{t("mobile.keepAwake.lidReason.isolated_data_dir")}</p>}
+						</TooltipContent>
+					</Tooltip>
+					{lidNeedsAttention && keepAwake.lidReason !== "isolated_data_dir" && (
+						<span className="mt-1 block" role="status">{status}</span>
+					)}
+				</>
+			}
+		>
+			<Switch
+				aria-label={t("mobile.keepAwake.label")}
+				checked={keepAwake.enabled && keepAwake.lidClosed === true}
+				disabled={disabled || lidUnavailable}
+				onCheckedChange={onCheckedChange}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -918,37 +1056,61 @@ function PairingLayout({ panel, children }: { panel: ReactNode; children: ReactN
 	);
 }
 
-/** One instruction and where to get the app. Nothing here changes once paired. */
+/**
+ * One instruction and where to get the app. The two stores are one compact
+ * segmented control, a filled surface that stands out from the muted copy
+ * around it; each segment shows its store's QR on hover or focus. Nothing here
+ * changes once paired.
+ */
 function ScanIntro() {
 	const { t } = useTranslation();
 	return (
 		<>
 			<p className="text-sm leading-5 text-settings-label">{t("mobile.scanHint")}</p>
-			<p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-control leading-5 text-settings-muted">
-				<span>{t("mobile.getApp")}</span>
-				{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }) => (
-					<Tooltip key={key}>
-						<TooltipTrigger asChild>
-							<button
-								type="button"
-								className={STORE_LINK_CLASS}
-								aria-label={t(ariaKey)}
-								onClick={() => void aoBridge.app.openExternal(url)}
-							>
-								<Icon className="size-3.5 shrink-0" />
-								{t(labelKey)}
-								<ArrowUpRight className="size-3" aria-hidden="true" />
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom" className="p-2" data-testid={testId}>
-							<div className="rounded-md bg-(--color-bg-settings-input) p-2">
-								<QrCanvas value={url} size={STORE_QR_SIZE} showLogo={false} cache className="block" />
-							</div>
-						</TooltipContent>
-					</Tooltip>
-				))}
-			</p>
+			<div className="mt-2 flex flex-wrap items-center gap-3 text-control leading-5">
+				<span className="text-settings-muted">{t("mobile.getApp")}</span>
+				<div className="inline-flex h-7 items-stretch divide-x divide-(--color-border-settings-input) overflow-hidden rounded-md bg-(--color-bg-settings-input)">
+					{/* One QR glyph for the whole control: each store reveals its QR on hover. */}
+					<span className="flex items-center px-2 text-settings-muted" aria-hidden="true">
+						<QrCode className="size-3.5" />
+					</span>
+					{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }) => (
+						<Tooltip key={key}>
+							<TooltipTrigger asChild>
+								<Pressable
+									className={STORE_SEGMENT_CLASS}
+									aria-label={t(ariaKey)}
+									onClick={() => void aoBridge.app.openExternal(url)}
+								>
+									<Icon className="size-3.5 shrink-0" />
+									{t(labelKey)}
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent side="bottom" className="p-2" data-testid={testId}>
+								<div className="rounded-md bg-(--color-bg-settings-input) p-2">
+									<QrCanvas value={url} size={STORE_QR_SIZE} showLogo={false} cache className="block" />
+								</div>
+							</TooltipContent>
+						</Tooltip>
+					))}
+				</div>
+			</div>
 		</>
+	);
+}
+
+/**
+ * The code column: the pairing square and an optional note beneath it. Every
+ * state, loading included, renders this same element with the code first, so
+ * the note coming and going never changes the code's place in the tree. A
+ * different wrapper would remount the code and drop PairingQr's crossfade.
+ */
+function PairingPanel({ code, note }: { code: ReactNode; note?: ReactNode }) {
+	return (
+		<div className="flex w-60 shrink-0 flex-col gap-1.5 self-start" data-testid="mobile-pairing-panel">
+			{code}
+			{note}
+		</div>
 	);
 }
 

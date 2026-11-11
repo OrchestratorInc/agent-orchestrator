@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import type { SessionInterfaceTransitionStatus } from "./useSessionInterfaceTransition";
+import type { SessionInterfaceTransition, SessionInterfaceTransitionStatus } from "./useSessionInterfaceTransition";
 import { useSessionInterfaceSwitch } from "./useSessionInterfaceSwitch";
 
 type SwitchDialogElement = ReactElement<{ open: boolean; requireExplicitTerminalStop: boolean }>;
@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ client: { getSession: mocks.getSession } }) }));
 vi.mock("./useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
-vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { chatHarnesses: ["claude-code", "codex", "gemini", "cursor"] } }) }));
+vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { chatHarnesses: ["claude-code", "codex", "gemini", "cursor", "hermes"] } }) }));
 vi.mock("./useSessionInterfaceTransition", async (importOriginal) => ({
 	...await importOriginal<typeof import("./useSessionInterfaceTransition")>(),
 	useSessionInterfaceTransition: (sessionId: string, context: unknown) => {
@@ -79,6 +79,16 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		mocks.settling = false;
 	});
 
+	it.each(["chat", "tui"] as const)("asks before an idle Hermes %s switch can reset context", (mode) => {
+		mocks.status = { supported: true, targetMode: mode === "chat" ? "tui" : "chat" };
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, provider: "hermes", mode }));
+		requestSwitch(result.current.switchControl as SwitchControl);
+		expect(mocks.start).not.toHaveBeenCalled();
+		const dialogs = result.current.dialogs as ReactElement<{ children: SwitchDialogElement[] }>;
+		expect(dialogs.props.children[0].props.open).toBe(true);
+	});
+
 	it.each(["codex", "claude-code", "cursor"] as const)("preserves %s model and effort when leaving Cloud Chat", async (provider) => {
 		mocks.status = { supported: true, targetMode: "tui" };
 		localStorage.setItem(`cloud-chat-settings:org-1:session-1:${provider}`, JSON.stringify({
@@ -131,24 +141,38 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(result.current.renderedMode).toBe("tui");
 	});
 
+	const accountMove = (mode: "chat" | "tui", phase: SessionInterfaceTransition["phase"]): SessionInterfaceTransitionStatus => ({
+		supported: true,
+		targetMode: mode === "chat" ? "tui" : "chat",
+		transition: {
+			id: "account-move",
+			sessionId: "session-1",
+			sourceMode: mode,
+			targetMode: mode,
+			policy: "drain",
+			historyPolicy: "strict",
+			phase,
+			sourceAccountId: "device-claude",
+			targetAccountId: "acct-b",
+			createdAt: "2026-10-01T00:00:00Z",
+			updatedAt: "2026-10-01T00:00:01Z",
+		},
+	});
+
+	it.each([
+		["draining", false],
+		["source_stopping", false],
+		["source_stopped", true],
+		["target_starting", true],
+	] as const)("queues chat sends during an account move in %s: %s", (phase, queues) => {
+		mocks.status = accountMove("chat", phase);
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode: "chat" }));
+		expect(result.current.accountMoveQueues).toBe(queues);
+	});
+
 	it.each(["chat", "tui"] as const)("keeps the %s surface and its content during an account move", (mode) => {
-		mocks.status = {
-			supported: true,
-			targetMode: mode === "chat" ? "tui" : "chat",
-			transition: {
-				id: "account-move",
-				sessionId: "session-1",
-				sourceMode: mode,
-				targetMode: mode,
-				policy: "drain",
-				historyPolicy: "strict",
-				phase: "target_starting",
-				sourceAccountId: "device-claude",
-				targetAccountId: "acct-b",
-				createdAt: "2026-10-01T00:00:00Z",
-				updatedAt: "2026-10-01T00:00:01Z",
-			},
-		};
+		mocks.status = accountMove(mode, "target_starting");
 		const { cloud: _cloud, ...localSession } = cloudSession;
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode }));
 		// Not an arrival: the conversation or terminal on screen stays.
@@ -180,6 +204,15 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode: "tui" }));
 		expect(result.current.optimisticTarget).toBeUndefined();
 		expect(result.current.renderedMode).toBe("tui");
+	});
+
+	it.each(["tui", "chat"] as const)("offers a guest of a shared session no switch from %s", (mode) => {
+		mocks.status = { supported: true, targetMode: mode === "chat" ? "tui" : "chat" };
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", {
+			...cloudSession, mode, cloud: { orgId: "org-1", shared: true },
+		}, { orgId: "org-1" }));
+		expect(result.current.switchControl).toBeNull();
+		expect(result.current.switchAction).toBeFalsy();
 	});
 
 	it("keeps source Chat visible while a Cloud drain waits and scopes transition to its org", () => {

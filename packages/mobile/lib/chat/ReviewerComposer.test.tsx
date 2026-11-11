@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
+const { paste } = vi.hoisted(() => ({ paste: { handler: null as null | ((assets: unknown[]) => void) } }));
 vi.mock("react-native", () => ({
 	Platform: { OS: "android" },
 	ActivityIndicator: "ActivityIndicator", Image: "Image", Pressable: "Pressable", ScrollView: "ScrollView", Text: "Text", TextInput: "TextInput", View: "View",
@@ -18,10 +19,14 @@ vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: (fac
 vi.mock("../voice/MicKey", () => ({ MicKey: "MicKey" }));
 vi.mock("../voice/useVoiceInput", () => ({ useVoiceInput: () => ({}) }));
 vi.mock("./ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
+vi.mock("./useImagePaste", () => ({ useImagePaste: (handler: typeof paste.handler) => { paste.handler = handler; return () => {}; } }));
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
+vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: undefined, pressed: {} }) }));
+vi.mock("../AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 
 import { launchImageLibraryAsync } from "expo-image-picker";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
+import { HardwareReturn } from "./HardwareReturn";
 import { ReviewerComposer } from "./ReviewerComposer";
 
 const props = () => ({
@@ -62,4 +67,54 @@ it("clears only what a send submitted, keeping a photo attached in a reopened re
 	await act(async () => finish("send-id"));
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove a.jpg" })).toHaveLength(0);
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove b.jpg" })).toHaveLength(1);
+});
+
+it("takes pasted images only while reviewer attachments are enabled", async () => {
+	const image = { uri: "paste-1", fileName: "Pasted image", mimeType: "image/png", fileSize: 5, base64: "aGVsbG8=" };
+	const p = { ...props(), attachmentKey: "reviewer.host.paste", attachmentsEnabled: false };
+	await act(async () => { renderer = create(<ReviewerComposer {...p} />); });
+	expect(paste.handler).toBeNull();
+	await act(async () => renderer.update(<ReviewerComposer {...p} attachmentsEnabled />));
+	act(() => paste.handler?.([image]));
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove Pasted image" })).toHaveLength(1);
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send reply" }).props.onPress());
+	expect(p.onSend).toHaveBeenCalledExactlyOnceWith("", [{ mimeType: "image/png", data: "aGVsbG8=" }], []);
+});
+
+const noModifiers = { command: false, control: false, option: false };
+
+it("sends on hardware Return and gives the field focus back once the send lands", async () => {
+	let delivered!: (id: string) => void;
+	const p = { ...props(), onSend: vi.fn(() => new Promise<string>((resolve) => { delivered = resolve; })) };
+	const focus = vi.fn();
+	// The renderer has no native field behind the ref; give it one that can take focus.
+	await act(async () => { renderer = create(<ReviewerComposer {...p} />, { createNodeMock: (element) => element.type === "TextInput" ? { focus } : null }); });
+	act(() => renderer.root.findByProps({ accessibilityLabel: "Reply to reviewer" }).props.onChangeText("Check the migration too"));
+	await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn(noModifiers));
+	expect(p.onSend).toHaveBeenCalledExactlyOnceWith("Check the migration too", [], []);
+	// In flight the field is read-only; focus waits for the send to land.
+	expect(focus).not.toHaveBeenCalled();
+	await act(async () => delivered("send-id"));
+	expect(focus).toHaveBeenCalledOnce();
+	expect(renderer.root.findByProps({ accessibilityLabel: "Reply to reviewer" }).props.value).toBe("");
+});
+
+it("keeps hardware Return on while the reviewer works, and ignores it there", async () => {
+	const p = { ...props(), busy: true };
+	const focus = vi.fn();
+	await act(async () => { renderer = create(<ReviewerComposer {...p} />, { createNodeMock: (element) => element.type === "TextInput" ? { focus } : null }); });
+	act(() => renderer.root.findByProps({ accessibilityLabel: "Reply to reviewer" }).props.onChangeText("Follow-up typed mid-review"));
+	// Turned off, iPadOS would take Ctrl+Return back and open its edit menu.
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(true);
+	for (const modifiers of [noModifiers, { ...noModifiers, control: true }, { ...noModifiers, command: true }]) {
+		await act(async () => renderer.root.findByType(HardwareReturn).props.onReturn(modifiers));
+	}
+	expect(p.onSend).not.toHaveBeenCalled();
+	expect(focus).not.toHaveBeenCalled();
+	expect(renderer.root.findByProps({ accessibilityLabel: "Reply to reviewer" }).props.value).toBe("Follow-up typed mid-review");
+});
+
+it("turns hardware Return off only when the field cannot be edited", async () => {
+	await act(async () => { renderer = create(<ReviewerComposer {...props()} stopped />); });
+	expect(renderer.root.findByType(HardwareReturn).props.enabled).toBe(false);
 });

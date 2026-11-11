@@ -28,14 +28,16 @@ import {
 	MousePointer2,
 	RefreshCw,
 	ChevronRight,
-	type LucideIcon,
-} from "lucide-react";
+	CornerDownRight,
+	type AppIcon,
+} from "@/components/app-icons";
 import { useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
-import type { ConversationMessage } from "../../types/conversation";
+import { Pressable } from "../ui/pressable";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
 import { formatTime, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
@@ -278,6 +280,30 @@ export function AutomationMessage({ message, queued, fallback }: { message: Conv
 	);
 }
 
+/** The Browser annotations a steer carried, or null for any other steer. */
+export function steeredBrowserFeedback(activity: ConversationActivity): ParsedBrowserAnnotationMessage | null {
+	return parseBrowserAnnotationMessage(activity.detail?.text ?? "");
+}
+
+/**
+ * A queued annotation batch the user steered into the running turn. It keeps
+ * the card it had while queued instead of exposing the agent-facing transport.
+ */
+export function SteeredBrowserFeedback({ annotations }: { annotations: ParsedBrowserAnnotationMessage }) {
+	const { t } = useTranslation();
+	return (
+		<div className="flex flex-col items-end gap-1" data-testid="steered-browser-feedback">
+			<div className={cn(humanBubbleClass(), "min-w-0")}>
+				<BrowserFeedbackBody annotations={annotations} />
+			</div>
+			<span className="flex items-center gap-1 text-xs text-muted-foreground">
+				<CornerDownRight aria-hidden="true" className="size-3" />
+				{t("chat.automation.steered")}
+			</span>
+		</div>
+	);
+}
+
 /** Something the user did through AO, drawn as the user's own message: queued until sent, with its time on hover. */
 function YourAction({ queued, createdAt, children }: { queued?: boolean; createdAt: string; children: ReactNode }) {
 	return (
@@ -346,7 +372,7 @@ function FileFeedbackBody({ comments }: { comments: readonly FileFeedback[] }) {
 	);
 }
 
-const GIT_ACTIONS: Record<GitAction, { icon: LucideIcon; label: MessageKey }> = {
+const GIT_ACTIONS: Record<GitAction, { icon: AppIcon; label: MessageKey }> = {
 	createPR: { icon: GitPullRequest, label: "inspector.git.createPR" },
 	createDraftPR: { icon: GitPullRequestDraft, label: "inspector.git.createDraftPR" },
 	commit: { icon: GitCommitHorizontal, label: "inspector.git.commit" },
@@ -398,7 +424,7 @@ function BrowserFeedbackBody({ annotations }: { annotations: ParsedBrowserAnnota
 	);
 }
 
-const NOTICES: Record<AutomationNotice, { icon: LucideIcon; label: MessageKey }> = {
+const NOTICES: Record<AutomationNotice, { icon: AppIcon; label: MessageKey }> = {
 	orchestratorReplaced: { icon: RefreshCw, label: "chat.automation.orchestratorReplaced" },
 	contextCarried: { icon: ArrowLeftRight, label: "chat.automation.contextCarried" },
 	reviewTask: { icon: ClipboardCheck, label: "chat.automation.reviewTask" },
@@ -524,14 +550,13 @@ function FailedCheckLine({ check }: { check: FailedCheck }) {
 					{check.name}
 				</ForgeLink>
 				{check.log ? (
-					<button
-						type="button"
+					<Pressable
 						aria-expanded={open}
 						onClick={() => setOpen((current) => !current)}
-						className="ml-1 shrink-0 rounded font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						className="ml-1 shrink-0 rounded font-medium text-muted-foreground transition-colors hover:text-foreground"
 					>
 						{t(open ? "chat.automation.hideLog" : "chat.automation.showLog")}
-					</button>
+					</Pressable>
 				) : null}
 			</div>
 			{open && check.log ? (

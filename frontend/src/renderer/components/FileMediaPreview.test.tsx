@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { getDocument } from "pdfjs-dist";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { aoBridge } from "../lib/bridge";
 import { FileMediaPreview } from "./FileMediaPreview";
 
 vi.mock("../lib/api-client", () => ({ getApiBaseUrl: () => "http://127.0.0.1:3001" }));
@@ -8,11 +10,21 @@ vi.mock("../hooks/useHostConnection", () => ({
 }));
 
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
-vi.mock("pdfjs-dist", () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn(), TextLayer: class {} }));
+const textLayer = vi.hoisted(() => ({ render: vi.fn(async () => {}), cancel: vi.fn() }));
+vi.mock("pdfjs-dist", () => ({
+	GlobalWorkerOptions: {},
+	getDocument: vi.fn(),
+	TextLayer: class {
+		render = textLayer.render;
+		cancel = textLayer.cancel;
+	},
+}));
 
 describe("FileMediaPreview", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		textLayer.render.mockClear();
+		textLayer.cancel.mockClear();
 	});
 
 	it.each(["image", "video", "audio"] as const)("uses renderer-origin CORS for protected %s", (kind) => {
@@ -48,6 +60,12 @@ describe("FileMediaPreview", () => {
 		expect(video.getAttribute("src")).toMatch(/^https:\/\/cp\.test\/api\/cloud\/v1\/artifact-files\/t\/demo\.mp4\?v=1/);
 		fireEvent.error(video);
 		expect(onAccessRefused).toHaveBeenCalledTimes(1);
+	});
+
+	it("loads cloud media without CORS, which a localhost control plane does not send", () => {
+		const source = { kind: "artifact" as const, cloud: true, rawUrl: "http://127.0.0.1:8081/api/cloud/v1/artifact-files/t/demo.mp4?v=1", onAccessRefused: vi.fn() };
+		render(<FileMediaPreview kind="video" path="demo.mp4" sessionId="session-1" source={source} version={1} />);
+		expect(screen.getByLabelText("demo.mp4")).not.toHaveAttribute("crossorigin");
 	});
 
 	it("takes one fresh link per file version, then shows a cloud file that still fails", () => {
@@ -89,6 +107,53 @@ describe("FileMediaPreview", () => {
 		vi.stubGlobal("fetch", vi.fn(async () => new Response("missing", { status: 404 })));
 		render(<FileMediaPreview kind="pdf" path="report.pdf" sessionId="session-1" source={{ kind: "artifact", rawUrl: "http://ao-preview-artifact.abc.localhost/report.pdf?raw=true" }} version={1} />);
 		expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
+	});
+
+	it("renders a cloud PDF's pages from bytes read through the main process", async () => {
+		const bytes = new Uint8Array([37, 80, 68, 70]);
+		const fetchFile = vi.spyOn(aoBridge.cloudArtifact, "fetch").mockResolvedValue(bytes);
+		const browserFetch = vi.fn();
+		vi.stubGlobal("fetch", browserFetch);
+		vi.stubGlobal("ResizeObserver", class {
+			constructor(private readonly callback: ResizeObserverCallback) {}
+			observe() {
+				this.callback([{ contentRect: { width: 600 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+			}
+			disconnect() {}
+		});
+		const page = {
+			getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale }),
+			render: () => ({ promise: Promise.resolve(), cancel: () => {} }),
+			streamTextContent: () => null,
+			cleanup: () => true,
+		};
+		vi.mocked(getDocument).mockReturnValueOnce({ promise: Promise.resolve({ numPages: 2, getPage: async () => page }), destroy: async () => {} } as unknown as ReturnType<typeof getDocument>);
+		const source = { kind: "artifact" as const, cloud: true, rawUrl: "https://cp.test/api/cloud/v1/artifact-files/t/report.pdf?v=1" };
+		const view = render(<FileMediaPreview kind="pdf" path="report.pdf" sessionId="session-1" source={source} version={1} />);
+
+		await waitFor(() => expect(document.querySelectorAll("[data-page-number]")).toHaveLength(2));
+		await waitFor(() => expect(document.querySelectorAll(".endOfContent")).toHaveLength(2));
+		expect(fetchFile).toHaveBeenCalledWith(source.rawUrl);
+		expect(getDocument).toHaveBeenCalledWith({ data: bytes });
+		expect(browserFetch).not.toHaveBeenCalled();
+		await waitFor(() => expect(textLayer.render).toHaveBeenCalledTimes(2));
+		view.unmount();
+		expect(textLayer.cancel).toHaveBeenCalledTimes(2);
+		fetchFile.mockRestore();
+	});
+
+	it("reads a cloud PDF through the main process and asks for a fresh link when it fails", async () => {
+		const fetchFile = vi.spyOn(aoBridge.cloudArtifact, "fetch").mockRejectedValue(new Error("Artifact request failed (403)"));
+		const browserFetch = vi.fn();
+		vi.stubGlobal("fetch", browserFetch);
+		const onAccessRefused = vi.fn();
+		const source = { kind: "artifact" as const, cloud: true, rawUrl: "https://cp.test/api/cloud/v1/artifact-files/t/report.pdf?v=1", onAccessRefused };
+		render(<FileMediaPreview kind="pdf" path="report.pdf" sessionId="session-1" source={source} version={1} />);
+		expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
+		expect(fetchFile).toHaveBeenCalledWith(source.rawUrl);
+		expect(browserFetch).not.toHaveBeenCalled();
+		expect(onAccessRefused).toHaveBeenCalledTimes(1);
+		fetchFile.mockRestore();
 	});
 
 	it("does not read a PDF over the preview size cap", async () => {

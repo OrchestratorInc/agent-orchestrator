@@ -160,6 +160,14 @@ INSERT INTO pr_url_alias(alias_url, canonical_url)
 VALUES (sqlc.arg(alias_url), sqlc.arg(canonical_url))
 ON CONFLICT(alias_url) DO UPDATE SET canonical_url = excluded.canonical_url;
 
+-- name: UpsertRepositoryRename :exec
+INSERT INTO repository_renames(host, old_name, name)
+VALUES (sqlc.arg(host), sqlc.arg(old_name), sqlc.arg(name))
+ON CONFLICT(host, old_name) DO UPDATE SET name = excluded.name;
+
+-- name: ListRepositoryRenames :many
+SELECT host, old_name, name FROM repository_renames;
+
 -- name: MovePRAliasChecks :exec
 UPDATE OR IGNORE pr_checks SET pr_url = sqlc.arg(canonical_url) WHERE pr_url = sqlc.arg(previous_url);
 
@@ -515,3 +523,34 @@ SELECT pr.session_id, sessions.is_terminated
 FROM pr
 JOIN sessions ON sessions.id = pr.session_id
 WHERE pr.url = ?;
+-- name: RecordWorkerPRUsage :exec
+-- While export is not allowed, every outcome observed (association, merge,
+-- close) is consumed here, so a later opt-in never exports the off interval.
+INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported, closed_reported)
+SELECT CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
+        THEN pr.provider || ':' || pr.host || ':' || pr.provider_id
+        ELSE pr.url END,
+    sessions.project_id,
+    CASE WHEN sqlc.arg(export_allowed) = 0 THEN 1 ELSE 0 END,
+    CASE WHEN sqlc.arg(export_allowed) = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END,
+    CASE WHEN sqlc.arg(export_allowed) = 0 AND pr.pr_state = 'closed' THEN 1 ELSE 0 END
+FROM pr JOIN sessions ON sessions.id = pr.session_id
+WHERE pr.url = sqlc.arg(pr_url) AND sessions.kind = 'worker' AND sessions.project_id IS NOT NULL
+ON CONFLICT(pr_key) DO UPDATE SET
+    associated_reported = CASE WHEN ?1 = 0 THEN 1 ELSE usage_pr_measurement.associated_reported END,
+    merged_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'merged'
+        THEN 1 ELSE usage_pr_measurement.merged_reported END,
+    closed_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'closed'
+        THEN 1 ELSE usage_pr_measurement.closed_reported END;
+
+-- name: UpgradeWorkerPRUsageIdentity :exec
+UPDATE OR IGNORE usage_pr_measurement
+SET pr_key = (SELECT pr.provider || ':' || pr.host || ':' || pr.provider_id FROM pr WHERE pr.url = sqlc.arg(pr_url))
+WHERE pr_key IN (
+    SELECT alias_url FROM pr_url_alias WHERE canonical_url = sqlc.arg(pr_url)
+    UNION SELECT sqlc.arg(pr_url)
+)
+AND EXISTS (SELECT 1 FROM pr WHERE pr.url = sqlc.arg(pr_url)
+    AND pr.provider <> '' AND pr.provider_id <> '');

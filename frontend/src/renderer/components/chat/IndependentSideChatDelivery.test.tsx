@@ -20,7 +20,7 @@ vi.mock("../../lib/api-client", () => ({
 	subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { sideChats: { capture: async () => {} } },
+	aoBridge: { sideChats: { capture: async () => {}, confirmClose: async () => {}, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } },
 }));
 
 describe("side delivery draft ownership", () => {
@@ -71,6 +71,56 @@ describe("side delivery draft ownership", () => {
 		return { ...hook, sending };
 	}
 
+	it.each([70 * 1024, 128 * 1024])("accepts a local plain side question of %i bytes", async (bytes) => {
+		const text = "q".repeat(bytes);
+		const hook = await beginSend(text);
+		expect(post.mock.calls[0][1].body.text).toBe(text);
+		await act(async () => { accept({}); await hook.sending; });
+	});
+
+	it("rejects a local side question above 128 KiB without losing the draft", async () => {
+		const text = "q".repeat(128 * 1024 + 1);
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		act(() => hook.result.current.setQuestionDraft("side", text));
+		await act(async () => { await hook.result.current.send("side", text); });
+		expect(post).not.toHaveBeenCalled();
+		expect(hook.result.current.error).toBeDefined();
+		await waitFor(() => expect(put.mock.calls.some(([, options]) => JSON.parse(options.body.contentJson).text === text)).toBe(true));
+	});
+
+	it("refreshes the accepted title without switching the active sidechat", async () => {
+		let label = "Side Chat";
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) return { data: { sides: [
+				{ id: "other", sessionId: "session", state: "ready", label: "Other topic" },
+				{ id: "side", sessionId: "session", state: "ready", label },
+			] } };
+			return originalGet(path, ...args);
+		});
+		const hook = await beginSend("Explain this code");
+		expect(hook.result.current.sides.find((side) => side.id === "side")?.label).toBe("Side Chat");
+		act(() => hook.result.current.show("other"));
+		label = "Explain this code";
+		await act(async () => { accept({}); await hook.sending; });
+		await waitFor(() => expect(hook.result.current.sides.find((side) => side.id === "side")?.label).toBe(label));
+		expect(hook.result.current.activeId).toBe("other");
+		expect(post).toHaveBeenCalledOnce();
+	});
+
+	it("does not fail an accepted send when refreshing its title fails", async () => {
+		const hook = await beginSend();
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation(async (path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) throw new Error("List unavailable");
+			return originalGet(path, ...args);
+		});
+		await act(async () => { accept({}); await hook.sending; });
+		expect(hook.result.current.error).toBeUndefined();
+		expect(post).toHaveBeenCalledOnce();
+	});
+
 	it("keeps existing sides accessible while creation is unsupported", async () => {
 		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false, true, undefined, undefined, false));
 		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
@@ -80,7 +130,7 @@ describe("side delivery draft ownership", () => {
 
 	it("preserves a reference added while acceptance is pending", async () => {
 		const hook = await beginSend();
-		act(() =>
+		await act(async () =>
 			hook.result.current.addReference("side", {
 				id: "chip",
 				conversationId: "main",
@@ -126,12 +176,12 @@ describe("side delivery draft ownership", () => {
 		);
 	});
 
-	it.each(["btw", "side"])("/%s opens a fresh side", async (command) => {
+	it("/btw opens a fresh side", async () => {
 		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
 		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
 		post.mockResolvedValue({ data: { side: { id: "new-side", state: "ready" } } });
 		await act(async () => {
-			await hook.result.current.send("side", `/${command} first`);
+			await hook.result.current.send("side", "/btw first");
 		});
 		const creates = post.mock.calls.filter(([path]) => path.endsWith("/side-chats"));
 		expect(creates).toHaveLength(1);
@@ -473,10 +523,18 @@ describe("side panel navigation and recovery", () => {
 		);
 	});
 
-	it("shows the shorter isolation explanation without info or collapse controls", async () => {
+	it("keeps the no-open-side-chat state to one message", async () => {
+		get.mockResolvedValue({ data: { sides: [] } });
+		render(<SidePanelHarness />);
+		await screen.findByText("No side chat opened yet");
+		expect(screen.queryByText("Explore a quick question without interrupting the main chat."))
+			.not.toBeInTheDocument();
+	});
+
+	it("shows the quick-question description without info or collapse controls", async () => {
         render(<SidePanelHarness />);
         await screen.findByLabelText("Side chat question");
-        expect(screen.getByText(/Files and Git are shared/)).toBeVisible();
+        expect(screen.getByText("Explore a quick question without interrupting the main chat.")).toBeVisible();
         expect(screen.queryByRole("button", { name: "About side-chat isolation" })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Hide side chat" })).not.toBeInTheDocument();
     });
@@ -541,8 +599,9 @@ describe("side panel navigation and recovery", () => {
 		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([
 			new DOMRect(40, 150, 100, 20),
 		] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
 		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
-		fireEvent.mouseUp(log);
+		fireEvent.pointerUp(log);
 		fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
 		await waitFor(() =>
 			expect(
@@ -564,7 +623,7 @@ describe("side panel navigation and recovery", () => {
 			.mockReturnValue(new DOMRect(40, 150, 100, 20));
 		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Juniper" }));
-		await waitFor(() => expect(text.closest("[data-chat-message-body]")).toHaveClass("chat-annotation-target"));
+		expect(text.closest("[data-chat-message-body]")).not.toHaveClass("chat-annotation-target");
 		expect(scrollTo).not.toHaveBeenCalled();
 		rangeBounds.mockReturnValue(new DOMRect(40, 800, 100, 20));
 		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
@@ -741,6 +800,6 @@ it("does not call the local daemon for a remote session", async () => {
 		await Promise.resolve();
 	});
 	expect(get).not.toHaveBeenCalled();
-	await expect(hook.result.current.create()).rejects.toThrow("only for local AO sessions");
+	await expect(hook.result.current.create()).rejects.toThrow("only for local Orchestrator-managed sessions");
 	expect(post).not.toHaveBeenCalled();
 });

@@ -5,8 +5,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type projectCapture struct {
@@ -85,18 +91,293 @@ func TestProjectSetConfig_TrackerIntakeJSON(t *testing.T) {
 	}
 }
 
+func TestProjectSetConfig_PreRemoveFlags(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--pre-remove", "docker compose down -v", "--pre-remove", "rm -rf .cache")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.method != http.MethodPut || capture.path != "/api/v1/projects/demo/config" {
+		t.Fatalf("request = %s %s, want PUT /api/v1/projects/demo/config", capture.method, capture.path)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
+	}
+	want := []string{"docker compose down -v", "rm -rf .cache"}
+	if len(got.Config.PreRemove) != len(want) || got.Config.PreRemove[0] != want[0] || got.Config.PreRemove[1] != want[1] {
+		t.Fatalf("preRemove request = %#v, want %q", got.Config.PreRemove, want)
+	}
+}
+
+func TestProjectSetConfig_PreRemoveConfigJSON(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--config-json", `{"postCreate":["npm install"],"preRemove":["docker compose down -v"]}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
+	}
+	// #7514: preRemove must survive --config-json instead of being dropped.
+	if len(got.Config.PreRemove) != 1 || got.Config.PreRemove[0] != "docker compose down -v" {
+		t.Fatalf("preRemove request = %#v, want preserved from --config-json", got.Config.PreRemove)
+	}
+	if len(got.Config.PostCreate) != 1 || got.Config.PostCreate[0] != "npm install" {
+		t.Fatalf("postCreate request = %#v", got.Config.PostCreate)
+	}
+}
+
 func TestBuildProjectConfigTrackerIntakeFlags(t *testing.T) {
+	changed := func(name string) bool {
+		return name == "tracker-intake" || name == "tracker-repo" || name == "tracker-assignee"
+	}
+	current := func() (projectConfig, error) { return projectConfig{}, nil }
 	got, err := buildProjectConfig(projectSetConfigOptions{
 		trackerIntake:   true,
 		trackerRepo:     "acme/demo",
 		trackerAssignee: "alice",
-	})
+	}, changed, current)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Provider is omitted: the daemon infers it from the project's git origin.
 	if !got.TrackerIntake.Enabled || got.TrackerIntake.Provider != "" || got.TrackerIntake.Repo != "acme/demo" || got.TrackerIntake.Assignee != "alice" {
 		t.Fatalf("tracker intake config = %#v", got.TrackerIntake)
+	}
+}
+
+// TestProjectConfigMirrorsDomainJSONKeys fails when the CLI's hand-written
+// projectConfig drifts from domain.ProjectConfig. A key the CLI does not model
+// is silently dropped by every set-config round trip.
+func TestProjectConfigMirrorsDomainJSONKeys(t *testing.T) {
+	want := map[string]bool{}
+	jsonKeyPaths(reflect.TypeOf(domain.ProjectConfig{}), "", want)
+	got := map[string]bool{}
+	jsonKeyPaths(reflect.TypeOf(projectConfig{}), "", got)
+	for key := range want {
+		if !got[key] {
+			t.Errorf("CLI projectConfig is missing domain key %q", key)
+		}
+	}
+	for key := range got {
+		if !want[key] {
+			t.Errorf("CLI projectConfig has key %q that domain.ProjectConfig does not", key)
+		}
+	}
+}
+
+// jsonKeyPaths records every JSON key path typ encodes, descending through
+// pointers, slices, and nested structs so keys like worker.agentConfig.effort
+// are compared too. It does not support embedded structs, which encoding/json
+// promotes inline, and it compares key names only, not types.
+func jsonKeyPaths(typ reflect.Type, prefix string, out map[string]bool) {
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if !field.IsExported() || name == "-" {
+			continue
+		}
+		if name == "" {
+			name = field.Name
+		}
+		out[prefix+name] = true
+		jsonKeyPaths(field.Type, prefix+name+".", out)
+	}
+}
+
+// TestProjectConfigFlagsListsEveryFieldFlag fails when a set-config field flag
+// is registered but missing from projectConfigFlags, which would make a call
+// with only that flag a "provide at least one config flag" usage error.
+func TestProjectConfigFlagsListsEveryFieldFlag(t *testing.T) {
+	notFieldFlags := map[string]bool{"config-json": true, "clear": true, "json": true}
+	cmd := newProjectSetConfigCommand(&commandContext{})
+	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
+		if !notFieldFlags[f.Name] && !slices.Contains(projectConfigFlags, f.Name) {
+			t.Errorf("set-config flag --%s is missing from projectConfigFlags", f.Name)
+		}
+	})
+	for _, name := range projectConfigFlags {
+		if cmd.LocalFlags().Lookup(name) == nil {
+			t.Errorf("projectConfigFlags has %q, which set-config does not register", name)
+		}
+	}
+}
+
+// storedProjectConfig carries fields set in the desktop app that no
+// set-config flag manages (effort, preRemove, workersRequestReview).
+const storedProjectConfig = `{"sessionPrefix":"old","env":{"KEEP":"1"},"preRemove":["make clean"],` +
+	`"agentConfig":{"model":"m1","effort":"high"},"worker":{"agent":"codex","agentConfig":{"effort":"medium"}},` +
+	`"reviewers":[{"harness":"claude-code","agentConfig":{"effort":"max"}}],"workersRequestReview":true}`
+
+type projectConfigCapture struct {
+	requests []string
+	putBody  []byte
+}
+
+// projectConfigServer serves getBody for GET /api/v1/projects/demo and records
+// the API requests it sees plus the PUT /api/v1/projects/demo/config body.
+func projectConfigServer(t *testing.T, getBody string) (*httptest.Server, *projectConfigCapture) {
+	t.Helper()
+	capture := &projectConfigCapture{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			capture.requests = append(capture.requests, r.Method+" "+r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, getBody)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/projects/demo/config":
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read request body: %v", err)
+			}
+			capture.putBody = data
+			_, _ = io.WriteString(w, `{"project":{"id":"demo"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, capture
+}
+
+// putConfig decodes the captured PUT body as the daemon does, into
+// domain.ProjectConfig, so the assertion sees what the daemon would store.
+func putConfig(t *testing.T, capture *projectConfigCapture) domain.ProjectConfig {
+	t.Helper()
+	var body struct {
+		Config domain.ProjectConfig `json:"config"`
+	}
+	if err := json.Unmarshal(capture.putBody, &body); err != nil {
+		t.Fatalf("decode PUT body: %v\nbody=%s", err, capture.putBody)
+	}
+	return body.Config
+}
+
+func decodeStoredProjectConfig(t *testing.T) domain.ProjectConfig {
+	t.Helper()
+	var cfg domain.ProjectConfig
+	if err := json.Unmarshal([]byte(storedProjectConfig), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestProjectSetConfig_FlagsUpdateOnlyChangedFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		args   []string
+		change func(cfg *domain.ProjectConfig)
+	}{
+		{
+			name: "changed flags overwrite only their fields",
+			args: []string{"--session-prefix", "new", "--model", "m2"},
+			change: func(cfg *domain.ProjectConfig) {
+				cfg.SessionPrefix = "new"
+				cfg.AgentConfig.Model = "m2"
+			},
+		},
+		{
+			name: "an empty flag value clears that field",
+			args: []string{"--session-prefix="},
+			change: func(cfg *domain.ProjectConfig) {
+				cfg.SessionPrefix = ""
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			srv, capture := projectConfigServer(t, `{"status":"ok","project":{"id":"demo","config":`+storedProjectConfig+`}}`)
+			writeRunFileFor(t, cfg, srv)
+
+			args := append([]string{"project", "set-config", "demo"}, tt.args...)
+			_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...)
+			if err != nil {
+				t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+			}
+			wantRequests := []string{"GET /api/v1/projects/demo", "PUT /api/v1/projects/demo/config"}
+			if !reflect.DeepEqual(capture.requests, wantRequests) {
+				t.Fatalf("requests = %q, want %q", capture.requests, wantRequests)
+			}
+			want := decodeStoredProjectConfig(t)
+			tt.change(&want)
+			if got := putConfig(t, capture); !reflect.DeepEqual(got, want) {
+				t.Fatalf("PUT config = %+v\nwant %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestProjectSetConfig_ConfigJSONKeepsEffortAndPreRemove(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectConfigServer(t, `{"status":"ok","project":{"id":"demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--config-json", storedProjectConfig)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	// --config-json is a full replacement, so it never reads the current config.
+	if want := []string{"PUT /api/v1/projects/demo/config"}; !reflect.DeepEqual(capture.requests, want) {
+		t.Fatalf("requests = %q, want %q", capture.requests, want)
+	}
+	want := decodeStoredProjectConfig(t)
+	if got := putConfig(t, capture); !reflect.DeepEqual(got, want) {
+		t.Fatalf("PUT config = %+v\nwant %+v", got, want)
+	}
+}
+
+func TestProjectSetConfig_NoConfigFlagIsUsageErrorWithoutRequests(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectConfigServer(t, `{"status":"ok","project":{"id":"demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--json")
+	if got := ExitCode(err); got != 2 {
+		t.Fatalf("exit code = %d (err %v), want 2", got, err)
+	}
+	if len(capture.requests) != 0 {
+		t.Fatalf("requests = %q, want none before the usage check passes", capture.requests)
+	}
+}
+
+func TestProjectSetConfig_FlagsRefuseDegradedProject(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectConfigServer(t, `{"status":"degraded","project":{"id":"demo","resolveError":"config missing"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--session-prefix", "new")
+	if err == nil {
+		t.Fatal("expected an error for a degraded project")
+	}
+	if want := []string{"GET /api/v1/projects/demo"}; !reflect.DeepEqual(capture.requests, want) {
+		t.Fatalf("requests = %q, want only the GET; a degraded project has no config to merge into", capture.requests)
 	}
 }
 
@@ -184,7 +465,7 @@ func TestProjectGet_Success(t *testing.T) {
 
 func TestProjectGet_JSON(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, capture := projectServer(t, http.StatusOK, `{"status":"degraded","project":{"id":"demo","name":"Demo","path":"/repo/demo","resolveError":"config missing","config":{"worker":{"agent":"amp","agentConfig":{"mode":"high"}}}}}`)
+	srv, capture := projectServer(t, http.StatusOK, `{"status":"degraded","project":{"id":"demo","name":"Demo","path":"/repo/demo","resolveError":"config missing","config":{"orchestratorRulesFile":"docs/orch.md","worker":{"agent":"amp","agentConfig":{"mode":"high"}}}}}`)
 	writeRunFileFor(t, cfg, srv)
 
 	out, errOut, err := executeCLI(t, Deps{
@@ -202,6 +483,9 @@ func TestProjectGet_JSON(t *testing.T) {
 	}
 	if got.Status != "degraded" || got.Project.ID != "demo" || got.Project.ResolveError != "config missing" {
 		t.Fatalf("get json = %#v, want degraded demo with resolve error", got)
+	}
+	if got.Project.Config == nil || got.Project.Config.OrchestratorRulesFile != "docs/orch.md" {
+		t.Fatalf("get json orchestratorRulesFile = %#v, want preserved", got.Project.Config)
 	}
 	if got.Project.Config == nil || got.Project.Config.Worker.AgentConfig.Mode != "high" {
 		t.Fatalf("get json worker config = %#v, want preserved amp high mode", got.Project.Config)
@@ -240,7 +524,7 @@ func TestProjectGet_NotFound(t *testing.T) {
 
 func TestProjectSetConfig_RulesFlags(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, capture := projectServer(t, http.StatusOK, `{"status":"ok","project":{"id":"demo","config":{"agentRules":"Run tests.","agentRulesFile":"docs/rules.md","orchestratorRules":"Delegate."}}}`)
+	srv, capture := projectServer(t, http.StatusOK, `{"status":"ok","project":{"id":"demo","config":{"agentRules":"Run tests.","agentRulesFile":"docs/rules.md","orchestratorRules":"Delegate.","orchestratorRulesFile":"docs/orch.md"}}}`)
 	writeRunFileFor(t, cfg, srv)
 
 	out, errOut, err := executeCLI(t, Deps{
@@ -249,6 +533,7 @@ func TestProjectSetConfig_RulesFlags(t *testing.T) {
 		"--agent-rules", "Run tests.",
 		"--agent-rules-file", "docs/rules.md",
 		"--orchestrator-rules", "Delegate.",
+		"--orchestrator-rules-file", "docs/orch.md",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
@@ -260,11 +545,31 @@ func TestProjectSetConfig_RulesFlags(t *testing.T) {
 	if err := json.Unmarshal(capture.body, &got); err != nil {
 		t.Fatalf("decode request body: %v\nbody=%s", err, capture.body)
 	}
-	if got.Config.AgentRules != "Run tests." || got.Config.AgentRulesFile != "docs/rules.md" || got.Config.OrchestratorRules != "Delegate." {
+	if got.Config.AgentRules != "Run tests." || got.Config.AgentRulesFile != "docs/rules.md" || got.Config.OrchestratorRules != "Delegate." || got.Config.OrchestratorRulesFile != "docs/orch.md" {
 		t.Fatalf("rules config = %#v", got.Config)
 	}
 	if !strings.Contains(out, "updated config for project demo") {
 		t.Fatalf("output missing update message:\n%s", out)
+	}
+}
+
+func TestProjectSetConfig_ConfigJSONKeepsOrchestratorRulesFile(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"status":"ok","project":{"id":"demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--config-json", `{"orchestratorRulesFile":"docs/orch.md"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request body: %v\nbody=%s", err, capture.body)
+	}
+	if got.Config.OrchestratorRulesFile != "docs/orch.md" {
+		t.Fatalf("config-json dropped orchestratorRulesFile: %s", capture.body)
 	}
 }
 

@@ -34,7 +34,7 @@
 	--muted-foreground: oklch(0.720 0.002 250);
 	--accent: oklch(0.295 0.002 250);
 	--accent-foreground: oklch(0.970 0.002 250);
-	--destructive: oklch(0.704 0.191 22.216);
+	--destructive: #fb4934; /* Shared Gruvbox red across palettes. */
 	/* Hairlines separate, they do not decorate: below the shadcn dark default of
 	 * 10% so column rules and card edges recede behind content. */
 	--border: oklch(1 0 0 / 7%);
@@ -112,7 +112,12 @@
 	/* Board lane signals, matched to the landing hero's board preview. */
 	--color-status-working: #60a5fa;
 	--color-status-needs-you: #f06445;
-	--color-status-validating: #facc15;
+	/* Validating is pink with the new sidebar design and yellow without it
+	   (`data-legacy-status-colors`, below). Themes set the two candidates;
+	   only this block and the legacy one pick between them. */
+	--color-status-validating-new: #e58bb5;
+	--color-status-validating-legacy: #facc15;
+	--color-status-validating: var(--color-status-validating-new);
 	--color-status-in-review: #f59e0b;
 	--color-status-ready: #4ade80;
 	--color-status-merged: #c084fc;
@@ -129,6 +134,9 @@
 	--color-success-bright: var(--chart-1);
 	--color-danger: var(--destructive);
 	--color-purple: var(--chart-4);
+
+	--agent-tone-lightness: 0.65;
+	--agent-tone-chroma: 0.15;
 
 	/* Interactive overlays */
 	--color-interactive-hover: color-mix(in oklch, var(--foreground) 4%, transparent);
@@ -265,7 +273,6 @@
 	--size-icon-sm: 13px;
 	--size-icon-md: 14px;
 	--size-icon-base: 16px;
-	--size-terminal-agent-icon: 11px;
 	--size-icon-lg: 15px;
 	--size-icon-xl: 18px;
 	--size-dot-sm: 7px;
@@ -284,10 +291,12 @@
 	--size-topbar-primary: 36px;
 	--size-topbar-secondary: 36px;
 	--size-topbar-control: 28px;
+	--gap-topbar-control: var(--space-1);
 	--size-toolbar: var(--size-topbar-primary);
-	/* ShellTopbar (.dashboard-app-header) on Win/Linux — the full-width bar
-	   the sidebar hangs below. Distinct from --size-toolbar (36px) because
-	   the shell header is taller (56px) to accommodate the project crumb. */
+	/* Controls center above the shared header's one-pixel bottom divider. */
+	--size-topbar-content: calc(var(--size-toolbar) - 1px);
+	/* Top offset for the Win/Linux browser and files pop-outs.
+	   Distinct from --size-toolbar (36px). */
 	--size-shell-topbar: 56px;
 	/* Windows custom title bar (.window-titlebar). */
 	--size-window-titlebar: 36px;
@@ -303,7 +312,7 @@
 	--size-sidebar-icon: 48px;
 	--size-sidebar-default: 240px;
 	--size-sidebar-mobile: 288px;
-	--size-titlebar-cluster-left: calc(80px / var(--ao-window-zoom, 1));
+	--size-titlebar-cluster-left: calc(84px / var(--ao-window-zoom, 1));
 	/* Linux has no traffic lights: with the sidebar open the cluster sits at the
 	 * sidebar's own left inset (TitlebarNav `left-titlebar-cluster-left-linux`). */
 	--size-titlebar-cluster-left-linux: 6px;
@@ -325,10 +334,20 @@
 			var(--size-titlebar-content-gap)
 	);
 
-	/* Keep macOS traffic-light chrome aligned with the shared route topbar. */
-	--size-traffic-light-clearance: var(--size-toolbar);
-	/* Fullscreen removes native controls, not the shared header row. */
-	--size-traffic-light-clearance-fullscreen: var(--size-traffic-light-clearance);
+	/* macOS traffic-light row: the route topbar plus the framed panel's top
+	 * offset (inset + 1px border) above and below, so the native buttons, the
+	 * sidebar brand, and the in-panel title share one centreline. Keep in sync
+	 * with MAC_TRAFFIC_LIGHT_ROW_HEIGHT in shared/window-chrome.ts. */
+	--size-traffic-light-clearance: calc(var(--size-toolbar) + 2 * (var(--size-center-panel-inset-mac) + 1px));
+	/* Fullscreen drops the panel frame, so the row matches the flush topbar. */
+	--size-traffic-light-clearance-fullscreen: var(--size-toolbar);
+	/* Bottom edge of the framed panel's header row: window chrome (drag strips)
+	 * that overlaps the panel must stop here so it never covers panel content. */
+	--size-mac-panel-header-bottom: calc(var(--size-traffic-light-clearance) - var(--size-center-panel-inset-mac) - 1px);
+	/* The same cluster clearance, measured from the framed panel's inner edge. */
+	--size-titlebar-content-offset-mac-panel: calc(
+		var(--size-titlebar-content-offset) - var(--size-center-panel-inset-mac) - 1px
+	);
 	/* Resize handle straddles the sidebar-panel boundary: offset = half the width
 	 * so the hairline lands exactly at the junction and the drag zone covers 6px
 	 * on each side of it. */
@@ -361,25 +380,30 @@
 	--size-shell-tab-min: 64px;
 	/* Keeps added session tabs aligned with the owning tab in the secondary strip. */
 	--size-session-pane-tab-max: 112px;
-	/* Compact connected shell tab in a session's terminal strip. This includes
-	   the terminal glyph and close action, not only the truncated label. */
-	--size-shell-tab-connected: 148px;
 	/* Caps a standalone shell terminal's tab label so several open shells stay
 	   readable side by side instead of one long path crowding out the rest. */
 	--size-shell-tab-max: 140px;
+	/* Agent names and their status glyph need more room in Developer Mode. */
+	--size-agent-shell-tab-max: 192px;
 	--size-dialog-md: 420px;
 	--size-dialog-lg: 440px;
 	--size-dialog-orchestrator: 460px;
 	--size-dialog-xl: 560px;
 
+	/* Glass overlay: Cmd+K and the New task modal show the app through a
+	 * blurred, see-through modal surface. The see-through share is low enough
+	 * that body text keeps its contrast over any content. */
+	--color-bg-overlay-glass: color-mix(in oklch, var(--popover) 60%, transparent);
+	--blur-overlay-glass: 28px;
+
 	/* Command palette */
-	--color-bg-command-palette: var(--popover);
+	--color-bg-command-palette: var(--color-bg-overlay-glass);
 	--color-border-command-palette: var(--color-border-overlay);
-	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
+	--color-bg-command-item-active: color-mix(in oklch, var(--foreground) 10%, transparent);
 	--color-text-command-item: var(--foreground);
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);
-	--radius-command-palette: 12px;
+	--radius-command-palette: var(--radius-panel);
 	--radius-command-item: 6px;
 	--shadow-command-palette: var(--shadow-popover);
 	/* Overlay edge: a faint edge so a transient layer (menu, popover, dialog,
@@ -387,14 +411,15 @@
 	--color-border-overlay: color-mix(in oklch, var(--foreground) 2%, transparent);
 	/* Overlay shadow: a barely-there lift. Black, not --background, so it
 	 * reads on a graphite canvas. */
+	--shadow-control-inset: inset 0 1px 0 oklch(100% 0 0 / 6%), inset 0 -1px 0 oklch(0% 0 0 / 10%);
 	--shadow-popover: 0 4px 12px -4px oklch(0 0 0 / 14%);
 	--size-command-palette: 720px;
 	--size-command-palette-top: 14vh;
 	--size-command-palette-list-max: 420px;
 	--size-command-palette-list-vh: 50vh;
 	--size-command-subtitle-max: 45%;
-	--size-command-pad-x: 20px;
-	--size-command-item-inset: 8px;
+	--size-command-pad-x: 16px;
+	--size-command-item-inset: 6px;
 	--size-command-item-pad-l: 14px;
 	--font-size-command-input: 16px;
 	--leading-command-item: 22px;
@@ -403,6 +428,8 @@
 	--size-textarea-min: 112px;
 	/* Two 24px actions + one 6px gap + 4px right inset + 4px label clearance. */
 	--size-sidebar-project-actions: 58px;
+	/* A pinned row adds a third 24px action and its 2px gap. */
+	--size-sidebar-project-actions-pinned: 84px;
 
 	/* Shared inset-panel geometry (welcome board + settings page) */
 	--size-center-panel-inset: 24px;
@@ -475,8 +502,6 @@
 	--size-settings-inline-input-height: 28px;
 	--size-settings-row-value-max: 20rem;
 	--size-settings-row-value-max-percent: 55%;
-	--size-settings-footer-button-padding-x: 20px;
-	--color-settings-footer-button-primary-fg: var(--primary-foreground);
 	--size-settings-dialog: 575px;
 	--size-settings-dialog-wide: 920px;
 	--size-settings-dialog-height: 680px;
@@ -654,12 +679,17 @@
 		"FiraCode Nerd Font Mono", "FiraCode Nerd Font", "MesloLGS NF", Menlo, monospace;
 }
 
+/* The new sidebar design switched off in Developer mode: the old yellow Validating. */
+:root[data-legacy-status-colors] {
+	--color-status-validating: var(--color-status-validating-legacy);
+}
+
 /* Light theme — set via data-theme (apply-initial-theme + Zustand toggle). */
 
 :root[data-theme="light"] {
 	color-scheme: light;
 
-	--background: oklch(0.97 0 0);
+	--background: oklch(0.985 0 0);
 	--foreground: oklch(0.18 0 0);
 	--card: oklch(1 0 0);
 	--card-foreground: oklch(0.18 0 0);
@@ -667,16 +697,16 @@
 	--popover-foreground: oklch(0.18 0 0);
 	--primary: oklch(0.24 0 0);
 	--primary-foreground: oklch(0.97 0 0);
-	--secondary: oklch(0.935 0 0);
+	--secondary: oklch(0.955 0 0);
 	--secondary-foreground: oklch(0.18 0 0);
-	--muted: oklch(0.935 0 0);
-	--muted-foreground: oklch(0.5 0 0);
-	--accent: oklch(0.935 0 0);
+	--muted: oklch(0.955 0 0);
+	--muted-foreground: oklch(0.48 0 0);
+	--accent: oklch(0.945 0 0);
 	--accent-foreground: oklch(0.18 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
+	--destructive: #9d0006;
 	/* Translucent like dark: hairlines and input wells are overlays on whatever
 	 * surface they sit on, so a card edge never reads as an opaque gray stroke. */
-	--border: oklch(0 0 0 / 7%);
+	--border: oklch(0 0 0 / 8%);
 	--input: oklch(0 0 0 / 4%);
 	--ring: oklch(0.64 0 0);
 	--chart-1: oklch(0.72 0 0);
@@ -684,11 +714,11 @@
 	--chart-3: oklch(0.4 0 0);
 	--chart-4: oklch(0.32 0 0);
 	--chart-5: oklch(0.24 0 0);
-	--sidebar: oklch(0.95 0 0);
+	--sidebar: oklch(0.968 0 0);
 	--sidebar-foreground: oklch(0.18 0 0);
 	--sidebar-primary: oklch(0.24 0 0);
 	--sidebar-primary-foreground: oklch(0.97 0 0);
-	--sidebar-accent: oklch(0.935 0 0);
+	--sidebar-accent: oklch(0.94 0 0);
 	--sidebar-accent-foreground: oklch(0.18 0 0);
 	--sidebar-border: var(--border);
 	--sidebar-ring: oklch(0.64 0 0);
@@ -736,10 +766,14 @@
 	/* Same lane hues as dark, deepened so they hold contrast on a light canvas. */
 	--color-status-working: #2563eb;
 	--color-status-needs-you: #c2412d;
-	--color-status-validating: #ca8a04;
+	--color-status-validating-new: #9b4871;
+	--color-status-validating-legacy: #ca8a04;
 	--color-status-in-review: #d97706;
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;
+
+	--agent-tone-lightness: 0.6;
+	--agent-tone-chroma: 0.15;
 	--color-status-idle: var(--muted-foreground);
 	--color-status-exited: var(--destructive);
 	--color-status-terminated: var(--color-text-passive);
@@ -771,10 +805,12 @@
 		0 1px 0 color-mix(in oklch, var(--foreground) 3%, transparent),
 		0 20px 50px color-mix(in oklch, var(--foreground) 14%, transparent);
 
+	--color-bg-overlay-glass: color-mix(in oklch, var(--popover) 68%, transparent);
+
 	/* Command palette */
-	--color-bg-command-palette: var(--popover);
+	--color-bg-command-palette: var(--color-bg-overlay-glass);
 	--color-border-command-palette: var(--color-border-overlay);
-	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
+	--color-bg-command-item-active: color-mix(in oklch, var(--foreground) 9%, transparent);
 	--color-text-command-item: var(--foreground);
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);

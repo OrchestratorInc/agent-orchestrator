@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -37,7 +38,8 @@ type fakeStore struct {
 	checks         map[string][]domain.PullRequestCheck
 	writeErr       error
 
-	writes []fakeWrite
+	writes  []fakeWrite
+	renames []domain.RepositoryRename
 
 	listEntered chan struct{}
 	listRelease chan struct{}
@@ -114,6 +116,13 @@ func (s *fakeStore) WriteSCMObservation(_ context.Context, pr domain.PullRequest
 		return s.writeErr
 	}
 	s.writes = append(s.writes, fakeWrite{pr: pr, checks: append([]domain.PullRequestCheck(nil), checks...), reviews: append([]domain.PullRequestReview(nil), reviews...), threads: append([]domain.PullRequestReviewThread(nil), threads...), comments: append([]domain.PullRequestComment(nil), comments...), reviewMode: reviewMode})
+	return nil
+}
+
+func (s *fakeStore) RecordRepositoryRename(_ context.Context, r domain.RepositoryRename) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.renames = append(s.renames, r)
 	return nil
 }
 
@@ -1089,18 +1098,12 @@ func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
 	if len(store.writes) == 0 || store.writes[0].pr.SessionID != "p-1" {
 		t.Fatalf("renamed-repo PR must be attributed to p-1, got %#v", store.writes)
 	}
-	if got := store.writes[0].pr.URLAlias; got != "https://github.com/o/r/pull/1" {
-		t.Fatalf("discovered PR URLAlias = %q, want the listed old-name URL", got)
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestListedRepoAliasIsNormalized(t *testing.T) {
-	listed := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "Old-Org", Name: "R", Repo: "Old-Org/R"}
-	if got := listedRepoAlias("https://github.com/NewOrg/r/pull/1", listed); got != "https://github.com/old-org/r/pull/1" {
-		t.Fatalf("alias = %q, want the normalized old-name URL", got)
-	}
-	if got := listedRepoAlias("https://github.com/old-org/r/pull/1", listed); got != "" {
-		t.Fatalf("alias = %q, want none when only the case differs", got)
+	want := []domain.RepositoryRename{{Host: "github.com", OldName: "o/r", Name: "neworg/r"}}
+	if !reflect.DeepEqual(store.renames, want) {
+		t.Fatalf("renames after two polls = %#v, want the old name recorded once: %#v", store.renames, want)
 	}
 }
 
@@ -3709,5 +3712,86 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 				t.Fatalf("Blockers = %v, want %v", got.Blockers, tc.wantBlockers)
 			}
 		})
+	}
+}
+
+// A review AO just posted must reach the worker on the next poll, not after the
+// repo guard, review cadence, or max-age backstop happen to notice it.
+func TestPoll_RequestedReviewRefreshFetchesThreadsOnce(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	review := ports.SCMReviewObservation{
+		Decision: string(domain.ReviewNone),
+		Reviews:  []ports.SCMReviewSummaryObservation{{ID: "review-1", Author: "ao-reviewer", State: "COMMENTED", SubmittedAt: time.Unix(199, 0).UTC()}},
+		Threads:  []ports.SCMReviewThreadObservation{{ID: "t1", Path: "f.go", Line: 2, Comments: []ports.SCMReviewCommentObservation{{ID: "c1", Author: "ao-reviewer", Body: "fix this"}}}},
+	}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo", NotModified: true}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): review},
+	}
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(200, 0).UTC())
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo"
+	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = time.Unix(190, 0).UTC()
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 0 || len(provider.fetchBatches) != 0 {
+		t.Fatalf("unrequested poll fetched: reviews=%d batches=%d", provider.reviewCalls, len(provider.fetchBatches))
+	}
+
+	obs.RequestReviewRefresh(local.URL)
+	select {
+	case <-obs.trigger:
+	default:
+		t.Fatal("review refresh request did not wake the poll loop")
+	}
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 1 || len(provider.fetchBatches) != 1 {
+		t.Fatalf("requested refresh: reviews=%d batches=%d, want 1 each", provider.reviewCalls, len(provider.fetchBatches))
+	}
+	if len(store.writes) == 0 || len(store.writes[0].comments) != 1 || store.writes[0].reviewMode != ports.ReviewWriteReplace {
+		t.Fatalf("requested review not persisted: %#v", store.writes)
+	}
+	if len(lc.observed) != 1 || !lc.observed[0].Changed.Review {
+		t.Fatalf("requested review not delivered to lifecycle: %#v", lc.observed)
+	}
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 1 {
+		t.Fatalf("one request refreshed more than once: reviews=%d", provider.reviewCalls)
+	}
+}
+
+// A forced review refresh is still a provider call: during a rate-limit
+// cooldown it must not fetch threads (or the PR) before Retry-After elapses.
+func TestPoll_RequestedReviewRefreshRespectsRateLimitCooldown(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo", NotModified: true}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): {Decision: string(domain.ReviewNone)}},
+	}
+	now := time.Unix(200, 0).UTC()
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, now)
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo"
+	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = time.Unix(190, 0).UTC()
+	obs.setRateLimitCooldown(now, "github", 2*time.Minute)
+
+	obs.RequestReviewRefresh(local.URL)
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 0 || len(provider.fetchBatches) != 0 {
+		t.Fatalf("forced refresh called a cooled-down provider: reviews=%d batches=%d", provider.reviewCalls, len(provider.fetchBatches))
 	}
 }

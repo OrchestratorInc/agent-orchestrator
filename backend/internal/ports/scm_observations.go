@@ -7,6 +7,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -102,6 +103,15 @@ type SCMIdentity struct {
 	Login string
 	// Human is true when the provider identifies the account as a human user.
 	Human bool
+}
+
+// Authored reports whether author is this account: a human account whose
+// login matches, ignoring case and surrounding space. AO attaches a PR to a
+// session automatically only when the account authored it, so another
+// developer's PR on a matching branch is never attached.
+func (id SCMIdentity) Authored(author string) bool {
+	login := strings.TrimSpace(id.Login)
+	return id.Human && login != "" && strings.EqualFold(strings.TrimSpace(author), login)
 }
 
 // ScopedIdentityResolver resolves the authenticated identity for a specific
@@ -301,4 +311,19 @@ type SCMMergeabilityObservation struct {
 	BehindBase bool
 	// Blockers lists normalized reasons preventing merge.
 	Blockers []string
+}
+
+// GitHubRepository is GitHub's current identity for a repository. ID survives
+// renames and transfers; FullName is the current owner/name. OwnerAvatarURL
+// is the owner's id-based avatar on avatars.githubusercontent.com, or "".
+type GitHubRepository struct {
+	ID             int64
+	FullName       string
+	OwnerAvatarURL string
+}
+
+// GitHubRepositoryResolver looks up a github.com repository by owner/name,
+// following renames and transfers to its current identity.
+type GitHubRepositoryResolver interface {
+	ResolveGitHubRepository(ctx context.Context, owner, name string) (GitHubRepository, error)
 }

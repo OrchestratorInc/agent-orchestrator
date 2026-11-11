@@ -14,7 +14,7 @@ describe("retained-stack host routes", () => {
 		const shell = source("../app/shell/[handleId].tsx");
 		const preview = source("../app/preview/[id].tsx");
 		expect(shell).toContain("hostRouteMatches(routeHostId, currentHostId)");
-		expect(shell).toContain("return <TerminalSessionScreen />");
+		expect(shell).toContain("<TerminalSessionScreen /></View>;");
 		expect(preview).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		expect(preview).toContain("previewForConfig(");
 	});
@@ -34,6 +34,6 @@ describe("retained-stack host routes", () => {
 			expect(route).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		}
 		expect(source("../app/review/[sessionId].tsx")).toContain("hostId: routeHostId");
-		expect(source("./PRCard.tsx")).toContain("prUrl: pr.url, hostId");
+		expect(source("./PRCard.tsx")).toContain("reviewRouteForPR(session.id, pr, hostId)");
 	});
 });

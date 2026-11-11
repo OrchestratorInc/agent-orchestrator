@@ -21,6 +21,24 @@ import (
 // client actually receives, because the daemon's snapshot is where this work ends:
 // a field that is correct in the store and absent from the body is not shipped.
 
+func TestSnapshotExposesTypedFailureBesideTechnicalError(t *testing.T) {
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		SessionID: domain.SessionID("p1-1"), Mode: domain.SessionModeChat,
+		Turns: []domain.ConversationTurn{{
+			ID: "turn-1", State: domain.TurnStateFailed, RequestedAt: time.Now().UTC(),
+			ErrorMessage: "ACP internal detail", FailureCode: domain.ConversationFailureProviderKeyMissing,
+		}},
+	})
+	turns, ok := body["turns"].([]any)
+	if !ok || len(turns) != 1 {
+		t.Fatalf("turns = %#v", body["turns"])
+	}
+	turn := turns[0].(map[string]any)
+	if turn["failureCode"] != "provider_key_missing" || turn["errorMessage"] != "ACP internal detail" {
+		t.Fatalf("turn = %#v", turn)
+	}
+}
+
 func TestSnapshotExposesTurnPlanAsStructuredSteps(t *testing.T) {
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{
 		SessionID: domain.SessionID("p1-1"),

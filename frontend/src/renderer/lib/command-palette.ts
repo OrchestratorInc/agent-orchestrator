@@ -8,6 +8,7 @@ import {
 	sessionIsActive,
 	sessionNeedsAttention,
 	workerSessions,
+	type AgentProvider,
 	type AttentionZone,
 	type PullRequestFacts,
 	type WorkspaceSession,
@@ -21,16 +22,19 @@ import {
 	type PRReviewState,
 } from "./session-reviews";
 import { appI18n, type MessageKey } from "../i18n";
+import { isArchivedSession } from "./standalone-archive";
 import type { components } from "../../api/schema";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import type { GlobalSettingsSection } from "../stores/ui-store";
 import { renderedSnippetText } from "./chat-annotation-navigation";
+import { getSessionStatusDotView } from "./session-presentation";
 
 export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
 
 export type NavigateTarget =
 	| { to: "/" }
 	| { to: "/settings" }
+	| { to: "/usage" }
 	| { to: "/projects/$projectId"; params: { projectId: string } }
 	| { to: "/projects/$projectId/settings"; params: { projectId: string } }
 	| { to: "/projects/$projectId/sessions/$sessionId"; params: { projectId: string; sessionId: string } }
@@ -56,6 +60,7 @@ export type CommandAction =
 	| { kind: "open-new-task"; projectId: string }
 	| { kind: "open-new-project" }
 	| { kind: "open-orchestrator"; projectId: string }
+	| { kind: "open-archive"; projectId: string }
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
 	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
@@ -85,6 +90,16 @@ export type CommandItem = {
 	snippet?: { text: string; highlights: { start: number; end: number }[]; code?: boolean };
 	/** Rows the daemon found by content: already matched, ranked by matchScore's content tier. */
 	contentMatch?: boolean;
+	/** The ⌘↵ alternative to `action`, such as a session's actions list. */
+	secondaryAction?: CommandAction;
+	/** A session row's live status, drawn as the sidebar's dot. */
+	status?: { className: string; breathe: boolean };
+	/** A session row's agent, drawn as its logo. */
+	agent?: AgentProvider;
+	/** The app shortcut this row runs, shown as its keys. */
+	shortcut?: AppShortcutId;
+	/** What the command acts on, drawn bold after the title: "New task in **app**". */
+	emphasis?: string;
 };
 
 export type CommandPaletteContext = {
@@ -103,6 +118,7 @@ export type CommandPaletteContext = {
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
 	/** Signed in to Cloud, so a shared session's link can be opened. */
 	cloudReady?: boolean;
+	developerMode?: boolean;
 };
 
 export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
@@ -118,40 +134,6 @@ const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
 	prs: "command.group.prs",
 	settings: "command.group.settings",
 	global: "command.group.global",
-};
-
-/** Live labels for the current locale. */
-export const commandGroupLabel: Record<CommandGroupId, string> = {
-	get current() {
-		return appI18n.t(commandGroupLabelKeys.current);
-	},
-	get attention() {
-		return appI18n.t(commandGroupLabelKeys.attention);
-	},
-	get files() {
-		return appI18n.t(commandGroupLabelKeys.files);
-	},
-	get content() {
-		return appI18n.t(commandGroupLabelKeys.content);
-	},
-	get messages() {
-		return appI18n.t(commandGroupLabelKeys.messages);
-	},
-	get projects() {
-		return appI18n.t(commandGroupLabelKeys.projects);
-	},
-	get sessions() {
-		return appI18n.t(commandGroupLabelKeys.sessions);
-	},
-	get prs() {
-		return appI18n.t(commandGroupLabelKeys.prs);
-	},
-	get settings() {
-		return appI18n.t(commandGroupLabelKeys.settings);
-	},
-	get global() {
-		return appI18n.t(commandGroupLabelKeys.global);
-	},
 };
 
 function isSyntheticBranch(session: WorkspaceSession): boolean {
@@ -287,14 +269,21 @@ export function buildContentSearchCommands(
 }
 
 /** One row per chat message, opened scrolled to it. */
-export function buildChatSearchCommands(hits: readonly ConversationSearchHit[], t: TFunction = appI18n.t): CommandItem[] {
+export function buildChatSearchCommands(
+	hits: readonly ConversationSearchHit[],
+	t: TFunction = appI18n.t,
+	/** The chat's session title, used when the chat has none, and where it lives, shown beside it. */
+	context?: (hit: ConversationSearchHit) => { title?: string; place?: string },
+): CommandItem[] {
 	return hits.map((hit) => {
 		const snippet = markedSnippet(hit.text);
+		const { title, place } = context?.(hit) ?? {};
+		const subtitle = [place, hit.reviewId ? t("terminal.reviewer") : undefined].filter(Boolean).join(" · ");
 		return {
 			id: `message:${hit.messageId}`,
 			group: "messages",
-			title: hit.title || t("command.chatFallback"),
-			subtitle: hit.reviewId ? t("terminal.reviewer") : undefined,
+			title: hit.title || title || t("command.chatFallback"),
+			subtitle: subtitle || undefined,
 			contentMatch: true,
 			snippet,
 			action: {
@@ -320,8 +309,11 @@ function sessionCommand(
 		title: session.title,
 		subtitle: workspace.name,
 		zone: attentionZone(session),
+		status: getSessionStatusDotView(session),
+		agent: session.provider,
 		keywords: [workspace.name, sessionBranchPresentation(session).branch ?? "", session.issueId ?? ""],
-		action: { kind: "open-session-actions", sessionId: session.id },
+		action: { kind: "navigate", target: jumpTarget(workspace, session) },
+		secondaryAction: { kind: "open-session-actions", sessionId: session.id },
 	};
 }
 
@@ -392,9 +384,12 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		id: "current-new-task",
 		group: "current",
 		title: t("command.newTask"),
-		subtitle: currentProject?.name,
-		keywords: ["worker", "chat", "start"],
+		emphasis: currentProject?.name,
+		shortcut: "new-session",
+		keywords: ["worker", "chat", "start", currentProject?.name ?? ""],
 		disabled: !currentProject || isProjectRestarting,
+		// Off a project the row can only explain why it is off, so it waits for a search.
+		searchOnly: !currentProject,
 		disabledReason: !currentProject
 			? t("command.noCurrentProject")
 			: isProjectRestarting
@@ -409,17 +404,30 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				id: "current-open-orchestrator",
 				group: "current",
 				title: t("command.openOrchestrator"),
-				subtitle: currentProject.name,
+				emphasis: currentProject.name,
+				shortcut: "open-orchestrator",
 				keywords: ["orchestrator", "spawn", currentProject.name],
 				disabled: isProjectRestarting,
 				disabledReason: isProjectRestarting ? t("command.orchestratorRestarting") : undefined,
 				action: { kind: "open-orchestrator", projectId: currentProject.id },
 			});
+			const archivedCount = workerSessions(currentProject.sessions).filter(isArchivedSession).length;
+			if (archivedCount > 0) {
+				items.push({
+					id: "current-open-archive",
+					group: "current",
+					title: t("command.openArchive"),
+					emphasis: currentProject.name,
+					subtitle: t("command.archivedCount", { count: archivedCount }),
+					keywords: ["archive", "archived", "ended", "terminated", "restore", "history", currentProject.name],
+					action: { kind: "open-archive", projectId: currentProject.id },
+				});
+			}
 			items.push({
 				id: "current-project-settings",
 				group: "current",
 				title: t("command.projectSettings"),
-				subtitle: currentProject.name,
+				emphasis: currentProject.name,
 				keywords: ["settings", "config", currentProject.name],
 				action: {
 					kind: "navigate",
@@ -437,9 +445,10 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		items.push({
 			id: "current-search-files",
 			group: "current",
-			title: t("command.searchFiles"),
-			subtitle: searchableCurrentSession?.title ?? currentProject.name,
-			keywords: ["file", "files", "path", "workspace", "worktree", "code"],
+			title: t("command.goToFile"),
+			emphasis: currentProject.name,
+			...(searchableCurrentSession ? { shortcut: "quick-open-file" as const } : {}),
+			keywords: ["search files", "file", "files", "path", "workspace", "worktree", "code", searchableCurrentSession?.title ?? currentProject.name],
 			action: {
 				kind: "open-file-search",
 				projectId: currentProject.id,
@@ -466,7 +475,9 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		.flatMap((workspace) => workerSessions(workspace.sessions).map((session) => ({ workspace, session })))
 		.filter(
 			({ session }) =>
-				session.id !== currentSessionId && (attentionZone(session) === "merge" || sessionNeedsAttention(session)),
+				session.id !== currentSessionId &&
+				sessionIsActive(session) &&
+				(attentionZone(session) === "merge" || sessionNeedsAttention(session)),
 		)
 		.sort(
 			(a, b) =>
@@ -565,10 +576,20 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		keywords: ["add", "import", "repo", "workspace"],
 		action: { kind: "open-new-project" },
 	});
+	if (ctx.developerMode) {
+		items.push({
+			id: "global-usage",
+			group: "global",
+			title: t("command.openUsage"),
+			keywords: ["usage", "cost", "tokens", "limits", "spend", "billing", "quota"],
+			action: { kind: "navigate", target: { to: "/usage" } },
+		});
+	}
 	items.push({
 		id: "global-settings",
 		group: "global",
 		title: t("command.globalSettings"),
+		shortcut: "open-settings",
 		keywords: ["settings", "preferences", "config"],
 		action: { kind: "navigate", target: { to: "/settings" } },
 	});
@@ -687,7 +708,9 @@ export function matchScore(query: string, item: CommandItem): number {
 		return 300 + Math.round((100 * words.filter(inTitle).length) / words.length);
 	}
 	if (isSubsequence(q, title)) return 200;
-	if (isSubsequence(q, extras)) return 100;
+	// Loose letters scattered across every keyword match almost anything ("side"
+	// in "subscriptions"), so only a short query may match them.
+	if (q.length <= 2 && isSubsequence(q, extras)) return 100;
 	return 0;
 }
 
@@ -715,12 +738,13 @@ export const MAX_SEARCH_RESULTS = 20;
 export function groupCommands(
 	items: CommandItem[],
 	t: TFunction = appI18n.t,
+	rowsPerGroup: number = MAX_ITEMS_PER_GROUP,
 ): { id: CommandGroupId; label: string; items: CommandItem[] }[] {
 	return commandGroupOrder
 		.map((id) => ({
 			id,
 			label: t(commandGroupLabelKeys[id]),
-			items: items.filter((item) => item.group === id).slice(0, MAX_ITEMS_PER_GROUP),
+			items: items.filter((item) => item.group === id).slice(0, rowsPerGroup),
 		}))
 		.filter((group) => group.items.length > 0);
 }
@@ -747,14 +771,41 @@ export function visibleForQuery(items: CommandItem[], query: string): CommandIte
 	return [...attention, ...rest, ...backfill];
 }
 
-export function displayGroups(items: CommandItem[], query: string, t: TFunction = appI18n.t): DisplayGroup[] {
+/**
+ * Groups the daemon fills (file names, file contents, chats). They arrive after
+ * the local rows, so they always sit below them: what Enter opens does not
+ * change while a search is still answering.
+ */
+const SEARCH_GROUPS: ReadonlySet<CommandGroupId> = new Set(["files", "content", "messages"]);
+
+export function isSearchGroup(group: CommandGroupId): boolean {
+	return SEARCH_GROUPS.has(group);
+}
+
+/** Rows each search group shows beside commands; the file view shows them all. */
+export const SEARCH_GROUP_ROWS = 6;
+
+export function displayGroups(
+	items: CommandItem[],
+	query: string,
+	t: TFunction = appI18n.t,
+	searchGroupRows: number = SEARCH_GROUP_ROWS,
+): DisplayGroup[] {
+	const local = items.filter((item) => !SEARCH_GROUPS.has(item.group));
+	// The daemon already matched these, so rank them without dropping any.
+	const searched = items
+		.filter((item) => SEARCH_GROUPS.has(item.group))
+		.map((item, index) => ({ item, index, score: matchScore(query, item) }))
+		.sort((a, b) => b.score - a.score || a.index - b.index)
+		.map((entry) => entry.item);
+	const searchGroups = groupCommands(searched, t, searchGroupRows);
 	// Keep matches under their category headings (Cursor-style), including while typing.
-	const groups = groupCommands(visibleForQuery(items, query), t);
-	if (!query.trim()) return groups;
+	const groups = groupCommands(visibleForQuery(local, query), t);
+	if (!query.trim()) return [...groups, ...searchGroups];
 	// The palette runs cmdk with shouldFilter:false and selects the first item in DOM
 	// order, so Enter follows category order. Rank categories by their best match to
 	// keep the highest-scoring hit — and therefore the Enter target — first.
-	return groups
+	const ranked = groups
 		.map((group, index) => ({
 			group,
 			index,
@@ -762,4 +813,44 @@ export function displayGroups(items: CommandItem[], query: string, t: TFunction 
 		}))
 		.sort((a, b) => b.score - a.score || a.index - b.index)
 		.map((entry) => entry.group);
+	return [...ranked, ...searchGroups];
+}
+
+/**
+ * The spans of a row title the query matched, for drawing them brighter: the
+ * typed text where it appears whole, else each typed word, else the letters a
+ * loose match picked in order.
+ */
+export function titleHighlights(query: string, title: string): { start: number; end: number }[] {
+	const q = query.trim().toLowerCase();
+	if (!q) return [];
+	const lower = title.toLowerCase();
+	const whole = lower.indexOf(q);
+	if (whole >= 0) return [{ start: whole, end: whole + q.length }];
+	const spans: { start: number; end: number }[] = [];
+	for (const word of q.split(/\s+/)) {
+		const at = lower.indexOf(word);
+		if (at >= 0) spans.push({ start: at, end: at + word.length });
+	}
+	if (spans.length > 0) return mergeSpans(spans);
+	let at = 0;
+	for (const char of q) {
+		if (char === " ") continue;
+		const found = lower.indexOf(char, at);
+		if (found < 0) return [];
+		spans.push({ start: found, end: found + 1 });
+		at = found + 1;
+	}
+	return mergeSpans(spans);
+}
+
+function mergeSpans(spans: { start: number; end: number }[]): { start: number; end: number }[] {
+	const sorted = [...spans].sort((a, b) => a.start - b.start);
+	const merged: { start: number; end: number }[] = [];
+	for (const span of sorted) {
+		const last = merged[merged.length - 1];
+		if (last && span.start <= last.end) last.end = Math.max(last.end, span.end);
+		else merged.push({ ...span });
+	}
+	return merged;
 }

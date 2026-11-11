@@ -49,6 +49,39 @@ func conversationFixture(t *testing.T) (*sqlite.Store, domain.SessionID, string)
 	return s, session.ID, conversation.ID
 }
 
+func TestQueuedBatchReservationIsRecoverableAfterReconnect(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for i, text := range []string{"first pending", "second pending"} {
+		id := fmt.Sprintf("batch-%d", i)
+		if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1",
+			domain.ConversationMessage{ID: "message-" + id, Text: text,
+				ClientMessageID: id, Origin: domain.MessageOriginAutomation}, id, histClock.Add(time.Duration(i)*time.Second)); err != nil || !created {
+			t.Fatalf("append %s: created=%v err=%v", id, created, err)
+		}
+	}
+	batch, err := s.ClaimQueuedBatch(ctx, conversation, false, 0, histClock.Add(time.Minute))
+	if err != nil || len(batch) != 2 || batch[0].Text != "first pending" || batch[1].Text != "second pending" {
+		t.Fatalf("claimed batch = %+v, %v", batch, err)
+	}
+	if _, err := s.NextQueuedTurn(ctx, conversation); !errors.Is(err, domain.ErrNoQueuedTurn) {
+		t.Fatalf("reserved messages remained dispatchable: %v", err)
+	}
+	if err := s.FailReservedQueuedBatch(ctx, conversation, histClock.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for _, queued := range batch {
+		turn, err := s.TurnByID(ctx, queued.TurnID)
+		if err != nil || turn.State != domain.TurnStateFailed || !strings.Contains(turn.ErrorMessage, "uncertain") {
+			t.Fatalf("recovered turn = %+v, %v", turn, err)
+		}
+	}
+	messages, err := s.ConversationMessages(ctx, conversation)
+	if err != nil || !reflect.DeepEqual(texts(messages), []string{"first pending", "second pending"}) {
+		t.Fatalf("retained source messages = %+v, %v", messages, err)
+	}
+}
+
 func texts(messages []domain.ConversationMessage) []string {
 	out := make([]string, 0, len(messages))
 	for _, message := range messages {
@@ -71,6 +104,31 @@ func turnIDs(turns []domain.ConversationTurn) []string {
 		out = append(out, turn.ID)
 	}
 	return out
+}
+
+func TestConversationFailureCodeSurvivesSnapshotReload(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1",
+		domain.ConversationMessage{ID: "key-prompt", Text: "hello", Origin: domain.MessageOriginHuman},
+		"key-turn", histClock)
+	if err != nil || !created {
+		t.Fatalf("append prompt: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "key-turn", "provider-key-turn", histClock); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleTurnWithFailureCode(ctx, conversation, "provider-key-turn", domain.TurnStateFailed,
+		"ACP internal detail", domain.ConversationFailureProviderKeyMissing, time.Time{}, histClock); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Turns) != 1 || snapshot.Turns[0].FailureCode != domain.ConversationFailureProviderKeyMissing || snapshot.Turns[0].ErrorMessage != "ACP internal detail" {
+		t.Fatalf("turns = %+v", snapshot.Turns)
+	}
 }
 
 func TestAppendUserMessageRejectsChangedPayloadForSameClientID(t *testing.T) {
@@ -1937,5 +1995,105 @@ func TestAppendUserMessagePersistsContinuation(t *testing.T) {
 	}
 	if continuation["asked"] || !continuation["continued"] {
 		t.Fatalf("continuation by message = %v, want only the continue marked", continuation)
+	}
+}
+
+// The chat host replays a pending question after a reconnect, and a question
+// reaches the store with only its request id. The replay must land on the row
+// AO already stored rather than tripping the (conversation_id, request_id)
+// index and stopping the whole projection with the turn still running (#7944).
+func TestUpsertActivityReplayRefreshesTheStoredQuestionInsteadOfColliding(t *testing.T) {
+	s, _, conversation := conversationFixture(t)
+	ctx := context.Background()
+	activity := domain.ConversationActivity{
+		ID: "question", Kind: domain.ActivityKindUserInput, Status: domain.ActivityStatusPending,
+		Summary: "Questions", RequestID: "replayed-request",
+		Detail: []byte(`{"inputMode":"form","message":"Questions"}`),
+	}
+	if err := s.UpsertActivity(ctx, conversation, "", activity, histClock); err != nil {
+		t.Fatalf("UpsertActivity: %v", err)
+	}
+
+	replay := activity
+	replay.ID = "question-replay"
+	if err := s.UpsertActivity(ctx, conversation, "", replay, histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("replayed UpsertActivity: %v", err)
+	}
+
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot: %v", err)
+	}
+	rows, status := questionRowsByRequest(snapshot, "replayed-request")
+	if rows != 1 || status != domain.ActivityStatusPending {
+		t.Fatalf("after replay: rows=%d status=%q, want one pending row", rows, status)
+	}
+
+	// A question the user answered is not reopened by a late replay.
+	if err := s.ResolveApproval(ctx, conversation, "replayed-request",
+		`{"resolvedBy":"user"}`, histClock.Add(2*time.Minute)); err != nil {
+		t.Fatalf("ResolveApproval: %v", err)
+	}
+	late := activity
+	late.ID = "question-late-replay"
+	if err := s.UpsertActivity(ctx, conversation, "", late, histClock.Add(3*time.Minute)); err != nil {
+		t.Fatalf("late replayed UpsertActivity: %v", err)
+	}
+	snapshot, err = s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot after late replay: %v", err)
+	}
+	rows, status = questionRowsByRequest(snapshot, "replayed-request")
+	if rows != 1 || status != domain.ActivityStatusResolved {
+		t.Fatalf("after late replay: rows=%d status=%q, want the one resolved row kept", rows, status)
+	}
+}
+
+func questionRowsByRequest(
+	snapshot store.ConversationSnapshot, requestID string,
+) (int, domain.ActivityStatus) {
+	rows := 0
+	status := domain.ActivityStatus("")
+	for _, activity := range snapshot.Activities {
+		if activity.RequestID == requestID {
+			rows++
+			status = activity.Status
+		}
+	}
+	return rows, status
+}
+
+// settleOrphanedWork fails a pending question and its turn in the same pass,
+// so a replay that reopened it would leave a pending question on a failed
+// turn — one the dock never shows, because latestPendingInteraction only
+// docks a question linked to the running turn. A failed row stays failed.
+func TestUpsertActivityReplayDoesNotReopenAFailedQuestion(t *testing.T) {
+	s, _, conversation := conversationFixture(t)
+	ctx := context.Background()
+	activity := domain.ConversationActivity{
+		ID: "question", Kind: domain.ActivityKindUserInput, Status: domain.ActivityStatusPending,
+		Summary: "Questions", RequestID: "replayed-request",
+		Detail: []byte(`{"inputMode":"form","message":"Questions"}`),
+	}
+	if err := s.UpsertActivity(ctx, conversation, "", activity, histClock); err != nil {
+		t.Fatalf("UpsertActivity: %v", err)
+	}
+	if err := s.FailPendingInputs(ctx, conversation, histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("FailPendingInputs: %v", err)
+	}
+
+	replay := activity
+	replay.ID = "question-replay"
+	if err := s.UpsertActivity(ctx, conversation, "", replay, histClock.Add(2*time.Minute)); err != nil {
+		t.Fatalf("replayed UpsertActivity: %v", err)
+	}
+
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot: %v", err)
+	}
+	rows, status := questionRowsByRequest(snapshot, "replayed-request")
+	if rows != 1 || status != domain.ActivityStatusFailed {
+		t.Fatalf("after replay: rows=%d status=%q, want the one failed row kept", rows, status)
 	}
 }

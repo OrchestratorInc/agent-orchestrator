@@ -1,20 +1,14 @@
 name: CLI E2E
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    paths:
-      - "backend/**"
-      - "test/cli/**"
-      - ".github/workflows/cli-e2e.yml"
+  workflow_call:
+    inputs:
+      native:
+        type: boolean
+        required: true
 
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Primary tier: the cross-platform Go E2E suite (build tag `e2e`) runs the real
@@ -26,8 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.native && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend
@@ -49,6 +44,7 @@ jobs:
   # after `stop` instead of lingering as a zombie.
   container:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
