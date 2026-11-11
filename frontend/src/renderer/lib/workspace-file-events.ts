@@ -1,4 +1,4 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { InvalidateQueryFilters, QueryClient } from "@tanstack/react-query";
 import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { baseUrlForHost, subscribeConnectedHosts } from "./host-clients";
 import { sessionUiKey } from "./hosts";
@@ -118,23 +118,21 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 				});
 		}, 2000);
 	};
-	const remoteRefreshes = new Map<string, { dirty: boolean }>();
+	const awaitingRead = new Set<string>();
 	const refreshRemote = (queryKey: string[]) => {
-		const id = JSON.stringify(queryKey);
-		const running = remoteRefreshes.get(id);
-		if (running) {
-			running.dirty = true;
-			return;
-		}
-		const state = { dirty: false };
-		remoteRefreshes.set(id, state);
-		const settled = () => {
-			remoteRefreshes.delete(id);
-			if (state.dirty && !stream.disposed) refreshRemote(queryKey);
+		const refresh = (filters: InvalidateQueryFilters) => {
+			void queryClient.invalidateQueries(filters, { cancelRefetch: false });
 		};
-		const inFlight = queryClient.getQueryCache().findAll({ queryKey, fetchStatus: "fetching" }).map((query) => query.promise);
-		const refresh = () => queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
-		void Promise.resolve(inFlight.length > 0 ? Promise.allSettled(inFlight).then(refresh) : refresh()).then(settled, settled);
+		const inFlight = queryClient.getQueryCache().findAll({ queryKey, fetchStatus: "fetching" });
+		refresh({ queryKey, predicate: (query) => query.state.fetchStatus !== "fetching" });
+		for (const query of inFlight) {
+			if (awaitingRead.has(query.queryHash)) continue;
+			awaitingRead.add(query.queryHash);
+			void Promise.allSettled([query.promise]).then(() => {
+				awaitingRead.delete(query.queryHash);
+				if (!stream.disposed) refresh({ queryKey: query.queryKey, exact: true });
+			});
+		}
 	};
 	const scheduleInvalidation = (names: readonly string[]) => {
 		if (names.includes("session-workspace-file")) scheduleAnnotations();
