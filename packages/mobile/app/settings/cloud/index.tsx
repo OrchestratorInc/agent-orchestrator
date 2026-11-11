@@ -186,6 +186,7 @@ export default function CloudSettingsScreen() {
 	}
 
 	const role = roleLabel(org.role);
+	const agentsOffered = cloudAgentsOffered(plan);
 	return (
 		<View style={[styles.fill, { backgroundColor: t.bgBase }]}>
 			<SettingsForm testID="cloud-settings-form">
@@ -195,8 +196,8 @@ export default function CloudSettingsScreen() {
 
 				{planSection(plan)}
 
-				{/* Their sign-ins only matter where the plan runs cloud agents. */}
-				{cloudAgentsOffered(plan) ? (
+				{/* Agents' sign-ins, GitHub and new projects only matter where the plan runs cloud agents. */}
+				{agentsOffered ? (
 					<SettingsSection title="Coding agents" footer={!connectionsLoaded && error ? error : undefined}>
 						{CLOUD_AGENTS.map((agent) => {
 							const line = agentStatus(connections, connectionsLoaded, Boolean(error), agent);
@@ -216,11 +217,13 @@ export default function CloudSettingsScreen() {
 					</SettingsSection>
 				) : null}
 
-				{githubSection(github)}
+				{agentsOffered ? githubSection(github) : null}
 
-				<SettingsSection>
-					<SettingsButtonRow icon="add" label="New cloud project" onPress={() => router.push("/cloud/new-project")} testID="cloud-settings-new-project" />
-				</SettingsSection>
+				{agentsOffered ? (
+					<SettingsSection>
+						<SettingsButtonRow icon="add" label="New cloud project" onPress={() => router.push("/cloud/new-project")} testID="cloud-settings-new-project" />
+					</SettingsSection>
+				) : null}
 			</SettingsForm>
 		</View>
 	);

@@ -4,6 +4,8 @@ import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 import { AddFab } from "../../../lib/AddFab";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
+import { cloudAgentsOffered } from "../../../lib/cloud/plan";
+import { useCloudPlan } from "../../../lib/cloud/planStore";
 import { useTabBarInset } from "../../../lib/useTabBarInset";
 import { useFabExpanded } from "../../../lib/useFabExpanded";
 import { boardTitle } from "../../../lib/board-tabs";
@@ -41,7 +43,10 @@ export default function ProjectsScreen() {
 		notificationsUnread,
 		refreshAll,
 	} = useApp();
-	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, projectsLoaded: cloudProjectsLoaded } = useCloud();
+	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, projectsLoaded: cloudProjectsLoaded, client: cloudClient, org: cloudOrg } = useCloud();
+	// A Free organization runs no cloud agents, so a new cloud project could never run anything.
+	const cloudPlan = useCloudPlan(cloudClient, cloud ? cloudOrg?.id : undefined);
+	const canCreateCloudProject = Boolean(cloud) && cloudAgentsOffered(cloudPlan) === true;
 	const cloudReady = Boolean(cloud) && cloudProjectsLoaded;
 	const cloudPending = !cloud && (cloudStatus === "loading" || cloudStatus === "connecting");
 	useFocusEffect(useCallback(() => watchCloud(), [watchCloud]));
@@ -54,7 +59,7 @@ export default function ProjectsScreen() {
 	// floating button.
 	const largeTitle = useInlineLargeTitle(boardTitle("(projects)"), {
 		onScroll: fab.onScroll,
-		action: cloud ? <TitleActionButton icon="add" accessibilityLabel="New cloud project" onPress={newCloudProject} testID="new-cloud-project-title" /> : undefined,
+		action: canCreateCloudProject ? <TitleActionButton icon="add" accessibilityLabel="New cloud project" onPress={newCloudProject} testID="new-cloud-project-title" /> : undefined,
 	});
 	const tabBar = useTabBarFrost();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
@@ -153,8 +158,8 @@ export default function ProjectsScreen() {
 							<EmptyState
 								icon="folder"
 								title="No projects"
-								message={cloud ? "Create a cloud project from a GitHub repository, or add one in Orchestrator on your computer." : "Add a project in Orchestrator to get started."}
-								action={cloud ? <Button title="New cloud project" icon="cloud" onPress={newCloudProject} /> : undefined}
+								message={canCreateCloudProject ? "Create a cloud project from a GitHub repository, or add one in Orchestrator on your computer." : "Add a project in Orchestrator to get started."}
+								action={canCreateCloudProject ? <Button title="New cloud project" icon="cloud" onPress={newCloudProject} /> : undefined}
 							/>
 						)
 					}
@@ -164,7 +169,7 @@ export default function ProjectsScreen() {
 			{largeTitle.edge}
 			{tabBar.frost}
 			{/* iOS adds from the title line; Android's create action is the floating button. */}
-			{cloud ? <AddFab expanded={fab.expanded} label="New project" onPress={newCloudProject} bottomInset={tabBarInset + tabBar.inset} testID="new-cloud-project" /> : null}
+			{canCreateCloudProject ? <AddFab expanded={fab.expanded} label="New project" onPress={newCloudProject} bottomInset={tabBarInset + tabBar.inset} testID="new-cloud-project" /> : null}
 		</View>
 	);
 }

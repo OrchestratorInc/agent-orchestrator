@@ -72,11 +72,12 @@ export function cloudPlanView(summary: CloudBillingSummary, now = Date.now()): C
 }
 
 /**
- * Whether to offer the coding agents' sign-ins: they only matter where the
- * organization can run cloud agents, so never on Free. Undefined until the
- * plan is read, so the section neither flashes in on Free nor out on a paid
- * plan; a plan that can't be read leaves them offered, as the control plane
- * still decides.
+ * Whether to offer what only matters where the organization can run cloud
+ * agents (the coding agents' sign-ins, GitHub access, new cloud projects):
+ * never on Free, where a project could never run anything. Undefined until
+ * the plan is read, so nothing flashes in on Free or out on a paid plan; a
+ * plan that can't be read leaves them offered, as the control plane still
+ * decides.
  */
 export function cloudAgentsOffered(plan: { status: "loading" | "ready" | "failed"; summary?: CloudBillingSummary } | undefined): boolean | undefined {
 	if (!plan || plan.status === "failed" || !plan.summary) return plan?.status === "loading" ? undefined : true;
