@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { shouldPoll } from "../../lib/appStatePoll";
@@ -44,7 +44,7 @@ function SessionRouteContent() {
 	const isListed = Boolean(listed);
 	// A session can outlive its project; only a project still listed is worth starting in.
 	const listedProjectId = listed?.projectId && projects.some((project) => project.id === listed.projectId) ? listed.projectId : undefined;
-	useEffect(() => { rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, listedProjectId]);
+	useFocusEffect(useCallback(() => { rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, listedProjectId]));
 	const key = sessionLookupKey(machine, id);
 	const [stored, setStored] = useState<KeyedSessionLookup | null>(null);
 	const [attempt, setAttempt] = useState(0);

@@ -1,5 +1,5 @@
-import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -57,7 +57,8 @@ function ProjectScreenContent() {
 		[projects, sessions, orchestrators, id, hostMatches],
 	);
 	const listedProjectId = row?.project.id;
-	useEffect(() => { if (hostMatches) rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, hostMatches, listedProjectId]);
+	// On focus, not mount: coming back here from a task started elsewhere makes this the last project again.
+	useFocusEffect(useCallback(() => { if (hostMatches) rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, hostMatches, listedProjectId]));
 	const title = row?.project.name ?? "Project";
 	// The native header's title, and this page's name in the back-history menu
 	// of a page opened from here.
