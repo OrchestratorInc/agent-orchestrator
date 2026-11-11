@@ -686,6 +686,7 @@ WHERE status = 'running'
   AND turn_id IN (
       SELECT id FROM conversation_turns
       WHERE handled_by_session_id = ?2
+        AND handled_by_review_id IS NULL
         AND state IN ('queued', 'running')
   )
 `
@@ -5051,7 +5052,7 @@ UPDATE conversation_turns
 SET state = 'failed',
     error_message = 'controller ended before the turn completed',
     completed_at = ?
-WHERE handled_by_session_id = ? AND state IN ('queued', 'running')
+WHERE handled_by_session_id = ? AND handled_by_review_id IS NULL AND state IN ('queued', 'running')
 `
 
 type SettleOrphanedConversationTurnsParams struct {
