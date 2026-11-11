@@ -9,9 +9,22 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { type CloudShareLink, artifactShareUrl } from "../shared/cloud-share";
 
-/** The record key of one file: its control plane, session and path. */
+/**
+ * The record key of one file by its control plane, session and path. A file
+ * with an artifact ID is recorded under artifactRecordKey instead; this key
+ * still names records written before artifacts had one.
+ */
 export function shareRecordKey(baseUrl: string, sessionId: string, relativePath: string): string {
 	return JSON.stringify([baseUrl, sessionId, relativePath]);
+}
+
+/**
+ * The record key of one artifact: its control plane, session and ID. The ID
+ * survives a rename, so the renamed file finds the link it was published to.
+ * The empty third part keeps it apart from every path key.
+ */
+export function artifactRecordKey(baseUrl: string, sessionId: string, artifactId: string): string {
+	return JSON.stringify([baseUrl, sessionId, "", artifactId]);
 }
 
 /** One file's record: the link it was published to, and what it held then. */
@@ -27,6 +40,8 @@ export interface ShareLinkRecordStore {
 	/** The fingerprint the file had when it was last published, if recorded. */
 	publishedFingerprint(key: string): Promise<string | undefined>;
 	set(key: string, shareId: string, fingerprint?: string, url?: string): Promise<void>;
+	/** Moves the record at `from` to `to`, unless `to` already has one. */
+	adopt(to: string, from: string): Promise<void>;
 	/** Drops every record of a link, after it is unpublished. */
 	forgetShare(shareId: string): Promise<void>;
 	syncLinks(baseUrl: string, shares: CloudShareLink[]): Promise<void>;
@@ -53,6 +68,14 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 	async set(key: string, shareId: string, fingerprint?: string, url?: string): Promise<void> {
 		const records = await this.load();
 		records[key] = encodeRecord({ shareId, fingerprint, url });
+		await this.save();
+	}
+
+	async adopt(to: string, from: string): Promise<void> {
+		const records = await this.load();
+		if (to === from || records[to] !== undefined || records[from] === undefined) return;
+		records[to] = records[from];
+		delete records[from];
 		await this.save();
 	}
 

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -114,6 +115,21 @@ func sentryEnvironment(version string) string {
 	default:
 		return "stable"
 	}
+}
+
+// publishedVersion matches a release-stamped stable (0.14.10) or nightly
+// (0.14.11-nightly.202611100625) version, the same pattern as the desktop app
+// (frontend/src/shared/sentry-config.ts).
+var publishedVersion = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-nightly\.\d{12})?$`)
+
+// publishedSentryDSN keeps Sentry off for any version that is not a published
+// stable or nightly build (an edge, PR, forked or unversioned copy). The
+// desktop app also withholds the DSN from self-built copies.
+func publishedSentryDSN(dsn, version string) string {
+	if publishedVersion.MatchString(strings.TrimSpace(version)) {
+		return dsn
+	}
+	return ""
 }
 
 // Session Manager asserts the terminal input gate's optional capabilities at
@@ -255,6 +271,7 @@ func Run(buildVersion string) error {
 	defer sentryobs.SetPolicyCheck(nil)
 	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
 	configureUsageRecording(cfg, store, telemetryIdentity)
+	recordSlowWriteLocks(store, telemetrySink)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	installID := ""
 	if telemetryIdentity != nil {
@@ -264,7 +281,7 @@ func Run(buildVersion string) error {
 	// restart. The policy gate is checked before every capture. An unavailable
 	// install ID omits the tag without disabling error reporting.
 	if err := sentryobs.Init(sentryobs.Config{
-		DSN:         cfg.Telemetry.SentryDSN,
+		DSN:         publishedSentryDSN(cfg.Telemetry.SentryDSN, cfg.Telemetry.AppVersion),
 		InstallID:   installID,
 		Release:     cfg.Telemetry.AppVersion,
 		Environment: sentryEnvironment(cfg.Telemetry.AppVersion),

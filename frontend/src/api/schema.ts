@@ -2531,6 +2531,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/artifact-registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register files in the session's artifact directory as its deliverables */
+        post: operations["registerSessionArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/artifact-versions": {
         parameters: {
             query?: never;
@@ -5330,6 +5347,40 @@ export interface components {
             agent: string;
             modes: string[];
         };
+        ChatExcerptRange: {
+            end: number;
+            /** @enum {string} */
+            offsetUnit: "utf-16";
+            start: number;
+        };
+        ChatExcerptSnapshot: {
+            badgeOnly?: boolean;
+            /** @enum {string} */
+            captureMode: "exact" | "block" | "legacy";
+            containsFlowchart?: boolean;
+            contextOmitted?: boolean;
+            diagramRange?: components["schemas"]["ChatExcerptRange"];
+            prefix?: string;
+            rawText: string;
+            /** @enum {string} */
+            referenceFormat?: "numbered-v1";
+            renderedRange?: components["schemas"]["ChatExcerptRange"];
+            sourceRange?: components["schemas"]["ChatExcerptRange"];
+            sourceTurnId?: string;
+            suffix?: string;
+            turn?: components["schemas"]["ChatExcerptTurnSnapshot"];
+            version: number;
+        };
+        ChatExcerptTurnMessage: {
+            /** @enum {string} */
+            role: "user" | "assistant";
+            text: string;
+        };
+        ChatExcerptTurnSnapshot: {
+            id: string;
+            messages: components["schemas"]["ChatExcerptTurnMessage"][];
+            truncated?: boolean;
+        };
         ChatFileReferenceLine: {
             /** @enum {string} */
             kind: "context" | "add" | "del";
@@ -5720,6 +5771,14 @@ export interface components {
             extensionVersion?: string;
             hostPath: string;
         };
+        ControllersConversationTurnArtifactResponse: {
+            path: string;
+            /** @enum {string} */
+            status: "added" | "modified";
+        };
+        ControllersConversationTurnArtifactsResponse: {
+            files: components["schemas"]["ControllersConversationTurnArtifactResponse"][];
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -5804,7 +5863,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Interrupted" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -5950,10 +6009,10 @@ export interface components {
             fileReference?: components["schemas"]["ConversationFileReferenceRequest"];
             mimeType?: string;
             name?: string;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             sourceConversationId?: string;
             sourceMessageId?: string;
-            /** Format: int64 */
-            sourceRevision?: number;
+            sourceRevision?: null | number;
             text?: string;
             type: string;
             uri?: string;
@@ -5975,6 +6034,7 @@ export interface components {
             order?: number;
             /** Format: int64 */
             revision: number;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             text: string;
         };
         ConversationFileReferenceRequest: {
@@ -5991,6 +6051,8 @@ export interface components {
             order?: number;
             path: string;
             previousPath?: string;
+            /** @enum {string} */
+            referenceFormat?: "numbered-v1";
             scope?: string;
             sessionId: string;
             /** @enum {string} */
@@ -6184,6 +6246,7 @@ export interface components {
             truncated?: boolean;
         };
         ConversationTurnResponse: {
+            artifacts?: components["schemas"]["ControllersConversationTurnArtifactsResponse"];
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
@@ -6384,10 +6447,14 @@ export interface components {
         };
         DomainSideReference: {
             conversationId: string;
+            id?: string;
             messageId: string;
+            /** Format: int64 */
+            order?: number;
             /** Format: int64 */
             revision: number;
             selection: string;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             sourceRole: string;
         };
         EditConversationMessageRequest: {
@@ -7065,6 +7132,18 @@ export interface components {
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
         };
+        RegisterArtifactsRequest: {
+            /** @description Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it. */
+            paths: string[];
+        };
+        RegisterArtifactsResponse: {
+            /** @description How many of the session's files are not registered. */
+            otherFiles: number;
+            /** @description The unregistered files at the root of the artifact directory. */
+            otherRootFiles: string[];
+            /** @description The requested paths, relative to the artifact directory. */
+            registered: string[];
+        };
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
             deviceName?: string;
@@ -7323,13 +7402,16 @@ export interface components {
             total: number;
         };
         SessionArtifact: {
+            id?: string;
             inlineUrl?: string;
             /** @enum {string} */
             kind: "html" | "markdown" | "file";
             name: string;
             path: string;
             previewUrl?: string;
+            previousPaths?: string[];
             rawUrl?: string;
+            registered?: boolean;
             shareUrl?: string;
             /** Format: int64 */
             size: number;
@@ -17577,6 +17659,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    registerSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterArtifactsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterArtifactsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

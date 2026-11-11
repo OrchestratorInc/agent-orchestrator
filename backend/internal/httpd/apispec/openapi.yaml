@@ -6838,6 +6838,63 @@ paths:
         theme bootstrap
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/artifact-registrations:
+    post:
+      operationId: registerSessionArtifacts
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterArtifactsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterArtifactsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Register files in the session's artifact directory as its deliverables
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/artifact-versions:
     get:
       operationId: listSessionArtifactVersions
@@ -15614,6 +15671,89 @@ components:
       - agent
       - modes
       type: object
+    ChatExcerptRange:
+      properties:
+        end:
+          type: integer
+        offsetUnit:
+          enum:
+          - utf-16
+          type: string
+        start:
+          type: integer
+      required:
+      - start
+      - end
+      - offsetUnit
+      type: object
+    ChatExcerptSnapshot:
+      properties:
+        badgeOnly:
+          type: boolean
+        captureMode:
+          enum:
+          - exact
+          - block
+          - legacy
+          type: string
+        containsFlowchart:
+          type: boolean
+        contextOmitted:
+          type: boolean
+        diagramRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        prefix:
+          type: string
+        rawText:
+          type: string
+        referenceFormat:
+          enum:
+          - numbered-v1
+          type: string
+        renderedRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        sourceRange:
+          $ref: '#/components/schemas/ChatExcerptRange'
+        sourceTurnId:
+          type: string
+        suffix:
+          type: string
+        turn:
+          $ref: '#/components/schemas/ChatExcerptTurnSnapshot'
+        version:
+          type: integer
+      required:
+      - version
+      - rawText
+      - captureMode
+      type: object
+    ChatExcerptTurnMessage:
+      properties:
+        role:
+          enum:
+          - user
+          - assistant
+          type: string
+        text:
+          type: string
+      required:
+      - role
+      - text
+      type: object
+    ChatExcerptTurnSnapshot:
+      properties:
+        id:
+          type: string
+        messages:
+          items:
+            $ref: '#/components/schemas/ChatExcerptTurnMessage'
+          type: array
+        truncated:
+          type: boolean
+      required:
+      - id
+      - messages
+      type: object
     ChatFileReferenceLine:
       properties:
         kind:
@@ -16652,6 +16792,28 @@ components:
       - hostPath
       - channels
       type: object
+    ControllersConversationTurnArtifactResponse:
+      properties:
+        path:
+          type: string
+        status:
+          enum:
+          - added
+          - modified
+          type: string
+      required:
+      - path
+      - status
+      type: object
+    ControllersConversationTurnArtifactsResponse:
+      properties:
+        files:
+          items:
+            $ref: '#/components/schemas/ControllersConversationTurnArtifactResponse'
+          type: array
+      required:
+      - files
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -16845,22 +17007,24 @@ components:
           enum:
           - Working
           - Blocked
+          - Needs input
           - Exited
           - No signal
           - Interrupted
-          - Awaiting PR
+          - Idle
           - Fixing CI failures
           - Addressing comments
-          - Needs review
           - Review scheduled
           - Reviewing
-          - Review failed
-          - Review pending
+          - Retrying review
           - Draft
+          - Awaiting review
+          - Review failed
+          - Review cancelled
           - CI failing
+          - Merge conflicts
           - Commented
           - Changes requested
-          - Needs human review
           - Mergeable
           - Approved
           - Merged
@@ -17297,13 +17461,16 @@ components:
           type: string
         name:
           type: string
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         sourceConversationId:
           type: string
         sourceMessageId:
           type: string
         sourceRevision:
-          format: int64
-          type: integer
+          type:
+          - "null"
+          - integer
         text:
           type: string
         type:
@@ -17352,6 +17519,8 @@ components:
         revision:
           format: int64
           type: integer
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         text:
           type: string
       required:
@@ -17390,6 +17559,10 @@ components:
         path:
           type: string
         previousPath:
+          type: string
+        referenceFormat:
+          enum:
+          - numbered-v1
           type: string
         scope:
           type: string
@@ -17897,6 +18070,8 @@ components:
       type: object
     ConversationTurnResponse:
       properties:
+        artifacts:
+          $ref: '#/components/schemas/ControllersConversationTurnArtifactsResponse'
         completedAt:
           type:
           - "null"
@@ -18450,13 +18625,20 @@ components:
       properties:
         conversationId:
           type: string
+        id:
+          type: string
         messageId:
           type: string
+        order:
+          format: int64
+          type: integer
         revision:
           format: int64
           type: integer
         selection:
           type: string
+        snapshot:
+          $ref: '#/components/schemas/ChatExcerptSnapshot'
         sourceRole:
           type: string
       required:
@@ -20211,6 +20393,37 @@ components:
       required:
       - pat
       type: object
+    RegisterArtifactsRequest:
+      properties:
+        paths:
+          description: 'Files or bundle directories in the session''s artifact directory:
+            absolute paths, or paths relative to it.'
+          items:
+            type: string
+          type: array
+      required:
+      - paths
+      type: object
+    RegisterArtifactsResponse:
+      properties:
+        otherFiles:
+          description: How many of the session's files are not registered.
+          type: integer
+        otherRootFiles:
+          description: The unregistered files at the root of the artifact directory.
+          items:
+            type: string
+          type: array
+        registered:
+          description: The requested paths, relative to the artifact directory.
+          items:
+            type: string
+          type: array
+      required:
+      - registered
+      - otherFiles
+      - otherRootFiles
+      type: object
     RegisterPushDeviceRequest:
       properties:
         deviceName:
@@ -20850,6 +21063,8 @@ components:
       type: object
     SessionArtifact:
       properties:
+        id:
+          type: string
         inlineUrl:
           type: string
         kind:
@@ -20864,8 +21079,14 @@ components:
           type: string
         previewUrl:
           type: string
+        previousPaths:
+          items:
+            type: string
+          type: array
         rawUrl:
           type: string
+        registered:
+          type: boolean
         shareUrl:
           type: string
         size:

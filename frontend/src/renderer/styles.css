@@ -1615,12 +1615,10 @@ body {
 	user-select: none;
 }
 
-button,
-input,
-textarea,
-select {
-	font: inherit;
-}
+/* Form controls inherit their font from Tailwind's preflight, inside
+ * `@layer base`. Do not repeat that rule here: unlayered CSS beats every
+ * layered utility, so `text-*` and `font-*` on buttons and inputs would be
+ * ignored. */
 
 /* Error copy stays copyable under the app-wide `user-select: none` (#4268). */
 input,
@@ -2348,14 +2346,6 @@ textarea,
 .ao-startup-logo {
 	animation: ao-startup-logo-breathe 3.2s ease-in-out infinite;
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
-}
-
-.ao-mascot-eyes {
-	fill: transparent;
-}
-
-:root[data-theme="light"] .ao-mascot-eyes {
-	fill: #000;
 }
 
 /* Startup requirements checklist — each row fades/slides in on its own

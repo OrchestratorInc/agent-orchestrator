@@ -407,8 +407,9 @@ describe("SessionInspector tabs", () => {
     renderWithQuery(<SessionInspector orchestrator session={session([], {
       kind: "orchestrator",
       artifactFiles: [
-        artifact({ path: "direct.html", name: "direct.html", kind: "html" }),
-        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html" }),
+        // A kept render is listed once the agent registers it, like any file.
+        artifact({ path: "direct.html", name: "direct.html", kind: "html", registered: true }),
+        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html", registered: true }),
       ],
     })} />);
 

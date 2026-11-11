@@ -1,9 +1,10 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
 import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactImageSource } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
+import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { artifactVisual } from "../../lib/artifactVisual";
 import { artifactExtensionLabel, artifactViewKind, formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
 import { haptics } from "../../lib/haptics";
@@ -41,6 +42,8 @@ function SessionArtifactsContent() {
 	const columns = width >= WIDE_LAYOUT ? 3 : 2;
 	const { artifacts, loading, error, reload, markDeleted } = useSessionArtifacts(hostMatches ? sessionId : "");
 	// A listed file's modified time, so a markdown card's regenerated image is not served from cache.
+	// The list shows deliverables only; `artifacts` stays whole for link lookups.
+	const listedArtifacts = useMemo(() => (artifacts ? deliverableArtifacts(artifacts) : []), [artifacts]);
 	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
 	const onDeleted = useCallback((artifact: SessionArtifact) => markDeleted(artifact.path), [markDeleted]);
 	const { openMenu, menu } = useArtifactActions(sessionId, onDeleted);
@@ -95,10 +98,10 @@ function SessionArtifactsContent() {
 				key={columns}
 				style={styles.screen}
 				contentInsetAdjustmentBehavior="automatic"
-				contentContainerStyle={[styles.content, artifacts.length === 0 && styles.emptyContent]}
-				data={artifacts}
+				contentContainerStyle={[styles.content, listedArtifacts.length === 0 && styles.emptyContent]}
+				data={listedArtifacts}
 				numColumns={columns}
-				columnWrapperStyle={artifacts.length ? styles.row : undefined}
+				columnWrapperStyle={listedArtifacts.length ? styles.row : undefined}
 				keyExtractor={(artifact) => artifact.path}
 				onViewableItemsChanged={onViewableItemsChanged}
 				viewabilityConfig={viewabilityConfig}
@@ -107,7 +110,7 @@ function SessionArtifactsContent() {
 				ListEmptyComponent={<EmptyState icon={{ ios: "doc.text", android: "description" }} title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} versionOf={versionOf} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
+						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} versionOf={versionOf} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={item.bundle ? undefined : () => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
 					</View>
 				)}
 			/>
@@ -128,7 +131,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 	/** An image artifact's own picture, drawn over its icon tile. */
 	thumbnail?: { uri: string; headers: Record<string, string> };
 	onOpen(): void;
-	onMenu(): void;
+	onMenu?(): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -151,7 +154,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 			accessibilityLabel={`${artifact.name}, ${meta}`}
 			accessibilityHint="Opens the artifact. Long-press for more actions."
 			accessibilityActions={[{ name: "longpress", label: "More actions" }]}
-			onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "longpress") onMenu(); }}
+			onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "longpress") onMenu?.(); }}
 			onPress={onOpen}
 			onLongPress={onMenu}
 			delayLongPress={350}
