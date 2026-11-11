@@ -810,6 +810,31 @@ describe("ChatWorkspace steering", () => {
 		expect(screen.getByText(/Steered/)).toBeInTheDocument();
 	});
 
+	it("draws queued turns a steer carried at that steer, not after the running turn", () => {
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 14,
+					// The carried turn is not among the snapshot's turns, as the daemon sends it.
+					turns: [{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) }],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the review comments", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "review", turnId: "carried", sequence: 11, revision: 0, role: "user", origin: "automation", text: "Rename the pairing helper.", streaming: false, createdAt: at(1) },
+						{ kind: "activity", id: "work", turnId: "run", sequence: 12, revision: 0, activityKind: "command", status: "completed", summary: "go test ./...", detail: { command: "go test ./...", output: "ok" }, createdAt: at(2) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "Write the explainer", detail: { event: "steer", origin: "human", text: "Write the explainer", clientMessageId: "steer-1" }, createdAt: at(3) },
+						{ kind: "message", id: "answer", turnId: "run", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Writing the explainer first.", streaming: false, createdAt: at(4) },
+					],
+					batchedDeliveries: [{ turnId: "carried", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+				}}
+			/>,
+		);
+		const carried = screen.getByText(/Rename the pairing helper/);
+		const answer = screen.getByText("Writing the explainer first.");
+		expect(carried.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("renders a steered browser annotation batch as its annotation card", () => {
 		const transport = [
 			"<browser_annotations>",

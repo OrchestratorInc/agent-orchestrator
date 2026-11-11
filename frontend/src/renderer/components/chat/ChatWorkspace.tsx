@@ -208,6 +208,7 @@ import {
 	isUserQueuePrompt,
 	needsReauth,
 	queuedTurnIds,
+	type BatchedDelivery,
 	type ConversationPlan,
 	type ConversationSnapshot,
 	type ControllerState,
@@ -3998,7 +3999,8 @@ export function Timeline({
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
 		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
 		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
-		const items = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
+		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
+		const items = atCarryingSteer(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
@@ -6452,6 +6454,32 @@ function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): 
 		detachedActions.set(item, detached);
 	}
 	return detached;
+}
+
+const carriedRows = new WeakMap<ConversationItem, ConversationItem>();
+
+function atCarryingSteer(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
+	if (deliveries.length === 0) return items;
+	const steers = new Map(items.flatMap((item) => (item.kind === "activity" && item.turnId && isSteer(item) ? [[item.id, item] as const] : [])));
+	const carriers = new Map(deliveries.flatMap((delivery) => {
+		const steer = delivery.steerActivityId ? steers.get(delivery.steerActivityId) : undefined;
+		return steer && !moved.has(delivery.turnId) ? [[delivery.turnId, steer] as const] : [];
+	}));
+	if (carriers.size === 0) return items;
+	let carried = 0;
+	return items
+		.map((item) => {
+			const steer = item.turnId ? carriers.get(item.turnId) : undefined;
+			if (!steer) return item;
+			carried += 1;
+			const sequence = steer.sequence + carried / 1000;
+			const cached = carriedRows.get(item);
+			if (cached?.turnId === steer.turnId && cached.sequence === sequence) return cached;
+			const row = { ...item, turnId: steer.turnId, sequence };
+			carriedRows.set(item, row);
+			return row;
+		})
+		.sort((a, b) => a.sequence - b.sequence);
 }
 
 /** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */
