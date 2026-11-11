@@ -452,8 +452,15 @@ function UpdateActions({
 	const incomingVersion = incoming ? (status.version ?? status.staged?.version)?.replace(/^v/, "") : undefined;
 	const incomingBase = incomingVersion ? (parseNightlyVersion(incomingVersion)?.base ?? incomingVersion) : undefined;
 	const targetBase = incomingBase && incomingBase !== installedBase ? incomingBase : undefined;
-	const showCheck = !downloading && status.state !== "available";
 	const headlineNamesTarget = targetBase !== undefined && targetBase === incomingVersion;
+	const showCheck = !downloading && status.state !== "available";
+	const statusParts = statusLineParts(displayState, status, headlineNamesTarget);
+	const statusHasLine = showStatusState && (statusParts.label || statusParts.detail);
+	const [hadStatusLine, setHadStatusLine] = useState(false);
+	useEffect(() => {
+		if (showStatusState) setHadStatusLine(statusHasLine);
+	}, [showStatusState, statusHasLine]);
+	const reserveStatusLine = !showStatusState && hadStatusLine;
 	const downloadedBytes = status.transferred !== undefined && status.total !== undefined
 		? t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })
 		: null;
@@ -521,7 +528,7 @@ function UpdateActions({
 						</>
 					)}
 				</p>
-				<div className="mt-2 flex min-w-0 flex-col gap-1.5 text-control leading-4 text-settings-muted">
+				<div className="update-hero-desc flex min-w-0 flex-col gap-1.5 text-control leading-4 text-settings-muted">
 						{installed && (
 							// Two spans, not one string: the version needs break-all so a long
 							// nightly stamp can never overflow, but break-all applied to the
@@ -547,10 +554,12 @@ function UpdateActions({
 							aria-atomic="true"
 							aria-busy={checking || downloading}
 							tabIndex={-1}
-							// Keep one line while the button owns the checking feedback, so
-							// the notices below do not jump up.
 							title={checkedLabel ?? undefined}
-							className="flex min-h-4 min-w-0 flex-col gap-1.5"
+							// With nothing to show it leaves the layout (the version and
+							// its action then share one centred row) but stays in the DOM
+							// as the live region. During a check it keeps the line it had,
+							// so the card does not jump while the button owns the feedback.
+							className={statusHasLine || reserveStatusLine ? "flex min-h-4 min-w-0 flex-col gap-1.5" : "sr-only"}
 						>
 							{showStatusState && <UpdateStatusLine state={displayState} status={status} detailHidden={headlineNamesTarget} />}
 							{/* The percentage and the track already show progress; the byte
@@ -748,17 +757,37 @@ function UpdateStatusLine({
 			label = t("settings.updates.notChecked");
 	}
 
+	const parts = statusLineParts(state, status, detailHidden);
+	// Nothing to show: the words stay for the live region only.
+	if (!parts.label && !parts.detail) {
+		return <p className="sr-only">{detail === null ? label : `${label} ${detail}`}</p>;
+	}
 	return (
 		// The detail sits under the icon, on the card's text edge, not indented
 		// under the label: every line in the card then starts at one x.
 		<div className={cn("flex min-w-0 flex-col gap-1.5", className)}>
-			<div className="flex min-w-0 items-start gap-1.5">
+			<div className={parts.label ? "flex min-w-0 items-start gap-1.5" : "sr-only"}>
 				{icon !== null && <span className="flex h-4 shrink-0 items-center">{icon}</span>}
 				<p className="min-w-0 text-pretty">{label}</p>
 			</div>
 			{detail !== null && (
-				<p className={detailHidden && state !== "error" ? "sr-only" : "truncate text-settings-muted"}>{detail}</p>
+				<p className={parts.detail ? "truncate text-settings-muted" : "sr-only"}>{detail}</p>
 			)}
 		</div>
 	);
+}
+
+/**
+ * Which parts of the status line are drawn. Idle, available and downloaded
+ * each sit beside the one action that says the same thing (Check for updates,
+ * Update, Restart & install), so their label is left to assistive tech. The
+ * detail is drawn only where the headline does not already name the target.
+ */
+function statusLineParts(state: UpdateState, status: UpdateStatus, detailHidden: boolean): { label: boolean; detail: boolean } {
+	const hasDetail = Boolean(status.version)
+		&& (state === "available" || state === "downloading" || state === "preparing" || state === "downloaded" || state === "error");
+	return {
+		label: !(state === "idle" || state === "available" || state === "downloaded"),
+		detail: hasDetail && (state === "error" || !detailHidden),
+	};
 }

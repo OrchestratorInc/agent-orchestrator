@@ -1147,6 +1147,17 @@ button.settings-row-bar {
 	color: var(--color-text-settings-title);
 }
 
+/* The lines under the version. With nothing visible in it (its status is then
+ * for assistive tech only) it adds no gap, so the version and its action share
+ * one centred row. */
+.update-hero-desc {
+	margin-top: var(--space-2);
+}
+
+.update-hero-desc:not(:has(> :not(.sr-only))) {
+	margin-top: 0;
+}
+
 .update-notes {
 	padding-block: var(--space-5);
 }

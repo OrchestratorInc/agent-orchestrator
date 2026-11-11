@@ -774,7 +774,10 @@ describe("GlobalSettingsForm", () => {
 				finishCheck = resolve;
 			}),
 		);
+		// Start from a state that shows a status line, so the check has one to keep.
+		updGetStatus.mockResolvedValue({ state: "not-available" });
 		renderForm();
+		await screen.findByText("You're on the latest version.");
 		const button = await screen.findByRole("button", { name: "Check for updates" });
 
 		await userEvent.click(button);
@@ -785,7 +788,7 @@ describe("GlobalSettingsForm", () => {
 		const statusLine = screen.getByTestId("update-status-line");
 		expect(statusLine).not.toHaveTextContent("Checking for updates…");
 		expect(statusLine.querySelector("svg")).toBeNull();
-		// The slot keeps one description line while the button owns the feedback.
+		// The slot keeps the line it had while the button owns the feedback.
 		expect(statusLine).toHaveClass("min-h-4");
 
 		act(() => finishCheck());
