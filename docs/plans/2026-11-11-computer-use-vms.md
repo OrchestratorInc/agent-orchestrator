@@ -75,9 +75,10 @@ tools, the same guide.
 
 - **Cloudflare can read the calls and screenshots**, as it can already read
   chat and terminal traffic on remote hosts. Phase 2 fixes this.
-- **A leaked host credential is not enough.** It opens a terminal there, as
-  it does today, but computer-use calls must also be signed by the paired
-  machine.
+- **Whoever can message an agent can use it.** Anyone with access to AO on
+  either machine can tell an agent to act, as they can today. The switch and
+  idle-off limit when that is possible. Signing only stops forged or replayed
+  calls on the way.
 - **The agent is still on the user's machine**, with its shell and files.
 - **It needs the connection.** No internet means no computer use, and each
   action is slower because the screenshot travels back.
@@ -107,10 +108,8 @@ tools, the same guide.
 1. Is it acceptable to accept computer-use calls on the remote listener, when
    turned on at the machine itself?
 2. Is end-to-end encryption needed in the first release, or can it follow?
-3. Is a signature from the user's machine enough, or should the user also
-   approve each session's use of the remote computer?
-4. One target for every session, or a choice per project?
-5. Does the original proposal differ from this? It was not available when
+3. One target for every session, or a choice per project?
+4. Does the original proposal differ from this? It was not available when
    this was written.
 
 Nothing here was tested on a real host. Facts about Cua Driver come from
