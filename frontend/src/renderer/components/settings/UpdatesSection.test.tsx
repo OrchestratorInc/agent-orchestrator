@@ -237,6 +237,77 @@ it.each(["downloaded", "error"] as const)("keeps focus on the live status while 
 	expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
 });
 
+it("names the staged build on Restart when a newer one is only available", async () => {
+	// Restart installs the staged 2.0.0; the headline and Update are about 3.0.0.
+	updGetStatus.mockResolvedValue({
+		state: "available",
+		version: "3.0.0",
+		staged: { version: "2.0.0", stagedAt: 1, escalated: false, ready: true },
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("button", { name: "Update to v3.0.0" })).toBeVisible();
+	expect(screen.getByTestId("update-target-version")).toHaveTextContent("v3.0.0");
+	expect(screen.getByRole("button", { name: "Restart & install v2.0.0" })).toBeVisible();
+});
+
+it("leaves Restart unlabelled when it installs the version in the headline", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "downloaded",
+		version: "2.0.0",
+		staged: { version: "2.0.0", stagedAt: 1, escalated: false, ready: true },
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByRole("button", { name: "Restart & install" })).toBeVisible();
+	expect(screen.queryByTestId("update-staged-version")).toBeNull();
+});
+
+it("hands focus on when Check for updates is removed under it", async () => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	updGetStatus.mockResolvedValue({ state: "not-available" } satisfies UpdateStatus);
+	renderUpdates();
+
+	const check = await screen.findByRole("button", { name: "Check for updates" });
+	check.focus();
+	// A background check finds an update: Check gives way to Update.
+	act(() => emit({ state: "available", version: "9.9.9" }));
+	expect(check).not.toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Update to v9.9.9" })).toHaveFocus();
+});
+
+it("does not take focus from elsewhere when Check for updates is removed", async () => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	updGetStatus.mockResolvedValue({ state: "not-available" } satisfies UpdateStatus);
+	renderUpdates();
+
+	await screen.findByRole("button", { name: "Check for updates" });
+	const elsewhere = screen.getByRole("switch", { name: "Automatic updates" });
+	elsewhere.focus();
+	act(() => emit({ state: "downloading", version: "9.9.9", percent: 10 }));
+	expect(elsewhere).toHaveFocus();
+});
+
+it("formats the downloaded size with the active locale's decimal separator", async () => {
+	updGetStatus.mockResolvedValue({ state: "downloading", version: "9.9.9", percent: 57, transferred: 142_700_000, total: 250_400_000 } satisfies UpdateStatus);
+	await appI18n.changeLanguage("de");
+	try {
+		renderUpdates();
+		expect(await screen.findByText(/142,7/)).toBeInTheDocument();
+		expect(screen.getByText(/250,4/)).toBeInTheDocument();
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
+});
+
 it.each(["downloading", "preparing"] as const)("shows an existing %s update without a click", async (state) => {
 	updGetStatus.mockResolvedValue({ state, version: "9.9.9" } satisfies UpdateStatus);
 	renderUpdates();

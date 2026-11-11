@@ -12,6 +12,7 @@ import type { UpdateChannel, UpdateSettings, UpdateState, UpdateStatus } from ".
 import { localizedUpdateError } from "../../lib/update-error-copy";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { DesktopReleaseNotes } from "../DesktopReleaseNotes";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
@@ -410,6 +411,12 @@ function UpdateActions({
 		if (!node && downloadButtonRef.current && downloadButtonRef.current === document.activeElement) restoreActionFocusRef.current = true;
 		downloadButtonRef.current = node;
 	}, []);
+	const setCheckButtonRef = useCallback((node: HTMLButtonElement | null) => {
+		// Check leaves too: a background check that finds an update, or an
+		// automatic download, removes it while it may hold focus.
+		if (!node && checkButtonRef.current && checkButtonRef.current === document.activeElement) restoreActionFocusRef.current = true;
+		checkButtonRef.current = node;
+	}, []);
 	useLayoutEffect(() => {
 		if (!restoreActionFocusRef.current) return;
 		const active = document.activeElement;
@@ -418,7 +425,7 @@ function UpdateActions({
 			restoreActionFocusRef.current = false;
 			return;
 		}
-		const nextAction = restartButtonRef.current ?? checkButtonRef.current;
+		const nextAction = restartButtonRef.current ?? downloadButtonRef.current ?? checkButtonRef.current;
 		// No action is on screen while the download runs (and a fast failure can
 		// arrive inside the manual-check minimum busy window): wait on the live
 		// status, then hand focus to the action that follows.
@@ -453,6 +460,11 @@ function UpdateActions({
 	const incomingBase = incomingVersion ? (parseNightlyVersion(incomingVersion)?.base ?? incomingVersion) : undefined;
 	const targetBase = incomingBase && incomingBase !== installedBase ? incomingBase : undefined;
 	const headlineNamesTarget = targetBase !== undefined && targetBase === incomingVersion;
+	// A staged build can sit under a newer one that is only available. Restart
+	// installs the staged build, not the version in the headline, so the button
+	// then says which one it means.
+	const stagedVersion = status.staged?.version?.replace(/^v/, "");
+	const restartVersion = stagedVersion !== undefined && stagedVersion !== incomingVersion ? stagedVersion : undefined;
 	const showCheck = !downloading && status.state !== "available";
 	const statusParts = statusLineParts(displayState, status, headlineNamesTarget);
 	const statusHasLine = showStatusState && (statusParts.label || statusParts.detail);
@@ -461,8 +473,10 @@ function UpdateActions({
 		if (showStatusState) setHadStatusLine(statusHasLine);
 	}, [showStatusState, statusHasLine]);
 	const reserveStatusLine = !showStatusState && hadStatusLine;
+	// One decimal, with the locale's own decimal separator ("142,7" in German).
+	const megabytes = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 	const downloadedBytes = status.transferred !== undefined && status.total !== undefined
-		? t("settings.updates.bytes", { downloaded: (status.transferred / 1_000_000).toFixed(1), total: (status.total / 1_000_000).toFixed(1) })
+		? t("settings.updates.bytes", { downloaded: megabytes.format(status.transferred / 1_000_000), total: megabytes.format(status.total / 1_000_000) })
 		: null;
 
 	const [now, setNow] = useState(Date.now());
@@ -554,7 +568,6 @@ function UpdateActions({
 							aria-atomic="true"
 							aria-busy={checking || downloading}
 							tabIndex={-1}
-							title={checkedLabel ?? undefined}
 							// With nothing to show it leaves the layout (the version and
 							// its action then share one centred row) but stays in the DOM
 							// as the live region. During a check it keeps the line it had,
@@ -567,8 +580,8 @@ function UpdateActions({
 							{downloadedBytes && <p className="sr-only">{downloadedBytes}</p>}
 							{status.state === "downloading" && status.percent !== undefined && <progress aria-label={t("settings.updates.progress")} max={100} value={status.percent} title={downloadedBytes ?? undefined} className="update-progress" />}
 							{channelSwitchMessage && <p>{channelSwitchMessage}</p>}
-							{/* When it last checked is the status line's tooltip, and read out
-							    by assistive tech; the Check button is the visible answer. */}
+							{/* When it last checked is read out here by assistive tech, and is
+							    the Check button's tooltip for everyone else. */}
 							{checkedLabel ? <p className="sr-only tabular-nums" data-testid="update-checked-at">{checkedLabel}</p> : null}
 						</div>
 						{/* The primary error already explains the failed check. Keep a separate
@@ -606,9 +619,15 @@ function UpdateActions({
 						// Opens the restart confirmation rather than installing outright:
 						// installing quits the app, which costs a turn on any chat session
 						// running a daemon-owned driver.
-						<Button ref={restartButtonRef} type="button" variant="primary" size="sm" onClick={requestUpdateInstall}>
+						<Button ref={restartButtonRef} type="button" variant="primary" size="sm" title={restartVersion ? `v${restartVersion}` : undefined} onClick={requestUpdateInstall}>
 							<RefreshCw className="size-icon-sm" aria-hidden="true" />
 							{t("settings.updates.restartInstall")}
+							{/* Short form, so a nightly stamp never widens the button; the
+							    full version is the tooltip. */}
+							{restartVersion && (
+								// The space is for the accessible name; the flex gap draws it.
+								<>{" "}<span className="tabular-nums opacity-70" data-testid="update-staged-version">v{parseNightlyVersion(restartVersion)?.base ?? restartVersion}</span></>
+							)}
 						</Button>
 					)}
 					{/* Always rendered. Hiding it whenever something was available or
@@ -617,8 +636,11 @@ function UpdateActions({
 					    other action on the page. It is left out only where it has no
 					    use: beside Update, which already acts on a fresh check, and
 					    during a download, where it was disabled throughout. */}
-					{showCheck && <Button
-						ref={checkButtonRef}
+					{/* The tooltip opens on hover and on keyboard focus, so the last
+					    check time does not depend on a mouse. Its own provider keeps
+					    the section usable where no app-level one is mounted. */}
+					{showCheck && <TooltipProvider><Tooltip><TooltipTrigger asChild><Button
+						ref={setCheckButtonRef}
 						type="button"
 						aria-label={checking ? t("settings.updates.checking") : t("settings.updates.check")}
 						aria-describedby={showStatusState ? "update-status-line" : undefined}
@@ -637,7 +659,7 @@ function UpdateActions({
 							<RefreshCw className="size-icon-sm" aria-hidden="true" />
 						)}
 						{checking ? t("settings.updates.checking") : t("settings.updates.check")}
-					</Button>}
+					</Button></TooltipTrigger>{checkedLabel && !checking ? <TooltipContent>{checkedLabel}</TooltipContent> : null}</Tooltip></TooltipProvider>}
 				</div>}
 			</div>
 
@@ -771,7 +793,8 @@ function UpdateStatusLine({
 				<p className="min-w-0 text-pretty">{label}</p>
 			</div>
 			{detail !== null && (
-				<p className={parts.detail ? "truncate text-settings-muted" : "sr-only"}>{detail}</p>
+				// Wraps rather than truncates: a nightly's stamp is what identifies it.
+				<p className={parts.detail ? "[overflow-wrap:anywhere] text-settings-muted" : "sr-only"}>{detail}</p>
 			)}
 		</div>
 	);

@@ -873,9 +873,11 @@ describe("GlobalSettingsForm", () => {
 		renderForm();
 
 		const formatted = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "medium" }).format(checkedAt);
-		// Read out by assistive tech and shown as the status line's tooltip.
+		// Read out by assistive tech, and the Check button's tooltip, which
+		// keyboard focus opens as well as hover.
 		expect(await screen.findByTestId("update-checked-at")).toHaveTextContent(formatted);
-		expect(screen.getByTestId("update-status-line")).toHaveAttribute("title", expect.stringContaining(formatted));
+		act(() => screen.getByRole("button", { name: "Check for updates" }).focus());
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(formatted);
 		expect(screen.getByTestId("update-status-line")).toHaveTextContent("You're on the latest version.");
 	});
 
