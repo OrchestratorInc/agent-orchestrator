@@ -24,6 +24,9 @@ type recordedReq struct {
 	Path        string
 	Body        string
 	IfNoneMatch string
+	// Authorization is the raw header, so tests can prove which credential a
+	// conditional request was sent under.
+	Authorization string
 }
 
 // fakeGH is a programmable httptest.Server that matches requests by
@@ -55,7 +58,7 @@ func (f *fakeGH) serve(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	key := r.Method + " " + r.URL.Path
 	f.mu.Lock()
-	f.requests = append(f.requests, recordedReq{Method: r.Method, Path: r.URL.Path, Body: string(body), IfNoneMatch: r.Header.Get("If-None-Match")})
+	f.requests = append(f.requests, recordedReq{Method: r.Method, Path: r.URL.Path, Body: string(body), IfNoneMatch: r.Header.Get("If-None-Match"), Authorization: r.Header.Get("Authorization")})
 	h, ok := f.handlers[key]
 	f.mu.Unlock()
 	if !ok {
@@ -767,6 +770,99 @@ func TestList_SeparateCacheKeyPerFilter(t *testing.T) {
 	}
 	if len(second) != 1 || second[0].Title != "docs" {
 		t.Fatalf("second issues = %#v, want docs", second)
+	}
+}
+
+// switchableTokenSource yields whichever credential the test set, so a sweep
+// can be run under one credential and the next under another (gh auth login,
+// token refresh). New() resolves the token once during its fail-fast check, so
+// a rotating source would already be out of step by the first List.
+type switchableTokenSource struct {
+	mu    sync.Mutex
+	token string
+}
+
+func (s *switchableTokenSource) Token(context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.token, nil
+}
+
+func (s *switchableTokenSource) set(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.token = token
+}
+
+// TestList_CacheNotReusedAcrossCredentials is the regression for a conditional
+// request replayed under a different token: GitHub scopes each ETag to one
+// credential, so reusing it either wastes the request or serves the previous
+// credential's cached issues from a 304.
+func TestList_CacheNotReusedAcrossCredentials(t *testing.T) {
+	f := newFakeGH(t)
+	f.on("GET", "/repos/o/r/issues", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Header.Get("Authorization") {
+		case "Bearer token-a":
+			w.Header().Set("ETag", `"etag-a"`)
+			_, _ = w.Write([]byte(`[{"number":1,"title":"visible to a","state":"open","html_url":"https://github.com/o/r/issues/1"}]`))
+		case "Bearer token-b":
+			w.Header().Set("ETag", `"etag-b"`)
+			_, _ = w.Write([]byte(`[{"number":2,"title":"visible to b","state":"open","html_url":"https://github.com/o/r/issues/2"}]`))
+		default:
+			t.Errorf("unexpected Authorization %q", r.Header.Get("Authorization"))
+			http.Error(w, "bad token", http.StatusUnauthorized)
+		}
+	})
+	tokens := &switchableTokenSource{token: "token-a"}
+	tr, err := New(Options{BaseURL: f.server.URL, Token: tokens, HTTPClient: f.server.Client()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	repo := domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "o/r"}
+
+	first, err := tr.List(ctx(), repo, domain.ListFilter{})
+	if err != nil {
+		t.Fatalf("first List: %v", err)
+	}
+	tokens.set("token-b")
+	second, err := tr.List(ctx(), repo, domain.ListFilter{})
+	if err != nil {
+		t.Fatalf("second List: %v", err)
+	}
+	if len(first) != 1 || first[0].Title != "visible to a" {
+		t.Fatalf("first issues = %#v", first)
+	}
+	if len(second) != 1 || second[0].Title != "visible to b" {
+		t.Fatalf("second issues = %#v, want the second credential's own issues", second)
+	}
+	reqs := f.calls()
+	if len(reqs) != 2 {
+		t.Fatalf("HTTP calls = %d, want 2", len(reqs))
+	}
+	if got := reqs[1].IfNoneMatch; got != "" {
+		t.Fatalf("second credential replayed the first credential's validator %q", got)
+	}
+	for i, req := range reqs {
+		if req.Authorization == "" {
+			t.Fatalf("request #%d carried no bearer header", i)
+		}
+	}
+}
+
+// TestStoreListCacheEntry_BoundsSize pins the eviction ceiling: the cache is a
+// conditional-request saving, so it is bounded rather than allowed to grow with
+// every repo/filter/cursor a long-lived daemon ever sees.
+func TestStoreListCacheEntry_BoundsSize(t *testing.T) {
+	tr := &Tracker{listCache: map[string]listCacheEntry{}}
+	for i := 0; i <= listCacheLimit*2; i++ {
+		tr.storeListCacheEntry(strconv.Itoa(i), listCacheEntry{etag: strconv.Itoa(i), tokenKey: "tkn"})
+	}
+	if got := len(tr.listCache); got > listCacheLimit {
+		t.Fatalf("list cache holds %d entries, want at most %d", got, listCacheLimit)
+	}
+	last := strconv.Itoa(listCacheLimit * 2)
+	if got, ok := tr.listCache[last]; !ok || got.etag != last {
+		t.Fatalf("newest entry was evicted: %#v", got)
 	}
 }
 

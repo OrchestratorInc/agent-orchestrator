@@ -10,6 +10,12 @@
 //     token is accepted; success is cached for the lifetime of the
 //     Tracker, failures are not.
 //
+// List keeps ETag validators so repeat sweeps revalidate in one conditional
+// request. Those validators are keyed by request path AND credential: GitHub
+// scopes both visibility and ETags per token, so a cached list is never
+// revalidated under a different credential. The cache is bounded, and evicting
+// an entry only costs a full fetch.
+//
 // Writing back to the tracker (Comment, Transition) is deferred to issue
 // #40. The observer/polling loop is deferred to issue #35.
 //

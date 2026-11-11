@@ -107,15 +107,20 @@ type Tracker struct {
 	preflight httpkit.PreflightCache
 }
 
-// New returns a Tracker. It fails fast when no token can be obtained so
-// daemons crash at startup rather than at first issue lookup.
+// New returns a Tracker. It fails fast when no credential can be obtained at
+// all (no default token and no per-host token) so a daemon with no GitLab
+// access does not advertise one; a configuration whose only credentials are
+// HostTokens for self-managed hosts constructs fine and fails per-host at call
+// time, matching the SCM provider's hostTokens semantics.
 func New(opts Options) (*Tracker, error) {
 	src := opts.Token
-	if src == nil {
-		return nil, ErrNoToken
-	}
-	if _, err := src.Token(context.Background()); err != nil {
-		return nil, err
+	defaultErr := error(ErrNoToken)
+	if src != nil {
+		if _, err := src.Token(context.Background()); err != nil {
+			defaultErr = err
+		} else {
+			defaultErr = nil
+		}
 	}
 	baseURL := opts.BaseURL
 	if baseURL == "" {
@@ -126,8 +131,12 @@ func New(opts Options) (*Tracker, error) {
 		ua = defaultUserAgent
 	}
 
-	// Build per-host config for self-managed hosts.
+	// Build per-host config for self-managed hosts. A host with its own token is
+	// usable even when the default (gitlab.com) token is missing; hosts without
+	// one inherit the default source, and therefore its failure, at call time.
 	hosts := make(map[string]hostEntry, len(opts.AllowedHosts))
+	usableHostToken := false
+	var hostTokenErr error
 	for _, raw := range opts.AllowedHosts {
 		h := scmgitlab.NormalizeHost(raw)
 		if h == "" || scmgitlab.IsGitLabDotCom(h) {
@@ -138,9 +147,22 @@ func New(opts Options) (*Tracker, error) {
 			tokens:  src, // fall back to default token
 		}
 		if ts, ok := opts.HostTokens[h]; ok && ts != nil {
+			if _, err := ts.Token(context.Background()); err != nil {
+				if hostTokenErr == nil {
+					hostTokenErr = err
+				}
+			} else {
+				usableHostToken = true
+			}
 			he.tokens = ts
 		}
 		hosts[h] = he
+	}
+	if defaultErr != nil && !usableHostToken {
+		if hostTokenErr != nil {
+			return nil, hostTokenErr
+		}
+		return nil, defaultErr
 	}
 
 	t := &Tracker{
@@ -386,6 +408,10 @@ func (t *Tracker) roundTrip(ctx context.Context, he hostEntry, method, path stri
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", t.userAgent)
+	if he.tokens == nil {
+		// A tracker built with only per-host tokens has no gitlab.com credential.
+		return nil, "", fmt.Errorf("gitlab tracker: %s %s: %w", method, path, ErrNoToken)
+	}
 	tok, err := he.tokens.Token(ctx)
 	if err != nil {
 		return nil, "", err

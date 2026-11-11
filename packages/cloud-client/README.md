@@ -55,3 +55,16 @@ The worker client matches the control plane's bootstrap, heartbeat, event,
 fenced turn, credential, checkout-grant, child orchestration, workspace
 transport, and terminal transport routes. It intentionally excludes worker
 provisioning, database details, secret storage, and local daemon routes.
+
+## Errors and retries
+
+Failed requests throw `CloudApiError` carrying the server's error envelope
+(`error.envelope`). Before retrying, check `terminal` on the caught
+`CloudApiError` itself — `error.envelope` has no such field. A terminal error
+cannot succeed on a retry even though its `status` may look transient (a
+5xx-shaped envelope).
+`streamEvents` reconnects on transient failures with capped backoff, and after
+a bounded number of reconnects without delivering an event it throws
+`EVENT_STREAM_INTERRUPTED` with `terminal: true`. An outer retry loop around
+`streamEvents` must treat that error as final and wait for a user action or a
+new stream, not reconnect it.

@@ -255,13 +255,18 @@ SET session_mode = sqlc.arg(target_mode),
     native_checkpoint_evidence = CASE WHEN sqlc.arg(target_mode) = 'tui' THEN '' ELSE native_checkpoint_evidence END,
     activity_state = 'idle',
     activity_last_at = sqlc.arg(activity_last_at),
+    -- The committed target controller has not yet proven its hook pipeline.
+    -- Clearing the receipt makes a relaunch that never signals degrade to
+    -- no_signal instead of inheriting the source controller's receipt.
+    first_signal_at = NULL,
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id) AND session_mode = sqlc.arg(source_mode) AND is_terminated = 0;
 
 -- name: RestoreSessionControllerEpoch :execrows
 -- Rollback owns the same controller/activity facts but retains the source replay
 -- checkpoint: the failed target never accepted it, so a later strict retry must
--- prove the same checkpoint again.
+-- prove the same checkpoint again. The source controller never stopped, so its
+-- first_signal_at receipt stays valid and is deliberately not cleared here.
 UPDATE sessions
 SET session_mode = sqlc.arg(target_mode),
     runtime_handle_id = '',

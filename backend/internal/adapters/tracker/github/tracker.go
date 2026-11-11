@@ -80,17 +80,28 @@ type Tracker struct {
 	baseURL   string
 	userAgent string
 
-	// listCache stores one entry per distinct List request path. The key
-	// space is naturally bounded by intake-enabled repo/filter pairs, so no
-	// eviction is needed here.
+	// listCache stores one entry per distinct List request path, bounded by
+	// listCacheLimit so a long-lived daemon that sees many repos, filters, and
+	// paginated cursors cannot grow it without limit. Entries are ETag
+	// validators only: evicting one costs a conditional-request saving, never
+	// correctness, and each List re-populates the paths it needs.
 	listCacheMu sync.Mutex
 	listCache   map[string]listCacheEntry
 
 	preflight httpkit.PreflightCache
 }
 
+// listCacheLimit caps cached conditional-request validators. Intake sweeps keep
+// only a few repo/filter pairs hot, so this is well above the working set.
+const listCacheLimit = 512
+
+// listCacheEntry is keyed by request path and the token identity that produced
+// its ETag. GitHub scopes both visibility and validators per credential, so a
+// cached issue list must never be revalidated (or served on 304) under a
+// different token — that would leak a previous credential's visible issues.
 type listCacheEntry struct {
 	etag     string
+	tokenKey string
 	issues   []domain.Issue
 	nextPath string
 }
@@ -278,6 +289,12 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 	if filter.Limit > 0 {
 		out = make([]domain.Issue, 0, filter.Limit)
 	}
+	// One credential per sweep: every conditional request in this List must
+	// share it so a rotating token source cannot mix validators mid-pagination.
+	token, err := t.tokens.Token(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for page := 0; path != ""; page++ {
 		if page >= maxListPages {
 			return nil, fmt.Errorf("github tracker: list pagination exceeded %d pages", maxListPages)
@@ -285,17 +302,21 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 		t.listCacheMu.Lock()
 		cached, hasCached := t.listCache[path]
 		t.listCacheMu.Unlock()
+		// A validator minted under a different credential says nothing about
+		// what this credential can see, so it is not reused.
+		if hasCached && cached.tokenKey != token {
+			cached, hasCached = listCacheEntry{}, false
+		}
 
-		resp, etag, nextPath, notModified, err := t.roundTrip(ctx, http.MethodGet, path, nil, cached.etag)
+		resp, etag, nextPath, notModified, sentToken, err := t.roundTrip(ctx, http.MethodGet, path, nil, cached.etag, token)
 		if err != nil {
 			return nil, err
 		}
+		token = sentToken
 		if notModified {
 			if hasCached {
 				if etag != "" && etag != cached.etag {
-					t.listCacheMu.Lock()
-					t.listCache[path] = listCacheEntry{etag: etag, issues: cached.issues, nextPath: cached.nextPath}
-					t.listCacheMu.Unlock()
+					t.storeListCacheEntry(path, listCacheEntry{etag: etag, tokenKey: token, issues: cached.issues, nextPath: cached.nextPath})
 				}
 				var done bool
 				out, done = httpkit.AppendIssuesWithLimit(out, cloneIssues(cached.issues), filter.Limit)
@@ -307,10 +328,11 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 			}
 			// A 304 requires a prior validator, but if a server violates that
 			// contract, retry unconditionally rather than returning no data.
-			resp, etag, nextPath, notModified, err = t.roundTrip(ctx, http.MethodGet, path, nil, "")
+			resp, etag, nextPath, notModified, sentToken, err = t.roundTrip(ctx, http.MethodGet, path, nil, "", token)
 			if err != nil {
 				return nil, err
 			}
+			token = sentToken
 			if notModified {
 				return nil, fmt.Errorf("github tracker: unexpected 304 for uncached list")
 			}
@@ -327,9 +349,7 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 			pageIssues = append(pageIssues, issueFromGH(owner, repoName, r))
 		}
 		if etag != "" {
-			t.listCacheMu.Lock()
-			t.listCache[path] = listCacheEntry{etag: etag, issues: cloneIssues(pageIssues), nextPath: nextPath}
-			t.listCacheMu.Unlock()
+			t.storeListCacheEntry(path, listCacheEntry{etag: etag, tokenKey: token, issues: cloneIssues(pageIssues), nextPath: nextPath})
 		} else if hasCached {
 			t.listCacheMu.Lock()
 			delete(t.listCache, path)
@@ -349,6 +369,21 @@ func cloneIssues(in []domain.Issue) []domain.Issue {
 	out := make([]domain.Issue, len(in))
 	copy(out, in)
 	return out
+}
+
+// storeListCacheEntry writes one validator and bounds the map. The limit is
+// enforced by evicting an arbitrary entry when full: every entry is an optional
+// conditional-request saving, so no eviction order can cost correctness.
+func (t *Tracker) storeListCacheEntry(path string, entry listCacheEntry) {
+	t.listCacheMu.Lock()
+	defer t.listCacheMu.Unlock()
+	if _, exists := t.listCache[path]; !exists && len(t.listCache) >= listCacheLimit {
+		for victim := range t.listCache {
+			delete(t.listCache, victim)
+			break
+		}
+	}
+	t.listCache[path] = entry
 }
 
 // ---------------------------------------------------------------------------
@@ -378,22 +413,27 @@ func (t *Tracker) Preflight(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 func (t *Tracker) do(ctx context.Context, method, path string, body any) ([]byte, error) {
-	respBody, _, _, _, err := t.roundTrip(ctx, method, path, body, "")
+	respBody, _, _, _, _, err := t.roundTrip(ctx, method, path, body, "", "")
 	return respBody, err
 }
 
-func (t *Tracker) roundTrip(ctx context.Context, method, path string, body any, ifNoneMatch string) ([]byte, string, string, bool, error) {
+// roundTrip performs one request. token is the resolved credential the caller
+// already fetched (List resolves it once per sweep so every page shares one
+// identity); an empty token makes roundTrip resolve and return it, which is what
+// Get-style single-shot callers do. The returned token is the one actually sent,
+// so callers can key per-credential caches on it.
+func (t *Tracker) roundTrip(ctx context.Context, method, path string, body any, ifNoneMatch, token string) (respBody []byte, etag, nextPath string, notModified bool, sentToken string, err error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, "", "", false, fmt.Errorf("github tracker: encode body: %w", err)
+			return nil, "", "", false, "", fmt.Errorf("github tracker: encode body: %w", err)
 		}
 		rdr = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, t.baseURL+path, rdr)
 	if err != nil {
-		return nil, "", "", false, fmt.Errorf("github tracker: build request: %w", err)
+		return nil, "", "", false, "", fmt.Errorf("github tracker: build request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -404,30 +444,34 @@ func (t *Tracker) roundTrip(ctx context.Context, method, path string, body any, 
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", t.userAgent)
-	tok, err := t.tokens.Token(ctx)
-	if err != nil {
-		return nil, "", "", false, err
+	sentToken = token
+	if sentToken == "" {
+		resolved, err := t.tokens.Token(ctx)
+		if err != nil {
+			return nil, "", "", false, "", err
+		}
+		sentToken = resolved
 	}
-	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Authorization", "Bearer "+sentToken)
 
 	resp, err := t.http.Do(req)
 	if err != nil {
-		return nil, "", "", false, fmt.Errorf("github tracker: %s %s: %w", method, path, err)
+		return nil, "", "", false, "", fmt.Errorf("github tracker: %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	etag := resp.Header.Get("ETag")
-	nextPath := httpkit.ParseLinkNext(resp.Header.Get("Link"), t.baseURL)
+	etag = resp.Header.Get("ETag")
+	nextPath = httpkit.ParseLinkNext(resp.Header.Get("Link"), t.baseURL)
 	if resp.StatusCode == http.StatusNotModified {
-		return nil, etag, nextPath, true, nil
+		return nil, etag, nextPath, true, sentToken, nil
 	}
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return nil, "", "", false, fmt.Errorf("github tracker: read response body: %w", readErr)
+		return nil, "", "", false, "", fmt.Errorf("github tracker: read response body: %w", readErr)
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return respBody, etag, nextPath, false, nil
+		return respBody, etag, nextPath, false, sentToken, nil
 	}
-	return respBody, etag, nextPath, false, classifyError(resp, respBody)
+	return respBody, etag, nextPath, false, sentToken, classifyError(resp, respBody)
 }
 
 func classifyError(resp *http.Response, body []byte) error {

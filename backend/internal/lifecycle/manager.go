@@ -537,6 +537,13 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 // instead of overwriting them with a stale full projection.
 const maxActivitySignalProjectionRetries = 3
 
+// MarkTerminated re-reads and re-applies after a same-launch revision change.
+// The loop is bounded so a session whose revision is churned by concurrent
+// writers surfaces contention instead of spinning forever while holding a
+// caller's request. Termination does strictly less work per attempt than a
+// signal projection (no checkpoint reduction), so it allows a few more tries.
+const maxTerminationProjectionRetries = 8
+
 // nonInteractiveNativeEntrypoint reports whether a hook came from a headless
 // Claude process. Claude forces CLAUDE_CODE_ENTRYPOINT to sdk-cli for -p runs,
 // even when the parent interactive session exported "cli", while SDK hosts set
@@ -1711,6 +1718,12 @@ func (m *Manager) changeControllerEpoch(
 		next.Metadata.ConversationCheckpointUnsettled = false
 	}
 	next.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
+	if !restore {
+		// The committed target controller must re-prove its hook pipeline, the
+		// same way MarkSpawned clears the receipt for a new launch. Rollback
+		// leaves the source controller running, so its receipt stays valid.
+		next.FirstSignalAt = time.Time{}
+	}
 	next.UpdatedAt = now
 	delete(m.flights, id)
 	// The old runtime's open step never gets its post-hook; left in place it
@@ -1734,9 +1747,12 @@ func (m *Manager) changeControllerEpoch(
 // session's Docker containers via the optional ContainerReaper (#2652) as its one
 // built-in external side effect.
 func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error {
-	for {
+	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if attempt >= maxTerminationProjectionRetries {
+			return fmt.Errorf("%w for %s: concurrent session writes exhausted %d attempts", ports.ErrActivityProjectionContention, id, attempt)
 		}
 		rec, ok, err := m.store.GetSession(ctx, id)
 		if err != nil || !ok {
@@ -1752,6 +1768,13 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 		m.mu.Lock()
 		finalizer := m.usageFinalizer
 		m.mu.Unlock()
+		// Ordering is load-bearing, not incidental: the usage finalizer's write
+		// requires this exact pre-termination revision AND is_terminated = 0, so
+		// it can only run before the CAS below. The sessions_revision_update
+		// trigger bumps revision on every write, so a post-CAS call can never
+		// match and would silently finalize nothing. It is idempotent per
+		// (launch, revision): a contention retry re-runs it against the same
+		// values, and an already-finalized binding is simply rewritten.
 		finalizeSessionUsage(ctx, id, launchID, sessionRevision, finalizer)
 
 		const (
@@ -1813,21 +1836,26 @@ func (m *Manager) reapSessionContainers(ctx context.Context, id domain.SessionID
 	if m.containers == nil {
 		return
 	}
-	if m.projects != nil {
-		rec, ok, err := m.store.GetSession(ctx, id)
-		if err != nil || !ok {
-			slog.Default().Warn("lifecycle: container reap: session lookup failed, skipping", "session", id, "err", err)
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil || !ok {
+		slog.Default().Warn("lifecycle: container reap: session lookup failed, skipping", "session", id, "err", err)
+		return
+	}
+	if !rec.IsStandalone() {
+		if m.projects == nil {
+			// Without the project loader a project's ContainerReap opt-out can
+			// never be consulted, so reaping would silently override it. Spare
+			// on ambiguity, exactly as a failed lookup does.
+			slog.Default().Warn("lifecycle: container reap: project config loader not wired, skipping project session", "session", id, "project", rec.ProjectID)
 			return
 		}
-		if !rec.IsStandalone() {
-			project, ok, err := m.projects.GetProject(ctx, string(rec.ProjectID))
-			if err != nil || !ok {
-				slog.Default().Warn("lifecycle: container reap: project lookup failed or missing, skipping rather than guessing", "session", id, "project", rec.ProjectID, "err", err)
-				return
-			}
-			if project.Config.ContainerReap.Disabled {
-				return
-			}
+		project, ok, err := m.projects.GetProject(ctx, string(rec.ProjectID))
+		if err != nil || !ok {
+			slog.Default().Warn("lifecycle: container reap: project lookup failed or missing, skipping rather than guessing", "session", id, "project", rec.ProjectID, "err", err)
+			return
+		}
+		if project.Config.ContainerReap.Disabled {
+			return
 		}
 	}
 	removed, err := m.containers.ReapSessionContainers(ctx, id)
