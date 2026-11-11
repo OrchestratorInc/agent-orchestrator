@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // SessionCreator records who caused a session to exist. It is a closed
 // vocabulary so product telemetry can tell human-started work from work an
 // agent or a schedule started on the user's behalf.
@@ -47,4 +49,19 @@ const (
 type SessionTelemetryFacts struct {
 	CreatedBy         SessionCreator
 	WaitingInputCount int64
+}
+
+// AutoSpawnPause reports that automatic starts (tracker intake, schedules)
+// for one project and harness stopped after repeated identical failures.
+// Message is the API message the last failure answered with; it is shown
+// only in the local desktop and never exported.
+type AutoSpawnPause struct {
+	Harness   AgentHarness `json:"harness"`
+	Model     string       `json:"model,omitempty"`
+	Effort    string       `json:"effort,omitempty"`
+	Kind      string       `json:"kind,omitempty"`
+	ErrorCode string       `json:"errorCode"`
+	Message   string       `json:"message"`
+	Failures  int          `json:"failures"`
+	PausedAt  time.Time    `json:"pausedAt"`
 }

@@ -126,6 +126,7 @@ export type GlobalToast = {
 	tone?: "info" | "error" | "success";
 	placement?: "bottom-right" | "top-center" | "bottom-center";
 	dismissible?: boolean;
+	/** Zero keeps the toast visible until explicitly dismissed. */
 	durationMs?: number;
 	dedupeKey?: string;
 	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */

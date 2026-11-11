@@ -15058,6 +15058,32 @@ components:
       required:
       - data
       type: object
+    AutoSpawnPause:
+      properties:
+        effort:
+          type: string
+        errorCode:
+          type: string
+        failures:
+          type: integer
+        harness:
+          type: string
+        kind:
+          type: string
+        message:
+          type: string
+        model:
+          type: string
+        pausedAt:
+          format: date-time
+          type: string
+      required:
+      - harness
+      - errorCode
+      - message
+      - failures
+      - pausedAt
+      type: object
     AutomationEnvelope:
       properties:
         automation:
@@ -20232,6 +20258,10 @@ components:
       type: object
     ProjectSummary:
       properties:
+        autoSpawnPauses:
+          items:
+            $ref: '#/components/schemas/AutoSpawnPause'
+          type: array
         folderMissing:
           type: boolean
         id:
