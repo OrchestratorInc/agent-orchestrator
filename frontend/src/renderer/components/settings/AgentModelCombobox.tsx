@@ -71,6 +71,7 @@ export function AgentModelCombobox({
 	onChange,
 	onCustom,
 	onUseDefault,
+	useDefaultLabel,
 	emptyLabel,
 	footer,
 	modelHint,
@@ -82,6 +83,7 @@ export function AgentModelCombobox({
 	recentScope,
 	compact = false,
 	showEffortInTrigger = true,
+	preserveDefaultSelection = false,
 	agentId,
 	tuning,
 	disabled = false,
@@ -100,6 +102,8 @@ export function AgentModelCombobox({
 	onCustom?: (value: string) => void;
 	/** Offers the agent's native default as a choice, above the listed models. */
 	onUseDefault?: () => void;
+	/** Names the default choice where "project or agent default" does not fit. */
+	useDefaultLabel?: string;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
 	/** A note under the models, such as where they come from. */
@@ -123,6 +127,8 @@ export function AgentModelCombobox({
 	compact?: boolean;
 	/** Keep the effort level inside the menu only, off the trigger label. */
 	showEffortInTrigger?: boolean;
+	/** Save explicit catalog default picks instead of treating them as inheritance. */
+	preserveDefaultSelection?: boolean;
 	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
 	disabled?: boolean;
@@ -247,7 +253,7 @@ export function AgentModelCombobox({
 			const next = rememberRecentModel(recentScope, modelID);
 			setSessionRecentModels((current) => ({ ...current, [recentScope]: next }));
 		}
-		onChange(modelID === defaultModel ? "" : modelID);
+		onChange(!preserveDefaultSelection && modelID === defaultModel ? "" : modelID);
 	};
 	const selectCatalogModel = (event: Event, item: IndexedModel) => {
 		const family = families?.find((entry) => entry.id === item.id);
@@ -411,9 +417,9 @@ export function AgentModelCombobox({
 					>
 						{onUseDefault && normalizedSearch === "" && (
 							<>
-								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "")}>
+								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "" && !explicitEffort)}>
 									<span className="truncate text-settings-label">
-										{t("settings.models.useConfiguredDefault")}
+										{useDefaultLabel ?? t("settings.models.useConfiguredDefault")}
 									</span>
 								</DropdownMenuItem>
 								{visibleModels.length > 0 && <DropdownMenuSeparator />}
@@ -580,7 +586,7 @@ export function AgentModelCombobox({
 								{effortOptions.map((effort) => (
 									<OptionMenuItem key={effort} role="menuitemradio" aria-checked={effort === effectiveEffort}
 										active={effort === effectiveEffort} onSelect={() => {
-											tuning.onEffortChange(effort === defaultEffort ? "" : effort);
+											tuning.onEffortChange(!preserveDefaultSelection && effort === defaultEffort ? "" : effort);
 											setEffortMenuOpen(false);
 											setAwaitingEffort(false);
 											setMenuOpen(false);

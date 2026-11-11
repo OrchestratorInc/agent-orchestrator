@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TaskModelPicker } from "../TaskModelControls";
 import { AgentModelCombobox, buildModelSearchIndex, searchModelIndex } from "./AgentModelCombobox";
 
 function renderCombobox(
@@ -26,6 +27,45 @@ function renderCombobox(
 
 describe("AgentModelCombobox", () => {
 	beforeEach(() => window.localStorage.clear());
+
+	it("keeps the task composer default model inherited", async () => {
+		const onModelChange = vi.fn();
+		render(<TaskModelPicker id="task-model" disabled={false} fetching={false} agentId="codex" agentLabel="Codex" projectId="" value="" mode=""
+			catalog={{ allowCustom: false, customModelEntry: "none", selectionMode: "catalog", models: [{ id: "gpt-test", label: "GPT Test", isDefault: true }] }}
+			onModelChange={onModelChange} onModeChange={vi.fn()} showFollowAgentAction={false} />);
+		expect(onModelChange).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT Test" }));
+		expect(onModelChange).toHaveBeenCalledWith("");
+	});
+
+	it("keeps catalog default selections inherited for composer callers", async () => {
+		const onEffortChange = vi.fn();
+		const { onChange } = renderCombobox([
+			{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" },
+		], { compact: true, tuning: { effort: "", onEffortChange } });
+		expect(onChange).not.toHaveBeenCalled();
+		expect(onEffortChange).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT Test" }));
+		expect(onChange).toHaveBeenCalledWith("");
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		expect(onEffortChange).toHaveBeenCalledWith("");
+	});
+
+	it("reports explicit catalog default picks when the caller preserves them", async () => {
+		const onEffortChange = vi.fn();
+		const { onChange } = renderCombobox([
+			{ id: "gpt-test", label: "GPT Test", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" },
+		], { compact: true, preserveDefaultSelection: true, tuning: { effort: "", onEffortChange } });
+		expect(onChange).not.toHaveBeenCalled();
+		expect(onEffortChange).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "GPT Test" }));
+		expect(onChange).toHaveBeenCalledWith("gpt-test");
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		expect(onEffortChange).toHaveBeenCalledWith("low");
+	});
 
 	it("shows resolved effort beside the model and keeps effort in the menu", async () => {
 		function Picker() {
