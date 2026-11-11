@@ -1,3 +1,5 @@
+import type { Element as HastElement } from "hast";
+import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excerpt-source";
 /**
  * Markdown for agent prose.
  *
@@ -107,6 +109,8 @@ const FADE_SHED_MS = 450;
  */
 const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
+/** Inside a link to an artifact: its name reads in the UI font, as everywhere else artifacts are named. */
+const InsideArtifactLink = createContext(false);
 const SafeOriginContent = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
 const OpenChatLink = createContext<{
@@ -244,6 +248,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					<MarkdownChunk
 						key={index}
 						source={block.source}
+						sourceOffset={block.start}
 						repairInline={block.repairInline}
 						streaming={streaming && index === blocks.blocks.length - 1}
 						fading={animate && index === blocks.blocks.length - 1}
@@ -258,8 +263,9 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 
 // No wrapper DOM: list/table layout, image galleries and prose spacing keep
 // their existing parent. Only the changing chunk enters react-markdown again.
-const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
+const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
 	source: string;
+	sourceOffset: number;
 	repairInline: boolean;
 	streaming: boolean;
 	fading: boolean;
@@ -270,8 +276,13 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, stream
 		linkMode: "text-only", images: false, htmlTags: false,
 		katex: false, setextHeadings: false, comparisonOperators: false,
 	}) : source, [source, streaming, repairInline]);
-	const plugins = useMemo<Options["rehypePlugins"]>(() =>
-		fading ? [[rehypeStreamFade, { settledOffset }]] : undefined, [fading, settledOffset]);
+	const plugins = useMemo<NonNullable<Options["rehypePlugins"]>>(() => {
+		// Repaired streaming tails cannot be selected. Settled chunks retain only
+		// source bounds; detailed mappings are built when a selection is captured.
+		const entries: NonNullable<Options["rehypePlugins"]> = streaming ? [] : [[rehypeExcerptSource, { offset: sourceOffset }]];
+		if (fading) entries.push([rehypeStreamFade, { settledOffset }]);
+		return entries;
+	}, [sourceOffset, streaming, fading, settledOffset]);
 	return <StreamingProse.Provider value={streaming}>
 		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 			{repaired}
@@ -298,17 +309,19 @@ let preferredWrap = false;
  * The toggle is there for the case that argument loses — a single 300-character
  * line, where scrolling means losing the rest of the block.
  */
-function CodeBlock({ code, language }: { code: string; language?: string }) {
+function CodeBlock({ code, language, sourceNode }: { code: string; language?: string; sourceNode?: HastElement }) {
+	const positions = excerptElementProps(sourceNode);
 	const streaming = useContext(StreamingProse);
 	const grammar = canonicalLanguage(language);
 	const [wrap, setWrap] = useState(preferredWrap);
 
 	return (
 		<div
+			{...positions}
 			className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface"
 			data-wrap={wrap ? "true" : "false"}
 		>
-			<div data-chat-find-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
+			<div data-excerpt-exclude="" data-chat-find-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="text-caption text-muted-foreground">
 					{language || "text"}
 				</span>
@@ -334,7 +347,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 				</div>
 			</div>
 			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
-				<code className="font-mono text-xs leading-[1.6] text-foreground">
+				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>
@@ -423,7 +436,9 @@ function MarkdownLink({ href, children, className, menuPath }: { href?: string; 
 			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
 			<ChatImageLinkScope>
-				<InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
+				<InsideMarkdownLink.Provider value>
+					<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
+				</InsideMarkdownLink.Provider>
 			</ChatImageLinkScope>
 		</AppLink>
 	);
@@ -548,29 +563,43 @@ export function useChatLinkWorkspaces() {
 	return useSessionLinkSource(sessionLinkHostId, sessionLinkSourceKind).workspaces;
 }
 
-/** Inline code naming a listed session artifact, linked to that artifact. */
-export function ArtifactPathCode({ text, children }: { text: string; children: ReactNode }) {
+/**
+ * Inline code naming a listed session artifact, linked to that artifact's
+ * preview and showing `children`; a path the session does not list shows
+ * `unlisted` (default `children`).
+ */
+export function ArtifactPathCode({ text, children, unlisted = children }: { text: string; children: ReactNode; unlisted?: ReactNode }) {
 	const workspaces = useChatLinkWorkspaces();
 	const href = artifactLinkForPath(text, workspaces);
 	const path = explicitWorkspaceFilePath(text);
-	if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
-	return path ? <ChatPathMenu path={path}><span>{children}</span></ChatPathMenu> : <>{children}</>;
+	// Every workspace refresh, for any session's status, reaches here; the same
+	// element back lets the path menu below skip it unless the link changed.
+	return useMemo(() => {
+		if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
+		return path ? <ChatPathMenu path={path}><span>{unlisted}</span></ChatPathMenu> : <>{unlisted}</>;
+	}, [children, href, path, unlisted]);
 }
 
-function InlineCode({ children, className }: { children?: ReactNode; className?: string }) {
+function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
+	const positions = excerptElementProps(node);
 	const { openSession } = useContext(OpenChatLink);
 	const insideLink = useContext(InsideMarkdownLink);
+	const insideArtifactLink = useContext(InsideArtifactLink);
 	const text = typeof children === "string" ? children : undefined;
 	const file = useWorkspaceFile(text);
-	if (isInlineMath(className)) return <MathFormula tex={text ?? ""} />;
+	if (isInlineMath(className)) return <span {...positions} data-excerpt-block=""><MathFormula tex={text ?? ""} /></span>;
+	// An artifact's name is not code: it reads in the UI font, like its rows and
+	// headers. It is still inline code in the source, so excerpts map it as one.
+	const name = <span {...positions} data-excerpt-kind="inline-code">{children}</span>;
+	if (insideArtifactLink) return name;
 	const code = (
-		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
+		<code {...positions} data-excerpt-kind="inline-code" className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
 			{children}
 		</code>
 	);
 	if (insideLink) return code;
 	if (!file) {
-		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text}>{code}</ArtifactPathCode>;
+		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
 	}
@@ -579,6 +608,7 @@ function InlineCode({ children, className }: { children?: ReactNode; className?:
 		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
 			<Pressable
 				data-chat-find-include=""
+				data-excerpt-include=""
 				onClick={openFile}
 				aria-label={`Open ${file.filePath} in Files`}
 				className="inline rounded transition-colors hover:bg-interactive-hover"
@@ -590,35 +620,36 @@ function InlineCode({ children, className }: { children?: ReactNode; className?:
 }
 
 const COMPONENTS: Components = {
+	span: ({ children, node: _node, ...props }) => <span {...props}>{props.className?.split(" ").includes("stream-char") ? children : compactEmoji(children)}</span>,
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
-	h1: ({ children }) => (
-		<h3 className="mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0">
+	h1: ({ children, node: _node, ...props }) => (
+		<h3 {...props} className="mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h3>
 	),
-	h2: ({ children }) => (
-		<h4 className="mb-1.5 mt-3.5 text-sm font-semibold leading-snug text-foreground first:mt-0">
+	h2: ({ children, node: _node, ...props }) => (
+		<h4 {...props} className="mb-1.5 mt-3.5 text-sm font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h4>
 	),
-	h3: ({ children }) => (
-		<h5 className="mb-1 mt-3 text-sm font-semibold leading-snug text-foreground first:mt-0">
+	h3: ({ children, node: _node, ...props }) => (
+		<h5 {...props} className="mb-1 mt-3 text-sm font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h5>
 	),
-	h4: ({ children }) => (
-		<h6 className="mb-1 mt-3 text-xs font-semibold text-muted-foreground first:mt-0">
+	h4: ({ children, node: _node, ...props }) => (
+		<h6 {...props} className="mb-1 mt-3 text-xs font-semibold text-muted-foreground first:mt-0">
 			{children}
 		</h6>
 	),
 
 	// A paragraph of nothing but images is a set of pictures, not prose.
-	p: ({ children, node }) =>
+	p: ({ children, node, ...props }) =>
 		isImageOnlyParagraph(node) ? (
 			<ChatImageGallery>{children}</ChatImageGallery>
 		) : (
-			<p className="my-2 first:mt-0 last:mb-0">{compactEmoji(children)}</p>
+			<p {...props} className="my-2 first:mt-0 last:mb-0">{compactEmoji(children)}</p>
 		),
 
 	ul: ({ children }) => <ul className="my-2 ml-4 list-disc space-y-1 first:mt-0">{children}</ul>,
@@ -626,9 +657,9 @@ const COMPONENTS: Components = {
 	ol: ({ children, start }) => (
 		<ol start={start} className="my-2 ml-4 list-decimal space-y-1 first:mt-0">{children}</ol>
 	),
-	li: ({ children, className }) => (
+	li: ({ children, className, node: _node, ...props }) => (
 		// A task-list item drops its bullet: the checkbox is the marker.
-		<li className={cn("marker:text-muted-foreground", className?.includes("task-list-item") && "list-none")}>
+		<li {...props} className={cn("marker:text-muted-foreground", className?.includes("task-list-item") && "list-none")}>
 			{compactEmoji(children)}
 		</li>
 	),
@@ -649,16 +680,16 @@ const COMPONENTS: Components = {
 	// gave one — as a class on the inner element. It is claimed here rather than in
 	// `code` because a fence with no language carries no class at all, and matching
 	// on the class alone rendered those as inline code.
-	pre: ({ children }) => {
+	pre: ({ children, node }) => {
 		const fence = fenceOf(children);
 		if (!fence) return <>{children}</>;
 		// Mermaid is a diagram, not source: it renders through the sandboxed SVG
 		// path rather than the highlighter. See `MermaidBlock.tsx`.
-		if (fence.language?.toLowerCase() === "mermaid") return <MermaidFence code={fence.code} />;
+		if (fence.language?.toLowerCase() === "mermaid") return <div {...excerptElementProps(node)} data-excerpt-block="" data-excerpt-flowchart=""><MermaidFence code={fence.code} /></div>;
 		// Display formulas (`$$…$$`, `\[…\]`) arrive as `language-math` fences too,
 		// so one check covers them and explicit ```math fences.
-		if (fence.language?.toLowerCase() === "math") return <MathFormula tex={fence.code} display />;
-		return <CodeBlock code={fence.code} language={fence.language} />;
+		if (fence.language?.toLowerCase() === "math") return <div {...excerptElementProps(node)} data-excerpt-block=""><MathFormula tex={fence.code} display /></div>;
+		return <CodeBlock code={fence.code} language={fence.language} sourceNode={node} />;
 	},
 	// Only inline code and inline formulas reach here; `pre` above takes every fence.
 	code: InlineCode,
@@ -671,13 +702,13 @@ const COMPONENTS: Components = {
 		</div>
 	),
 	thead: ({ children }) => <thead className="bg-raised/40">{children}</thead>,
-	th: ({ children }) => (
-		<th className="border-b border-border px-2.5 py-1.5 text-left font-medium text-muted-foreground">
+	th: ({ children, node: _node, ...props }) => (
+		<th {...props} className="border-b border-border px-2.5 py-1.5 text-left font-medium text-muted-foreground">
 			{compactEmoji(children)}
 		</th>
 	),
-	td: ({ children }) => (
-		<td className="border-b border-border/60 px-2.5 py-1.5 align-top">{compactEmoji(children)}</td>
+	td: ({ children, node: _node, ...props }) => (
+		<td {...props} className="border-b border-border/60 px-2.5 py-1.5 align-top">{compactEmoji(children)}</td>
 	),
 
 	blockquote: ({ children }) => (
@@ -686,8 +717,8 @@ const COMPONENTS: Components = {
 		</blockquote>
 	),
 	hr: () => <hr className="my-3 border-border" />,
-	strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
-	del: ({ children }) => <del className="text-muted-foreground">{children}</del>,
+	strong: ({ children, node: _node, ...props }) => <strong {...props} className="font-semibold text-foreground">{children}</strong>,
+	del: ({ children, node: _node, ...props }) => <del {...props} className="text-muted-foreground">{children}</del>,
 
 	// Match terminal links: a plain HTTP(S) click uses the session's AO Browser;
 	// Cmd/Ctrl- or Option/Alt-click and non-web schemes use the system browser,

@@ -260,6 +260,7 @@ import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenu
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
+import { sealSavedPasswords, setPasswordCipher } from "./main/remotes-store";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
@@ -682,8 +683,8 @@ function privacyGuidePreloadPath(): string {
 	return path.join(__dirname, "privacy-guide-preload.js");
 }
 
-// Runtime window/taskbar icon for Linux and Windows, and the macOS dock icon.
-// Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
+// Runtime window/taskbar icon for Linux and Windows, and the unpackaged macOS
+// dock icon. Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
 // the orange "DEV" variant so they are recognisable and never impersonate the
 // installed app's taskbar/dock icon (#3642).
 function windowIconPath(): string | undefined {
@@ -703,8 +704,11 @@ function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
 	]);
 }
 
+// Unpackaged runs only: the Dock shows the DEV icon. A packaged app keeps its
+// bundle icon, which macOS 26+ renders as Liquid Glass from Assets.car and
+// adapts to light, dark, tinted and clear; a runtime PNG would flatten it.
 function applyRuntimeAppIcon(): void {
-	if (process.platform !== "darwin") return;
+	if (process.platform !== "darwin" || app.isPackaged) return;
 	const iconPath = windowIconPath();
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
@@ -1531,10 +1535,10 @@ function telemetryOverrides(): Record<string, string> {
 		AO_TELEMETRY_POSTHOG_KEY: process.env.AO_TELEMETRY_POSTHOG_KEY ?? DEFAULT_POSTHOG_PROJECT_KEY,
 		AO_TELEMETRY_POSTHOG_HOST: process.env.AO_TELEMETRY_POSTHOG_HOST ?? DEFAULT_POSTHOG_HOST,
 		// Daemon-side Sentry (5xx + panics with Go stacks). Stamped on the daemon
-		// env so the spawned daemon inherits the DSN; off in dev to match the
-		// PostHog remote gate, and an explicit env always wins. A blank value
-		// leaves the daemon's Sentry a no-op.
-		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, isDev),
+		// env so the spawned daemon inherits the DSN; off in dev and in any copy
+		// that is not a published stable or nightly build, and an explicit env
+		// always wins. A blank value leaves the daemon's Sentry a no-op.
+		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(), isDev),
 		// The daemon binary has no version of its own that release tooling sets,
 		// so without this every daemon event lands unattributable to a release.
 		AO_TELEMETRY_APP_VERSION: process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(),
@@ -3409,6 +3413,13 @@ const remoteRegistry = new RemoteRegistry((entry) => {
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
+setPasswordCipher(() => protectedStorageAvailable() ? {
+	encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
+	decrypt: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),
+} : null);
+void app.whenReady().then(() => sealSavedPasswords(remotesFilePath())).catch((error: unknown) => {
+	console.warn("[remotes] could not encrypt saved host passwords", error);
+});
 registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
@@ -3416,6 +3427,14 @@ registerRemotesIpc(ipcMain, {
 		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
+	cloudRequest: async (method, path, { body, signal } = {}) => {
+		const baseUrl = await cloudControlPlaneUrl();
+		if (!baseUrl) throw new ExpectedIpcError("No Orchestrator Cloud control plane is configured.");
+		return cloudCpProxy.request({
+			baseUrl, path, method,
+			...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+		}, { hostTokens: true, signal });
+	},
 	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
 		? { port: daemonStatus.port, pid: daemonStatus.pid, generation: daemonAttachmentGeneration }
 		: null),
@@ -4012,7 +4031,7 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
-installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
+const cloudCpProxy = installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
 ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
 	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 

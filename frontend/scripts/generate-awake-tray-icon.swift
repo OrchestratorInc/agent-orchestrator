@@ -1,11 +1,13 @@
-// Run from the repository root:
-// swift frontend/scripts/generate-awake-tray-icon.swift frontend/assets
-// Builds both menu bar template icons from the current mascot (ao-mascot.png)
-// so the mascot and the Lucide Coffee cup share one optical vertical center.
+// Run by scripts/generate-brand-assets.swift, which passes the mascot
+// silhouette it renders from assets/brand/ruto.svg (eyes cut out):
+// swift frontend/scripts/generate-awake-tray-icon.swift frontend/assets <silhouette.png>
+// Builds both menu bar template icons from that silhouette so the mascot and
+// the Lucide Coffee cup share one optical vertical center.
 // Cup icon license: frontend/assets/trayAwakeIcon.LICENSE.
 import AppKit
 
 let assets = URL(fileURLWithPath: CommandLine.arguments[1])
+let sourcePath = CommandLine.arguments[2]
 let height = 20.0
 let mascotMaxWidth = 18.0
 let mascotMaxHeight = 16.0
@@ -13,7 +15,7 @@ let mascotLeft = 2.0
 let cupSize = 13.0
 let gap = 3.0
 
-let source = NSImage(contentsOf: assets.appendingPathComponent("ao-mascot.png"))!
+let source = NSImage(contentsOf: URL(fileURLWithPath: sourcePath))!
 var proposed = NSRect(origin: .zero, size: source.size)
 let cg = source.cgImage(forProposedRect: &proposed, context: nil, hints: nil)!
 

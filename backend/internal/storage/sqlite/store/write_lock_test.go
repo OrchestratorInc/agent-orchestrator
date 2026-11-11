@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Break caught: shutdown cancellation could lose a race with an available
@@ -49,4 +51,49 @@ type lockAdmissionContext struct {
 func (c *lockAdmissionContext) Err() error {
 	c.once.Do(func() { close(c.admission) })
 	return c.Context.Err()
+}
+
+// Break caught: a writer holding the daemon-wide lock for minutes left no
+// record of who held it, and a report made before release would deadlock any
+// observer that writes.
+func TestContextMutexReportsSlowHolderAfterRelease(t *testing.T) {
+	mutex := newContextMutex()
+	mutex.slowHold = 50 * time.Millisecond
+	var caller string
+	var held time.Duration
+	observe := func(c string, h time.Duration) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := mutex.LockContext(ctx); err != nil {
+			t.Errorf("observer could not take the released lock: %v", err)
+			return
+		}
+		mutex.Unlock()
+		caller, held = c, h
+	}
+	mutex.onSlow.Store(&observe)
+
+	holdWriteLock(mutex, 0)
+	if caller != "" {
+		t.Fatalf("fast hold reported by %q", caller)
+	}
+
+	holdWriteLock(mutex, 100*time.Millisecond)
+	if held < 100*time.Millisecond || !strings.HasPrefix(caller, "store.holdWriteLock:") {
+		t.Fatalf("deferred hold reported caller %q held %v", caller, held)
+	}
+
+	mutex.Lock()
+	release := mutex.Unlock
+	time.Sleep(100 * time.Millisecond)
+	release()
+	if !strings.HasPrefix(caller, "store.TestContextMutexReportsSlowHolderAfterRelease:") {
+		t.Fatalf("method value release reported caller %q", caller)
+	}
+}
+
+func holdWriteLock(mutex *contextMutex, d time.Duration) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	time.Sleep(d)
 }

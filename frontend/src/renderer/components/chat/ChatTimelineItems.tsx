@@ -21,8 +21,10 @@ import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
-import { ProviderMark } from "./ProviderMark";
-import { useChatSessionId } from "./chat-image-source";
+import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
+import { ArtifactThumbnail } from "../ArtifactThumbnail";
+import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
+import type { ArtifactRow } from "../../lib/artifacts";
 import { useChatEntrance } from "./chat-entrance";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -171,6 +173,7 @@ import {
 	type DiffStatus,
 	type FileChangeFile,
 	type ConversationItem,
+	type TurnArtifactChange,
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
@@ -499,7 +502,7 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 /** The remote host a chat's session runs on, whose catalogs name its models. */
 export const ChatHostId = createContext<string | undefined>(undefined);
 
-/** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
+/** One side of a handoff: its model by name when one was recorded, else the agent's name. */
 function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
 	const { t } = useTranslation();
 	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
@@ -508,7 +511,6 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
 	return (
 		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
-			<ProviderMark provider={harness} />
 			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
 			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
 			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
@@ -890,8 +892,9 @@ function ProseWithInlineImages({
 
 /** An inline image chip, drawn from the composer's copy while the file was just sent. */
 function InlineStagedImage({ path, sessionId, apiBaseUrl, alt }: { path: string; sessionId: string; apiBaseUrl: string; alt: string }) {
+	// A local copy that fails to draw hands the chip to the daemon's copy.
 	const local = useSentAttachmentPreview(path);
-	return <ChatImage inline src={local ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} />;
+	return <ChatImage inline src={local.url ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} onError={local.onError} />;
 }
 
 /** Collapse the home directory so a long absolute path does not eat the row. */
@@ -1053,7 +1056,7 @@ export function HumanMessage({
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
-		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
+		(content) => (content.type === "excerpt" && (Boolean(content.text) || content.snapshot?.badgeOnly === true)) || Boolean(content.fileReference),
 	);
 	const annotationSummary = excerptReferences.length > 0 ? (
 		<ChatAnnotationSummary
@@ -1063,6 +1066,7 @@ export function HumanMessage({
 				conversationId: excerpt.sourceConversationId,
 				messageId: excerpt.sourceMessageId,
 				revision: excerpt.sourceRevision,
+				snapshot: excerpt.snapshot,
 			}))}
 			onSelect={onSelectAnnotation}
 			tile
@@ -3814,6 +3818,110 @@ function fileChangeIcon(status: DiffStatus): StepIcon {
 		default:
 			return "write";
 	}
+}
+
+/** Fills a 5:4 tile with a page laid out 1000 wide, as the Summary's previews do. */
+const TURN_ARTIFACT_PAGE_HEIGHT = 800;
+
+/**
+ * The end-of-turn results: deliverables the turn created or edited as preview
+ * cards, then every other changed file in the changed-files card. An artifact
+ * is the thing the reader asked for, not a code change to review, so it never
+ * appears in both.
+ */
+export function TurnResults({
+	diff,
+	reportedArtifacts,
+	items,
+	onReview,
+	onOpenFile,
+	onOpenArtifact,
+}: {
+	/** Absent for an agent that reports no diffs, or a turn that only wrote artifacts. */
+	diff?: TurnDiff;
+	/** The artifacts the daemon saw the turn create or edit. */
+	reportedArtifacts?: TurnArtifactChange[];
+	items?: ConversationItem[];
+	onReview?: () => void;
+	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens an artifact in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
+}) {
+	const source = useChatArtifactFiles();
+	const pathHints = useMemo(() => turnPathHints(items), [items]);
+	const split = useMemo(
+		() => splitTurnArtifacts(diff, source?.sessionId, source?.artifacts, (path) => resolveTurnFilePath(path, pathHints), reportedArtifacts),
+		[diff, source?.sessionId, source?.artifacts, pathHints, reportedArtifacts],
+	);
+	const files = useMemo<TurnDiff | undefined>(() => (diff ? { ...diff, files: split.files } : undefined), [diff, split.files]);
+	return (
+		<>
+			{split.artifacts.length > 0 && source ? (
+				<TurnArtifacts artifacts={split.artifacts} sessionId={source.sessionId} cloud={source.cloud} onOpenArtifact={onOpenArtifact} />
+			) : null}
+			{files ? <TurnChangedFiles diff={files} items={items} onReview={onReview} onOpenFile={onOpenFile} /> : null}
+		</>
+	);
+}
+
+/** Preview cards for the deliverables one turn created or edited. */
+export function TurnArtifacts({
+	artifacts,
+	sessionId,
+	cloud,
+	onOpenArtifact,
+}: {
+	artifacts: TurnArtifact[];
+	sessionId: string;
+	cloud?: ArtifactRow["cloud"];
+	/**
+	 * Opens the artifact by its artifact path. Not the workspace-file opener: a
+	 * cloud chat resolves that against workspace files, which never holds the
+	 * artifact, so a card would open the wrong file or none.
+	 */
+	onOpenArtifact?: (target: { path: string }) => void;
+}) {
+	return (
+		<section aria-label={artifacts.length === 1 ? "Artifact" : `${artifacts.length} Artifacts`} className="flex min-w-0 flex-col gap-2">
+			<span className="text-xs text-muted-foreground">
+				{artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`}
+			</span>
+			<ul className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2.5">
+				{artifacts.map(({ artifact, status }) => {
+					const row: ArtifactRow = { ...artifact, sessionId, sessionTitle: "", cloud };
+					const verb = fileChangeVerb(status);
+					const body = (
+						<>
+							<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+								<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={TURN_ARTIFACT_PAGE_HEIGHT} row={row} />
+							</span>
+							<span className="flex min-w-0 flex-col">
+								<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
+								<span className="truncate text-caption leading-4 text-passive">{verb}</span>
+							</span>
+						</>
+					);
+					const tileClass = "group flex w-full min-w-0 flex-col gap-1.5 rounded-md text-left focus-visible:ring-1 focus-visible:ring-ring";
+					return (
+						<li key={artifact.path} className="min-w-0">
+							{onOpenArtifact ? (
+								<Pressable
+									aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
+									className={tileClass}
+									onClick={() => onOpenArtifact({ path: artifact.path })}
+									title={artifact.path}
+								>
+									{body}
+								</Pressable>
+							) : (
+								<div className={tileClass} title={artifact.path}>{body}</div>
+							)}
+						</li>
+					);
+				})}
+			</ul>
+		</section>
+	);
 }
 
 /**

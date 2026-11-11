@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useUiStore } from "../stores/ui-store";
+import { ArchiveModalHost } from "./ArchiveModalHost";
 import { SessionsBoard } from "./SessionsBoard";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -36,6 +38,9 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useRemoteProjectQuery: (hostId: string) => ({
 		data: mocks.workspaces[hostId], isError: false, isSuccess: Boolean(mocks.workspaces[hostId]),
 	}),
+	useRemoteHostWorkspacesQuery: (hostId: string) => ({
+		data: mocks.workspaces[hostId] ? [mocks.workspaces[hostId]] : undefined, isError: false,
+	}),
 	useCloudProjectsQuery: () => ({ data: undefined }),
 }));
 vi.mock("../hooks/useBoardPresentation", () => ({
@@ -63,7 +68,10 @@ vi.mock("../lib/host-clients", () => ({
 vi.mock("../lib/shell-context", () => ({
 	useShellMaybe: () => ({ openRemoteProjectSettings: mocks.openRemoteProjectSettings }),
 }));
-vi.mock("../stores/ui-store", () => {
+// A real store, so the shell's archive host follows openArchive/closeArchive.
+vi.mock("../stores/ui-store", async () => {
+	const { create } = await import("zustand");
+	let nonce = 0;
 	const state = {
 		developerMode: true,
 		diagnostics: true,
@@ -75,11 +83,17 @@ vi.mock("../stores/ui-store", () => {
 		orchestratorStartupErrors: {} as Record<string, string>,
 		setProjectRestarting: vi.fn(),
 		setOrchestratorStartupError: vi.fn(),
+		archiveModal: null as Record<string, unknown> | null,
 	};
-	return {
-		sidebarOccupiesLayout: () => true,
-		useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }),
-	};
+	const useUiStore = create<typeof state & {
+		openArchive: (request: Record<string, unknown>) => void;
+		closeArchive: () => void;
+	}>()((set) => ({
+		...state,
+		openArchive: (request) => set({ archiveModal: { ...request, nonce: ++nonce } }),
+		closeArchive: () => set({ archiveModal: null }),
+	}));
+	return { sidebarOccupiesLayout: () => true, useUiStore };
 });
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => null }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
@@ -98,7 +112,7 @@ const clients: QueryClient[] = [];
 function renderBoard(hostId: string, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
 	clients.push(client);
 	const view = (host: string) => <QueryClientProvider client={client}>
-		<TooltipProvider><SessionsBoard key={host} hostId={host} projectId="shared" /></TooltipProvider>
+		<TooltipProvider><SessionsBoard key={host} hostId={host} projectId="shared" /><ArchiveModalHost /></TooltipProvider>
 	</QueryClientProvider>;
 	const rendered = render(view(hostId));
 	return { ...rendered, client, showHost: (host: string) => rendered.rerender(view(host)) };
@@ -108,6 +122,7 @@ beforeEach(() => {
 	for (const mock of [mocks.navigate, mocks.localGet, mocks.localPost, mocks.remoteGet, mocks.remotePost,
 		mocks.requestNewTask, mocks.openRemoteProjectSettings]) mock.mockReset();
 	mocks.connected = ["box-a", "box-b"];
+	useUiStore.setState({ archiveModal: null });
 	mocks.workspaces = {
 		"box-a": { hostId: "box-a", id: "shared", name: "Todo App", path: "/todo", orchestratorAgent: "opencode", sessions: [worker("box-a")] },
 		"box-b": { hostId: "box-b", id: "shared", name: "Todo App", path: "/todo", orchestratorAgent: "opencode", sessions: [worker("box-b", "Fix billing")] },

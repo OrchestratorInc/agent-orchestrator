@@ -144,6 +144,11 @@ describe("buildCommands grouping", () => {
 		expect(map.get("current-copy-branch")?.action).toEqual({ kind: "copy-branch", branch: "feature/w-pr" });
 	});
 
+	it("offers Open usage only in Developer Mode", () => {
+		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-usage")).toBe(false);
+		expect(byId(buildCommands({ workspaces: workspaces(), developerMode: true })).has("global-usage")).toBe(true);
+	});
+
 	it("offers Open archive for the current project only when it has archived sessions", () => {
 		expect(byId(buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" })).has("current-open-archive")).toBe(false);
 

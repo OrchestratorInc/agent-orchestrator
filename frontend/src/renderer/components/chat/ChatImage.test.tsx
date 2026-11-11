@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
+import { useState } from "react";
 import { ChatImage } from "./ChatImage";
 import { chatImageSaveName } from "./chat-image-actions";
 
@@ -73,5 +74,44 @@ describe("chatImageSaveName", () => {
 		expect(chatImageSaveName("https://example.com/render?id=3", "Chart: v2", "image/jpeg")).toBe("render.jpg");
 		expect(chatImageSaveName("data:image/webp;base64,AAAA", "Chart: v2", "image/webp")).toBe("Chart v2.webp");
 		expect(chatImageSaveName("https://example.com/", "", "image/unknown")).toBe("image.png");
+	});
+});
+
+describe("ChatImage source fallback", () => {
+	// A just-sent tile draws from an object URL first; when that fails it must move
+	// to the daemon's copy, not stop on its alt text.
+	function Tile({ onLocalError }: { onLocalError: () => void }) {
+		const [local, setLocal] = useState<string | undefined>("blob:app/sent");
+		return (
+			<ChatImage
+				src={local ?? url}
+				alt="Image 1"
+				onError={local ? () => {
+					onLocalError();
+					setLocal(undefined);
+				} : undefined}
+			/>
+		);
+	}
+
+	it("draws the replacement source without showing the alt text in between", () => {
+		const onLocalError = vi.fn();
+		render(<Tile onLocalError={onLocalError} />);
+		expect(screen.getByRole("img")).toHaveAttribute("src", "blob:app/sent");
+
+		fireEvent.error(screen.getByRole("img"));
+		expect(onLocalError).toHaveBeenCalledOnce();
+		expect(screen.getByRole("img")).toHaveAttribute("src", url);
+		expect(screen.queryByText("Image 1")).toBeNull();
+	});
+
+	it("settles on the alt text if the replacement fails too", () => {
+		const onLocalError = vi.fn();
+		render(<Tile onLocalError={onLocalError} />);
+		fireEvent.error(screen.getByRole("img"));
+		fireEvent.error(screen.getByRole("img"));
+		expect(onLocalError).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("img")).toBeNull();
+		expect(screen.getByText("Image 1")).toBeInTheDocument();
 	});
 });

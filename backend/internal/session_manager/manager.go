@@ -405,8 +405,10 @@ type Manager struct {
 	workspace ports.Workspace
 	store     Store
 	// agentReadiness is late-bound by SetAgentReadiness.
-	agentReadiness ports.AgentReadinessProvider
-	importArchive  ImportArchiveRefresher
+	agentReadiness      ports.AgentReadinessProvider
+	backgroundTaskUsage BackgroundTaskUsage
+	usageFlusher        UsageFlusher
+	importArchive       ImportArchiveRefresher
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -648,6 +650,26 @@ func (m *Manager) SetTerminalInputGate(gate TerminalInputGate) {
 // SetAgentReadiness completes daemon wiring before request handling begins.
 func (m *Manager) SetAgentReadiness(provider ports.AgentReadinessProvider) {
 	m.agentReadiness = provider
+}
+
+// BackgroundTaskUsage counts the provider calls AO makes on a session's behalf.
+type BackgroundTaskUsage interface {
+	RecordBackgroundTask(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, workspace string) error
+}
+
+// SetBackgroundTaskUsage completes daemon wiring before request handling begins.
+func (m *Manager) SetBackgroundTaskUsage(usage BackgroundTaskUsage) {
+	m.backgroundTaskUsage = usage
+}
+
+// UsageFlusher stores the usage AO has not read yet.
+type UsageFlusher interface {
+	Flush(ctx context.Context)
+}
+
+// SetUsageFlusher completes daemon wiring before request handling begins.
+func (m *Manager) SetUsageFlusher(flusher UsageFlusher) {
+	m.usageFlusher = flusher
 }
 
 // SetAgentAccounts completes daemon wiring before request handling begins.
@@ -6378,9 +6400,10 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 	if dir == "" {
 		return ""
 	}
-	inThread := ""
+	inThread, keptRender := "", ""
 	if chat {
 		inThread = "In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory.\n\n"
+		keptRender = " Neither does keeping a render with `ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns."
 	}
 	return "## Session Artifacts\n\n" +
 		"Write deliverables that are not part of a pull request to `" + dir + "`, never into the git workspace, even temporarily or under `docs/` or `notes/`.\n\n" +
@@ -6388,6 +6411,8 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 		"Everything produced along the way is working material and goes in the system temp directory unless the user asked for it: intermediate outputs such as frames or partial renders, drafts, downloaded inputs, caches, build output, logs, and the scripts that generate the deliverable. " +
 		"If a file is neither opened on its own nor needed by a deliverable, it is working material.\n\n" +
 		inThread +
+		"Only files you register appear as this session's artifacts. Run `ao artifact add <path>` once for each deliverable as soon as it exists, and again for a copy; edits, and renames or moves inside the directory, need no further command. " +
+		"Other files stay in the directory, so links between them keep working, but they are not listed. `ao report --artifact` does not register a file." + keptRender + "\n\n" +
 		"Create a deliverable only when the user asks for a durable output or the task needs a reviewable one; summaries, final answers, and validation results stay in chat or Orchestrator report notes. " +
 		"Prefer one consolidated deliverable, and revise it in place instead of adding copies. " +
 		"Saving a file here or attaching it to an Orchestrator report does not authorize external publishing. " +
@@ -7246,6 +7271,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	metadata := nativeRestoreMetadata(domain.SessionRecord{Metadata: meta})
 	metadata[ports.MetadataKeySessionMode] = string(domain.SessionModeTUI)
+	metadata[ports.MetadataKeyNativeTranscriptPath] = meta.NativeTranscriptPath
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,

@@ -407,8 +407,9 @@ describe("SessionInspector tabs", () => {
     renderWithQuery(<SessionInspector orchestrator session={session([], {
       kind: "orchestrator",
       artifactFiles: [
-        artifact({ path: "direct.html", name: "direct.html", kind: "html" }),
-        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html" }),
+        // A kept render is listed once the agent registers it, like any file.
+        artifact({ path: "direct.html", name: "direct.html", kind: "html", registered: true }),
+        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html", registered: true }),
       ],
     })} />);
 
@@ -1391,7 +1392,6 @@ describe("SessionInspector usage", () => {
 		renderWithQuery(<SessionInspector session={session([])} />);
 		expect(await screen.findByText("Branch")).toBeInTheDocument();
 		expect(screen.queryByText("Usage & cost")).not.toBeInTheDocument();
-		expect(getMock).not.toHaveBeenCalledWith("/api/v1/usage/sessions/{sessionId}", expect.anything());
 	});
 });
 

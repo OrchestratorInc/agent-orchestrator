@@ -487,9 +487,8 @@ if (typeof window !== "undefined") {
 		},
 		remotes: {
 			list: async () => [],
-			importAccountHost: async () => undefined,
-			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => ({ token: "" }),
+			syncAccountHosts: async () => undefined,
+			linkAccountHost: async () => undefined,
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,

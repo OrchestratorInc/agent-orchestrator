@@ -10,6 +10,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
+import { useLatestCallback } from "../hooks/useStable";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
@@ -18,6 +19,7 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
+import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
@@ -86,6 +88,8 @@ import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to
 import { sessionUiKey } from "../lib/hosts";
 import { pageHasTopbar } from "../lib/shell-topbar";
 import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
+import { watchRemoteUnpins } from "../lib/remote-session-unpins";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
@@ -334,8 +338,13 @@ function ShellLayout() {
 	// What each host showed last stays only for the hosts still saved, and shows
 	// while they connect or are offline.
 	useEffect(() => {
-		if (remoteHostsListed) void syncRemoteCache(queryClient, remoteHostIds);
+		if (!remoteHostsListed) return;
+		void syncRemoteCache(queryClient, remoteHostIds);
+		// Pins removed here for a host that is no longer saved have no row left to hide.
+		useRemoteUnpinStore.getState().keepHosts(remoteHostIds);
 	}, [queryClient, remoteHostIds, remoteHostsListed]);
+	// Pins removed here while a host was unreachable reach it once its list loads.
+	useEffect(() => watchRemoteUnpins(queryClient), [queryClient]);
 	const refusedRemoteHostKey = remoteHosts.filter((host) => host.failureReason === "unauthorized").map((host) => host.hostId).join("\0");
 	useEffect(() => {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
@@ -1128,6 +1137,28 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			showGlobalToast(t("shell.couldNotSpawn"), message, "error");
 		}
 	}, [navigate, openProjectSettings, queryClient, remoteWorkspaces, setOrchestratorStartupError, showGlobalToast, t]);
+	// The sidebar is memoized, and the shell re-renders several times per route
+	// change. Handlers that keep their identity let those renders skip it.
+	const openRemoteProjectFromSidebar = useCallback((hostId: string, projectId: string) => {
+		void navigate(projectNavigateTarget(projectId, hostId));
+	}, [navigate]);
+	const openRemoteOrchestratorFromSidebar = useLatestCallback((hostId: string, projectId: string) => {
+		void openRemoteProjectOrchestrator(hostId, projectId);
+	});
+	const configureRemoteProjectFromSidebar = useCallback(
+		(hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
+		[openProjectSettings],
+	);
+	const removeRemoteProjectFromSidebar = useLatestCallback(removeRemoteProject);
+	const retryRemoteHosts = useCallback(() => {
+		void refreshRemoteHosts();
+		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
+	}, [queryClient, refreshRemoteHosts]);
+	// A new handler on every shell render would rebuild the sidebar context and
+	// re-render every row button that reads it.
+	const handleSidebarOpenChange = useCallback((open: boolean) => {
+		if (open !== isSidebarOpen) toggleSidebar();
+	}, [isSidebarOpen, toggleSidebar]);
 
 	const restartOrchestrator = useCallback(
 		async (projectId: string, mode?: "chat" | "tui", approvalMode?: "bypass-permissions") => {
@@ -1169,6 +1200,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					body: { enabled: developerMode },
 				});
 				if (error) throw error;
+				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
+					body: { enabled: developerMode },
+				});
+				if (limitHistoryError) throw limitHistoryError;
 			}).catch(() => {
 				if (!cancelled) retry = setTimeout(sync, 5_000);
 			});
@@ -1493,6 +1528,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					</div>
 				) : null}
 				<NewTaskNavigator />
+				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
 				<SessionImportDialog />
@@ -1533,9 +1569,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<SidebarProvider
 					className="min-h-0 flex-1 flex-col overflow-x-hidden"
 					keyboardShortcut={false}
-					onOpenChange={(open) => {
-						if (open !== isSidebarOpen) toggleSidebar();
-					}}
+					onOpenChange={handleSidebarOpenChange}
 					open={!isStartupLoading && isSidebarOpen}
 					style={
 						{
@@ -1564,14 +1598,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						remoteHosts={remoteHosts}
 						onCreateRemoteProject={createRemoteProject}
 						onInitializeRemoteProject={initializeRemoteProject}
-						onOpenRemoteProject={(hostId, projectId) => { void navigate(projectNavigateTarget(projectId, hostId)); }}
-						onOpenRemoteOrchestrator={(hostId, projectId) => { void openRemoteProjectOrchestrator(hostId, projectId); }}
-						onConfigureRemoteProject={(hostId, projectId) => openProjectSettings(projectId, hostId)}
-						onRemoveRemoteProject={removeRemoteProject}
-						onRetryRemoteHosts={() => {
-							void refreshRemoteHosts();
-							void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
-						}}
+						onOpenRemoteProject={openRemoteProjectFromSidebar}
+						onOpenRemoteOrchestrator={openRemoteOrchestratorFromSidebar}
+						onConfigureRemoteProject={configureRemoteProjectFromSidebar}
+						onRemoveRemoteProject={removeRemoteProjectFromSidebar}
+						onRetryRemoteHosts={retryRemoteHosts}
 						remoteWorkspaces={remoteWorkspaces}
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>

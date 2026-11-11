@@ -1056,6 +1056,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// replaced can be told apart from the current one's.
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.prChanged, s.onCodexCapacityChanged, s.reader)
+	if owner.Kind != domain.ConversationOwnerReview {
+		controller.artifactDir = s.sessionArtifactDir(ctx, cfg.SessionID)
+	}
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {
@@ -1389,6 +1392,9 @@ func (s *Service) Send(
 				if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
 					return domain.ConversationTurn{}, domain.ErrClientMessageConflict
 				}
+				if err := validateSnapshotRetry(msg, existing); err != nil {
+					return domain.ConversationTurn{}, err
+				}
 				msg.ClientPayloadHash = existing.ClientPayloadHash
 				return controller.Send(ctx, msg)
 			}
@@ -1488,9 +1494,19 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 			if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
 				return domain.ConversationTurn{}, domain.ErrClientMessageConflict
 			}
+			if err := validateSnapshotRetry(msg, existing); err != nil {
+				return domain.ConversationTurn{}, err
+			}
 			msg.ClientPayloadHash = existing.ClientPayloadHash
 			return controller.Send(ctx, msg)
 		}
+	}
+	if hasExcerptSnapshots(msg.Excerpts) {
+		hash, err := clientPayloadHash(msg)
+		if err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		msg.ClientPayloadHash = hash
 	}
 	if err := hydrateExcerptReferences(ctx, controller, &msg); err != nil {
 		return domain.ConversationTurn{}, err
@@ -1504,6 +1520,20 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 	}
 	if err := validateExcerptReferences(msg.Excerpts, controller.conversation.ID); err != nil {
 		return err
+	}
+	if hasExcerptSnapshots(msg.Excerpts) {
+		var legacy []ports.ChatExcerptReference
+		for _, ref := range msg.Excerpts {
+			if ref.Snapshot != nil {
+				msg.Content = append(msg.Content, snapshotExcerptContent(ref))
+			} else {
+				legacy = append(legacy, ref)
+			}
+		}
+		msg.Excerpts = legacy
+		if len(legacy) == 0 {
+			return nil
+		}
 	}
 	messages, err := controller.store.ConversationMessages(ctx, controller.conversation.ID)
 	if err != nil {
@@ -1575,13 +1605,22 @@ func validateExcerptReferences(excerpts []ports.ChatExcerptReference, conversati
 	if len(excerpts) > maxExcerptReferences {
 		return fmt.Errorf("%w: at most %d excerpts may be attached", ErrExcerptInvalid, maxExcerptReferences)
 	}
-	total := 0
+	total, rawTotal := 0, 0
 	for _, excerpt := range excerpts {
 		text := strings.TrimSpace(excerpt.Text)
-		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || text == "" || excerpt.Revision < 0 {
+		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || (text == "" && !isFlowchartOnlySnapshot(excerpt.Snapshot)) || excerpt.Revision < 0 {
 			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
 		}
-		total += len(text)
+		if excerpt.Snapshot != nil {
+			if err := validateExcerptSnapshot(excerpt.Snapshot); err != nil {
+				return err
+			}
+			rawTotal += len(excerpt.Snapshot.RawText)
+			if rawTotal > maxExcerptTextBytes {
+				return fmt.Errorf("%w: raw excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
+			}
+		}
+		total += len(excerpt.Text)
 		if total > maxExcerptTextBytes {
 			return fmt.Errorf("%w: attached excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
 		}
@@ -1958,6 +1997,8 @@ type Snapshot struct {
 	HasMoreBefore                    bool
 	// AfterSequence is the floor of a tail read, or zero for a whole page.
 	AfterSequence int64
+	// BatchedDeliveries links queued turns AO batched into another turn's input.
+	BatchedDeliveries []domain.ConversationBatchedDelivery
 	// Usage and RateLimits are current state carried on the snapshot the client
 	// already polls, rather than timeline entries or a second request. Both are nil
 	// until the provider has reported, so a client can tell "not known yet" from a
@@ -2004,6 +2045,8 @@ type ConversationRows struct {
 	OldestSequence                   int64
 	HasMoreBefore                    bool
 	AfterSequence                    int64
+	// BatchedDeliveries links queued turns AO batched into another turn's input.
+	BatchedDeliveries []domain.ConversationBatchedDelivery
 }
 
 // idleControllerState is what a session with no live controller reports. A
@@ -2112,6 +2155,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 		Activities:                       rows.Activities,
 		BranchPoints:                     rows.BranchPoints,
 		BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+		BatchedDeliveries:                rows.BatchedDeliveries,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,
@@ -2157,7 +2201,7 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 		state, caps = controller.State(), controller.Capabilities()
 		dispatching = controller.DispatchingTurnIDs()
 	}
-	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
+	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: withDispatchingTurnRunning(rows.Turns, dispatching...), Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, BatchedDeliveries: rows.BatchedDeliveries, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
 }
 
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
@@ -2234,6 +2278,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		OldestSequence:                   rows.OldestSequence,
 		HasMoreBefore:                    rows.HasMoreBefore,
 		AfterSequence:                    rows.AfterSequence,
+		BatchedDeliveries:                rows.BatchedDeliveries,
 		Capabilities:                     caps,
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,

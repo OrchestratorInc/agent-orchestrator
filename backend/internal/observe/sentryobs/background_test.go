@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 
 func TestCaptureBackgroundScrubsAndTagsFailure(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -41,7 +42,7 @@ func TestCaptureBackgroundScrubsAndTagsFailure(t *testing.T) {
 
 func TestCaptureBackgroundSkipsCanceledAndUnregistered(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 4)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -67,7 +68,7 @@ func TestCaptureBackgroundSkipsCanceledAndUnregistered(t *testing.T) {
 
 func TestCaptureBackgroundGroupsOnlyValidatedTags(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
@@ -98,7 +99,7 @@ func TestCaptureBackgroundDoesNotBlockAndOptOutDrainsAdmittedSends(t *testing.T)
 		recordingTransport: recordingTransport{events: make(chan *sentry.Event, 5)},
 		release:            make(chan struct{}),
 	}
-	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -112,7 +113,7 @@ func TestCaptureBackgroundDoesNotBlockAndOptOutDrainsAdmittedSends(t *testing.T)
 		enabled.Store(false)
 	})
 	SetPolicyCheck(func(context.Context) bool { return true })
-	for _, operation := range []string{"model_discovery", "agent_install", "chat_turn", "chat_spawn"} {
+	for _, operation := range []string{"reconcile", "agent_install", "chat_turn", "chat_spawn"} {
 		returned := make(chan struct{})
 		go func() {
 			CaptureBackground(context.Background(), errors.New("boom"), "chat", operation, nil)
@@ -198,7 +199,7 @@ func TestErrorBudgetOverflowIsPerOperation(t *testing.T) {
 
 func TestCaptureErrorAsyncOwnsTagsAndPreservesHTTPMetadata(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	SetPolicyCheck(func(context.Context) bool { return true })
@@ -218,5 +219,21 @@ func TestCaptureErrorAsyncOwnsTagsAndPreservesHTTPMetadata(t *testing.T) {
 		}
 	default:
 		t.Fatal("HTTP capture missing")
+	}
+}
+
+func TestModelDiscoveryFailuresAreNotReported(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
+	// A missing or misconfigured agent CLI is user setup state, exec_exit included.
+	CaptureBackground(context.Background(), &exec.ExitError{}, "session_manager", "model_discovery", map[string]string{"agent": "codex"})
+	select {
+	case event := <-transport.events:
+		t.Fatalf("model discovery failure reached Sentry: %+v", event.Tags)
+	case <-time.After(50 * time.Millisecond):
 	}
 }

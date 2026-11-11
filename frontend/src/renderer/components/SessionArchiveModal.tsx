@@ -50,26 +50,35 @@ function searchText(session: WorkspaceSession): string {
 }
 
 /**
- * The board's archive: a searchable grid of ended-session cards in the Cmd+K
- * surface. Sessions arrive newest first. Restore state lives here, and
- * in-flight restores are dropped when the board scope changes or this
- * unmounts so a late completion cannot navigate after the user left.
+ * The archive: a searchable grid of ended-session cards in the Cmd+K surface,
+ * opened over whatever page is showing (see ArchiveModalHost). Sessions arrive
+ * newest first. Restore state lives here, and in-flight restores are dropped
+ * when the scope changes, the modal closes or this unmounts, so a late
+ * completion cannot navigate after the user left.
  */
 export function SessionArchiveModal({
 	connected,
 	hostId,
+	initialQuery,
+	onCloseAutoFocus,
 	onOpenChange,
 	onOpenSession,
 	open,
+	requestId,
 	resetKey,
 	sessions,
 }: {
 	connected: boolean;
 	hostId?: string;
+	/** The search each request starts from. */
+	initialQuery?: string;
+	onCloseAutoFocus?: (event: Event) => void;
 	onOpenChange: (open: boolean) => void;
 	onOpenSession: (session: WorkspaceSession) => void;
 	open: boolean;
-	/** The board scope; a change drops restore state. */
+	/** Changes with every request to open, so each starts from its own search. */
+	requestId: number;
+	/** The scope; a change, like a new request, drops restore state. */
 	resetKey: string;
 	sessions: WorkspaceSession[];
 }) {
@@ -93,24 +102,36 @@ export function SessionArchiveModal({
 	const resetKeyRef = useRef(resetKey);
 	resetKeyRef.current = resetKey;
 
-	// Each opening starts from an empty search at the newest session.
-	const [wasOpen, setWasOpen] = useState(open);
-	if (open !== wasOpen) {
-		setWasOpen(open);
-		if (open) {
-			setQuery("");
+	// Each request starts from its own search (usually empty) at the newest
+	// session, including one that retargets the modal while it is open.
+	const [seenRequest, setSeenRequest] = useState<number | null>(null);
+	const currentRequest = open ? requestId : null;
+	if (currentRequest !== seenRequest) {
+		setSeenRequest(currentRequest);
+		if (currentRequest !== null) {
+			setQuery(initialQuery ?? "");
 			setLimit(PAGE_SIZE);
 			setKeyboardSelecting(false);
 		}
 	}
 
+	// A new scope or a new request (even for the same project) starts clean: a
+	// restore begun under the last one must not close or navigate this one.
 	useEffect(() => {
 		setRestoringSessionId(undefined);
 		setRestoreErrors({});
 		setRestoreUnavailableSession(undefined);
 		setDeleteTarget(undefined);
 		restoreGenerationRef.current += 1;
-	}, [resetKey]);
+	}, [requestId, resetKey]);
+
+	// Closed, the modal no longer stands for where the user is: a restore that
+	// finishes later must not take them to its session.
+	useEffect(() => {
+		if (open) return;
+		restoreGenerationRef.current += 1;
+		setRestoringSessionId(undefined);
+	}, [open]);
 
 	useEffect(() => () => {
 		restoreGenerationRef.current += 1;
@@ -231,6 +252,7 @@ export function SessionArchiveModal({
 				// Wider and taller than the palette so cards sit at least three to a
 				// row. `!` because tailwind-merge does not know the palette's sizes.
 				className="top-[6vh]! w-[min(1200px,calc(100vw-4rem))]!"
+				contentProps={onCloseAutoFocus ? { onCloseAutoFocus } : undefined}
 				commandProps={{
 					shouldFilter: false,
 					onValueChange: (value) => {
@@ -271,7 +293,9 @@ export function SessionArchiveModal({
 					data-keyboard={keyboardSelecting || undefined}
 					// The arrow-key selection looks like the board card's own hover.
 					// Hover and selection switch instantly, without the card's fade.
-					className="[&[data-keyboard]_[cmdk-item][data-selected=true]_[data-testid=board-session-card]]:bg-interactive-hover [&_[data-testid=board-session-card]]:transition-none max-h-[calc(88vh-6rem)]! px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
+					// Always full height, however few cards there are, so the modal
+					// keeps one size while searching.
+					className="[&[data-keyboard]_[cmdk-item][data-selected=true]_[data-testid=board-session-card]]:bg-interactive-hover [&_[data-testid=board-session-card]]:transition-none h-[calc(88vh-6rem)] max-h-[calc(88vh-6rem)]! px-3 pt-1 pb-3 [&_[cmdk-list-sizer]]:grid [&_[cmdk-list-sizer]]:grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] [&_[cmdk-list-sizer]]:auto-rows-fr [&_[cmdk-list-sizer]]:gap-2"
 				>
 					<CommandEmpty className="col-span-full px-[var(--size-command-pad-x)] py-8 text-center text-control text-muted-foreground">
 						{sessions.length === 0 ? t("archiveModal.empty") : t("command.noResults")}
