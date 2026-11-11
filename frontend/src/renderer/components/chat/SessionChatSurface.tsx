@@ -406,10 +406,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	// A new chat of this agent offers these "/" skills before its own session runs.
 	const skillsHarness = snapshot?.harness;
-	const skillsOpenedAt = useRef({ chat: "", at: 0 });
+	const skillsSaved = useRef({ chat: "", openedAt: 0, fetchedAt: 0 });
 	useEffect(() => {
-		if (skillsOpenedAt.current.chat !== uiSessionId) skillsOpenedAt.current = { chat: uiSessionId, at: Date.now() };
-		if (session.kind !== "worker" || !skillsHarness || !liveSkillsLoaded || liveSkillsUpdatedAt < skillsOpenedAt.current.at) return;
+		if (skillsSaved.current.chat !== uiSessionId) skillsSaved.current = { chat: uiSessionId, openedAt: Date.now(), fetchedAt: 0 };
+		if (session.kind !== "worker" || !skillsHarness || !liveSkillsLoaded ||
+			liveSkillsUpdatedAt < skillsSaved.current.openedAt || liveSkillsUpdatedAt === skillsSaved.current.fetchedAt) return;
+		skillsSaved.current.fetchedAt = liveSkillsUpdatedAt;
 		rememberChatSkills(skillsHarness, session.workspaceId, hostId, liveSkills);
 	}, [hostId, session.kind, session.workspaceId, liveSkills, liveSkillsLoaded, liveSkillsUpdatedAt, skillsHarness, uiSessionId]);
 	const skills = useMemo(
