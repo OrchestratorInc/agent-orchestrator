@@ -1,5 +1,6 @@
 import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ILink } from "@xterm/xterm";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { TerminalMux } from "../lib/terminal-mux";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
@@ -85,6 +86,8 @@ const state = vi.hoisted(() => ({
 		focus: ReturnType<typeof vi.fn>;
 		selectAll: ReturnType<typeof vi.fn>;
 		dataListeners: Set<(data: string) => void>;
+		binaryListeners: Set<(data: string) => void>;
+		oscHandlers: Map<number, (data: string) => boolean>;
 		renderListeners: Set<() => void>;
 		csiHandlers: Array<{
 			callback: (params: (number | number[])[]) => boolean | Promise<boolean>;
@@ -101,6 +104,7 @@ const state = vi.hoisted(() => ({
 			viewport: { scrollBarWidth: number };
 			_selectionService: {
 				enable: ReturnType<typeof vi.fn>;
+				disable: ReturnType<typeof vi.fn>;
 				shouldForceSelection: (event: MouseEvent) => boolean;
 				_mouseMoveListener?: EventListener;
 				_dragScrollAmount?: number;
@@ -158,12 +162,18 @@ vi.mock("@xterm/xterm", () => ({
 		focus = vi.fn();
 		selectAll = vi.fn();
 		dataListeners = new Set<(data: string) => void>();
+		binaryListeners = new Set<(data: string) => void>();
+		oscHandlers = new Map<number, (data: string) => boolean>();
 		renderListeners = new Set<() => void>();
 		csiHandlers: Array<{
 			callback: (params: (number | number[])[]) => boolean | Promise<boolean>;
 			id: { final: string; intermediates?: string; prefix?: string };
 		}> = [];
 		parser = {
+			registerOscHandler: (ident: number, callback: (data: string) => boolean) => {
+				this.oscHandlers.set(ident, callback);
+				return { dispose: () => this.oscHandlers.delete(ident) };
+			},
 			registerCsiHandler: (
 				id: { final: string; intermediates?: string; prefix?: string },
 				callback: (params: (number | number[])[]) => boolean | Promise<boolean>,
@@ -189,6 +199,7 @@ vi.mock("@xterm/xterm", () => ({
 			viewport: { scrollBarWidth: 15 },
 			_selectionService: {
 				enable: vi.fn(),
+				disable: vi.fn(),
 				shouldForceSelection: () => false,
 				_mouseMoveListener: state.mouseMoveListener,
 				_dragScrollAmount: 0,
@@ -222,6 +233,10 @@ vi.mock("@xterm/xterm", () => ({
 		onData(listener: (data: string) => void) {
 			this.dataListeners.add(listener);
 			return { dispose: () => this.dataListeners.delete(listener) };
+		}
+		onBinary(listener: (data: string) => void) {
+			this.binaryListeners.add(listener);
+			return { dispose: () => this.binaryListeners.delete(listener) };
 		}
 		onResize() {
 			return { dispose: () => undefined };
@@ -374,6 +389,9 @@ describe("XtermTerminal", () => {
 		window.ao!.clipboard.readText = vi.fn().mockResolvedValue("");
 		window.ao!.terminal.setFocused = vi.fn();
 		window.ao!.terminal.onFontSizeShortcut = () => () => undefined;
+		localStorage.removeItem("ao.terminalClickMode");
+		localStorage.removeItem("ao.terminalSelectHintShown");
+		useUiStore.setState({ terminalClickMode: "app", terminalSelectHintShown: false });
 	});
 
 	// FitAddon proposes its 2-column minimum for a host with no layout box (a
@@ -1505,6 +1523,7 @@ describe("XtermTerminal", () => {
 		const { container } = render(<XtermTerminal theme="dark" />);
 		const host = container.querySelector(".terminal-xterm-host")!;
 		state.lastTerminal!.selection = "released selection";
+		state.lastTerminal!.modes.mouseTrackingMode = "none";
 
 		fireEvent.pointerDown(host, { button: 0 });
 		fireEvent.pointerUp(document, { button: 0 });
@@ -1549,6 +1568,7 @@ describe("XtermTerminal", () => {
 		const { container } = render(<XtermTerminal theme="dark" />);
 		const host = container.querySelector(".terminal-xterm-host")!;
 		state.lastTerminal!.selection = "kept armed";
+		state.lastTerminal!.modes.mouseTrackingMode = "none";
 
 		fireEvent.pointerDown(host, { button: 0 });
 		fireEvent.pointerUp(document, { button: 2 });
@@ -1670,6 +1690,7 @@ describe("XtermTerminal", () => {
 		];
 		terminal.selectionRange = { start: { x: 1, y: 0 }, end: { x: 3, y: 1 } };
 		terminal.selection = selection;
+		terminal.modes.mouseTrackingMode = "none";
 
 		const host = container.querySelector(".terminal-xterm-host")!;
 		fireEvent.pointerDown(host, { altKey: true, button: 0 });
@@ -2936,13 +2957,200 @@ describe("XtermTerminal", () => {
 		open.mockRestore();
 	});
 
-	it("forces plain drag selection without raw xterm data forwarding", () => {
-		render(<XtermTerminal theme="dark" />);
+	describe("mouse routing", () => {
+		const press = (init: MouseEventInit = {}) => new MouseEvent("mousedown", { button: 0, ...init });
+		type HoverHandler = { hover: (event: MouseEvent, uri: string) => void; leave: () => void };
 
-		expect(state.lastTerminal!.options.macOptionClickForcesSelection).toBe(true);
-		expect(state.lastTerminal!._core._selectionService.enable).toHaveBeenCalled();
-		expect(state.lastTerminal!._core.element.classList.remove).toHaveBeenCalledWith("enable-mouse-events");
-		expect(state.lastTerminal!._core._selectionService.shouldForceSelection({} as MouseEvent)).toBe(true);
+		it("reports plain left presses to a mouse-tracking program and keeps Shift, other buttons and links local", () => {
+			render(<XtermTerminal theme="dark" />);
+			const terminal = state.lastTerminal!;
+			const shouldForce = terminal._core._selectionService.shouldForceSelection;
+
+			expect(terminal.options.macOptionClickForcesSelection).toBe(true);
+			expect(terminal._core._selectionService.enable).not.toHaveBeenCalled();
+			expect(terminal._core.element.classList.remove).not.toHaveBeenCalledWith("enable-mouse-events");
+			expect(shouldForce(press())).toBe(false);
+			expect(shouldForce(press({ shiftKey: true }))).toBe(true);
+			// Alt stays xterm's column-selection modifier off macOS, so it is reported.
+			expect(shouldForce(press({ altKey: true }))).toBe(false);
+			expect(shouldForce(press({ button: 1 }))).toBe(true);
+			expect(shouldForce(press({ button: 2 }))).toBe(true);
+
+			const links = terminal.options.linkHandler as HoverHandler;
+			act(() => links.hover(press(), "https://example.com"));
+			expect(shouldForce(press())).toBe(true);
+			act(() => links.leave());
+			expect(shouldForce(press())).toBe(false);
+		});
+
+		it("forces selection with Option on macOS", () => {
+			setNavigatorPlatform("MacIntel");
+			render(<XtermTerminal theme="dark" />);
+			const shouldForce = state.lastTerminal!._core._selectionService.shouldForceSelection;
+
+			expect(shouldForce(press())).toBe(false);
+			expect(shouldForce(press({ altKey: true }))).toBe(true);
+			expect(shouldForce(press({ shiftKey: true }))).toBe(false);
+		});
+
+		it("keeps a press on an ao: session link local", () => {
+			render(<XtermTerminal theme="dark" />);
+			const shouldForce = state.lastTerminal!._core._selectionService.shouldForceSelection;
+			state.lastTerminal!.buffer.active.getLine = () => testBufferLine(asciiCells("ao://sessions/project/session"));
+			let links: ILink[] | undefined;
+			state.sessionLinkProvider!.provideLinks(1, (provided) => {
+				links = provided;
+			});
+
+			links![0].hover!(press(), links![0].text);
+			expect(shouldForce(press())).toBe(true);
+			links![0].leave!(press(), links![0].text);
+			expect(shouldForce(press())).toBe(false);
+		});
+
+		it("always selects text when the setting says so, exactly as before", () => {
+			act(() => useUiStore.getState().setTerminalClickMode("select"));
+			render(<XtermTerminal theme="dark" />);
+			const terminal = state.lastTerminal!;
+
+			expect(terminal._core._selectionService.enable).toHaveBeenCalled();
+			expect(terminal._core.element.classList.remove).toHaveBeenCalledWith("enable-mouse-events");
+			expect(terminal._core._selectionService.shouldForceSelection(press())).toBe(true);
+			expect(terminal._core._selectionService.shouldForceSelection({} as MouseEvent)).toBe(true);
+		});
+
+		it("applies a live change of the click setting", () => {
+			render(<XtermTerminal theme="dark" />);
+			const terminal = state.lastTerminal!;
+			const shouldForce = terminal._core._selectionService.shouldForceSelection;
+
+			act(() => useUiStore.getState().setTerminalClickMode("select"));
+			expect(shouldForce(press())).toBe(true);
+			expect(terminal._core._selectionService.enable).toHaveBeenCalled();
+			expect(terminal._core.element.classList.remove).toHaveBeenCalledWith("enable-mouse-events");
+
+			act(() => useUiStore.getState().setTerminalClickMode("app"));
+			expect(shouldForce(press())).toBe(false);
+			expect(terminal._core._selectionService.disable).toHaveBeenCalled();
+			expect(terminal._core.element.classList.add).toHaveBeenCalledWith("enable-mouse-events");
+		});
+
+		it("forwards xterm's mouse reports, and nothing else, only during real mouse input", () => {
+			const onInput = vi.fn();
+			render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+			const terminal = state.lastTerminal!;
+			const emitData = (data: string) => terminal.dataListeners.forEach((listener) => listener(data));
+			const emitBinary = (data: string) => terminal.binaryListeners.forEach((listener) => listener(data));
+
+			// No mouse event has been dispatched yet: a report-shaped string is not user input.
+			emitData("\x1b[<0;5;3M");
+			expect(onInput).not.toHaveBeenCalled();
+
+			window.dispatchEvent(new MouseEvent("mousedown"));
+			emitData("\x1b[<0;5;3M");
+			emitData("\x1b[<32;6;3M");
+			emitData("\x1b[<0;6;3m");
+			emitBinary("\x1b[M !!");
+			// Wheel reports are AO's own job; X10 bytes above 0x7f cannot cross the text path.
+			emitData("\x1b[<64;5;3M");
+			emitBinary("\x1b[M \x80!");
+			emitData("plain typed text");
+			emitData("\x1b[<0;5;3M\x1b[<0;5;3m");
+			expect(onInput.mock.calls).toEqual([
+				["\x1b[<0;5;3M", "mouse"],
+				["\x1b[<32;6;3M", "mouse"],
+				["\x1b[<0;6;3m", "mouse"],
+				["\x1b[M !!", "mouse"],
+			]);
+
+			onInput.mockClear();
+			act(() => useUiStore.getState().setTerminalClickMode("select"));
+			window.dispatchEvent(new MouseEvent("mousedown"));
+			emitData("\x1b[<0;5;3M");
+			expect(onInput).not.toHaveBeenCalled();
+		});
+
+		it("copies an OSC 52 write that follows a gesture sent to the program, and nothing else", async () => {
+			const { container } = render(<XtermTerminal theme="dark" />);
+			const host = container.querySelector(".terminal-xterm-host")!;
+			const osc52 = state.lastTerminal!.oscHandlers.get(52)!;
+			const write = (text: string) => osc52(`c;${btoa(text)}`);
+
+			expect(write("unprompted")).toBe(true);
+			expect(osc52("c;?")).toBe(true);
+			fireEvent.pointerDown(host, { button: 0, clientX: 10, clientY: 10 });
+			fireEvent.pointerUp(document, { button: 0 });
+			expect(osc52("c;?")).toBe(true);
+			write("copied by tmux");
+			write("second write after the same gesture");
+
+			await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("copied by tmux"));
+			expect(window.ao!.clipboard.writeText).toHaveBeenCalledTimes(1);
+			expect(window.ao!.clipboard.readText).not.toHaveBeenCalled();
+		});
+
+		it("ignores OSC 52 writes when copy on select is off", async () => {
+			const { container } = render(<XtermTerminal theme="dark" />);
+			act(() => useUiStore.getState().setTerminalCopyOnSelect(false));
+			try {
+				fireEvent.pointerDown(container.querySelector(".terminal-xterm-host")!, { button: 0 });
+				fireEvent.pointerUp(document, { button: 0 });
+				state.lastTerminal!.oscHandlers.get(52)!(`c;${btoa("nope")}`);
+				await new Promise((resolve) => window.setTimeout(resolve, 0));
+				expect(window.ao!.clipboard.writeText).not.toHaveBeenCalled();
+			} finally {
+				act(() => useUiStore.getState().setTerminalCopyOnSelect(true));
+			}
+		});
+
+		it("does not re-copy an old selection when the program received the gesture", async () => {
+			const { container } = render(<XtermTerminal theme="dark" />);
+			state.lastTerminal!.selection = "older selection";
+
+			fireEvent.pointerDown(container.querySelector(".terminal-xterm-host")!, { button: 0 });
+			fireEvent.pointerUp(document, { button: 0 });
+			await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+			expect(window.ao!.clipboard.writeText).not.toHaveBeenCalled();
+		});
+
+		it("shows the select-text hint once, on the first drag that goes to the program", async () => {
+			const { container, unmount } = render(<XtermTerminal theme="dark" />);
+			const host = container.querySelector(".terminal-xterm-host")!;
+
+			fireEvent.pointerDown(host, { button: 0, clientX: 10, clientY: 10 });
+			fireEvent.pointerMove(document, { buttons: 1, clientX: 12, clientY: 10 });
+			expect(screen.queryByTestId("terminal-select-hint")).not.toBeInTheDocument();
+			fireEvent.pointerMove(document, { buttons: 1, clientX: 40, clientY: 10 });
+			const hint = await screen.findByTestId("terminal-select-hint");
+			expect(hint).toHaveTextContent("Hold Shift and drag to select text");
+			expect(useUiStore.getState().terminalSelectHintShown).toBe(true);
+			expect(localStorage.getItem("ao.terminalSelectHintShown")).toBe("true");
+
+			fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+			expect(screen.queryByTestId("terminal-select-hint")).not.toBeInTheDocument();
+			fireEvent.pointerUp(document, { button: 0 });
+			unmount();
+
+			const { container: next } = render(<XtermTerminal theme="dark" />);
+			const nextHost = next.querySelector(".terminal-xterm-host")!;
+			fireEvent.pointerDown(nextHost, { button: 0, clientX: 10, clientY: 10 });
+			fireEvent.pointerMove(document, { buttons: 1, clientX: 40, clientY: 10 });
+			expect(screen.queryByTestId("terminal-select-hint")).not.toBeInTheDocument();
+		});
+
+		it("shows no hint for a drag that selects text", () => {
+			const { container } = render(<XtermTerminal theme="dark" />);
+			const host = container.querySelector(".terminal-xterm-host")!;
+
+			fireEvent.pointerDown(host, { button: 0, shiftKey: true, clientX: 10, clientY: 10 });
+			fireEvent.pointerMove(document, { buttons: 1, clientX: 40, clientY: 10 });
+			state.lastTerminal!.modes.mouseTrackingMode = "none";
+			fireEvent.pointerDown(host, { button: 0, clientX: 10, clientY: 10 });
+			fireEvent.pointerMove(document, { buttons: 1, clientX: 40, clientY: 10 });
+
+			expect(screen.queryByTestId("terminal-select-hint")).not.toBeInTheDocument();
+		});
 	});
 
 	function dropTransfer(entry: { isDirectory: boolean }, files: File[]) {

@@ -85,6 +85,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "version-refresh", section: "general", label: "settings.versionRefresh.label", keywords: ["auto upgrade sessions", "version refresh"] },
 	{ id: "terminal-shell", section: "general", label: "settings.terminalShell.label", keywords: ["zsh", "bash", "fish", "powershell", "shell path"] },
 	{ id: "copy-on-select", section: "general", label: "settings.terminalCopyOnSelect", keywords: ["terminal copy", "selection", "clipboard"] },
+	{ id: "terminal-clicks", section: "general", label: "settings.terminalClicks", keywords: ["terminal mouse", "mouse reporting", "click", "select text", "option drag"] },
 	{ id: "sound", section: "general", label: "settings.soundNotifications", keywords: ["sounds", "chime", "alert sound"] },
 	{ id: "privacy", section: "general", label: "settings.privacy", keywords: ["data", "tracking"] },
 	{ id: "analytics", section: "general", label: "settings.analytics.label", keywords: ["telemetry", "tracking", "opt out", "posthog"] },

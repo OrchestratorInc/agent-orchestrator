@@ -27,7 +27,7 @@ import { recordDirectWorkerInteraction } from "../lib/session-management-telemet
  * The slice of xterm's Terminal the attachment needs. Structural, so tests can
  * drive the hook with a tiny fake instead of a real xterm + DOM.
  */
-export type TerminalUserInputSource = "keyboard" | "paste" | "composition" | "shortcut" | "wheel" | "protocol";
+export type TerminalUserInputSource = "keyboard" | "paste" | "composition" | "shortcut" | "wheel" | "mouse" | "protocol";
 export type TerminalWriteSource = "live" | "replay";
 
 export type AttachableTerminal = {
