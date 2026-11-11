@@ -216,6 +216,9 @@ jobs:
         run: npm run api
 
       # openapi.yaml drift is already caught by TestBuild_MatchesEmbedded in
-      # the backend-core job (go test -race). Only schema.ts needs checking here.
-      - name: Check for schema.ts drift
-        run: git diff --exit-code -- frontend/src/api/schema.ts
+      # the backend-core job (go test -race). The generated TypeScript is not:
+      # schema.ts and the route templates derived from it both have to match.
+      - name: Check for generated frontend API drift
+        run: |
+          git diff --exit-code -- frontend/src/api/schema.ts frontend/src/api/route-templates.generated.ts
+          test -z "$(git ls-files --others --exclude-standard -- frontend/src/api)"

@@ -1,4 +1,5 @@
 # Generated artifacts are compared byte-for-byte by drift tests.
 backend/internal/httpd/apispec/openapi.yaml text eol=lf
 frontend/src/api/schema.ts text eol=lf
+frontend/src/api/route-templates.generated.ts text eol=lf
 frontend/src/renderer/routeTree.gen.ts text eol=lf

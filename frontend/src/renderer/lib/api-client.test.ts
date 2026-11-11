@@ -12,8 +12,27 @@ import {
 	setApiBaseUrl,
 	subscribeApiBaseUrl,
 } from "./api-client";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
+import { ROUTE_TEMPLATES } from "../../api/route-templates.generated";
+
+// Read the generated spec's own path keys rather than importing the type: the
+// route-coverage test must fail when route-templates.generated.ts drifts, so it
+// cannot take its expectation from the same file it is checking.
+//
+// Resolved the way scripts/api-route-templates.mjs does it, from this file's own
+// URL, so the test works wherever vitest is started. Note the two-step form is
+// required: jsdom installs its own global `URL`, which resolves a relative
+// `new URL(..., import.meta.url)` against `http://localhost:3000/`, and
+// `fileURLToPath` then rejects that http URL. Passing the `file:` URL string
+// straight to `fileURLToPath` avoids the global entirely.
+const schemaSource = readFileSync(
+	join(dirname(fileURLToPath(import.meta.url)), "../../api/schema.ts"),
+	"utf8",
+);
 
 vi.mock("./telemetry", () => ({
 	captureRendererEvent: vi.fn().mockResolvedValue(undefined),
@@ -368,6 +387,43 @@ describe("normalizeApiOperation", () => {
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/renders/r-1/artifact")).toBe("POST /api/v1/sessions/:id/renders/:id/artifact");
 		expect(normalizeApiOperation("POST", "/api/v1/agents/codex/accounts/ensure")).toBe("POST /api/v1/agents/codex/accounts/ensure");
 		expect(normalizeApiOperation("DELETE", "/api/v1/agents/codex/accounts/private-account-id")).toBe("DELETE /api/v1/agents/codex/accounts/:id");
+	});
+
+	// The route table used to be hand-written and rotted: 52 schema routes leaked
+	// an identifier into telemetry and 4 static routes were reported under another
+	// operation. These pin the table to the generated schema so a new daemon route
+	// cannot go unreported.
+	const schemaRoutes = [...new Set([...schemaSource.matchAll(/^ {4}"(\/api\/[^"]*)": \{$/gm)].map((match) => match[1]))];
+
+	it("covers every route in the generated schema", () => {
+		// Regenerate with `npm run api` (repo root) when this fails.
+		expect([...ROUTE_TEMPLATES].sort()).toEqual([...schemaRoutes].sort());
+	});
+
+	it.each(schemaRoutes.filter((route) => !route.includes("*")))(
+		"reports %s as its own operation with every path parameter collapsed",
+		(route) => {
+			// A user-chosen project/automation ID has no digits, which is exactly what
+			// the removed segment heuristic relied on.
+			const pathname = route.replace(/\{[^}]+\}/g, "renamed-by-the-user");
+			const expected = route.replace(/\{[^}]+\}/g, ":id");
+			expect(normalizeApiOperation("GET", pathname)).toBe(`GET ${expected}`);
+		},
+	);
+
+	it("keeps a wildcard route's remaining path opaque", () => {
+		expect(normalizeApiOperation("GET", "/api/v1/sessions/ao-42/preview/files/notes/secret.md")).toMatch(
+			/^GET \/api\/v1\/sessions\/:id\/preview\/files\b/,
+		);
+		expect(normalizeApiOperation("GET", "/api/v1/sessions/ao-42/preview/files/notes/secret.md")).not.toContain("secret");
+	});
+
+	it("still normalizes routes the schema does not describe", () => {
+		expect(normalizeApiOperation("GET", "/api/v1/health")).toBe("GET /api/v1/health");
+		// The defensive fallback collapses known collections and digit-bearing
+		// segments only; it is best-effort for routes outside the daemon's spec.
+		expect(normalizeApiOperation("GET", "/api/v1/projects/anything/extra")).toBe("GET /api/v1/projects/:id/extra");
+		expect(normalizeApiOperation("GET", "/api/v1/unknown/abc123def/thing")).toBe("GET /api/v1/unknown/:id/thing");
 	});
 });
 

@@ -11,7 +11,8 @@
 		"sqlc": "cd backend && go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate",
 		"api:spec": "cd backend && go generate ./internal/httpd/apispec/...",
 		"api:ts": "openapi-typescript backend/internal/httpd/apispec/openapi.yaml -o frontend/src/api/schema.ts",
-		"api": "npm run api:spec && npm run api:ts"
+		"api:routes": "node frontend/scripts/api-route-templates.mjs",
+		"api": "npm run api:spec && npm run api:ts && npm run api:routes"
 	},
 	"devDependencies": {
 		"openapi-typescript": "7.4.4"
