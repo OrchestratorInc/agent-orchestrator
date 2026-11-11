@@ -29,27 +29,18 @@ type LiveSet interface {
 	LastSeen(installID string) (time.Time, bool)
 }
 
-// DeviceAccess is the access side of the device list, satisfied by
-// *BridgeService: the devices that hold their own token, and the account's
-// shared token.
+// DeviceAccess is the device list's view of credentials, satisfied by *BridgeService.
 type DeviceAccess interface {
 	AccessDevices() []mobilebridge.AccessDevice
-	// ConnectedCredentials reports, by SHA-256, the credentials with an open
-	// connection.
 	ConnectedCredentials() map[string]bool
-	// AccountDevices reports the account token's SHA-256, empty when no
-	// account is linked, and when it was last used.
 	AccountDevices() (tokenHash string, lastUsed time.Time)
-	// RevokeDevice removes a device's token and returns its push-registry row.
 	RevokeDevice(id string) (installID string, found bool, err error)
 	UnlinkAccount() error
 }
 
-// AccountDevicesID is the list row for every device signed in to the linked
-// account. They share one token, so they are revoked together.
+// AccountDevicesID is the one list row for all account devices, which share one token.
 const AccountDevicesID = "account"
 
-// The kinds of row in the device list.
 const (
 	deviceKindDevice   = "device"
 	deviceKindPassword = "password"
@@ -62,7 +53,6 @@ const (
 type MobileDevicesController struct {
 	Registry DeviceRoster
 	Presence LiveSet
-	// Access adds the devices that hold their own token and the account row.
 	// Nil lists push registrations only.
 	Access DeviceAccess
 }
@@ -167,10 +157,8 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, MobileDevicesResponse{Devices: out})
 }
 
-// Remove handles DELETE /api/v1/mobile/devices/{id}. A device with its own
-// token loses access and its notifications. The account row unlinks the
-// account. A phone that still uses the pairing password only loses its
-// notifications: the password it holds keeps working.
+// Remove handles DELETE /api/v1/mobile/devices/{id}: it revokes a device or unlinks
+// the account. A phone on the pairing password only loses its notifications.
 func (c *MobileDevicesController) Remove(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if c.Access != nil {
@@ -188,8 +176,7 @@ func (c *MobileDevicesController) Remove(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if found {
-			// The token is revoked either way; a push row that outlives it only
-			// costs a notification to a device that can no longer connect.
+			// Best effort: the token is already revoked.
 			if installID != "" && c.Registry != nil {
 				_ = c.Registry.Delete(installID)
 			}

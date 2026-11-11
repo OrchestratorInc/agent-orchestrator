@@ -35,8 +35,6 @@ func printPairingCode(cmd *cobra.Command, pairing remoteHostPairingCode) error {
 	return err
 }
 
-// newRemoteHostPairCommand prints a one-time code that lets one new device
-// pair with this machine.
 func newRemoteHostPairCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use: "pair", Args: noArgs,
@@ -88,8 +86,6 @@ func remoteHostDeviceName(device remoteHostDevice) string {
 	}
 }
 
-// newRemoteHostDevicesCommand lists the devices that can reach this machine
-// and revokes them.
 func newRemoteHostDevicesCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "devices", Args: noArgs,
@@ -176,8 +172,6 @@ func newRemoteHostDevicesCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-// newRemoteHostRequireDeviceCredentialsCommand turns the pairing password off
-// or on for remote connections.
 func newRemoteHostRequireDeviceCredentialsCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use:       "require-device-credentials on|off",

@@ -2822,22 +2822,17 @@ type MobileStatusResponse struct {
 	// TailscaleHost is this machine's 100.64.0.0/10 Tailscale address, or "" when
 	// Tailscale is not up. The renderer encodes it into the pairing QR when the
 	// user selects the Tailscale tab, and shows a hint instead when it is empty.
-	TailscaleHost string              `json:"tailscaleHost"`
-	Port          int                 `json:"port"`
-	Password      string              `json:"password"`
-	Warning       string              `json:"warning"`
-	SecurePairing SecurePairingStatus `json:"securePairing"`
-	KeepAwake     KeepAwakeStatus     `json:"keepAwake"`
-	// RequireDeviceCredentials means the remote listener refuses the pairing
-	// password: a device needs its own token or the account token.
-	RequireDeviceCredentials bool `json:"requireDeviceCredentials"`
-	// PasswordLastUsedAt is when the pairing password last authenticated a
-	// remote request. Absent when it never has.
-	PasswordLastUsedAt *time.Time `json:"passwordLastUsedAt,omitempty"`
+	TailscaleHost            string              `json:"tailscaleHost"`
+	Port                     int                 `json:"port"`
+	Password                 string              `json:"password"`
+	Warning                  string              `json:"warning"`
+	SecurePairing            SecurePairingStatus `json:"securePairing"`
+	KeepAwake                KeepAwakeStatus     `json:"keepAwake"`
+	RequireDeviceCredentials bool                `json:"requireDeviceCredentials"`
+	PasswordLastUsedAt       *time.Time          `json:"passwordLastUsedAt,omitempty"`
 }
 
-// PairingCodeResponse is a one-time code a new device exchanges for its own
-// token.
+// PairingCodeResponse is a one-time pairing code.
 type PairingCodeResponse struct {
 	Code      string    `json:"code"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -2854,8 +2849,7 @@ type PairDeviceResponse struct {
 	HostID   string `json:"hostId"`
 	DeviceID string `json:"deviceId"`
 	Token    string `json:"token"`
-	// Credential is what the device presented. A pairing code is used up; the
-	// pairing password still works, so a device may keep it as a fallback.
+	// Credential is what the device presented. Only the password stays usable as a fallback.
 	Credential string `json:"credential" enum:"pairing-code,password"`
 }
 
@@ -3957,9 +3951,8 @@ type RequestRereviewResponse struct {
 	OK bool `json:"ok"`
 }
 
-// MobileDeviceResponse is one row of the host's device list: a device with its
-// own token, a phone that still uses the pairing password, or the account's
-// devices, which share one token.
+// MobileDeviceResponse is one row of the device list: a device with its own token,
+// a phone on the pairing password, or the account's devices.
 type MobileDeviceResponse struct {
 	ID                   string    `json:"id" description:"What DELETE /api/v1/mobile/devices/{id} takes."`
 	Kind                 string    `json:"kind" enum:"device,password,account" description:"device: holds its own token. password: a phone that still uses the pairing password, so removing it only stops its notifications. account: every device signed in to the linked account; they share one token."`

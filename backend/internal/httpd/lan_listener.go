@@ -200,15 +200,13 @@ func (m *LANManager) SetAccountTokenHash(hash string) {
 	}
 }
 
-// UseDeviceCredentials gives the listener the device registry and the pairing
-// codes, so it accepts device tokens and, on the pairing route, one-time
+// UseDeviceCredentials makes the listener accept device tokens and pairing
 // codes. Call it before Start.
 func (m *LANManager) UseDeviceCredentials(devices *mobilebridge.AccessDevices, codes *mobilebridge.PairingCodes) {
 	m.state.devices, m.state.codes = devices, codes
 }
 
-// SetPasswordLoginDisabled makes the listener refuse the pairing password.
-// Turning it on closes the connections that password authenticated.
+// SetPasswordLoginDisabled turns the pairing password off or on. Off closes its connections.
 func (m *LANManager) SetPasswordLoginDisabled(off bool) {
 	m.transitionMu.Lock()
 	defer m.transitionMu.Unlock()
@@ -218,8 +216,7 @@ func (m *LANManager) SetPasswordLoginDisabled(off bool) {
 	m.DisconnectCredential(m.state.currentHash())
 }
 
-// DisconnectCredential closes the connections a credential authenticated,
-// such as a revoked device's. hash is the credential's SHA-256.
+// DisconnectCredential closes the connections of the credential with this SHA-256.
 func (m *LANManager) DisconnectCredential(hash string) {
 	if hash == "" {
 		return // closeConnections("") would close every connection
@@ -232,8 +229,7 @@ func (m *LANManager) DisconnectCredential(hash string) {
 	}
 }
 
-// ConnectedCredentials reports, by SHA-256, the credentials that have an open
-// connection.
+// ConnectedCredentials returns the SHA-256 of each credential with an open connection.
 func (m *LANManager) ConnectedCredentials() map[string]bool {
 	m.mu.Lock()
 	ln := m.ln

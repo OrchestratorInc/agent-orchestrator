@@ -8,12 +8,10 @@ import (
 // PairingCodeTTL is how long an unused pairing code stays valid.
 const PairingCodeTTL = 10 * time.Minute
 
-// maxPairingCodes bounds the unused codes kept at once; the one closest to
-// expiry makes room for a new one.
+// maxPairingCodes bounds the unused codes kept in memory.
 const maxPairingCodes = 8
 
-// PairingCodes holds the one-time codes a new device exchanges for its own
-// token. They live in memory only, so a daemon restart drops unused codes.
+// PairingCodes holds the unused one-time pairing codes, in memory only.
 type PairingCodes struct {
 	mu    sync.Mutex
 	now   func() time.Time
@@ -64,8 +62,7 @@ func (p *PairingCodes) Valid(code string) bool {
 	return ok
 }
 
-// Consume uses up code. It reports false when the code is unknown, expired,
-// or already used, so of two devices presenting one code only one pairs.
+// Consume uses up code and reports whether it was valid.
 func (p *PairingCodes) Consume(code string) bool {
 	if code == "" {
 		return false

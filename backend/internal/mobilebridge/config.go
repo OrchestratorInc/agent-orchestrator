@@ -41,8 +41,7 @@ type State struct {
 	// AccountTokenOwner makes issuance idempotent for retries by the same AO
 	// account while still allowing an intentional re-link by another account.
 	AccountTokenOwner string `json:"accountTokenOwner,omitempty"`
-	// RequireDeviceCredentials makes the remote listener refuse the pairing
-	// password, so only device tokens and the account token authenticate.
+	// RequireDeviceCredentials makes the remote listener refuse the pairing password.
 	RequireDeviceCredentials bool `json:"requireDeviceCredentials,omitempty"`
 	// NoPublicTunnel keeps the self-hosted remote listener off the managed
 	// Cloudflare tunnel, including after daemon restart. Old Connect Mobile

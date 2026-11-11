@@ -26,11 +26,8 @@ const DEVICE_REGISTRY_UNAVAILABLE_CODE = "DEVICE_REGISTRY_UNAVAILABLE";
  */
 export const REMOVE_UNDO_MS = 2000;
 
-/**
- * device: holds its own token, which removing revokes. password: a phone that
- * still uses the pairing password, so removing it only stops its
- * notifications. account: every device signed in to the linked account.
- */
+/** device: its own token. password: a phone on the pairing password, which removing
+ * only stops notifying. account: every device signed in to the linked account. */
 type DeviceKind = "device" | "password" | "account";
 
 interface MobileDevice {
@@ -209,8 +206,7 @@ export function MobileDevicesSection() {
 					{sortedDevices.map((device) => {
 						const name = device.kind === "account" ? t("mobile.devices.account") : device.deviceName || t("mobile.devices.unnamed");
 						const icon = device.kind === "account" ? Users : isPhone(device) ? Smartphone : Laptop;
-						// Only what changes the decision to remove: these two rows do not
-						// simply revoke one device.
+						// Only rows where removing does not simply revoke one device get a description.
 						const description = device.kind === "account" ? t("mobile.devices.accountDescription")
 							: device.kind === "password" ? t("mobile.devices.passwordDescription") : undefined;
 						if (pendingRemovals.has(device.id)) {

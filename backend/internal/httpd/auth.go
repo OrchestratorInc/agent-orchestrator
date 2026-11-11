@@ -18,8 +18,7 @@ import (
 // after rotation cannot lock out a newly paired client behind the same address.
 type authState struct {
 	hashes atomic.Pointer[authHashes]
-	// devices and codes are set once, before the listener starts. Both may be
-	// nil, and the listener then accepts only the shared credentials.
+	// Set once before the listener starts. Nil accepts only the shared credentials.
 	devices *mobilebridge.AccessDevices
 	codes   *mobilebridge.PairingCodes
 	// passwordOff makes the listener refuse the pairing password.
@@ -82,9 +81,8 @@ func (a *authState) currentHash() string {
 	return ""
 }
 
-// authenticate names the credential tok is. A pairing code counts only on
-// the pairing route. passwordRefused means tok is the pairing password and
-// the listener no longer accepts it.
+// authenticate returns the credential tok matches. A pairing code counts only on
+// the pairing route. passwordRefused means tok is the password while it is off.
 func (a *authState) authenticate(tok string, pairing bool) (credential requestscope.Credential, ok, passwordRefused bool) {
 	if mobilebridge.PasswordMatches(a.currentHash(), tok) {
 		if a.passwordOff.Load() {
@@ -106,7 +104,6 @@ func (a *authState) authenticate(tok string, pairing bool) (credential requestsc
 	return requestscope.Credential{}, false, false
 }
 
-// noteUse records when a credential last authenticated a request.
 func (a *authState) noteUse(credential requestscope.Credential, now time.Time) {
 	if a.devices == nil {
 		return
@@ -333,8 +330,6 @@ func isIdentityProbe(r *http.Request) bool {
 	return r.Method == http.MethodGet && r.URL.Path == identityProbePath
 }
 
-// devicePairPath is where a new device exchanges a pairing code for its own
-// token, and where a device that still holds the pairing password swaps it.
 const devicePairPath = "/api/v1/remote-host/devices"
 
 func isDevicePairing(r *http.Request) bool {
@@ -394,17 +389,14 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				return
 			}
 			if passwordRefused {
-				// A paired device that has not swapped its password yet: not a guess,
-				// so it does not count toward the lockout.
+				// Not a guess, so it does not count toward the lockout.
 				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_CREDENTIAL_REQUIRED",
 					"this host no longer accepts the pairing password; pair this device again", nil)
 				return
 			}
 			if strings.HasPrefix(tok, mobilebridge.DeviceTokenPrefix) {
-				// A device token this host does not hold: the device was removed.
-				// Saying so stops a device that kept the pairing password from
-				// falling back to it. Not counted toward the lockout: the token is
-				// 256 random bits, and a removed device retries on a timer.
+				// A removed device. The distinct code stops it falling back to the password,
+				// and a 256-bit token is not a guess, so it does not count toward the lockout.
 				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_REVOKED",
 					"this device was removed from the host; pair it again", nil)
 				return
