@@ -205,8 +205,8 @@ describe("connectHost with device tokens", () => {
 	});
 
 	// The machine's answer to the refresh, which presents the token.
-	const refused = (code: string) => Object.assign(new Error("endpoint refresh returned 401"), { status: 401, code });
-	const refreshRefusing = (code: string) => vi.fn(async (config: { password: string }) => {
+	const refused = (code: string | undefined) => Object.assign(new Error("endpoint refresh returned 401"), { status: 401, code });
+	const refreshRefusing = (code: string | undefined) => vi.fn(async (config: { password: string }) => {
 		if (config.password === token) throw refused(code);
 		return [lan, tunnel];
 	});
@@ -225,8 +225,8 @@ describe("connectHost with device tokens", () => {
 		expect(d.saveEndpoints).toHaveBeenCalledOnce();
 	});
 
-	it("does not use the kept password when the machine removed this phone", async () => {
-		const d = deps(host({ token, fallbackToken: "pw" }), { refreshEndpoints: refreshRefusing("DEVICE_REVOKED") });
+	it.each([["removed this phone", "DEVICE_REVOKED"], ["sent no error code", undefined]])("does not use the kept password when the machine %s", async (_name, code) => {
+		const d = deps(host({ token, fallbackToken: "pw" }), { refreshEndpoints: refreshRefusing(code) });
 		const got = await connectHost("h_paired", d);
 		expect(d.saveToken).not.toHaveBeenCalled();
 		expect(d.pair).not.toHaveBeenCalled();

@@ -104,10 +104,10 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		// A failed refresh must not cost us a working connection: the endpoints
 		// already stored are what got us here and remain good enough.
 		//
-		// One failure is acted on: a 401 to this phone's token that does not say it was
-		// removed means a release without device tokens, where the kept password works.
+		// One failure is acted on: only a release without device tokens, as after a
+		// rollback, refuses this phone's token with BAD_PASSWORD; the kept password works there.
 		const { status, code } = (typeof error === "object" && error !== null ? error : {}) as { status?: unknown; code?: unknown };
-		if (deps.saveToken && host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && status === 401 && code !== "DEVICE_REVOKED") {
+		if (deps.saveToken && host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && status === 401 && code === "BAD_PASSWORD") {
 			token = host.fallbackToken;
 			await deps.saveToken(hostKey, token);
 			config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
