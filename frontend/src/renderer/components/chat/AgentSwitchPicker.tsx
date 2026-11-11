@@ -454,7 +454,7 @@ export function AgentModelPicker({
 								>
 									<ProviderMark provider={favorite.harness} className="mr-2 size-3.5" />
 									<span className="min-w-0 truncate">{favorite.label}</span>
-									<span className="sr-only"> {agentLabel(favorite.harness)}</span>
+									<span className="sr-only">{`, ${agentLabel(favorite.harness)}`}</span>
 									{favorite.fast ? <Zap aria-label={t("agentSwitch.fastMode")} className="ml-1.5 size-3 shrink-0 fill-current" /> : null}
 									{favorite.thinking ? <Brain aria-label={t("agentSwitch.thinking")} className="ml-1.5 size-3 shrink-0" /> : null}
 									{favorite.effortLabel ? <span className="ml-1.5 shrink-0 text-muted-foreground">{favorite.effortLabel}</span> : null}

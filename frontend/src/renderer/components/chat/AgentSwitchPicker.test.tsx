@@ -188,8 +188,8 @@ describe("AgentModelPicker", () => {
 		try {
 			open();
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			expect(screen.getByRole("menuitemradio", { name: /Opus Claude Code/ })).toBeInTheDocument();
-			expect(screen.getByRole("menuitemradio", { name: /Opus Cursor/ })).toBeInTheDocument();
+			expect(screen.getByRole("menuitemradio", { name: "Opus, Claude Code" })).toBeInTheDocument();
+			expect(screen.getByRole("menuitemradio", { name: "Opus, Cursor" })).toBeInTheDocument();
 		} finally {
 			act(() => favorites.forEach(toggleModelFavorite));
 		}
