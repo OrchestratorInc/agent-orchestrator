@@ -183,7 +183,7 @@ func TestAuthStatusForRuntimeHoldsBackWhatTheCallerWithholds(t *testing.T) {
 		})})
 	}
 	t.Cleanup(func() { claudeValidator = previousValidator })
-	ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"ANTHROPIC_API_KEY": "", "CLAUDE_CODE_OAUTH_TOKEN": "not-this"})
+	ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"ANTHROPIC_API_KEY": ""})
 	_, _, _, _ = (&Plugin{resolvedBinary: "/fixture/claude"}).AuthStatusForRuntime(ctx, dataDir)
 	if value, ok := probed["ANTHROPIC_API_KEY"]; !ok || value != "" {
 		t.Fatalf("probe env = %v, want ANTHROPIC_API_KEY blanked", probed)
@@ -268,5 +268,40 @@ func TestRemoveLocalOAuthTokenKeepsCloudToken(t *testing.T) {
 	}
 	if got := readTokenFile(CloudOAuthTokenPath(dataDir)); got != testCloudToken {
 		t.Fatalf("cloud token = %q after removing the menu token", got)
+	}
+}
+
+// An Anthropic key AO exported to the daemon for another harness is blanked
+// for Claude Code's sessions, so it is no login of Claude Code's own: the
+// probe gets the AO Cloud token those sessions get.
+func TestAuthStatusForRuntimeOffersTheCloudTokenWhenTheExportedKeyIsHeldBack(t *testing.T) {
+	dataDir := withCloudToken(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-ao-exported")
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	var probed map[string]string
+	previousCommand := claudeAuthCommand
+	claudeAuthCommand = func(_ context.Context, _, _ string, env map[string]string) (claudeCommandOutput, error) {
+		probed = env
+		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}`)}, nil
+	}
+	t.Cleanup(func() { claudeAuthCommand = previousCommand })
+	previousValidator := claudeValidator
+	claudeValidator = func() *agentcreds.Validator {
+		return agentcreds.New(&http.Client{Transport: claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+				Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-test"}]}`)), Request: req,
+			}, nil
+		})})
+	}
+	t.Cleanup(func() { claudeValidator = previousValidator })
+	ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"ANTHROPIC_API_KEY": ""})
+	_, _, _, _ = (&Plugin{resolvedBinary: "/fixture/claude"}).AuthStatusForRuntime(ctx, dataDir)
+	if probed["CLAUDE_CODE_OAUTH_TOKEN"] != testCloudToken {
+		t.Fatalf("probe env = %v, want the AO Cloud token", probed)
+	}
+	if value, ok := probed["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("probe env = %v, want ANTHROPIC_API_KEY blanked", probed)
 	}
 }

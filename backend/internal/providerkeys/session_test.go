@@ -147,17 +147,34 @@ func TestHoldBackAddsWithheldKeysWithoutReplacingSetOnes(t *testing.T) {
 	if err := ExportForProbes("ANTHROPIC_API_KEY", "ao-ant"); err != nil {
 		t.Fatal(err)
 	}
-	if got := HoldBack(nil, dir, "claude-code"); !reflect.DeepEqual(got, map[string]string{"ANTHROPIC_API_KEY": ""}) {
+	if got := HoldBack(t.Context(), nil, dir, "claude-code"); !reflect.DeepEqual(got, map[string]string{"ANTHROPIC_API_KEY": ""}) {
 		t.Fatalf("HoldBack(nil) = %v, want AO's copy blanked", got)
 	}
 	env := map[string]string{"ANTHROPIC_API_KEY": "launch-own", "CLAUDE_CODE_OAUTH_TOKEN": "tok"}
-	if got := HoldBack(env, dir, "claude-code"); got["ANTHROPIC_API_KEY"] != "launch-own" || got["CLAUDE_CODE_OAUTH_TOKEN"] != "tok" {
+	if got := HoldBack(t.Context(), env, dir, "claude-code"); got["ANTHROPIC_API_KEY"] != "launch-own" || got["CLAUDE_CODE_OAUTH_TOKEN"] != "tok" {
 		t.Fatalf("HoldBack replaced a value the work set: %v", got)
 	}
-	if got := HoldBack(nil, dir, "goose"); got != nil {
+	if got := HoldBack(t.Context(), nil, dir, "goose"); got != nil {
 		t.Fatalf("HoldBack for a harness without subscription keys = %v, want nil", got)
 	}
-	if got := HoldBack(nil, "", "claude-code"); got != nil {
+	if got := HoldBack(t.Context(), nil, "", "claude-code"); got != nil {
 		t.Fatalf("HoldBack without a data directory = %v, want nil", got)
+	}
+}
+
+// An ended context reads nothing and fails closed: a key Claude Code's own
+// sign-in would yield to is blanked even though the store would allow it.
+func TestHoldBackFailsClosedOnAnEndedContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := Save(context.Background(), dir, "ANTHROPIC_API_KEY", "ao-ant"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClaimForHarness(context.Background(), dir, "ANTHROPIC_API_KEY", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got := HoldBack(ctx, nil, dir, "claude-code"); !reflect.DeepEqual(got, map[string]string{"ANTHROPIC_API_KEY": ""}) {
+		t.Fatalf("HoldBack after cancellation = %v, want ANTHROPIC_API_KEY blanked", got)
 	}
 }

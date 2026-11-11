@@ -193,12 +193,22 @@ func Withheld(dataDir, harness string) map[string]string {
 // HoldBack adds Withheld(dataDir, harness) to env for work run on harness's
 // behalf outside a session (account checks, model discovery), keeping any
 // value env sets itself. It returns env, or a new map when env is nil and
-// something is held back; nil stays nil when nothing is.
-func HoldBack(env map[string]string, dataDir, harness string) map[string]string {
+// something is held back; nil stays nil when nothing is. When ctx has ended
+// it reads nothing and blanks every key harness's own sign-in would yield to,
+// so an aborted check never runs with an override harness did not choose.
+func HoldBack(ctx context.Context, env map[string]string, dataDir, harness string) map[string]string {
 	if strings.TrimSpace(dataDir) == "" {
 		return env
 	}
-	for name, value := range Withheld(dataDir, harness) {
+	withheld := map[string]string{}
+	if ctx.Err() != nil {
+		for _, name := range SubscriptionKeys(harness) {
+			withheld[name] = ""
+		}
+	} else {
+		withheld = Withheld(dataDir, harness)
+	}
+	for name, value := range withheld {
 		if env == nil {
 			env = map[string]string{}
 		}
