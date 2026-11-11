@@ -2678,10 +2678,12 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
 		expect(screen.getByText("The agent stopped before this turn finished")).toBeInTheDocument();
-		expect(document.querySelector('[data-turn-outcome="unknown"]')).not.toBeNull();
-		// The daemon still holds the turn open, so neither stop nor undo would be honoured.
+		const unknownOutcome = document.querySelector<HTMLElement>('[data-turn-outcome="unknown"]');
+		expect(unknownOutcome).not.toBeNull();
+		// The daemon still holds the turn open, so neither stop nor rollback would be honoured.
+		// Earlier settled turns may keep their own rollback, so look only at this outcome.
 		expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /undo/i })).not.toBeInTheDocument();
+		expect(within(unknownOutcome as HTMLElement).queryByRole("button", { name: "Roll back to here" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Resume agent" }));
 		await user.click(screen.getByRole("button", { name: "Open shell" }));
 		expect(resume).toHaveBeenCalledOnce();
