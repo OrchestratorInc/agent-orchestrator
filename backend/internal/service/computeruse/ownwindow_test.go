@@ -6,19 +6,23 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 type fakeOwnApp struct {
-	pid   int
-	drags []map[string]any
+	pid       int
+	drags     []map[string]any
+	deadlines []time.Time
 }
 
 func (f *fakeOwnApp) PID() int { return f.pid }
 
-func (f *fakeOwnApp) Drag(_ context.Context, _ string, drag map[string]any) (any, error) {
+func (f *fakeOwnApp) Drag(ctx context.Context, _ string, drag map[string]any) (any, error) {
 	f.drags = append(f.drags, drag)
+	deadline, _ := ctx.Deadline()
+	f.deadlines = append(f.deadlines, deadline)
 	return map[string]any{"ok": true, "route": "send_input_event"}, nil
 }
 
@@ -121,6 +125,29 @@ func TestDragInAOWindowRefusesBadCoordinatesBeforeAnyGesture(t *testing.T) {
 	}
 	if len(app.drags) != 0 {
 		t.Fatalf("a batch with a bad drag still moved the pointer: %v", app.drags)
+	}
+}
+
+func TestDragInAOWindowKeepsTheBatchLimitAndTheObserveChoice(t *testing.T) {
+	s, app, _ := ownWindowService(t)
+	ctx := context.Background()
+	if _, err := s.Call(ctx, CallRequest{Tool: "get_window_state", Arguments: map[string]any{"pid": 7, "window_id": 9}, SessionID: "w"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{
+		"steps": []any{drag(7, 9)}, "observe": map[string]any{"include_screenshot": false},
+	}, SessionID: "w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(app.deadlines) != 1 || app.deadlines[0].IsZero() || app.deadlines[0].After(time.Now().Add(batchTimeout)) {
+		t.Fatalf("drag deadlines = %v, want within %s", app.deadlines, batchTimeout)
+	}
+	if len(result.Images) != 0 {
+		t.Fatalf("observe.include_screenshot=false still saved %v", result.Images)
+	}
+	if observed := observation(t, result); observed["ok"] != true {
+		t.Fatalf("observation = %v", observed)
 	}
 }
 
