@@ -1,10 +1,12 @@
 import { useId } from "react";
+import type { TFunction } from "i18next";
 import { Coffee, TriangleAlert } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { useStayAwake } from "../hooks/useStayAwake";
 import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { DropdownMenuSwitchItem } from "./ui/dropdown-menu";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -16,19 +18,26 @@ export function AwakeControl(props: AwakeControlProps) {
 	return <MacAwakeControl {...props} />;
 }
 
-function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
-	const { t } = useTranslation();
-	const stay = useStayAwake(true);
-	const title = t("awake.title", "Stay Awake");
-	const descriptionId = useId();
-	const highlighted = stay.starting || (stay.active && !stay.stopping);
-	const reason = stay.reason === "low_battery"
+type StayAwake = ReturnType<typeof useStayAwake>;
+
+/** Why Stay Awake paused itself, or "" when it did not. */
+function awakePauseReason(t: TFunction, stay: StayAwake): string {
+	return stay.reason === "low_battery"
 		? t("awake.pausedBattery", "Paused: battery below {{percent}}%.\nResumes after charging.", { percent: stay.stopBatteryPercent })
 		: stay.reason === "critical_heat"
 			? t("awake.pausedHeat", "Paused while your Mac cools. Toggle to retry.")
 			: stay.reason === "battery_unknown"
 				? t("awake.pausedUnknownBattery", "Battery status unavailable. Toggle to retry.")
 				: "";
+}
+
+function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
+	const { t } = useTranslation();
+	const stay = useStayAwake(true);
+	const title = t("awake.title", "Stay Awake");
+	const descriptionId = useId();
+	const highlighted = stay.starting || (stay.active && !stay.stopping);
+	const reason = awakePauseReason(t, stay);
 	const description = stay.error
 		? t("awake.toggleFailed", "Couldn’t update Stay Awake. Try again.")
 		: highlighted
@@ -72,5 +81,53 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 				</span>
 			) : null}
 		</>
+	);
+}
+
+/** True when Stay Awake needs a look (paused or failed); always false off macOS. */
+export function useAwakeAttention(): boolean {
+	const mac = isMacPlatform();
+	const stay = useStayAwake(mac);
+	return mac && stay.attention;
+}
+
+/**
+ * Stay Awake as a switch row in a dropdown (the sidebar footer's Mobile menu).
+ * A second line appears only when it paused or failed, saying why. Renders
+ * nothing off macOS.
+ */
+export function AwakeMenuItem() {
+	if (!isMacPlatform()) return null;
+	return <MacAwakeMenuItem />;
+}
+
+function MacAwakeMenuItem() {
+	const { t } = useTranslation();
+	const stay = useStayAwake(true);
+	const highlighted = stay.starting || (stay.active && !stay.stopping);
+	const problem = stay.error
+		? t("awake.toggleFailed", "Couldn’t update Stay Awake. Try again.")
+		: !highlighted && stay.on
+			? awakePauseReason(t, stay) || t("awake.pausedTooltip", "Stay Awake is paused. Click to turn off.")
+			: "";
+	return (
+		<DropdownMenuSwitchItem
+			checked={stay.on}
+			className={problem ? "items-start" : undefined}
+			data-testid="awake-menu-item"
+			disabled={!stay.supported}
+			onSelect={stay.toggle}
+		>
+			<span className={cn("relative grid shrink-0 place-items-center", problem && "mt-px")}>
+				<Coffee aria-hidden="true" />
+				{stay.attention ? <TriangleAlert className="absolute -right-1 -top-1 size-2.5! fill-background text-error" strokeWidth={2.5} aria-hidden="true" /> : null}
+			</span>
+			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span>{t("awake.title", "Stay Awake")}</span>
+				{problem ? (
+					<span className="whitespace-pre-line text-[length:var(--font-size-xs)] leading-snug text-error">{problem}</span>
+				) : null}
+			</span>
+		</DropdownMenuSwitchItem>
 	);
 }

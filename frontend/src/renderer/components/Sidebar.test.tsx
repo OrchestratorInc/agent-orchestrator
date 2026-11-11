@@ -677,7 +677,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		const signInControls = screen.getAllByLabelText("Sign in to cloud");
+		const signInControls = screen.getAllByLabelText("Sign in");
 		expect(signInControls).toHaveLength(2);
 		const activeControl = signInControls.find((control) => control.tabIndex === 0);
 		expect(activeControl).toBeDefined();
@@ -709,7 +709,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
+		expect(screen.getAllByLabelText("Sign in")).toHaveLength(2);
 	});
 
 	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
@@ -776,9 +776,11 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const footer = document.querySelector('[data-sidebar="footer"]');
-		expect(footer).toHaveClass("border-t", "border-border-strong", "!py-2");
+		expect(footer).toHaveClass("!pt-0", "!pb-2");
+		expect(footer).not.toHaveClass("border-t");
+		expect(footer?.querySelector(".border-t")).toBeNull();
 		expect(screen.getAllByRole("button", { name: "Settings" })[0]).toHaveClass("h-9");
-		expect(screen.getAllByRole("button", { name: "Connect mobile" })[0]).toHaveClass("h-9");
+		expect(screen.getAllByRole("button", { name: "Mobile" })[0]).toHaveClass("size-9");
 		expect(footer?.className).not.toContain("--size-center-panel-bottom-inset");
 		expect(footer?.className).not.toContain("--size-center-panel-inset-mac");
 	});
@@ -790,7 +792,8 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
-		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "0");
+		expect(screen.queryByTestId("awake-button")).not.toBeInTheDocument();
+		expect(screen.getByTestId("footer-mobile-menu")).toHaveAttribute("tabindex", "0");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "0");
 		expect(expandedButton?.parentElement).not.toHaveAttribute("aria-hidden");
@@ -805,7 +808,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
-		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "-1");
+		expect(screen.getByTestId("footer-mobile-menu")).toHaveAttribute("tabindex", "-1");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "-1");
 		expect(expandedButton?.closest('[aria-hidden="true"]')).toBeInTheDocument();
@@ -2287,15 +2290,25 @@ describe("Sidebar", () => {
 	it("opens the Mobile settings page from the footer and starts pairing", async () => {
 		const user = userEvent.setup();
 		renderSidebar();
-		await user.click((await screen.findAllByRole("button", { name: "Connect mobile" }))[0]);
+		await user.click((await screen.findAllByRole("button", { name: "Mobile" }))[0]);
+		await user.click(await screen.findByRole("menuitem", { name: "Connect mobile" }));
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "mobile", startPairing: true });
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("always shows Connect mobile", () => {
+	it("always shows the Mobile menu", () => {
 		renderSidebar();
 
-		expect(screen.getByRole("button", { name: "Connect mobile" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Mobile" })).toBeVisible();
+	});
+
+	it("keeps Stay Awake inside the Mobile menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		expect(screen.queryByRole("button", { name: "Stay Awake" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Mobile" }));
+		expect(await screen.findByTestId("awake-menu-item")).toHaveTextContent("Stay Awake");
 	});
 
 	it("opens the command palette when Search is clicked", async () => {
@@ -3865,7 +3878,7 @@ describe("Sidebar", () => {
 		expect(readyRow.querySelector(".rounded-full")).toBeNull();
 		expect(screen.queryAllByLabelText("Retry update check")).toHaveLength(0);
 		// Stays above Connect mobile / Settings — not overlaid on them.
-		const connectMobile = screen.getByRole("button", { name: "Connect mobile" });
+		const connectMobile = screen.getByRole("button", { name: "Mobile" });
 		expect(readyRow.compareDocumentPosition(connectMobile) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.queryByLabelText(/Hide update/)).not.toBeInTheDocument();
 	});
