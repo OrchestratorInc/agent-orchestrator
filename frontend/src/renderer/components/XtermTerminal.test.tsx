@@ -3129,6 +3129,34 @@ describe("XtermTerminal", () => {
 			expect(window.ao!.clipboard.writeText).toHaveBeenCalledTimes(1);
 		});
 
+		it("does not let a late OSC 52 write from another terminal replace a newer copy", async () => {
+			const first = render(<XtermTerminal theme="dark" />);
+			const programTerminal = state.lastTerminal!;
+			const second = render(<XtermTerminal theme="dark" />);
+			const copyingTerminal = state.lastTerminal!;
+			expect(copyingTerminal).not.toBe(programTerminal);
+
+			// A drag goes to the program in the first terminal...
+			fireEvent.pointerDown(first.container.querySelector(".terminal-xterm-host")!, { button: 0 });
+			fireEvent.pointerUp(document, { button: 0 });
+			// ...then the user copies a selection in the second one.
+			copyingTerminal.selection = "copied in the other terminal";
+			copyingTerminal.keyHandler!({
+				key: "c",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				preventDefault: vi.fn(),
+				stopPropagation: vi.fn(),
+			} as unknown as KeyboardEvent);
+			expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("copied in the other terminal");
+
+			programTerminal.oscHandlers.get(52)!(`c;${btoa("late program copy")}`);
+			await new Promise((resolve) => window.setTimeout(resolve, 0));
+			expect(window.ao!.clipboard.writeText).toHaveBeenCalledTimes(1);
+			second.unmount();
+		});
+
 		it("ignores OSC 52 writes when copy on select is off", async () => {
 			const { container } = render(<XtermTerminal theme="dark" />);
 			act(() => useUiStore.getState().setTerminalCopyOnSelect(false));

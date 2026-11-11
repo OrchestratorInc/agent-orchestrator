@@ -429,6 +429,13 @@ function applyTerminalClickMode(term: Terminal, mode: TerminalClickMode): void {
 // with OSC 52 (tmux copy-mode does on release; double-click copies after
 // 0.3s). Only a write this soon after such a gesture is honored.
 const OSC52_GESTURE_WINDOW_MS = 1500;
+// When any terminal last copied to the clipboard itself (a selection or a
+// link). Shared by every terminal: a program's late OSC 52 write, in this pane
+// or another, hidden or not, must not replace a newer copy the user made.
+let lastLocalTerminalCopyAt = Number.NEGATIVE_INFINITY;
+function markLocalTerminalCopy(): void {
+	lastLocalTerminalCopyAt = performance.now();
+}
 // xterm emits a mouse report synchronously inside the DOM mouse event that
 // caused it; anything outside this window is not user mouse input.
 const MOUSE_REPORT_EVENT_WINDOW_MS = 250;
@@ -1076,10 +1083,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		const copySelection = (options?: { clipboardData?: DataTransfer | null }) => {
 			const selection = joinVisuallyContinuousLines(term, term.getSelection(), columnSelectionActive);
 			if (!selection) return false;
-			// A local copy (release, shortcut or context menu) is newer than anything
-			// the program might still send for an earlier gesture; a late OSC 52
-			// write must not replace it.
-			appGestureEndedAt = Number.NEGATIVE_INFINITY;
+			// Newer than anything a program might still send for an earlier gesture
+			// in any terminal (see lastLocalTerminalCopyAt).
+			markLocalTerminalCopy();
 			options?.clipboardData?.setData("text/plain", selection);
 			void aoBridge.clipboard
 				.writeText(selection)
@@ -1755,6 +1761,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			if (text === null || pendingReplayWrites > 0) return true;
 			if (clickMode() !== "app" || !useUiStore.getState().terminalCopyOnSelect) return true;
 			if (performance.now() - appGestureEndedAt > OSC52_GESTURE_WINDOW_MS) return true;
+			if (lastLocalTerminalCopyAt >= appGestureEndedAt) return true;
 			appGestureEndedAt = Number.NEGATIVE_INFINITY;
 			void aoBridge.clipboard
 				.writeText(text)
@@ -2380,7 +2387,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 							<DropdownMenuItem onSelect={() => {
 								const { link } = contextMenu;
 								setContextMenuOpen(false);
-								if (link) void aoBridge.clipboard.writeText(link);
+								if (link) {
+									markLocalTerminalCopy();
+									void aoBridge.clipboard.writeText(link);
+								}
 							}}>
 								{t("link.copy")}
 							</DropdownMenuItem>
