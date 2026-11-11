@@ -1,4 +1,5 @@
 import createClient from "openapi-fetch";
+import { ROUTE_TEMPLATES as generatedRouteTemplates } from "../../api/route-templates.generated";
 import type { components, paths } from "../../api/schema";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
@@ -80,109 +81,23 @@ export function setApiDaemonStatus(nextStatus: DaemonStatus): void {
 	daemonServesIPv6Loopback = nextStatus.state === "ready" && nextStatus.ipv6Loopback === true;
 }
 
-// Route templates from the generated OpenAPI schema (frontend/src/api/schema.ts).
-// Operation strings sent to telemetry must never contain raw IDs (project IDs
-// are user-chosen strings), so we match each request path against these
-// templates and report the template — collapsing `{param}` to `:id` — rather
-// than guessing which segments are identifiers. Matching from the schema keeps
-// static child routes (notifications/read-all, sessions/cleanup) intact and
-// still normalizes IDs for every resource, including ones a segment heuristic
-// would miss (orchestrators/{id}). Keep in sync with schema.ts.
-const ROUTE_TEMPLATES = [
-    "/api/v1/awake/observations", "/api/v1/awake", "/api/v1/awake/sessions", "/api/v1/awake/settings",
-    "/api/v1/awake/rules", "/api/v1/awake/stop", "/api/v1/awake/resume",
-    "/api/v1/awake/recover", "/api/v1/awake/history", "/api/v1/awake/downloads",
-    "/api/v1/awake/low-power/authorize", "/api/v1/awake/low-power/revoke", "/api/v1/awake/sessions/{awakeId}/end",
-    "/api/v1/awake/sessions/{awakeId}/extend",
-    "/api/v1/session-import",
-	"/api/v1/agents",
-	"/api/v1/agents/install-jobs",
-	"/api/v1/agents/auth-plans",
-	"/api/v1/agents/installers",
-	"/api/v1/agents/refresh",
-	"/api/v1/agents/readiness",
-	"/api/v1/agents/readiness/ensure",
-	"/api/v1/agents/{agent}/auth",
-	"/api/v1/agents/{agent}/auth/operations",
-	"/api/v1/agents/{agent}/auth/operations/{operationId}",
-	"/api/v1/agents/{agent}/auth/operations/{operationId}/code",
-	"/api/v1/agents/{agent}/logout",
-	"/api/v1/settings/harness-defaults/{agent}",
-	"/api/v1/agents/{agent}/install",
-	"/api/v1/agents/codex/accounts",
-	"/api/v1/agents/codex/accounts/{accountId}",
-	"/api/v1/agents/codex/accounts/ensure",
-	"/api/v1/agents/codex/accounts/{accountId}/login-terminal",
-	"/api/v1/agents/codex/accounts/{accountId}/logout",
-	"/api/v1/agents/codex/accounts/{accountId}/reset-credit/consume",
-	"/api/v1/agents/codex/accounts/events",
-	"/api/v1/agents/codex/accounts/login-terminal",
-	"/api/v1/agents/codex/accounts/login-operations/{operationId}/verify",
-	"/api/v1/agents/codex/accounts/login-operations/{operationId}/cancel",
-	"/api/v1/agents/codex/account-switches",
-	"/api/v1/agents/codex/account-switches/{switchId}",
-	"/api/v1/agents/accounts",
-	"/api/v1/agents/accounts/usage",
-	"/api/v1/agents/accounts/login",
-	"/api/v1/agents/accounts/login/{operationId}/verify",
-	"/api/v1/agents/accounts/login/{operationId}/cancel",
-	"/api/v1/agents/accounts/sessions/{sessionId}",
-	"/api/v1/agents/accounts/{accountId}",
-	"/api/v1/agents/accounts/{accountId}/default",
-	"/api/v1/agents/accounts/{accountId}/reset-credit",
-	"/api/v1/agents/{agent}/models",
-	"/api/v1/agents/{agent}/models/refresh",
-	"/api/v1/agents/{agent}/probe",
-	"/api/v1/agents/{agent}/verify",
-	"/api/v1/desktop/sessions/{sessionId}/workspace",
-	"/api/v1/events",
-	"/api/v1/import",
-	"/api/v1/imports/prepare-git",
-	"/api/v1/imports/validate",
-	"/api/v1/notifications",
-	"/api/v1/notifications/{id}",
-	"/api/v1/notifications/read-all",
-	"/api/v1/notifications/stream",
-	"/api/v1/orchestrators",
-	"/api/v1/orchestrators/{id}",
-	"/api/v1/projects",
-"/api/v1/projects/clone",
-	"/api/v1/projects/clone/prepare",
-	"/api/v1/projects/clone/prepare/stream",
-	"/api/v1/projects/clone/check",
-	"/api/v1/projects/clone/cleanup",
-	"/api/v1/projects/initialize",
-	"/api/v1/projects/{id}",
-	"/api/v1/projects/{id}/config",
-	"/api/v1/prs/{id}/merge",
-	"/api/v1/prs/{id}/resolve-comments",
-	"/api/v1/sessions",
-	"/api/v1/sessions/{sessionId}",
-	"/api/v1/sessions/{sessionId}/activity",
-	"/api/v1/sessions/{sessionId}/exit-agent",
-	"/api/v1/sessions/{sessionId}/interface-transition",
-	"/api/v1/sessions/{sessionId}/kill",
-	"/api/v1/sessions/{sessionId}/pr",
-	"/api/v1/sessions/{sessionId}/pr/claim",
-	"/api/v1/sessions/{sessionId}/preview",
-	"/api/v1/sessions/{sessionId}/preview/files/*",
-	"/api/v1/sessions/{sessionId}/preview/server",
-	"/api/v1/sessions/{sessionId}/provider-switch",
-	"/api/v1/sessions/{sessionId}/renders/{renderId}/artifact",
-	"/api/v1/sessions/{sessionId}/resume-agent",
-	"/api/v1/sessions/{sessionId}/restore",
-	"/api/v1/sessions/{sessionId}/reviews",
-	"/api/v1/sessions/{sessionId}/reviews/cancel",
-	"/api/v1/sessions/{sessionId}/reviews/comments/resolve",
-	"/api/v1/sessions/{sessionId}/reviews/submit",
-	"/api/v1/sessions/{sessionId}/reviews/trigger",
-	"/api/v1/sessions/{sessionId}/rollback",
-	"/api/v1/sessions/{sessionId}/send",
-	"/api/v1/sessions/{sessionId}/workspace/events",
-	"/api/v1/sessions/{sessionId}/workspace/file",
-	"/api/v1/sessions/{sessionId}/workspace/files",
-	"/api/v1/sessions/cleanup",
-] as const;
+// Route templates, taken from the generated OpenAPI schema (route-templates.generated.ts).
+//
+// Operation strings sent to telemetry must never contain raw IDs (project and
+// automation IDs are user-chosen strings, so no segment heuristic can tell them
+// from a route word). A hand-maintained copy of this list silently rotted: it
+// held 102 of the schema's 273 routes, so 52 routes leaked an identifier into
+// telemetry (`POST /api/v1/task-preparations/<token>`) and 4 static routes were
+// attributed to a different operation (`orchestrators/delegate` reported as
+// `orchestrators/:id`). The list is now generated from the schema, `npm run api`
+// refreshes it, and CI diffs it, so a new route cannot silently go unreported.
+// Static child routes (notifications/read-all, usage/sessions/memory) reach their
+// own template, and a route's trailing `*` keeps matching the rest of the path.
+//
+// The annotation is the schema's own path union: a generated template that is
+// not a schema route stops typechecking, which is what keeps this honest when
+// the daemon's surface changes.
+const ROUTE_TEMPLATES: readonly (keyof paths)[] = generatedRouteTemplates;
 
 // Resource collections whose next path segment is an identifier. Only used as a
 // defensive fallback for paths not covered by ROUTE_TEMPLATES; keeps IDs out of

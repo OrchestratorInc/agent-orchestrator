@@ -150,6 +150,7 @@ Keep existing migration IDs, filenames, and SQL unchanged.
 npm run sqlc
 
 # Regenerate OpenAPI spec and frontend TypeScript types
+# (also refreshes src/api/route-templates.generated.ts)
 npm run api
 ```
 
