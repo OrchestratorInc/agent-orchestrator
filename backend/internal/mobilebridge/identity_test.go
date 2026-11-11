@@ -188,6 +188,41 @@ func TestEnsureIdentityKeepsTheHostIDWhenTheOnlyInterfaceIsReplaced(t *testing.T
 	}
 }
 
+// A damaged identity file must never be treated as a fresh machine. Reissuing
+// silently would unpair every phone, and the operator can only reset on purpose
+// by deleting the file.
+func TestEnsureIdentityRefusesToReplaceACorruptIdentityFile(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"invalid json", "{not json"},
+		{"missing host id", `{"fingerprint":"abc"}`},
+		{"empty object", `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mobile", "identity.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := EnsureIdentityFor(path, []net.Interface{iface("en0", "aa:bb:cc:dd:ee:01")}); err == nil {
+				t.Fatal("EnsureIdentityFor replaced a corrupt identity; want an error")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read back: %v", err)
+			}
+			if string(got) != tc.content {
+				t.Fatalf("corrupt identity was rewritten: %q", got)
+			}
+		})
+	}
+}
+
 // An installation with no hardware addresses must not reissue its id on every
 // start.
 func TestEnsureIdentityIsStableWithoutHardwareAddresses(t *testing.T) {

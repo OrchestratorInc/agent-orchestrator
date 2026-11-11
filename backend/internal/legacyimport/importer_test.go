@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,32 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	r, ok := f.projects[id]
 	return r, ok, nil
 }
+
+// FindProjectByPath mirrors the real query: an active project owning the path.
+func (f *fakeStore) FindProjectByPath(_ context.Context, path string) (domain.ProjectRecord, bool, error) {
+	if path == "" {
+		return domain.ProjectRecord{}, false, nil
+	}
+	for _, r := range f.projects {
+		if r.Path == path && r.ArchivedAt.IsZero() {
+			return r, true, nil
+		}
+	}
+	return domain.ProjectRecord{}, false, nil
+}
+
+// ListProjects mirrors the real query: active projects ordered by id.
+func (f *fakeStore) ListProjects(_ context.Context) ([]domain.ProjectRecord, error) {
+	out := make([]domain.ProjectRecord, 0, len(f.projects))
+	for _, r := range f.projects {
+		if r.ArchivedAt.IsZero() {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 func (f *fakeStore) UpsertProject(_ context.Context, r domain.ProjectRecord) error {
 	f.projects[r.ID] = r
 	return nil
@@ -159,6 +186,107 @@ func TestLegacyConfigError_NilWhenAbsentOrEmpty(t *testing.T) {
 	}
 	if LegacyConfigError(context.Background(), filepath.Join(t.TempDir(), "nope")) != nil {
 		t.Fatal("LegacyConfigError on a missing root = non-nil, want nil")
+	}
+}
+
+// A legacy project whose path an existing active project already owns under a
+// different id must be skipped, not written: two active projects on one path
+// would bypass the daemon's PATH_ALREADY_REGISTERED contract, and a re-run must
+// stay idempotent rather than overwriting the newer owner.
+func TestRun_SkipsProjectWhosePathIsAlreadyRegisteredUnderAnotherID(t *testing.T) {
+	root := writeLegacyRoot(t)
+	store := newFakeStore()
+	// The importer normalizes legacy paths, so the pre-existing owner must hold
+	// the normalized form — the same one importProject looks up.
+	alphaPath, err := filepath.Abs("/repos/alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.projects["existing"] = domain.ProjectRecord{ID: "existing", Path: alphaPath}
+
+	rep, err := Run(context.Background(), store, runOpts(root))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, imported := store.projects["alpha"]; imported {
+		t.Fatal("alpha was written even though its path belongs to project existing")
+	}
+	if got := store.projects["existing"].ID; got != "existing" {
+		t.Fatalf("existing project was replaced by %q", got)
+	}
+	if _, imported := store.projects["beta"]; !imported {
+		t.Fatal("beta has a free path and must still import")
+	}
+	if rep.ProjectsImported != 1 || rep.ProjectsSkipped != 1 {
+		t.Fatalf("projects: imported=%d skipped=%d, want 1/1", rep.ProjectsImported, rep.ProjectsSkipped)
+	}
+	if len(rep.Notes) == 0 {
+		t.Fatal("path collision must be reported, not silently skipped")
+	}
+}
+
+// An alias of an already-registered directory must be caught too: the textual
+// lookup cannot see it, so the importer compares directory identity the way the
+// daemon's registration path does. The stored path differs textually from the
+// imported one but names the same directory, so this exercises the os.SameFile
+// branch on every platform.
+func TestRun_SkipsProjectWhosePathResolvesToARegisteredDirectory(t *testing.T) {
+	realDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(realDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	root := filepath.Join(t.TempDir(), ".agent-orchestrator")
+	mustMkdir(t, filepath.Join(root, "projects", "aliased", "sessions"))
+	mustWrite(t, filepath.Join(root, "config.yaml"), "projects:\n  aliased:\n    path: "+filepath.ToSlash(realDir)+"\n")
+
+	store := newFakeStore()
+	// Trailing separator: not equal as text, the same directory on disk.
+	store.projects["existing"] = domain.ProjectRecord{ID: "existing", Path: realDir + string(os.PathSeparator)}
+
+	rep, err := Run(context.Background(), store, runOpts(root))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, imported := store.projects["aliased"]; imported {
+		t.Fatal("aliased path was imported as a second project on the same directory")
+	}
+	if rep.ProjectsSkipped != 1 || rep.ProjectsImported != 0 {
+		t.Fatalf("projects: imported=%d skipped=%d, want 0/1", rep.ProjectsImported, rep.ProjectsSkipped)
+	}
+	if len(rep.Notes) == 0 {
+		t.Fatal("alias collision must be reported")
+	}
+}
+
+// The realistic alias is a symlink; it needs privileges Windows may not grant,
+// so that host skips rather than silently passing.
+func TestRun_SkipsProjectWhosePathSymlinksToARegisteredDirectory(t *testing.T) {
+	realDir := filepath.Join(t.TempDir(), "real-repo")
+	if err := os.MkdirAll(realDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias-repo")
+	if err := os.Symlink(realDir, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	root := filepath.Join(t.TempDir(), ".agent-orchestrator")
+	mustMkdir(t, filepath.Join(root, "projects", "aliased", "sessions"))
+	mustWrite(t, filepath.Join(root, "config.yaml"), "projects:\n  aliased:\n    path: "+filepath.ToSlash(alias)+"\n")
+
+	store := newFakeStore()
+	store.projects["existing"] = domain.ProjectRecord{ID: "existing", Path: realDir}
+
+	rep, err := Run(context.Background(), store, runOpts(root))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, imported := store.projects["aliased"]; imported {
+		t.Fatal("symlinked path was imported as a second project on the same directory")
+	}
+	if rep.ProjectsSkipped != 1 || rep.ProjectsImported != 0 {
+		t.Fatalf("projects: imported=%d skipped=%d, want 0/1", rep.ProjectsImported, rep.ProjectsSkipped)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -24,6 +25,32 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	r, ok := f.projects[id]
 	return r, ok, nil
 }
+
+// FindProjectByPath mirrors the real query: an active project owning the path.
+func (f *fakeStore) FindProjectByPath(_ context.Context, path string) (domain.ProjectRecord, bool, error) {
+	if path == "" {
+		return domain.ProjectRecord{}, false, nil
+	}
+	for _, r := range f.projects {
+		if r.Path == path && r.ArchivedAt.IsZero() {
+			return r, true, nil
+		}
+	}
+	return domain.ProjectRecord{}, false, nil
+}
+
+// ListProjects mirrors the real query: active projects ordered by id.
+func (f *fakeStore) ListProjects(_ context.Context) ([]domain.ProjectRecord, error) {
+	out := make([]domain.ProjectRecord, 0, len(f.projects))
+	for _, r := range f.projects {
+		if r.ArchivedAt.IsZero() {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 func (f *fakeStore) UpsertProject(_ context.Context, r domain.ProjectRecord) error {
 	f.projects[r.ID] = r
 	return nil
