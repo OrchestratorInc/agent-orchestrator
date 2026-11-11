@@ -155,7 +155,7 @@ import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { captureRendererException } from "../lib/telemetry";
-import { AwakeMenuItem, useAwakeAttention } from "./AwakeControl";
+import { AwakeMenuItem, awakeNeedsAttention, useFooterStayAwake } from "./AwakeControl";
 import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { isNewSidebarDesign } from "../lib/new-sidebar-design";
@@ -3222,12 +3222,14 @@ function FooterAccountRow({
 /**
  * The footer's Mobile menu: Connect mobile, plus the Stay Awake toggle on macOS
  * (keeping the Mac awake is what lets the phone reach it). Off macOS there is
- * nothing to group, so the icon opens Connect mobile directly. A paused Stay
- * Awake badges the icon so the warning is not hidden inside the menu.
+ * nothing to group, so the icon opens Connect mobile directly. A paused or
+ * failed Stay Awake badges the icon so the warning is not hidden inside the menu.
  */
 function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () => void; tabIndex: number }) {
 	const { t } = useTranslation();
-	const attention = useAwakeAttention();
+	// Held here, not in the menu row, so a failed toggle outlives the menu.
+	const stay = useFooterStayAwake();
+	const attention = awakeNeedsAttention(stay);
 	const label = isMac ? t("settings.mobile") : t("settings.connectMobile");
 	const icon = (
 		<span className="relative z-[1] grid place-items-center">
@@ -3288,7 +3290,7 @@ function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () =
 					{t("settings.connectMobile")}
 				</DropdownMenuItem>
 				<DropdownMenuSeparator />
-				<AwakeMenuItem />
+				<AwakeMenuItem stay={stay} />
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

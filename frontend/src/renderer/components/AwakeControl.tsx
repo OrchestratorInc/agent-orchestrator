@@ -18,7 +18,7 @@ export function AwakeControl(props: AwakeControlProps) {
 	return <MacAwakeControl {...props} />;
 }
 
-type StayAwake = ReturnType<typeof useStayAwake>;
+export type StayAwake = ReturnType<typeof useStayAwake>;
 
 /** Why Stay Awake paused itself, or "" when it did not. */
 function awakePauseReason(t: TFunction, stay: StayAwake): string {
@@ -84,11 +84,18 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 	);
 }
 
-/** True when Stay Awake needs a look (paused or failed); always false off macOS. */
-export function useAwakeAttention(): boolean {
-	const mac = isMacPlatform();
-	const stay = useStayAwake(mac);
-	return mac && stay.attention;
+/**
+ * Stay Awake for the sidebar footer's Mobile menu. The always-mounted trigger
+ * holds it and hands it to {@link AwakeMenuItem}, so a failed toggle is still
+ * badged and explained after the menu closes. Disabled off macOS.
+ */
+export function useFooterStayAwake(): StayAwake {
+	return useStayAwake(isMacPlatform());
+}
+
+/** True when Stay Awake needs a look: it paused, or the last toggle failed. */
+export function awakeNeedsAttention(stay: StayAwake): boolean {
+	return isMacPlatform() && (stay.attention || !!stay.error);
 }
 
 /**
@@ -96,14 +103,13 @@ export function useAwakeAttention(): boolean {
  * A second line appears only when it paused or failed, saying why. Renders
  * nothing off macOS.
  */
-export function AwakeMenuItem() {
+export function AwakeMenuItem({ stay }: { stay: StayAwake }) {
 	if (!isMacPlatform()) return null;
-	return <MacAwakeMenuItem />;
+	return <MacAwakeMenuItem stay={stay} />;
 }
 
-function MacAwakeMenuItem() {
+function MacAwakeMenuItem({ stay }: { stay: StayAwake }) {
 	const { t } = useTranslation();
-	const stay = useStayAwake(true);
 	const highlighted = stay.starting || (stay.active && !stay.stopping);
 	const problem = stay.error
 		? t("awake.toggleFailed", "Couldn’t update Stay Awake. Try again.")
@@ -120,7 +126,7 @@ function MacAwakeMenuItem() {
 		>
 			<span className={cn("relative grid shrink-0 place-items-center", problem && "mt-px")}>
 				<Coffee aria-hidden="true" />
-				{stay.attention ? <TriangleAlert className="absolute -right-1 -top-1 size-2.5! fill-background text-error" strokeWidth={2.5} aria-hidden="true" /> : null}
+				{awakeNeedsAttention(stay) ? <TriangleAlert className="absolute -right-1 -top-1 size-2.5! fill-background text-error" strokeWidth={2.5} aria-hidden="true" /> : null}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span>{t("awake.title", "Stay Awake")}</span>
