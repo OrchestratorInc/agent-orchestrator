@@ -65,8 +65,7 @@ func (c *MobileController) IssueAccountToken(w http.ResponseWriter, r *http.Requ
 	accountID := strings.TrimSpace(r.Header.Get("X-AO-Account-ID"))
 	var result RemoteHostAccountTokenResponse
 	var err error
-	// A device the remote listener authenticated by its own token holds no
-	// pairing password to present; its token is the proof.
+	// A device token is the proof: the device holds no pairing password.
 	if device, ok := c.Bridge.(interface {
 		IssueAccountTokenForDevice(string) (RemoteHostAccountTokenResponse, error)
 	}); ok && requestscope.CredentialFrom(r.Context()).Kind == requestscope.CredentialDevice {
@@ -106,8 +105,7 @@ func (c *MobileController) NewPairingCode(w http.ResponseWriter, r *http.Request
 }
 
 // PairDevice handles POST /api/v1/remote-host/devices: a device presents a
-// one-time pairing code, or the pairing password it already holds, as its
-// bearer and receives its own token.
+// pairing code or the pairing password and receives its own token.
 func (c *MobileController) PairDevice(w http.ResponseWriter, r *http.Request) {
 	pairing, ok := c.Bridge.(interface {
 		PairDevice(code, name, platform string) (PairDeviceResponse, error)
@@ -116,8 +114,7 @@ func (c *MobileController) PairDevice(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "DEVICE_PAIRING", "device pairing is unavailable", nil)
 		return
 	}
-	// The remote listener checked the bearer. A loopback request carries no
-	// credential, and the account token and a device token do not pair.
+	// Only a pairing code or the pairing password pairs a device.
 	credential := requestscope.CredentialFrom(r.Context())
 	if credential.Kind != requestscope.CredentialPairingCode && credential.Kind != requestscope.CredentialPassword {
 		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "DEVICE_PAIRING", "a pairing code is required", nil)
@@ -385,13 +382,10 @@ type BridgeService struct {
 	// macOS), which Status reports as unsupported.
 	KeepAwake KeepAwakeController
 
-	// Devices is the registry of device tokens and Codes the one-time pairing
-	// codes; the LAN listener holds the same two. Nil where pairing is not
-	// wired, as in tests of the other bridge behavior.
+	// Shared with the LAN listener. Nil disables device pairing.
 	Devices *mobilebridge.AccessDevices
 	Codes   *mobilebridge.PairingCodes
-	// PushDevices is the push registry, so revoking every device also stops
-	// their notifications. Nil leaves the registry alone.
+	// PushDevices lets revoking every device also remove its push registration.
 	PushDevices DeviceRoster
 
 	// OnBrowserRemoteAccessDisabled synchronously revokes live streams when the
@@ -935,9 +929,7 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		}
 		return MobileStatusResponse{}, err
 	}
-	// A new password revokes everything paired before it, once it is saved:
-	// device tokens and unused pairing codes go with it, as the account token
-	// does below. A start or save that failed above revokes nothing.
+	// Revoke only after the new password is saved, so a failed rotation keeps every device.
 	var revokeErr error
 	if prevSt.Password != "" && prevSt.Password != pw {
 		revokeErr = b.revokeAllDevices()
@@ -1058,8 +1050,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	return b.issueAccountToken(password, false, accountID)
 }
 
-// IssueAccountTokenForDevice issues the account credential to a device the
-// remote listener authenticated by its own token.
+// IssueAccountTokenForDevice issues the account token to a device holding its own token.
 func (b *BridgeService) IssueAccountTokenForDevice(accountID string) (RemoteHostAccountTokenResponse, error) {
 	return b.issueAccountToken("", true, accountID)
 }
@@ -1121,16 +1112,12 @@ var (
 	errPairingCodeUsed = errors.New("the pairing code is used or expired; make a new one")
 )
 
-// applyPasswordLogin tells the listener whether it still accepts the pairing
-// password.
 func (b *BridgeService) applyPasswordLogin(st mobilebridge.State) {
 	if setter, ok := b.LAN.(interface{ SetPasswordLoginDisabled(bool) }); ok {
 		setter.SetPasswordLoginDisabled(st.RequireDeviceCredentials)
 	}
 }
 
-// revokeAllDevices removes every device token, unused pairing code and push
-// registration, and closes the devices' connections.
 func (b *BridgeService) revokeAllDevices() error {
 	if b.Codes != nil {
 		b.Codes.Clear()
@@ -1146,8 +1133,7 @@ func (b *BridgeService) revokeAllDevices() error {
 			}
 		}
 	}
-	// Best effort: access is already revoked. A phone that pairs again
-	// registers again.
+	// Best effort: access is already revoked.
 	if b.PushDevices != nil {
 		for _, device := range b.PushDevices.List() {
 			_ = b.PushDevices.Delete(device.InstallID)
@@ -1175,8 +1161,7 @@ func (b *BridgeService) NewPairingCode() (PairingCodeResponse, error) {
 	return PairingCodeResponse{Code: code, ExpiresAt: expiresAt.UTC()}, nil
 }
 
-// PairDevice gives a device its own token. code is the pairing code it
-// presented, used up here, or empty when it presented the pairing password.
+// PairDevice gives a device its own token. An empty code means it presented the password.
 func (b *BridgeService) PairDevice(code, name, platform string) (PairDeviceResponse, error) {
 	if b.Codes == nil || b.Devices == nil {
 		return PairDeviceResponse{}, errors.New("device pairing is unavailable")
@@ -1195,8 +1180,7 @@ func (b *BridgeService) PairDevice(code, name, platform string) (PairDeviceRespo
 	return PairDeviceResponse{HostID: b.HostID, DeviceID: device.ID, Token: token, Credential: credential}, nil
 }
 
-// SetRequireDeviceCredentials makes the remote listener refuse, or accept
-// again, the pairing password.
+// SetRequireDeviceCredentials turns the pairing password off or on.
 func (b *BridgeService) SetRequireDeviceCredentials(on bool) (MobileStatusResponse, error) {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()
@@ -1222,8 +1206,7 @@ func (b *BridgeService) AccessDevices() []mobilebridge.AccessDevice {
 	return b.Devices.List()
 }
 
-// ConnectedCredentials reports, by SHA-256, the credentials with an open
-// connection to the remote listener.
+// ConnectedCredentials returns the SHA-256 of each credential with an open connection.
 func (b *BridgeService) ConnectedCredentials() map[string]bool {
 	if lan, ok := b.LAN.(interface{ ConnectedCredentials() map[string]bool }); ok {
 		return lan.ConnectedCredentials()
@@ -1231,8 +1214,7 @@ func (b *BridgeService) ConnectedCredentials() map[string]bool {
 	return map[string]bool{}
 }
 
-// AccountDevices reports the account's shared token: its SHA-256, empty when
-// no account is linked, and when it last authenticated a request.
+// AccountDevices returns the account token's SHA-256, empty when unlinked, and its last use.
 func (b *BridgeService) AccountDevices() (tokenHash string, lastUsed time.Time) {
 	st, _ := mobilebridge.Load(b.ConfigPath)
 	if st.AccountTokenHash == "" || b.Devices == nil {
@@ -1241,8 +1223,7 @@ func (b *BridgeService) AccountDevices() (tokenHash string, lastUsed time.Time) 
 	return st.AccountTokenHash, b.Devices.SharedLastUsed(mobilebridge.SharedAccount)
 }
 
-// RevokeDevice removes a device's token and closes its connections. It
-// returns the device's push-registry row, if it has one.
+// RevokeDevice revokes a device and returns its push install ID.
 func (b *BridgeService) RevokeDevice(id string) (installID string, found bool, err error) {
 	if b.Devices == nil {
 		return "", false, nil
@@ -1257,9 +1238,7 @@ func (b *BridgeService) RevokeDevice(id string) (installID string, found bool, e
 	return device.InstallID, true, nil
 }
 
-// UnlinkAccount revokes the account's shared token, cutting off every device
-// that reaches this machine through the linked account until it is linked
-// again.
+// UnlinkAccount revokes the account token, cutting off every account device.
 func (b *BridgeService) UnlinkAccount() error {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()
@@ -1446,9 +1425,7 @@ func (b *BridgeService) ConnectorInstalled() {
 	}
 }
 
-// Regenerate revokes every device: it rotates the pairing password, which
-// removes all device tokens, unlinks the account and closes the listener's
-// connections. Each device pairs again.
+// Regenerate rotates the pairing password, which revokes every device and unlinks the account.
 func (b *BridgeService) Regenerate() (MobileStatusResponse, error) {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()

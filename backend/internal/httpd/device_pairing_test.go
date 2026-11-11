@@ -21,9 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// pairingHost is a bridge with a real remote listener. remote sends a request
-// to that listener; local serves one on the router directly, as the loopback
-// listener does.
+// pairingHost serves remote requests through a real LAN listener and local ones on the router.
 type pairingHost struct {
 	t        *testing.T
 	bridge   *controllers.BridgeService
@@ -114,7 +112,6 @@ func (h *pairingHost) code() string {
 	return code
 }
 
-// pair exchanges bearer for a device token and returns the device id and token.
 func (h *pairingHost) pair(bearer, name string) (string, string) {
 	h.t.Helper()
 	status, body := h.remote(http.MethodPost, devicePairPath, bearer, map[string]string{"name": name, "platform": "ios"})
@@ -148,7 +145,6 @@ func (h *pairingHost) rows() []map[string]any {
 func TestPairingCodePairsOneDevice(t *testing.T) {
 	h := newPairingHost(t)
 	code := h.code()
-	// A pairing code opens nothing but the pairing route.
 	if got := h.sessions(code); got != http.StatusUnauthorized {
 		t.Fatalf("pairing code on another route: %d", got)
 	}
@@ -179,7 +175,6 @@ func TestPairingCodePairsOneDevice(t *testing.T) {
 
 func TestOnlyACodeOrThePasswordPairs(t *testing.T) {
 	h := newPairingHost(t)
-	// A device that still holds the pairing password swaps it for its own token.
 	_, token := h.pair("secret12", "Laptop")
 	if status, _ := h.remote(http.MethodPost, devicePairPath, token, nil); status != http.StatusForbidden {
 		t.Fatalf("a device token paired another device: %d", status)
@@ -213,8 +208,7 @@ func TestRequireDeviceCredentialsRefusesThePassword(t *testing.T) {
 	if status != http.StatusOK || body["requireDeviceCredentials"] != true {
 		t.Fatalf("turn on: status=%d body=%v", status, body)
 	}
-	// More attempts than the lockout allows: a paired device that has not
-	// swapped its password is told to pair again, never locked out.
+	// More attempts than the lockout allows: the device is never locked out.
 	for range 7 {
 		status, body := h.remote(http.MethodGet, "/api/v1/sessions", "secret12", nil)
 		if status != http.StatusUnauthorized || body["code"] != "DEVICE_CREDENTIAL_REQUIRED" {
@@ -227,7 +221,6 @@ func TestRequireDeviceCredentialsRefusesThePassword(t *testing.T) {
 	if h.sessions(token) != http.StatusOK || h.sessions(account) != http.StatusOK {
 		t.Fatal("a device token or the account token stopped working")
 	}
-	// A new device still gets in with a code.
 	h.pair(h.code(), "Tablet")
 
 	// The setting survives a daemon restart.
@@ -259,8 +252,7 @@ func TestRequireDeviceCredentialsRefusesThePassword(t *testing.T) {
 	}
 }
 
-// openConnection authenticates a keep-alive connection with bearer and
-// returns it, so a test can see whether the host closes it.
+// openConnection returns a connection authenticated with bearer and kept open.
 func (h *pairingHost) openConnection(bearer string) net.Conn {
 	h.t.Helper()
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", h.port))
@@ -287,8 +279,6 @@ func TestRemovingADeviceRevokesItAlone(t *testing.T) {
 	h := newPairingHost(t)
 	phoneID, phone := h.pair(h.code(), "Phone")
 	laptopID, laptop := h.pair(h.code(), "Laptop")
-	// The phone registers for notifications with its token; another phone
-	// still on the pairing password registers too.
 	push := func(bearer, installID string) {
 		status, body := h.remote(http.MethodPost, "/api/v1/push/devices", bearer, map[string]string{"installId": installID, "token": "ExponentPushToken[" + installID + "]", "platform": "ios", "deviceName": installID})
 		if status != http.StatusOK {
@@ -324,8 +314,7 @@ func TestRemovingADeviceRevokesItAlone(t *testing.T) {
 	if status, _ := h.local(http.MethodDelete, "/api/v1/mobile/devices/"+phoneID, nil); status != http.StatusNoContent {
 		t.Fatalf("remove phone: %d", status)
 	}
-	// More attempts than the lockout allows: a removed device retries on a
-	// timer, and is told it was removed rather than locked out.
+	// More attempts than the lockout allows: a removed device is never locked out.
 	for range 7 {
 		if status, body := h.remote(http.MethodGet, "/api/v1/sessions", phone, nil); status != http.StatusUnauthorized || body["code"] != "DEVICE_REVOKED" {
 			t.Fatalf("a removed device: status=%d body=%v", status, body)
@@ -340,7 +329,6 @@ func TestRemovingADeviceRevokesItAlone(t *testing.T) {
 	if h.sessions(laptop) != http.StatusOK || h.sessions("secret12") != http.StatusOK || h.sessions(account) != http.StatusOK {
 		t.Fatal("removing one device cut off another credential")
 	}
-	// Its notifications stop with it.
 	for _, device := range h.registry.List() {
 		if device.InstallID == "install-phone" {
 			t.Fatal("the removed device still has a push registration")
@@ -389,7 +377,6 @@ func TestRegenerateRevokesEveryDevice(t *testing.T) {
 	_, issued := h.remote(http.MethodPost, "/api/v1/remote-host/account-token", phone, nil)
 	account, _ := issued["token"].(string)
 	unused := h.code()
-	// One phone registered with its token, one with the password.
 	for installID, bearer := range map[string]string{"install-phone": phone, "install-old": "secret12"} {
 		if status, _ := h.remote(http.MethodPost, "/api/v1/push/devices", bearer, map[string]string{"installId": installID}); status != http.StatusOK {
 			t.Fatalf("register %s: %d", installID, status)
@@ -420,12 +407,10 @@ func TestRegenerateRevokesEveryDevice(t *testing.T) {
 	if got := len(h.rows()); got != 0 {
 		t.Fatalf("rows left = %d", got)
 	}
-	// Devices pair again with the new password or a new code.
 	h.pair(password, "Phone")
 	h.pair(h.code(), "Laptop")
 }
 
-// A rotation that fails before the new password is saved revokes nothing.
 func TestAFailedRegenerateKeepsEveryDevice(t *testing.T) {
 	h := newPairingHost(t)
 	_, phone := h.pair(h.code(), "Phone")

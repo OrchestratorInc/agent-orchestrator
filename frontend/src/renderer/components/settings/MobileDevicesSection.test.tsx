@@ -295,7 +295,6 @@ describe("MobileDevicesSection", () => {
 		const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
 		expect(rows).toHaveLength(3);
 		expect(rows[2]).toContain("Account devices (shared)");
-		// A device with its own token needs no explanation; the other two do not simply revoke one device.
 		expect(screen.getByText("Work MacBook").closest(".settings-row-bar")?.textContent).toBe("Work MacBook");
 		expect(screen.getByText("Uses the pairing password. Removing it only stops its notifications.")).toBeInTheDocument();
 		expect(screen.getByText("Every device signed in to your account. Removing this unlinks the account.")).toBeInTheDocument();

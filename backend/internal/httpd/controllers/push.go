@@ -28,8 +28,7 @@ type PushRegistry interface {
 // holding the connection password can register.
 type PushController struct {
 	Registry PushRegistry
-	// Devices ties a registration to the device token that made it, so
-	// removing that device also stops its notifications. Nil skips this.
+	// Devices links a push registration to the device token that made it.
 	Devices *mobilebridge.AccessDevices
 	// Now stamps CreatedAt/LastSeenAt; overridable in tests. Defaults to time.Now.
 	Now func() time.Time
@@ -147,8 +146,8 @@ func (c *PushController) unpair(w http.ResponseWriter, r *http.Request) {
 			"Could not unpair the device", nil)
 		return
 	}
-	// The phone is forgetting this host, so its token goes too. Its open
-	// connections are left to close by themselves: one carries this answer.
+	// A phone that forgets the host gives up its token. Its connections stay open:
+	// one carries this response.
 	if credential := requestscope.CredentialFrom(r.Context()); c.Devices != nil && credential.Kind == requestscope.CredentialDevice {
 		_, _, _ = c.Devices.Revoke(credential.DeviceID)
 	}

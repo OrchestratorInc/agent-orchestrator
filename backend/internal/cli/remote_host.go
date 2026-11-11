@@ -19,10 +19,9 @@ type remoteHostStatus struct {
 	AccountLinked bool `json:"accountLinked"`
 	// AccountLinkRefused: AO Cloud refused the machine's address under its
 	// account token, so the account's devices may not list it.
-	AccountLinkRefused bool   `json:"accountLinkRefused"`
-	HostID             string `json:"hostId"`
-	Password           string `json:"password"`
-	// RequireDeviceCredentials: the remote listener refuses the pairing password.
+	AccountLinkRefused       bool       `json:"accountLinkRefused"`
+	HostID                   string     `json:"hostId"`
+	Password                 string     `json:"password"`
 	RequireDeviceCredentials bool       `json:"requireDeviceCredentials"`
 	PasswordLastUsedAt       *time.Time `json:"passwordLastUsedAt"`
 	Tunnel                   struct {
@@ -147,9 +146,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 					return err
 				}
 				if action.name == "enable" {
-					// A new device pairs with a one-time code, not the password that
-					// works until it is rotated. Only a daemon without pairing codes
-					// prints the password, as before.
+					// Only a daemon without pairing codes prints the password.
 					var pairing remoteHostPairingCode
 					err := ctx.doJSON(cmd.Context(), http.MethodPost, "mobile/pairing-code", nil, &pairing)
 					var apiErr apiResponseError

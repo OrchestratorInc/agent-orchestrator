@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// pairingDaemon is a fake daemon that serves pairing codes and the device list.
 func pairingDaemon(t *testing.T, requests *[]string) {
 	t.Helper()
 	cfg := setConfigEnv(t)
@@ -72,15 +71,12 @@ func TestRemoteHostEnableAndPairPrintAOneTimeCode(t *testing.T) {
 				t.Fatalf("%s output %q missing %q", verb, out, want)
 			}
 		}
-		// The password works until it is rotated, so it is not what a new device gets.
 		if strings.Contains(out, "pairing-secret") {
 			t.Fatalf("%s printed the pairing password: %q", verb, out)
 		}
 	}
 }
 
-// enable prints the password only for a daemon without pairing codes. Any
-// other failure to make a code is an error, not a reason to print it.
 func TestRemoteHostEnablePrintsThePasswordOnlyWithoutPairingCodes(t *testing.T) {
 	for name, tc := range map[string]struct {
 		status       int
@@ -176,7 +172,6 @@ func TestRemoteHostRequireDeviceCredentials(t *testing.T) {
 	if got := requests[len(requests)-1]; got != `POST /api/v1/mobile/require-device-credentials {"enabled":true}` {
 		t.Fatalf("on sent %q", got)
 	}
-	// With the password off, status and enable point to pairing codes and never print it.
 	for _, args := range [][]string{{"status"}, {"status", "--show-password"}, {"enable"}} {
 		out, err := runRemoteHost(t, args...)
 		if err != nil || !strings.Contains(out, "The pairing password is off") || strings.Contains(out, "pairing-secret") {

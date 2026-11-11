@@ -417,8 +417,7 @@ PY
 				printf '%s\n' 'daemon service PATH omits bundled Node' >&2; exit 1;
 			}
 		elif [[ "$1" == tunnel-pairing-code ]]; then
-			# A release with pairing codes: the code is made when the details are
-			# printed, and the password is not shown.
+			# A release with pairing codes shows a code, not the password.
 			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Pairing code: fresh-code$/ { code = NR } END { exit !(address && code > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			grep -q 'For another, run: .*remote-host pair$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }

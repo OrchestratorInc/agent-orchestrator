@@ -843,8 +843,7 @@ func Run(buildVersion string) error {
 	// the bridge service. Break the cycle with late binding: build bs with LAN
 	// left nil, hand its controller into NewWithDeps, then once srv exists,
 	// build the LAN listener over srv.Handler() and assign it onto bs.LAN.
-	// Device tokens and one-time pairing codes, shared by the bridge service
-	// and the LAN listener. A damaged registry starts empty: devices pair again.
+	// Shared by the bridge service and the LAN listener. A damaged registry starts empty.
 	accessDevices, accessErr := mobilebridge.LoadAccessDevices(mobilebridge.AccessDevicesPath(cfg.DataDir))
 	if accessErr != nil {
 		log.Warn("load access device registry failed; paired devices must pair again", "err", accessErr)
