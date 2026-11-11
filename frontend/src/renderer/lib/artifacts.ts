@@ -161,6 +161,18 @@ export type ArtifactSharing = "public" | "private";
 export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "private"];
 
 /**
+ * Whether an artifact is known to be public or known not to be, or undefined
+ * when it cannot be told. Only a local session's files carry their public
+ * link (the daemon reads it from this computer's publish records); a cloud
+ * session's file list says nothing about publishing, so its state is unknown
+ * rather than "not shared".
+ */
+export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "cloud">): ArtifactSharing | undefined {
+	if (row.shareUrl) return "public";
+	return row.cloud ? undefined : "private";
+}
+
+/**
  * Keeps groups matching the project filter, and rows matching the location
  * and type filters whose project, file name or session title contains the
  * query. Groups left without rows are dropped.
@@ -181,7 +193,7 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 				rows: group.rows.filter((row) =>
 					(!location || artifactLocation(row, group) === location)
 					&& (types.length === 0 || types.includes(artifactType(row)))
-					&& (sharings.length === 0 || sharings.includes(row.shareUrl ? "public" : "private"))
+					&& (sharings.length === 0 || matchesSharing(sharings, artifactSharing(row)))
 					&& (groupMatches
 						|| row.name.toLocaleLowerCase().includes(needle)
 						|| row.sessionTitle.toLocaleLowerCase().includes(needle)),
@@ -189,6 +201,11 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 			};
 		})
 		.filter((group) => group.rows.length > 0);
+}
+
+/** A sharing filter keeps only rows whose state is known and chosen. */
+function matchesSharing(sharings: readonly ArtifactSharing[], sharing: ArtifactSharing | undefined): boolean {
+	return sharing !== undefined && sharings.includes(sharing);
 }
 
 function newestFirst(left: Pick<ArtifactRow, "updatedAt">, right: Pick<ArtifactRow, "updatedAt">): number {

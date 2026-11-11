@@ -195,12 +195,19 @@ describe("filterArtifactGroups", () => {
 	it("keeps only public artifacts, or only ones not shared", () => {
 		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}` } : row) }));
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["public"] }))).toEqual(["notes.md", "chart.png"]);
-		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html", "report.pdf", "demo.mp4"]);
+		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html"]);
 		expect(names(filterArtifactGroups(shared, { query: "", projectIds: ["ao"], sharings: ["public"] }))).toEqual(["notes.md"]);
 	});
 
 	it("keeps a project's rows of the chosen type when the query names the project", () => {
 		expect(names(filterArtifactGroups(groups, { query: "agent-orch", types: ["document"] }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
+	});
+
+	it("keeps cloud artifacts, whose publishing is unknown, out of both Public and Not shared", () => {
+		// The cloud file list carries no public link, so chart.png may well be published.
+		expect(names(filterArtifactGroups(groups, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "", sharings: ["public", "private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "", location: "cloud" }))).toEqual(["report.pdf", "chart.png", "demo.mp4"]);
 	});
 
 	it("keeps rows matching any value chosen in a filter, and every filter together", () => {
