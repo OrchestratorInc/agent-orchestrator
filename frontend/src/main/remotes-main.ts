@@ -123,6 +123,21 @@ export function registerRemotesIpc(
 			result: "paired",
 		};
 	};
+	// A token issued for an add or edit whose probe then failed, by host. The code it
+	// replaced is spent, so the retry uses the token. In memory only.
+	const unsaved = new Map<string, Pick<RemoteEntry, "password" | "fallbackPassword">>();
+	const pairOrReuse = async (typed: RemoteEntry) => {
+		const kept = typed.hostId ? unsaved.get(typed.hostId) : undefined;
+		return kept ? { entry: { ...typed, ...kept }, result: "paired" as const } : pairOwnToken(typed);
+	};
+	const remember = (hostId: string | undefined, paired: Awaited<ReturnType<typeof pairOwnToken>>, health: RemoteHealth) => {
+		if (!hostId) return;
+		if (paired.result === "paired" && health !== "online" && health !== "unauthorized") {
+			unsaved.set(hostId, { password: paired.entry.password, fallbackPassword: paired.entry.fallbackPassword });
+		} else {
+			unsaved.delete(hostId);
+		}
+	};
 	// Keep edits and connects ordered so an update cannot leave a stale proxy.
 	// ponytail: one queue includes network probes; split by host if five-host setup is too slow.
 	let pending: Promise<void> = Promise.resolve();
@@ -168,12 +183,12 @@ export function registerRemotesIpc(
 		refuseSelf(hostId, localHostId);
 		const typed: RemoteEntry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account };
 		await checkConnectionContext(localHostId, account);
-		const paired = await pairOwnToken(typed);
+		const paired = await pairOrReuse(typed);
 		if (paired.result === "unauthorized") return "unauthorized" as RemoteHealth;
 		const entry = paired.entry;
 		const health = await checkedProbe(entry, account);
-		// An issued token is saved even when the probe fails: the code it replaced is spent.
-		if (health === "online" || paired.result === "paired") {
+		remember(hostId, paired, health);
+		if (health === "online") {
 			const previous = (await owned()).find((saved) => saved.hostId === hostId);
 			await addRemote(file, entry);
 			if (previous && previous.url !== entry.url) await disconnect(previous.url);
@@ -199,15 +214,13 @@ export function registerRemotesIpc(
 			refuseSelf(actual, localHostId);
 			if (typed.hostId && actual !== typed.hostId) throw new ExpectedIpcError(`remote host identity changed for ${typed.url}; connection refused`);
 			await checkConnectionContext(localHostId, account);
-			const paired = await pairOwnToken(typed);
+			const paired = await pairOrReuse(typed);
 			if (paired.result === "unauthorized") return "unauthorized";
 			editable.password = paired.entry.password;
 			editable.fallbackPassword = paired.entry.fallbackPassword;
-			if (paired.result === "paired") {
-				const saved = await updateRemote(file, url, editable);
-				await disconnect(url);
-				return checkedProbe(saved, account);
-			}
+			const health = await updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
+			remember(typed.hostId, paired, health);
+			return health;
 		}
 		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
 	}));

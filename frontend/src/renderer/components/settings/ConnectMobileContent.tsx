@@ -650,7 +650,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	useEffect(() => {
 		if (codeSpentBy === null) return;
 		if (lastCodeSpentBy.current !== null && lastCodeSpentBy.current !== codeSpentBy) {
-			void queryClient.invalidateQueries({ queryKey: mobilePairingCodeQueryKey });
+			// Reset, not invalidated: the spent code must not stay on screen while, or if, its replacement fails.
+			void queryClient.resetQueries({ queryKey: mobilePairingCodeQueryKey });
 		}
 		lastCodeSpentBy.current = codeSpentBy;
 	}, [codeSpentBy, queryClient]);
