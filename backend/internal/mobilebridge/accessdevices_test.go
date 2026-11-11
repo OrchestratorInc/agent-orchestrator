@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ func TestAccessDevicesIssueMatchRevoke(t *testing.T) {
 	if strings.Contains(string(raw), token) {
 		t.Fatal("the token is stored in the registry file")
 	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("registry mode = %v, want 0600", info.Mode().Perm())
 	}
 
