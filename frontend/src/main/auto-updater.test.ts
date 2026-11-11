@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, type PathLike } from "node:fs";
 import os from "node:os";
 import { EventEmitter } from "node:events";
 import semver from "semver";
@@ -3619,8 +3619,8 @@ function stubProcess(platform: NodeJS.Platform, execPath: string): () => void {
   };
 }
 
-// Builds a real bundle-shaped tree so the writability checks run against the
-// filesystem rather than a stub. Returns the exec path inside it.
+// Builds a real bundle-shaped tree for path and owner metadata checks.
+// Returns the exec path inside it.
 function makeBundle(name = "Agent Orchestrator.app"): { root: string; bundle: string; execPath: string } {
   const root = mkdtempSync(nodePath.join(os.tmpdir(), "ao-updater-perm-"));
   const bundle = nodePath.join(root, name);
@@ -3629,6 +3629,17 @@ function makeBundle(name = "Agent Orchestrator.app"): { root: string; bundle: st
     root,
     bundle,
     execPath: nodePath.join(bundle, "Contents", "MacOS", "agent-orchestrator"),
+  };
+}
+
+// chmod does not deny root's writes on Linux. Fail only the fixture's write
+// probes, preserving real access checks everywhere else (including staging).
+function denyWritesTo(actualFs: typeof import("node:fs"), paths: readonly string[]) {
+  return (file: PathLike, mode?: number): void => {
+    if (mode === actualFs.constants.W_OK && paths.includes(String(file))) {
+      throw Object.assign(new Error("Permission denied"), { code: "EACCES" });
+    }
+    actualFs.accessSync(file, mode);
   };
 }
 
@@ -4011,9 +4022,15 @@ describe("quitAndInstallUpdate", () => {
 
   it.each(["bundle", "parent"])("rejects an unwritable %s without quitting", async (location) => {
     const { root, bundle, execPath } = makeBundle();
-    chmodSync(location === "bundle" ? bundle : root, 0o555);
     const restore = stubProcess("darwin", execPath);
     try {
+      vi.doMock("node:fs", async (importOriginal) => {
+        const actualFs = await importOriginal<typeof import("node:fs")>();
+        return {
+          ...actualFs,
+          accessSync: denyWritesTo(actualFs, [location === "bundle" ? bundle : root]),
+        };
+      });
       const { module, autoUpdater } = await importAutoUpdater(undefined, { nativeReadyManually: true });
       await module.startAutoUpdates(stateDir);
       const blocker = module.getMacInstallBlocker();
@@ -4030,21 +4047,23 @@ describe("quitAndInstallUpdate", () => {
       expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     } finally {
-      restore(); chmodSync(root, 0o755); chmodSync(bundle, 0o755);
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
 
   it.each([true, false])("identifies a foreign bundle owner when parent writable is %s", async (parentWritable) => {
     const { root, bundle, execPath } = makeBundle();
-    chmodSync(bundle, 0o555);
-    if (!parentWritable) chmodSync(root, 0o555);
     const restore = stubProcess("darwin", execPath);
     try {
-      vi.doMock("node:fs", async (importOriginal) => ({
-        ...await importOriginal<typeof import("node:fs")>(),
-        statSync: () => ({ uid: 502 }),
-      }));
+      vi.doMock("node:fs", async (importOriginal) => {
+        const actualFs = await importOriginal<typeof import("node:fs")>();
+        return {
+          ...actualFs,
+          accessSync: denyWritesTo(actualFs, parentWritable ? [bundle] : [bundle, root]),
+          statSync: (file: PathLike) => file === bundle ? { uid: 502 } : actualFs.statSync(file),
+        };
+      });
       vi.spyOn(process, "getuid").mockReturnValue(501);
       const { module, autoUpdater } = await importAutoUpdater();
       const blocker = module.getMacInstallBlocker();
@@ -4055,27 +4074,33 @@ describe("quitAndInstallUpdate", () => {
       await expect(module.quitAndInstallUpdate()).rejects.toThrow(blocker);
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     } finally {
-      restore(); chmodSync(root, 0o755); chmodSync(bundle, 0o755);
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("still explains a bundle permission failure when its owner cannot be read", async () => {
     const { root, bundle, execPath } = makeBundle();
-    chmodSync(bundle, 0o555);
     const restore = stubProcess("darwin", execPath);
     try {
-      vi.doMock("node:fs", async (importOriginal) => ({
-        ...await importOriginal<typeof import("node:fs")>(),
-        statSync: () => { throw new Error("stat failed"); },
-      }));
+      vi.doMock("node:fs", async (importOriginal) => {
+        const actualFs = await importOriginal<typeof import("node:fs")>();
+        return {
+          ...actualFs,
+          accessSync: denyWritesTo(actualFs, [bundle]),
+          statSync: (file: PathLike) => {
+            if (file === bundle) throw new Error("stat failed");
+            return actualFs.statSync(file);
+          },
+        };
+      });
       const { module } = await importAutoUpdater();
       const blocker = module.getMacInstallBlocker();
       expect(blocker).toContain(`app bundle isn't writable: ${bundle}`);
       expect(blocker).not.toContain("owner UID");
       expect(blocker).not.toContain("another user account");
     } finally {
-      restore(); chmodSync(bundle, 0o755);
+      restore();
       rmSync(root, { recursive: true, force: true });
     }
   });
