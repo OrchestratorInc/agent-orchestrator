@@ -30,6 +30,8 @@ export type ArtifactRow = {
 	projectId?: string;
 	/** Set on a row that stands for a bundle directory; `path` is a file inside it. */
 	bundle?: ArtifactBundle;
+	/** The file's public link while it is published; unset when it is not shared. */
+	shareUrl?: string;
 };
 
 /**
@@ -104,6 +106,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 					cloud: session.cloud,
 					projectId: isScratchpad ? undefined : workspace.id,
 					bundle: artifact.bundle,
+					...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
 				})),
 			)
 			.sort(newestFirst);
@@ -139,15 +142,23 @@ export function artifactLocation(row: Pick<ArtifactRow, "cloud">, group: Pick<Ar
 	return group.cloud || row.cloud ? "cloud" : "local";
 }
 
+/**
+ * What the Artifacts page shows. Each list keeps the rows matching any of its
+ * values; an empty or missing list keeps every row. The lists narrow together.
+ */
 export type ArtifactFilters = {
 	query: string;
-	/** Empty for every project. */
-	projectId: string;
+	projectIds?: readonly string[];
 	/** Undefined for both locations. */
 	location?: ArtifactLocation;
-	/** Undefined for every type. */
-	type?: ArtifactType;
+	types?: readonly ArtifactType[];
+	sharings?: readonly ArtifactSharing[];
 };
+
+/** Whether an artifact has a public link ("public") or none ("private"). */
+export type ArtifactSharing = "public" | "private";
+
+export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "private"];
 
 /**
  * Keeps groups matching the project filter, and rows matching the location
@@ -155,10 +166,13 @@ export type ArtifactFilters = {
  * query. Groups left without rows are dropped.
  */
 export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ArtifactGroup[] {
-	const { projectId, location, type } = filters;
+	const { location } = filters;
+	const projectIds = filters.projectIds ?? [];
+	const types = filters.types ?? [];
+	const sharings = filters.sharings ?? [];
 	const needle = filters.query.trim().toLocaleLowerCase();
 	return groups
-		.filter((group) => !projectId || group.id === projectId)
+		.filter((group) => projectIds.length === 0 || projectIds.includes(group.id))
 		.map((group) => {
 			const groupMatches = !needle || group.name.toLocaleLowerCase().includes(needle)
 				|| Boolean(group.isScratchpad && scratchpadName?.toLocaleLowerCase().includes(needle));
@@ -166,7 +180,8 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 				...group,
 				rows: group.rows.filter((row) =>
 					(!location || artifactLocation(row, group) === location)
-					&& (!type || artifactType(row) === type)
+					&& (types.length === 0 || types.includes(artifactType(row)))
+					&& (sharings.length === 0 || sharings.includes(row.shareUrl ? "public" : "private"))
 					&& (groupMatches
 						|| row.name.toLocaleLowerCase().includes(needle)
 						|| row.sessionTitle.toLocaleLowerCase().includes(needle)),

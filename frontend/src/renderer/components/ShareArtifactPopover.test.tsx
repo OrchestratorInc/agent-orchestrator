@@ -38,7 +38,7 @@ function stub(inspect: CloudShareInspection, list: CloudShareLinks, publish?: Cl
 
 /** Clicks the header button once it says `label`: Republish only after its check finds the file changed. */
 async function openPopover(path = file.path, name = "report.html", label: "Publish" | "Republish" = "Publish") {
-	render(<TooltipProvider><ShareArtifactButton file={{ ...file, path }} name={name} /></TooltipProvider>);
+	render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={{ ...file, path }} name={name} /></TooltipProvider></QueryClientProvider>);
 	await userEvent.click(await screen.findByRole("button", { name: `${label}: ${name}` }));
 	return screen.findByRole("dialog");
 }
@@ -46,11 +46,11 @@ async function openPopover(path = file.path, name = "report.html", label: "Publi
 /** The panel as the artifact menu's Publish item opens it: it shows a published file's link without republishing. */
 async function openMenuPanel() {
 	render(
-		<TooltipProvider>
+		<QueryClientProvider client={new QueryClient()}><TooltipProvider>
 			<ShareArtifactMenuPopover file={file} name="report.html" open onOpenChange={() => undefined}>
 				<button type="button">menu</button>
 			</ShareArtifactMenuPopover>
-		</TooltipProvider>,
+		</TooltipProvider></QueryClientProvider>,
 	);
 	return screen.findByRole("dialog");
 }
@@ -175,7 +175,7 @@ describe("ShareArtifactButton", () => {
 
 	it("says Publish, not Republish, while the file is unchanged or never published", async () => {
 		const { inspectSpy, listSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" }, { ...links, shares: [share] });
-		render(<TooltipProvider><ShareArtifactButton file={file} name="report.html" /></TooltipProvider>);
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={file} name="report.html" /></TooltipProvider></QueryClientProvider>);
 		await screen.findByRole("button", { name: "Publish: report.html" });
 		await waitFor(() => expect(inspectSpy).toHaveBeenCalled());
 		// Unchanged: the link list is not asked for.
@@ -190,7 +190,7 @@ describe("ShareArtifactButton", () => {
 			{ ...links, shares: [share] },
 			{ status: "published", replaced: true, share: { ...share, name: "final.html" } },
 		);
-		render(<TooltipProvider><ShareArtifactButton file={renamed} name="final.html" /></TooltipProvider>);
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={renamed} name="final.html" /></TooltipProvider></QueryClientProvider>);
 		await userEvent.click(await screen.findByRole("button", { name: "Republish: final.html" }));
 		await waitFor(() => expect(publishSpy).toHaveBeenCalledExactlyOnceWith({
 			...renamed, baseUrl: "https://cp.test", fingerprint: inspection.fingerprint, shareId: SHARE_ID,
@@ -280,6 +280,37 @@ describe("ShareArtifactButton", () => {
 		expect(screen.getByText("3 of 3 free links left")).toBeTruthy();
 	});
 
+	it("opens the menu's Unpublish on its confirmation, unpublishes, and closes", async () => {
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		const unpublish = vi.spyOn(aoBridge.cloudShare, "unpublish").mockResolvedValue(undefined);
+		const onOpenChange = vi.fn();
+		render(
+			<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+				<ShareArtifactMenuPopover file={file} intent="unpublish" name="report.html" open onOpenChange={onOpenChange}>
+					<button type="button">menu</button>
+				</ShareArtifactMenuPopover>
+			</TooltipProvider></QueryClientProvider>,
+		);
+		expect(await screen.findByText("The link stops working for everyone who has it.")).toBeTruthy();
+		await userEvent.click(screen.getByRole("button", { name: "Unpublish" }));
+		expect(unpublish).toHaveBeenCalledWith("https://cp.test", SHARE_ID);
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("never publishes from the menu's Unpublish when the file has no active link", async () => {
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
+		render(
+			<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+				<ShareArtifactMenuPopover file={file} intent="unpublish" name="report.html" open onOpenChange={() => undefined}>
+					<button type="button">menu</button>
+				</ShareArtifactMenuPopover>
+			</TooltipProvider></QueryClientProvider>,
+		);
+		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
 	it("publishes a file whose link was unpublished to a new link", async () => {
 		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] }, { status: "published", replaced: false, share: { ...share, id: "new" } });
 		await openPopover();
@@ -297,7 +328,7 @@ describe("ShareArtifactButton", () => {
 	it("offers only Upgrade at the link limit, never unpublishing", async () => {
 		const { publishSpy } = stub(inspection, { ...links, used: 3 });
 		await openPopover();
-		expect(await screen.findByText("Free plan: up to 3 active links. Upgrade to share more.")).toBeTruthy();
+		expect(await screen.findByText("Free plan: up to 3 active links. Upgrade to publish more.")).toBeTruthy();
 		expect(screen.queryByText(/unpublish/i)).toBeNull();
 		await userEvent.click(screen.getByRole("button", { name: "Upgrade" }));
 		expect(mocks.openSettings).toHaveBeenCalledWith("billing");
@@ -313,9 +344,9 @@ describe("ShareArtifactButton", () => {
 	});
 
 	it("shows the server's limit refusal at once, even when another link has the file's name", async () => {
-		stub(inspection, { ...links, used: 3, shares: [{ ...share, id: "other" }] }, { status: "limit", message: "Free plan: up to 3 active links. Upgrade to share more." });
+		stub(inspection, { ...links, used: 3, shares: [{ ...share, id: "other" }] }, { status: "limit", message: "Free plan: up to 3 active links. Upgrade to publish more." });
 		await openPopover();
-		expect(await screen.findByText("Free plan: up to 3 active links. Upgrade to share more.")).toBeTruthy();
+		expect(await screen.findByText("Free plan: up to 3 active links. Upgrade to publish more.")).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Upgrade" })).toBeTruthy();
 	});
 
@@ -352,11 +383,11 @@ describe("ShareArtifactButton", () => {
 	it("is not offered where the control plane does not serve share links", async () => {
 		mocks.baseUrl = "https://no-shares.test";
 		const available = vi.spyOn(aoBridge.cloudShare, "available").mockResolvedValue(false);
-		render(<TooltipProvider><ShareArtifactButton file={file} name="report.html" /></TooltipProvider>);
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={file} name="report.html" /></TooltipProvider></QueryClientProvider>);
 		await waitFor(() => expect(available).toHaveBeenCalledWith("https://no-shares.test"));
 		expect(screen.queryByRole("button", { name: /^Publish/ })).toBeNull();
 		// The answer is kept: a second button does not ask again.
-		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "b.html" }} name="b.html" /></TooltipProvider>);
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={{ ...file, path: "b.html" }} name="b.html" /></TooltipProvider></QueryClientProvider>);
 		expect(available).toHaveBeenCalledTimes(1);
 		expect(screen.queryByRole("button", { name: /^Publish/ })).toBeNull();
 	});
@@ -364,25 +395,25 @@ describe("ShareArtifactButton", () => {
 	it("shows a refusal's message, without Electron's IPC wrapper", async () => {
 		stub(inspection, links, { status: "error", message: "There is not enough free disk space to prepare this file for sharing." });
 		await openPopover();
-		expect(await screen.findByText("Sharing failed: There is not enough free disk space to prepare this file for sharing.")).toBeTruthy();
+		expect(await screen.findByText("Publishing failed: There is not enough free disk space to prepare this file for sharing.")).toBeTruthy();
 		vi.spyOn(aoBridge.cloudShare, "inspect").mockRejectedValue(new Error("Error invoking remote method 'cloudShare:inspect': CloudShareError: The file is no longer available."));
 		await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-		expect(await screen.findByText("Sharing failed: The file is no longer available.")).toBeTruthy();
+		expect(await screen.findByText("Publishing failed: The file is no longer available.")).toBeTruthy();
 	});
 
 	it("offers no Cancel while a cloud session's file is being shared", async () => {
 		stub(inspection, links);
 		vi.spyOn(aoBridge.cloudShare, "publish").mockReturnValue(new Promise(() => undefined));
-		render(<TooltipProvider><ShareArtifactButton file={{ source: "cloud", orgId: "org-1", sessionId: "cloud-1", path: "docs/cloud.html", projectId: "" }} name="cloud.html" /></TooltipProvider>);
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={{ source: "cloud", orgId: "org-1", sessionId: "cloud-1", path: "docs/cloud.html", projectId: "" }} name="cloud.html" /></TooltipProvider></QueryClientProvider>);
 		await userEvent.click(await screen.findByRole("button", { name: "Publish: cloud.html" }));
 		expect(await screen.findByRole("button", { name: "Publishing…" })).toBeDisabled();
 		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
 	});
 
-	it("says only the session's creator can share when someone else tries", async () => {
+	it("says only the session's creator can publish when someone else tries", async () => {
 		stub(inspection, links, { status: "not_owner" });
 		await openPopover();
-		expect(await screen.findByText("Only the person who started this session can share its files.")).toBeTruthy();
+		expect(await screen.findByText("Only the person who started this session can publish its files.")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /^(Publish|Try again)$/ })).toBeNull();
 	});
 
@@ -394,7 +425,7 @@ describe("ShareArtifactButton", () => {
 	});
 
 	it("disables Publish for a video", async () => {
-		render(<TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mp4" }} name="clip.mp4" /></TooltipProvider>);
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={{ ...file, path: "clip.mp4" }} name="clip.mp4" /></TooltipProvider></QueryClientProvider>);
 		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
 	});
 

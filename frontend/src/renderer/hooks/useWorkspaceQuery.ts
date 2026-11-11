@@ -81,6 +81,8 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 		updatedAt: artifact.updatedAt,
 		registered: artifact.registered,
 		...(artifact.previousPaths?.length ? { previousPaths: artifact.previousPaths } : {}),
+		// Set while the file is published from this computer; the Artifacts list marks it.
+		...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
 	};
 }
 
