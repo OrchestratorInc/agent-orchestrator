@@ -3,6 +3,7 @@ import {
 	attentionZone,
 	getAgentActivityView,
 	getAttentionZoneView,
+	getSessionRowIndicator,
 	getSessionRowMarker,
 	getSessionStatusDotView,
 	getSessionStatusView,
@@ -40,9 +41,55 @@ const openPr: WorkspaceSession["prs"][number] = {
 };
 
 describe("session presentation", () => {
+	describe("sidebar row indicator", () => {
+		const mergeable: Partial<WorkspaceSession> = {
+			status: "mergeable",
+			scmStatus: "mergeable",
+			kanbanColumn: "ready",
+			displayStatus: "Mergeable",
+			prs: [{ ...openPr, mergeability: "mergeable", ci: "passing", review: "approved" }],
+		};
+
+		it("shows the working spinner while the agent works, even with a PR open", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				...mergeable,
+				status: "working",
+				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBe("working");
+		});
+
+		it("shows the PR icon once the agent is idle", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				...mergeable,
+				activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBe("ready");
+		});
+
+		it("flags a session waiting on the user ahead of its PR", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				...mergeable,
+				status: "needs_input",
+				activity: { state: "waiting_input", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBe("attention");
+		});
+
+		it("spins while the session is still being set up", () => {
+			expect(getSessionRowIndicator(sessionWith({ ...mergeable, provisionState: "provisioning" }))).toBe("working");
+		});
+
+		it("never spins for a terminated session", () => {
+			expect(getSessionRowIndicator(sessionWith({
+				status: "terminated",
+				displayStatus: "Terminated",
+				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" },
+			}))).toBeNull();
+		});
+	});
+
 	it.each([
 		["Draft", null],
-		["Review pending", "review"],
+		["Awaiting review", "review"],
+		["Merge conflicts", "attention"],
 	] as const)("maps in-review sessions with %s to marker %s", (displayStatus, marker) => {
 		expect(getSessionRowMarker(sessionWith({
 			status: "pr_open",
@@ -53,7 +100,7 @@ describe("session presentation", () => {
 	});
 
 	it.each([
-		["Needs review", null],
+		["Review cancelled", null],
 		["Review failed", "review"],
 		["Review scheduled", null],
 		["Reviewing", null],
@@ -180,11 +227,11 @@ describe("session presentation", () => {
 		expect(needsYou({ status: "working", activity: { state: "blocked", lastActivityAt: "" } }).className).toBe(
 			"bg-status-needs-you",
 		);
-		for (const displayStatus of ["Blocked", "CI failing", "Changes requested"]) {
+		for (const displayStatus of ["Blocked", "Needs input", "CI failing", "Merge conflicts", "Changes requested"]) {
 			expect(needsYou({ status: "working", displayStatus }).className).toBe("bg-status-needs-you");
 		}
 		// A calm display phrase keeps the lane tone.
-		expect(needsYou({ status: "working", displayStatus: "Review pending" }).className).toBe("bg-status-in-review");
+		expect(needsYou({ status: "working", displayStatus: "Awaiting review" }).className).toBe("bg-status-in-review");
 	});
 
 	it("prefers SCM state over runtime status for the dot tone", () => {
@@ -276,6 +323,35 @@ describe("session presentation", () => {
 				sessionWith({ status: "working", scmStatus, activity: { state: "active", lastActivityAt: "" } }),
 			),
 		).toEqual({ className: "bg-status-ready", breathe: true });
+	});
+
+	it("colours the dot from the PR the card's phrase describes, not the worst PR", () => {
+		// Two PRs: the card reads "Mergeable" from one while the other fails CI,
+		// so scmStatus aggregates to ci_failed. The dot must agree with the card.
+		const session = sessionWith({ status: "idle", scmStatus: "ci_failed", kanbanColumn: "ready", displayStatus: "Mergeable" });
+
+		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
+	});
+
+	it("keeps the legacy dot on the PR the card's phrase describes", () => {
+		useUiStore.setState({ developerMode: true, newSidebarDesign: false });
+		try {
+			const session = sessionWith({ status: "idle", scmStatus: "ci_failed", displayStatus: "Mergeable" });
+			expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
+		} finally {
+			useUiStore.setState({ developerMode: false, newSidebarDesign: true });
+		}
+	});
+
+	it.each(["Working", "", undefined])("falls back to SCM state for the phrase %s", (displayStatus) => {
+		const session = sessionWith({
+			status: "working",
+			scmStatus: "mergeable",
+			displayStatus,
+			activity: { state: "active", lastActivityAt: "" },
+		});
+
+		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: true });
 	});
 
 	it("uses a blinking blue dot when an idle-section session starts working", () => {

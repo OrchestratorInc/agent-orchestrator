@@ -1,9 +1,10 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
 import { deleteAccountRemoteHost, listAccountRemoteHosts } from "../../lib/account-remote-hosts";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { apiClient } from "../../lib/api-client";
 import { useCloudSession } from "../../lib/cloud-session";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { Switch } from "../ui/switch";
@@ -17,7 +18,7 @@ type MobileStatus = Awaited<ReturnType<typeof fetchMobileStatus>>;
 async function disableRemoteAccess() {
 	const stopped = await apiClient.POST("/api/v1/mobile/disable");
 	// Disable can report an error after the listener has already stopped.
-	if (stopped.error && (await fetchMobileStatus()).enabled) throw new Error(apiErrorMessage(stopped.error));
+	if (stopped.error && (await fetchMobileStatus()).enabled) throw apiErrorException(stopped.error);
 }
 
 /** Puts remote access back the way it was before a turn-on that did not link this computer. */
@@ -27,7 +28,7 @@ async function restoreRemoteAccess(before: MobileStatus) {
 	// tunnel again but keeps its password, so a paired phone stays paired.
 	if (!before.noPublicTunnel) return;
 	const restored = await apiClient.POST("/api/v1/mobile/enable-lan-only");
-	if (restored.error) throw new Error(apiErrorMessage(restored.error));
+	if (restored.error) throw apiErrorException(restored.error);
 }
 
 /**
@@ -83,7 +84,7 @@ export function ThisComputerAccess() {
 			// while the link runs leaves remote access on, not a LAN-only computer.
 			if (!before.enabled) {
 				const started = await apiClient.POST("/api/v1/mobile/enable");
-				if (started.error || !started.data) throw new Error(apiErrorMessage(started.error));
+				if (started.error || !started.data) throw apiErrorException(started.error);
 				password = started.data.password ?? "";
 			}
 			// remote-access then moves the tunnel to the fixed address the link gave this computer. When
@@ -92,7 +93,7 @@ export function ThisComputerAccess() {
 				() => ({ hostId: "", added: false }),
 			));
 			const access = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (access.error) throw new Error(apiErrorMessage(access.error));
+			if (access.error) throw apiErrorException(access.error);
 			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
 			if (!ready) {
 				setNeedsConnector(true);

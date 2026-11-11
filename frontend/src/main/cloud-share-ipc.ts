@@ -10,6 +10,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import {
+	artifactShareUrl,
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareFile,
 	type CloudShareInspection,
@@ -31,7 +32,7 @@ import {
 	unpublishShareLink,
 	uploadShare,
 } from "./cloud-share";
-import { type ShareLinkRecordStore, shareRecordKey } from "./cloud-share-links";
+import { type ShareLinkRecordStore, artifactRecordKey, shareRecordKey } from "./cloud-share-links";
 
 export interface CloudShareIpcDeps extends CloudShareApi {
 	ipcMain: Pick<IpcMain, "handle">;
@@ -51,29 +52,43 @@ function isVideo(name: string): boolean {
 
 function shareFileArgument(value: unknown): CloudShareFile {
 	if (typeof value !== "object" || value === null) throw new CloudShareError("invalid_request", "Not a file to share.");
-	const { source, baseUrl, sessionId, path: filePath, projectId, orgId, shareId, fingerprint } = value as Record<string, unknown>;
+	const { source, baseUrl, sessionId, path: filePath, projectId, orgId, artifactId, shareId, fingerprint } = value as Record<string, unknown>;
 	if (typeof baseUrl !== "string" || typeof sessionId !== "string" || typeof filePath !== "string" ||
+		(artifactId !== undefined && (typeof artifactId !== "string" || artifactId === "")) ||
 		(shareId !== undefined && typeof shareId !== "string") || (fingerprint !== undefined && typeof fingerprint !== "string")) {
 		throw new CloudShareError("invalid_request", "Not a file to share.");
 	}
 	if (source === "cloud") {
 		if (typeof orgId !== "string") throw new CloudShareError("invalid_request", "Not a file to share.");
-		return { source, baseUrl, orgId, sessionId, path: filePath, projectId: "", shareId, fingerprint } satisfies CloudSessionShareFile;
+		return { source, baseUrl, orgId, sessionId, path: filePath, projectId: "", artifactId, shareId, fingerprint } satisfies CloudSessionShareFile;
 	}
 	// A local file's project names the document: an empty one would make a
 	// second document, and link, for a file already published.
 	if (source !== undefined && source !== "local") throw new CloudShareError("invalid_request", "Not a file to share.");
 	if (typeof projectId !== "string" || projectId === "") throw new CloudShareError("invalid_request", "Not a file to share.");
-	return { baseUrl, sessionId, path: filePath, projectId, shareId, fingerprint };
+	return { baseUrl, sessionId, path: filePath, projectId, artifactId, shareId, fingerprint };
 }
 
 function isCloudFile(file: CloudShareFile): file is CloudSessionShareFile {
 	return file.source === "cloud" && typeof file.orgId === "string";
 }
 
+/**
+ * The record key of a file: by its artifact ID when it has one, so the record
+ * follows the file through a rename, else by its path. A record kept under the
+ * path from before the file had an ID moves to the ID's key.
+ */
+async function recordKey(records: ShareLinkRecordStore, baseUrl: string, sessionId: string, relativePath: string, artifactId: string | undefined): Promise<string> {
+	const byPath = shareRecordKey(baseUrl, sessionId, relativePath);
+	if (!artifactId) return byPath;
+	const key = artifactRecordKey(baseUrl, sessionId, artifactId);
+	await records.adopt(key, byPath);
+	return key;
+}
+
 /** The record key of a cloud session's file: apart from every local session's. */
-function cloudRecordKey(baseUrl: string, file: CloudSessionShareFile): string {
-	return shareRecordKey(baseUrl, `cloud:${file.orgId}/${file.sessionId}`, file.path);
+function cloudRecordKey(records: ShareLinkRecordStore, baseUrl: string, file: CloudSessionShareFile): Promise<string> {
+	return recordKey(records, baseUrl, `cloud:${file.orgId}/${file.sessionId}`, file.path, file.artifactId);
 }
 
 function baseUrlArgument(value: unknown): string {
@@ -124,7 +139,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// another version.
 	const inspectCloudFile = async (file: CloudSessionShareFile): Promise<CloudShareInspection> => {
 		const found = await inspectCloudSessionArtifact(deps, file.baseUrl, file);
-		const key = cloudRecordKey(file.baseUrl, file);
+		const key = await cloudRecordKey(deps.records, file.baseUrl, file);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
 		return {
@@ -147,7 +162,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// request, so there is nothing to cancel: stopping the wait could
 			// leave a public link the person was told was cancelled.
 			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
-			await deps.records.set(cloudRecordKey(file.baseUrl, file), result.share.id, file.fingerprint);
+			await deps.records.set(await cloudRecordKey(deps.records, file.baseUrl, file), result.share.id, file.fingerprint, artifactShareUrl(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
@@ -162,7 +177,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const file = shareFileArgument(value);
 		if (isCloudFile(file)) return inspectCloudFile(file);
 		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
-		const key = shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath);
+		const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
 		const { secretFindings, fingerprint } = await scanShareFile(resolved);
@@ -180,8 +195,12 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	deps.ipcMain.handle("cloudShare:available", async (_event, value: unknown): Promise<boolean | null> =>
 		shareLinksAvailable(deps, baseUrlArgument(value)));
 
-	deps.ipcMain.handle("cloudShare:list", async (_event, value: unknown): Promise<CloudShareLinks> =>
-		listShareLinks(deps, baseUrlArgument(value)));
+	deps.ipcMain.handle("cloudShare:list", async (_event, value: unknown): Promise<CloudShareLinks> => {
+		const baseUrl = baseUrlArgument(value);
+		const links = await listShareLinks(deps, baseUrl);
+		await deps.records.syncLinks(baseUrl, links.shares);
+		return links;
+	});
 
 	deps.ipcMain.handle("cloudShare:unpublish", async (event, value: unknown): Promise<void> => {
 		requireMainFrame(event);
@@ -229,7 +248,8 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			const taken = snapshot;
 			// Publish only what the person was shown: the file as inspected,
 			// with no credential the inspection did not report.
-			const shareId = await deps.records.get(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath));
+			const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
+			const shareId = await deps.records.get(key);
 			if (taken.fingerprint !== file.fingerprint) {
 				return {
 					status: "changed",
@@ -254,7 +274,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				feature: folder === "." ? file.sessionId : `${file.sessionId}/${folder}`,
 				shareId: file.shareId,
 			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
-			await deps.records.set(shareRecordKey(file.baseUrl, file.sessionId, resolved.relativePath), result.share.id, taken.fingerprint);
+			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share));
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };

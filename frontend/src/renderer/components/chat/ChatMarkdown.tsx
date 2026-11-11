@@ -1,3 +1,5 @@
+import type { Element as HastElement } from "hast";
+import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excerpt-source";
 /**
  * Markdown for agent prose.
  *
@@ -33,10 +35,13 @@ import {
 } from "react";
 import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Root, RootContent } from "mdast";
+import type { Processor } from "unified";
 import remend from "remend";
 import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
-import { WrapText } from "lucide-react";
+import { WrapText } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
@@ -54,10 +59,13 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
-	findWorkspaceFilePath,
+	createWorkspaceFileLookup,
+	isAbsoluteFileReference,
+	normalizeWorkspaceFileReference,
 	workspaceFileOpenTarget,
 	workspaceFileReferenceLine,
 } from "../../lib/workspace-file-path";
@@ -101,6 +109,8 @@ const FADE_SHED_MS = 450;
  */
 const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
+/** Inside a link to an artifact: its name reads in the UI font, as everywhere else artifacts are named. */
+const InsideArtifactLink = createContext(false);
 const SafeOriginContent = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
 const OpenChatLink = createContext<{
@@ -111,10 +121,12 @@ const OpenChatLink = createContext<{
 	sessionLinkSourceKind?: "cloud";
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
-}>({ workspacePaths: [] });
+	findFile: (reference: string) => string | undefined;
+}>({ workspacePaths: [], findFile: () => undefined });
 const EMPTY_WORKSPACE_PATHS: string[] = [];
 
 export function ChatLinkProvider({
+	sessionId,
 	onLinkOpen,
 	onFileOpen,
 	remoteHost,
@@ -124,6 +136,7 @@ export function ChatLinkProvider({
 	workspacePaths = EMPTY_WORKSPACE_PATHS,
 	children,
 }: {
+	sessionId?: string;
 	onLinkOpen?: (url: string) => void;
 	onFileOpen?: (path: string, line?: number) => void;
 	remoteHost?: boolean;
@@ -133,11 +146,24 @@ export function ChatLinkProvider({
 	workspacePaths?: string[];
 	children: ReactNode;
 }) {
+	const openLink = useLatestCallback((url: string) => onLinkOpen?.(url));
+	const openFile = useLatestCallback((path: string, line?: number) => line == null ? onFileOpen?.(path) : onFileOpen?.(path, line));
+	const openSession = useLatestCallback((url: string) => onSessionLinkOpen?.(url));
+	const findFile = useMemo(() => createWorkspaceFileLookup(workspacePaths), [workspacePaths]);
+	const canOpenLink = Boolean(onLinkOpen);
+	const canOpenFile = Boolean(onFileOpen);
+	const canOpenSession = Boolean(onSessionLinkOpen);
 	const value = useMemo(
-		() => ({ open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths }),
-		[onLinkOpen, onFileOpen, onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths],
+		() => ({ open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
+		[canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
 	);
-	return <OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>;
+	const pathMenuValue = useMemo(
+		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
+		[sessionId, remoteHost, sessionLinkHostId, sessionLinkSourceKind],
+	);
+	return <ChatPathMenuContext.Provider value={pathMenuValue}>
+		<OpenChatLink.Provider value={value}>{children}</OpenChatLink.Provider>
+	</ChatPathMenuContext.Provider>;
 }
 
 function chatUrlTransform(url: string, key: string): string | undefined {
@@ -222,6 +248,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					<MarkdownChunk
 						key={index}
 						source={block.source}
+						sourceOffset={block.start}
 						repairInline={block.repairInline}
 						streaming={streaming && index === blocks.blocks.length - 1}
 						fading={animate && index === blocks.blocks.length - 1}
@@ -236,8 +263,9 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 
 // No wrapper DOM: list/table layout, image galleries and prose spacing keep
 // their existing parent. Only the changing chunk enters react-markdown again.
-const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
+const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
 	source: string;
+	sourceOffset: number;
 	repairInline: boolean;
 	streaming: boolean;
 	fading: boolean;
@@ -248,8 +276,13 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, stream
 		linkMode: "text-only", images: false, htmlTags: false,
 		katex: false, setextHeadings: false, comparisonOperators: false,
 	}) : source, [source, streaming, repairInline]);
-	const plugins = useMemo<Options["rehypePlugins"]>(() =>
-		fading ? [[rehypeStreamFade, { settledOffset }]] : undefined, [fading, settledOffset]);
+	const plugins = useMemo<NonNullable<Options["rehypePlugins"]>>(() => {
+		// Repaired streaming tails cannot be selected. Settled chunks retain only
+		// source bounds; detailed mappings are built when a selection is captured.
+		const entries: NonNullable<Options["rehypePlugins"]> = streaming ? [] : [[rehypeExcerptSource, { offset: sourceOffset }]];
+		if (fading) entries.push([rehypeStreamFade, { settledOffset }]);
+		return entries;
+	}, [sourceOffset, streaming, fading, settledOffset]);
 	return <StreamingProse.Provider value={streaming}>
 		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 			{repaired}
@@ -276,17 +309,19 @@ let preferredWrap = false;
  * The toggle is there for the case that argument loses — a single 300-character
  * line, where scrolling means losing the rest of the block.
  */
-function CodeBlock({ code, language }: { code: string; language?: string }) {
+function CodeBlock({ code, language, sourceNode }: { code: string; language?: string; sourceNode?: HastElement }) {
+	const positions = excerptElementProps(sourceNode);
 	const streaming = useContext(StreamingProse);
 	const grammar = canonicalLanguage(language);
 	const [wrap, setWrap] = useState(preferredWrap);
 
 	return (
 		<div
+			{...positions}
 			className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface"
 			data-wrap={wrap ? "true" : "false"}
 		>
-			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
+			<div data-excerpt-exclude="" data-chat-find-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="text-caption text-muted-foreground">
 					{language || "text"}
 				</span>
@@ -312,7 +347,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 				</div>
 			</div>
 			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
-				<code className="font-mono text-xs leading-[1.6] text-foreground">
+				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>
@@ -347,19 +382,22 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-function MarkdownLink({ href, children, className }: { href?: string; children?: ReactNode; className?: string }) {
+function MarkdownLink({ href, children, className, menuPath }: { href?: string; children?: ReactNode; className?: string; menuPath?: string }) {
 	const safeOriginContent = useContext(SafeOriginContent);
-	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths } = useContext(OpenChatLink);
+	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
-		? workspaceFilePath(href, workspacePaths) ?? findWorkspaceFilePath(href, workspacePaths) ?? explicitWorkspaceFilePath(href)
+		? workspaceFilePath(href, workspacePaths) ?? findFile(href) ?? explicitWorkspaceFilePath(href)
 		: undefined;
 	const sessionLink = Boolean(href && isAoLink(href));
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
 	const openInFiles = filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined;
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
-		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
+		const unavailable = <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
 		</span>;
+		return isPotentialWorkspaceFileLink(href)
+			? <ChatPathMenu path={normalizeWorkspaceFileReference(href)}>{unavailable}</ChatPathMenu>
+			: unavailable;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
 	return (
@@ -368,6 +406,7 @@ function MarkdownLink({ href, children, className }: { href?: string; children?:
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath}
+			menuPath={menuPath ?? (href && (filePath || isPotentialWorkspaceFileLink(href)) ? normalizeWorkspaceFileReference(href) : undefined)}
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
@@ -397,7 +436,9 @@ function MarkdownLink({ href, children, className }: { href?: string; children?:
 			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
 			<ChatImageLinkScope>
-				<InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
+				<InsideMarkdownLink.Provider value>
+					<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
+				</InsideMarkdownLink.Provider>
 			</ChatImageLinkScope>
 		</AppLink>
 	);
@@ -490,8 +531,8 @@ function MermaidFence({ code }: { code: string }) {
 
 /** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
 function useWorkspaceFile(path: string | undefined) {
-	const { openFile, workspacePaths } = useContext(OpenChatLink);
-	const filePath = path && openFile ? findWorkspaceFilePath(path, workspacePaths) : undefined;
+	const { openFile, findFile } = useContext(OpenChatLink);
+	const filePath = path && openFile ? findFile(path) : undefined;
 	if (!path || !filePath || !openFile) return undefined;
 	const target = workspaceFileOpenTarget(path, filePath);
 	return { filePath, open: (line?: number) => (line == null ? openFile(target) : openFile(target, line)) };
@@ -505,7 +546,7 @@ export function FileReference({ path, line, className, children }: { path: strin
 	const file = useWorkspaceFile(path);
 	if (!file) return <span className={className} title={path}>{children}</span>;
 	return (
-		<Pressable className={className} title={path} onClick={() => file.open(line)}>
+		<Pressable data-chat-find-include="" className={className} title={path} onClick={() => file.open(line)}>
 			{children}
 		</Pressable>
 	);
@@ -522,67 +563,93 @@ export function useChatLinkWorkspaces() {
 	return useSessionLinkSource(sessionLinkHostId, sessionLinkSourceKind).workspaces;
 }
 
-/** Inline code naming a listed session artifact, linked to that artifact. */
-export function ArtifactPathCode({ text, children }: { text: string; children: ReactNode }) {
+/**
+ * Inline code naming a listed session artifact, linked to that artifact's
+ * preview and showing `children`; a path the session does not list shows
+ * `unlisted` (default `children`).
+ */
+export function ArtifactPathCode({ text, children, unlisted = children }: { text: string; children: ReactNode; unlisted?: ReactNode }) {
 	const workspaces = useChatLinkWorkspaces();
 	const href = artifactLinkForPath(text, workspaces);
-	return href ? <MarkdownLink href={href}>{children}</MarkdownLink> : <>{children}</>;
+	const path = explicitWorkspaceFilePath(text);
+	// Every workspace refresh, for any session's status, reaches here; the same
+	// element back lets the path menu below skip it unless the link changed.
+	return useMemo(() => {
+		if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
+		return path ? <ChatPathMenu path={path}><span>{unlisted}</span></ChatPathMenu> : <>{unlisted}</>;
+	}, [children, href, path, unlisted]);
 }
 
-function InlineCode({ children, className }: { children?: ReactNode; className?: string }) {
+function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
+	const positions = excerptElementProps(node);
 	const { openSession } = useContext(OpenChatLink);
 	const insideLink = useContext(InsideMarkdownLink);
+	const insideArtifactLink = useContext(InsideArtifactLink);
 	const text = typeof children === "string" ? children : undefined;
 	const file = useWorkspaceFile(text);
-	if (isInlineMath(className)) return <MathFormula tex={text ?? ""} />;
+	if (isInlineMath(className)) return <span {...positions} data-excerpt-block=""><MathFormula tex={text ?? ""} /></span>;
+	// An artifact's name is not code: it reads in the UI font, like its rows and
+	// headers. It is still inline code in the source, so excerpts map it as one.
+	const name = <span {...positions} data-excerpt-kind="inline-code">{children}</span>;
+	if (insideArtifactLink) return name;
 	const code = (
-		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
+		<code {...positions} data-excerpt-kind="inline-code" className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
 			{children}
 		</code>
 	);
 	if (insideLink) return code;
-	if (!file) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
+	if (!file) {
+		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
+		const path = text ? explicitWorkspaceFilePath(text) : undefined;
+		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
+	}
+	const openFile = () => file.open(workspaceFileReferenceLine(text ?? ""));
 	return (
-		<Pressable
-			onClick={() => file.open(workspaceFileReferenceLine(text ?? ""))}
-			aria-label={`Open ${file.filePath} in Files`}
-			className="inline rounded transition-colors hover:bg-interactive-hover"
-		>
-			{code}
-		</Pressable>
+		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
+			<Pressable
+				data-chat-find-include=""
+				data-excerpt-include=""
+				onClick={openFile}
+				aria-label={`Open ${file.filePath} in Files`}
+				className="inline rounded transition-colors hover:bg-interactive-hover"
+			>
+				{code}
+			</Pressable>
+		</ChatPathMenu>
 	);
 }
 
 const COMPONENTS: Components = {
+	span: ({ children, node: _node, ...props }) => <span {...props}>{props.className?.split(" ").includes("stream-char") ? children : compactEmoji(children)}</span>,
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
-	h1: ({ children }) => (
-		<h3 className="mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0">
+	h1: ({ children, node: _node, ...props }) => (
+		<h3 {...props} className="mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h3>
 	),
-	h2: ({ children }) => (
-		<h4 className="mb-1.5 mt-3.5 text-sm font-semibold leading-snug text-foreground first:mt-0">
+	h2: ({ children, node: _node, ...props }) => (
+		<h4 {...props} className="mb-1.5 mt-3.5 text-sm font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h4>
 	),
-	h3: ({ children }) => (
-		<h5 className="mb-1 mt-3 text-sm font-semibold leading-snug text-foreground first:mt-0">
+	h3: ({ children, node: _node, ...props }) => (
+		<h5 {...props} className="mb-1 mt-3 text-sm font-semibold leading-snug text-foreground first:mt-0">
 			{children}
 		</h5>
 	),
-	h4: ({ children }) => (
-		<h6 className="mb-1 mt-3 text-xs font-semibold text-muted-foreground first:mt-0">
+	h4: ({ children, node: _node, ...props }) => (
+		<h6 {...props} className="mb-1 mt-3 text-xs font-semibold text-muted-foreground first:mt-0">
 			{children}
 		</h6>
 	),
 
 	// A paragraph of nothing but images is a set of pictures, not prose.
-	p: ({ children, node }) =>
+	p: ({ children, node, ...props }) =>
 		isImageOnlyParagraph(node) ? (
 			<ChatImageGallery>{children}</ChatImageGallery>
 		) : (
-			<p className="my-2 first:mt-0 last:mb-0">{compactEmoji(children)}</p>
+			<p {...props} className="my-2 first:mt-0 last:mb-0">{compactEmoji(children)}</p>
 		),
 
 	ul: ({ children }) => <ul className="my-2 ml-4 list-disc space-y-1 first:mt-0">{children}</ul>,
@@ -590,9 +657,9 @@ const COMPONENTS: Components = {
 	ol: ({ children, start }) => (
 		<ol start={start} className="my-2 ml-4 list-decimal space-y-1 first:mt-0">{children}</ol>
 	),
-	li: ({ children, className }) => (
+	li: ({ children, className, node: _node, ...props }) => (
 		// A task-list item drops its bullet: the checkbox is the marker.
-		<li className={cn("marker:text-muted-foreground", className?.includes("task-list-item") && "list-none")}>
+		<li {...props} className={cn("marker:text-muted-foreground", className?.includes("task-list-item") && "list-none")}>
 			{compactEmoji(children)}
 		</li>
 	),
@@ -613,16 +680,16 @@ const COMPONENTS: Components = {
 	// gave one — as a class on the inner element. It is claimed here rather than in
 	// `code` because a fence with no language carries no class at all, and matching
 	// on the class alone rendered those as inline code.
-	pre: ({ children }) => {
+	pre: ({ children, node }) => {
 		const fence = fenceOf(children);
 		if (!fence) return <>{children}</>;
 		// Mermaid is a diagram, not source: it renders through the sandboxed SVG
 		// path rather than the highlighter. See `MermaidBlock.tsx`.
-		if (fence.language?.toLowerCase() === "mermaid") return <MermaidFence code={fence.code} />;
+		if (fence.language?.toLowerCase() === "mermaid") return <div {...excerptElementProps(node)} data-excerpt-block="" data-excerpt-flowchart=""><MermaidFence code={fence.code} /></div>;
 		// Display formulas (`$$…$$`, `\[…\]`) arrive as `language-math` fences too,
 		// so one check covers them and explicit ```math fences.
-		if (fence.language?.toLowerCase() === "math") return <MathFormula tex={fence.code} display />;
-		return <CodeBlock code={fence.code} language={fence.language} />;
+		if (fence.language?.toLowerCase() === "math") return <div {...excerptElementProps(node)} data-excerpt-block=""><MathFormula tex={fence.code} display /></div>;
+		return <CodeBlock code={fence.code} language={fence.language} sourceNode={node} />;
 	},
 	// Only inline code and inline formulas reach here; `pre` above takes every fence.
 	code: InlineCode,
@@ -635,13 +702,13 @@ const COMPONENTS: Components = {
 		</div>
 	),
 	thead: ({ children }) => <thead className="bg-raised/40">{children}</thead>,
-	th: ({ children }) => (
-		<th className="border-b border-border px-2.5 py-1.5 text-left font-medium text-muted-foreground">
+	th: ({ children, node: _node, ...props }) => (
+		<th {...props} className="border-b border-border px-2.5 py-1.5 text-left font-medium text-muted-foreground">
 			{compactEmoji(children)}
 		</th>
 	),
-	td: ({ children }) => (
-		<td className="border-b border-border/60 px-2.5 py-1.5 align-top">{compactEmoji(children)}</td>
+	td: ({ children, node: _node, ...props }) => (
+		<td {...props} className="border-b border-border/60 px-2.5 py-1.5 align-top">{compactEmoji(children)}</td>
 	),
 
 	blockquote: ({ children }) => (
@@ -650,8 +717,8 @@ const COMPONENTS: Components = {
 		</blockquote>
 	),
 	hr: () => <hr className="my-3 border-border" />,
-	strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
-	del: ({ children }) => <del className="text-muted-foreground">{children}</del>,
+	strong: ({ children, node: _node, ...props }) => <strong {...props} className="font-semibold text-foreground">{children}</strong>,
+	del: ({ children, node: _node, ...props }) => <del {...props} className="text-muted-foreground">{children}</del>,
 
 	// Match terminal links: a plain HTTP(S) click uses the session's AO Browser;
 	// Cmd/Ctrl- or Option/Alt-click and non-web schemes use the system browser,
@@ -660,3 +727,92 @@ const COMPONENTS: Components = {
 
 	img: MarkdownImage,
 };
+
+/**
+ * What markdown leaves literal in a person's own message. Pasted text keeps its
+ * look: `# notes` is not a heading, four spaces are not a code block, a `---`
+ * under a line is not a rule, and `<Component>` stays visible text. Images,
+ * tables, footnotes, link definitions and strikethrough are out for the same
+ * reason. The daemon's find splits these messages the same way
+ * (`FindUserBlocks`), so change both together.
+ */
+const USER_LITERAL_CONSTRUCTS = [
+	"headingAtx", "setextUnderline", "thematicBreak", "codeIndented", "htmlFlow", "htmlText",
+	"definition", "labelStartImage", "table", "strikethrough",
+	"gfmFootnoteDefinition", "gfmFootnoteCall", "gfmPotentialFootnoteCall",
+];
+
+function remarkUserSubset(this: Processor) {
+	const data = this.data();
+	(data.micromarkExtensions ??= []).push({ disable: { null: USER_LITERAL_CONSTRUCTS } });
+}
+
+type MarkdownParent = { children: RootContent[] };
+
+/** A newline the person typed is a line break, as it was in the plain bubble. */
+function splitSoftBreaks(parent: MarkdownParent) {
+	parent.children = parent.children.flatMap((child): RootContent[] => {
+		if ("children" in child) splitSoftBreaks(child as MarkdownParent);
+		if (child.type !== "text" || !child.value.includes("\n")) return [child];
+		return child.value.split("\n").flatMap((value, index): RootContent[] => [
+			...(index > 0 ? [{ type: "break" } as const] : []),
+			...(value ? [{ type: "text", value } as const] : []),
+		]);
+	});
+}
+
+function remarkSoftBreaks() {
+	return (tree: Root) => splitSoftBreaks(tree);
+}
+
+const USER_PLUGINS: Options["remarkPlugins"] = [remarkGfm, remarkSessionLinks, remarkUserSubset, remarkSoftBreaks];
+
+const UserTextRenderer = createContext<((text: string) => ReactNode) | undefined>(undefined);
+
+/** Hands the message's words to the bubble's own text renderer (inline images, chips), inside lists and emphasis too. */
+function UserProse({ children }: { children?: ReactNode }) {
+	const render = useContext(UserTextRenderer);
+	if (!render) return <>{children}</>;
+	if (typeof children === "string") return <>{render(children)}</>;
+	if (!Array.isArray(children)) return <>{children}</>;
+	return <>{children.map((child, index) => typeof child === "string" ? <Fragment key={index}>{render(child)}</Fragment> : child)}</>;
+}
+
+const USER_COMPONENTS: Components = {
+	...COMPONENTS,
+	// Paragraphs the person split with a blank line keep a blank line's gap.
+	p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0 [p+&]:mt-[1lh]"><UserProse>{children}</UserProse></p>,
+	li: ({ children, className }) => (
+		<li className={cn("marker:text-muted-foreground", className?.includes("task-list-item") && "list-none")}>
+			<UserProse>{children}</UserProse>
+		</li>
+	),
+	em: ({ children }) => <em><UserProse>{children}</UserProse></em>,
+	strong: ({ children }) => <strong className="font-semibold"><UserProse>{children}</UserProse></strong>,
+	// Every fence is code here, a ```mermaid one included: nothing in a person's
+	// own message runs or renders as something else.
+	pre: ({ children }) => {
+		const fence = fenceOf(children);
+		return fence ? <CodeBlock code={fence.code} language={fence.language} /> : <>{children}</>;
+	},
+};
+
+/**
+ * A person's own message with the light markdown people type: lists, task
+ * boxes, bold and italic, inline and fenced code, links and quotes. Display
+ * only: the stored text, the text sent to the agent and the Copy action all
+ * stay the raw source. Links open only when clicked.
+ */
+export const UserMarkdown = memo(function UserMarkdown({ text, renderText }: {
+	text: string;
+	/** Renders each run of plain text, for inline images and chips; keep it stable. */
+	renderText?: (text: string) => ReactNode;
+}) {
+	return (
+		<UserTextRenderer.Provider value={renderText}>
+			<Markdown remarkPlugins={USER_PLUGINS} components={USER_COMPONENTS} urlTransform={chatUrlTransform}>
+				{text}
+			</Markdown>
+		</UserTextRenderer.Provider>
+	);
+});

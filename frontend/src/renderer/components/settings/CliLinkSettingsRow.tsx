@@ -71,7 +71,7 @@ function CliLinkSettingsRow() {
 			<SettingsRow label={t("settings.cliLink.label")}>
 				<div className="flex items-center gap-1.5">
 					{canUnlink ? (
-						<Button type="button" variant="footer" disabled={busy} onClick={() => {
+						<Button type="button" variant="secondary" disabled={busy} onClick={() => {
 							if (!status || status.current.kind === "missing") return;
 							setError(null);
 							setConfirm({ action: "unlink", target: status.current.target });
@@ -80,7 +80,7 @@ function CliLinkSettingsRow() {
 						</Button>
 					) : null}
 					{canLink ? (
-						<Button type="button" variant="footer-primary" disabled={busy} onClick={() => {
+						<Button type="button" variant="primary" disabled={busy} onClick={() => {
 							if (!status) return;
 							setError(null);
 							if (status.current.kind === "missing") void runAction("link", null, false);

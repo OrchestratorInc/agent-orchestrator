@@ -168,7 +168,7 @@ export type RenderDisplayMode = "inline" | "fullscreen";
  * paint. scrollable lets a page scroll inside a capped frame with a scrollbar.
  */
 export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDisplayMode, scrollable = false, wrapContent = false): string {
-	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent }))}`;
+	return `#ao-theme=${encodeURIComponent(JSON.stringify({ ...theme, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent, openImages: true }))}`;
 }
 
 /** Live theme and wrapping updates; displayMode is the MCP Apps host-context field. */
@@ -176,7 +176,7 @@ export function renderThemeMessage(theme: RenderTheme, displayMode: RenderDispla
 	return {
 		jsonrpc: "2.0",
 		method: "ui/notifications/host-context-changed",
-		params: { theme: theme.appearance, styles: { variables: theme.variables }, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent },
+		params: { theme: theme.appearance, styles: { variables: theme.variables }, displayMode, ...(scrollable ? { scrollable } : {}), wrapContent, openImages: true },
 	} as const;
 }
 
@@ -195,4 +195,11 @@ export function readRenderContentHeight(data: unknown): number | undefined {
 export function readRenderLinkRequest(data: unknown): string | undefined {
 	const url = rpc(data, "ui/open-link")?.url;
 	return typeof url === "string" && /^https?:\/\//i.test(url) ? url : undefined;
+}
+
+export function readRenderImageRequest(data: unknown): { src: string; alt: string } | undefined {
+	const params = rpc(data, "ao/open-image");
+	const src = params?.src;
+	if (typeof src !== "string" || !/^data:image\//i.test(src)) return undefined;
+	return { src, alt: typeof params?.alt === "string" ? params.alt : "" };
 }

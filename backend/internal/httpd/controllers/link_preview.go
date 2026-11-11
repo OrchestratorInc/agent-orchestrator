@@ -42,6 +42,11 @@ func (c *LinkPreviewController) preview(w http.ResponseWriter, r *http.Request) 
 	}
 	p, err := c.Svc.Preview(r.Context(), rawURL)
 	if err != nil {
+		// The hover ended and its request was aborted; nobody is listening and
+		// the upstream fetch itself carries on to warm the cache.
+		if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+			return
+		}
 		// Upstream fetch failures are a bad gateway, which the apierr.Kind
 		// vocabulary cannot express; render them here. Everything else is an
 		// apierr and goes through the standard mapping (400 invalid URL, 404

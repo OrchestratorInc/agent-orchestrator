@@ -848,7 +848,7 @@ func TestGetAgentHooksRequiresAOManagedKimiHome(t *testing.T) {
 		WorkspacePath: t.TempDir(),
 	})
 
-	if err == nil || !strings.Contains(err.Error(), "AO-managed Kimi Code home is unavailable") {
+	if err == nil || !strings.Contains(err.Error(), "Orchestrator-managed Kimi Code home is unavailable") {
 		t.Fatalf("GetAgentHooks err = %v, want AO-managed Kimi home requirement", err)
 	}
 }

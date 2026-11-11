@@ -436,12 +436,13 @@ func TestOpenCommandTerminalStartsTrustedCommandInDedicatedAuthWorkspace(t *test
 		t.Errorf("argv = %#v, want []string{\"pi\"}", got)
 	}
 	wantRecord := ShellTerminalRecord{
-		HandleID:   "shellterm-test1",
-		WorkingDir: authWorkspace,
-		Title:      "Log in to Pi",
-		AppRunID:   testAppRunID,
-		Transient:  true,
-		CreatedAt:  time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		HandleID:      "shellterm-test1",
+		WorkingDir:    authWorkspace,
+		Title:         "Log in to Pi",
+		TitleExplicit: true,
+		AppRunID:      testAppRunID,
+		Transient:     true,
+		CreatedAt:     time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
 	}
 	if !reflect.DeepEqual(st.records, []ShellTerminalRecord{wantRecord}) {
 		t.Errorf("records = %#v, want %#v", st.records, []ShellTerminalRecord{wantRecord})
@@ -2508,5 +2509,23 @@ func TestOpenCommandTerminalRenderedSkipStateOverridesStaleRawMarker(t *testing.
 	case got := <-rt.sentCh:
 		t.Fatalf("initial input sent while rendered authentication picker is open: %#v", got)
 	case <-time.After(2 * initialInputPollInterval):
+	}
+}
+
+// A restarted daemon in the same app launch must still see the trusted command
+// terminals its predecessor opened, so agent auth can keep excluding logins.
+func TestListCommandTerminalsForCurrentAppRunReturnsOnlyThisLaunchesTrustedTerminals(t *testing.T) {
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
+		{HandleID: "user-shell", AppRunID: testAppRunID, Title: "Shell 1"},
+		{HandleID: "auth-current", AppRunID: testAppRunID, Title: "Log in to Codex", Transient: true},
+		{HandleID: "auth-previous", AppRunID: "previous", Title: "Log in to Codex", Transient: true},
+	}}
+	svc := newTestService(newFakeShellRuntime(), st, nil)
+	got, err := svc.ListCommandTerminalsForCurrentAppRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].HandleID != "auth-current" || got[0].Title != "Log in to Codex" {
+		t.Fatalf("command terminals = %+v, want only this launch's trusted terminal", got)
 	}
 }

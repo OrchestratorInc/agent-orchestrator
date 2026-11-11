@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const go = readFileSync(new URL('../.github/workflows/go.yml', import.meta.url), 'utf8');
@@ -51,68 +52,98 @@ if (args[0] === 'list' || args.includes('-list')) {
 function assertRace(args) {
   assert.ok(args.includes('-race'));
   assert.ok(args.includes('-count=1'));
-  assert.ok(args.includes('-timeout=40m'));
+  assert.ok(args.includes('-timeout=10m'));
 }
 
-test('core singleton executes every non-dedicated package once', t => {
+const DEDICATED = ['example/backend/internal/storage/sqlite', 'example/backend/internal/service/chat', 'example/backend/internal/session_manager', 'example/backend/internal/storage/sqlite/store'];
+
+test('three core shards execute every non-dedicated package exactly once', t => {
   const block = job(go, 'backend-core');
-  assert.match(block, /shard: \[0\]/);
-  const core = ['example/backend/internal/cli', 'example/backend/internal/service', 'example/backend/internal/storage/sqlite/gen'];
-  const dedicated = ['example/backend/internal/storage/sqlite', 'example/backend/internal/service/chat', 'example/backend/internal/session_manager', 'example/backend/internal/storage/sqlite/store'];
-  const { result, calls } = execute(t, runStep(block, 'Test'), [...core, ...dedicated].join('\n') + '\n');
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(calls.length, 1);
-  assertRace(calls[0]);
-  assert.deepEqual(calls[0].filter(arg => arg.startsWith('example/')), core);
-});
-
-test('chat singleton runs the complete package without a name filter', t => {
-  const block = job(go, 'chat-race');
-  assert.match(block, /shard: \[0\]/);
-  const { result, calls } = execute(t, runStep(block, 'Test chat'), '');
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(calls.length, 1);
-  assertRace(calls[0]);
-  assert.equal(calls[0].at(-1), './internal/service/chat');
-  assert.ok(!calls[0].includes('-run'));
-});
-
-test('two SQLite shards partition all tests, examples and fuzz seeds exactly once', t => {
-  const block = job(go, 'sqlite-race');
-  assert.match(block, /shard: \[0, 1\]/);
-  const tests = [...Array.from({ length: 17 }, (_, i) => `TestCase${i}`), 'ExampleStore', 'FuzzDecode'];
-  const inventory = [...tests, 'BenchmarkIgnored', 'ok example/backend/internal/storage/sqlite 0.01s'].join('\n') + '\n';
-  const selected = [];
-  for (const shard of [0, 1]) {
-    const script = runStep(block, 'Test SQLite shard').replaceAll('${{ matrix.shard }}', String(shard));
-    const { result, calls } = execute(t, script, inventory);
+  assert.match(block, /shard: \[0, 1, 2\]/);
+  const core = Array.from({ length: 7 }, (_, i) => `example/backend/internal/pkg${i}`);
+  const ran = [];
+  for (const shard of [0, 1, 2]) {
+    const script = runStep(block, 'Test').replaceAll('${{ matrix.shard }}', String(shard));
+    const { result, calls } = execute(t, script, [...core, ...DEDICATED].join('\n') + '\n');
     assert.equal(result.status, 0, result.stderr);
     assert.equal(calls.length, 1);
     assertRace(calls[0]);
-    const pattern = calls[0][calls[0].indexOf('-run') + 1];
-    const matches = tests.filter(name => new RegExp(pattern).test(name));
-    assert.ok(matches.length > 0);
-    selected.push(...matches);
+    ran.push(...calls[0].filter(arg => arg.startsWith('example/')));
   }
-  assert.equal(selected.length, tests.length);
-  assert.deepEqual([...selected].sort(), [...tests].sort());
+  assert.deepEqual([...ran].sort(), [...core].sort());
 });
 
-test('empty core and SQLite selections fail rather than falsely pass', t => {
-  for (const [id, name] of [['backend-core', 'Test'], ['sqlite-race', 'Test SQLite shard']]) {
-    const script = runStep(job(go, id), name).replaceAll('${{ matrix.shard }}', '0');
-    const { result, calls } = execute(t, script, '');
-    assert.notEqual(result.status, 0);
-    assert.equal(calls.length, 0);
+test('an empty core selection fails rather than falsely passes', t => {
+  const script = runStep(job(go, 'backend-core'), 'Test').replaceAll('${{ matrix.shard }}', '0');
+  const { result, calls } = execute(t, script, '');
+  assert.notEqual(result.status, 0);
+  assert.equal(calls.length, 0);
+});
+
+test('storage-race runs exactly the packages backend-core leaves out', () => {
+  const excluded = [...runStep(job(go, 'backend-core'), 'Test').matchAll(/-e '\/(internal\/[\w\/]+)\$'/g)].map(match => `./${match[1]}`);
+  const storage = runStep(job(go, 'storage-race'), 'Test SQLite, chat, session manager and SQLite store').split(/\s+/).filter(arg => arg.startsWith('./'));
+  assert.equal(excluded.length, 4);
+  assert.deepEqual([...storage].sort(), [...excluded].sort());
+});
+
+test('go-test-parallel.sh runs every test of every package exactly once', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'ao-go-parallel-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const capture = join(dir, 'runs.jsonl');
+  writeFileSync(capture, '');
+  const tests = { sqlite: [...Array.from({ length: 9 }, (_, i) => `TestCase${i}`), 'ExampleStore', 'FuzzDecode'], chat: ['TestOnly'] };
+  const fakeTest = join(dir, 'fake-test');
+  writeFileSync(fakeTest, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const name = path.basename(process.argv[1], '.test');
+const args = process.argv.slice(2);
+if (args[0] === '-test.list') {
+  process.stdout.write([...JSON.parse(process.env.TESTS)[name], 'BenchmarkIgnored'].join('\\n') + '\\n');
+} else {
+  fs.appendFileSync(process.env.CAPTURE, JSON.stringify({ name, run: args[args.indexOf('-test.run') + 1] }) + '\\n');
+}
+`);
+  writeFileSync(join(dir, 'go'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === 'list') {
+  process.stdout.write(process.env.PKGDIR + '\\n');
+} else {
+  if (!args.includes('-race')) process.exit(2);
+  const out = args[args.indexOf('-o') + 1];
+  for (const pkg of args.filter(arg => arg.startsWith('./'))) {
+    const bin = path.join(out, path.basename(pkg) + '.test');
+    fs.copyFileSync(${JSON.stringify(fakeTest)}, bin);
+    fs.chmodSync(bin, 0o755);
+  }
+}
+`);
+  chmodSync(join(dir, 'go'), 0o755);
+  const script = fileURLToPath(new URL('../.github/scripts/go-test-parallel.sh', import.meta.url));
+  const result = spawnSync('bash', [script, '3', './internal/storage/sqlite', './internal/service/chat'], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, CAPTURE: capture, PKGDIR: dir, TESTS: JSON.stringify(tests) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const runs = readFileSync(capture, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  for (const [name, names] of Object.entries(tests)) {
+    const patterns = runs.filter(run => run.name === name).map(run => new RegExp(run.run));
+    for (const test of [...names, 'BenchmarkIgnored']) {
+      assert.equal(patterns.filter(pattern => pattern.test(test)).length, test.startsWith('Benchmark') ? 0 : 1, `${name} ${test}`);
+    }
   }
 });
 
 test('vitest matrix and command agree on two complete shards', () => {
   const block = job(frontend, 'vitest');
   assert.match(block, /shard: \[1, 2\]/);
-  assert.equal(runStep(block, 'Run vitest shard'), 'npx vitest run --shard=${{ matrix.shard }}/2');
+  const script = runStep(block, 'Run vitest shard');
+  assert.match(script, /^ *npx vitest run --shard=\$\{\{ matrix\.shard \}\}\/2$/m);
+  assert.match(script, /^ *npx vitest related --run --passWithNoTests --shard=\$\{\{ matrix\.shard \}\}\/2 /m);
   assert.match(block, /timeout-minutes: 30/);
-  for (const id of ['backend-core', 'chat-race', 'sqlite-race']) {
-    assert.match(job(go, id), /timeout-minutes: 50/);
-  }
+  assert.match(job(go, 'backend-core'), /timeout-minutes: 20/);
+  assert.match(job(go, 'storage-race'), /timeout-minutes: 30/);
 });

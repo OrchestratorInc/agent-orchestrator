@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { ChatSelectionActions } from "./ChatSelectionActions";
+import { appI18n } from "../../i18n/instance";
 
 vi.mock("../../hooks/useChatSelectionPosition", () => ({ useChatSelectionPosition: () => ({ left: 8, top: 8, visible: true }) }));
 
@@ -12,6 +13,21 @@ function setup() {
 }
 
 describe("chat selection actions", () => {
+	it("translates excerpt errors without dismissing the selected text", async () => {
+		const props = setup();
+		props.onAdd.mockRejectedValue(new Error("chat.draft.excerptTextLimit"));
+		const view = render(<ChatSelectionActions {...props} />);
+		try {
+			await act(async () => fireEvent.click(screen.getByRole("button", { name: "Add to chat" })));
+			expect(screen.getByRole("alert")).toHaveTextContent("Selected text exceeds 24 KiB");
+			await act(async () => { await appI18n.changeLanguage("fr"); });
+			expect(screen.getByRole("alert")).toHaveTextContent("Le texte sélectionné dépasse 24 Kio");
+			expect(props.onInvalid).not.toHaveBeenCalled();
+		} finally {
+			view.unmount();
+			await appI18n.changeLanguage("en");
+		}
+	});
 	it.each(["{Enter}", " "])("supports native keyboard activation with %s", async (key) => {
 		const props = setup(); render(<ChatSelectionActions {...props} />);
 		const user = userEvent.setup();

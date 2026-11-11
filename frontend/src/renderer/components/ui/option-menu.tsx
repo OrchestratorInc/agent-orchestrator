@@ -1,7 +1,8 @@
 import { createContext, forwardRef, useCallback, useContext, useRef, useState, type ButtonHTMLAttributes } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "@/components/app-icons";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
+import { GHOST_PILL_CLASS } from "./button";
 import { ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter } from "./menu-focus";
 
 const SURFACE =
@@ -20,9 +21,12 @@ const LABEL =
  * same control: a visual tweak here should never need making twice.
  */
 export const MENU_TRIGGER_CHROME =
-	"settings-option-trigger max-w-full min-w-0 bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] hover:text-[var(--color-text-settings-trigger)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)] focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:outline-none data-[state=open]:ring-0 disabled:cursor-not-allowed disabled:opacity-50";
+	"settings-option-trigger button-raised max-w-full min-w-0 border [--button-color:var(--secondary)] text-secondary-foreground motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-50";
 
-const TRIGGER = cn("group/option-menu-trigger", MENU_TRIGGER_CHROME);
+export const MENU_GHOST_TRIGGER_CHROME = cn(
+	"settings-option-trigger max-w-full min-w-0 border-0 text-foreground motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-50",
+	GHOST_PILL_CLASS,
+);
 const CloseSubmenu = createContext<(() => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
@@ -49,11 +53,11 @@ export function OptionMenu({ modal, ...props }: React.ComponentProps<typeof Drop
 
 export const OptionMenuTrigger = forwardRef<
 	HTMLButtonElement,
-	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean }
->(function OptionMenuTrigger({ className, children, showCaret = true, ...props }, ref) {
+	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean; variant?: "secondary" | "ghost" }
+>(function OptionMenuTrigger({ className, children, showCaret = true, variant = "secondary", ...props }, ref) {
 	return (
 		<DropdownMenuPrimitive.Trigger asChild>
-			<button ref={ref} type="button" className={cn(TRIGGER, className)} {...props}>
+			<button ref={ref} type="button" className={cn("group/option-menu-trigger", variant === "ghost" ? MENU_GHOST_TRIGGER_CHROME : MENU_TRIGGER_CHROME, className)} {...props}>
 				{children}
 				{showCaret ? (
 					<ChevronDown
@@ -211,6 +215,12 @@ export function OptionMenuItem({
 // Submenu — trigger row + subcontent panel
 // ---------------------------------------------------------------------------
 
+/**
+ * Lets a submenu that a selection closed open again, once its trigger is
+ * asked for it: a click, a key, or a pointer that actually moves over it.
+ */
+const AllowSubmenuReopen = createContext<(() => void) | undefined>(undefined);
+
 export function OptionMenuSub({
 	closeOnSelect = false,
 	open,
@@ -219,13 +229,29 @@ export function OptionMenuSub({
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Sub> & { closeOnSelect?: boolean }) {
 	const [localOpen, setLocalOpen] = useState(defaultOpen);
+	// Radix opens a submenu 100ms after the pointer moves onto its trigger and
+	// does not cancel that timer when a click opens it at once. A choice made
+	// inside that window (a quick click and pick, or a search and Enter) closes
+	// the submenu, and the old timer then reopened it. After a selection closes
+	// it, only the trigger being asked again (see AllowSubmenuReopen) opens it.
+	const closedBySelection = useRef(false);
 	const changeOpen = (next: boolean) => {
+		if (next && closedBySelection.current) return;
 		setLocalOpen(next);
 		onOpenChange?.(next);
 	};
+	const closeAfterSelection = () => {
+		closedBySelection.current = true;
+		changeOpen(false);
+	};
+	const allowReopen = useCallback(() => {
+		closedBySelection.current = false;
+	}, []);
 	return (
-		<CloseSubmenu.Provider value={closeOnSelect ? () => changeOpen(false) : undefined}>
-			<DropdownMenuPrimitive.Sub open={open ?? localOpen} onOpenChange={changeOpen} {...props} />
+		<CloseSubmenu.Provider value={closeOnSelect ? closeAfterSelection : undefined}>
+			<AllowSubmenuReopen.Provider value={allowReopen}>
+				<DropdownMenuPrimitive.Sub open={open ?? localOpen} onOpenChange={changeOpen} {...props} />
+			</AllowSubmenuReopen.Provider>
 		</CloseSubmenu.Provider>
 	);
 }
@@ -236,11 +262,14 @@ export function OptionMenuSubTrigger({
 	value,
 	children,
 	onClick,
+	onKeyDown,
+	onPointerMove,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
 	label?: string;
 	value?: string;
 }) {
+	const allowReopen = useContext(AllowSubmenuReopen);
 	return (
 		<DropdownMenuPrimitive.SubTrigger
 			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", className)}
@@ -249,7 +278,18 @@ export function OptionMenuSubTrigger({
 			// signal to skip its own open/close handling.
 			onClick={(e) => {
 				e.stopPropagation();
+				allowReopen?.();
 				onClick?.(e);
+			}}
+			onKeyDown={(e) => {
+				allowReopen?.();
+				onKeyDown?.(e);
+			}}
+			onPointerMove={(e) => {
+				// A real move, not the zero-movement one a browser sends when the
+				// page changes under a resting pointer.
+				if (e.movementX || e.movementY) allowReopen?.();
+				onPointerMove?.(e);
 			}}
 			{...props}
 		>

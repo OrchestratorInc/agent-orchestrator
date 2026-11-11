@@ -402,26 +402,25 @@ type ChatMCPServerConfig struct {
 // ChatInternalReplayResourceURI is reserved for AO's reconstructed edit context.
 const ChatInternalReplayResourceURI = "ao://conversation/edit-replay"
 
-// ChatExcerptResourceURIPrefix identifies AO-verified transcript excerpts. The
-// daemon resolves these from durable messages; clients never supply the resource
-// text directly.
+// ChatExcerptResourceURIPrefix identifies legacy AO-verified transcript excerpts.
+// Captured snapshots carry user-supplied context without resolving this URI.
 const ChatExcerptResourceURIPrefix = "ao://conversation-excerpt/"
 
-// ChatExcerptReference points at selected text in one durable transcript
-// message. Revision makes stale selections fail closed when streaming updates
-// replace the source text before the user sends their draft.
+// ChatExcerptReference carries captured user input when Snapshot is present.
+// Without Snapshot it is a legacy reference requiring source validation.
 type ChatExcerptReference struct {
-	ID             string `json:"id,omitempty"`
-	Order          int64  `json:"order,omitempty"`
-	ConversationID string `json:"conversationId"`
-	MessageID      string `json:"messageId"`
-	Revision       int64  `json:"revision"`
-	Text           string `json:"text"`
+	Snapshot       *domain.ChatExcerptSnapshot `json:"snapshot,omitempty"`
+	ID             string                      `json:"id,omitempty"`
+	Order          int64                       `json:"order,omitempty"`
+	ConversationID string                      `json:"conversationId"`
+	MessageID      string                      `json:"messageId"`
+	Revision       int64                       `json:"revision"`
+	Text           string                      `json:"text"`
 }
 
-// ChatExcerptContext is the server-verified context delivered for one selected
-// transcript range. The paired turn is retained so a short selection can be
-// understood without relying on hidden provider history.
+// ChatExcerptContext carries a frozen selection. Captured context lives in
+// Reference.Snapshot; UserMessage and AssistantMessage retain the legacy
+// server-resolved paired turn for compatibility.
 type ChatExcerptContext struct {
 	Reference        ChatExcerptReference `json:"reference"`
 	SelectedText     string               `json:"selectedText"`
@@ -1015,6 +1014,11 @@ const (
 	// ChatEventThreadState reports the provider's own lifecycle view of the thread:
 	// working, idle, archived, closed.
 	ChatEventThreadState ChatEventKind = "thread.state"
+	// ChatEventProviderState reports that the provider itself started or finished
+	// work (ThreadState.Status active or idle). It exists for work AO did not
+	// start: a cycle the agent runs on its own after a turn has no turn events,
+	// so this is the only sign that the agent is busy.
+	ChatEventProviderState ChatEventKind = "provider.state"
 	// ChatEventMCPServers reports the startup state of the tool servers this
 	// conversation can reach, which is what explains a tool call that failed for a
 	// reason the agent had no part in.
@@ -1105,7 +1109,8 @@ type ChatEvent struct {
 	// TurnState is set on turn.completed.
 	TurnState domain.TurnState
 	// FailureCode is set only when an adapter recognizes a specific failed-turn cause.
-	FailureCode domain.ConversationFailureCode
+	FailureCode        domain.ConversationFailureCode
+	UsageLimitResetsAt time.Time
 
 	// Delta is the text appended by a message.delta, a reasoning.delta, a
 	// command.output.delta, a command.input or an activity.text.
@@ -1150,7 +1155,7 @@ type ChatEvent struct {
 	Reroute *ChatModelReroute
 	// Account is set on account.changed.
 	Account *ChatAccount
-	// ThreadState is set on thread.state.
+	// ThreadState is set on thread.state and provider.state.
 	ThreadState *ChatThreadState
 	// MCPServers is set on mcp.servers. A single-server update carries one entry:
 	// the provider reports servers one at a time, so a consumer merges by name

@@ -165,13 +165,30 @@ async function resizeTo(window: BrowserWindow, width: number, height: number): P
 	throw renderCheckError("BROWSER_COMMAND_FAILED", `render check failed: the viewport did not reach ${width}x${height} px`);
 }
 
-/** The next frame painted after this call, captured. invalidate() guarantees a frame. */
-async function capturePainted(window: BrowserWindow): Promise<NativeImage> {
+/** The next frame painted after this call. invalidate() guarantees a frame. */
+function nextPaint(window: BrowserWindow): Promise<NativeImage> {
 	const contents = window.webContents;
-	const painted = new Promise<void>((resolve) => contents.once("paint", () => resolve()));
+	const painted = new Promise<NativeImage>((resolve) => contents.once("paint", (_event, _dirty, image) => resolve(image)));
 	contents.invalidate();
-	await painted;
-	return contents.capturePage();
+	return painted;
+}
+
+/**
+ * The first frame painted at the whole width x height page, or the last frame
+ * painted if none is by the limit. The frame comes from the paint event, which
+ * carries the whole frame, never from capturePage(): on Electron 44 an
+ * offscreen window's invalidate() re-sends its last frame at once, the old
+ * size after a resize, and capturePage() before the compositor has a frame at
+ * the new size rejects with UnknownVizError. So it waits a frame between tries.
+ */
+async function capturePainted(window: BrowserWindow, width: number, height: number): Promise<NativeImage> {
+	const limit = Date.now() + MEASURE_RESIZE_LIMIT_MS;
+	let image = await nextPaint(window);
+	while (!showsWholePage(image, width, height) && Date.now() < limit) {
+		await sleep(MEASURE_POLL_MS);
+		image = await nextPaint(window);
+	}
+	return image;
 }
 
 /** Whether an image shows the whole width x height page, at any device scale. */
@@ -287,7 +304,7 @@ async function withRenderWindow<T>(
 		const onRefused = (destination: string) => {
 			if (refused.has(destination)) return;
 			refused.add(destination);
-			record({ level: "warning", text: `AO blocked a request to ${destination}. ${why}` });
+			record({ level: "warning", text: `Orchestrator blocked a request to ${destination}. ${why}` });
 		};
 		const releasePage = allowRenderPage(page.hostname, Number(page.port || 80), onRefused);
 		checkPages.set(contents.id, { page, onRefused });
@@ -342,11 +359,10 @@ export async function checkRender(
 		const contentHeight = Number(measured);
 		const height = clampHeight(contentHeight);
 		view.stage = "capturing the screenshot";
-		// Captured only once the page sees the new size, and again if the first
-		// frame was still the old size, or the image is cropped to it.
+		// Captured only once the page sees the new size, from a frame painted at
+		// it, or the image is cropped to the old size.
 		await resizeTo(view.window, width, height);
-		let image = await capturePainted(view.window);
-		if (!showsWholePage(image, width, height)) image = await capturePainted(view.window);
+		const image = await capturePainted(view.window, width, height);
 		if (image.isEmpty()) {
 			throw renderCheckError("BROWSER_COMMAND_FAILED", "render check captured an empty image");
 		}
