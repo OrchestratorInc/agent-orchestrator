@@ -105,8 +105,13 @@ describe("clone repository input", () => {
 			expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
 			return;
 		}
+		// The step opens as a summary; the folder list only expands on request.
 		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
+		expect(screen.queryByText("app")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Choose folders" }));
 		expect(screen.getByText("app")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));
+		expect(screen.queryByText("app")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Skip" }));
 		expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));

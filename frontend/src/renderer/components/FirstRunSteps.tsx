@@ -9,12 +9,14 @@ import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
 import { completeOnboardingStepIfViewed, reportOnboardingStep } from "../lib/onboarding-telemetry";
-import { sessionImportPreviewQuery, useImportableAgents, useImportOfferShown } from "../lib/session-import";
+import { agentLabel } from "../lib/agent-options";
+import { type ImportCandidate, sessionImportPreviewQuery, useImportableAgents, useImportOfferShown } from "../lib/session-import";
 import { useShellMaybe } from "../lib/shell-context";
 import { useResolvedTheme } from "../stores/ui-store";
 import { TerminalPane } from "./TerminalPane";
 import { GitHubRepoPicker, preloadGitHubRepos } from "./GitHubRepoPicker";
 import { GitHubIcon } from "./GitHubIcon";
+import { AgentAvatar } from "./AgentAvatar";
 import { InstallAction, useInstallRunner } from "./InstallDependencyDialog";
 import { FolderImport } from "./SessionImportDialog";
 import { Button } from "./ui/button";
@@ -218,22 +220,69 @@ export function FirstRunGitHubStep({ onDone, onBack, onClose }: { onDone: () => 
 export function WithImportOffer({ children }: { children: (offer: boolean) => ReactNode }) {
 	const agents = useImportableAgents(true);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000, enabled: agents.length > 0 });
-	const nothingToImport = preview.isError || (preview.isSuccess && !preview.data.candidates.some((chat) => !chat.sessionId && (chat.projectId || chat.folder)));
+	const nothingToImport = preview.isError || (preview.isSuccess && !preview.data.candidates.some(importableFromFolder));
 	return <>{children(agents.length > 0 && !nothingToImport)}</>;
 }
 
+/** A chat the folder import can bring in: not imported yet, and tied to a folder. */
+function importableFromFolder(chat: ImportCandidate): boolean {
+	return !chat.sessionId && Boolean(chat.projectId || chat.folder);
+}
+
 /**
- * Importing earlier chats is a one-time step for a new user, so it sits in first
- * run, between the welcome screen and setting up a project. Each picked folder
- * becomes a project, so a finished import ends the first-run prompt.
+ * Importing earlier chats is a one-time, optional step for a new user, so it sits
+ * in first run, between the welcome screen and setting up a project. It opens as
+ * a short summary of what was found; the folder list only expands when the user
+ * asks for it, and Skip moves on. Each picked folder becomes a project, so a
+ * finished import ends the first-run prompt.
  */
 export function FirstRunImport({ onBack, onClose, onSkip, onImported }: { onBack: () => void; onClose: () => void; onSkip: () => void; onImported: () => void }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
 	const [importing, setImporting] = useState(false);
+	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
 	useImportOfferShown("onboarding", true);
+	const chats = (preview.data?.candidates ?? []).filter(importableFromFolder);
+	const agents = [...new Set(chats.map((chat) => chat.harness))];
+	const header = (
+		<FirstRunHeader
+			onBack={expanded ? () => setExpanded(false) : onBack}
+			onClose={onClose}
+			disabled={importing}
+			title={t("sessionImport.offerTitle")}
+			description={t(expanded ? "sessionImport.foldersDescription" : "firstRun.importDescription")}
+		/>
+	);
+	if (!expanded) {
+		return (
+			<div>
+				{header}
+				<div className="px-4 pt-4">
+					<div className="flex items-center gap-3 rounded-lg bg-interactive-hover p-4">
+						{agents.length ? (
+							<span className="flex shrink-0 items-center gap-1">
+								{agents.slice(0, 4).map((agent) => (
+									<AgentAvatar key={agent} className="size-5" decorative provider={agent} />
+								))}
+							</span>
+						) : null}
+						<p className="min-w-0 text-pretty text-[13px] leading-5 text-foreground">
+							{preview.isPending
+								? t("sessionImport.reading")
+								: t("firstRun.importFound", { count: chats.length, agents: new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(agents.map(agentLabel)) })}
+						</p>
+					</div>
+				</div>
+				<div className="flex items-center justify-end gap-3 p-4">
+					<Button type="button" variant="secondary" onClick={onSkip}>{t("firstRun.skip")}</Button>
+					<Button type="button" variant="primary" disabled={!chats.length} onClick={() => setExpanded(true)}>{t("firstRun.importChoose")}</Button>
+				</div>
+			</div>
+		);
+	}
 	return (
 		<div>
-			<FirstRunHeader onBack={onBack} onClose={onClose} disabled={importing} title={t("sessionImport.offerTitle")} description={t("sessionImport.foldersDescription")} />
+			{header}
 			<FolderImport
 				source="onboarding"
 				cancelLabel={t("firstRun.skip")}
