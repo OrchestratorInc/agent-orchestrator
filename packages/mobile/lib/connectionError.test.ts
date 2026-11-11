@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CloudAuthError, CloudError } from "./cloud/errors";
 import {
 	classifyConnectionFailure,
 	daemonDetail,
@@ -323,6 +324,26 @@ describe("userFacingError", () => {
 		expect(copy).not.toContain("500");
 		expect(copy).toContain("Reference: req-42");
 		expect(userFacingError(answered(503))).toMatch(/still starting up/);
+	});
+
+	// A Cloud host's actions (New task on AO Cloud, say) reach the shared screens
+	// through this too. Cloud is not a paired machine: its 429 is a plan's usage
+	// limit, not a password lockout, and its 401 is an expired sign-in.
+	it("speaks for Orchestrator Cloud, not a paired machine, when Cloud refused", () => {
+		const windowLimit = new CloudError("You've reached your plan's usage limit for now.", {
+			status: 429,
+			code: "WINDOW_LIMIT_REACHED",
+			resetsAt: new Date(Date.now() + 2 * 3_600_000).toISOString(),
+		});
+		const copy = userFacingError(windowLimit, "Couldn't start the worker. Try again.");
+		expect(copy).toMatch(/^You've reached your plan's usage limit for now\. Resets /);
+		expect(copy).not.toMatch(/password|your machine/i);
+		expect(userFacingError(new CloudError("You've reached your plan's weekly usage limit.", { status: 429, code: "WEEKLY_LIMIT_REACHED" })))
+			.toBe("You've reached your plan's weekly usage limit.");
+		expect(userFacingError(new CloudError("Choose a plan to use AO Cloud.", { status: 402, code: "PLAN_REQUIRED" })))
+			.toBe("Choose a plan to use AO Cloud.");
+		expect(userFacingError(new CloudAuthError("expired", { status: 401 }))).toMatch(/Orchestrator Cloud sign-in expired/);
+		expect(userFacingError(new CloudError("Session not found.", { status: 404 }))).toBe("Session not found.");
 	});
 
 	it("does not mistake a code defect for a lost connection, or show its text", () => {
