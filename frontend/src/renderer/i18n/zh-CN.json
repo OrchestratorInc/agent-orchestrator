@@ -2929,7 +2929,6 @@
 	"shell.signInToAOCloud": "登录 Orchestrator Cloud",
 	"shell.signedInAs": "已登录为 {{email}}",
 	"shell.signOut": "退出登录",
-	"shell.signOutWithEmail": "{{email}} · 退出登录",
 	"chat.branch.previous": "上一个对话分支",
 	"chat.branch.next": "下一个对话分支",
 	"chat.branch.position": "第 {{position}} 个对话分支，共 {{total}} 个",

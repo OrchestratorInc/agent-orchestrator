@@ -3,7 +3,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const spawn = readFileSync(fileURLToPath(new URL("../app/spawn.tsx", import.meta.url)), "utf8");
-const attachmentRow = readFileSync(fileURLToPath(new URL("./spawn-attachment-row.tsx", import.meta.url)), "utf8");
+const tray = readFileSync(fileURLToPath(new URL("./chat/ComposerAttachmentTray.tsx", import.meta.url)), "utf8");
+const composer = readFileSync(fileURLToPath(new URL("./spawn-composer.tsx", import.meta.url)), "utf8");
+const platformControls = ["ios", "android"].map((platform) => readFileSync(fileURLToPath(new URL(`./spawn-composer-controls.${platform}.tsx`, import.meta.url)), "utf8"));
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
 
 describe("spawn page", () => {
@@ -29,10 +31,19 @@ describe("spawn composer", () => {
 		expect(spawn).not.toContain('label: "Standalone worker"');
 	});
 
-	it("keeps the attachment row at its own height so the chips sit on the selectors", () => {
-		expect(spawn).toContain("<SpawnAttachmentRow");
-		expect(attachmentRow).toContain("<View collapsable={false} style={styles.row}>");
-		expect(attachmentRow).toContain("row: { flexGrow: 0, flexShrink: 0 }");
+	// The same tray as a conversation's composer, inside the pill over the
+	// field rather than a row of chips stacked above it.
+	it("draws attachments inside the composer pill, over the field", () => {
+		expect(spawn).toContain("<ComposerAttachmentTray");
+		const pill = composer.slice(composer.indexOf("<View style={styles.composer}>"));
+		expect(pill.indexOf("{attachments}")).toBeGreaterThan(0);
+		expect(pill.indexOf("{attachments}")).toBeLessThan(pill.indexOf("<TextInput"));
+		for (const controls of platformControls) {
+			expect(controls).toContain("attachments={attachments}");
+			expect(controls).not.toContain("\t{attachments}\n");
+		}
+		expect(tray).toContain("<View collapsable={false} style={styles.tray}>");
+		expect(tray).toContain("tray: { flexGrow: 0, flexShrink: 0 }");
 	});
 
 	it("shows a prompt-specific error for the daemon's 100 KiB rejection", () => {

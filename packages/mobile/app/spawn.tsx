@@ -17,8 +17,8 @@ import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequ
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
-import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
+import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
@@ -102,6 +102,9 @@ export default function SpawnScreen() {
 	const attachmentsRef = useRef<SpawnAttachment[]>([]);
 	const pickingAttachments = useRef(false);
 	const [attachmentError, setAttachmentError] = useState<string>();
+	// Keyed by place and name: picked files carry no id of their own, and the
+	// same file can be picked twice.
+	const trayItems = useMemo(() => attachments.map((item, index) => ({ key: `${index}-${item.name}`, name: item.name, previewUri: spawnAttachmentPreview(item) })), [attachments]);
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
 	// An effort picked here; until then the model runs at its own default.
@@ -661,9 +664,11 @@ export default function SpawnScreen() {
 					prompt={prompt}
 					onChangePrompt={setPrompt}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
-					attachments={<SpawnAttachmentRow
-						attachments={attachments}
-						onRemove={(item) => {
+					attachments={<ComposerAttachmentTray
+						items={trayItems}
+						onRemove={(key) => {
+							const item = attachments[trayItems.findIndex((candidate) => candidate.key === key)];
+							if (!item) return;
 							attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
 							setAttachments(attachmentsRef.current);
 						}}

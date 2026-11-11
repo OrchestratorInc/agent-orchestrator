@@ -2947,7 +2947,6 @@
 	"shell.signInToAOCloud": "Orchestrator Cloud にサインイン",
 	"shell.signedInAs": "{{email}} としてサインイン中",
 	"shell.signOut": "サインアウト",
-	"shell.signOutWithEmail": "{{email}} · サインアウト",
 	"chat.branch.previous": "前の会話ブランチ",
 	"chat.branch.next": "次の会話ブランチ",
 	"chat.branch.position": "会話ブランチ {{position}} / {{total}}",

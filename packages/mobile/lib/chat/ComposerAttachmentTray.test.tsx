@@ -6,12 +6,12 @@ const fixtures = vi.hoisted(() => ({
 	tap: vi.fn(),
 }));
 
-vi.mock("./ThemeProvider", () => ({
+vi.mock("../ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
 	useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme),
 }));
-vi.mock("./haptics", () => ({ haptics: { tap: fixtures.tap } }));
-vi.mock("./ImageViewer", async () => {
+vi.mock("../haptics", () => ({ haptics: { tap: fixtures.tap } }));
+vi.mock("../ImageViewer", async () => {
 	const React = await import("react");
 	return { ImageViewer: (props: object) => React.createElement("ImageViewer", props) };
 });
@@ -30,8 +30,8 @@ vi.mock("react-native", async () => {
 	};
 });
 
-import { SpawnAttachmentRow } from "./spawn-attachment-row";
-import { iconSize, touchTarget } from "./tokens";
+import { ComposerAttachmentTray, removeSlop } from "./ComposerAttachmentTray";
+import { iconSize, touchTarget } from "../tokens";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -52,12 +52,12 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-const photo = { name: "IMG_0111.jpg", mimeType: "image/jpeg", data: "YQ==", bytes: 3, previewUri: "file:///IMG_0111.jpg" };
-const notes = { name: "notes.pdf", mimeType: "application/pdf", data: "YQ==", bytes: 3 };
+const photo = { key: "photo", name: "IMG_0111.jpg", previewUri: "file:///IMG_0111.jpg" };
+const notes = { key: "notes", name: "notes.pdf" };
 
-describe("SpawnAttachmentRow", () => {
-	it("shows images as thumbnails that open full screen, and files as name chips", async () => {
-		await act(async () => { renderer = create(<SpawnAttachmentRow attachments={[photo, notes]} onRemove={vi.fn()} />); });
+describe("ComposerAttachmentTray", () => {
+	it("shows images as thumbnails that open full screen, and files as named tiles", async () => {
+		await act(async () => { renderer = create(<ComposerAttachmentTray items={[photo, notes]} onRemove={vi.fn()} />); });
 		const root = renderer!.root;
 
 		expect(root.findAll((node) => String(node.type) === "Image").map((node) => node.props.source)).toEqual([{ uri: "file:///IMG_0111.jpg" }]);
@@ -75,32 +75,55 @@ describe("SpawnAttachmentRow", () => {
 		expect(root.findAll((node) => String(node.type) === "ImageViewer")).toHaveLength(0);
 	});
 
-	it("keeps its scroll view out of the form sheet's scroll view lookup", async () => {
-		await act(async () => { renderer = create(<SpawnAttachmentRow attachments={[photo]} onRemove={vi.fn()} />); });
+	// A send can land while a photo is open and take every attachment with it.
+	// The tray stays mounted, so a stale selection must not reopen on the next pick.
+	it("drops the open photo once its attachment is gone", async () => {
+		await act(async () => { renderer = create(<ComposerAttachmentTray items={[photo]} onRemove={vi.fn()} />); });
+		const open = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Open IMG_0111.jpg")[0];
+		await act(async () => open.props.onPress());
+		expect(renderer!.root.findAll((node) => String(node.type) === "ImageViewer")).toHaveLength(1);
+
+		await act(async () => renderer!.update(<ComposerAttachmentTray items={[]} onRemove={vi.fn()} />));
+		expect(renderer!.toJSON()).toBeNull();
+
+		await act(async () => renderer!.update(<ComposerAttachmentTray items={[photo]} onRemove={vi.fn()} />));
+		expect(renderer!.root.findAll((node) => String(node.type) === "ImageViewer")).toHaveLength(0);
+	});
+
+	it("keeps its scroll view out of a form sheet's scroll view lookup", async () => {
+		await act(async () => { renderer = create(<ComposerAttachmentTray items={[photo]} onRemove={vi.fn()} />); });
 		const wrapper = renderer!.root.findAll((node) => String(node.type) === "View" && node.props.collapsable === false)[0];
 		expect(wrapper?.findAll((node) => String(node.type) === "ScrollView")).toHaveLength(1);
 	});
 
 	it("removes the tapped attachment", async () => {
 		const onRemove = vi.fn();
-		await act(async () => { renderer = create(<SpawnAttachmentRow attachments={[photo, notes]} onRemove={onRemove} />); });
+		await act(async () => { renderer = create(<ComposerAttachmentTray items={[photo, notes]} onRemove={onRemove} />); });
 		const remove = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Remove IMG_0111.jpg")[0];
 		await act(async () => remove.props.onPress());
-		expect(onRemove).toHaveBeenCalledWith(photo);
+		expect(onRemove).toHaveBeenCalledWith("photo");
 		expect(fixtures.tap).toHaveBeenCalledOnce();
 	});
 
-	// The scroll view drops touches outside its bounds, so the row keeps room
-	// for the slop the thumbnail's corner disc reaches past its top and right.
-	it("reaches a full touch target to remove", async () => {
-		await act(async () => { renderer = create(<SpawnAttachmentRow attachments={[photo, notes]} onRemove={vi.fn()} />); });
+	// A tile clips touches to its own bounds (hit slop is not overflow), so the
+	// disc sits far enough inside the corner that its whole target is in the tile.
+	it("reaches a full touch target to remove, inside the tile", async () => {
+		await act(async () => { renderer = create(<ComposerAttachmentTray items={[photo, notes]} onRemove={vi.fn()} />); });
 		const root = renderer!.root;
 		const removes = root.findAll((node) => String(node.type) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Remove "));
-		expect(iconSize.lg + removes[0].props.hitSlop * 2).toBe(touchTarget);
-		expect(iconSize.sm + removes[1].props.hitSlop * 2).toBe(touchTarget);
-		const disc = removes[0].props.style({ pressed: false })[0];
-		const content = root.findAll((node) => String(node.type) === "ScrollView")[0].props.contentContainerStyle;
-		expect(content.paddingTop).toBeGreaterThanOrEqual(-disc.top + removes[0].props.hitSlop);
-		expect(content.paddingRight).toBeGreaterThanOrEqual(-disc.right + removes[0].props.hitSlop);
+		expect(removes).toHaveLength(2);
+		for (const remove of removes) {
+			const disc = remove.props.style({ pressed: false })[0];
+			expect(remove.props.hitSlop).toBe(removeSlop);
+			expect(disc.width).toBe(iconSize.xl);
+			expect(disc.width + remove.props.hitSlop * 2).toBe(touchTarget);
+			expect(disc.top).toBeGreaterThanOrEqual(remove.props.hitSlop);
+			expect(disc.right).toBeGreaterThanOrEqual(remove.props.hitSlop);
+		}
+	});
+
+	it("draws nothing without attachments", async () => {
+		await act(async () => { renderer = create(<ComposerAttachmentTray items={[]} onRemove={vi.fn()} />); });
+		expect(renderer!.toJSON()).toBeNull();
 	});
 });

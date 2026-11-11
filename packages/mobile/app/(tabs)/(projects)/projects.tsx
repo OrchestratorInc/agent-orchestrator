@@ -1,15 +1,13 @@
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
-import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
-import { AddFab } from "../../../lib/AddFab";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { FlatList, Platform, RefreshControl, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { cloudAgentsOffered } from "../../../lib/cloud/plan";
 import { useCloudPlan } from "../../../lib/cloud/planStore";
-import { useTabBarInset } from "../../../lib/useTabBarInset";
-import { useFabExpanded } from "../../../lib/useFabExpanded";
 import { boardTitle } from "../../../lib/board-tabs";
-import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
+import { useScrollToTopOnReselect } from "../../../lib/boardTabReselect";
+import { hostedProjectKey, hostedProjectSections, type HostedProjectRow } from "../../../lib/hostedRows";
 import { TitleActionButton, useInlineLargeTitle } from "../../../lib/inlineLargeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
@@ -50,18 +48,17 @@ export default function ProjectsScreen() {
 	const cloudReady = Boolean(cloud) && cloudProjectsLoaded;
 	const cloudPending = !cloud && (cloudStatus === "loading" || cloudStatus === "connecting");
 	useFocusEffect(useCallback(() => watchCloud(), [watchCloud]));
-	const fab = useFabExpanded();
-	const tabBarInset = useTabBarInset();
 	// A cloud project starts from a GitHub repository, here or from New task.
 	const newCloudProject = useCallback(() => router.push("/cloud/new-project"), [router]);
 	// On iOS, New cloud project sits at the end of the page's own title line, so
-	// the bar keeps the board's items as they are; Android adds from its
-	// floating button.
+	// the bar keeps the board's items as they are. Android's large title is the
+	// bar's own, on the row its actions sit on, so there it is the bar's "+".
 	const largeTitle = useInlineLargeTitle(boardTitle("(projects)"), {
-		onScroll: fab.onScroll,
 		action: canCreateCloudProject ? <TitleActionButton icon="add" accessibilityLabel="New cloud project" onPress={newCloudProject} testID="new-cloud-project-title" /> : undefined,
 	});
 	const tabBar = useTabBarFrost();
+	const listRef = useRef<FlatList<HostedProjectRow>>(null);
+	useScrollToTopOnReselect("(projects)", listRef);
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
 		? hostStates.every((host) => host.connection === "closed" && !host.loading)
@@ -128,6 +125,7 @@ export default function ProjectsScreen() {
 				</TabPageScroll>
 			) : (
 				<FlatList
+					ref={listRef}
 					data={rows}
 					keyExtractor={(row) => hostedProjectKey(row.project)}
 					contentInsetAdjustmentBehavior="automatic"
@@ -165,11 +163,10 @@ export default function ProjectsScreen() {
 					}
 				/>
 			)}
-			<BoardHeaderItems unread={unreadCount} />
+			<BoardHeaderItems unread={unreadCount} onAdd={Platform.OS === "android" && canCreateCloudProject ? newCloudProject : undefined} addLabel="New cloud project" />
 			{largeTitle.edge}
 			{tabBar.frost}
 			{/* iOS adds from the title line; Android's create action is the floating button. */}
-			{canCreateCloudProject ? <AddFab expanded={fab.expanded} label="New project" onPress={newCloudProject} bottomInset={tabBarInset + tabBar.inset} testID="new-cloud-project" /> : null}
 		</View>
 	);
 }

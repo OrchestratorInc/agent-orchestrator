@@ -1,11 +1,9 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
-import { useFabExpanded } from "../../../lib/useFabExpanded";
 import { useLargeTitle } from "../../../lib/largeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import { boardTitle } from "../../../lib/board-tabs";
-import { AddFab, addFabClearance } from "../../../lib/AddFab";
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
@@ -15,9 +13,9 @@ import { useBoardFailure } from "../../../lib/useBoardFailure";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
-import { useTabBarInset } from "../../../lib/useTabBarInset";
 import { useHeaderOverlap } from "../../../lib/useHeaderOverlap";
 import { setNewTaskHandler } from "../../../lib/newTaskAction";
+import { useScrollToTopOnReselect } from "../../../lib/boardTabReselect";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
@@ -51,9 +49,7 @@ export default function FleetScreen() {
 	const styles = useThemedStyles(makeStyles);
 
 	const router = useRouter();
-	const tabBarInset = useTabBarInset();
-	const fab = useFabExpanded();
-	const largeTitle = useLargeTitle(boardTitle("(workers)"), fab.onScroll);
+	const largeTitle = useLargeTitle(boardTitle("(workers)"));
 	const tabBar = useTabBarFrost();
 	const headerOverlap = useHeaderOverlap();
 	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, cloud, notificationsUnread, phoneNetwork } = useApp();
@@ -108,6 +104,7 @@ export default function FleetScreen() {
 	// and project filters while the board is the page in front.
 	useFocusEffect(useCallback(() => setNewTaskHandler(spawnWorker), [spawnWorker]));
 	const listRef = useRef<FlatList<BoardRow>>(null);
+	useScrollToTopOnReselect("(workers)", listRef);
 
 	const projectSessions = useMemo(
 		() => filterWorkersByEnvironmentAndProject(allSessions, workerEnvironmentId, workerProjectId, allProjects),
@@ -252,7 +249,7 @@ export default function FleetScreen() {
 				// iOS insets the list by the tab bar already. Android pads it clear
 				// of the floating New button, and of the clear tab bar it runs
 				// on under.
-				contentBottomInset={addFabClearance + space.xxl + tabBar.inset}
+				contentBottomInset={space.xxl + tabBar.inset}
 				contentInsetAdjustmentBehavior="automatic"
 				overlayTopInset={headerOverlap + largeTitle.topInset}
 				refreshing={refreshing}
@@ -320,15 +317,10 @@ export default function FleetScreen() {
 				// or spawn.
 				<BoardHeaderItems unread={0} notifications={false} />
 			) : (
-				<>
-					{/* One way to start a task at a time: while the idle state offers New
-					    agent, the floating New task stays out. */}
-					{boardEmpty && emptyView === "idle" ? null : <AddFab expanded={fab.expanded} label="New task" onPress={spawnWorker} bottomInset={tabBarInset + tabBar.inset} testID="spawn-worker" />}
-					{/* New task is the tab bar's own round button on iOS and the
-					    floating New button on Android; the header keeps settings and
-					    alerts. */}
-					<BoardHeaderItems unread={unreadCount} filter={filterMenu} />
-				</>
+				// New task is the round button beside the tab bar (see
+				// app/(tabs)/_layout), which starts it on this page's filters through
+				// `setNewTaskHandler`; the header keeps settings and alerts.
+				<BoardHeaderItems unread={unreadCount} filter={filterMenu} />
 			)}
 		</View>
 	);

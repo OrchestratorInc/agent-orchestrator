@@ -101,7 +101,6 @@ vi.mock("./worker-board-list", async () => {
 		React.createElement("WorkerBoardList", props, ListHeaderComponent, props.sessions.length === 0 ? ListEmptyComponent : null) };
 });
 // The real one draws nothing on iOS; this stands in for Android's FAB on both.
-vi.mock("./AddFab", () => ({ AddFab: "AddFab", addFabClearance: 72 }));
 vi.mock("./workers-idle-state", () => ({ WorkersIdleState: "WorkersIdleState" }));
 vi.mock("./archive/useLatestArchivedAt", () => ({ useLatestArchivedAt: () => undefined }));
 vi.mock("./frost", () => ({ useTabBarFrost: () => ({ inset: 0, frost: null }) }));
@@ -247,7 +246,6 @@ describe("Workers header", () => {
 		expect(headerButtons().map((button) => button.props.accessibilityLabel)).toEqual(["Settings"]);
 		expect(toolbar("left")).toBeUndefined();
 		expect(renderer.root.findAllByType("StackSearchBar" as never)).toHaveLength(0);
-		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(0);
 	});
 
 });
@@ -337,16 +335,13 @@ describe("Workers spawn action", () => {
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 	});
 
-	// Android floats Material's FAB instead, at the page's bottom-end corner,
-	// which already ends at the navigation bar.
-	// Settings and Pull Requests are tabs on Android, so the bar keeps the bell.
-	it("floats the Android spawn button instead of a header item", () => {
+	// Android lays its header out as iOS does: New task is the board bar's
+	// round button, and Settings and Pull Requests open from the header.
+	it("keeps Settings and Pull Requests in the Android header, and floats no button", () => {
 		fixtures.platform = "android";
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Notifications"]);
-		const fab = renderer.root.findByType("AddFab" as never);
-		expect(fab.props.label).toBe("New task");
-		act(() => fab.props.onPress());
+		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
+		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 	});
 
@@ -366,34 +361,11 @@ describe("Workers spawn action", () => {
 		expect(fixtures.push).toHaveBeenLastCalledWith({ pathname: "/spawn", params: { hostId: "orchestrator-cloud" } });
 	});
 
-	// One way to start a task at a time: the idle state has New agent, so the
-	// floating New task waits for a worker to show; an empty filtered board has no
-	// button of its own, so it keeps the floating one.
-	it("leaves the floating New task out while the idle state offers New agent", () => {
-		fixtures.platform = "android";
-		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac", connection: "open", error: null, sessions: [] })];
-		act(() => { renderer = create(<FleetScreen />); });
-		const list = () => renderer.root.findByType("WorkerBoardList" as never);
-		act(() => list().props.onEmptyChange(true));
-		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(0);
-		act(() => list().props.onEmptyChange(false));
-		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(1);
-	});
-
-	it("keeps the floating New task on a filtered board with no workers, whose empty state has no button", () => {
-		fixtures.platform = "android";
-		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
-		act(() => { renderer = create(<FleetScreen />); });
-		choose(filterMenu(), "Game · Windows");
-		act(() => renderer.root.findByType("WorkerBoardList" as never).props.onEmptyChange(true));
-		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(1);
-	});
-
 	it("carries the project filter into the spawn sheet", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
 		choose(filterMenu(), "Game · Windows");
-		act(() => renderer.root.findByType("AddFab" as never).props.onPress());
+		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "windows", projectId: "game" } });
 	});
 });
@@ -445,7 +417,7 @@ describe("Workers selected-machine reachability", () => {
 	it.each(["open", "closed"] as const)("targets the selected environment when creating work, even when %s", (connection) => {
 		fixtures.hostStates[1].connection = connection;
 		selectWindows();
-		act(() => renderer.root.findByType("AddFab" as never).props.onPress());
+		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "windows" } });
 	});
 	it("does not claim an unreachable machine has no workers while another machine is online", () => {

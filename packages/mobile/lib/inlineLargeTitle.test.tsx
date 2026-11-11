@@ -118,10 +118,12 @@ describe("a board title with an action on its line, Android", () => {
 describe("the Projects board", () => {
 	const page = readFileSync(new URL("../app/(tabs)/(projects)/projects.tsx", import.meta.url), "utf8");
 
-	it("adds a cloud project from its title line on iOS, not from the bar's items", () => {
+	// Android's large title is the bar's own, on the row its actions sit on, and
+	// its board has no floating button any more: there the "+" is the bar's.
+	it("adds a cloud project from its title line on iOS, and from the bar on Android", () => {
 		expect(page).toContain("useInlineLargeTitle(");
 		expect(page).toContain('accessibilityLabel="New cloud project"');
-		expect(page).toContain("<BoardHeaderItems unread={unreadCount} />");
-		expect(page).not.toContain("onAdd=");
+		expect(page).toContain('onAdd={Platform.OS === "android" && canCreateCloudProject ? newCloudProject : undefined} addLabel="New cloud project"');
+		expect(page).not.toContain("AddFab");
 	});
 });
