@@ -126,13 +126,15 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 			running.dirty = true;
 			return;
 		}
-		const state = { dirty: queryClient.isFetching({ queryKey }) > 0 };
+		const state = { dirty: false };
 		remoteRefreshes.set(id, state);
 		const settled = () => {
 			remoteRefreshes.delete(id);
 			if (state.dirty && !stream.disposed) refreshRemote(queryKey);
 		};
-		void Promise.resolve(queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false })).then(settled, settled);
+		const inFlight = queryClient.getQueryCache().findAll({ queryKey, fetchStatus: "fetching" }).map((query) => query.promise);
+		const refresh = () => queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+		void Promise.resolve(inFlight.length > 0 ? Promise.allSettled(inFlight).then(refresh) : refresh()).then(settled, settled);
 	};
 	const scheduleInvalidation = (names: readonly string[]) => {
 		if (names.includes("session-workspace-file")) scheduleAnnotations();

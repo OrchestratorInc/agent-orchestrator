@@ -68,7 +68,8 @@ class EventSourceStub {
 }
 
 function fakeQueryClient() {
-	return { getQueryData: vi.fn(), invalidateQueries: vi.fn(), isFetching: vi.fn(() => 0) } as unknown as Parameters<typeof subscribeWorkspaceFileChanges>[1];
+	const queryCache = { findAll: vi.fn(() => []) };
+	return { getQueryData: vi.fn(), invalidateQueries: vi.fn(), isFetching: vi.fn(() => 0), getQueryCache: () => queryCache } as unknown as Parameters<typeof subscribeWorkspaceFileChanges>[1];
 }
 
 beforeEach(() => {
@@ -221,6 +222,27 @@ describe("subscribeWorkspaceFileChanges", () => {
 		for (const resolve of pending.splice(0)) resolve();
 		await vi.advanceTimersByTimeAsync(0);
 		expect(paths()).toHaveLength(2);
+		stop();
+	});
+
+	it("waits for a remote read already in flight, observed or not, before refreshing it", async () => {
+		vi.useFakeTimers();
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/host-a");
+		const queryClient = fakeQueryClient();
+		let finish!: () => void;
+		const unobservedRead = { promise: new Promise<void>((resolve) => { finish = resolve; }) };
+		const findAll = vi.mocked(queryClient.getQueryCache().findAll);
+		findAll.mockImplementation((filters) => filters?.queryKey?.[0] === "remote-workspace-file-paths" ? [unobservedRead] as never : []);
+		const stop = subscribeWorkspaceFileChanges("unobserved", queryClient, "host-a");
+		const paths = () => vi.mocked(queryClient.invalidateQueries).mock.calls.filter(([filters]) => filters?.queryKey?.[0] === "remote-workspace-file-paths").length;
+		await vi.advanceTimersByTimeAsync(6_150);
+		expect(paths()).toBe(0);
+		findAll.mockReturnValue([]);
+		finish();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(paths()).toBe(2);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(paths()).toBe(2);
 		stop();
 	});
 
