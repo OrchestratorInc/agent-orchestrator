@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,7 +11,7 @@ import (
 
 func TestClientTimeZoneMiddlewareRecordsHeader(t *testing.T) {
 	dir := t.TempDir()
-	h := clientTimeZoneMiddleware(clienttz.NewRecorder(dir))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := clientTimeZoneMiddleware(clienttz.NewRecorder(context.Background(), dir))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -22,13 +23,13 @@ func TestClientTimeZoneMiddlewareRecordsHeader(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	if got := clienttz.Read(dir); got != "Pacific/Chatham" {
+	if got := clienttz.Read(context.Background(), dir); got != "Pacific/Chatham" {
 		t.Fatalf("recorded zone = %q, want Pacific/Chatham", got)
 	}
 
 	// Requests without the header leave the recorded zone alone.
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil))
-	if got := clienttz.Read(dir); got != "Pacific/Chatham" {
+	if got := clienttz.Read(context.Background(), dir); got != "Pacific/Chatham" {
 		t.Fatalf("recorded zone = %q after headerless request", got)
 	}
 }

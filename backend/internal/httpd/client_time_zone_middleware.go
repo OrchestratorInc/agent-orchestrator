@@ -17,7 +17,7 @@ func clientTimeZoneMiddleware(rec *clienttz.Recorder) func(http.Handler) http.Ha
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if zone := r.Header.Get(clienttz.Header); zone != "" {
-				rec.Observe(zone)
+				rec.Observe(r.Context(), zone)
 			}
 			next.ServeHTTP(w, r)
 		})

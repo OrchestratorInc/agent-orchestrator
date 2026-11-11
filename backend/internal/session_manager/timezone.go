@@ -19,7 +19,7 @@ func userTimeZone(ctx context.Context, dataDir string) string {
 	if ctx.Err() != nil {
 		return ""
 	}
-	if zone := clienttz.Read(dataDir); zone != "" {
+	if zone := clienttz.Read(ctx, dataDir); zone != "" {
 		return zone
 	}
 	return localTimeZone(ctx)

@@ -8,6 +8,7 @@
 package clienttz
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,17 +30,17 @@ type Recorder struct {
 
 // NewRecorder returns a Recorder backed by dataDir. An empty dataDir yields a
 // Recorder that ignores reports.
-func NewRecorder(dataDir string) *Recorder {
+func NewRecorder(ctx context.Context, dataDir string) *Recorder {
 	if dataDir == "" {
 		return &Recorder{}
 	}
-	return &Recorder{path: filepath.Join(dataDir, fileName), last: Read(dataDir)}
+	return &Recorder{path: filepath.Join(dataDir, fileName), last: Read(ctx, dataDir)}
 }
 
 // Observe records name when it is a valid zone that differs from the last
 // one recorded. Writes are best-effort: a failure leaves the previous value.
-func (r *Recorder) Observe(name string) {
-	if r == nil || r.path == "" {
+func (r *Recorder) Observe(ctx context.Context, name string) {
+	if r == nil || r.path == "" || ctx.Err() != nil {
 		return
 	}
 	name = strings.TrimSpace(name)
@@ -48,7 +49,7 @@ func (r *Recorder) Observe(name string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if name == r.last {
+	if name == r.last || ctx.Err() != nil {
 		return
 	}
 	tmp := r.path + ".tmp"
@@ -63,8 +64,8 @@ func (r *Recorder) Observe(name string) {
 }
 
 // Read returns the zone last recorded under dataDir, or "" when none is.
-func Read(dataDir string) string {
-	if dataDir == "" {
+func Read(ctx context.Context, dataDir string) string {
+	if dataDir == "" || ctx.Err() != nil {
 		return ""
 	}
 	data, err := os.ReadFile(filepath.Join(dataDir, fileName))

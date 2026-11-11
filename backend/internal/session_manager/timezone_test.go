@@ -74,7 +74,7 @@ func TestUserTimeZonePrefersClientReport(t *testing.T) {
 	if got := userTimeZone(context.Background(), dir); got != "Europe/Berlin" {
 		t.Fatalf("without a client report userTimeZone = %q, want machine zone Europe/Berlin", got)
 	}
-	clienttz.NewRecorder(dir).Observe("Asia/Kolkata")
+	clienttz.NewRecorder(context.Background(), dir).Observe(context.Background(), "Asia/Kolkata")
 	if got := userTimeZone(context.Background(), dir); got != "Asia/Kolkata" {
 		t.Fatalf("with a client report userTimeZone = %q, want Asia/Kolkata", got)
 	}

@@ -1196,7 +1196,7 @@ func Run(buildVersion string) error {
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
 		Presence:           presenceTracker,
-		ClientTimeZone:     clienttz.NewRecorder(cfg.DataDir),
+		ClientTimeZone:     clienttz.NewRecorder(ctx, cfg.DataDir),
 		DeviceRoster:       deviceRoster,
 		DeviceLive:         presenceTracker,
 		DeviceAccess:       bs,
