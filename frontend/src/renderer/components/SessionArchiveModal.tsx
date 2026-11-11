@@ -78,7 +78,7 @@ export function SessionArchiveModal({
 	open: boolean;
 	/** Changes with every request to open, so each starts from its own search. */
 	requestId: number;
-	/** The scope; a change drops restore state. */
+	/** The scope; a change, like a new request, drops restore state. */
 	resetKey: string;
 	sessions: WorkspaceSession[];
 }) {
@@ -115,13 +115,15 @@ export function SessionArchiveModal({
 		}
 	}
 
+	// A new scope or a new request (even for the same project) starts clean: a
+	// restore begun under the last one must not close or navigate this one.
 	useEffect(() => {
 		setRestoringSessionId(undefined);
 		setRestoreErrors({});
 		setRestoreUnavailableSession(undefined);
 		setDeleteTarget(undefined);
 		restoreGenerationRef.current += 1;
-	}, [resetKey]);
+	}, [requestId, resetKey]);
 
 	// Closed, the modal no longer stands for where the user is: a restore that
 	// finishes later must not take them to its session.

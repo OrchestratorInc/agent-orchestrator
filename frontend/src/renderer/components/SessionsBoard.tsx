@@ -351,7 +351,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
 						data-testid="board-archive-button"
 						// The shell's archive modal, the same one the sidebar and Cmd+K open.
-						onClick={() => useUiStore.getState().openArchive({ projectId, hostId })}
+						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
 						size="xs"
 						type="button"
 						variant="quiet"

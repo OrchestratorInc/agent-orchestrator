@@ -164,9 +164,9 @@ export type ArchiveModalRequest = {
 	/** Prefills the search. */
 	query?: string;
 	/**
-	 * Where focus goes once the modal closes, for an opener whose own focus
-	 * will not survive it (Cmd+K closes as the modal opens). A menu needs none:
-	 * its focus hand-off already returns to the trigger or row.
+	 * Where focus goes once the modal closes: the board's button, the sidebar
+	 * menu's trigger or row, or wherever Cmd+K was opened from. The dialog has
+	 * no trigger of its own to return to.
 	 */
 	returnFocus?: HTMLElement | null;
 	/** New for every request, so a request made while open retargets it. */

@@ -28,17 +28,32 @@ const {
 	workspaceQueryMock,
 	cloudProjectsMock,
 	spawnCloudOrchestratorMock,
-} = vi.hoisted(() => ({
-	appMemoryMock: vi.fn(),
-	sessionMemoryMock: vi.fn(),
-	navigateMock: vi.fn(),
-	notificationShowMock: vi.fn(),
-	postMock: vi.fn(),
-	patchMock: vi.fn(),
-	workspaceQueryMock: vi.fn(),
-	cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
-	spawnCloudOrchestratorMock: vi.fn(),
-}));
+	routerListeners,
+	fakeRouter,
+} = vi.hoisted(() => {
+	// Stands in for the router's onBeforeNavigate events, which the archive host follows.
+	const listeners = new Set<(event: { pathChanged: boolean }) => void>();
+	return {
+		routerListeners: listeners,
+		fakeRouter: {
+			subscribe: (_type: string, listener: (event: { pathChanged: boolean }) => void) => {
+				listeners.add(listener);
+				return () => {
+					listeners.delete(listener);
+				};
+			},
+		},
+		appMemoryMock: vi.fn(),
+		sessionMemoryMock: vi.fn(),
+		navigateMock: vi.fn(),
+		notificationShowMock: vi.fn(),
+		postMock: vi.fn(),
+		patchMock: vi.fn(),
+		workspaceQueryMock: vi.fn(),
+		cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
+		spawnCloudOrchestratorMock: vi.fn(),
+	};
+});
 
 vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloudOrchestratorMock }));
 
@@ -47,6 +62,7 @@ vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ default
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
+	useRouter: () => fakeRouter,
 }));
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -1106,19 +1122,28 @@ describe("SessionsBoard", () => {
 		);
 		expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument();
 
+		// Where Cmd+K was opened from; its own search is gone by the time the archive closes.
+		const opener = document.createElement("button");
+		opener.textContent = "opener";
+		document.body.append(opener);
+
 		// What the sidebar's menu and Cmd+K do.
-		act(() => useUiStore.getState().openArchive({ projectId: "p1", query: "dead" }));
+		act(() => useUiStore.getState().openArchive({ projectId: "p1", query: "dead", returnFocus: opener }));
 
 		const archive = await screen.findByRole("dialog", { name: "Archived sessions" });
 		const search = within(archive).getByRole("combobox");
 		expect(search).toHaveValue("dead");
 		expect(await within(archive).findByText("dead worker")).toBeInTheDocument();
 		expect(within(archive).queryByText("p2 worker")).not.toBeInTheDocument();
+		expect(search).toHaveFocus();
 
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
 		expect(useUiStore.getState().archiveModal).toBeNull();
 		expect(navigateMock).not.toHaveBeenCalled();
+		// Closing hands focus back to where the opener came from.
+		await waitFor(() => expect(opener).toHaveFocus());
+		opener.remove();
 	});
 
 	it("hides PR progress for a live merged session that has not actually terminated", () => {
@@ -1394,6 +1419,40 @@ describe("SessionsBoard", () => {
 
 		expect(navigateMock).not.toHaveBeenCalled();
 		expect(screen.queryByText("Session can no longer be restored")).not.toBeInTheDocument();
+	});
+
+	it("closes when the user moves to another page, and drops a restore still running", async () => {
+		let finishRestore: ((value: { data: Record<string, never> }) => void) | undefined;
+		postMock.mockReturnValueOnce(
+			new Promise((resolve) => {
+				finishRestore = resolve;
+			}),
+		);
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([terminatedSession()])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		await expandArchive();
+		await userEvent.click(screen.getByRole("button", { name: "Restore dead worker" }));
+
+		const navigateAway = (pathChanged: boolean) => act(() => {
+			for (const listener of [...routerListeners]) listener({ pathChanged });
+		});
+		// The same page with new search params is not leaving it.
+		navigateAway(false);
+		expect(screen.getByRole("dialog", { name: "Archived sessions" })).toBeInTheDocument();
+
+		// A shortcut, history or a notification moving to another page.
+		navigateAway(true);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
+		expect(useUiStore.getState().archiveModal).toBeNull();
+		await act(async () => {
+			finishRestore?.({ data: {} });
+		});
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("keeps a live merged session in the ready lane and opens its card without restore", async () => {

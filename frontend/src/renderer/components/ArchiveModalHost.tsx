@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { useRemoteHostWorkspacesQuery, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
@@ -32,16 +32,22 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 	const { hostId, projectId } = request;
 	const connectedHosts = useConnectedHosts();
 	const connected = !hostId || connectedHosts.includes(hostId);
-	// Subscribed only while open: closed (or closing), workspace polls leave
-	// this alone. The shell keeps both lists fresh either way.
-	const local = useWorkspaceQuery({ subscribed: open && !hostId });
+	// Enabled and subscribed only while open. This stays mounted after the first
+	// open, and an enabled observer would keep the cloud lists' own poll timers
+	// (5 s, 15 s) running beside the shell's for the rest of the app's life.
+	const local = useWorkspaceQuery({ enabled: open && !hostId, subscribed: open && !hostId });
 	const remote = useRemoteHostWorkspacesQuery(hostId ?? "", { enabled: open && Boolean(hostId), subscribed: open && Boolean(hostId) });
 	const workspaces = hostId ? remote.data : local.data;
 
-	const sessions = useMemo(() => {
+	const liveSessions = useMemo(() => {
 		const scoped = projectId ? (workspaces ?? []).filter((workspace) => workspace.id === projectId) : workspaces ?? [];
 		return archivedNewestFirst(scoped);
 	}, [projectId, workspaces]);
+	// Closing keeps the last list on screen: disabled, the cloud part of the
+	// workspace list can drop out, and the exit animation would show it empty.
+	const shownSessionsRef = useRef(liveSessions);
+	if (open) shownSessionsRef.current = liveSessions;
+	const sessions = shownSessionsRef.current;
 
 	const openSession = useCallback((session: WorkspaceSession) => {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
@@ -52,11 +58,24 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 		if (!next) useUiStore.getState().closeArchive();
 	}, []);
 
+	// Opened over a page, it belongs to that page: any move to another one (a
+	// shortcut, history, a notification) closes it, so a restore still running
+	// cannot take the user anywhere once they have left. Without a router (a
+	// component test), there is nothing to follow.
+	const router = useRouter({ warn: false });
+	useEffect(() => {
+		if (!open || !router) return;
+		return router.subscribe("onBeforeNavigate", (event) => {
+			if (event.pathChanged) useUiStore.getState().closeArchive();
+		});
+	}, [open, router]);
+
 	const returnFocus = request.returnFocus;
 	const onCloseAutoFocus = useMemo(() => returnFocus ? (event: Event) => {
-		// The element that opened the modal is gone (Cmd+K's search), so hand
-		// focus back to where the opener came from. Two frames later, so a page
-		// the modal navigated to (a session's composer) claims it first.
+		// Radix would focus the dialog's trigger, and the archive has none: it
+		// opens from a menu, a button on another surface or Cmd+K. Hand focus
+		// back to the opener instead, two frames later, so a page the modal
+		// navigated to (a session's composer) claims it first.
 		event.preventDefault();
 		requestAnimationFrame(() => requestAnimationFrame(() => {
 			const active = document.activeElement;

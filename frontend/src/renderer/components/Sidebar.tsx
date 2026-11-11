@@ -143,6 +143,7 @@ import {
 import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
+import { menuFocusReturnTarget } from "./ui/menu-focus";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { ProjectIcon } from "./ProjectIcon";
@@ -1855,7 +1856,12 @@ const ProjectItem = memo(function ProjectItem({
 	).size;
 	// The shell's archive modal opens over the current page, scoped to this
 	// project; nothing navigates. A store action, so the row takes no new prop.
-	const openArchive = () => useUiStore.getState().openArchive({ projectId: workspace.id, hostId: workspace.hostId });
+	// Closing it returns focus to the ⋮ trigger or the right-clicked row.
+	const openArchive = () => useUiStore.getState().openArchive({
+		projectId: workspace.id,
+		hostId: workspace.hostId,
+		returnFocus: menuFocusReturnTarget(),
+	});
 	// The ⋮ button and right-click show these same rows. Built only while a menu
 	// is open, so the archive count costs a closed row nothing.
 	const buildMenuEntries = (): MenuEntry[] => {
