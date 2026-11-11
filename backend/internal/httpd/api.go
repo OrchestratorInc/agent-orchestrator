@@ -105,11 +105,9 @@ type APIDeps struct {
 	// DeviceRoster and DeviceLive back the desktop-only mobile device roster.
 	DeviceRoster controllers.DeviceRoster
 	DeviceLive   controllers.LiveSet
-	// DeviceAccess is the access side of that roster: device tokens and the
-	// account's shared token. Nil lists push registrations only.
+	// DeviceAccess adds device tokens and the account to the device list. Nil skips them.
 	DeviceAccess controllers.DeviceAccess
-	// AccessDevices lets a push registration be attached to the device token
-	// that made it.
+	// AccessDevices links push registrations to device tokens.
 	AccessDevices *mobilebridge.AccessDevices
 }
 

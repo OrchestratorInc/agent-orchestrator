@@ -240,8 +240,7 @@ func TestMobileControlOriginElectron(t *testing.T) {
 	}
 }
 
-// A pairing code lets a new device in, so only this machine's own app or CLI
-// may make one: through the real router, not a web page on another origin.
+// Only this machine's app or CLI may make a pairing code, not a page on another origin.
 func TestPairingCodeIsMadeOnlyForTheLocalApp(t *testing.T) {
 	router, bridge, _, _ := mobileOriginRouter(t)
 	devices, err := mobilebridge.LoadAccessDevices(filepath.Join(filepath.Dir(bridge.ConfigPath), "access-devices.json"))

@@ -16,50 +16,42 @@ import (
 	"unicode"
 )
 
-// AccessDevice is one device that paired with this machine and holds its own
-// token. Only the token's SHA-256 is stored.
+// AccessDevice is a paired device. Only its token's SHA-256 is stored.
 type AccessDevice struct {
 	ID        string `json:"id"`
 	Name      string `json:"name,omitempty"`
 	Platform  string `json:"platform,omitempty"`
 	TokenHash string `json:"tokenHash"`
-	// InstallID is the phone's row in the push-device registry, recorded when
-	// the device registers for push with this token.
+	// InstallID links the device to its push registration.
 	InstallID  string    `json:"installId,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 	LastSeenAt time.Time `json:"lastSeenAt"`
 }
 
-// The credentials several devices share, as keys of the last-used times.
+// Keys of the shared credentials' last-used times.
 const (
 	SharedPassword = "password"
 	SharedAccount  = "account"
 )
 
-// DeviceTokenPrefix marks a device token, so it is never mistaken for an
-// account token (64 hex characters) or a pairing password.
+// DeviceTokenPrefix keeps a device token from looking like an account token.
 const DeviceTokenPrefix = "aod_"
 
-// maxAccessDevices bounds the registry: a holder of the pairing password can
-// exchange it for device tokens without limit otherwise.
+// maxAccessDevices bounds the tokens a holder of the pairing password can mint.
 const maxAccessDevices = 64
 
-// touchInterval is how stale a stored last-seen time may be before a request
-// rewrites the file.
+// touchInterval limits how often last-seen times are written to disk.
 const touchInterval = 5 * time.Minute
 
-// ErrTooManyDevices means the registry is full; revoke a device to pair another.
+// ErrTooManyDevices is returned by Issue when the registry is full.
 var ErrTooManyDevices = errors.New("too many paired devices; revoke one first")
 
 type accessDevicesFile struct {
-	Devices []AccessDevice `json:"devices"`
-	// SharedLastUsed is when the pairing password and the account token last
-	// authenticated a request.
+	Devices        []AccessDevice       `json:"devices"`
 	SharedLastUsed map[string]time.Time `json:"sharedLastUsed,omitempty"`
 }
 
-// AccessDevicesPath is the registry's location beside the Connect Mobile
-// config (~/.ao/mobile/access-devices.json).
+// AccessDevicesPath returns the registry's path in dataDir.
 func AccessDevicesPath(dataDir string) string {
 	return filepath.Join(dataDir, "mobile", "access-devices.json")
 }
@@ -68,18 +60,15 @@ func AccessDevicesPath(dataDir string) string {
 type AccessDevices struct {
 	mu   sync.RWMutex
 	path string
-	// writeErr is set when a damaged or unreadable file could not be moved
-	// aside. Every write then fails, so none can replace the file.
+	// writeErr refuses every write when a damaged file could not be moved aside.
 	writeErr error
 	devices  map[string]AccessDevice
 	byHash   map[string]string
 	shared   map[string]time.Time
 }
 
-// LoadAccessDevices reads the registry. A missing file is an empty registry.
-// A damaged or unreadable one is moved aside, so the next write cannot replace
-// it, and reported. The returned registry is empty and usable: every device
-// then pairs again.
+// LoadAccessDevices reads the registry. A damaged or unreadable file is moved
+// aside and reported, and the registry starts empty.
 func LoadAccessDevices(path string) (*AccessDevices, error) {
 	r := &AccessDevices{path: path, devices: map[string]AccessDevice{}, byHash: map[string]string{}, shared: map[string]time.Time{}}
 	raw, err := os.ReadFile(path)
@@ -108,8 +97,6 @@ func LoadAccessDevices(path string) (*AccessDevices, error) {
 	return r, nil
 }
 
-// moveAside renames the registry file to .bad. If that fails, the registry
-// refuses every write.
 func (r *AccessDevices) moveAside(cause error) error {
 	if err := os.Rename(r.path, r.path+".bad"); err != nil {
 		r.writeErr = fmt.Errorf("%w; moving it aside failed: %w", cause, err)
@@ -118,8 +105,7 @@ func (r *AccessDevices) moveAside(cause error) error {
 	return cause
 }
 
-// Issue registers a new device and returns it with its token, which is shown
-// to the caller once and never stored.
+// Issue registers a new device and returns it with its token.
 func (r *AccessDevices) Issue(name, platform string, now time.Time) (AccessDevice, string, error) {
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
@@ -165,8 +151,7 @@ func (r *AccessDevices) Match(token string) (AccessDevice, bool) {
 	return device, ok
 }
 
-// Touch records that the device just made a request. The file is rewritten
-// only when the stored time is older than touchInterval.
+// Touch updates the device's last-seen time.
 func (r *AccessDevices) Touch(id string, now time.Time) {
 	r.mu.RLock()
 	device, ok := r.devices[id]
@@ -184,8 +169,7 @@ func (r *AccessDevices) Touch(id string, now time.Time) {
 	_ = r.persistLocked()
 }
 
-// TouchShared records that a shared credential just authenticated a request,
-// with the same write limit as Touch.
+// TouchShared updates a shared credential's last-used time.
 func (r *AccessDevices) TouchShared(kind string, now time.Time) {
 	r.mu.RLock()
 	last := r.shared[kind]
@@ -199,8 +183,7 @@ func (r *AccessDevices) TouchShared(kind string, now time.Time) {
 	_ = r.persistLocked()
 }
 
-// SharedLastUsed is when a shared credential last authenticated a request, or
-// the zero time.
+// SharedLastUsed returns when a shared credential last authenticated a request.
 func (r *AccessDevices) SharedLastUsed(kind string) time.Time {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -226,8 +209,7 @@ func (r *AccessDevices) LinkInstall(id, installID string) error {
 	return nil
 }
 
-// Revoke removes a device, so its token stops authenticating. It reports
-// whether the device existed.
+// Revoke removes a device and reports whether it existed.
 func (r *AccessDevices) Revoke(id string) (AccessDevice, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -297,8 +279,6 @@ func (r *AccessDevices) persistLocked() error {
 	return writeFileAtomic(r.path, raw)
 }
 
-// cleanLabel trims a client-supplied name to printable text of at most limit
-// bytes.
 func cleanLabel(value string, limit int) string {
 	value = strings.TrimSpace(strings.Map(func(c rune) rune {
 		if unicode.IsControl(c) {

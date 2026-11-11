@@ -142,8 +142,6 @@ func TestAccessDevicesCapAndDamagedFile(t *testing.T) {
 	}
 }
 
-// A registry that cannot be read is moved aside, so pairing a device does not
-// write over it.
 func TestAnUnreadableRegistryIsMovedAside(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "access-devices.json")
 	// A directory in the file's place fails to read on every platform.
@@ -162,7 +160,6 @@ func TestAnUnreadableRegistryIsMovedAside(t *testing.T) {
 	}
 }
 
-// A damaged registry that cannot be moved aside is never written over.
 func TestARegistryThatCannotBeMovedAsideIsKept(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "access-devices.json")
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {

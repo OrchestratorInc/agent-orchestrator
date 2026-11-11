@@ -22,19 +22,15 @@ func IsLAN(ctx context.Context) bool {
 // CredentialKind names what authenticated a request on the LAN listener.
 type CredentialKind string
 
+// The credentials the LAN listener accepts. A pairing code counts only for pairing.
 const (
-	// CredentialPassword is the pairing password every hand-paired device shares.
-	CredentialPassword CredentialKind = "password"
-	// CredentialAccount is the account token every signed-in device shares.
-	CredentialAccount CredentialKind = "account"
-	// CredentialDevice is one device's own token.
-	CredentialDevice CredentialKind = "device"
-	// CredentialPairingCode is a one-time code, accepted only for pairing.
+	CredentialPassword    CredentialKind = "password"
+	CredentialAccount     CredentialKind = "account"
+	CredentialDevice      CredentialKind = "device"
 	CredentialPairingCode CredentialKind = "pairing-code"
 )
 
-// Credential is the credential the LAN listener accepted for a request.
-// DeviceID is set for CredentialDevice.
+// Credential is what the LAN listener accepted. DeviceID is set for CredentialDevice.
 type Credential struct {
 	Kind     CredentialKind
 	DeviceID string
@@ -47,8 +43,7 @@ func WithCredential(ctx context.Context, credential Credential) context.Context 
 	return context.WithValue(ctx, credentialKey{}, credential)
 }
 
-// CredentialFrom returns the credential the LAN listener accepted, or the
-// zero Credential for a request it did not authenticate, such as a loopback one.
+// CredentialFrom returns the accepted credential, or the zero Credential for a loopback request.
 func CredentialFrom(ctx context.Context) Credential {
 	credential, _ := ctx.Value(credentialKey{}).(Credential)
 	return credential
