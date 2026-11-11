@@ -214,6 +214,7 @@ export function ArtifactActionsMenu({
 		}
 	};
 	const copyable = owner && !fileMediaKind(artifact.path);
+	/** Copies the artifact's public link, showing why below the menu if the clipboard refuses. */
 	const copyPublicLink = async (url: string) => {
 		setCopyError("");
 		try {

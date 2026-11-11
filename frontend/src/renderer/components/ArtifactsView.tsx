@@ -465,6 +465,11 @@ function FilterOption({ checked, onToggle, children }: { checked: boolean; onTog
 	);
 }
 
+/**
+ * One artifact in the list or the gallery: its name, project and session,
+ * Published mark and last change, with Pin, Open in session and its menu.
+ * Opening it previews the file on this page; while selecting it toggles.
+ */
 function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; pinned: boolean; view: ArtifactViewMode; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
 	const { t } = useTranslation();
 	const id = artifactKey(row);

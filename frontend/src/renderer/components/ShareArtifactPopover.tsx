@@ -315,8 +315,10 @@ function SharePanel({
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	// The daemon reads the published links into each artifact's shareUrl, which
-	// the Artifacts list shows; it reads them again once this panel changes one.
+	/**
+	 * Reads the artifact list again after a publish or an unpublish: the daemon
+	 * serves each artifact's shareUrl from the publish records this panel changed.
+	 */
 	const refreshArtifacts = () => void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
 	const { baseUrl, signedIn } = useShareAccess();
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
@@ -484,6 +486,7 @@ function SharePanel({
 			<div className="ml-auto flex shrink-0 items-center gap-1.5">{right}</div>
 		</div>
 	);
+	/** Secondary footer text, such as the plan usage or upload progress. */
 	const meta = (text: string) => <span className="block truncate text-caption text-muted-foreground tabular-nums">{text}</span>;
 
 	switch (phase.kind) {
@@ -626,7 +629,7 @@ function SharePanel({
 				<>
 					{title}
 					{status(t("artifacts.share.failed", { message: phase.message }), "alert")}
-					{footer(null, <Button onClick={() => load()} size="sm" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>)}
+					{footer(null, <Button onClick={() => load({ publishNow: !unpublishOnOpen })} size="sm" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>)}
 				</>
 			);
 	}

@@ -299,6 +299,22 @@ describe("ShareArtifactButton", () => {
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
+	it("keeps the menu's Unpublish intent when Try again follows a failed check, never publishing", async () => {
+		// The link was unpublished elsewhere meanwhile: a retry that forgot the intent would publish the file.
+		const { inspectSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
+		inspectSpy.mockRejectedValueOnce(new Error("offline"));
+		render(
+			<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+				<ShareArtifactMenuPopover file={file} intent="unpublish" name="report.html" open onOpenChange={() => undefined}>
+					<button type="button">menu</button>
+				</ShareArtifactMenuPopover>
+			</TooltipProvider></QueryClientProvider>,
+		);
+		await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
 	it("never publishes from the menu's Unpublish when the file has no active link", async () => {
 		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
 		render(
