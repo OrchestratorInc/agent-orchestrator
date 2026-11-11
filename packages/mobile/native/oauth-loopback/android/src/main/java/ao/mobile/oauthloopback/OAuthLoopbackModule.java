@@ -4,14 +4,15 @@ import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.BindException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -108,19 +109,57 @@ public final class OAuthLoopbackModule extends ReactContextBaseJavaModule {
     return text.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;");
   }
 
+  private static final int REQUEST_LINE_LIMIT = 8192;
+  private static final long REQUEST_LINE_DEADLINE_NANOS = 3_000_000_000L;
+
+  /**
+   * The request line ("GET /callback?code=... HTTP/1.1"), read through its line
+   * end: one read may return only part of it. Null when the client closes, or
+   * the line isn't complete within 8 KiB and 3 seconds in all, so a client that
+   * trickles bytes can't hold the listener's one thread.
+   */
+  private static String readRequestLine(Socket client) throws IOException {
+    InputStream in = client.getInputStream();
+    byte[] buffer = new byte[REQUEST_LINE_LIMIT];
+    int length = 0;
+    long start = System.nanoTime();
+    while (length < buffer.length) {
+      long left = REQUEST_LINE_DEADLINE_NANOS - (System.nanoTime() - start);
+      if (left <= 0) return null;
+      // Each read waits only as long as the deadline has left; a zero timeout would wait forever.
+      client.setSoTimeout((int) Math.max(1, left / 1_000_000));
+      int count;
+      try {
+        count = in.read(buffer, length, buffer.length - length);
+      } catch (SocketTimeoutException timedOut) {
+        return null;
+      }
+      if (count < 0) return null;
+      for (int i = length; i < length + count; i++) {
+        if (buffer[i] != '\n') continue;
+        int end = i > 0 && buffer[i - 1] == '\r' ? i - 1 : i;
+        return new String(buffer, 0, end, StandardCharsets.UTF_8);
+      }
+      length += count;
+    }
+    return null;
+  }
+
   private void acceptLoop(ServerSocket socket) {
     while (!socket.isClosed()) {
       try (Socket client = socket.accept()) {
-        client.setSoTimeout(3000);
-        BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
-        String line = reader.readLine();
-        String[] parts = line == null ? new String[0] : line.split(" ");
+        String line = readRequestLine(client);
+        if (line == null) continue;
+        String[] parts = line.split(" ");
         String target = parts.length >= 2 ? parts[1] : "";
         int query = target.indexOf('?');
         String path = query >= 0 ? target.substring(0, query) : target;
         String expected;
         String back;
         synchronized (lock) {
+          // Stopped, or replaced by a newer sign-in, since this request was
+          // accepted: it belongs to no sign-in now.
+          if (server != socket) return;
           expected = callbackPath;
           back = returnUrl == null ? "" : returnUrl;
         }
@@ -142,6 +181,7 @@ public final class OAuthLoopbackModule extends ReactContextBaseJavaModule {
         out.write(bodyBytes);
         out.flush();
         synchronized (lock) {
+          if (server != socket) return;
           if (waiter != null) {
             waiter.resolve(target);
             waiter = null;

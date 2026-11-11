@@ -22,6 +22,10 @@
 @implementation AOOAuthLoopback {
   dispatch_queue_t _queue;
   dispatch_source_t _source;
+  // Every listener whose descriptor isn't closed yet; a start binds once it's empty.
+  dispatch_group_t _open;
+  // Bumped by every start and stop, so a start still waiting for the port gives way.
+  NSUInteger _generation;
   NSString *_callbackPath;
   NSString *_returnURL;
   NSString *_pending;
@@ -40,6 +44,7 @@ RCT_EXPORT_MODULE(AOOAuthLoopback)
 {
   if (self = [super init]) {
     _queue = dispatch_queue_create("ao.oauth-loopback", DISPATCH_QUEUE_SERIAL);
+    _open = dispatch_group_create();
   }
   return self;
 }
@@ -52,6 +57,7 @@ RCT_EXPORT_MODULE(AOOAuthLoopback)
 // Must run on _queue.
 - (void)stopLocked:(NSString *)reason
 {
+  _generation++;
   if (_source) {
     dispatch_source_cancel(_source);
     _source = nil;
@@ -161,6 +167,56 @@ static NSString *AOReadRequestLine(int fd)
   }
 }
 
+// Must run on _queue.
+- (void)listenOnPort:(double)port
+        callbackPath:(NSString *)callbackPath
+           returnURL:(NSString *)returnURL
+             resolve:(RCTPromiseResolveBlock)resolve
+              reject:(RCTPromiseRejectBlock)reject
+{
+  int listener = socket(AF_INET, SOCK_STREAM, 0);
+  if (listener < 0) {
+    reject(@"socket", @"Couldn't open a local socket for the sign-in.", nil);
+    return;
+  }
+  int yes = 1;
+  setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+  struct sockaddr_in address;
+  memset(&address, 0, sizeof(address));
+  address.sin_len = sizeof(address);
+  address.sin_family = AF_INET;
+  address.sin_port = htons((uint16_t)port);
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0) {
+    close(listener);
+    reject(@"in_use", @"The sign-in port on this phone is busy.", nil);
+    return;
+  }
+  if (listen(listener, 8) != 0) {
+    close(listener);
+    reject(@"listen", @"Couldn't listen for the sign-in.", nil);
+    return;
+  }
+  socklen_t size = sizeof(address);
+  getsockname(listener, (struct sockaddr *)&address, &size);
+  fcntl(listener, F_SETFL, O_NONBLOCK);
+
+  _callbackPath = callbackPath;
+  _returnURL = returnURL;
+  dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)listener, 0, _queue);
+  __weak AOOAuthLoopback *weakSelf = self;
+  dispatch_source_set_event_handler(source, ^{ [weakSelf acceptOn:listener]; });
+  dispatch_group_t open = _open;
+  dispatch_group_enter(open);
+  dispatch_source_set_cancel_handler(source, ^{
+    close(listener);
+    dispatch_group_leave(open);
+  });
+  _source = source;
+  dispatch_resume(source);
+  resolve(@(ntohs(address.sin_port)));
+}
+
 RCT_EXPORT_METHOD(start:(double)port
                   callbackPath:(NSString *)callbackPath
                   returnURL:(NSString *)returnURL
@@ -169,42 +225,18 @@ RCT_EXPORT_METHOD(start:(double)port
 {
   dispatch_async(_queue, ^{
     [self stopLocked:@"A new sign-in started."];
-    int listener = socket(AF_INET, SOCK_STREAM, 0);
-    if (listener < 0) {
-      reject(@"socket", @"Couldn't open a local socket for the sign-in.", nil);
-      return;
-    }
-    int yes = 1;
-    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    struct sockaddr_in address;
-    memset(&address, 0, sizeof(address));
-    address.sin_len = sizeof(address);
-    address.sin_family = AF_INET;
-    address.sin_port = htons((uint16_t)port);
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0) {
-      close(listener);
-      reject(@"in_use", @"The sign-in port on this phone is busy.", nil);
-      return;
-    }
-    if (listen(listener, 8) != 0) {
-      close(listener);
-      reject(@"listen", @"Couldn't listen for the sign-in.", nil);
-      return;
-    }
-    socklen_t size = sizeof(address);
-    getsockname(listener, (struct sockaddr *)&address, &size);
-    fcntl(listener, F_SETFL, O_NONBLOCK);
-
-    self->_callbackPath = callbackPath;
-    self->_returnURL = returnURL;
-    dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)listener, 0, self->_queue);
-    __weak AOOAuthLoopback *weakSelf = self;
-    dispatch_source_set_event_handler(source, ^{ [weakSelf acceptOn:listener]; });
-    dispatch_source_set_cancel_handler(source, ^{ close(listener); });
-    self->_source = source;
-    dispatch_resume(source);
-    resolve(@(ntohs(address.sin_port)));
+    NSUInteger generation = self->_generation;
+    // A listener stopped just now holds its port until its cancel handler
+    // closes the descriptor, and that handler runs on this queue after this
+    // block: bind once every earlier listener has closed. A stop or another
+    // start in the meantime wins.
+    dispatch_group_notify(self->_open, self->_queue, ^{
+      if (self->_generation != generation) {
+        reject(@"cancelled", @"Sign-in cancelled.", nil);
+        return;
+      }
+      [self listenOnPort:port callbackPath:callbackPath returnURL:returnURL resolve:resolve reject:reject];
+    });
   });
 }
 
