@@ -81,7 +81,8 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	}
 	// A machine paired with its key is never paired again without one: that would
 	// send the code unencrypted and drop the key. Only an older desktop shows such a code.
-	const pinned = async (id: string) => Boolean(id && (options.repairHost?.id === id ? options.repairHost : await deps.findHost(id))?.hostKey);
+	// The reconnect screen's snapshot and the saved record are checked apart: a stale snapshot must not hide a saved key.
+	const pinned = async (id: string) => Boolean(id && ((options.repairHost?.id === id && options.repairHost.hostKey) || (await deps.findHost(id))?.hostKey));
 	if (!offer.hostKey && await pinned(offer.hostId)) return { ok: false, reason: "outdated-desktop" };
 	const outcome = await deps.race(offer.endpoints, offer.hostId);
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };

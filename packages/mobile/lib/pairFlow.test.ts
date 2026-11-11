@@ -116,7 +116,8 @@ describe("pairFromCode", () => {
 
 		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Prod" } });
 
-		expect(d.findHost).not.toHaveBeenCalled();
+		// Read once, for a saved key; the name comes from the machine being reconnected.
+		expect(d.findHost).toHaveBeenCalledTimes(1);
 		expect(got).toMatchObject({ ok: true, kind: "reconnected" });
 		expect(got).not.toHaveProperty("instead");
 	});
@@ -177,6 +178,14 @@ describe("pairFromCode", () => {
 		expect(d.race).not.toHaveBeenCalled();
 		expect(pair).not.toHaveBeenCalled();
 		expect(d.saveHost).not.toHaveBeenCalled();
+	});
+
+	it("refuses a code without a key when only the saved record has one, not the reconnect screen's copy", async () => {
+		const d = deps({ findHost: vi.fn(async (id: string) => ({ id, name: "Studio", hostKey: "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0" })) });
+		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Studio" } });
+
+		expect(got).toEqual({ ok: false, reason: "outdated-desktop" });
+		expect(d.race).not.toHaveBeenCalled();
 	});
 
 	it("refuses a code without a machine id when the machine that answers is paired with a key", async () => {
