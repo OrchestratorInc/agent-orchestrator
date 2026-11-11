@@ -7,9 +7,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// The batch query reads these slow-changing, view-only fields for every tracked
-// PR on every tick, so each is capped: the PR view shows a bounded sample, not
-// the provider's full history.
+// The batch query reads these slow-changing, view-only fields for a tracked PR
+// when it has none stored or its updatedAt moved, so each is capped: the PR
+// view shows a bounded sample, not the provider's full history.
 const (
 	scmDetailsLabelLimit    = 20
 	scmDetailsReviewerLimit = 20

@@ -208,7 +208,7 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 			return err
 		}
 	}
-	if err := writePRDetails(ctx, q, pr.URL, pr.Details); err != nil {
+	if err := writePRDetails(ctx, q, pr.URL, pr.UpdatedAtProvider, pr.Details); err != nil {
 		return err
 	}
 	if err := q.UpgradeWorkerPRUsageIdentity(ctx, pr.URL); err != nil {

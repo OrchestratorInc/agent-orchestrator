@@ -90,6 +90,9 @@ type Store interface {
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error)
+	// PRDetailsUpdatedAt returns the provider updatedAt the PR's stored
+	// details were read at; ok is false when they are due a read.
+	PRDetailsUpdatedAt(ctx context.Context, prURL string) (time.Time, bool, error)
 	WriteSCMObservation(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error
 	RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error
 }
@@ -700,6 +703,17 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		}
 		prepared := o.prepareForPersistence(obs, local, opts, now)
 		if !prepared.Changed.Metadata && !prepared.Changed.CI && !prepared.Changed.Review {
+			// Details are left out of the hashes, and a provider reads them only
+			// when none are stored or the PR's updatedAt moved, so details here
+			// with no other change are ones the store lacks (a PR stored before
+			// details existed, or by a path that writes none). Store them; there
+			// is nothing new for lifecycle.
+			if prepared.PR.Details != nil {
+				pr, _, _, _, _ := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
+				if err := o.store.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+					o.logger.Warn("scm observer: PR details write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+				}
+			}
 			prRefreshOK[key] = true
 			continue
 		}
@@ -1431,6 +1445,26 @@ func sessionBranchPrefixes(branch string) []string {
 	return prefixes
 }
 
+// trackedPRRef is the provider ref for a tracked PR. It carries the provider
+// updatedAt the PR's stored details were read at, so the provider reads them
+// again only once the PR has changed. A failed lookup leaves it zero, which
+// costs a details read and never skips one.
+func (o *Observer) trackedPRRef(ctx context.Context, s *subject) ports.SCMPRRef {
+	ref := ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL}
+	if s.known.URL == "" {
+		return ref
+	}
+	updatedAt, ok, err := o.store.PRDetailsUpdatedAt(ctx, s.known.URL)
+	if err != nil {
+		o.logger.Warn("scm observer: read stored PR details updatedAt failed; reading details again", "pr", s.known.URL, "err", err)
+		return ref
+	}
+	if ok {
+		ref.DetailsUpdatedAt = updatedAt
+	}
+	return ref
+}
+
 func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[string]*subject, guards map[string]repoGuardState, listedPRs, forced map[string]bool, forcedSessions map[domain.SessionID]bool, markRepoFailed func(ports.SCMRepo), now time.Time) refreshSelection {
 	selection := refreshSelection{
 		subjectsByPR:  map[string]*subject{},
@@ -1513,7 +1547,7 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 			}
 		}
 		if candidate {
-			selection.refs = append(selection.refs, ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL})
+			selection.refs = append(selection.refs, o.trackedPRRef(ctx, s))
 			selection.refKeys = append(selection.refKeys, key)
 			selection.candidateKeys[key] = true
 		}
@@ -1603,7 +1637,7 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 			continue
 		}
 		refs = append(refs, pendingReconcile{
-			ref: ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL},
+			ref: o.trackedPRRef(ctx, s),
 			s:   s,
 		})
 	}

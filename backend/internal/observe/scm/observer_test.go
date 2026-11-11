@@ -36,7 +36,10 @@ type fakeStore struct {
 	workspaceRepos map[string][]domain.WorkspaceRepoRecord
 	prs            map[domain.SessionID][]domain.PullRequest
 	checks         map[string][]domain.PullRequestCheck
-	writeErr       error
+	// detailsUpdatedAt is the provider updatedAt of each PR's stored details,
+	// by PR URL; a PR missing from it has none stored.
+	detailsUpdatedAt map[string]time.Time
+	writeErr         error
 
 	writes  []fakeWrite
 	renames []domain.RepositoryRename
@@ -107,6 +110,13 @@ func (s *fakeStore) ListChecks(_ context.Context, prURL string) ([]domain.PullRe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]domain.PullRequestCheck(nil), s.checks[prURL]...), nil
+}
+
+func (s *fakeStore) PRDetailsUpdatedAt(_ context.Context, prURL string) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	updatedAt, ok := s.detailsUpdatedAt[prURL]
+	return updatedAt, ok, nil
 }
 
 func (s *fakeStore) WriteSCMObservation(_ context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error {
@@ -390,17 +400,21 @@ func TestDomainFromObservationCarriesPRDetailsWithTheObservationTime(t *testing.
 	}
 }
 
-func TestMetadataHashChangesWhenOnlyThePRDetailsChange(t *testing.T) {
-	base := ports.SCMObservation{Provider: "github", Repo: "o/r", PR: ports.SCMPRObservation{URL: "u", Number: 1, Details: &domain.PullRequestDetails{Description: "one"}}}
-	edited := base
-	edited.PR.Details = &domain.PullRequestDetails{Description: "two"}
-	if metadataSemanticHash(base) == metadataSemanticHash(edited) {
-		t.Fatal("a description-only edit must change the metadata hash, or the observer skips persisting it")
+// Providers read details only when none are stored or the PR's updatedAt
+// moved, so the hash leaves them out: a poll that skipped them must not look
+// like a change, and an edit still changes the hash through updatedAt.
+func TestMetadataHashLeavesOutPRDetails(t *testing.T) {
+	base := ports.SCMObservation{Provider: "github", Repo: "o/r", PR: ports.SCMPRObservation{URL: "u", Number: 1, UpdatedAtProvider: time.Unix(50, 0).UTC()}}
+	withDetails := base
+	withDetails.PR.Details = &domain.PullRequestDetails{Description: "one"}
+	if metadataSemanticHash(base) != metadataSemanticHash(withDetails) {
+		t.Fatal("a poll that skipped the details hashes differently from the one that read them")
 	}
-	same := base
-	same.PR.Details = &domain.PullRequestDetails{Description: "one"}
-	if metadataSemanticHash(base) != metadataSemanticHash(same) {
-		t.Fatal("identical details must hash identically, or every tick rewrites the PR")
+	edited := withDetails
+	edited.PR.UpdatedAtProvider = time.Unix(60, 0).UTC()
+	edited.PR.Details = &domain.PullRequestDetails{Description: "two"}
+	if metadataSemanticHash(withDetails) == metadataSemanticHash(edited) {
+		t.Fatal("an edit that moved the PR's updatedAt must change the metadata hash")
 	}
 }
 
@@ -1553,6 +1567,132 @@ func TestPoll_UnchangedHashesDoNotWriteOrNotify(t *testing.T) {
 	}
 	if len(store.writes) != 0 || len(lc.observed) != 0 {
 		t.Fatalf("unchanged hashes wrote/notified: writes=%d observed=%d", len(store.writes), len(lc.observed))
+	}
+}
+
+// detailsPollFixture is a tracked PR #1 whose stored hashes match obsValue,
+// with a provider that answers obsValue.
+func detailsPollFixture(obsValue ports.SCMObservation) (*fakeStore, *fakeProvider, domain.PullRequest) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	local.MetadataHash = metadataSemanticHash(obsValue)
+	local.CIHash = ciSemanticHash(obsValue.CI)
+	local.ReviewHash = reviewSemanticHash(obsValue.Review)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{prKey(testRepo, 1): obsValue}}
+	return store, provider, local
+}
+
+// The ref carries the updatedAt the stored details were read at, so the
+// provider skips details that cannot have changed; a PR with none stored
+// sends zero and gets them.
+func TestPoll_RefCarriesTheStoredDetailsUpdatedAt(t *testing.T) {
+	stored := time.Unix(50, 0).UTC()
+	for _, tc := range []struct {
+		name   string
+		stored map[string]time.Time
+		want   time.Time
+	}{
+		{name: "details stored", stored: map[string]time.Time{"https://github.com/o/r/pull/1": stored}, want: stored},
+		{name: "none stored", want: time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, provider, _ := detailsPollFixture(testObs(1))
+			store.detailsUpdatedAt = tc.stored
+			obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(100, 0).UTC())
+			if err := obs.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(provider.fetchBatches) != 1 || len(provider.fetchBatches[0]) != 1 {
+				t.Fatalf("batches = %#v, want PR #1 fetched once", provider.fetchBatches)
+			}
+			if got := provider.fetchBatches[0][0].DetailsUpdatedAt; !got.Equal(tc.want) {
+				t.Fatalf("ref DetailsUpdatedAt = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// An unchanged PR whose details the provider skipped is not a change: nothing
+// is written, so the stored details stay, and lifecycle hears nothing.
+func TestPoll_SkippedDetailsAreNotAChange(t *testing.T) {
+	read := testObs(1)
+	read.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+	read.PR.Details = &domain.PullRequestDetails{Description: "body"}
+	skipped := read
+	skipped.PR.Details = nil
+	store, provider, local := detailsPollFixture(read)
+	provider.observations[prKey(testRepo, 1)] = skipped
+	store.detailsUpdatedAt = map[string]time.Time{local.URL: read.PR.UpdatedAtProvider}
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(100, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) != 0 || len(lc.observed) != 0 {
+		t.Fatalf("skipped details wrote/notified: writes=%d observed=%d", len(store.writes), len(lc.observed))
+	}
+}
+
+// Details read for a PR that has none stored (one stored before details
+// existed, say) are written even though no hash changed, without a lifecycle
+// round or a rewrite of its checks and reviews.
+func TestPoll_StoresDetailsReadForAnOtherwiseUnchangedPR(t *testing.T) {
+	obsValue := testObs(1)
+	obsValue.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+	store, provider, local := detailsPollFixture(obsValue)
+	read := obsValue
+	read.PR.Details = &domain.PullRequestDetails{Description: "body"}
+	provider.observations[prKey(testRepo, 1)] = read
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(100, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) != 1 {
+		t.Fatalf("writes = %d, want one details write", len(store.writes))
+	}
+	w := store.writes[0]
+	if w.pr.Details == nil || w.pr.Details.Description != "body" || !w.pr.UpdatedAtProvider.Equal(obsValue.PR.UpdatedAtProvider) {
+		t.Fatalf("written PR = %+v details %+v, want the details with the observation's updatedAt", w.pr, w.pr.Details)
+	}
+	if w.pr.MetadataHash != local.MetadataHash || w.pr.CIHash != local.CIHash || w.pr.ReviewHash != local.ReviewHash {
+		t.Fatalf("hashes moved on a details-only write: %q/%q/%q", w.pr.MetadataHash, w.pr.CIHash, w.pr.ReviewHash)
+	}
+	if len(w.checks) != 0 || w.reviewMode != ports.ReviewWritePreserve {
+		t.Fatalf("details write touched checks/reviews: checks=%d mode=%v", len(w.checks), w.reviewMode)
+	}
+	if len(lc.observed) != 0 {
+		t.Fatalf("lifecycle notified %d times for a details-only write", len(lc.observed))
+	}
+}
+
+// A PR whose updatedAt moved gets its new details written with the change,
+// so the stored details and their updatedAt move together.
+func TestPoll_MovedUpdatedAtWritesTheNewDetails(t *testing.T) {
+	old := testObs(1)
+	old.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+	store, provider, local := detailsPollFixture(old)
+	store.detailsUpdatedAt = map[string]time.Time{local.URL: old.PR.UpdatedAtProvider}
+	moved := old
+	moved.PR.UpdatedAtProvider = time.Unix(60, 0).UTC()
+	moved.PR.Details = &domain.PullRequestDetails{Description: "edited"}
+	provider.observations[prKey(testRepo, 1)] = moved
+	lc := &fakeLifecycle{}
+	obs := newTestObserver(store, provider, lc, time.Unix(100, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.fetchBatches[0][0].DetailsUpdatedAt; !got.Equal(old.PR.UpdatedAtProvider) {
+		t.Fatalf("ref DetailsUpdatedAt = %v, want the stored %v", got, old.PR.UpdatedAtProvider)
+	}
+	if len(store.writes) == 0 || len(lc.observed) != 1 {
+		t.Fatalf("writes=%d observed=%d, want the change persisted and delivered", len(store.writes), len(lc.observed))
+	}
+	for i, w := range store.writes {
+		if w.pr.Details == nil || w.pr.Details.Description != "edited" || !w.pr.UpdatedAtProvider.Equal(moved.PR.UpdatedAtProvider) {
+			t.Fatalf("write %d = %+v details %+v, want the edited details at the new updatedAt", i, w.pr, w.pr.Details)
+		}
 	}
 }
 

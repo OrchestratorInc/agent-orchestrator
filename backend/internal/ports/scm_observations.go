@@ -41,6 +41,11 @@ type SCMPRRef struct {
 	Number int
 	// URL is the canonical browser URL when already known locally.
 	URL string
+	// DetailsUpdatedAt is the provider updatedAt of the PR state the caller's
+	// stored details were read from. While the PR's updatedAt still equals it,
+	// a provider may leave the observation's PR.Details nil instead of reading
+	// them again. Zero asks for the details unconditionally.
+	DetailsUpdatedAt time.Time
 }
 
 // SCMGuardResult is an ETag-style cache guard result. NotModified maps to HTTP
@@ -194,8 +199,12 @@ type SCMPRObservation struct {
 
 	// Details is the PR's description, labels, requested reviewers, commits and
 	// conversation comments.
-	// Nil when the provider did not return them, so the stored ones are kept.
-	Details *domain.PullRequestDetails
+	// Nil when the provider did not read them, so the stored ones are kept.
+	// It is left out of the observer's metadata hash (json:"-"): a provider
+	// reads details only when they are missing or the PR's updatedAt moved,
+	// which the hash already covers, so a pass that skipped them must not look
+	// like a change.
+	Details *domain.PullRequestDetails `json:"-"`
 }
 
 // SCMCIObservation carries aggregate CI state plus failing-check details.

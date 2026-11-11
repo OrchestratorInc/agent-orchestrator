@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// writePRDetails stores a PR's details in the transaction that wrote its row.
-// An observation without details leaves the stored ones as they are.
-func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, details *domain.PullRequestDetails) error {
+// writePRDetails stores a PR's details in the transaction that wrote its row,
+// with the provider updatedAt of the observation they came from. An
+// observation without details leaves the stored ones, and their updatedAt, as
+// they are.
+func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, providerUpdatedAt time.Time, details *domain.PullRequestDetails) error {
 	if details == nil {
 		return nil
 	}
@@ -43,6 +46,7 @@ func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, details *
 		CommitCount:          int64(details.CommitCount),
 		Conversation:         string(conversation),
 		ObservedAt:           details.ObservedAt,
+		ProviderUpdatedAt:    nullTime(providerUpdatedAt),
 	}); err != nil {
 		return fmt.Errorf("write pr details %s: %w", prURL, err)
 	}
@@ -72,6 +76,25 @@ func (s *Store) GetPRDetails(ctx context.Context, prURL string) (domain.PullRequ
 	_ = json.Unmarshal([]byte(row.Commits), &details.Commits)
 	_ = json.Unmarshal([]byte(row.Conversation), &details.Conversation)
 	return details, true, nil
+}
+
+// PRDetailsUpdatedAt returns the provider updatedAt of the PR state a PR's
+// stored details were read from, so the observer can skip re-reading details
+// that cannot have changed. ok is false when the PR has no stored details, or
+// has details stored before the updatedAt was recorded: either way they are
+// due a read.
+func (s *Store) PRDetailsUpdatedAt(ctx context.Context, prURL string) (time.Time, bool, error) {
+	updatedAt, err := s.qr.GetPRDetailsProviderUpdatedAt(ctx, prURL)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("get pr details updated at %s: %w", prURL, err)
+	}
+	if !updatedAt.Valid || updatedAt.Time.IsZero() {
+		return time.Time{}, false, nil
+	}
+	return updatedAt.Time, true, nil
 }
 
 // AppendPRConversationComment adds one just-posted conversation comment to a

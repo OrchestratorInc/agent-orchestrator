@@ -254,6 +254,12 @@ func stableCheckFingerprint(parts []string) string {
 // observer marks that ref refresh-incomplete and can log the permanent miss
 // distinctly from a transient provider failure. The observer owns chunking;
 // this method rejects larger batches so tests catch accidental over-batching.
+//
+// PR details cost far more than the rest of the query, so they are read only
+// when they can have changed. A ref with no DetailsUpdatedAt gets them in the
+// batch query itself. A ref with one gets the light fields; if the PR's
+// updatedAt has moved from it, one follow-up query reads the details of every
+// such PR in the batch, and otherwise the observation's Details stay nil.
 func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
 	if len(refs) == 0 {
 		return nil, nil
@@ -267,6 +273,8 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 		return nil, err
 	}
 	out := make([]ports.SCMObservation, len(refs))
+	details := make([]*domain.PullRequestDetails, len(refs))
+	var stale []int
 	for i, ref := range refs {
 		repoData, _ := data[aliases[i]].(map[string]any)
 		pr, _ := repoData["pullRequest"].(map[string]any)
@@ -287,8 +295,45 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 			}
 		}
 		out[i] = scmObservationFromGraphQL(ref, pr)
+		switch {
+		case ref.DetailsUpdatedAt.IsZero():
+			details[i] = pullRequestDetailsFromGraphQL(pr)
+		case !out[i].PR.UpdatedAtProvider.Equal(ref.DetailsUpdatedAt):
+			stale = append(stale, i)
+		}
+	}
+	p.fetchPullRequestDetails(ctx, refs, stale, details)
+	for i := range out {
+		out[i].PR.Details = details[i]
 	}
 	return out, nil
+}
+
+// fetchPullRequestDetails reads, in one query, the details of the PRs at the
+// stale indexes of refs into details. Details are view-only, so a failed read
+// is logged and leaves them nil: the observation still carries the PR's state
+// and CI, the stored details are kept, and the next poll reads them again
+// because their recorded updatedAt has not moved.
+func (p *Provider) fetchPullRequestDetails(ctx context.Context, refs []ports.SCMPRRef, stale []int, details []*domain.PullRequestDetails) {
+	if len(stale) == 0 {
+		return
+	}
+	staleRefs := make([]ports.SCMPRRef, len(stale))
+	for j, i := range stale {
+		staleRefs[j] = refs[i]
+	}
+	query, aliases := buildSCMDetailsQuery(staleRefs)
+	data, err := p.client.doGraphQL(ctx, query, nil)
+	if err != nil {
+		p.logger.Warn("github scm: PR details read failed; keeping the stored details", "prs", len(staleRefs), "err", err)
+		return
+	}
+	for j, i := range stale {
+		repoData, _ := data[aliases[j]].(map[string]any)
+		if pr, _ := repoData["pullRequest"].(map[string]any); pr != nil {
+			details[i] = pullRequestDetailsFromGraphQL(pr)
+		}
+	}
 }
 
 // FetchFailedCheckLogTail fetches and tails a failed GitHub Actions job log.
@@ -404,7 +449,23 @@ func restListPullToSCM(pull restListPull) ports.SCMPRObservation {
 	}
 }
 
+// buildSCMBatchQuery selects the light PR fields for every ref, plus the
+// details fields for a ref with no DetailsUpdatedAt.
 func buildSCMBatchQuery(refs []ports.SCMPRRef) (string, []string) {
+	return buildPRQuery(refs, func(ref ports.SCMPRRef) string {
+		if ref.DetailsUpdatedAt.IsZero() {
+			return scmPRFields() + scmPRDetailsFields()
+		}
+		return scmPRFields()
+	})
+}
+
+// buildSCMDetailsQuery selects only the details fields of each ref's PR.
+func buildSCMDetailsQuery(refs []ports.SCMPRRef) (string, []string) {
+	return buildPRQuery(refs, func(ports.SCMPRRef) string { return scmPRDetailsFields() })
+}
+
+func buildPRQuery(refs []ports.SCMPRRef, fields func(ports.SCMPRRef) string) (string, []string) {
 	aliases := make([]string, len(refs))
 	var b strings.Builder
 	b.WriteString("query{\n")
@@ -412,24 +473,39 @@ func buildSCMBatchQuery(refs []ports.SCMPRRef) (string, []string) {
 		alias := fmt.Sprintf("pr%d", i)
 		aliases[i] = alias
 		_, _ = fmt.Fprintf(&b, "%s: repository(owner:%s,name:%s){ pullRequest(number:%d){ %s } }\n",
-			alias, graphQLString(ref.Repo.Owner), graphQLString(ref.Repo.Name), ref.Number, scmPRFields())
+			alias, graphQLString(ref.Repo.Owner), graphQLString(ref.Repo.Name), ref.Number, fields(ref))
 	}
 	b.WriteString("}")
 	return b.String(), aliases
 }
 
+// scmPRFields are the state, CI and merge fields every poll reads.
 func scmPRFields() string {
+	return strings.ReplaceAll(`
+number id url state isDraft merged closed title additions deletions changedFiles
+mergeable mergeStateStatus reviewDecision headRefName headRefOid baseRefName baseRefOid
+createdAt updatedAt mergedAt closedAt
+author{ login avatarUrl }
+mergeCommit{ oid }
+commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONTEXT_LIMIT){ nodes{
+  __typename
+  ... on CheckRun { `+checkRunFields+` }
+  ... on StatusContext { context state targetUrl }
+} pageInfo{ hasNextPage endCursor } } } } } }
+`, "CONTEXT_LIMIT", strconv.Itoa(scmBatchCheckContextLimit))
+}
+
+// scmPRDetailsFields are the view-only details: description, labels,
+// requested reviewers, commits and conversation comments. Editing the
+// description, labels or reviewers, pushing commits and commenting all move
+// the PR's updatedAt, which is what lets a poll skip them.
+func scmPRDetailsFields() string {
 	return strings.NewReplacer(
-		"CONTEXT_LIMIT", strconv.Itoa(scmBatchCheckContextLimit),
 		"LABEL_LIMIT", strconv.Itoa(scmDetailsLabelLimit),
 		"REVIEWER_LIMIT", strconv.Itoa(scmDetailsReviewerLimit),
 		"COMMIT_LIMIT", strconv.Itoa(scmDetailsCommitLimit),
 		"CONVERSATION_LIMIT", strconv.Itoa(domain.MaxPullRequestConversationComments),
-	).Replace(`
-number id url state isDraft merged closed title additions deletions changedFiles
-mergeable mergeStateStatus reviewDecision headRefName headRefOid baseRefName baseRefOid
-createdAt updatedAt mergedAt closedAt
-body
+	).Replace(`body
 labels(first:LABEL_LIMIT){ nodes{ name color } }
 reviewRequests(first:REVIEWER_LIMIT){ nodes{ requestedReviewer{
   __typename
@@ -440,13 +516,6 @@ reviewRequests(first:REVIEWER_LIMIT){ nodes{ requestedReviewer{
 } } }
 commitList: commits(last:COMMIT_LIMIT){ totalCount nodes{ commit{ oid messageHeadline committedDate author{ name user{ login } } } } }
 conversation: comments(last:CONVERSATION_LIMIT){ nodes{ id body url createdAt author{ login __typename } } }
-author{ login avatarUrl }
-mergeCommit{ oid }
-commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONTEXT_LIMIT){ nodes{
-  __typename
-  ... on CheckRun { ` + checkRunFields + ` }
-  ... on StatusContext { context state targetUrl }
-} pageInfo{ hasNextPage endCursor } } } } } }
 `)
 }
 
@@ -576,7 +645,6 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 			UpdatedAtProvider:        parseGitHubTime(str(pr["updatedAt"])),
 			MergedAtProvider:         parseGitHubTime(str(pr["mergedAt"])),
 			ClosedAtProvider:         parseGitHubTime(str(pr["closedAt"])),
-			Details:                  pullRequestDetailsFromGraphQL(pr),
 		},
 		CI: ports.SCMCIObservation{
 			Summary:           ci,

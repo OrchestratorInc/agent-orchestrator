@@ -7,6 +7,7 @@ package gen
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -44,6 +45,17 @@ func (q *Queries) GetPRDetails(ctx context.Context, prUrl string) (GetPRDetailsR
 	return i, err
 }
 
+const getPRDetailsProviderUpdatedAt = `-- name: GetPRDetailsProviderUpdatedAt :one
+SELECT provider_updated_at FROM pr_details WHERE pr_url = ?
+`
+
+func (q *Queries) GetPRDetailsProviderUpdatedAt(ctx context.Context, prUrl string) (sql.NullTime, error) {
+	row := q.db.QueryRowContext(ctx, getPRDetailsProviderUpdatedAt, prUrl)
+	var provider_updated_at sql.NullTime
+	err := row.Scan(&provider_updated_at)
+	return provider_updated_at, err
+}
+
 const setPRDetailsConversation = `-- name: SetPRDetailsConversation :execrows
 UPDATE pr_details SET conversation = ? WHERE pr_url = ?
 `
@@ -62,8 +74,8 @@ func (q *Queries) SetPRDetailsConversation(ctx context.Context, arg SetPRDetails
 }
 
 const upsertPRDetails = `-- name: UpsertPRDetails :exec
-INSERT INTO pr_details (pr_url, description, description_truncated, labels, requested_reviewers, commits, commit_count, conversation, observed_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO pr_details (pr_url, description, description_truncated, labels, requested_reviewers, commits, commit_count, conversation, observed_at, provider_updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (pr_url) DO UPDATE SET
     description = excluded.description,
     description_truncated = excluded.description_truncated,
@@ -72,7 +84,8 @@ ON CONFLICT (pr_url) DO UPDATE SET
     commits = excluded.commits,
     commit_count = excluded.commit_count,
     conversation = excluded.conversation,
-    observed_at = excluded.observed_at
+    observed_at = excluded.observed_at,
+    provider_updated_at = excluded.provider_updated_at
 `
 
 type UpsertPRDetailsParams struct {
@@ -85,6 +98,7 @@ type UpsertPRDetailsParams struct {
 	CommitCount          int64
 	Conversation         string
 	ObservedAt           time.Time
+	ProviderUpdatedAt    sql.NullTime
 }
 
 func (q *Queries) UpsertPRDetails(ctx context.Context, arg UpsertPRDetailsParams) error {
@@ -98,6 +112,7 @@ func (q *Queries) UpsertPRDetails(ctx context.Context, arg UpsertPRDetailsParams
 		arg.CommitCount,
 		arg.Conversation,
 		arg.ObservedAt,
+		arg.ProviderUpdatedAt,
 	)
 	return err
 }

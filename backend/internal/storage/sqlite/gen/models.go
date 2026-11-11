@@ -595,6 +595,7 @@ type PRDetail struct {
 	CommitCount          int64
 	ObservedAt           time.Time
 	Conversation         string
+	ProviderUpdatedAt    sql.NullTime
 }
 
 type PRReview struct {

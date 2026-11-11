@@ -84,6 +84,69 @@ func TestPRObservationWithoutDetailsKeepsTheStoredOnes(t *testing.T) {
 	}
 }
 
+// The stored details remember the provider updatedAt of the observation that
+// carried them. A pass that skipped them moves the PR's updatedAt but not
+// theirs, which is what makes the next poll read them again.
+func TestPRDetailsUpdatedAtFollowsTheObservationThatCarriedThem(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	read := now.Add(-time.Hour)
+	pr := domain.PullRequest{URL: "https://github.com/o/r/pull/1", SessionID: r.ID, Number: 1, UpdatedAt: now, UpdatedAtProvider: read, Details: detailsFixture(now)}
+
+	if _, ok, err := s.PRDetailsUpdatedAt(ctx, pr.URL); err != nil || ok {
+		t.Fatalf("before any details: ok=%v err=%v, want not stored", ok, err)
+	}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.PRDetailsUpdatedAt(ctx, pr.URL); err != nil || !ok || !got.Equal(read) {
+		t.Fatalf("after details: %v ok=%v err=%v, want %v", got, ok, err, read)
+	}
+
+	pr.Details = nil
+	pr.UpdatedAtProvider = now
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.PRDetailsUpdatedAt(ctx, pr.URL); err != nil || !ok || !got.Equal(read) {
+		t.Fatalf("after a details-less write: %v ok=%v err=%v, want the details' own %v", got, ok, err, read)
+	}
+	if details, ok, err := s.GetPRDetails(ctx, pr.URL); err != nil || !ok || details.Description == "" {
+		t.Fatalf("details after a details-less write = %+v ok=%v err=%v, want the stored ones", details, ok, err)
+	}
+
+	pr.Details = &domain.PullRequestDetails{Description: "edited", ObservedAt: now}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.PRDetailsUpdatedAt(ctx, pr.URL); err != nil || !ok || !got.Equal(now) {
+		t.Fatalf("after re-read details: %v ok=%v err=%v, want %v", got, ok, err, now)
+	}
+}
+
+// Details stored without a provider updatedAt (a provider that reports none,
+// or rows from before it was recorded) read as due a read, never as current.
+func TestPRDetailsUpdatedAtIsUnknownWithoutAProviderUpdatedAt(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{URL: "https://github.com/o/r/pull/1", SessionID: r.ID, Number: 1, UpdatedAt: now, Details: detailsFixture(now)}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.PRDetailsUpdatedAt(ctx, pr.URL); err != nil || ok {
+		t.Fatalf("details with no provider updatedAt: ok=%v err=%v, want unknown", ok, err)
+	}
+	if _, ok, err := s.GetPRDetails(ctx, pr.URL); err != nil || !ok {
+		t.Fatalf("details themselves: ok=%v err=%v, want stored", ok, err)
+	}
+}
+
 func TestPRDetailsAreReplacedByTheNextObservation(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
