@@ -38,6 +38,11 @@ describe("getArtifactSize", () => {
 		await expect(getArtifactSize(cfg, "ao-1", "empty.csv")).resolves.toBe(0);
 	});
 
+	it("does not read a whole reply without a length as empty", async () => {
+		respond(200, {}, "run,model\n1,alpha\n");
+		await expect(getArtifactSize(cfg, "ao-1", "data.csv")).resolves.toBeUndefined();
+	});
+
 	it("reads a refused range on an empty file as 0 bytes", async () => {
 		respond(416, { "Content-Type": "text/plain" }, "invalid range");
 		await expect(getArtifactSize(cfg, "ao-1", "empty.csv")).resolves.toBe(0);

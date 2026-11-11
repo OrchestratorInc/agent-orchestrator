@@ -719,8 +719,11 @@ export async function getArtifactSize(cfg: ServerConfig, sessionId: string, path
 	try {
 		const res = await req(cfg, route, { ...init, headers: { Range: "bytes=0-0" } });
 		if (res.status === 206) return contentRangeTotal(res.headers.get("content-range"));
-		const length = Number(res.headers.get("content-length"));
-		return Number.isFinite(length) && length >= 0 ? length : undefined;
+		// No length (a chunked reply) is not "empty": the size is unknown, and the viewer falls back.
+		const header = res.headers.get("content-length")?.trim();
+		if (!header) return undefined;
+		const length = Number(header);
+		return Number.isInteger(length) && length >= 0 ? length : undefined;
 	} catch (cause) {
 		if (cause instanceof ApiError && cause.status === 416) return 0;
 		throw cause;
