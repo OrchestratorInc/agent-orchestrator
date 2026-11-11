@@ -8,11 +8,12 @@ import { settingsQueryKey } from "../../hooks/useSettings";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
+import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { sessionUiKey } from "../../lib/hosts";
 import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
-import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -77,6 +78,17 @@ const session = {
 	updatedAt: "2026-09-22T00:00:00Z",
 	prs: [],
 } satisfies WorkspaceSession;
+
+function capturedCloudExcerpt(): ChatDraftExcerptReference {
+	return {
+		id: "captured", order: 2, conversationId: `cloud:${session.id}`, messageId: "deleted-source", revision: 0, role: "assistant", text: "缓存",
+		snapshot: {
+			version: 1, referenceFormat: "numbered-v1", rawText: "**缓存**", captureMode: "exact", sourceTurnId: "source-turn",
+			sourceRange: { start: 20, end: 26, offsetUnit: "utf-16" }, renderedRange: { start: 4, end: 6, offsetUnit: "utf-16" }, prefix: "the ", suffix: " rest",
+			turn: { id: "source-turn", messages: [{ role: "user", text: "FROZEN_QUESTION\n" + "问".repeat(1000) }, { role: "assistant", text: "FROZEN_ANSWER\n" + "答".repeat(1000) }], truncated: true },
+		},
+	};
+}
 
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
@@ -178,6 +190,7 @@ describe("CloudSessionChatSurface", () => {
 		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{...session,cloud:{orgId:"org-1"}}}/></QueryClientProvider>);
 		const props=cloudMocks.chatProps.mock.lastCall?.[0];
 		expect(props.fileReferenceDelivery).toBe("text");
+		expect(props.messageByteLimit).toBe(64 * 1024);
 		const ref=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"CLOUD_PROVIDER_MARKER"}]},session.id);
 		await expect(props.onSend("question",undefined,"capture-retry",undefined,[ref])).rejects.toThrow("offline");
 		await props.onSend("question",undefined,"capture-retry",undefined,[ref]);
@@ -186,6 +199,40 @@ describe("CloudSessionChatSurface", () => {
 		expect(calls[0][2].text.match(/CLOUD_PROVIDER_MARKER/g)).toHaveLength(1);
 		expect(calls[0][2].text).toContain('"cloud.ts"#L1-L1');
 		expect(calls[0][3]).toEqual({idempotencyKey:"capture-retry"});
+	});
+	it.each(["retry", "fallback"])("keeps frozen background in agent text while omitting it from display content on %s", async (failure) => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset().mockRejectedValueOnce(failure === "retry"
+			? new Error("offline") : new CloudCpError("unsupported display", { status: 400, code: "invalid_request" })).mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		const excerpt = capturedCloudExcerpt();
+		const original = structuredClone(excerpt);
+		const file = { ...captureFileReference({ path: "cache.ts", side: "file", line: 1, endLine: 1, lines: [{ kind: "context", oldNo: 1, newNo: 1, text: "FILE_MARKER" }] }, session.id), order: 1 };
+		const send = () => props.onSend("Explain this", undefined, "frozen-receipt", [excerpt], [file], "Explain this");
+		if (failure === "retry") {
+			await expect(send()).rejects.toThrow("offline");
+			await send();
+		} else await send();
+		const [first, second] = cloudMocks.sendSessionMessage.mock.calls;
+		expect(first[2].text).toContain("FROZEN_QUESTION");
+		expect(first[2].text).toContain("FROZEN_ANSWER");
+		expect(first[2].text).toContain("FILE_MARKER");
+		expect(first[2].text).toContain("**缓存**");
+		expect(first[2].content.map((block: { type: string }) => block.type)).toEqual(["file_reference", "excerpt"]);
+		expect(first[2].content[1].snapshot).not.toHaveProperty("turn");
+		expect(first[2].content[1].snapshot).not.toHaveProperty("contextOmitted");
+		expect({ ...first[2].content[1].snapshot, turn: original.snapshot!.turn }).toEqual(original.snapshot);
+		expect(first[3]).toEqual({ idempotencyKey: "frozen-receipt" });
+		expect(second[3]).toEqual(first[3]);
+		if (failure === "retry") expect(second).toEqual(first);
+		else {
+			expect(second[2]).not.toHaveProperty("content");
+			expect(second[2].text).toBe(first[2].text);
+		}
+		expect(excerpt).toEqual(original);
 	});
 	it("sends quotes and captures inlined for the agent and as content blocks for the transcript", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [
@@ -262,13 +309,13 @@ describe("CloudSessionChatSurface", () => {
 		const [[, , first], [, , second]] = cloudMocks.sendSessionMessage.mock.calls;
 		expect(first.attachmentIds).toEqual([attachmentId]);
 		expect(first.displayText).toBe("Is this right?");
-		expect(first.text.startsWith("Is this right?\n\nUser-supplied captured code")).toBe(true);
+		expect(first.text.startsWith("Is this right?\n\nReferenced annotations.")).toBe(true);
 		expect(first.text).toContain("const ttl = 60;");
 		expect(first.text).toContain("Selected text:\n---\nthe cache");
 		expect(first.content).toHaveLength(2);
 		expect(second.attachmentIds).toEqual([attachmentId]);
 		expect(second).not.toHaveProperty("displayText");
-		expect(second.text.startsWith("User-supplied captured code")).toBe(true);
+		expect(second.text.startsWith("Referenced annotations.")).toBe(true);
 		for (const body of [first, second]) {
 			expect(JSON.stringify(body)).not.toContain("ao-cloud-attachment:");
 			expect(JSON.stringify(body)).not.toContain("Attached files");
@@ -310,6 +357,11 @@ describe("CloudSessionChatSurface", () => {
 			createdAt: session.updatedAt,
 		}]);
 		expect(snapshot.items[0]).toMatchObject({ text: "Explain this", content: [{ type: "excerpt", text: "the cache", annotationId: "ex-1", sourceMessageId: "m-1" }] });
+	});
+	it("retains a chart-only annotation when history omits its empty display text", () => {
+		const chart = { version: 1, referenceFormat: "numbered-v1", captureMode: "block", containsFlowchart: true, badgeOnly: true, rawText: "```mermaid\nflowchart LR; A-->B\n```" };
+		const snapshot = toSnapshot(session, [{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Explain the chart", content: [{ type: "excerpt", annotationId: "chart", snapshot: chart }] }, createdAt: session.updatedAt }]);
+		expect(snapshot.items[0]).toMatchObject({ content: [{ type: "excerpt", text: "", snapshot: chart }] });
 	});
 
 	it("shows a message of only files, with its files and no text", () => {
@@ -2270,5 +2322,59 @@ describe("CloudSessionChatSurface palette jump", () => {
 		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionA} /></QueryClientProvider>);
 		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={sessionB} /></QueryClientProvider>);
 		expect(props().annotationNavigationRequest).toBeUndefined();
+	});
+});
+
+ it("delivers frozen excerpts independently of Cloud source history", () => {
+	const ref = { id: "quote", conversationId: "cloud", messageId: "deleted", revision: 9, role: "assistant" as const, text: "selected", snapshot: { version: 1, rawText: "**selected**", captureMode: "exact" as const } };
+	const text = cloudExcerptText([ref], { items: [] });
+	expect(text).toContain("**selected**");
+	expect(text).toContain("Selected text:\n---\nselected");
+	expect(cloudAnnotationContent([ref])[0].snapshot).toEqual(ref.snapshot);
+ });
+
+describe("Cloud excerpt display snapshots", () => {
+	it("omits repeated background turns from eight excerpts without changing the captures", () => {
+		const excerpt = capturedCloudExcerpt();
+		const original = structuredClone(excerpt);
+		const refs = Array.from({ length: 8 }, (_, index) => ({ ...excerpt, id: `excerpt-${index}`, order: index }));
+		const content = cloudAnnotationContent(refs);
+		for (const [index, block] of content.entries()) {
+			expect(block.annotationId).toBe(`excerpt-${index}`);
+			expect(block.sourceRevision).toBe(0);
+			expect(block.snapshot).not.toHaveProperty("turn");
+			expect({ ...block.snapshot, turn: original.snapshot!.turn }).toEqual(original.snapshot);
+		}
+		expect(excerpt).toEqual(original);
+		const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+		const full = content.map(block => ({ ...block, snapshot: excerpt.snapshot }));
+		const removedBytes = bytes(full) - bytes(content);
+		// The only JSON removed per reference is the comma and the turn property.
+		expect(removedBytes).toBe(8 * (bytes({ turn: excerpt.snapshot!.turn }) - 1));
+		expect(removedBytes).toBeGreaterThan(48_000);
+	});
+
+	it.each(["legacy", "no-turn", "omitted", "diagram"])("preserves %s metadata and supports old transcript events", (kind) => {
+		const excerpt = capturedCloudExcerpt();
+		if (kind === "legacy") delete excerpt.snapshot;
+		else if (kind === "no-turn") delete excerpt.snapshot!.turn;
+		else if (kind === "omitted") {
+			delete excerpt.snapshot!.turn;
+			excerpt.snapshot!.contextOmitted = true;
+		} else {
+			excerpt.text = "";
+			const rawText = "```mermaid\nflowchart LR; A-->B\n```";
+			excerpt.snapshot = { ...excerpt.snapshot!, rawText, captureMode: "block", containsFlowchart: true, badgeOnly: true,
+				sourceRange: { start: 0, end: rawText.length, offsetUnit: "utf-16" }, diagramRange: { start: 0, end: rawText.length, offsetUnit: "utf-16" } };
+		}
+		const original = structuredClone(excerpt);
+		const display = cloudAnnotationContent([excerpt])[0];
+		if (display.snapshot) expect(display.snapshot).not.toHaveProperty("turn");
+		if (original.snapshot?.turn) expect({ ...display.snapshot, turn: original.snapshot.turn }).toEqual(original.snapshot);
+		else expect(display.snapshot).toEqual(original.snapshot);
+		const projected = toSnapshot(session, [{ sessionId: session.id, sequence: 1, type: "chat.user_message",
+			payload: { text: "Explain", content: [{ ...display, snapshot: original.snapshot }] }, createdAt: session.updatedAt }]);
+		expect(projected.items[0]).toMatchObject({ content: [{ text: excerpt.text, snapshot: original.snapshot }] });
+		expect(excerpt).toEqual(original);
 	});
 });

@@ -35,6 +35,8 @@ export type MenuEntry =
 			shortcut?: string;
 			/** An app shortcut's key hint, honouring custom keybindings. */
 			shortcutId?: AppShortcutId;
+			/** A muted trailing count in the hint column; give `ariaLabel` the spoken form. */
+			count?: number;
 			disabled?: boolean;
 			destructive?: boolean;
 			title?: string;
@@ -164,6 +166,7 @@ export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 								{entry.label}
 								{entry.shortcut ? <kit.Shortcut aria-hidden="true">{entry.shortcut}</kit.Shortcut> : null}
 								{!entry.shortcut && entry.shortcutId ? <AppShortcutHint id={entry.shortcutId} /> : null}
+								{entry.count !== undefined ? <kit.Shortcut aria-hidden="true">{entry.count}</kit.Shortcut> : null}
 							</kit.Item>
 						);
 				}

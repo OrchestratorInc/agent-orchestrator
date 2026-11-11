@@ -59,6 +59,7 @@ import {
 import { IncompatibleHostVersionError } from "./race";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
+import { rememberLastProject } from "./lastProject";
 import { ALL_PROJECTS, NO_PROJECTS_KNOWN, STANDALONE_PROJECT, projectsForMachine, resolveActiveProject, retainProjects, sessionRowsForMachine, type KnownProjects } from "./projectFilter";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry, trackFeature } from "./telemetry/runtime";
@@ -994,6 +995,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const setActiveProject = useCallback((id: string) => {
 		setChosenProjectId(id);
 		AsyncStorage.setItem(ACTIVE_PROJECT_KEY, id).catch(() => {});
+		if (id !== ALL_PROJECTS) rememberLastProject(selectedHostIdRef.current, id);
 	}, []);
 
 	// Which machine this view is about. Rows are keyed to it, so after a re-pair

@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -376,6 +377,8 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	// from an unusual daemon launch environment.
 	env["AO_BROWSER_CAPABILITY"] = ""
 	env["AO_PREVIEW_CAPABILITY"] = ""
+	// What the user types here is theirs, not the agent's turn's (see cli caller header).
+	env[caller.ShellTerminalEnv] = "1"
 	var verifier string
 	if in.SessionID != "" {
 		env["AO_SESSION_ID"] = string(in.SessionID)

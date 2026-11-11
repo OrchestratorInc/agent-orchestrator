@@ -1,3 +1,6 @@
+import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
+import { excerptSizeError } from "../../../shared/chat-excerpt";
+import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
 import { FileAnnotationContext } from "./FileAnnotationPreview";
 import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
@@ -9,8 +12,7 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
-import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
-import { useEdgeFade } from "../../hooks/useEdgeFade";
+import { useEdgeFadeRef } from "../../hooks/useEdgeFade";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -59,9 +61,10 @@ import {
 	type Virtualizer,
 } from "@tanstack/react-virtual";
 import { isShownAORender } from "../../lib/mcp-tool";
+import { isOrchestratorPlumbing } from "./activity-step";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
-import { annotationBody, annotationTextMatches, annotationTextRange, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
+import { annotationBody, annotationTextMatches, annotationReferenceRange, annotationDiagramBlock, highlightChatAnnotation } from "../../lib/chat-annotation-navigation";
 import {
 	acknowledgeChatInlineEditMutation,
 	beginChatInlineEditMutation,
@@ -138,7 +141,7 @@ import {
 	OriginMessage,
 	SteerMessage,
 	TurnActions,
-	TurnChangedFiles,
+	TurnResults,
 	TurnOutcome,
 	LiveResponseStatus,
 	LiveStepChoices,
@@ -154,9 +157,6 @@ import {
 	isTaskTitleUpdate,
 	isWorkerLead,
 	isDuplicateSpawnAction,
-	OrchestratorReply,
-	piggybackedUpdates,
-	quietWorkerReply,
 	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
@@ -164,15 +164,22 @@ import {
 	TaskNamedLine,
 	useWorkerUpdateIndex,
 	WorkerUpdateIndexContext,
+	BatchedReportsContext,
+	type BatchedReports,
+	placeBatchedReports,
+	ReportsLine,
+	type WorkerUpdate,
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
+import { ChatEntrance, createChatEntranceGate } from "./chat-entrance";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
+import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -185,6 +192,7 @@ import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
+import { agentAccountProviderFor } from "../../hooks/useAgentAccounts";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
@@ -198,6 +206,7 @@ import {
 	fullQueuedTurnOrder,
 	hiddenTimelineTurnIds,
 	isUserQueuePrompt,
+	needsReauth,
 	queuedTurnIds,
 	type ConversationPlan,
 	type ConversationSnapshot,
@@ -214,9 +223,12 @@ import {
 	type ConversationMessage,
 	type ConversationTurn,
 	type ConversationUsageLimit,
+	type TurnArtifactChange,
 	type TurnDiff,
 	type TurnSettings,
 } from "../../types/conversation";
+
+const NO_SKILLS: ChatSkill[] = [];
 
 const EMPTY_CHAT_PLACEHOLDERS = [
 	"Fix a failing test in this project",
@@ -362,7 +374,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	checkingSideChatAvailability?: boolean;
-	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
+	annotationNavigationRequest?: { id: string; text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number };
 	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
 	onAnnotationNavigationHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
@@ -442,6 +454,7 @@ export interface ChatWorkspaceProps {
 	excerptsEnabled?: boolean;
 	fileReferencesEnabled?: boolean;
 	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
+	messageByteLimit?: number;
 	onSend?: (
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
@@ -555,6 +568,8 @@ export interface ChatWorkspaceProps {
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	onOpenFileAnnotation?: OpenFileAnnotation;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
@@ -779,6 +794,7 @@ function ChatWorkspaceContent({
 	excerptsEnabled = false,
 	fileReferencesEnabled = false,
 	fileReferenceDelivery,
+	messageByteLimit,
 	onSend,
 	onDecide,
 	onResolveInput,
@@ -823,6 +839,7 @@ function ChatWorkspaceContent({
 	rollbackError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	onOpenFileAnnotation,
 	retryControl,
 	onEditMessage,
@@ -902,6 +919,7 @@ function ChatWorkspaceContent({
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
 		session?.statusReadiness === "checking";
+	const signInRequired = needsReauth(snapshot) && agentAccountProviderFor(snapshot.harness) !== null && !activeRemoteHostId && !session?.cloud;
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
 			? session.provisionState
@@ -1084,6 +1102,7 @@ function ChatWorkspaceContent({
 	const queuedMessages = useQueuedMessages(snapshot, openingTurnId);
 	const [steerStartedAt, setSteerStartedAt] = useState<ReadonlyMap<string, string>>(() => new Map());
 	const [steerErrors, setSteerErrors] = useState<Readonly<Record<string, string>>>({});
+	const [steerEchoes, setSteerEchoes] = useState<readonly SteerEcho[]>([]);
 	const backgroundWakeQueuedTurnIds = useMemo(
 		() => new Set(
 			(localEchos ?? [])
@@ -1129,13 +1148,46 @@ function ChatWorkspaceContent({
 		],
 		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerStartedAt],
 	);
+	// A steer sent from the composer shows in its turn at once, as a send's echo does.
+	// The daemon places its row when the agent accepts the steer, so until then the echo
+	// stays last, and from then on it keeps the place it had, with later output below it.
+	// The daemon's own row, matched by its client id, replaces it.
+	const pendingSteerEchoes = useMemo(
+		() => turn?.state === "running"
+			? steerEchoes.filter((echo) => echo.turnId === turn.id && !snapshot.items.some((item) => steerEchoArrived(item, echo)))
+			: [],
+		[snapshot.items, steerEchoes, turn],
+	);
+	useEffect(() => {
+		setSteerEchoes((current) => {
+			const next = current.filter((echo) => pendingSteerEchoes.includes(echo));
+			return next.length === current.length ? current : next;
+		});
+	}, [pendingSteerEchoes]);
 	const timelineSnapshot = useMemo(() => {
 		const steering = queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
-		if (turn?.state !== "running" || steering.length === 0) return snapshot;
+		if (turn?.state !== "running" || (steering.length === 0 && pendingSteerEchoes.length === 0)) return snapshot;
+		const items = [...snapshot.items];
+		pendingSteerEchoes.forEach((echo, index) => {
+			const sequence = (echo.acceptedAfterSequence ?? snapshot.latestSequence) + 0.4 + index / 1000;
+			const at = items.findIndex((item) => item.sequence > sequence);
+			items.splice(at < 0 ? items.length : at, 0, {
+				kind: "activity",
+				id: `steer-echo:${echo.clientMessageId}`,
+				turnId: turn.id,
+				sequence,
+				revision: 0,
+				activityKind: "system",
+				status: "completed",
+				summary: echo.text,
+				detail: { event: "steer", text: echo.text, origin: "human", clientMessageId: echo.clientMessageId },
+				createdAt: echo.createdAt,
+			});
+		});
 		return {
 			...snapshot,
 			items: [
-				...snapshot.items,
+				...items,
 				...steering.map(({ turnId, message }, index): ConversationActivity => ({
 					kind: "activity",
 					id: `steering:${turnId}`,
@@ -1150,7 +1202,7 @@ function ChatWorkspaceContent({
 				})),
 			],
 		};
-	}, [queuedMessages, snapshot, steerStartedAt, turn]);
+	}, [pendingSteerEchoes, queuedMessages, snapshot, steerStartedAt, turn]);
 	// The dock omits queued turns that are not the user's own; the daemon needs
 	// the whole queue, with those turns left where they were.
 	const reorderQueuedTurns = useCallback(
@@ -1328,14 +1380,42 @@ function ChatWorkspaceContent({
 		},
 		[stablePromoteQueuedTurn],
 	);
+	const steerEchoTarget = useStableCallback(() =>
+		turn?.state === "running" ? { turnId: turn.id, sentAfterSequence: snapshot.latestSequence } : undefined);
+	const latestSequence = useStableCallback(() => snapshot.latestSequence);
 	const steer = useCallback(
 		async (
 			text: string,
 			attachments?: { mimeType: string; data: string }[],
 			clientMessageId?: string,
 			recoverOnly?: boolean,
-		) => stableSteer(text, attachments, clientMessageId, recoverOnly),
-		[stableSteer],
+		) => {
+			const id = clientMessageId ?? crypto.randomUUID();
+			// A recovery re-asks about a steer sent before; the daemon may already have it.
+			const target = recoverOnly ? undefined : steerEchoTarget();
+			if (target) {
+				setSteerEchoes((current) => [
+					...current.filter((echo) => echo.clientMessageId !== id),
+					{ clientMessageId: id, text, createdAt: new Date().toISOString(), ...target },
+				]);
+			}
+			const dropEcho = () => setSteerEchoes((current) => current.filter((echo) => echo.clientMessageId !== id));
+			try {
+				const outcome = await stableSteer(text, attachments, id, recoverOnly);
+				// A refused steer stays in the composer, so its echo goes.
+				if (outcome?.status === "not-accepted") dropEcho();
+				else {
+					const acceptedAfterSequence = latestSequence() ?? 0;
+					setSteerEchoes((current) => current.map((echo) =>
+						echo.clientMessageId === id && echo.acceptedAfterSequence === undefined ? { ...echo, acceptedAfterSequence } : echo));
+				}
+				return outcome;
+			} catch (error) {
+				dropEcho();
+				throw error;
+			}
+		},
+		[latestSequence, stableSteer, steerEchoTarget],
 	);
 	const acceptedClientMessageIds = useMemo(
 		() =>
@@ -1368,8 +1448,8 @@ function ChatWorkspaceContent({
 		const { composer } = readChatSessionDraft(draftScope);
 		return !composer.text.trim() && composer.attachments.length === 0 && !composer.excerpts?.length;
 	});
-	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
-	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
+	const annotationNavigationRef = useRef<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void) | null>(null);
+	const navigateToAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
 	}, []);
 	// This content remounts per session (it is keyed by the draft scope), so a
@@ -1960,7 +2040,7 @@ function ChatWorkspaceContent({
 				>
 				<HoldWhileHidden hidden={reviewerActive || shellActive}>
 					{snapshot.account ? (
-						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness}
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId}
 							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
 					) : null}
 					{!draftPersistenceAvailable ? (
@@ -1987,6 +2067,7 @@ function ChatWorkspaceContent({
 							onOpenShell={onOpenShell}
 							openingShell={openingShell}
 							shellError={shellError}
+							signInRequired={signInRequired}
 						/>
 					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
@@ -2010,8 +2091,9 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
+							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
@@ -2034,6 +2116,7 @@ function ChatWorkspaceContent({
 									onRollback={rollbackTarget}
 									onOpenFiles={onOpenFiles}
 									onOpenFile={onOpenFile}
+									onOpenArtifact={onOpenArtifact}
 									retryControl={retryControl}
 									composerRecoveryTurnId={retryControl ? limitedTurn?.id : undefined}
 									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
@@ -2053,6 +2136,7 @@ function ChatWorkspaceContent({
 									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
 									arriving={arrivingInChat}
 								/>
+							</ChatTokenSkills.Provider>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
@@ -2120,6 +2204,7 @@ function ChatWorkspaceContent({
 										onSend={handleComposerSend}
 						fileReferencesEnabled={fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
 						fileReferenceDelivery={fileReferenceDelivery}
+						messageByteLimit={messageByteLimit}
 										sentMessages={sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
@@ -2186,7 +2271,9 @@ function ChatWorkspaceContent({
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: startupReconnecting
 														? "Reconnecting to the agent…"
-														: undefined
+														: signInRequired && snapshot.controller.state === "stopped"
+															? t("chat.reauth.composerPlaceholder")
+															: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -2385,6 +2472,9 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.activityKind === "reasoning") return false;
 		// The page an html_render call shows is its own row right after it.
 		if (isShownAORender(item)) return false;
+		// Reading Orchestrator's own guides or `ao --help` is how the agent learns the
+		// tool, not work on the user's task.
+		if (isOrchestratorPlumbing(item)) return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (
@@ -2499,7 +2589,6 @@ function ChatHeader({
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
-	const simplifiedTopbar = useSimplifiedTopbar();
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
 		<SessionTabsTopbar
@@ -2515,7 +2604,7 @@ function ChatHeader({
 			tabs={
 					<div
 						aria-label="Chat tabs"
-						className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
+						className="flex h-full min-w-0 items-stretch"
 						onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
 						ref={tabListRef}
 						role="tablist"
@@ -2621,6 +2710,7 @@ function ControllerBanner({
 	openingShell,
 	shellError,
 	quietConnect = false,
+	signInRequired = false,
 }: {
 	controller: { state: ControllerState; error?: string };
 	/** The chat already shows the opening brief as working; connecting needs no banner. */
@@ -2641,6 +2731,7 @@ function ControllerBanner({
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
+	signInRequired?: boolean;
 }) {
 	const { t } = useTranslation();
 	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
@@ -2705,6 +2796,7 @@ function ControllerBanner({
 	if (!shown) return null;
 	const loading = controller.state === "connecting" || waking || restarting;
 	const actionable = controller.state === "stopped" && !waking && !restarting;
+	if (actionable && !terminated && signInRequired) return null;
 
 	return (
 		<div
@@ -2853,6 +2945,7 @@ export function Timeline({
 	onRollback,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	retryControl,
 	composerRecoveryTurnId,
 	onEditHumanMessage,
@@ -2874,10 +2967,10 @@ export function Timeline({
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
-	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
+	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	/** Handles annotations whose source is another conversation. */
-	onForeignAnnotation?: (annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => void;
-	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
+	onForeignAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => void;
+	annotationNavigationRef: MutableRefObject<((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
@@ -2895,6 +2988,8 @@ export function Timeline({
 	onRollback?: (turnId: string) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	retryControl?: ChatRetryControl;
 	composerRecoveryTurnId?: string;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
@@ -2930,11 +3025,27 @@ export function Timeline({
 	const arrivedEmpty = useRef(false);
 	if (arriving && !hasTranscript) arrivedEmpty.current = true;
 	const revealTranscript = arrivedEmpty.current && hasTranscript;
+	// Rows above the newest sequence this chat opened with arrived while it was on
+	// screen; only they play an entrance (chat-entrance.ts). Taken from the first
+	// render with a transcript, so a placeholder or loading frame does not count.
+	const [entranceGate] = useState(createChatEntranceGate);
+	if (entranceGate.floor === undefined && sourceSnapshot.items.length > 0) {
+		entranceGate.floor = sourceSnapshot.items.reduce((floor, item) => Math.max(floor, item.sequence), sourceSnapshot.latestSequence);
+	}
+	useEffect(() => {
+		entranceGate.settled = true;
+	}, [entranceGate]);
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
 	// The transcript fades out under the top bar once it is scrolled, and above
-	// the composer while there is more below.
-	useEdgeFade(scroller);
+	// the composer while there is more below. A callback ref, not an effect: the
+	// scroller is not rendered while the chat is empty, and an effect that ran
+	// then never attached once it was.
+	const edgeFadeRef = useEdgeFadeRef<HTMLDivElement>();
+	const scrollerRef = useCallback((node: HTMLDivElement | null) => {
+		scroller.current = node;
+		edgeFadeRef(node);
+	}, [edgeFadeRef]);
 	const scrollContent = useRef<HTMLDivElement>(null);
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
@@ -3031,7 +3142,7 @@ export function Timeline({
 	const dismissedSelection = useRef<typeof selectionAction>(null);
 	const dismissedEscapePress = useRef(false);
 	useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); }, [snapshot.conversationId, clearSelectionAction]);
-	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; messageId?: string; revision?: number }>();
+	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
 	const annotationHighlightTimer = useRef<number | undefined>(undefined);
@@ -3040,7 +3151,7 @@ export function Timeline({
 	// that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
 	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
-	const selectAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => {
+	const selectAnnotation = useCallback((annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; conversationId?: string }) => {
 		if (onForeignAnnotation && annotation.conversationId && annotation.conversationId !== snapshot.conversationId) {
 			// The source lives in another conversation (a side chat quoting the main
 			// chat); its host navigates there instead of searching this transcript.
@@ -3136,7 +3247,7 @@ export function Timeline({
 			setSelectionAction(null);
 			return;
 		}
-		const text = selection.toString().trim();
+		let text = selection.toString();
 		const messageId = source.dataset.chatMessageId;
 		const revision = Number(source.dataset.chatMessageRevision);
 		const role = source.dataset.chatMessageRole;
@@ -3150,6 +3261,12 @@ export function Timeline({
 			return;
 		}
 		const selectedRange = selection.getRangeAt(0).cloneRange();
+		const message = snapshot.items.find(item => item.kind === "message" && item.id === messageId);
+		if (!message || message.kind !== "message") { setSelectionAction(null); return; }
+		let captured;
+		try { captured = captureExcerptSnapshot(annotationBody(source), selectedRange, message.text); }
+		catch { setSelectionAction(null); return; }
+		text = captured.text;
 		const dismissed = dismissedSelection.current;
 		if (dismissed && dismissed.excerpt.messageId === messageId && dismissed.excerpt.revision === revision &&
 			dismissed.excerpt.text === text && selectionRangesEqual(dismissed.range, selectedRange)) return;
@@ -3162,13 +3279,14 @@ export function Timeline({
 				revision,
 				text,
 				role: role as "user" | "assistant",
+				snapshot: captured.snapshot,
 			},
 			range: selectedRange,
 		};
 		setSelectionAction((previous) => previous && previous.excerpt.messageId === messageId &&
 			previous.excerpt.revision === revision && previous.excerpt.text === text && selectionRangesEqual(previous.range, selectedRange)
 			? previous : next);
-	}, [excerptsEnabled, snapshot.conversationId]);
+	}, [excerptsEnabled, snapshot]);
 	useEffect(() => {
 		if (!excerptsEnabled) return;
 		const capture = (event: Event) => captureTranscriptSelection(event);
@@ -3214,9 +3332,10 @@ export function Timeline({
 
 	const addSelectionToChat = useCallback(async () => {
 		if (!selectionAction) return;
+		const excerpt = captureExcerptTurn(selectionAction.excerpt, snapshot);
 		if (onAddToChat) {
 			// A host with its own composer (a side chat) owns where references go.
-			onAddToChat(selectionAction.excerpt);
+			await onAddToChat(excerpt);
 			setSelectionAction(null);
 			window.getSelection()?.removeAllRanges();
 			return;
@@ -3224,25 +3343,31 @@ export function Timeline({
 		const composer = readChatSessionDraft(draftScope).composer;
 		// A pending delivery is cleared by revision on acceptance. Changing the
 		// draft now would keep the sent text and excerpts for a second send.
-		if (composer.delivery) {
-			setSelectionAction(null);
-			return;
-		}
+		if (composer.delivery) throw new Error("chat.draft.excerptPendingDelivery");
 		const current = composer.excerpts ?? [];
 		const duplicate = current.some(
 			(item) =>
 				item.messageId === selectionAction.excerpt.messageId &&
 				item.revision === selectionAction.excerpt.revision &&
-				item.text === selectionAction.excerpt.text,
+				item.text === selectionAction.excerpt.text &&
+				JSON.stringify(item.snapshot?.sourceRange) === JSON.stringify(selectionAction.excerpt.snapshot?.sourceRange) &&
+				JSON.stringify(item.snapshot?.renderedRange) === JSON.stringify(selectionAction.excerpt.snapshot?.renderedRange) &&
+				JSON.stringify(item.snapshot?.diagramRange) === JSON.stringify(selectionAction.excerpt.snapshot?.diagramRange),
 		);
-		if (!duplicate && current.length + (composer.fileReferences?.length ?? 0) >= 8) { setDraftPersistenceError("chat.draft.annotationLimit"); return; }
-  const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
-  const next = duplicate ? current : [...current, { ...selectionAction.excerpt, order }];
+		if (!duplicate && current.length + (composer.fileReferences?.length ?? 0) >= 8) {
+			setDraftPersistenceError("chat.draft.annotationLimit");
+			return;
+		}
+		const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
+		const next = duplicate ? current : [...current, { ...excerpt, order }];
+		const sizeError = excerptSizeError(next);
+		if (sizeError) throw new Error(sizeError);
 		const result = writeChatExcerptReferences(draftScope, next);
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
+		if (!result.ok) throw new Error("chat.draft.excerptSaveFailed");
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
-	}, [draftScope, onAddToChat, selectionAction]);
+	}, [draftScope, onAddToChat, selectionAction, snapshot]);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -3326,6 +3451,7 @@ export function Timeline({
 	const rollback = useStableCallback(onRollback);
 	const openFiles = useStableCallback(onOpenFiles);
 	const openFile = useStableCallback(onOpenFile);
+	const openArtifact = useStableCallback(onOpenArtifact);
 	const retryTurn = useStableCallback(retryControl?.retry);
 	const localBaseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const apiBaseUrl = remoteHost ? assetBaseUrl ?? null : assetBaseUrl ?? localBaseUrl;
@@ -3772,7 +3898,7 @@ export function Timeline({
 					text: excerpt.text,
 					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
-					sourceRevision: excerpt.revision,
+					sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
 				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
 				streaming: false,
 				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
@@ -3845,23 +3971,31 @@ export function Timeline({
 	// The brief that started this chat reads as working from the moment it was
 	// sent, through the agent connecting, until its turn settles.
 	const openingPending = Boolean(openingStartedAt) && !firstTurnSettled(snapshot);
+	const batchedReports = useMemo(
+		() => workerUpdates ? placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items) : NO_BATCHED_REPORTS,
+		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
+	);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		const firstTurn = snapshot.turns[0];
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
-		const groups = groupByTurn({ ...snapshot, items: timelineItems })
-				.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
-				.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
-					? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
-					: group);
+		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
+		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
+		const items = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
+		const groups = groupByTurn({ ...snapshot, items })
+			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
+				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
+				: group);
 		if (!workerUpdates) return groups;
-		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
-		if (spawnedIds.size === 0) return groups;
-		return groups
+		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
+		const spawnedIds = new Set(placed.flatMap((group) => spawnedSessionIds(group.items)));
+		if (spawnedIds.size === 0) return placed;
+		return placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
+	}, [batchedReports, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Whether the reader opened a step from the live row, kept for the step's own row
 	// (LiveStepChoices). Read once, when that row mounts, so nothing re-renders on it.
@@ -4038,10 +4172,40 @@ export function Timeline({
 		const frame = requestAnimationFrame(() => {
 			window.clearTimeout(annotationHighlightTimer.current);
 			annotationHighlightCleanup.current?.();
-			annotationHighlightCleanup.current = highlightChatAnnotation(source, annotationTarget.text, annotationTarget.revision);
+			annotationHighlightCleanup.current = highlightChatAnnotation(source, annotationTarget.text, annotationTarget.revision, annotationTarget.snapshot);
 			const scrollerNode = scroller.current;
-			let range = annotationTextRange(annotationBody(source), annotationTarget.text);
-			if (range && scrollerNode) {
+			const diagram = annotationDiagramBlock(source, annotationTarget);
+			let range = annotationReferenceRange(source, annotationTarget);
+			if (diagram && scrollerNode) {
+				const alignDiagram = () => {
+					if (!diagram.isConnected) return;
+					const rect = diagram.getBoundingClientRect();
+					const viewport = scrollerNode.getBoundingClientRect();
+					if (!rect.height || !viewport.height) return;
+					const padding = 12;
+					if (rect.top >= viewport.top + padding && rect.bottom <= viewport.bottom - padding) return;
+					const delta = rect.height > viewport.height - padding * 2
+						? rect.top - viewport.top - padding
+						: rect.top + rect.height / 2 - (viewport.top + viewport.height / 2);
+					scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: "auto" });
+				};
+				alignDiagram();
+				// Mermaid may replace its loading source with a differently sized SVG.
+				// Follow that layout briefly, but stop immediately on user interaction.
+				const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(alignDiagram);
+				observer?.observe(diagram);
+				observer?.observe(source);
+				const stopFollowing = () => observer?.disconnect();
+				const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+				const interactionTarget = scrollerNode.ownerDocument;
+				for (const event of events) interactionTarget.addEventListener(event, stopFollowing, { passive: true });
+				const clearHighlight = annotationHighlightCleanup.current;
+				annotationHighlightCleanup.current = () => {
+					stopFollowing();
+					for (const event of events) interactionTarget.removeEventListener(event, stopFollowing);
+					clearHighlight?.();
+				};
+			} else if (range && scrollerNode) {
 				const rangeRect = range.getBoundingClientRect();
 				const scrollerRect = scrollerNode.getBoundingClientRect();
 				const padding = 12;
@@ -4050,7 +4214,7 @@ export function Timeline({
 					source.scrollIntoView({ behavior: "auto", block: "center" });
 					// Re-read after the source jump; layout may have moved the selected
 					// range before the final centering adjustment.
-					range = annotationTextRange(annotationBody(source), annotationTarget.text);
+					range = annotationReferenceRange(source, annotationTarget);
 					if (range) {
 						const nextRect = range.getBoundingClientRect();
 						const delta = nextRect.top + nextRect.height / 2 - (scrollerRect.top + scrollerRect.height / 2);
@@ -4700,6 +4864,7 @@ export function Timeline({
 
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
+		<ChatEntrance.Provider value={entranceGate}>
 		<LiveStepChoices.Provider value={liveStepChoices}>
 		<div
 			ref={findSurface}
@@ -4714,9 +4879,9 @@ export function Timeline({
 			{find.bar}
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
 				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
-				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
+				onSide={onAddToSideChat ? excerpt => onAddToSideChat(captureExcerptTurn(excerpt, snapshot)) : undefined} checkingSide={checkingSideChatAvailability} /> : null}
 			<div
-				ref={scroller}
+				ref={scrollerRef}
 				tabIndex={-1}
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
@@ -4791,12 +4956,11 @@ export function Timeline({
 							>
 								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
+								<BatchedReportsContext.Provider value={batchedReports}>
 								<TurnGroup
 									group={group}
 									harness={snapshot.harness}
 									workerUpdates={workerUpdates}
-									// Consecutive quiet worker turns read as one list of rows, not separate turns.
-									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
 									startup={group.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
@@ -4807,6 +4971,7 @@ export function Timeline({
 									onRollback={rollback}
 									onOpenFiles={onOpenFiles ? openFiles : undefined}
 									onOpenFile={onOpenFile ? openFile : undefined}
+									onOpenArtifact={onOpenArtifact ? openArtifact : undefined}
 									retry={retry}
 									onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
 									messageEdit={messageEdit}
@@ -4820,14 +4985,14 @@ export function Timeline({
 									editPending={inlineEditPending}
 									editSendBlocked={inlineEditSendBlocked}
 									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
-									editBusy={Boolean(editBusy || newWorkDisabled)}
+									editBusy={turnEditing(group, messageEdit) && Boolean(editBusy || newWorkDisabled)}
 									editError={translateDraft(editError ??
 										draftPersistenceError ??
 										inlineEditRecoveryNotice ??
 										inlineEditOutcomeNotice)}
 									branchPoints={branchPoints}
 									editableTurns={editableTurns}
-									newHumanMessageIds={newHumanMessageIds}
+									newHumanMessageIds={turnNewHumanMessageIds(group, newHumanMessageIds)}
 									onActivateBranch={canActivateBranch ? activateBranch : undefined}
 									activateBranchPending={activateBranchPending}
 									activateBranchError={activateBranchError}
@@ -4836,9 +5001,10 @@ export function Timeline({
 									// rather than hiding rows the agent still remembers.
 									canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
 									rollbackDisabled={rollbackDisabled}
-									busy={busy}
+									busy={turnShowsApproval(group) ? busy : undefined}
 									queued={Boolean(group.turnId && queued.has(group.turnId))}
 								/>
+								</BatchedReportsContext.Provider>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
@@ -5008,6 +5174,7 @@ export function Timeline({
 			) : null}
 		</div>
 		</LiveStepChoices.Provider>
+		</ChatEntrance.Provider>
 		</ChatOpeningRef.Provider>
 	);
 }
@@ -5095,6 +5262,7 @@ const TurnGroup = memo(function TurnGroup({
 	onRollback,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	onEditHumanMessage,
 	messageEdit,
 	onStartMessageEdit,
@@ -5121,7 +5289,6 @@ const TurnGroup = memo(function TurnGroup({
 	startup,
 	onSelectAnnotation,
 	workerUpdates = false,
-	tight = false,
 }: {
 	group: TimelineGroup;
 	harness: string;
@@ -5133,6 +5300,8 @@ const TurnGroup = memo(function TurnGroup({
 	onRollback: (turnId: string) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	onEditHumanMessage?: ChatWorkspaceProps["onEditMessage"];
 	messageEdit?: MessageEditDraft;
 	onStartMessageEdit: (message: ConversationMessage) => void;
@@ -5162,11 +5331,11 @@ const TurnGroup = memo(function TurnGroup({
 	newHumanMessageIds: ReadonlySet<string>;
 	/** The opening turn of a starting session: its setup checklist. */
 	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
-	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
-	tight?: boolean;
 }) {
 	const hostId = useContext(ChatHostId);
+	const batched = useContext(BatchedReportsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
@@ -5317,20 +5486,40 @@ const TurnGroup = memo(function TurnGroup({
 	// Orchestrator chat: whatever a worker sent (a message, a mid-turn steer, a
 	// report batch, or reports folded into the user's message) draws as rows, and
 	// AO's task-naming prompt as the name it produced.
+	const reportsLine = (key: string, updates: readonly WorkerUpdate[]) => (
+		<ReportsLine
+			key={key}
+			updates={updates}
+			open={Boolean(activityDisclosureOverrides[key])}
+			onOpenChange={(open) => onActivityDisclosureChange(key, open)}
+		/>
+	);
+	// Set when a reports line was drawn under a message or steer, so the prompt's action row knows it is taken.
+	let drewReportsUnder = false;
 	const renderWorkerRun = (run: TimelineRun): ReactNode | ReactNode[] => {
 		const item = run.kind === "single" ? run.items[0] : undefined;
 		if (!workerUpdates || !item) return renderRun(run);
 		const updates = workerUpdatesOf(item);
-		if (updates.length > 0) return <WorkerUpdateRows key={run.key} updates={updates} />;
+		// A direct send or steer is one row; a batch of reports is one line that opens to them.
+		if (updates.length > 0 && updates[0]?.state === undefined) {
+			const rows = <WorkerUpdateRows key={run.key} updates={updates} />;
+			// Reports a worker's steer carried in travel with it, as their own line.
+			const carried = batched?.under.get(item.id) ?? [];
+			if (carried.length === 0) return rows;
+			drewReportsUnder = true;
+			return [rows, reportsLine(`${run.key}:reports`, carried)];
+		}
+		if (updates.length > 0) return reportsLine(run.key, updates);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
-		const piggybacked = piggybackedUpdates(item);
-		if (piggybacked.length === 0) return renderRun(run);
-		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
+		// Reports delivered with a human message or steer are not drawn: the message stands alone.
+		return renderRun(run);
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
+	// The reports line under the prompt takes the prompt's action row itself.
+	const reportsUnderPrompt = drewReportsUnder;
 	// The live row sits at the end of the turn, under what the agent has written so
 	// far, where the reader is already looking: orb, current step, timer. A provider
 	// retry shows in the same row. The setup checklist shares it too, so the handoff
@@ -5338,6 +5527,7 @@ const TurnGroup = memo(function TurnGroup({
 	const workingRow =
 		startup || group.live ? (
 			<LiveResponseStatus
+				entranceKey={`live:${group.key}`}
 				startedAt={group.liveStartedAt}
 				startupLabel={startup ? startup.label ?? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : group.liveStartupLabel}
 				failed={startup?.failed}
@@ -5353,9 +5543,6 @@ const TurnGroup = memo(function TurnGroup({
 			</LiveResponseStatus>
 		) : null;
 	const outcome = group.outcome;
-	// A settled worker turn whose answer asks the user nothing draws that answer as
-	// one line under the rows, with the work folded into it instead of "Worked for".
-	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
 	// "Worked for" heads every settled turn with how long it ran. With work to fold it
 	// is the fold, opening onto the steps; a turn that went straight to its answer has
 	// nothing to open, so it is the same words without the chevron. As the turn
@@ -5364,8 +5551,13 @@ const TurnGroup = memo(function TurnGroup({
 	// into its summary. A settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
+	// Agents the turn spawned are part of its work, so they fold with its steps.
+	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
+	const spawnedLine = spawned.length > 0 ? <SpawnedAgents key="spawned" sessionIds={spawned} /> : null;
+	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
+	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
 	const showsWorked = Boolean(
-		outcome && !quietReply && !onlyRead && (foldedRuns.length > 0 || workedDurationMs !== undefined),
+		outcome && !onlyRead && (hasFoldedWork || workedDurationMs !== undefined),
 	);
 	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
 	// "Worked for" fills that row; without it, an empty row of the same height keeps
@@ -5373,7 +5565,7 @@ const TurnGroup = memo(function TurnGroup({
 	const promptBubble = group.items.some(
 		(item) => item.kind === "message" && item.role === "user" && item.origin === "human" && !item.continuation && !relayedVia(item),
 	);
-	const reservesActionRow = promptBubble && !quietReply && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
+	const reservesActionRow = promptBubble && !reportsUnderPrompt && !(group.turnId && onActivateBranch && branchPoints.get(group.turnId));
 	// The empty row is exactly as tall as "Worked for", which takes its place as the
 	// turn settles, so the handover moves nothing. Only one of the two is ever in the
 	// DOM, so the turn's row gap is never counted twice.
@@ -5395,7 +5587,7 @@ const TurnGroup = memo(function TurnGroup({
 						open={Boolean(activityDisclosureOverrides[disclosureKey])}
 						onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
 					>
-						{foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
+						{hasFoldedWork ? foldedWork() : undefined}
 					</TurnWorkSummary>
 				</motion.div>
 			) : null}
@@ -5406,28 +5598,13 @@ const TurnGroup = memo(function TurnGroup({
 	// a step keeps its element as later ones land under it and an image the reader
 	// opened from it stays open. Once the turn settles they fold beneath "Worked for".
 	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
-	if (outcome) body.push(...noticeRuns.map(renderRun));
-	if (quietReply && finalRun) {
-		body.push(
-			<OrchestratorReply
-				key={finalRun.key}
-				message={quietReply}
-				work={foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
-				workOpen={Boolean(activityDisclosureOverrides[disclosureKey])}
-				onWorkOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
-				onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
-				rollbackDisabled={rollbackDisabled}
-			/>,
-		);
-	} else if (finalRun) {
-		body.push(renderRun(finalRun));
-	}
-	const spawned = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	if (spawned.length > 0) body.push(<SpawnedAgents key="spawned" sessionIds={spawned} />);
+	// Settled steers still carry the reports they delivered.
+	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
+	if (finalRun) body.push(renderRun(finalRun));
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.
-		<div className={cn("relative flex min-w-0 flex-col gap-2.5", tight && "-mt-3.5")}>
+		<div className="relative flex min-w-0 flex-col gap-2.5">
 			{body}
 			{/* The live row comes straight after the steps, so the step it names sits
 			    under the work it continues, and the plan reads below it. Once the turn
@@ -5459,12 +5636,14 @@ const TurnGroup = memo(function TurnGroup({
 			{group.plan ? <TurnPlan plan={group.plan} live={group.live} /> : null}
 			{/* Changed-files review is a settled result, not live activity. Keep it
 			    below the completed assistant response and its bottom action row. */}
-			{group.diff && group.outcome?.state === "completed" && copyableMessageId ? (
-				<TurnChangedFiles
+			{(group.diff || group.artifacts?.length) && group.outcome?.state === "completed" && copyableMessageId ? (
+				<TurnResults
 					diff={group.diff}
+					reportedArtifacts={group.artifacts}
 					items={group.items}
 					onReview={onOpenFiles}
 					onOpenFile={onOpenFile}
+					onOpenArtifact={onOpenArtifact}
 				/>
 			) : null}
 			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
@@ -5573,7 +5752,7 @@ function TimelineItem({
 	onRollback?: () => void;
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
-	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
+	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** This message is the live edge of its turn, rather than an earlier fragment
 	 * followed by tool activity. */
 }) {
@@ -5829,6 +6008,21 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 }
 
 /**
+ * A steer the composer sent that the daemon has not yet recorded. `sentAfterSequence`
+ * is the newest row when it was sent; `acceptedAfterSequence`, the newest when the
+ * daemon accepted it, which is where the daemon's own row lands.
+ */
+type SteerEcho = { clientMessageId: string; text: string; createdAt: string; turnId: string; sentAfterSequence: number; acceptedAfterSequence?: number };
+
+/** Whether this row is the daemon's record of the steer. */
+function steerEchoArrived(item: ConversationItem, echo: SteerEcho): boolean {
+	if (item.kind !== "activity" || item.detail?.event !== "steer") return false;
+	return item.detail.clientMessageId
+		? item.detail.clientMessageId === echo.clientMessageId
+		: item.sequence > echo.sentAfterSequence && (item.detail.text ?? item.summary) === echo.text;
+}
+
+/**
  * A callback whose identity survives its caller re-rendering.
  *
  * `useConversationCommands` returns fresh arrows every render and the preview
@@ -5883,6 +6077,8 @@ type TimelineGroup = {
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
+	/** The session artifacts the turn created or edited, whatever wrote them. */
+	artifacts?: TurnArtifactChange[];
 	/** The agent's plan for this turn, when it made one. */
 	plan?: ConversationPlan;
 	/** The turn is still running, so its diff and plan can still change. */
@@ -6072,6 +6268,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
+		group.artifacts = turn.artifacts;
 		// A later turn or run carries a newer copy of a list that spans turns.
 		group.plan = turn.plan?.steps.length && !turn.plan.superseded ? turn.plan : undefined;
 		group.live = turn.state === "running";
@@ -6184,26 +6381,37 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }
 
-const quietWorkerGroups = new WeakMap<TimelineGroup, boolean>();
+const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };
 
 /**
- * A settled worker turn that draws only rows and a quiet reply, so it can sit
- * tight against its neighbours. Groups keep their identity while unchanged, so
- * each is judged once rather than on every streamed delta.
+ * What a turn reads of the timeline-wide flags, so a send or steer redraws only
+ * the turns it changes. A turn uses the new-message ids only for its own human
+ * messages' entrance, `editBusy` only in the message being edited, and `busy`
+ * only on an approval card; other turns get the same value every time and keep
+ * their memoized render.
  */
-function isQuietWorkerGroup(group: TimelineGroup | undefined): boolean {
-	if (!group) return false;
-	let quiet = quietWorkerGroups.get(group);
-	if (quiet === undefined) {
-		quiet = group.outcome?.state === "completed"
-			&& !group.plan
-			&& !group.diff
-			&& quietWorkerReply(group.items) !== undefined
-			&& !group.items.some(isNoticeItem)
-			&& spawnedSessionIds(group.items).length === 0;
-		quietWorkerGroups.set(group, quiet);
+const NO_NEW_HUMAN_MESSAGES: ReadonlySet<string> = new Set();
+function turnNewHumanMessageIds(group: TimelineGroup, ids: ReadonlySet<string>): ReadonlySet<string> {
+	return ids.size > 0 && group.items.some((item) => ids.has(itemKey(item))) ? ids : NO_NEW_HUMAN_MESSAGES;
+}
+function turnEditing(group: TimelineGroup, edit: MessageEditDraft | undefined): boolean {
+	return Boolean(edit && group.items.some((item) => item.kind === "message" && item.turnId === edit.turnId));
+}
+function turnShowsApproval(group: TimelineGroup): boolean {
+	return group.items.some((item) => item.kind === "activity" && item.activityKind === "approval");
+}
+
+const detachedActions = new WeakMap<ConversationItem, ConversationItem>();
+
+/** An AO action filed under a turn the timeline drops, as a turn-less row; anything else unchanged. */
+function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): ConversationItem {
+	if (item.kind !== "activity" || item.activityKind !== "ao_action" || !item.turnId || !dropped.has(item.turnId)) return item;
+	let detached = detachedActions.get(item);
+	if (!detached) {
+		detached = { ...item, turnId: undefined };
+		detachedActions.set(item, detached);
 	}
-	return quiet;
+	return detached;
 }
 
 /** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */

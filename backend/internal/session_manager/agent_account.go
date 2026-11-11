@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -194,14 +195,23 @@ func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) err
 	if err != nil {
 		return err
 	}
-	var errs []error
+	var (
+		errs  []error
+		errMu sync.Mutex
+		wg    sync.WaitGroup
+	)
+	fail := func(err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		errs = append(errs, err)
+	}
 	for _, rec := range recs {
 		if rec.IsTerminated {
 			continue
 		}
 		bound, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
 		if err != nil {
-			errs = append(errs, err)
+			fail(err)
 			continue
 		}
 		if bound != accountID {
@@ -212,16 +222,19 @@ func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) err
 		// exited until its agent reports. Refuse rather than delete the folder
 		// under it: a retry after it settles stops it like any running agent.
 		if m.launchInFlight(rec.ID) {
-			errs = append(errs, fmt.Errorf("session %s is starting its agent on the account", rec.ID))
+			fail(fmt.Errorf("session %s is starting its agent on the account", rec.ID))
 			continue
 		}
 		if rec.Activity.State == domain.ActivityExited {
 			continue
 		}
-		if _, err := m.ExitAgent(ctx, rec.ID); err != nil && !errors.Is(err, ErrAgentExited) {
-			errs = append(errs, err)
-		}
+		wg.Go(func() {
+			if _, err := m.ExitAgent(ctx, rec.ID); err != nil && !errors.Is(err, ErrAgentExited) {
+				fail(err)
+			}
+		})
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 
