@@ -59,8 +59,12 @@ else
 	sudo apt-get install -y build-essential pkg-config xz-utils
 	tools="$HOME/.local/ao-build-tools"
 	mkdir -p "$tools"
-	if [[ ! -x "$tools/go/bin/go" ]]; then
-		curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o "$stage/go.tar.gz"
+	# Replace a cached Go older than the one backend/go.mod requires; keep a newer one.
+	go_version=1.27.4
+	cached_go="$(GOTOOLCHAIN=local "$tools/go/bin/go" env GOVERSION 2>/dev/null || true)"
+	if [[ "$(printf '%s\n' "$go_version" "${cached_go#go}" | sort -V | head -n1)" != "$go_version" ]]; then
+		rm -rf "$tools/go"
+		curl -fsSL "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz" -o "$stage/go.tar.gz"
 		printf '%s  %s\n' 7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840 "$stage/go.tar.gz" | sha256sum -c -
 		tar -xzf "$stage/go.tar.gz" -C "$tools"
 	fi
