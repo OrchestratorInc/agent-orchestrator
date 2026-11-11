@@ -17,8 +17,19 @@ import (
 // writes through. *sqlite.Store satisfies it. Idempotency lives here: a project
 // whose id already exists is skipped, never overwritten, so a re-run is safe
 // and legacy files stay the sole source of truth.
+//
+// The same holds for a path an existing active project already owns under a
+// different id: writing it would give two active projects one directory. The
+// check is FindProjectByPath (exact equality on the normalized path) plus, when
+// the imported path resolves on this host, an os.SameFile scan of the active
+// projects — the same two-step identity the daemon's own registration path uses
+// to answer PATH_ALREADY_REGISTERED. A path that does not resolve here (an
+// unmounted repo, another OS) is matched by text only, so an alias of it is not
+// detected.
 type Store interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
+	FindProjectByPath(ctx context.Context, path string) (domain.ProjectRecord, bool, error)
+	ListProjects(ctx context.Context) ([]domain.ProjectRecord, error)
 	UpsertProject(ctx context.Context, r domain.ProjectRecord) error
 }
 
@@ -149,6 +160,32 @@ func importProject(ctx context.Context, store Store, record domain.ProjectRecord
 		rep.ProjectsSkipped++
 		return nil
 	}
+	// A different id already owning this path is a conflict, not a new project:
+	// importing it would leave two active projects on one directory. The legacy
+	// store is read-only input, so the imported one is skipped and the collision
+	// reported rather than silently adopted.
+	if record.Path != "" {
+		owner, taken, err := store.FindProjectByPath(ctx, record.Path)
+		if err != nil {
+			return fmt.Errorf("lookup project path %s: %w", record.Path, err)
+		}
+		if !taken {
+			// FindProjectByPath compares the path as text, so an alias of an
+			// already-registered directory (symlink, macOS /tmp vs /private/tmp)
+			// looks free. Compare directory identity too, exactly as the daemon's
+			// registration path does before answering PATH_ALREADY_REGISTERED.
+			owner, taken, err = findSameFileOwner(ctx, store, record.Path)
+			if err != nil {
+				return err
+			}
+		}
+		if taken && owner.ID != record.ID {
+			rep.ProjectsSkipped++
+			rep.Notes = append(rep.Notes, fmt.Sprintf(
+				"%s: skipped, path %s already belongs to project %s", record.ID, quote(record.Path), quote(owner.ID)))
+			return nil
+		}
+	}
 	if dryRun {
 		rep.ProjectsImported++
 		return nil
@@ -158,6 +195,29 @@ func importProject(ctx context.Context, store Store, record domain.ProjectRecord
 	}
 	rep.ProjectsImported++
 	return nil
+}
+
+// findSameFileOwner reports the active project whose directory is the same
+// filesystem object as path, for when path is aliased rather than textually
+// identical. It mirrors the daemon registration check: nothing is found when
+// path does not resolve to a directory here, because directory identity cannot
+// be compared for a path this host cannot stat.
+func findSameFileOwner(ctx context.Context, store Store, path string) (domain.ProjectRecord, bool, error) {
+	selected, err := os.Stat(path)
+	if err != nil || !selected.IsDir() {
+		return domain.ProjectRecord{}, false, nil
+	}
+	projects, err := store.ListProjects(ctx)
+	if err != nil {
+		return domain.ProjectRecord{}, false, fmt.Errorf("list projects for path identity %s: %w", path, err)
+	}
+	for _, candidate := range projects {
+		registered, statErr := os.Stat(candidate.Path)
+		if statErr == nil && os.SameFile(selected, registered) {
+			return candidate, true, nil
+		}
+	}
+	return domain.ProjectRecord{}, false, nil
 }
 
 func appendPrefixed(dst []string, id string, notes []string) []string {

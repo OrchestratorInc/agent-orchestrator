@@ -1209,15 +1209,22 @@ CREATE TABLE review_session (
 	return tx.Commit()
 }
 
-func repairReviewPerHarnessShape(db *sql.DB) error {
-	ok, err := reviewHasSessionHarnessUnique(db)
-	if err != nil || ok {
-		return err
+func repairReviewPerHarnessShape(db *sql.DB) (err error) {
+	ok, queryErr := reviewHasSessionHarnessUnique(db)
+	if queryErr != nil || ok {
+		return queryErr
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
 		return err
 	}
-	defer func() { _, _ = db.Exec(`PRAGMA foreign_keys=ON`) }()
+	// The restore is not best effort: leaving foreign_keys OFF on this
+	// connection silently disables every cascade and the CDC triggers' lookups
+	// for the daemon's whole lifetime, so surface it instead of dropping it.
+	defer func() {
+		if _, restoreErr := db.Exec(`PRAGMA foreign_keys=ON`); restoreErr != nil && err == nil {
+			err = fmt.Errorf("restore foreign_keys after review repair: %w", restoreErr)
+		}
+	}()
 
 	tx, err := db.Begin()
 	if err != nil {

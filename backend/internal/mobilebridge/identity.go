@@ -88,16 +88,24 @@ func EnsureIdentityFor(path string, ifaces []net.Interface) (Identity, error) {
 
 	if b, err := os.ReadFile(path); err == nil {
 		var existing Identity
-		if json.Unmarshal(b, &existing) == nil && existing.HostID != "" {
-			if !equalStrings(existing.Fingerprints, current) || existing.Fingerprint != aggregate {
-				existing.Fingerprints = current
-				existing.Fingerprint = aggregate
-				if err := writeIdentity(path, existing); err != nil {
-					return Identity{}, err
-				}
-			}
-			return existing, nil
+		// A file that is present but unreadable is NOT a fresh machine. Issuing
+		// a new HostID here would silently unpair every phone, which is exactly
+		// what the reset rule below forbids. Fail loudly instead: the operator
+		// can delete identity.json to reset deliberately.
+		if unmarshalErr := json.Unmarshal(b, &existing); unmarshalErr != nil {
+			return Identity{}, fmt.Errorf("parse mobile identity %s: %w (delete the file to deliberately reset this host identity)", path, unmarshalErr)
 		}
+		if existing.HostID == "" {
+			return Identity{}, fmt.Errorf("mobile identity %s has no hostId (delete the file to deliberately reset this host identity)", path)
+		}
+		if !equalStrings(existing.Fingerprints, current) || existing.Fingerprint != aggregate {
+			existing.Fingerprints = current
+			existing.Fingerprint = aggregate
+			if err := writeIdentity(path, existing); err != nil {
+				return Identity{}, err
+			}
+		}
+		return existing, nil
 	} else if !os.IsNotExist(err) {
 		return Identity{}, fmt.Errorf("read mobile identity: %w", err)
 	}
@@ -133,7 +141,7 @@ func writeIdentity(path string, id Identity) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+	if err := writeFileAtomic(path, append(b, '\n')); err != nil {
 		return fmt.Errorf("write mobile identity: %w", err)
 	}
 	return nil

@@ -56,7 +56,7 @@ func (s *Store) WriteSCMObservation(ctx context.Context, pr domain.PullRequest, 
 func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qr.MarkPRMerged(ctx, gen.MarkPRMergedParams{
+	rows, err := s.qw.MarkPRMerged(ctx, gen.MarkPRMergedParams{
 		MergeCommitSha: mergeCommitSHA,
 		StateChangedAt: sql.NullTime{Time: mergedAt, Valid: true},
 		UpdatedAt:      mergedAt,

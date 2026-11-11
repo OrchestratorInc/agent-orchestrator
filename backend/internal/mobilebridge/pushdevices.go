@@ -371,22 +371,5 @@ func (r *DeviceRegistry) persistLocked() error {
 	if err := os.MkdirAll(filepath.Dir(r.path), 0o700); err != nil {
 		return fmt.Errorf("mkdir mobile dir: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(r.path), ".push-devices-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(b); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, r.path)
+	return writeFileAtomic(r.path, b)
 }
