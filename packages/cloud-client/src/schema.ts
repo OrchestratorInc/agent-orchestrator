@@ -231,7 +231,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Returns what the viewer page shows a signed-in person for a link: the same details as getPublicArtifactShare, for a public link, a link they own, or a private link shared with their verified email. For a private link contentUrl carries a view token (?vt=) that opens the file for 10 minutes; the file host checks the token and the link's grants on every request, so removing someone or unpublishing takes effect at once. Any other link, private or not there at all, returns 404, so the answer never says that a private link exists. Rate-limited per person (429 rate_limited). */
+        /** @description Returns what the viewer page shows a signed-in person for a link: the same details as getPublicArtifactShare, for a public link, a link they own, or a private link shared with their verified email. For a private link contentUrl carries a view token (?vt=) that opens the file for 10 minutes; the file host checks the token and the link's grants on every request, so removing someone or unpublishing takes effect at once. Any other link, private or not there at all, returns 404, so the answer never says that a private link exists. For the link's owner the answer adds you, with the link's ID, so they can unpublish it from the viewer page. Rate-limited per person (429 rate_limited). */
         post: operations["viewArtifactShare"];
         delete?: never;
         options?: never;
@@ -4804,6 +4804,13 @@ export interface components {
             /** @description Where the link's file is served; the viewer frames it. For a private link (viewArtifactShare) it carries a short-lived view token in its vt query parameter. */
             contentUrl: string;
             access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description Only from viewArtifactShare, and only for the link's owner: what the viewer page needs to manage the link. shareId unpublishes it (deleteArtifactShare); grantCount is how many emails it is shared with. Absent for everyone else. */
+            you?: {
+                owner: boolean;
+                /** Format: uuid */
+                shareId: string;
+                grantCount: number;
+            };
         };
         WorkerArtifactFile: {
             path: string;

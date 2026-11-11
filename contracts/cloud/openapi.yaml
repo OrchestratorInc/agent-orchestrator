@@ -412,8 +412,9 @@ paths:
         10 minutes; the file host checks the token and the link's grants on
         every request, so removing someone or unpublishing takes effect at
         once. Any other link, private or not there at all, returns 404, so
-        the answer never says that a private link exists. Rate-limited per
-        person (429 rate_limited).
+        the answer never says that a private link exists. For the link's
+        owner the answer adds you, with the link's ID, so they can unpublish
+        it from the viewer page. Rate-limited per person (429 rate_limited).
       responses:
         "200":
           description: The link's details, with a contentUrl that opens it.
@@ -8835,6 +8836,24 @@ components:
             token in its vt query parameter.
         access:
           $ref: "#/components/schemas/ArtifactShareAccess"
+        you:
+          type: object
+          additionalProperties: false
+          required: [owner, shareId, grantCount]
+          description: >-
+            Only from viewArtifactShare, and only for the link's owner: what
+            the viewer page needs to manage the link. shareId unpublishes it
+            (deleteArtifactShare); grantCount is how many emails it is shared
+            with. Absent for everyone else.
+          properties:
+            owner:
+              type: boolean
+            shareId:
+              type: string
+              format: uuid
+            grantCount:
+              type: integer
+              minimum: 0
     WorkerArtifactFile:
       type: object
       additionalProperties: false
