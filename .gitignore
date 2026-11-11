@@ -108,3 +108,13 @@ pnpm-lock.yaml
 .serena/
 
 /frontend/wake-helper/
+
+# Local Codex/Claude tooling state (keep curated Claude skills visible)
+.codex/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/ao-desktop-dev/
+!.claude/skills/ao-desktop-dev/**
+!.claude/skills/bug-triage/
+!.claude/skills/bug-triage/**
