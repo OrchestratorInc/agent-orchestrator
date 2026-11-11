@@ -806,11 +806,12 @@ describe("a sleeping or waking agent", () => {
 			sending = result.current.commands.send("after the pick");
 		});
 
+		const refused = expect(sending).rejects.toMatchObject({ code: CHAT_SETTINGS_NOT_SAVED });
 		await act(async () => {
 			write.resolve({ data: undefined, error: { code: "CHAT_SETTINGS_FAILED", message: "refused" } });
 			await picking;
+			await refused;
 		});
-		await expect(sending).rejects.toMatchObject({ code: CHAT_SETTINGS_NOT_SAVED });
 		expect(postMock).not.toHaveBeenCalled();
 	});
 });
