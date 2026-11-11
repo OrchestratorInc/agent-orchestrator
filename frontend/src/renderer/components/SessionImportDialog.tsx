@@ -293,7 +293,7 @@ function ImportError({ error, failures }: { error?: string; failures: { id: stri
 	const { t } = useTranslation();
 	if (!error) return null;
 	return (
-		<div role="alert" className="flex flex-col gap-1 px-(--size-modal-padding) pb-(--size-modal-padding) text-sm text-destructive">
+		<div role="alert" className="max-h-[30svh] shrink-0 space-y-1 overflow-y-auto px-(--size-modal-padding) pb-(--size-modal-padding) text-sm text-destructive settings-thin-scrollbar">
 			<p>{error}</p>
 			{failures.slice(0, MAX_LISTED_FAILURES).map((failure) => (
 				<p key={failure.id} className="truncate text-xs">
