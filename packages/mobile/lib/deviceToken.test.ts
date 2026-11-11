@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ServerConfig } from "./config";
-import { isPairingSecret, pairDevice } from "./deviceToken";
+import { isPairingSecret, pairDevice, releaseDeviceToken } from "./deviceToken";
 
 const config: ServerConfig = { host: "192.168.1.42", httpPort: "3011", muxPort: "14801", secure: false, password: "Code1234", hostId: "h_paired" };
 const device = { name: "Test phone", platform: "ios" };
@@ -46,5 +46,16 @@ describe("pairDevice", () => {
 		await expect(pairDevice(config, device, answer(200, { hostId: "h_other", token }))).resolves.toEqual({ kind: "offline" });
 		await expect(pairDevice(config, device, answer(200, { hostId: "h_paired", token: "b".repeat(64) }))).resolves.toEqual({ kind: "offline" });
 		await expect(pairDevice(config, device, unreachable)).resolves.toEqual({ kind: "offline" });
+	});
+});
+
+describe("releaseDeviceToken", () => {
+	it("hands the token back through the machine's unpair route, and ignores a failure", async () => {
+		const fetchImpl = answer(204);
+		await releaseDeviceToken({ ...config, password: token }, fetchImpl);
+		const [url, init] = fetchImpl.calls[0];
+		expect(url).toBe("http://192.168.1.42:3011/api/v1/push/pairings/released");
+		expect(init).toMatchObject({ method: "DELETE", headers: { Authorization: `Bearer ${token}`, "X-AO-Expected-Host-ID": "h_paired" } });
+		await expect(releaseDeviceToken({ ...config, password: token }, unreachable)).resolves.toBeUndefined();
 	});
 });

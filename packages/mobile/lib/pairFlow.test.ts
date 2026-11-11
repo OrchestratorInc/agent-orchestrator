@@ -333,6 +333,16 @@ describe("pairing for this phone's own token", () => {
 		expect(result.ok && result.config.password).toBe(token);
 	});
 
+	it("hands the token back when the user cancels naming, and keeps it when verification fails", async () => {
+		const pair = vi.fn(async () => ({ kind: "paired" as const, token, credential: "pairing-code" as const }));
+		const release = vi.fn(async (_config: unknown) => {});
+		await expect(pairFromCode(`aomobile://pair#${code}`, deps({ pair, release, chooseName: vi.fn(async () => null) }))).resolves.toMatchObject({ ok: false, reason: "cancelled" });
+		expect(release).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: token }));
+		release.mockClear();
+		await expect(pairFromCode(`aomobile://pair#${code}`, deps({ pair, release, verify: vi.fn(async () => { throw new Error("offline"); }) }))).resolves.toMatchObject({ ok: false, reason: "verify-failed" });
+		expect(release).not.toHaveBeenCalled();
+	});
+
 	it("saves the code's token as it is for a desktop without device tokens", async () => {
 		const d = deps({ pair: vi.fn(async () => ({ kind: "unsupported" as const })) });
 		await pairFromCode(`aomobile://pair#${code}`, d);

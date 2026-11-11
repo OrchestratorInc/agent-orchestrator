@@ -58,3 +58,17 @@ export async function pairDevice(
 		clearTimeout(timeout);
 	}
 }
+
+/** Hands this phone's token in config back to the machine. Best effort. */
+export async function releaseDeviceToken(config: ServerConfig, fetchImpl: typeof fetch = fetch): Promise<void> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), PAIR_DEVICE_TIMEOUT_MS);
+	try {
+		// The machine revokes the device token that calls its unpair route.
+		await fetchImpl(`${base(config)}/api/v1/push/pairings/released`, { method: "DELETE", headers: headers(config), signal: controller.signal });
+	} catch {
+		// A token not handed back stays listed on the machine, where it can be removed.
+	} finally {
+		clearTimeout(timeout);
+	}
+}

@@ -1,0 +1,24 @@
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./hosts", () => ({ updateHostToken: vi.fn() }));
+vi.mock("./deviceToken", () => ({ pairDevice: vi.fn(), releaseDeviceToken: vi.fn(async () => {}) }));
+
+import type { ServerConfig } from "./config";
+import { pairDevice, releaseDeviceToken } from "./deviceToken";
+import { pairThisDevice, releaseThisDevice } from "./deviceTokenRuntime";
+
+const config: ServerConfig = { host: "192.168.1.42", httpPort: "3011", muxPort: "14801", secure: false, password: "Code1234", hostId: "h_paired" };
+const token = "aod_" + "a".repeat(64);
+
+describe("pairThisDevice", () => {
+	it("gives a retry with the same spent code the token it issued, until that token is handed back", async () => {
+		vi.mocked(pairDevice).mockResolvedValue({ kind: "paired", token, credential: "pairing-code" });
+		const first = await pairThisDevice(config, { fresh: true });
+		await expect(pairThisDevice(config, { fresh: true })).resolves.toEqual(first);
+		expect(pairDevice).toHaveBeenCalledOnce();
+		await releaseThisDevice({ ...config, password: token });
+		expect(releaseDeviceToken).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+		await pairThisDevice(config, { fresh: true });
+		expect(pairDevice).toHaveBeenCalledTimes(2);
+	});
+});

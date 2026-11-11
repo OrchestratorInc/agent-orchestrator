@@ -42,6 +42,7 @@ export type PairDeps = {
 	/** Proves the winning endpoint actually serves us, with our credential. */
 	verify: (config: ServerConfig) => Promise<void>;
 	pair?: (config: ServerConfig) => Promise<PairDeviceResult>;
+	release?: (config: ServerConfig) => Promise<void>;
 	/** New pairings are not persisted until the user confirms a readable name.
 	 * The icon is offered alongside it, starting from the machine's default. */
 	chooseName: (suggested: string, appearance: MachineAppearance, hostId: string) => Promise<MachineNameChoice | null>;
@@ -84,11 +85,13 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	// The race has confirmed the machine, so the secret may be sent now.
 	let token = offer.token;
 	let fallbackToken: string | undefined;
+	let issued = false;
 	let config = configForEndpoint(outcome.endpoint, token, offer.hostId || outcome.hostId);
 	if (deps.pair && isPairingSecret(token)) {
 		const paired = await deps.pair(config);
 		if (paired.kind === "unauthorized") return { ok: false, reason: "verify-failed", endpoint: outcome.endpoint, status: 401 };
 		if (paired.kind === "paired") {
+			issued = true;
 			if (paired.credential === "password") fallbackToken = token;
 			token = paired.token;
 			config = configForEndpoint(outcome.endpoint, token, offer.hostId || outcome.hostId);
@@ -119,8 +122,9 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	if (!name) {
 		const suggested = offer.name || outcome.endpoint.host;
 		const chosen = await deps.chooseName(suggested, appearance ?? machineAppearance({ id: hostId, name: suggested }), hostId);
+		name = chosen?.name.trim() ?? "";
+		if (!name && issued) await deps.release?.(config);
 		if (chosen === null) return { ok: false, reason: "cancelled" };
-		name = chosen.name.trim();
 		if (!name) return { ok: false, reason: "name-required" };
 		appearance = chosen.appearance;
 	}
