@@ -1069,9 +1069,17 @@ export function XtermTerminal(props: XtermTerminalProps) {
 
 		let columnSelectionActive = false;
 		let pendingColumnSelection: boolean | null = null;
+		// When the last left-button gesture that went to the program ended (see
+		// pointerUp). An OSC 52 write shortly after it is honored as that
+		// gesture's copy.
+		let appGestureEndedAt = Number.NEGATIVE_INFINITY;
 		const copySelection = (options?: { clipboardData?: DataTransfer | null }) => {
 			const selection = joinVisuallyContinuousLines(term, term.getSelection(), columnSelectionActive);
 			if (!selection) return false;
+			// A local copy (release, shortcut or context menu) is newer than anything
+			// the program might still send for an earlier gesture; a late OSC 52
+			// write must not replace it.
+			appGestureEndedAt = Number.NEGATIVE_INFINITY;
 			options?.clipboardData?.setData("text/plain", selection);
 			void aoBridge.clipboard
 				.writeText(selection)
@@ -1319,7 +1327,6 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		// A left-button gesture xterm reports to the program rather than turning
 		// into a local selection (see shouldForceTerminalSelection).
 		let appGesture: { x: number; y: number; dragged: boolean } | null = null;
-		let appGestureEndedAt = Number.NEGATIVE_INFINITY;
 		const disarmPointerSelection = () => {
 			pointerSelectionArmed = false;
 			pendingColumnSelection = null;
@@ -1360,9 +1367,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				return;
 			}
 			if (!useUiStore.getState().terminalCopyOnSelect) return;
-			// A local copy is newer than anything the program might still send for
-			// an earlier gesture; a late OSC 52 write must not replace it.
-			if (copySelection()) appGestureEndedAt = Number.NEGATIVE_INFINITY;
+			copySelection();
 		};
 		host.addEventListener("pointerdown", pointerDown);
 		document.addEventListener("pointermove", pointerMove);

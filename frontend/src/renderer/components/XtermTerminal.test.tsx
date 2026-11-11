@@ -3107,6 +3107,28 @@ describe("XtermTerminal", () => {
 			expect(window.ao!.clipboard.writeText).toHaveBeenCalledTimes(1);
 		});
 
+		it("does not let a late OSC 52 write replace a copy made with the copy shortcut", async () => {
+			const { container } = render(<XtermTerminal theme="dark" />);
+			const terminal = state.lastTerminal!;
+
+			fireEvent.pointerDown(container.querySelector(".terminal-xterm-host")!, { button: 0 });
+			fireEvent.pointerUp(document, { button: 0 });
+			terminal.selection = "copied with the shortcut";
+			terminal.keyHandler!({
+				key: "c",
+				metaKey: true,
+				ctrlKey: false,
+				shiftKey: false,
+				preventDefault: vi.fn(),
+				stopPropagation: vi.fn(),
+			} as unknown as KeyboardEvent);
+			expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("copied with the shortcut");
+
+			terminal.oscHandlers.get(52)!(`c;${btoa("late program copy")}`);
+			await new Promise((resolve) => window.setTimeout(resolve, 0));
+			expect(window.ao!.clipboard.writeText).toHaveBeenCalledTimes(1);
+		});
+
 		it("ignores OSC 52 writes when copy on select is off", async () => {
 			const { container } = render(<XtermTerminal theme="dark" />);
 			act(() => useUiStore.getState().setTerminalCopyOnSelect(false));
