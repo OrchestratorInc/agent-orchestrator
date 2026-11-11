@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inlineScript, mermaidPageHtml, parseDiagramMessage, scriptString } from "./mermaidPage";
+import { inlineScript, mermaidPageHtml, mermaidSvgPageHtml, parseDiagramMessage, scriptString } from "./mermaidPage";
 
 describe("mermaidPageHtml", () => {
 	const page = (code: string, scheme: "light" | "dark" = "dark", background = "#0a0a0a") => mermaidPageHtml({ runtime: "window.mermaid = {};", code, colors: { scheme, background } });
@@ -31,6 +31,31 @@ describe("mermaidPageHtml", () => {
 	});
 });
 
+describe("inline diagrams", () => {
+	const colors = { scheme: "dark" as const, background: "#111111" };
+
+	it("lays a diagram out for a message: no zoom, and its height and SVG posted back", () => {
+		const html = mermaidPageHtml({ runtime: "", code: "graph TD; A-->B", colors, inline: true });
+		expect(html).toContain("user-scalable=no");
+		expect(html).toContain("report(result.svg)");
+		expect(mermaidPageHtml({ runtime: "", code: "graph TD; A-->B", colors })).toContain("report(undefined)");
+	});
+
+	it("posts the height again when the diagram's size changes", () => {
+		for (const html of [mermaidPageHtml({ runtime: "", code: "graph TD; A-->B", colors, inline: true }), mermaidSvgPageHtml({ svg: "<svg/>", colors, inline: true })]) {
+			expect(html).toContain("new ResizeObserver(follow).observe(document.getElementById(\"diagram\"))");
+			expect(html).toContain('window.addEventListener("resize", follow)');
+		}
+	});
+
+	it("draws a cached diagram without the engine, and without any script it carries", () => {
+		const html = mermaidSvgPageHtml({ svg: '<svg><script>alert(1)</script><g/></svg>', colors, inline: true });
+		expect(html).toContain("<svg><g/></svg>");
+		expect(html).not.toContain("alert(1)</script>");
+		expect(html).not.toContain("mermaid.initialize");
+	});
+});
+
 describe("inlineScript", () => {
 	it("escapes a closing script tag in the engine's source", () => {
 		expect(inlineScript('var a = "</script>"; var b = "</SCRIPT>";')).toBe('var a = "<\\/script>"; var b = "<\\/SCRIPT>";');
@@ -49,6 +74,8 @@ describe("scriptString", () => {
 describe("parseDiagramMessage", () => {
 	it("reads the page's own messages", () => {
 		expect(parseDiagramMessage('{"type":"rendered"}')).toEqual({ type: "rendered" });
+		expect(parseDiagramMessage('{"type":"rendered","height":212,"svg":"<svg/>"}')).toEqual({ type: "rendered", height: 212, svg: "<svg/>" });
+		expect(parseDiagramMessage('{"type":"rendered","height":-4,"svg":7}')).toEqual({ type: "rendered" });
 		expect(parseDiagramMessage('{"type":"failed","message":"Parse error"}')).toEqual({ type: "failed", message: "Parse error" });
 	});
 
