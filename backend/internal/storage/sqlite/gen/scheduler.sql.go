@@ -709,7 +709,10 @@ func (q *Queries) ListSchedulerDecisions(ctx context.Context, arg ListSchedulerD
 }
 
 const listSchedulerOccupancy = `-- name: ListSchedulerOccupancy :many
-SELECT a.harness FROM scheduler_admissions a WHERE a.state<>'released'
+SELECT a.harness FROM scheduler_admissions a
+LEFT JOIN sessions s ON s.id=a.session_id
+WHERE a.state<>'released'
+AND NOT (a.attempt_id IS NULL AND a.mode='chat' AND a.state='active' AND s.id IS NOT NULL AND s.is_terminated=0 AND s.activity_state='exited')
 UNION ALL
 SELECT s.harness FROM sessions s WHERE s.is_terminated=0 AND s.is_task_preparation=0
 AND s.id<>?1

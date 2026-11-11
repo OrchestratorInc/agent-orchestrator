@@ -67,7 +67,10 @@ UPDATE scheduler_admissions SET owner_id=sqlc.arg(owner_id),epoch=sqlc.arg(epoch
 WHERE id=sqlc.arg(id) AND revision=sqlc.arg(revision) AND state<>'released' AND epoch<=sqlc.arg(epoch);
 
 -- name: ListSchedulerOccupancy :many
-SELECT a.harness FROM scheduler_admissions a WHERE a.state<>'released'
+SELECT a.harness FROM scheduler_admissions a
+LEFT JOIN sessions s ON s.id=a.session_id
+WHERE a.state<>'released'
+AND NOT (a.attempt_id IS NULL AND a.mode='chat' AND a.state='active' AND s.id IS NOT NULL AND s.is_terminated=0 AND s.activity_state='exited')
 UNION ALL
 SELECT s.harness FROM sessions s WHERE s.is_terminated=0 AND s.is_task_preparation=0
 AND s.id<>sqlc.arg(replacing_session_id)

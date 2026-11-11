@@ -102,6 +102,7 @@ type ResourceSample struct {
 // AdmissionEvidence 仅由可信服务提供；Store 重新读取策略、余额及资源占用。
 type AdmissionEvidence struct {
 	Fence                            SchedulerFence
+	ReplacingSessionID               SessionID
 	ExpectedPolicyRevisions          map[string]int64
 	Resources                        ResourceSample
 	Capability                       HarnessCapabilitySnapshot

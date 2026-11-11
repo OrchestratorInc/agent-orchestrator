@@ -105,6 +105,30 @@ func TestM3ReleasedSessionRestartMustPassCapacity(t *testing.T) {
 	}
 }
 
+// 恢复终止会话时，自己的 released 槽不再是物理占用；其余占位仍必须参与容量。
+func TestM3TerminatedReleasedSessionRestartIgnoresOwnHistoricalSlot(t *testing.T) {
+	x := newRestartFixture(t)
+	ctx := context.Background()
+	x.rec.IsTerminated = true
+	if err := x.s.UpdateSession(ctx, x.rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.s.ReleaseExecutionAdmission(ctx, x.ad, ports.SessionObservation{SessionID: x.rec.ID, Terminated: true, ControllerGeneration: "first", ObservedAt: x.now}, x.now); err != nil {
+		t.Fatal(err)
+	}
+	m3Capacity(t, x.s, domain.HarnessCodex, 3, x.now)
+	x.proof, _ = x.f.PrepareSessionAdmission(ctx, ports.SpawnConfig{Harness: domain.HarnessCodex})
+	for _, key := range []string{"other-one", "other-two"} {
+		if _, _, err := x.s.ReserveSessionAdmission(ctx, domain.SessionAdmissionInput{Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, ClientRequestID: key, ClientRequestHash: strings.Repeat("a", 64), Evidence: x.proof}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	x.proof.ReplacingSessionID = x.rec.ID
+	if err := x.s.AdmitSessionRestart(ctx, x.rec, "second", x.proof); err != nil {
+		t.Fatalf("restart with own released slot: %v", err)
+	}
+}
+
 // 删除只排除本次替换旧 Session 的查询条件会把 Legacy Session 纳管误算成两个槽。
 func TestM3LegacySessionRestartCountsOneSlot(t *testing.T) {
 	x := newRestartFixture(t)
@@ -125,6 +149,30 @@ func TestM3LegacySessionRestartCountsOneSlot(t *testing.T) {
 	occupied, err := x.s.ListSchedulerOccupancy(ctx)
 	if err != nil || len(occupied) != 3 {
 		t.Fatalf("occupied=%+v err=%v", occupied, err)
+	}
+}
+
+// 已观测退出且进入冷态的 Chat 不再占用执行容量；保留记录和代际仍可供恢复时重新准入。
+func TestExitedChatAdmissionDoesNotOccupyCapacity(t *testing.T) {
+	x := newRestartFixture(t)
+	ctx := context.Background()
+	x.rec.Activity.State = domain.ActivityExited
+	if err := x.s.UpdateSession(ctx, x.rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.s.RecoverExecutionAdmissionSession(ctx, x.ad, ports.SessionObservation{
+		SessionID: x.rec.ID, ClientRequestID: x.rec.ClientRequestID,
+		ControllerGeneration: x.rec.Metadata.ControllerGeneration,
+		Readiness:            ports.SessionReadinessExited, ObservedAt: x.now,
+	}, x.now); err != nil {
+		t.Fatal(err)
+	}
+	occupied, err := x.s.ListSchedulerOccupancy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(occupied) != 0 {
+		t.Fatalf("exited Chat still occupies capacity: %+v", occupied)
 	}
 }
 

@@ -48,7 +48,11 @@ func checkAdmission(ctx context.Context, q *gen.Queries, a domain.SchedulerAdmis
 	if !global.ResourceLimitsDisabled && !validResourceSample(e.Resources, e.Now, global) || e.EffectiveGlobalCap < 1 || e.EffectiveGlobalCap > global.MaxConcurrent || e.EffectiveGlobalCap > domain.SchedulerHardCap {
 		return nil, domain.ErrSchedulerCapacity
 	}
-	occupied, err := q.ListSchedulerOccupancy(ctx, a.SessionID)
+	replacingSessionID := a.SessionID
+	if replacingSessionID == "" {
+		replacingSessionID = e.ReplacingSessionID
+	}
+	occupied, err := q.ListSchedulerOccupancy(ctx, replacingSessionID)
 	if err != nil {
 		return nil, err
 	}

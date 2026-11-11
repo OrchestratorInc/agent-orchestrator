@@ -31,6 +31,7 @@ func (m *Manager) admitSessionRestart(ctx context.Context, rec domain.SessionRec
 		if err != nil {
 			return err
 		}
+		evidence.ReplacingSessionID = rec.ID
 	}
 	return store.AdmitSessionRestart(ctx, rec, generation, evidence)
 }
