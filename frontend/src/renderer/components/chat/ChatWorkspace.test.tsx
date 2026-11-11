@@ -2654,6 +2654,52 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
+	// #6064: a reviewer whose controller died mid-turn spun "Working for…" forever.
+	it("settles a running turn with an unknown outcome once the controller stops", async () => {
+		const user = userEvent.setup();
+		const resume = vi.fn();
+		const openShell = vi.fn();
+		const live = structuredClone(chatFixture);
+		live.items = live.items.filter(
+			(item) => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"),
+		);
+		expect(live.turns.some((turn) => turn.state === "running")).toBe(true);
+
+		render(
+			<ChatWorkspace
+				snapshot={{ ...live, controller: { state: "stopped" } }}
+				onResumeAgent={resume}
+				onOpenShell={openShell}
+				onInterrupt={vi.fn()}
+				onRollback={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
+		expect(screen.getByText("The agent stopped before this turn finished")).toBeInTheDocument();
+		expect(document.querySelector('[data-turn-outcome="unknown"]')).not.toBeNull();
+		// The daemon still holds the turn open, so neither stop nor undo would be honoured.
+		expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /undo/i })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Resume agent" }));
+		await user.click(screen.getByRole("button", { name: "Open shell" }));
+		expect(resume).toHaveBeenCalledOnce();
+		expect(openShell).toHaveBeenCalledOnce();
+	});
+
+	it("keeps a running turn live while a stopped controller is only handing off", () => {
+		const live = structuredClone(chatFixture);
+		live.items = live.items.filter(
+			(item) => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"),
+		);
+
+		render(<ChatWorkspace snapshot={{ ...live, controller: { state: "stopped" } }} controllerTransitioning />);
+
+		expect(screen.getAllByTestId("live-working-label")).toHaveLength(1);
+		expect(screen.queryByText("The agent stopped before this turn finished")).not.toBeInTheDocument();
+	});
+
 	it.each([
 		["codex", false],
 		["opencode", true],

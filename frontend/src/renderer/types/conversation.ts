@@ -1026,10 +1026,18 @@ export function needsReauth(snapshot: ConversationSnapshot): boolean {
  *
  * A running turn wins over a queued one: with a send queue both exist at once,
  * and the one the agent is actually working on is what the user is waiting on.
+ *
+ * `controllerStopped` says the agent controller is really gone, not handing off,
+ * waking or reconnecting. No agent is working then, so a turn the daemon still
+ * holds open as running is not in flight: it is settled with an unknown outcome
+ * (#6064). Queued turns stay in flight, because Resume dispatches them.
  */
-export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | undefined {
+export function activeTurn(
+	snapshot: ConversationSnapshot,
+	{ controllerStopped = false }: { controllerStopped?: boolean } = {},
+): ConversationTurn | undefined {
 	return (
-		snapshot.turns.find((turn) => turn.state === "running") ??
+		(controllerStopped ? undefined : snapshot.turns.find((turn) => turn.state === "running")) ??
 		snapshot.turns.find((turn) => turn.state === "queued")
 	);
 }

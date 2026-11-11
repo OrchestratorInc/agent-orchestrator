@@ -32,10 +32,11 @@ vi.mock("../../lib/use-session-link-navigation", () => ({
 	useSessionLinkNavigation: () => mocks.openSessionLink,
 }));
 vi.mock("./ChatWorkspace", () => ({
-	ChatWorkspace: ({ onResumeAgent, onSessionLinkOpen, draftOwner, models, onChooseSettings, approvalModes, annotationNavigationRequest, onAnnotationNavigationHandled }: { onResumeAgent?: () => void; onSessionLinkOpen?: (url: string) => void; draftOwner?: { sessionId: string }; models?: ChatModel[]; onChooseSettings?: (settings: TurnSettings) => void; approvalModes?: string[]; annotationNavigationRequest?: { id: string; messageId?: string }; onAnnotationNavigationHandled?: (id: string) => void }) => (
+	ChatWorkspace: ({ onOpenShell, openingShell, shellError, onResumeAgent, onSessionLinkOpen, draftOwner, models, onChooseSettings, approvalModes, annotationNavigationRequest, onAnnotationNavigationHandled }: { onOpenShell?: () => void; openingShell?: boolean; shellError?: string; onResumeAgent?: () => void; onSessionLinkOpen?: (url: string) => void; draftOwner?: { sessionId: string }; models?: ChatModel[]; onChooseSettings?: (settings: TurnSettings) => void; approvalModes?: string[]; annotationNavigationRequest?: { id: string; messageId?: string }; onAnnotationNavigationHandled?: (id: string) => void }) => (
 		<>
 		<button type="button" data-message-id={annotationNavigationRequest?.messageId} onClick={() => annotationNavigationRequest && onAnnotationNavigationHandled?.(annotationNavigationRequest.id)}>Navigation request</button>
 		<button onClick={onResumeAgent}>Resume agent</button>
+		{onOpenShell ? <button type="button" data-opening={String(Boolean(openingShell))} data-error={shellError} onClick={onOpenShell}>Open shell</button> : null}
 		<button type="button" data-draft-owner={draftOwner?.sessionId} onClick={() => onSessionLinkOpen?.("ao://sessions/project/session")}>
 			Open session
 		</button>
@@ -51,6 +52,21 @@ describe("ReviewerChatSurface", () => {
 		render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" />);
 		fireEvent.click(screen.getByRole("button", { name: "Resume agent" }));
 		expect(mocks.resumeAgent).toHaveBeenCalledWith("worker-1");
+	});
+
+	// #6064: the stopped banner promises a shell, so the reviewer pane must offer one.
+	it("forwards the worker's Open shell lever to the stopped reviewer banner", () => {
+		const openShell = vi.fn();
+		const { rerender } = render(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" onOpenShell={openShell} openingShell shellError="no shell" />);
+		const button = screen.getByRole("button", { name: "Open shell" });
+		expect(openShell).not.toHaveBeenCalled();
+		expect(button).toHaveAttribute("data-opening", "true");
+		expect(button).toHaveAttribute("data-error", "no shell");
+		fireEvent.click(button);
+		expect(openShell).toHaveBeenCalledOnce();
+		// An unreachable host cannot open a shell either.
+		rerender(<ReviewerChatSurface workerSessionId="worker-1" reviewId="review-1" hostUnreachable onOpenShell={openShell} />);
+		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
 	});
 
 	it("routes session links through in-app navigation", () => {
