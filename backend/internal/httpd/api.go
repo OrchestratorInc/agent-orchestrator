@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -104,6 +105,10 @@ type APIDeps struct {
 	// DeviceRoster and DeviceLive back the desktop-only mobile device roster.
 	DeviceRoster controllers.DeviceRoster
 	DeviceLive   controllers.LiveSet
+	// DeviceAccess adds device tokens and the account to the device list. Nil skips them.
+	DeviceAccess controllers.DeviceAccess
+	// AccessDevices links push registrations to device tokens.
+	AccessDevices *mobilebridge.AccessDevices
 }
 
 // normalizeAPIDeps closes the Presence/DeviceLive duplication trap structurally.
@@ -216,7 +221,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		reviews:       &controllers.ReviewsController{Svc: deps.Reviews},
 		notifications: &controllers.NotificationsController{Svc: deps.Notifications, Stream: deps.NotificationStream},
 		reports:       &controllers.ReportsController{Svc: deps.Reports},
-		push:          &controllers.PushController{Registry: deps.Push},
+		push:          &controllers.PushController{Registry: deps.Push, Devices: deps.AccessDevices},
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		sessionImport: &controllers.SessionImportController{Svc: deps.SessionImport},
 		fs:            &controllers.FSController{Svc: deps.Directories},

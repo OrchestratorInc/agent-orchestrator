@@ -860,9 +860,17 @@ func Run(buildVersion string) error {
 	// the bridge service. Break the cycle with late binding: build bs with LAN
 	// left nil, hand its controller into NewWithDeps, then once srv exists,
 	// build the LAN listener over srv.Handler() and assign it onto bs.LAN.
+	// Shared by the bridge service and the LAN listener. A damaged registry starts empty.
+	accessDevices, accessErr := mobilebridge.LoadAccessDevices(mobilebridge.AccessDevicesPath(cfg.DataDir))
+	if accessErr != nil {
+		log.Warn("load access device registry failed; paired devices must pair again", "err", accessErr)
+	}
+	pairingCodes := mobilebridge.NewPairingCodes(nil)
 	bs := &controllers.BridgeService{
 		ConfigPath:  mobilebridge.Path(cfg.DataDir),
 		DefaultPort: mobilebridge.DefaultPort,
+		Devices:     accessDevices,
+		Codes:       pairingCodes,
 	}
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
@@ -1062,6 +1070,7 @@ func Run(buildVersion string) error {
 		pushRegistry = reg
 		pushDevices = reg
 		deviceRoster = reg
+		bs.PushDevices = reg
 	}
 
 	// One presence tracker instance shared by APIDeps.Presence (the
@@ -1188,6 +1197,8 @@ func Run(buildVersion string) error {
 		Presence:           presenceTracker,
 		DeviceRoster:       deviceRoster,
 		DeviceLive:         presenceTracker,
+		DeviceAccess:       bs,
+		AccessDevices:      accessDevices,
 		Import:             importsvc.New(importsvc.Deps{Store: store}),
 		SessionImport:      sessionImportSvc,
 		Directories:        fsbrowsersvc.New(),
@@ -1287,6 +1298,7 @@ func Run(buildVersion string) error {
 	// Late-bind: the LAN listener shares the exact loopback router instance so
 	// the LAN surface and loopback surface never drift apart.
 	lan := httpd.NewMobileLAN(srv.Handler(), hostIdentity.HostID, mobilebridge.DefaultPort, log, telemetrySink)
+	lan.UseDeviceCredentials(accessDevices, pairingCodes)
 	bs.LAN = lan
 
 	// Restore Connect Mobile across a daemon restart: if the bridge was left
