@@ -73,11 +73,11 @@ Display status like `working`, `needs_input`, `ci_failed`, `mergeable` are **com
 | Waiting for input or blocked on approval | No | A provider request is still pending. |
 | Idle after an unconfirmed turn | No | The latest prompt has no durable terminal outcome. |
 | Ready and idle after the latest primary turn settled, with the primary Chat tab open | No | A short view lease keeps the provider ready for interaction. |
-| Ready and idle after the latest primary turn settled, with no Chat view | Yes, while Developer Mode enables hibernation, if the native conversation supports resume and no transition or pending work exists | Leaving the Chat tab checks immediately; a 30-second sweep catches turns that finish later. |
+| Ready and idle after the latest primary turn settled, with no Chat view | Yes, once the desktop has enabled hibernation, if the native conversation supports resume and no transition or pending work exists | Leaving the Chat tab checks immediately; a 30-second sweep catches turns that finish later. |
 | Hibernated | Already cold | Opening the primary Chat tab, sending, or an AO relay wakes the native conversation in the background. |
 | Exited or terminated | No | Existing resume or restore behavior applies. |
 
-The daemon starts with Chat hibernation disabled; the desktop synchronizes its Developer Mode toggle when the daemon becomes ready. TUI sessions keep their runtime lifecycle. The Chat view renews its lease every 10 seconds; an abandoned lease expires after 30 seconds. A renewal only extends the lease: after a failed wake, reopening the view, sending work, or using the visible retry action can attempt native resume again. Hibernation records a process boundary, not a display status: the session's derived board status continues to use activity and PR facts.
+The daemon starts with Chat hibernation disabled; the desktop enables it when the daemon becomes ready. TUI sessions keep their runtime lifecycle. The Chat view renews its lease every 10 seconds; an abandoned lease expires after 30 seconds. A renewal only extends the lease: after a failed wake, reopening the view, sending work, or using the visible retry action can attempt native resume again. Hibernation records a process boundary, not a display status: the session's derived board status continues to use activity and PR facts.
 
 ---
 
