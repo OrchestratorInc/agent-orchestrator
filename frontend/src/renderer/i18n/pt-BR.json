@@ -1797,6 +1797,7 @@
 	"shell.moreArtifacts": "+{{count}} a mais",
 	"shell.openArtifactsInInspector": "Abrir no inspetor",
 	"artifacts.sessionEmpty": "Esta sessão ainda não tem artefatos.",
+	"artifacts.notListedYet": "{{name}} ainda não está entre os artefatos desta sessão. Ele abrirá aqui assim que a sessão o listar.",
 	"artifacts.unavailable": "Este arquivo não está mais disponível.",
 	"artifacts.accessError": "Não foi possível carregar os artefatos desta sessão. Tente novamente.",
 	"artifacts.back": "Voltar aos artefatos",

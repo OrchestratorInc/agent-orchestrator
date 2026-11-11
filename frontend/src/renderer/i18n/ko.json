@@ -1771,6 +1771,7 @@
 	"shell.moreArtifacts": "+{{count}}개 더",
 	"shell.openArtifactsInInspector": "인스펙터에서 열기",
 	"artifacts.sessionEmpty": "이 세션에는 아직 아티팩트가 없습니다.",
+	"artifacts.notListedYet": "{{name}}은(는) 아직 이 세션의 아티팩트에 없습니다. 세션 목록에 나타나면 여기에서 열립니다.",
 	"artifacts.unavailable": "이 파일은 더 이상 사용할 수 없습니다.",
 	"artifacts.accessError": "이 세션의 아티팩트를 불러오지 못했습니다. 다시 시도하세요.",
 	"artifacts.back": "아티팩트로 돌아가기",

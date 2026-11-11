@@ -1,4 +1,5 @@
 import { aoBridge } from "./bridge";
+import { decodePath } from "./workspace-file-path";
 
 export function isWebLink(url: string): boolean {
 	try {
@@ -19,13 +20,9 @@ function decodedPath(url: string): string {
 			return "";
 		}
 	}
-	try {
-		path = decodeURIComponent(path);
-	} catch {
-		// Keep malformed percent escapes inert; the preview endpoint will reject
-		// anything it cannot resolve inside the session workspace.
-	}
-	return path.replace(/\\/g, "/");
+	// A malformed percent escape stays as written; the preview endpoint will
+	// reject anything it cannot resolve inside the session workspace.
+	return decodePath(path).replace(/\\/g, "/");
 }
 
 function hasParentTraversal(path: string): boolean {
