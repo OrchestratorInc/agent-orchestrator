@@ -2699,6 +2699,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.loginUnconfirmed": "ログイン未確認",
+	"settings.harness.loginUnconfirmedHint": "CLI はこのログインをプロバイダーで確認できませんでした。更新やセッションが認証エラーで失敗する場合は、ログアウトしてから再度ログインしてください。",
 	"settings.harness.signedInAs": "{{account}} としてサインイン中",
 	"settings.harness.usingApiKey": "API キーを使用中",
 	"settings.harness.signedInWithAccount": "アカウントでサインイン中",

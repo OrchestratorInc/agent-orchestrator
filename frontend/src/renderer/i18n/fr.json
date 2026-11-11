@@ -2740,6 +2740,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.loginUnconfirmed": "Connexion non confirmée",
+	"settings.harness.loginUnconfirmedHint": "La CLI n'a pas pu confirmer cette connexion auprès du fournisseur. Si les mises à jour ou les sessions échouent avec une erreur d'authentification, déconnectez-vous puis reconnectez-vous.",
 	"settings.harness.signedInAs": "Connecté en tant que {{account}}",
 	"settings.harness.usingApiKey": "Avec une clé d’API",
 	"settings.harness.signedInWithAccount": "Connecté avec un compte",

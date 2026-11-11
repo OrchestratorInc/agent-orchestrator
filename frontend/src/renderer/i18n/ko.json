@@ -2699,6 +2699,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.loginUnconfirmed": "로그인 확인되지 않음",
+	"settings.harness.loginUnconfirmedHint": "CLI가 공급자에서 이 로그인을 확인하지 못했습니다. 업데이트나 세션이 인증 오류로 실패하면 로그아웃한 후 다시 로그인하세요.",
 	"settings.harness.signedInAs": "{{account}}(으)로 로그인됨",
 	"settings.harness.usingApiKey": "API 키 사용 중",
 	"settings.harness.signedInWithAccount": "계정으로 로그인됨",

@@ -2699,6 +2699,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.loginUnconfirmed": "Anmeldung nicht bestätigt",
+	"settings.harness.loginUnconfirmedHint": "Die CLI konnte diese Anmeldung beim Anbieter nicht bestätigen. Wenn Updates oder Sitzungen mit einem Authentifizierungsfehler fehlschlagen, melde dich ab und erneut an.",
 	"settings.harness.signedInAs": "Angemeldet als {{account}}",
 	"settings.harness.usingApiKey": "Mit API-Schlüssel",
 	"settings.harness.signedInWithAccount": "Mit einem Konto angemeldet",

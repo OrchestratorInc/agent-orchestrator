@@ -1759,6 +1759,8 @@
 	"settings.harness.instructions": "Инструкции",
 	"settings.harness.interrupted": "Прервано",
 	"settings.harness.loggedIn": "Подключено",
+	"settings.harness.loginUnconfirmed": "Вход не подтверждён",
+	"settings.harness.loginUnconfirmedHint": "CLI не удалось подтвердить этот вход у провайдера. Если обновления или сеансы завершаются ошибкой аутентификации, выйдите и войдите снова.",
 	"settings.harness.signedInAs": "Вход выполнен как {{account}}",
 	"settings.harness.usingApiKey": "Используется ключ API",
 	"settings.harness.signedInWithAccount": "Вход выполнен через аккаунт",

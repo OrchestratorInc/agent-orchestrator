@@ -2,10 +2,13 @@ package cursor
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -34,6 +37,39 @@ func TestCursorCLIAuthStatusUnknownFromKeychainError(t *testing.T) {
 	}
 	if status != ports.AgentAuthStatusUnknown {
 		t.Fatalf("status = %q, want %q", status, ports.AgentAuthStatusUnknown)
+	}
+}
+
+func TestCursorUnconfirmedLoginStaysAuthorizedWithCaveat(t *testing.T) {
+	previousConfig := cursorConfigPath
+	cursorConfigPath = func() string { return filepath.Join(t.TempDir(), "missing.json") }
+	t.Cleanup(func() { cursorConfigPath = previousConfig })
+	t.Setenv("CURSOR_API_KEY", "")
+	for _, tc := range []struct {
+		name        string
+		out         string
+		unconfirmed bool
+	}{
+		// The exact status output when Cursor rejects the saved login,
+		// from the 2026.04.16 and 2026.11.10 CLI builds.
+		{name: "account lookup failed", out: "Checking authentication status...\n✓ Login successful!\nLogged in (unable to fetch user details)\n", unconfirmed: true},
+		{name: "account confirmed", out: "✓ Logged in as user@example.com\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restore := stubCursorAuthCommand(t, []string{"status"}, []byte(tc.out), nil)
+			defer restore()
+			status, _, steps, err := (&Plugin{resolvedBinary: "cursor-agent"}).AuthStatusWithDiagnostics(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status != ports.AgentAuthStatusAuthorized {
+				t.Fatalf("status = %q, want authorized: a failed lookup can also mean Cursor was unreachable", status)
+			}
+			got := slices.ContainsFunc(steps, func(step domain.AgentAuthDiagnostic) bool { return step.Code == "account_unconfirmed" })
+			if got != tc.unconfirmed {
+				t.Fatalf("account_unconfirmed = %v, want %v (steps %+v)", got, tc.unconfirmed, steps)
+			}
+		})
 	}
 }
 

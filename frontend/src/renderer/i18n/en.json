@@ -1700,6 +1700,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.loginUnconfirmed": "Login not confirmed",
+	"settings.harness.loginUnconfirmedHint": "The CLI couldn't confirm this login with its provider. If updates or sessions fail with an authentication error, log out and log in again.",
 	"settings.harness.signedInAs": "Signed in as {{account}}",
 	"settings.harness.usingApiKey": "Using an API key",
 	"settings.harness.signedInWithAccount": "Signed in with an account",

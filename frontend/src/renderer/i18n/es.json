@@ -2740,6 +2740,8 @@
 	"settings.harness.instructions": "Instructions",
 	"settings.harness.interrupted": "Interrupted",
 	"settings.harness.loggedIn": "Connected",
+	"settings.harness.loginUnconfirmed": "Inicio de sesión sin confirmar",
+	"settings.harness.loginUnconfirmedHint": "La CLI no pudo confirmar este inicio de sesión con el proveedor. Si las actualizaciones o las sesiones fallan con un error de autenticación, cierra sesión y vuelve a iniciarla.",
 	"settings.harness.signedInAs": "Sesión iniciada como {{account}}",
 	"settings.harness.usingApiKey": "Con una clave de API",
 	"settings.harness.signedInWithAccount": "Sesión iniciada con una cuenta",
