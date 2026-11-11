@@ -115,7 +115,7 @@
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
-		"dompurify": "3.4.14",
+		"dompurify": "3.4.17",
 		"electron-updater": "^6.8.9",
 		"github-markdown-css": "^5.9.0",
 		"i18next": "^26.3.6",

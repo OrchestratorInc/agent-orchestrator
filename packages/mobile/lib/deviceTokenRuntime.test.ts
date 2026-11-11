@@ -21,4 +21,21 @@ describe("pairThisDevice", () => {
 		await pairThisDevice(config, { fresh: true });
 		expect(pairDevice).toHaveBeenCalledTimes(2);
 	});
+
+	it("does not give a machine without an id the token another address was issued", async () => {
+		vi.mocked(pairDevice).mockReset().mockResolvedValue({ kind: "paired", token, credential: "pairing-code" });
+		const first = { ...config, hostId: undefined, password: "Code5678" };
+		await pairThisDevice(first);
+		await pairThisDevice({ ...first, host: "192.168.1.99" });
+		await pairThisDevice({ ...first, host: "192.168.1.99", hostId: "http://192.168.1.42:3011" });
+		expect(pairDevice).toHaveBeenCalledTimes(3);
+	});
+
+	it("pairs again for a password, which a retry can still use", async () => {
+		vi.mocked(pairDevice).mockReset().mockResolvedValue({ kind: "paired", token, credential: "password" });
+		const password = { ...config, password: "pairing1" };
+		await pairThisDevice(password);
+		await pairThisDevice(password);
+		expect(pairDevice).toHaveBeenCalledTimes(2);
+	});
 });

@@ -10,6 +10,7 @@ import { useStableArray } from "./useStable";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
+import { CLOUD_WORKSPACE_LAYOUT, isCloudWorkspaceProject, projectRepositoryUrls, repoDirName } from "../lib/cloud-project-repos";
 import { CloudCpError, type CloudCpClient, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { rememberSharedSessions } from "../lib/shared-session-memory";
@@ -558,11 +559,20 @@ export function toCloudWorkspaceSession(
 }
 
 export function toCloudWorkspace(project: CloudCpProject, sessions: CloudCpSession[], orgId: string): WorkspaceSummary {
+	// A cloud workspace's repositories are all its own, side by side in one
+	// folder, the way a local workspace lists its child repositories.
+	const workspace = isCloudWorkspaceProject(project);
 	return {
 		id: project.id,
 		cloudOrgId: orgId,
 		name: project.displayName,
 		kind: "cloud",
+		...(workspace
+			? {
+				cloudLayout: CLOUD_WORKSPACE_LAYOUT,
+				workspaceRepos: projectRepositoryUrls(project).map((url) => ({ name: repoDirName(url), relativePath: repoDirName(url), repo: url })),
+			}
+			: {}),
 		// Cloud projects run in control-plane sandboxes; there is no local folder.
 		path: "",
 		sessions: sessions

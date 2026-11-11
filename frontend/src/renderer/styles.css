@@ -6026,6 +6026,7 @@ html[data-native-browser-composition="true"][data-browser-popout-open] #root [da
 
 html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session,
 html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface,
+html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface::before,
 html[data-native-browser-composition="true"][data-browser-native-live] [data-testid="session-detail"],
 html[data-native-browser-composition="true"][data-browser-native-live] .session-split {
 	background: transparent;

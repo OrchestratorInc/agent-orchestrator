@@ -1,5 +1,5 @@
 import type { AppIcon } from "./icons";
-import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench } from "@/components/app-icons";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, Share2, TriangleAlert, Wrench } from "@/components/app-icons";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +18,10 @@ import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
+import { CloudProjectSharingSettings } from "./CloudProjectSharingSettings";
+import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { isCloudWorkspaceProject } from "../lib/cloud-project-repos";
 import { CloudProjectEnvironmentSettings, ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
@@ -99,6 +103,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// record of it. Resolve it here so its settings load from the control plane.
 	const explicitCloudOrgId = displaySettings?.scope === "project" ? displaySettings.cloudOrgId : undefined;
 	const localProjectScope = displaySettings?.scope === "project" && !remoteHostId && explicitCloudOrgId === undefined;
+	// Only a project the local daemon may hold needs the org's list to tell
+	// whether it is a Cloud project; one opened as a Cloud project is read on
+	// its own below.
 	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope });
 	const cloudProject = localProjectScope
 		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
@@ -117,6 +124,16 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
 	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
+	// The Cloud project itself, by the query its settings pages load it with,
+	// so they share one read: whichever org it is in, wherever it sits in the
+	// org's list.
+	const cloudCp = useCloudCp(isCloudProjectSettings);
+	const cloudProjectRecord = useQuery({
+		queryKey: cloudProjectSettingsQueryKey(cloudCp.baseUrl, cloudOrgId ?? "", projectId),
+		enabled: isCloudProjectSettings && cloudCp.ready,
+		retry: false,
+		queryFn: ({ signal }) => cloudCp.client.getProject(cloudOrgId ?? "", projectId, { signal }).then((response) => response.project),
+	});
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
@@ -131,7 +148,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// A Cloud project's repositories, where its agent starts, and the
 	// instructions added to its agents' prompts live on the control plane.
 	if (isCloudProjectSettings) {
-		projectSections.push({ id: "repositories", label: t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
+		// A workspace's repositories are all its own, side by side in its folder.
+		const workspace = isCloudWorkspaceProject(cloudProjectRecord.data ?? cloudProject);
+		projectSections.push({ id: "repositories", label: workspace ? t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" }) : t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
 		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
 	}
 	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
@@ -139,6 +158,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
+	// Sharing the whole project, as a session's Share does: only the project's
+	// own organization shares it, and only once WorkOS enables sharing for it.
+	const canShareProject = isCloudProjectSettings && cloudOrgId === offering.org?.id && offering.features?.includes(SHARE_FEATURE) === true;
+	if (canShareProject) projectSections.push({ id: "sharing", label: t("settings.project.sharing"), icon: Share2 });
 
 	const isProjectSettings = displaySettings?.scope === "project";
 	const globalHistory = useSectionHistory<GlobalSettingsSection>("general");
@@ -286,7 +309,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			else if (!isProjectSettings) { globalHistory.forward(); setFocusAgentId(undefined); }
 		},
 	};
-	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" &&
+	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" && activeProjectSection !== "sharing" &&
 		(projectSaveState.phase === "failed" ||
 			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
 			projectSaveState.phase === "saving" ||
@@ -321,6 +344,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			}
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
 				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && canShareProject && cloudOrgId !== undefined && activeProjectSection === "sharing") {
+				return <CloudProjectSharingSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} />;
 			}
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
 				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
