@@ -5,7 +5,21 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
 )
+
+// userTimeZone is the zone agent prompts name as the user's. The zone the
+// desktop app last reported wins, because the daemon may run on a remote host
+// or cloud machine in another zone. Without a report (CLI-only use, before
+// any desktop request) it falls back to this machine's zone, which is the
+// user's own when the daemon runs locally.
+func userTimeZone(dataDir string) string {
+	if zone := clienttz.Read(dataDir); zone != "" {
+		return zone
+	}
+	return localTimeZone()
+}
 
 // localTimeZone returns the machine's IANA time zone name (for example
 // "Asia/Kolkata"), or "" when it cannot be resolved. Go reports the system

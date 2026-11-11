@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
 )
 
 func TestResolveTimeZone(t *testing.T) {
@@ -61,5 +63,17 @@ func TestBuildSystemPrompt_TimeZoneSection(t *testing.T) {
 	}
 	if got := buildSystemPromptText(systemPromptConfig{Role: sessionPromptRoleWorker}); strings.Contains(got, "## Time Zone") {
 		t.Fatalf("prompt without a zone must omit the section:\n%s", got)
+	}
+}
+
+func TestUserTimeZonePrefersClientReport(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TZ", "Europe/Berlin")
+	if got := userTimeZone(dir); got != "Europe/Berlin" {
+		t.Fatalf("without a client report userTimeZone = %q, want machine zone Europe/Berlin", got)
+	}
+	clienttz.NewRecorder(dir).Observe("Asia/Kolkata")
+	if got := userTimeZone(dir); got != "Asia/Kolkata" {
+		t.Fatalf("with a client report userTimeZone = %q, want Asia/Kolkata", got)
 	}
 }
