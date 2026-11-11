@@ -79,6 +79,40 @@ func TestRemoteHostEnableAndPairPrintAOneTimeCode(t *testing.T) {
 	}
 }
 
+// enable prints the password only for a daemon without pairing codes. Any
+// other failure to make a code is an error, not a reason to print it.
+func TestRemoteHostEnablePrintsThePasswordOnlyWithoutPairingCodes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status       int
+		body         string
+		wantPassword bool
+	}{
+		"no such route":   {http.StatusNotFound, `{"code":"NOT_FOUND"}`, true},
+		"not implemented": {http.StatusNotImplemented, `{"code":"DEVICE_PAIRING"}`, true},
+		"server error":    {http.StatusInternalServerError, `{"code":"DEVICE_PAIRING","message":"boom"}`, false},
+		"empty code":      {http.StatusOK, `{"code":""}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/v1/mobile/pairing-code" {
+					w.WriteHeader(tc.status)
+					_, _ = io.WriteString(w, tc.body)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"enabled": true, "hostId": "host-a", "password": "pairing-secret"})
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+			out, err := runRemoteHost(t, "enable")
+			if (err == nil) != tc.wantPassword || strings.Contains(out, "pairing-secret") != tc.wantPassword {
+				t.Fatalf("out=%q err=%v", out, err)
+			}
+		})
+	}
+}
+
 func TestRemoteHostDevicesListsAndRevokes(t *testing.T) {
 	var requests []string
 	pairingDaemon(t, &requests)
