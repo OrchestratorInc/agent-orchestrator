@@ -16,7 +16,7 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("react-native-webview", () => ({ WebView: "WebView" }));
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn() } }));
-vi.mock("../MermaidDiagram", () => ({ stayInDiagramPage: () => true, useDiagramRemount: () => ({ mount: 0, gone: vi.fn() }) }));
+vi.mock("../MermaidDiagram", () => ({ stayInDiagramPage: () => true, useDiagramRemount: () => ({ mount: 0, gone: vi.fn(), rendered: vi.fn() }) }));
 vi.mock("../mermaidRuntime", () => ({ loadMermaidRuntime }));
 vi.mock("../ThemeProvider", () => ({
 	useTheme: () => new Proxy({}, { get: (_, key) => (key === "fontMono" ? "mono" : "#111111") }),

@@ -36,4 +36,23 @@ describe("useDiagramRemount", () => {
 		expect(giveUp).toHaveBeenCalledTimes(1);
 		act(() => renderer.unmount());
 	});
+
+	it("starts the count over once a fresh mount draws", () => {
+		let page!: ReturnType<typeof useDiagramRemount>;
+		function Probe() {
+			page = useDiagramRemount();
+			return null;
+		}
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(createElement(Probe)); });
+		const giveUp = vi.fn();
+		// Three background visits, each ending the process, each redrawn.
+		for (let visit = 0; visit < 3; visit += 1) {
+			act(() => page.gone(giveUp));
+			act(() => page.rendered());
+		}
+		expect(giveUp).not.toHaveBeenCalled();
+		expect(page.mount).toBe(3);
+		act(() => renderer.unmount());
+	});
 });

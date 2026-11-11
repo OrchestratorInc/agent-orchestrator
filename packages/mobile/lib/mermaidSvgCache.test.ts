@@ -11,6 +11,15 @@ describe("mermaidSvgCache", () => {
 		expect(diagramCacheKey("graph TD; A-->C", "dark")).not.toBe(key);
 	});
 
+	it("never gives two different sources one entry", () => {
+		const a = "graph TD; A-->B";
+		const b = "graph TD; A-->C";
+		expect(a.length).toBe(b.length);
+		storeDiagram(diagramCacheKey(a, "dark"), "<svg id=a/>");
+		expect(cachedDiagram(diagramCacheKey(b, "dark"))).toBeUndefined();
+		expect(cachedDiagram(diagramCacheKey(a, "dark"))).toBe("<svg id=a/>");
+	});
+
 	it("returns a stored diagram", () => {
 		storeDiagram("k", "<svg/>");
 		expect(cachedDiagram("k")).toBe("<svg/>");

@@ -22,10 +22,12 @@ const MAX_PROCESS_RESTARTS = 2;
  * A diagram WebView's mount, for when its web content process dies: iOS ends
  * WKWebView content processes in the background, and Android can lose the
  * renderer under memory pressure, which leaves a blank box. `gone` mounts the
- * page afresh (bump `key` with `mount`) up to a limit, then calls `giveUp`, as
- * the chat's render frames do (useRenderPage).
+ * page afresh (bump `key` with `mount`), then calls `giveUp` once it has died
+ * more than the limit in a row, as the chat's render frames do (useRenderPage).
+ * `rendered` says a mount drew: the count starts over, so a diagram that comes
+ * back each time is never given up on after several background visits.
  */
-export function useDiagramRemount(): { mount: number; gone: (giveUp: () => void) => void } {
+export function useDiagramRemount(): { mount: number; gone: (giveUp: () => void) => void; rendered: () => void } {
 	const [mount, setMount] = useState(0);
 	const restarts = useRef(0);
 	const gone = useCallback((giveUp: () => void) => {
@@ -33,7 +35,10 @@ export function useDiagramRemount(): { mount: number; gone: (giveUp: () => void)
 		if (restarts.current > MAX_PROCESS_RESTARTS) giveUp();
 		else setMount((value) => value + 1);
 	}, []);
-	return useMemo(() => ({ mount, gone }), [mount, gone]);
+	const rendered = useCallback(() => {
+		restarts.current = 0;
+	}, []);
+	return useMemo(() => ({ mount, gone, rendered }), [mount, gone, rendered]);
 }
 
 /**
@@ -70,7 +75,10 @@ export function MermaidDiagram({ code, fallback }: { code: string; fallback: Rea
 	if (!renderable || failed) return <>{fallback}</>;
 	const onMessage = (event: WebViewMessageEvent) => {
 		const message = parseDiagramMessage(event.nativeEvent.data);
-		if (message?.type === "rendered") setRendered(true);
+		if (message?.type === "rendered") {
+			setRendered(true);
+			page.rendered();
+		}
 		else if (message?.type === "failed") setFailed(true);
 	};
 	return (

@@ -72,6 +72,8 @@ export const MermaidBlock = memo(function MermaidBlock({ code, streaming = false
 		setFailed(false);
 		setHeight(undefined);
 	}, [key]);
+	// A frame mounted afresh (its process died) shows its loading state until it draws again.
+	useEffect(() => setHeight(undefined), [page.mount]);
 	if (!drawable) return <>{codeBlock}</>;
 	if (failed) {
 		return (
@@ -93,7 +95,10 @@ export const MermaidBlock = memo(function MermaidBlock({ code, streaming = false
 				}
 				return;
 			}
-			if (message.height) setHeight(message.height);
+			if (message.height) {
+				setHeight(message.height);
+				page.rendered();
+			}
 		}
 	};
 	const toggle = (

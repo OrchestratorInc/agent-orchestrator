@@ -9,13 +9,13 @@ const MAX_CHARS = 2_000_000;
 const cache = new Map<string, string>();
 let cachedChars = 0;
 
+/**
+ * A diagram's identity: its theme and its whole source. A source is at most
+ * MAX_DIAGRAM_CHARS and the cache holds MAX_ENTRIES, so the full text costs
+ * little, and no two diagrams can share an entry as two hashes could.
+ */
 export function diagramCacheKey(code: string, scheme: "light" | "dark"): string {
-	let hash = 0x811c9dc5;
-	for (let i = 0; i < code.length; i += 1) {
-		hash ^= code.charCodeAt(i);
-		hash = Math.imul(hash, 0x01000193);
-	}
-	return `${scheme}:${code.length}:${(hash >>> 0).toString(36)}`;
+	return `${scheme}\n${code}`;
 }
 
 export function cachedDiagram(key: string): string | undefined {
