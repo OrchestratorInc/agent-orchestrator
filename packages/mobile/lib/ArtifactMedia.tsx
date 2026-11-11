@@ -19,7 +19,8 @@ import { useGlassBarInset } from "./useHeaderOverlap";
  * screen pauses.
  */
 export function ArtifactMedia({ source, kind, active, name, label, hint }: {
-	source: { uri: string; headers: Record<string, string> };
+	/** A daemon's source carries the credential; Cloud's signed address needs none. */
+	source: { uri: string; headers?: Record<string, string> };
 	kind: "video" | "audio";
 	/** Whether this is the page on screen. */
 	active: boolean;

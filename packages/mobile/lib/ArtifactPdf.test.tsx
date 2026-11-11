@@ -19,25 +19,27 @@ vi.mock("react-native", () => ({
 	View: "View",
 }));
 vi.mock("react-native-pdf-renderer", () => ({ default: "PdfRendererView" }));
-vi.mock("./api", () => ({
-	artifactStreamSource: () => ({ uri: "http://machine/spec.pdf", headers: {} }),
-	getArtifactSize: mocks.getArtifactSize,
-}));
 vi.mock("./artifactDownload", () => ({
 	ArtifactTooLargeError: mocks.ArtifactTooLargeError,
 	discardArtifact: vi.fn(),
 	downloadArtifact: mocks.downloadArtifact,
 }));
-vi.mock("./config", () => ({ machineIdentity: () => "host.a" }));
 vi.mock("./connectionError", () => ({ userFacingError: (_: unknown, fallback: string) => fallback }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: () => ({}) }));
 vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState" }));
 vi.mock("./useHeaderOverlap", () => ({ useGlassBarInset: () => 0 }));
 
 import { MAX_ARTIFACT_DOWNLOAD_BYTES } from "./artifacts";
+import type { ArtifactsBackend } from "./artifactsBackend";
 import { ArtifactPdf } from "./ArtifactPdf";
 
-const config = { host: "machine", httpPort: "3011", muxPort: "", password: "", secure: false };
+// A daemon backend: it tells sizes; Cloud's does not.
+const backend = {
+	key: "host.a",
+	cloud: false,
+	streamSource: () => ({ uri: "http://machine/spec.pdf", headers: {} }),
+	size: mocks.getArtifactSize,
+} as unknown as ArtifactsBackend;
 let renderer: ReactTestRenderer | undefined;
 
 afterEach(() => {
@@ -48,7 +50,7 @@ afterEach(() => {
 });
 
 async function show(props: { active: boolean; size: number }) {
-	const element = createElement(ArtifactPdf, { config, sessionId: "ao-1", artifact: { path: "spec.pdf", updatedAt: "v1", size: props.size }, active: props.active, label: "PDF file", hint: "Open it on the machine." });
+	const element = createElement(ArtifactPdf, { backend, sessionId: "ao-1", artifact: { path: "spec.pdf", updatedAt: "v1", size: props.size }, active: props.active, label: "PDF file", hint: "Open it on the machine." });
 	await act(async () => {
 		if (renderer) renderer.update(element);
 		else renderer = create(element);

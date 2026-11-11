@@ -283,6 +283,9 @@ export function machineFileManagerName(platform: string | undefined): string | u
 	return undefined;
 }
 
+/** Where a Cloud session's file the phone cannot show can be opened: there is no machine to name. */
+export const OPEN_CLOUD_FILE_HINT = "Open it from the session's artifacts in the desktop app.";
+
 /**
  * Where a file the phone cannot show can be opened: on the machine, from the
  * desktop app's artifact menu, named as that menu names it.

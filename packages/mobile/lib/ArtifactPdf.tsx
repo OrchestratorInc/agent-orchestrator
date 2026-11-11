@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import PdfRendererView from "react-native-pdf-renderer";
-import { artifactStreamSource, getArtifactSize } from "./api";
 import { ArtifactTooLargeError, discardArtifact, downloadArtifact } from "./artifactDownload";
 import { artifactCacheEntry, MAX_ARTIFACT_DOWNLOAD_BYTES, type SessionArtifact } from "./artifacts";
-import { machineIdentity, type ServerConfig } from "./config";
+import type { ArtifactsBackend } from "./artifactsBackend";
 import { userFacingError } from "./connectionError";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -23,8 +22,9 @@ type PdfState = { key: string; uri?: string; error?: string; tooLarge?: boolean 
  * until it is swiped to (a download it started keeps going, and is picked up
  * again). A file over MAX_ARTIFACT_DOWNLOAD_BYTES is not downloaded at all.
  */
-export function ArtifactPdf({ config, sessionId, artifact, active, label, hint }: {
-	config: ServerConfig;
+export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint }: {
+	/** The paired machine's daemon, or Orchestrator Cloud. */
+	backend: ArtifactsBackend;
 	sessionId: string;
 	artifact: Pick<SessionArtifact, "path" | "updatedAt" | "size">;
 	/** Whether this is the page on screen. */
@@ -38,7 +38,7 @@ export function ArtifactPdf({ config, sessionId, artifact, active, label, hint }
 	const styles = useThemedStyles(makeStyles);
 	const glassInset = useGlassBarInset();
 	// Session ids are only unique on one machine: the same path on two paired machines is two files.
-	const machine = machineIdentity(config);
+	const machine = backend.key;
 	const key = `${machine}|${sessionId}|${artifact.path}|${artifact.updatedAt}`;
 	const entry = useMemo(() => artifactCacheEntry(machine, sessionId, artifact.path, artifact.updatedAt), [artifact.path, artifact.updatedAt, machine, sessionId]);
 	const [state, setState] = useState<PdfState>();
@@ -47,14 +47,15 @@ export function ArtifactPdf({ config, sessionId, artifact, active, label, hint }
 	useEffect(() => {
 		if (!active || settled) return;
 		let live = true;
-		const source = artifactStreamSource(config, sessionId, artifact.path, artifact.updatedAt);
+		const source = backend.streamSource(sessionId, artifact.path, artifact.updatedAt);
 		if (!source) {
 			setState({ key, error: "Its path isn't one the phone can request." });
 			return;
 		}
 		(async () => {
 			// The list gives the size; a file it does not list is asked (one byte, see getArtifactSize).
-			const size = artifact.size > 0 ? artifact.size : await getArtifactSize(config, sessionId, artifact.path).catch(() => undefined);
+			// Cloud does not say a size beforehand: the download's own check then decides.
+			const size = artifact.size > 0 ? artifact.size : await backend.size?.(sessionId, artifact.path).catch(() => undefined);
 			if (size !== undefined && size > MAX_ARTIFACT_DOWNLOAD_BYTES) throw new ArtifactTooLargeError();
 			return downloadArtifact(source, entry, { maxBytes: MAX_ARTIFACT_DOWNLOAD_BYTES });
 		})().then(
@@ -65,7 +66,7 @@ export function ArtifactPdf({ config, sessionId, artifact, active, label, hint }
 			},
 		);
 		return () => { live = false; };
-	}, [active, artifact.path, artifact.size, artifact.updatedAt, attempt, config, entry, key, sessionId, settled]);
+	}, [active, artifact.path, artifact.size, artifact.updatedAt, attempt, backend, entry, key, sessionId, settled]);
 	const retry = <Button title="Try again" icon="refresh-cw" onPress={() => { setState(undefined); setAttempt((n) => n + 1); }} />;
 	if (settled && state.tooLarge) return <View style={styles.center}><EmptyState icon="file" title="Too large to preview on the phone" message={`${label}\n${hint}`} /></View>;
 	if (settled && state.error) return <View style={styles.center}><EmptyState icon="file" title="Couldn't load this PDF" message={state.error} action={retry} /></View>;

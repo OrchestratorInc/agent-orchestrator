@@ -22,7 +22,7 @@ export class ArtifactTooLargeError extends Error {
  * A download over `maxBytes` (when the server did not say its size beforehand)
  * is deleted and rejects with ArtifactTooLargeError, so it is never kept.
  */
-export function downloadArtifact(source: { uri: string; headers: Record<string, string> }, entry: ArtifactCacheEntry, { maxBytes }: { maxBytes?: number } = {}): Promise<string> {
+export function downloadArtifact(source: { uri: string; headers?: Record<string, string> }, entry: ArtifactCacheEntry, { maxBytes }: { maxBytes?: number } = {}): Promise<string> {
 	const inFlight = pending.get(entry.name);
 	if (inFlight) return inFlight;
 	const task = (async () => {
@@ -32,7 +32,7 @@ export function downloadArtifact(source: { uri: string; headers: Record<string, 
 		if (!(target.exists && target.size > 0)) {
 			const partial = new File(directory, `${entry.name}.part`);
 			if (partial.exists) partial.delete();
-			const downloaded = await File.downloadFileAsync(source.uri, partial, { headers: source.headers, idempotent: true });
+			const downloaded = await File.downloadFileAsync(source.uri, partial, { headers: source.headers ?? {}, idempotent: true });
 			if (maxBytes !== undefined && (downloaded.size ?? 0) > maxBytes) {
 				downloaded.delete();
 				throw new ArtifactTooLargeError();

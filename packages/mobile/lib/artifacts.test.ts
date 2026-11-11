@@ -7,6 +7,7 @@ import {
 	artifactExtensionLabel,
 	artifactFormatLabel,
 	contentRangeTotal,
+	OPEN_CLOUD_FILE_HINT,
 	openOnMachineHint,
 	artifactFilePath,
 	artifactMenuActions,
@@ -174,6 +175,11 @@ describe("openOnMachineHint", () => {
 
 	it("points to the artifact menu when the platform is not known", () => {
 		expect(openOnMachineHint("Studio Mac", "")).toBe("Open it on Studio Mac from the artifact's ⋯ menu in the desktop app.");
+	});
+
+	it("names no machine for a Cloud session's file", () => {
+		expect(OPEN_CLOUD_FILE_HINT).toBe("Open it from the session's artifacts in the desktop app.");
+		expect(OPEN_CLOUD_FILE_HINT).not.toMatch(/machine|Finder/);
 	});
 
 	it("says the machine when its name is not known", () => {

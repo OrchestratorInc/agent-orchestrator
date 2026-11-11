@@ -51,8 +51,8 @@ export function ArtifactThumbnail({ backend, sessionId, artifact, visible, versi
 	const kind = artifactViewKind(artifact);
 	return (
 		<View pointerEvents="none" style={styles.fill} onLayout={onLayout} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-			{width > 0 && kind === "html" ? <PageThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} height={height} onFailed={onFailed} />
-				: width > 0 && (kind === "markdown" || kind === "text" || kind === "table" || kind === "diagram") ? <TextThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} versionOf={versionOf} onFailed={onFailed} />
+			{width > 0 && kind === "html" ? <PageThumbnail backend={backend} sessionId={sessionId} artifact={artifact} visible={visible} width={width} height={height} onFailed={onFailed} />
+				: width > 0 && (kind === "markdown" || kind === "text" || kind === "table" || kind === "diagram") ? <TextThumbnail backend={backend} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} versionOf={versionOf} onFailed={onFailed} />
 				: null}
 		</View>
 	);
