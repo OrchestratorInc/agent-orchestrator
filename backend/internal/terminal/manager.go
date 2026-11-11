@@ -807,6 +807,31 @@ func newOutQueue() *outQueue {
 // maxMergedData bounds one merged data frame.
 const maxMergedData = 256 << 10
 
+// maxPooledEncoded bounds the encode scratch buffer kept in base64Buffers. One
+// merged frame is at most maxMergedData of PTY output, whose base64 form is
+// about 4/3 of that, so every merged frame is pooled; anything larger is
+// dropped rather than pinned in the pool.
+const maxPooledEncoded = 512 << 10
+
+// base64Buffers reuses the scratch space for encoding PTY output. drain runs
+// once per merged frame for every attached client, so a heavy stream otherwise
+// allocates and discards an encoded buffer on each frame.
+var base64Buffers = sync.Pool{New: func() any {
+	b := make([]byte, 0, 32*1024)
+	return &b
+}}
+
+// base64Buffer returns the pooled scratch buffer for encoding one frame. The
+// pool stores a pointer so boxing it into an any does not allocate.
+func base64Buffer() *[]byte {
+	buf, ok := base64Buffers.Get().(*[]byte)
+	if !ok || buf == nil {
+		b := make([]byte, 0, 32*1024)
+		return &b
+	}
+	return buf
+}
+
 func (q *outQueue) push(msg serverMsg) {
 	q.mu.Lock()
 	// PTY output arrives in many small reads. Output queued behind the writer
@@ -822,9 +847,10 @@ func (q *outQueue) push(msg serverMsg) {
 			return
 		}
 	}
-	if msg.raw != nil {
-		msg.raw = append([]byte(nil), msg.raw...)
-	}
+	// msg.raw is taken as-is: every producer hands over a slice it does not
+	// reuse (the attachment read loop allocates one chunk per read), and the
+	// merge path above already copied its bytes. Copying again here duplicated
+	// every PTY byte a second time on the way to the socket.
 	q.frames = append(q.frames, msg)
 	q.bytes += len(msg.Data) + len(msg.raw)
 	q.mu.Unlock()
@@ -852,9 +878,18 @@ func (q *outQueue) drain() []serverMsg {
 	q.frames, q.bytes = nil, 0
 	q.mu.Unlock()
 	for i := range frames {
-		if frames[i].raw != nil {
-			frames[i].Data = base64.StdEncoding.EncodeToString(frames[i].raw)
-			frames[i].raw = nil
+		raw := frames[i].raw
+		if raw == nil {
+			continue
+		}
+		bufp := base64Buffer()
+		encoded := base64.StdEncoding.AppendEncode((*bufp)[:0], raw)
+		// string() copies, so the scratch buffer is free to return.
+		frames[i].Data = string(encoded)
+		frames[i].raw = nil
+		if cap(encoded) <= maxPooledEncoded {
+			*bufp = encoded
+			base64Buffers.Put(bufp)
 		}
 	}
 	select {
