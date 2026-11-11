@@ -10,6 +10,16 @@ export function isWebLink(url: string): boolean {
 	}
 }
 
+/** Schemes the renderer hands to the OS: web pages and mail, never file:, javascript: or app routes. */
+export function isSystemBrowserLink(url: string): boolean {
+	try {
+		const { protocol } = new URL(url);
+		return protocol === "http:" || protocol === "https:" || protocol === "mailto:";
+	} catch {
+		return false;
+	}
+}
+
 function decodedPath(url: string): string {
 	const trimmed = url.trim();
 	let path = trimmed.split(/[?#]/, 1)[0];
