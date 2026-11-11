@@ -90,6 +90,24 @@ const timed = (transcript: string, isFinal: boolean, startTimeMillis: number, en
 	],
 });
 
+// A result with native per-word segments, as iOS reports them: each word's own
+// text and audio timing, alongside the formatted transcript.
+const words = (transcript: string, isFinal: boolean, segments: [string, number, number][]) => ({
+	isFinal,
+	results: [
+		{
+			transcript,
+			confidence: 1,
+			segments: segments.map(([segment, startTimeMillis, endTimeMillis]) => ({
+				segment,
+				startTimeMillis,
+				endTimeMillis,
+				confidence: 1,
+			})),
+		},
+	],
+});
+
 beforeEach(() => {
 	listeners.clear();
 	started.length = 0;
@@ -544,6 +562,93 @@ describe("transcript delivery", () => {
 			emit("end");
 
 			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("open the PR run the tests, then merge it");
+		});
+
+		// Review: a revision covering only part of a banked utterance must keep the
+		// words whose audio it does not cover.
+		it("keeps the uncovered words of a banked utterance a revision only partly covers", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit(
+				"result",
+				words("First phrase second phrase.", true, [
+					["First", 0, 400],
+					["phrase", 400, 1000],
+					["second", 2000, 2500],
+					["phrase", 2500, 3000],
+				]),
+			);
+			emit("result", words(" Ship it.", true, [["Ship", 4000, 4400], ["it", 4400, 5000]]));
+			// Revises only the opening words of the banked utterance.
+			emit("result", words("Fresh phrase", true, [["Fresh", 0, 400], ["phrase", 400, 1000]]));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("Fresh phrase second phrase. Ship it.");
+		});
+
+		// The kept words come from the formatted transcript, not from re-joining
+		// segment substrings, so punctuation the recogniser added survives.
+		it("keeps the uncovered words' punctuation from the formatted transcript", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", words("first second.", true, [["first", 0, 500], ["second", 1000, 1500]]));
+			emit("result", words(" Later.", true, [["Later", 3000, 3500]]));
+			emit("result", words("First", true, [["First", 0, 500]]));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("First second. Later.");
+		});
+
+		it("does not insert spaces into the kept words of a no-space language", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", words("今日は晴れ。", true, [["今日", 0, 400], ["は", 400, 600], ["晴れ", 600, 1200]]));
+			emit("result", words(" 行こう。", true, [["行こう", 3000, 3600]]));
+			emit("result", words("明日", true, [["明日", 0, 400]]));
+			emit("end");
+
+			// The revision keeps the original (empty) separator inside its utterance;
+			// separate utterances are still joined with a space, as before.
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("明日は晴れ。 行こう。");
+		});
+
+		// Conservative fallback: when the native words cannot be located in the
+		// formatted transcript, a partly covered utterance is kept exactly as it
+		// was rather than rebuilt with guessed formatting.
+		it("leaves a partly covered utterance intact when its words cannot be mapped", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", words("first second.", true, [["1st", 0, 500], ["second", 1000, 1500]]));
+			emit("result", words(" Later.", true, [["Later", 3000, 3500]]));
+			emit("result", words("First", true, [["First", 0, 500]]));
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("First first second. Later.");
+		});
+
+		// Review: an untimed result left the provisional earlier text in place of the
+		// closed later utterance once a timed revision put the earlier one back.
+		it("restores the later utterance after a timed revision of earlier speech", async () => {
+			const p = createDeviceVoiceProvider();
+			const h = harness();
+			await p.start(h.cb);
+
+			emit("result", timed("A", true, 0, 1000));
+			emit("result", timed("B", true, 2000, 3000));
+			emit("result", result("revised A", false));
+			emit("result", timed("revised A", true, 0, 1000));
+			expect(h.onPartial).toHaveBeenLastCalledWith("revised A B");
+			emit("end");
+
+			expect(h.onFinal).toHaveBeenCalledExactlyOnceWith("revised A B");
 		});
 
 		it("revises earlier banked speech in place without touching later speech", async () => {
@@ -1016,6 +1121,28 @@ describe("locale resolution before start", () => {
 		localeLookup = async () => ({ locales: ["en-GB"], installedLocales: [] });
 		await p.start(harness().cb);
 		expect(started[1]).toMatchObject({ lang: "en-GB" });
+	});
+
+	// Review: the replaced start's own deadline must not abandon a lookup the
+	// replacing start is still waiting on.
+	it("lets a replacing start use a lookup that answers after the replaced start's deadline", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		deviceLocale("en-GB");
+		const lookup = deferred<{ locales: string[]; installedLocales: string[] }>();
+		localeLookup = () => lookup.promise;
+		const p = await freshProvider();
+
+		const first = p.start(harness().cb);
+		await vi.advanceTimersByTimeAsync(1000);
+		const second = p.start(harness().cb);
+		// The first start's deadline passes; the second's has a second to go.
+		await vi.advanceTimersByTimeAsync(1500);
+		lookup.resolve({ locales: ["en-US", "en-GB"], installedLocales: [] });
+		await vi.advanceTimersByTimeAsync(0);
+		await Promise.all([first, second]);
+
+		expect(calls.start).toBe(1);
+		expect(started[0]).toMatchObject({ lang: "en-GB" });
 	});
 
 	it("starts nothing and attaches nothing when aborted during the lookup", async () => {

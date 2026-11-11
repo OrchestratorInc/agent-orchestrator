@@ -119,19 +119,25 @@ function resolveLang(): Promise<string | null> {
 
 // The locale to start a recording with. Waits for the lookup (normally already
 // finished by the warm-up kick) so the first phrase is not recognised in the
-// wrong accent; en-US only once the lookup has failed or timed out.
-async function langForStart(): Promise<string> {
+// wrong accent; en-US only once the lookup has failed or timed out. Only a start
+// whose session is still live may abandon the lookup: a replaced start's deadline
+// says nothing about a lookup its replacement is still within time to use.
+async function langForStart(stillWanted: () => boolean): Promise<string> {
 	const timedOut = Symbol("timedOut");
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<typeof timedOut>((resolve) => {
 		timer = setTimeout(() => resolve(timedOut), LANG_LOOKUP_TIMEOUT_MS);
 	});
 	try {
-		const lang = await Promise.race([resolveLang(), timeout]);
+		const lookup = resolveLang();
+		const lang = await Promise.race([lookup, timeout]);
 		if (lang === timedOut) {
-			// Abandon the hung lookup so the next press asks the recogniser again.
-			langLookupGeneration++;
-			langLookup = null;
+			// Abandon the hung lookup so the next press asks the recogniser again,
+			// unless a newer lookup already replaced it.
+			if (stillWanted() && langLookup === lookup) {
+				langLookupGeneration++;
+				langLookup = null;
+			}
 			return "en-US";
 		}
 		return lang ?? "en-US";
@@ -164,22 +170,48 @@ function isSameSegment(prev: string, next: string): boolean {
 	return firstWord(a) === firstWord(b) && b.length >= a.length;
 }
 
-// Where in the recording a result's words were spoken, from its segments' native
-// timings (SFTranscriptionSegment timestamp/duration, measured from the start of
-// the task's audio). Null when there is nothing usable: no segments, or the
-// zeroed timings iOS can report on interim results.
-function audioSpan(
-	segments: readonly { startTimeMillis: number; endTimeMillis: number }[] | undefined,
-): { start: number; end: number } | null {
+// One recognised word, where in the recording it was spoken, and - when it could
+// be located - where it sits in its utterance's formatted transcript.
+type TimedWord = { text: string; start: number; end: number; at?: number };
+
+// A result's words with their native timings (SFTranscriptionSegment substring,
+// timestamp and duration, measured from the start of the task's audio), and the
+// span they cover. Null when there is nothing usable: no segments, or the zeroed
+// timings iOS can report on interim results.
+//
+// Each word is also located in `text`, the formatted transcript. Apple defines a
+// segment's substring as a range of that formatted string, so in order each one
+// must be found after the last; if any is not, no word gets a position and
+// nothing is cut from this utterance's text later (see the result listener).
+function timedWords(
+	segments:
+		| readonly { segment?: string; startTimeMillis: number; endTimeMillis: number }[]
+		| undefined,
+	text: string,
+): { words: TimedWord[]; start: number; end: number } | null {
 	if (!segments?.length) return null;
 	let start = Infinity;
 	let end = -Infinity;
+	const words: TimedWord[] = [];
 	for (const s of segments) {
 		if (!Number.isFinite(s.startTimeMillis) || !Number.isFinite(s.endTimeMillis)) return null;
 		start = Math.min(start, s.startTimeMillis);
 		end = Math.max(end, s.endTimeMillis);
+		words.push({ text: typeof s.segment === "string" ? s.segment : "", start: s.startTimeMillis, end: s.endTimeMillis });
 	}
-	return end > start ? { start, end } : null;
+	if (!(end > start)) return null;
+
+	let cursor = 0;
+	for (const w of words) {
+		const at = w.text ? text.indexOf(w.text, cursor) : -1;
+		if (at === -1) {
+			for (const u of words) u.at = undefined;
+			break;
+		}
+		w.at = at;
+		cursor = at + w.text.length;
+	}
+	return { words, start, end };
 }
 
 // A "no speech" error is what you get from a mis-tap or a silent room. It is the
@@ -236,10 +268,15 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 		nativeStarted: boolean;
 		// iOS only: the utterance a timed final result closed, and the audio it
 		// covers. Banked once a later result is shown to cover audio after it.
-		closed?: { text: string; start: number; end: number };
-		// iOS only: the audio each `finalized` entry covers, index for index, so a
-		// later result restating that audio can replace it rather than repeat it.
-		finalizedSpans: { start: number; end: number }[];
+		closed?: { text: string; start: number; end: number; words: TimedWord[] };
+		// iOS only: the timed words of each `finalized` entry, index for index, so a
+		// later result restating some of that audio replaces just those words
+		// rather than repeating them or dropping the rest.
+		finalizedWords: TimedWord[][];
+		// iOS only: the separator written before each `finalized` entry. A space
+		// between separate utterances; inside a split utterance, whatever its
+		// formatted transcript had there - which is nothing in a no-space language.
+		finalizedSeps: string[];
 	};
 	let session: Session | null = null;
 	// Sticky once granted. Permission can only be revoked from Settings, which
@@ -248,7 +285,12 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 
 	// Everything heard so far: completed segments plus the one in progress.
 	function transcriptOf(s: Session): string {
-		return [...s.finalized, s.partial].filter(Boolean).join(" ").trim();
+		let text = "";
+		s.finalized.forEach((entry, i) => {
+			if (entry) text += (text ? (s.finalizedSeps[i] ?? " ") : "") + entry;
+		});
+		if (s.partial) text += (text ? " " : "") + s.partial;
+		return text.trim();
 	}
 
 	function close(): VoiceCallbacks | null {
@@ -340,14 +382,15 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 				finalized: [],
 				partial: "",
 				nativeStarted: false,
-				finalizedSpans: [],
+				finalizedWords: [],
+				finalizedSeps: [],
 			};
 			session = current;
 
 			// Resolve the locale BEFORE starting: it cannot be changed once the
 			// recogniser is running. The session may be aborted, stopped or replaced
 			// while this waits; if so, start nothing and attach nothing.
-			const lang = await langForStart();
+			const lang = await langForStart(() => session === current);
 			if (session !== current) return;
 
 			current.subscriptions.push(
@@ -376,43 +419,96 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 						// An empty result carries no transcript (iOS 18 sends a trailing
 						// `isFinal` with no results); it must not wipe what was heard.
 						if (!text) return;
-						const span = audioSpan(e.results?.[0]?.segments);
+						const span = timedWords(e.results?.[0]?.segments, text);
+						// Where a revision split an utterance: the piece left before the cut
+						// and the piece left after it, each with the whitespace the
+						// transcript had at that cut (nothing, in a no-space language).
+						let cutBefore: { words: TimedWord[]; sep: string } | undefined;
+						let cutAfter: { words: TimedWord[]; sep: string } | undefined;
 						if (span) {
 							// A result restating audio already banked (a cumulative revision)
-							// supersedes exactly the utterances it covers. Speech before or
-							// after it is untouched.
-							for (let i = current.finalizedSpans.length - 1; i >= 0; i--) {
-								const b = current.finalizedSpans[i];
-								if (b.start < span.end && span.start < b.end) {
-									current.finalized.splice(i, 1);
-									current.finalizedSpans.splice(i, 1);
+							// supersedes exactly the words whose audio it covers. Words before
+							// or after it survive, cut from the utterance's own formatted
+							// transcript so their punctuation and spacing are unchanged; an
+							// utterance it does not touch keeps its text as is.
+							for (let i = current.finalizedWords.length - 1; i >= 0; i--) {
+								const ws = current.finalizedWords[i];
+								let before = 0;
+								while (before < ws.length && ws[before].end <= span.start) before++;
+								let after = 0;
+								while (after < ws.length - before && ws[ws.length - 1 - after].start >= span.end) after++;
+								const covered = ws.length - before - after;
+								if (!covered && (!before || !after)) continue;
+								const entry = current.finalized[i];
+								const parts: { text: string; words: TimedWord[]; sep: string }[] = [];
+								const trailingSpace = (end: number) => /\s*$/.exec(entry.slice(0, end))?.[0] ?? "";
+								if (before || after) {
+									// Conservative fallback: without verified positions the
+									// uncovered words cannot be cut out without guessing at
+									// formatting, so the utterance is kept whole.
+									if (ws.some((w) => w.at === undefined)) continue;
+									if (before) {
+										const words = ws.slice(0, before);
+										parts.push({
+											text: entry.slice(0, ws[before].at).trimEnd(),
+											words,
+											sep: current.finalizedSeps[i] ?? " ",
+										});
+										cutBefore = { words, sep: trailingSpace(ws[before].at ?? 0) };
+									}
+									if (after) {
+										const from = ws[ws.length - after].at ?? 0;
+										const words = ws.slice(ws.length - after).map((w) => ({ ...w, at: (w.at ?? 0) - from }));
+										// A space unless the revision lands right before it (below).
+										parts.push({ text: entry.slice(from).trim(), words, sep: " " });
+										cutAfter = { words, sep: trailingSpace(from) };
+									}
 								}
+								current.finalized.splice(i, 1, ...parts.map((part) => part.text));
+								current.finalizedWords.splice(i, 1, ...parts.map((part) => part.words));
+								current.finalizedSeps.splice(i, 1, ...parts.map((part) => part.sep));
 							}
 						}
 						const closed = current.closed;
 						if (closed && span) {
 							if (span.start >= closed.end) {
 								current.finalized.push(closed.text);
-								current.finalizedSpans.push({ start: closed.start, end: closed.end });
+								current.finalizedWords.push(closed.words);
+								current.finalizedSeps.push(" ");
 								current.closed = undefined;
 							} else if (span.end <= closed.start) {
 								// Revises only earlier, already-banked speech: put it back in
-								// its place in time and leave the current utterance alone.
-								const at = current.finalizedSpans.findIndex((b) => b.start > span.start);
+								// its place in time. The current utterance is still the closed
+								// one, so it is shown again in place of any untimed result
+								// that was in fact this earlier revision.
+								const at = current.finalizedWords.findIndex((ws) => ws[0].start >= span.start);
 								const i = at === -1 ? current.finalized.length : at;
 								current.finalized.splice(i, 0, text);
-								current.finalizedSpans.splice(i, 0, span);
+								current.finalizedWords.splice(i, 0, span.words);
+								// Back inside the utterance it was cut from, the revision keeps
+								// that utterance's separators at the cut; next to anything else
+								// it is a separate utterance, joined with a space.
+								current.finalizedSeps.splice(
+									i,
+									0,
+									cutBefore && i > 0 && current.finalizedWords[i - 1] === cutBefore.words ? cutBefore.sep : " ",
+								);
+								if (cutAfter && current.finalizedWords[i + 1] === cutAfter.words) {
+									current.finalizedSeps[i + 1] = cutAfter.sep;
+								}
+								current.partial = closed.text;
 								cb.onPartial(transcriptOf(current));
 								return;
 							} else {
 								closed.text = text;
 								closed.start = Math.min(closed.start, span.start);
 								closed.end = Math.max(closed.end, span.end);
+								closed.words = span.words;
 							}
 						}
 						current.partial = text;
 						if (e.isFinal && span && !current.closed) {
-							current.closed = { text, start: span.start, end: span.end };
+							current.closed = { text, start: span.start, end: span.end, words: span.words };
 						}
 						cb.onPartial(transcriptOf(current));
 						return;
