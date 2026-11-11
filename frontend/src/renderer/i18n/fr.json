@@ -2992,7 +2992,6 @@
 	"shell.signInToAOCloud": "Se connecter à Orchestrator Cloud",
 	"shell.signedInAs": "Connecté en tant que {{email}}",
 	"shell.signOut": "Se déconnecter",
-	"shell.signOutWithEmail": "{{email}} · Se déconnecter",
 	"chat.branch.previous": "Branche de conversation précédente",
 	"chat.branch.next": "Branche de conversation suivante",
 	"chat.branch.position": "Branche de conversation {{position}} sur {{total}}",

@@ -2947,7 +2947,6 @@
 	"shell.signInToAOCloud": "Orchestrator Cloud에 로그인",
 	"shell.signedInAs": "{{email}}(으)로 로그인됨",
 	"shell.signOut": "로그아웃",
-	"shell.signOutWithEmail": "{{email}} · 로그아웃",
 	"chat.branch.previous": "이전 대화 분기",
 	"chat.branch.next": "다음 대화 분기",
 	"chat.branch.position": "대화 분기 {{position}} / {{total}}",
