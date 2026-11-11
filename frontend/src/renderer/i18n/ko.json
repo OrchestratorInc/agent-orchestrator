@@ -405,6 +405,7 @@
 	"firstRun.showFewerHarnesses": "간단히 보기",
 	"firstRun.moreHarnessesList": "다른 Harness",
 	"firstRun.installHowTo": "설치 방법",
+	"firstRun.installOtherWays": "다른 설치 방법",
 	"firstRun.installDidNotFinish": "설치가 완료되지 않았습니다.",
 	"firstRun.ghDocs": "GitHub CLI 받기",
 	"firstRun.orchPoint1Title": "원하는 결과를 설명하세요",

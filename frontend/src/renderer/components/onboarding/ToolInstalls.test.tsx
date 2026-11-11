@@ -176,6 +176,15 @@ describe("useAgentInstalls", () => {
 	});
 });
 
+describe("InstallProblem", () => {
+	it("offers the harness's other installers in Settings", async () => {
+		const otherWays = vi.fn();
+		render(wrap(<InstallProblem view={{ busy: false, ended: true, problem: "Forbidden" }} otherWays={otherWays} />));
+		await userEvent.click(screen.getByRole("button", { name: "Other ways to install" }));
+		expect(otherWays).toHaveBeenCalledOnce();
+	});
+});
+
 describe("agentRowState", () => {
 	const agent = (installation: string, auth: string, freshness = "fresh", readiness = "not_ready") => ({
 		id: "gemini",

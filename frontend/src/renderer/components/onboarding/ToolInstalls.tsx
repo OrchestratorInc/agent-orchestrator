@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowRight, ArrowUpRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
@@ -232,15 +232,30 @@ export function InstallProgress({ job, label }: { job?: InstallJob; label: strin
 }
 
 /** Under a row whose install didn't finish: why, the command to run by hand
- * when there is one, and where to read more. */
-export function InstallProblem({ view, docsUrl, docsLabel }: { view: InstallView; docsUrl?: string; docsLabel?: string }) {
+ * when there is one, where to read more, and (for a harness) its full set of
+ * installers in Settings. */
+export function InstallProblem({ view, docsUrl, docsLabel, otherWays }: {
+	view: InstallView;
+	docsUrl?: string;
+	docsLabel?: string;
+	/** Opens the harness in Settings > Harness, with every install method and the failed job's diagnostics. */
+	otherWays?: () => void;
+}) {
 	const { t } = useTranslation();
 	const command = view.job?.status === "unsupported" || view.job?.status === "failed" ? view.job.command : undefined;
 	return (
 		<div className="flex flex-col gap-1.5">
 			{view.problem ? <p className="text-xs text-destructive" role="alert">{view.problem}</p> : null}
 			{command ? <ManualCommand command={command} t={t} /> : null}
-			{docsUrl ? <InstallDocsLink url={docsUrl} label={docsLabel ?? t("firstRun.installHowTo")} /> : null}
+			<div className="flex flex-wrap gap-1">
+				{otherWays ? (
+					<Button type="button" size="sm" variant="ghost" className="text-muted-foreground" onClick={otherWays}>
+						{t("firstRun.installOtherWays")}
+						<ArrowRight aria-hidden="true" />
+					</Button>
+				) : null}
+				{docsUrl ? <InstallDocsLink url={docsUrl} label={docsLabel ?? t("firstRun.installHowTo")} /> : null}
+			</div>
 		</div>
 	);
 }

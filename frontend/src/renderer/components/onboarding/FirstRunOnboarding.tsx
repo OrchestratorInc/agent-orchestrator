@@ -230,6 +230,8 @@ const PRESS_CLASS =
 
 function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 	const { t } = useTranslation();
+	// Settings open over the app (a harness's installers, from Your tools).
+	const settingsAside = useUiStore((state) => state.settingsModal?.scope === "global");
 	const [step, setStepState] = useState<Step>(readStoredStep);
 	const setStep = (next: Step) => {
 		storeStep(next);
@@ -329,8 +331,10 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 		// Back on every page but the welcome, which has nothing before it.
 		<BackContext.Provider value={step === "welcome" ? undefined : goBack}>
 		<div
-			className={cn("first-run-onboarding onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS)}
+			className={cn("first-run-onboarding onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS, settingsAside && "hidden")}
 			data-testid="first-run-onboarding"
+			// Settings opened from here (a harness's installers): step aside, keeping the page.
+			data-aside={settingsAside ? "" : undefined}
 			role="dialog"
 			aria-modal="true"
 			aria-label={t("firstRun.ariaLabel")}
@@ -937,6 +941,16 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 	const ghView = ghInstall.view;
 
 	const { agents, more, anyReady } = useToolAgents();
+	// A harness's own installers (every method, diagnostics) live in Settings >
+	// Harness; onboarding steps aside while Settings is open and comes back here.
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const openHarnessSettings = (agentId: string, job?: { startedAt?: string | null; error?: string }) =>
+		openGlobalSettings("harness", {
+			focusAgentId: agentId,
+			showDiagnostics: job ? { jobStartedAt: job.startedAt ?? undefined, error: job.error } : undefined,
+		});
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
+	const wasInSettings = useRef(false);
 	const [showAllAgents, setShowAllAgents] = useState(false);
 	const signingInAgent = workflow?.agentId;
 	const signingInReady = agents.some((row) => row.agent.id === signingInAgent && row.state === "ready");
@@ -1013,7 +1027,9 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 					: missing ? <RowState>{t("firstRun.agentMissing")}</RowState>
 					: <RowSpinner />}
 				below={view.busy && missing ? <InstallProgress job={view.job} label={agent.label} />
-					: view.ended && missing ? <InstallProblem view={view} docsUrl={plan?.documentationUrl} />
+					: view.ended && missing ? (
+						<InstallProblem view={view} docsUrl={plan?.documentationUrl} otherWays={() => openHarnessSettings(agent.id, view.job)} />
+					)
 					: undefined}
 			/>
 		);
@@ -1027,6 +1043,16 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 			setChecking(false);
 		}
 	};
+	// Back from Settings: whatever was installed or signed in there shows here.
+	const checkAgainRef = useRef(checkAgain);
+	checkAgainRef.current = checkAgain;
+	useEffect(() => {
+		if (settingsOpen) wasInSettings.current = true;
+		else if (wasInSettings.current) {
+			wasInSettings.current = false;
+			void checkAgainRef.current();
+		}
+	}, [settingsOpen]);
 
 	return (
 		<StepSplit

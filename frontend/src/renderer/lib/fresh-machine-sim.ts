@@ -10,7 +10,8 @@ import { developerModeStorageKey } from "./window-translucency";
 //
 // It answers a handful of daemon endpoints from memory: git, the GitHub CLI
 // and the coding agents start missing, GitHub is not signed in, and installs
-// pretend to succeed after a moment. When a daemon is running its real answers
+// pretend to succeed after a moment (except Aider's, which fails, so the
+// failure path can be walked too). When a daemon is running its real answers
 // are rewritten; without one (the browser preview, `npm run dev:web`) a small
 // baseline stands in, so the whole flow can be walked there too. The switch
 // lasts for this window's session; the simulated installs reset on reload.
@@ -58,14 +59,30 @@ const installStartedAt = new Map<string, number>();
 const json = (body: unknown, status = 200) =>
 	new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
+/** Installs that fail, so the failure path can be walked too: the download is
+ * refused, as on a network that blocks the installer's site. */
+const FAILING_INSTALLS = new Set(["aider"]);
+
 /** A pretend install: it downloads, then installs, reporting progress as a
- * real installer's output would, and succeeds after FAKE_INSTALL_MS. */
+ * real installer's output would, and succeeds after FAKE_INSTALL_MS (or, for
+ * FAILING_INSTALLS, fails partway). */
 function installJob(target: string) {
 	const command = `brew install ${target} (simulated)`;
 	const startedAt = installStartedAt.get(target);
 	if (startedAt === undefined) return { target, status: "idle", command };
 	const elapsed = Date.now() - startedAt;
-	const done = elapsed >= FAKE_INSTALL_MS;
+	const failing = FAILING_INSTALLS.has(target);
+	const done = elapsed >= (failing ? FAKE_INSTALL_MS / 2 : FAKE_INSTALL_MS);
+	if (done && failing) {
+		return {
+			target,
+			status: "failed",
+			command,
+			error: `download installer: Get "https://${target}.example/install.sh": Forbidden (simulated)`,
+			startedAt: new Date(startedAt).toISOString(),
+			finishedAt: new Date(startedAt + FAKE_INSTALL_MS / 2).toISOString(),
+		};
+	}
 	if (done) installed.add(AGENT_ID_FOR_TARGET[target] ?? target);
 	const downloading = elapsed < FAKE_INSTALL_MS / 2;
 	return {
@@ -191,7 +208,8 @@ export async function simulateFreshMachine(input: Request, send: () => Promise<R
 	const agentInstall = path.match(/^\/api\/v1\/agents\/([^/]+)\/install$/);
 	if (agentInstall) {
 		const agent = decodeURIComponent(agentInstall[1]!);
-		if (method === "POST" && !installStartedAt.has(agent)) installStartedAt.set(agent, Date.now());
+		// A retry after a failure starts over.
+		if (method === "POST" && (!installStartedAt.has(agent) || installJob(agent).status === "failed")) installStartedAt.set(agent, Date.now());
 		return json(installJob(agent));
 	}
 	const install = path.match(/^\/api\/v1\/system\/install\/([^/]+)$/);
