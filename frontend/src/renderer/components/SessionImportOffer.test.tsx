@@ -1,10 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, it } from "vitest";
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { useUiStore } from "../stores/ui-store";
-import { NoticeViewport } from "./Notice";
 import { SessionImportOffer } from "./SessionImportOffer";
 
 const agent = (id: string, installed: boolean, auth: string) => ({
@@ -18,7 +17,6 @@ function renderOffer(...agents: ReturnType<typeof agent>[]) {
 	client.setQueryData(agentReadinessQueryKey, { agents });
 	return render(
 		<QueryClientProvider client={client}>
-			<NoticeViewport />
 			<SessionImportOffer />
 		</QueryClientProvider>,
 	);
@@ -26,7 +24,7 @@ function renderOffer(...agents: ReturnType<typeof agent>[]) {
 
 beforeEach(() => {
 	window.localStorage.clear();
-	useUiStore.setState({ settingsModal: null, sessionImportOfferClosed: false, firstRunPromptActive: false });
+	useUiStore.setState({ settingsModal: null, sessionImportOfferClosed: false });
 	useSessionImportStore.setState({ dialog: null });
 });
 
@@ -40,19 +38,12 @@ it("opens the folder picker for every configured agent at once", () => {
 
 it("shows only logos for harnesses with import enabled", () => {
 	renderOffer(...["claude-code", "codex", "droid", "kimi", "opencode", "pi"].map((id) => agent(id, true, "authorized")));
-	expect(screen.getByRole("img", { name: "Claude Code, Codex, OpenCode, Pi" })).toHaveTextContent("+1");
-});
-
-it("shows as a notice in the corner, like an agent update", () => {
-	renderOffer(agent("codex", true, "authorized"));
-	const region = screen.getByRole("region", { name: "Import earlier chats" });
-	expect(region).toHaveClass("absolute", "top-3", "right-3");
-	expect(within(region).getByRole("article", { name: "Import earlier chats" })).toBeInTheDocument();
+	expect(screen.getByRole("img", { name: "Claude Code, Codex, OpenCode, Pi" })).not.toHaveTextContent("+2");
 });
 
 it("does not offer imports when only deferred harnesses are configured", () => {
 	renderOffer(agent("kimi", true, "authorized"), agent("droid", true, "authorized"));
-	expect(screen.queryByText("Import earlier chats")).not.toBeInTheDocument();
+	expect(screen.queryByText("Bring your earlier chats into Orchestrator")).not.toBeInTheDocument();
 });
 
 it("counts an agent whose sign-in check was inconclusive", () => {
@@ -62,29 +53,16 @@ it("counts an agent whose sign-in check was inconclusive", () => {
 
 it("shows nothing when no importable agent is configured", () => {
 	renderOffer(agent("claude-code", false, "authorized"), agent("codex", true, "unauthorized"));
-	expect(screen.queryByText("Import earlier chats")).not.toBeInTheDocument();
+	expect(screen.queryByText("Bring your earlier chats into Orchestrator")).not.toBeInTheDocument();
 });
 
-it("stays hidden once dismissed", async () => {
+it("stays hidden once dismissed", () => {
 	const { unmount } = renderOffer(agent("codex", true, "authorized"));
 	fireEvent.click(screen.getByRole("button", { name: "Not now" }));
-	await waitFor(() => expect(screen.queryByText("Import earlier chats")).not.toBeInTheDocument());
+	expect(screen.queryByText("Bring your earlier chats into Orchestrator")).not.toBeInTheDocument();
 	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
 	unmount();
 	renderOffer(agent("codex", true, "authorized"));
 	expect(screen.queryByRole("button", { name: "Choose folders" })).not.toBeInTheDocument();
-});
-
-it("dismisses from the close button the same way", async () => {
-	renderOffer(agent("codex", true, "authorized"));
-	fireEvent.click(screen.getByRole("button", { name: "Dismiss import suggestion" }));
-	await waitFor(() => expect(screen.queryByRole("region")).not.toBeInTheDocument());
-	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
-});
-
-it("waits for the first-run prompt, like agent updates", () => {
-	useUiStore.setState({ firstRunPromptActive: true });
-	renderOffer(agent("codex", true, "authorized"));
-	expect(screen.queryByRole("region")).not.toBeInTheDocument();
 });

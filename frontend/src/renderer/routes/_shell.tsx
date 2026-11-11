@@ -15,7 +15,6 @@ import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
-import { NoticeViewport } from "../components/Notice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
@@ -1485,7 +1484,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<NoticeViewport />
 				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
 				<TrayRuntime />
 				<SharedWithYouNotifier />

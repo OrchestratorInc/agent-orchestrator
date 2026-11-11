@@ -2,8 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { friendlyVersion, HarnessUpdateNotice } from "./HarnessUpdateNotice";
-import { noticeCoversLiveBrowser, NoticeViewport } from "./Notice";
+import { friendlyVersion, HarnessUpdateNotice, noticeCoversLiveBrowser } from "./HarnessUpdateNotice";
 import { useHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -14,7 +13,7 @@ import { useUiStore } from "../stores/ui-store";
 import type { AgentReadiness } from "../hooks/useAgentReadinessQuery";
 
 function mountNotice(enabled = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })) {
-	const view = render(<QueryClientProvider client={client}><TooltipProvider><NoticeViewport /><HarnessUpdateNotice enabled={enabled} /></TooltipProvider></QueryClientProvider>);
+	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessUpdateNotice enabled={enabled} /></TooltipProvider></QueryClientProvider>);
 	return { client, ...view };
 }
 
