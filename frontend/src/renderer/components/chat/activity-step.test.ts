@@ -293,6 +293,8 @@ describe("Orchestrator CLI", () => {
 		expect(done("ao preview /data/artifacts/s-1/hello.html")).toBe("Previewed hello.html");
 		expect(done("ao browser console | grep -c 'Button clicked'")).toBe("Checked the browser console for Button clicked");
 		expect(done("ao browser console --json | python3 -c 'print(1)'")).toBe("Checked the browser console");
+		expect(done("ao browser console; rg TODO src | head")).toBe("Checked the browser console");
+		expect(done("ao browser tab new http://localhost:3000")).toBe("Opened http://localhost:3000");
 		expect(done("ao browser errors | head -20")).toBe("Checked the page for errors");
 		expect(done('ao browser act "Click me button" --expect-dom-change')).toBe("Interacted with the page");
 		expect(done("ao artifact add /data/artifacts/s-1/hello.html")).toBe("Saved deliverable hello.html");

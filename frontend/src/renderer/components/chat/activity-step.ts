@@ -217,19 +217,22 @@ function describeKnownCommand(command: string): CommandStep | undefined {
 	return step;
 }
 
-/** The pattern of the first `| grep` or `| rg` stage, which drops out of the parsed segments. */
+/**
+ * The pattern of a `| grep` or `| rg` stage fed straight by an `ao` call. Later
+ * pipeline stages drop out of the parsed segments, so this reads the words again.
+ */
 function pipedSearchPattern(command: string): string | undefined {
 	for (const line of logicalLines(command)) {
-		let piped = false;
+		let fedByAO = false;
 		let stage: Word[] = [];
 		for (const word of [...tokenize(line), { text: ";", operator: true } as Word]) {
 			if (!word.operator) {
 				stage.push(word);
 				continue;
 			}
-			const segment = piped ? toSegment(stage) : undefined;
-			if (segment && (segment.binary === "grep" || segment.binary === "rg")) return searchPattern(segment.args);
-			piped = word.text === "|";
+			const segment = toSegment(stage);
+			if (fedByAO && segment && (segment.binary === "grep" || segment.binary === "rg")) return searchPattern(segment.args);
+			fedByAO = word.text === "|" && segment?.binary === "ao";
 			stage = [];
 		}
 	}
@@ -666,7 +669,8 @@ function aoStep(args: string[]): CommandStep {
 				? { done: "Previewed", live: "Previewing", ...page(values[1]), icon: "web" }
 				: { done: "Previewed the page", live: "Previewing the page", icon: "web" };
 		case "browser":
-			return aoBrowserStep(action, values[2] ?? flagValue(args, ["--url"]), page);
+			// `ao browser tab new <url>` names the page after its `new`.
+			return aoBrowserStep(action, (action === "tab" ? values[3] : values[2]) ?? flagValue(args, ["--url"]), page);
 		case "render":
 			return { done: "Rendered a preview", live: "Rendering a preview", icon: "web" };
 		case "artifact":
