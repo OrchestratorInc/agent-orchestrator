@@ -50,6 +50,7 @@ import { STANDALONE_PROJECT_KIND } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
 import { CloudLocalSignInDialog } from "../CloudLocalSignInDialog";
 import { GitHubIcon } from "../GitHubIcon";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { GitHubOnboardingNotice } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
@@ -207,7 +208,7 @@ export function FirstRunOnboarding() {
 	if (!open) return null;
 	return (
 		<OnboardingFlow
-			onFinish={() => {
+			onFinish={({ tour = true } = {}) => {
 				setOpen(false);
 				markSeen();
 				if (replaySimulated.current) {
@@ -216,8 +217,9 @@ export function FirstRunOnboarding() {
 					resetToolChecks();
 				}
 				// The tour starts on Home, where projects are added, once it's
-				// showing (not on whatever page was behind the onboarding).
-				void navigate({ to: "/" }).then(startGuidedTour);
+				// showing (not on whatever page was behind the onboarding). A
+				// skipped setup has no harness to show it with, so it goes without.
+				if (tour) void navigate({ to: "/" }).then(startGuidedTour);
 			}}
 		/>
 	);
@@ -228,7 +230,7 @@ export function FirstRunOnboarding() {
 const PRESS_CLASS =
 	"[&_button:active]:!scale-100 [&_button:active]:!translate-y-0 [&_button:not(:disabled):active]:brightness-[0.85]";
 
-function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
+function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean }) => void }) {
 	const { t } = useTranslation();
 	// Settings open over the app (a harness's installers, from Your tools).
 	const settingsAside = useUiStore((state) => state.settingsModal?.scope === "global");
@@ -359,7 +361,7 @@ function OnboardingFlow({ onFinish }: { onFinish: () => void }) {
 						>
 							{step === "welcome" ? <WelcomeStep point={point} onNext={goNext} /> : null}
 							{step === "signin" ? <SignInStep onNext={goNext} /> : null}
-							{step === "tools" ? <ToolsStep onNext={goNext} /> : null}
+							{step === "tools" ? <ToolsStep onNext={goNext} onSkip={() => onFinish({ tour: false })} /> : null}
 						</motion.div>
 					</AnimatePresence>
 				</div>
@@ -912,7 +914,7 @@ function useToolAgents() {
 	}, [readiness.data]);
 }
 
-function ToolsStep({ onNext }: { onNext: () => void }) {
+function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const gate = useSystemRequirementsGate();
@@ -944,6 +946,7 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 	const ghView = ghInstall.view;
 
 	const { agents, more, anyReady } = useToolAgents();
+	const [confirmingSkip, setConfirmingSkip] = useState(false);
 	// A harness's own installers (every method, diagnostics) live in Settings >
 	// Harness; onboarding steps aside while Settings is open and comes back here.
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
@@ -956,7 +959,8 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 	const wasInSettings = useRef(false);
 	const [showAllAgents, setShowAllAgents] = useState(false);
 	const signingInAgent = workflow?.agentId;
-	const signingInReady = agents.some((row) => row.agent.id === signingInAgent && row.state === "ready");
+	// Any harness can be signed in to here, the ones under "more" included.
+	const signingInReady = [...agents, ...more].some((row) => row.agent.id === signingInAgent && row.state === "ready");
 
 	// While a login terminal is open, re-check that agent until it is ready,
 	// then close the terminal on the user's behalf.
@@ -1132,9 +1136,25 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 			{authError ? <p className="text-xs text-destructive" role="alert">{authError}</p> : null}
 			<StepAction>
 				{/* At least one ready agent is needed to orchestrate anything; GitHub
-				    stays optional (agents still work locally without it). */}
+				    stays optional (agents still work locally without it). Until one
+				    is ready, setup can still be left for later (nothing installs
+				    here, or the person would rather do it themselves). */}
+				{anyReady ? null : (
+					<Button type="button" variant="ghost" onClick={() => setConfirmingSkip(true)}>
+						{t("firstRun.skipSetup")}
+					</Button>
+				)}
 				<NextButton onClick={onNext} disabled={!anyReady}>{t("firstRun.continue")}</NextButton>
 			</StepAction>
+			<ConfirmDialog
+				open={confirmingSkip}
+				title={t("firstRun.skipConfirmTitle")}
+				description={t("firstRun.skipConfirmBody")}
+				confirmLabel={t("firstRun.skipSetup")}
+				cancelLabel={t("firstRun.skipConfirmCancel")}
+				onConfirm={onSkip}
+				onOpenChange={setConfirmingSkip}
+			/>
 		</StepSplit>
 	);
 }
