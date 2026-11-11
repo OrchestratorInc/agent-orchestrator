@@ -215,7 +215,9 @@ export function FirstRunGitHubStep({ onDone, onBack, onClose }: { onDone: () => 
 /**
  * Whether first run offers the import step: an agent whose chats can be imported
  * is installed, and the scan of this computer has not come back empty. The scan
- * starts here, so the folder list is usually ready when the step opens.
+ * starts here, so the folder list is usually ready when the step opens. A scan
+ * still running is not waited for: the step shows it reading, and moves on by
+ * itself if the scan then finds nothing (see `onNothingToImport`).
  */
 export function WithImportOffer({ children }: { children: (offer: boolean) => ReactNode }) {
 	const agents = useImportableAgents(true);
@@ -236,13 +238,32 @@ function importableFromFolder(chat: ImportCandidate): boolean {
  * asks for it, and Skip moves on. Each picked folder becomes a project, so a
  * finished import ends the first-run prompt.
  */
-export function FirstRunImport({ onBack, onClose, onSkip, onImported }: { onBack: () => void; onClose: () => void; onSkip: () => void; onImported: () => void }) {
+export function FirstRunImport({
+	onBack,
+	onClose,
+	onSkip,
+	onNothingToImport,
+	onImported,
+}: {
+	onBack: () => void;
+	onClose: () => void;
+	onSkip: () => void;
+	/** The scan finished after the step opened and found nothing, or failed. */
+	onNothingToImport: () => void;
+	onImported: () => void;
+}) {
 	const { t, i18n } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	const [importing, setImporting] = useState(false);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
 	useImportOfferShown("onboarding", true);
 	const chats = (preview.data?.candidates ?? []).filter(importableFromFolder);
+	const nothingToImport = !expanded && (preview.isError || (preview.isSuccess && !chats.length));
+	const nothingRef = useRef(onNothingToImport);
+	nothingRef.current = onNothingToImport;
+	useEffect(() => {
+		if (nothingToImport) nothingRef.current();
+	}, [nothingToImport]);
 	const agents = [...new Set(chats.map((chat) => chat.harness))];
 	const header = (
 		<FirstRunHeader

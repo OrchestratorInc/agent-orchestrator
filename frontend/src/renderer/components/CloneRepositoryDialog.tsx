@@ -306,6 +306,10 @@ export default function CloneRepositoryDialog({
 							onBack={() => setFirstRunStep("welcome")}
 							onClose={onClose}
 							onSkip={() => setFirstRunStep("sources")}
+							onNothingToImport={() => {
+								setImportOffered(false);
+								setFirstRunStep("sources");
+							}}
 							onImported={onChatsImported}
 						/>
 					) : null}

@@ -118,6 +118,23 @@ describe("clone repository input", () => {
 		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
 	});
 
+	it("moves past the import step by itself when a scan still running finds nothing", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentReadinessQueryKey, { agents: [{ id: "codex", installation: { state: "installed" }, authentication: { state: "authorized" } }] });
+		render(React.createElement(QueryClientProvider, { client }, React.createElement(CloneRepositoryDialog, cloneDialogProps({
+			firstRun: true,
+			value: { remoteUrl: "", destinationParent: "/code" },
+			onChatsImported: vi.fn(),
+		}))));
+		fireEvent.click(screen.getByRole("button", { name: "Get started" }));
+		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
+		act(() => client.setQueryData(sessionImportPreviewQuery.queryKey, { candidates: [] }));
+		expect(await screen.findByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
+		// The step it skipped is not on the way back.
+		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));
+		expect(screen.getByRole("dialog", { name: "Welcome to Agent Orchestrator" })).toBeInTheDocument();
+	});
+
 	it("cannot dismiss the first run welcome step, but the close button works afterwards", () => {
 		const { props } = renderCloneDialog({ firstRun: true, value: { remoteUrl: "", destinationParent: "/code" } });
 		fireEvent.keyDown(document, { key: "Escape" });
