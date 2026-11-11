@@ -78,7 +78,7 @@ const {
 		cloudGateState: { cloudEnabled: true, localEnabled: true, client: "" },
 		cloudSessionState: {
 			configured: false,
-			session: null as null | { user: { email: string } },
+			session: null as null | { user: { email: string; displayName?: string } },
 			status: "unauthenticated" as "authenticated" | "loading" | "unauthenticated",
 			signIn: vi.fn(),
 			signOut: vi.fn().mockResolvedValue(undefined),
@@ -721,6 +721,39 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
+	});
+
+	it("shows only the name in the footer row and the email in the account menu", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "ada@example.com", displayName: "Ada Park" } };
+		renderSidebar();
+
+		const account = screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!;
+		expect(account).toHaveTextContent("Ada Park");
+		expect(account).not.toHaveTextContent("ada@example.com");
+
+		await user.click(account);
+		const menu = await screen.findByRole("menu");
+		expect(within(menu).getByText("Ada Park")).toBeVisible();
+		expect(within(menu).getByText("ada@example.com")).toBeVisible();
+		await user.click(within(menu).getByRole("menuitem", { name: "Sign out" }));
+		expect(cloudSessionState.signOut).toHaveBeenCalledOnce();
+	});
+
+	it("opens the account menu from the collapsed rail avatar instead of signing out", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "user@example.com" } };
+		renderSidebar({ initialOpen: false });
+
+		const railAvatar = screen.getAllByLabelText("Signed in as user@example.com").find((el) => el.tabIndex === 0)!;
+		await user.click(railAvatar);
+
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
+		expect(await screen.findByRole("menuitem", { name: "Sign out" })).toBeVisible();
 	});
 
 	it("keeps AO account controls visible for remote hosts when Cloud execution is off", () => {
@@ -2337,7 +2370,12 @@ describe("Sidebar", () => {
 
 		expect(screen.queryByRole("button", { name: "Stay Awake" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Mobile" }));
-		expect(await screen.findByTestId("awake-menu-item")).toHaveTextContent("Stay Awake");
+		const awake = await screen.findByTestId("awake-menu-item");
+		expect(awake).toHaveTextContent("Stay Awake");
+		// A switch row, not a nested control: the row itself carries the checked state.
+		expect(awake).toHaveAttribute("role", "menuitemcheckbox");
+		expect(awake).toHaveAttribute("aria-checked", "false");
+		expect(within(awake).queryByRole("switch")).not.toBeInTheDocument();
 	});
 
 	it("opens the command palette when Search is clicked", async () => {

@@ -3035,7 +3035,6 @@
 	"shell.signInToAOCloud": "Войти в облако",
 	"shell.signedInAs": "Выполнен вход: {{email}}",
 	"shell.signOut": "Выйти",
-	"shell.signOutWithEmail": "{{email}} · Выйти",
 	"chat.branch.previous": "Предыдущая ветка диалога",
 	"chat.branch.next": "Следующая ветка диалога",
 	"chat.branch.position": "Ветка диалога {{position}} из {{total}}",

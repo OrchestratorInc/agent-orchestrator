@@ -2967,7 +2967,6 @@
 	"shell.signInToAOCloud": "Iniciar sesión en Orchestrator Cloud",
 	"shell.signedInAs": "Sesión iniciada como {{email}}",
 	"shell.signOut": "Cerrar sesión",
-	"shell.signOutWithEmail": "{{email}} · Cerrar sesión",
 	"chat.branch.previous": "Rama de conversación anterior",
 	"chat.branch.next": "Rama de conversación siguiente",
 	"chat.branch.position": "Rama de conversación {{position}} de {{total}}",

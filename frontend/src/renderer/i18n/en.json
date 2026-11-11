@@ -2935,7 +2935,6 @@
 	"shell.signInToAOCloud": "Sign in to cloud",
 	"shell.signedInAs": "Signed in as {{email}}",
 	"shell.signOut": "Sign out",
-	"shell.signOutWithEmail": "{{email}} · Sign out",
 	"chat.branch.previous": "Previous conversation branch",
 	"chat.branch.next": "Next conversation branch",
 	"chat.branch.position": "Conversation branch {{position}} of {{total}}",

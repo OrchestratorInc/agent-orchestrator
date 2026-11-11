@@ -2967,7 +2967,6 @@
 	"shell.signInToAOCloud": "Entrar no Orchestrator Cloud",
 	"shell.signedInAs": "Conectado como {{email}}",
 	"shell.signOut": "Sair",
-	"shell.signOutWithEmail": "{{email}} · Sair",
 	"chat.branch.previous": "Ramificação de conversa anterior",
 	"chat.branch.next": "Próxima ramificação de conversa",
 	"chat.branch.position": "Ramificação de conversa {{position}} de {{total}}",
