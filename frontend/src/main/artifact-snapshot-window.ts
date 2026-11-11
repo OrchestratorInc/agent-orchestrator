@@ -15,7 +15,7 @@ import {
 	ARTIFACT_SNAPSHOT_WIDTH,
 	type ArtifactSnapshotJob,
 } from "../shared/artifact-snapshot";
-import { type SnapshotRenderer, SnapshotUnavailableError } from "./artifact-snapshots";
+import { SnapshotCancelledError, type SnapshotRenderer, SnapshotUnavailableError } from "./artifact-snapshots";
 
 /** The page reports one of these while it draws the preview. */
 type PageState = "loading" | "ready" | "unavailable" | "error";
@@ -37,6 +37,8 @@ type WindowDeps = {
 	/** The snapshot page's URL in the running renderer. */
 	pageUrl: () => string;
 	preload: string;
+	/** Whether the app's own window is open. The hidden window is only ever opened while it is: on macOS the app outlives its window, and a hidden window left open then breaks reopening it. */
+	shellOpen: () => boolean;
 };
 
 function nextPaint(window: BrowserWindow): Promise<NativeImage> {
@@ -174,6 +176,7 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 
 	/** One end-to-end bound on a render: a page that never starts, paints or encodes must not hold up every later one. */
 	const render: SnapshotRenderer = async (job) => {
+		if (!deps.shellOpen()) throw new SnapshotCancelledError("the app window is closed");
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const owned = open();
 		const work = renderOne(job, owned);

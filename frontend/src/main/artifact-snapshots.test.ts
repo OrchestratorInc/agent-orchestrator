@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type ArtifactSnapshotJob, artifactSnapshotUrl, parseArtifactSnapshotUrl } from "../shared/artifact-snapshot";
 import {
 	artifactSnapshotKey,
+	SnapshotCancelledError,
 	createArtifactSnapshotStore,
 	registerArtifactSnapshotIpc,
 	registerArtifactSnapshotProtocol,
@@ -133,6 +134,28 @@ describe("artifact snapshot store", () => {
 		const opener = setInterval(() => gates.splice(0).forEach((open) => open()), 2);
 		await settled;
 		clearInterval(opener);
+	});
+
+	it("drops every waiting request on cancel, renders nothing more, and does not hold a cancelled render against its file", async () => {
+		const gates: Array<() => void> = [];
+		const render = vi.fn((request: ArtifactSnapshotJob) => new Promise<Buffer>((resolve, reject) => {
+			if (request.path === "cancelled.html") reject(new SnapshotCancelledError("window closed"));
+			else gates.push(() => resolve(Buffer.from("x")));
+		}));
+		const store = createArtifactSnapshotStore({ directory, render, gapMs: 0 });
+		const first = store.request(job({ path: "first.html" }));
+		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
+		const waitingRequests = [1, 2, 3].map((n) => store.request(job({ path: `later-${n}.html` })));
+		store.cancel();
+		expect(await Promise.all(waitingRequests)).toEqual([SNAPSHOT_DROPPED, SNAPSHOT_DROPPED, SNAPSHOT_DROPPED]);
+		gates.shift()?.();
+		expect(await first).not.toBeNull();
+		// Nothing waiting was started after the render under way ended.
+		expect(render).toHaveBeenCalledTimes(1);
+		// A render that was cancelled is not retried only after the delay: the file asks again at once.
+		expect(await store.request(job({ path: "cancelled.html" }))).toBeNull();
+		expect(await store.request(job({ path: "cancelled.html" }))).toBeNull();
+		expect(render.mock.calls.filter(([request]) => request.path === "cancelled.html")).toHaveLength(2);
 	});
 
 	describe("Cloud snapshots", () => {

@@ -40,6 +40,9 @@ export type SnapshotRenderer = (job: ArtifactSnapshotJob) => Promise<Buffer>;
 /** A file with nothing to draw: asked again it would only fail again, so it is not retried until the app restarts. */
 export class SnapshotUnavailableError extends Error {}
 
+/** A render that did not happen because nothing is left to show it (the app window closed): not held against its file. */
+export class SnapshotCancelledError extends Error {}
+
 /** What `request` answers when the request was pushed out of a full queue: not a failure, ask again later. */
 export const SNAPSHOT_DROPPED = "dropped" as const;
 export type SnapshotResult = Buffer | null | typeof SNAPSHOT_DROPPED;
@@ -181,7 +184,7 @@ export function createArtifactSnapshotStore(options: {
 							failedAt.delete(key);
 							resolve(bytes);
 						} catch (error) {
-							failedAt.set(key, error instanceof SnapshotUnavailableError ? Number.POSITIVE_INFINITY : now());
+							if (!(error instanceof SnapshotCancelledError)) failedAt.set(key, error instanceof SnapshotUnavailableError ? Number.POSITIVE_INFINITY : now());
 							resolve(null);
 						} finally {
 							if (gapMs > 0) await new Promise((wait) => setTimeout(wait, gapMs));
@@ -224,6 +227,14 @@ export function createArtifactSnapshotStore(options: {
 			return pending;
 		},
 		prune,
+		/**
+		 * Drops every request still waiting, each answering as dropped, for when nothing is left to
+		 * show the result (the app window closed): the queue must not go on opening windows. A render
+		 * already under way finishes or fails by itself.
+		 */
+		cancel(): void {
+			while (waiting.length > 0) waiting.pop()?.drop();
+		},
 		/** Deletes every Cloud snapshot, for a sign-out: nothing of an account's content stays on disk. */
 		async clearCloud(): Promise<void> {
 			cloudOwner = undefined;

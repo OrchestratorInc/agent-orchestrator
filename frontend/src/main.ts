@@ -1321,7 +1321,9 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
 
 	mainWindow.on("closed", () => {
-		// The snapshot window is a BaseWindow too: left open it would count as the app's last window.
+		// The snapshot window is a BaseWindow too: left open it would count as the app's last window,
+		// and the requests still queued must not open another one.
+		artifactSnapshotStore.cancel();
 		artifactSnapshotRenderer.close();
 		chatDraftRisks = [];
 		chatDraftDialog = undefined;
@@ -3617,6 +3619,11 @@ const artifactSnapshotRenderer = createArtifactSnapshotRenderer({
 	BrowserWindow,
 	preload: preloadPath(),
 	pageUrl: () => new URL("artifact-snapshot.html", rendererUrl()).href,
+	// Never open the hidden window without the shell: the app stays alive on macOS after the shell closes.
+	shellOpen: () => {
+		const contents = getShellWebContents();
+		return contents !== null && !contents.isDestroyed();
+	},
 });
 const artifactSnapshotStore = createArtifactSnapshotStore({
 	directory: path.join(desktopDataDir, "artifact-previews"),
