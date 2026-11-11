@@ -35,8 +35,7 @@ export type ConnectResult =
 export type ConnectDeps = {
 	findHost: (id: string) => Promise<Host | null>;
 	race: (host: Host) => Promise<RaceOutcome>;
-	/** Asks the daemon what it advertises now, over the endpoint that just won.
-	 * An HTTP error rejects with its `status` and the daemon's error `code`. */
+	/** Asks the daemon what it advertises now, over the endpoint that just won. */
 	refreshEndpoints: (config: ServerConfig) => Promise<Endpoint[]>;
 	saveEndpoints: (hostId: string, endpoints: Endpoint[]) => Promise<void>;
 	/** Records the identity a machine reported that had none stored. */
@@ -74,7 +73,6 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
 
 	let token = host.token;
-	// The password is kept as the fallback.
 	const swapPairingPassword = async () => {
 		if (!deps.saveToken || !deps.pair || !isPairingSecret(token)) return;
 		const paired = await deps.pair(config);

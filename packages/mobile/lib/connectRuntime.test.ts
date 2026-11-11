@@ -50,12 +50,9 @@ describe("runtimeConnectDeps", () => {
 		expect(fetch).not.toHaveBeenCalled();
 	});
 
-	// connectHost reads these to tell a removed phone from a machine that does
-	// not know device tokens.
 	it("rejects an HTTP error with its status and the daemon's error code", async () => {
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({ code: "DEVICE_REVOKED" }) }));
 		await expect(runtimeConnectDeps().refreshEndpoints(config)).rejects.toMatchObject({ status: 401, code: "DEVICE_REVOKED", message: "endpoint refresh returned 401" });
-		// A body that is not JSON still reports the status.
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => { throw new SyntaxError("not JSON"); } }));
 		const failed = await runtimeConnectDeps().refreshEndpoints(config).catch((error: unknown) => error);
 		expect(failed).toMatchObject({ status: 502 });

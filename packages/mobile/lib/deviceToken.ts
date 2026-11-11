@@ -5,14 +5,12 @@ export const DEVICE_TOKEN_PREFIX = "aod_";
 /** The account's token for a machine: 32 random bytes in hex. */
 const ACCOUNT_TOKEN = /^[0-9a-f]{64}$/;
 
-/** Whether a saved token is the pairing password or an unexchanged one-time code. */
 export function isPairingSecret(token: string): boolean {
 	return token !== "" && !token.startsWith(DEVICE_TOKEN_PREFIX) && !ACCOUNT_TOKEN.test(token);
 }
 
 export type PairDeviceResult =
 	| { kind: "paired"; token: string; credential: "pairing-code" | "password" }
-	/** No device token: keep the token as it is. */
 	| { kind: "unsupported" }
 	| { kind: "unauthorized" }
 	| { kind: "offline" };

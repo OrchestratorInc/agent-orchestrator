@@ -435,7 +435,6 @@ describe("fallback token", () => {
 		expect(plain.get("ao.hosts")).not.toContain("pairing1");
 		expect(secure.get("ao.hostFallbackToken.a")).toBe("pairing1");
 
-		// A new token replaces the fallback with the one given, or none.
 		await updateHostToken("a", "pairing1");
 		expect((await loadHosts())[0]).toMatchObject({ token: "pairing1" });
 		expect((await loadHosts())[0].fallbackToken).toBeUndefined();

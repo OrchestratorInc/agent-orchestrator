@@ -183,7 +183,6 @@ describe("connectHost with device tokens", () => {
 		expect(d.pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: "pw", hostId: "h_paired" }));
 		expect(d.saveToken).toHaveBeenCalledExactlyOnceWith("h_paired", token, "pw");
 		expect(got.ok && got.config.password).toBe(token);
-		// The rest of the connect uses the new token.
 		expect(d.refreshEndpoints).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
 	});
 
@@ -204,7 +203,6 @@ describe("connectHost with device tokens", () => {
 		}
 	});
 
-	// The machine's answer to the refresh, which presents the token.
 	const refused = (code: string | undefined) => Object.assign(new Error("endpoint refresh returned 401"), { status: 401, code });
 	const refreshRefusing = (code: string | undefined) => vi.fn(async (config: { password: string }) => {
 		if (config.password === token) throw refused(code);
@@ -214,13 +212,11 @@ describe("connectHost with device tokens", () => {
 	it("falls back to the kept password on a machine that no longer knows device tokens", async () => {
 		const d = deps(host({ token, fallbackToken: "pw" }), {
 			refreshEndpoints: refreshRefusing("BAD_PASSWORD"),
-			// That machine has no pairing route either.
 			pair: vi.fn(async () => ({ kind: "unsupported" as const })),
 		});
 		const got = await connectHost("h_paired", d);
 		expect(d.saveToken).toHaveBeenCalledExactlyOnceWith("h_paired", "pw");
 		expect(got.ok && got.config.password).toBe("pw");
-		// The refresh is repeated with the password, so the endpoints still heal.
 		expect(d.refreshEndpoints.mock.calls.map(([config]) => config.password)).toEqual([token, "pw"]);
 		expect(d.saveEndpoints).toHaveBeenCalledOnce();
 	});
@@ -243,7 +239,6 @@ describe("connectHost with device tokens", () => {
 		}
 	});
 
-	// The refresh already presents the token, so no extra request is needed.
 	it("makes no extra request for a working token with a kept password", async () => {
 		const d = deps(host({ token, fallbackToken: "pw" }));
 		const got = await connectHost("h_paired", d);

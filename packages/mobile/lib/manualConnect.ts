@@ -81,7 +81,6 @@ export function editedManualHost(host: Host, cfg: ServerConfig, name: string, en
 	if (previous) endpoint.kind = previous.kind;
 	const endpoints = [...host.endpoints];
 	endpoints[endpointIndex] = endpoint;
-	// A new credential replaces the fallback kept for the old one.
 	return { ...host, name: name.trim(), token: cfg.password, endpoints, ...(cfg.password !== host.token ? { fallbackToken: undefined } : {}) };
 }
 
@@ -119,7 +118,6 @@ export async function persistManualHostEdit(
 		if (host.id && hostId !== host.id) throw new DifferentMachineError();
 		let credential = { ...target, hostId: host.id || hostId };
 		let saved = edited;
-		// Swap a typed code or password for this phone's own token. A password is kept as the fallback.
 		if (deps.pair && host.token !== target.password && isPairingSecret(target.password)) {
 			const paired = await deps.pair(credential);
 			if (paired.kind === "paired") {

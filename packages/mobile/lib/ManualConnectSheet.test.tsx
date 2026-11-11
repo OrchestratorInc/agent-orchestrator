@@ -9,7 +9,6 @@ const fixtures = vi.hoisted(() => ({
 	ping: vi.fn(async () => ({})),
 	probeIdentity: vi.fn(async () => "host-new"),
 	probeEndpoint: vi.fn(async () => ({ hostId: "host-1" })),
-	// A machine without device tokens, unless a test pairs.
 	pair: vi.fn(async (): Promise<import("./deviceToken").PairDeviceResult> => ({ kind: "unsupported" })),
 	saveConfig: vi.fn(async () => {}),
 	saveHost: vi.fn(async () => {}),
@@ -164,7 +163,6 @@ describe("ManualConnectSheet on iOS", () => {
 		await type("manual-connect-host", "192.168.1.30");
 		await type("manual-connect-password", "typed");
 		await act(async () => confirm().props.onPress());
-		// The typed secret goes to the machine the identity probe named, and nothing else is saved.
 		expect(fixtures.pair).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.1.30", password: "typed", hostId: "host-new" }), { fresh: true });
 		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
 		expect(fixtures.saveConfig).toHaveBeenCalledWith(expect.objectContaining({ password: token }));

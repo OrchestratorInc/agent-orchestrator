@@ -134,7 +134,6 @@ export async function rejectedEndpointNeedsRace(cfg: ServerConfig, status: numbe
  */
 export const ENDPOINT_REFRESH_TIMEOUT_MS = 5_000;
 
-/** An HTTP error from the endpoint refresh, with the daemon's error code when it sent one. */
 export class EndpointRefreshError extends Error {
 	constructor(readonly status: number, readonly code?: string) {
 		super(`endpoint refresh returned ${status}`);

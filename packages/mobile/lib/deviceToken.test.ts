@@ -6,7 +6,6 @@ const config: ServerConfig = { host: "192.168.1.42", httpPort: "3011", muxPort: 
 const device = { name: "Test phone", platform: "ios" };
 const token = "aod_" + "a".repeat(64);
 
-// A fetch that answers every request the same way and records what it was sent.
 function answer(status: number, body: unknown = {}) {
 	const calls: [string, RequestInit | undefined][] = [];
 	const fetchImpl = (async (url: string, init?: RequestInit) => {
@@ -37,7 +36,6 @@ describe("pairDevice", () => {
 
 	it.each([
 		[401, "unauthorized"],
-		// A desktop from before device tokens answers 404 or 405.
 		[404, "unsupported"], [405, "unsupported"], [403, "unsupported"], [409, "unsupported"],
 		[429, "offline"], [500, "offline"],
 	])("maps %i to %s", async (status, kind) => {

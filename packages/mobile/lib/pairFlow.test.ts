@@ -325,7 +325,6 @@ describe("pairing for this phone's own token", () => {
 		const d = deps({ pair });
 		const result = await pairFromCode(`aomobile://pair#${code}`, d);
 
-		// The code's secret is presented once, to the machine the race confirmed.
 		expect(pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ host: "192.168.1.42", password: "pw", hostId: "h_paired" }));
 		expect(d.verify).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
 		const saved = (d.saveHost.mock.calls as unknown as [{ token: string; fallbackToken?: string }][])[0][0];
