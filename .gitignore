@@ -118,3 +118,11 @@ pnpm-lock.yaml
 !.claude/skills/ao-desktop-dev/**
 !.claude/skills/bug-triage/
 !.claude/skills/bug-triage/**
+
+# Local tool workspaces, build outputs, and generated caches
+/.skill-chain-workshop/
+/artifacts/
+/.tmp-i18n-parts.json
+__pycache__/
+*.pyc
+.pytest_cache/
