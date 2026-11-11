@@ -299,7 +299,9 @@ export function FirstRunSources({
 	);
 }
 
-/** Springs the modal to each step's height. The content swaps instantly; only the size animates. */
+/** Springs the modal to each step's height. The content swaps instantly; only the size animates.
+ * A step taller than the dialog's height limit (a short window, or high zoom with the
+ * source tiles stacked) scrolls inside it instead of being cut off. */
 export function AnimatedStepBody({ children }: { children: ReactNode }) {
 	const reduceMotion = useReducedMotion();
 	const bodyRef = useRef<HTMLDivElement>(null);
@@ -313,7 +315,7 @@ export function AnimatedStepBody({ children }: { children: ReactNode }) {
 	}, []);
 	return (
 		<motion.div
-			className="relative min-h-0 overflow-hidden"
+			className="relative min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain"
 			initial={false}
 			animate={{ height }}
 			transition={reduceMotion ? { duration: 0 } : { type: "spring", duration: 0.25, bounce: 0 }}
