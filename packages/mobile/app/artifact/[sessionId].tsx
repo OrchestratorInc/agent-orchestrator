@@ -97,9 +97,10 @@ function ArtifactViewerContent() {
 	// The page on screen: the file the route opened, until a swipe moves on, or
 	// a link replaces the route's path (below).
 	const [currentPath, setCurrentPath] = useState(path);
-	// An unlisted file has no modified time: the time the viewer opened stands in, so it is fetched fresh each
-	// time. A downloaded copy (an Android PDF) then replaces the one kept from the last open, never adds one.
-	const [openedAt] = useState(() => new Date().toISOString());
+	// An unlisted file has no modified time: the time it was opened stands in, so it is fetched fresh each
+	// time it is opened (here, or by a link that comes back to it). A downloaded copy (an Android PDF) then
+	// replaces the one kept from the last open, never adds one.
+	const [openedAt, setOpenedAt] = useState(() => new Date().toISOString());
 	const [openedPath, setOpenedPath] = useState(path);
 	// The pages keep the order they had on open: the list is newest first, so a
 	// file the agent rewrites would otherwise jump to the front and remount.
@@ -160,6 +161,7 @@ function ArtifactViewerContent() {
 	// the previous one, so it is never sent against the new file.
 	if (openedPath !== path) {
 		setOpenedPath(path);
+		setOpenedAt(new Date().toISOString());
 		setCurrentPath(path);
 		setAsk(null);
 		setActionError(undefined);
