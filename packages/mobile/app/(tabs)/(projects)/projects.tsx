@@ -1,9 +1,10 @@
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { boardTitle } from "../../../lib/board-tabs";
-import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
+import { useScrollToTopOnReselect } from "../../../lib/boardTabReselect";
+import { hostedProjectKey, hostedProjectSections, type HostedProjectRow } from "../../../lib/hostedRows";
 import { useLargeTitle } from "../../../lib/largeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
@@ -38,6 +39,8 @@ export default function ProjectsScreen() {
 	} = useApp();
 	const largeTitle = useLargeTitle(boardTitle("(projects)"));
 	const tabBar = useTabBarFrost();
+	const listRef = useRef<FlatList<HostedProjectRow>>(null);
+	useScrollToTopOnReselect("(projects)", listRef);
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
 		? hostStates.every((host) => host.connection === "closed" && !host.loading)
@@ -103,6 +106,7 @@ export default function ProjectsScreen() {
 				</TabPageScroll>
 			) : (
 				<FlatList
+					ref={listRef}
 					data={rows}
 					keyExtractor={(row) => hostedProjectKey(row.project)}
 					contentInsetAdjustmentBehavior="automatic"
