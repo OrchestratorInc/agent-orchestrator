@@ -12,8 +12,8 @@ import (
 // the steps that ran (model_check_ms ... agent_start_ms), mode (chat or
 // terminal), async and the model. mode falls back to the caller's when the
 // trace has none (the start failed before choosing). model comes only from
-// the trace's catalog check (sessionmanager.NoteSpawnModel): a listed ID, or
-// "custom" for a typed one, never the raw saved or requested ID.
+// the trace's privacy check (sessionmanager.NoteSpawnModel): a fixed family
+// alias or "custom", never a concrete saved, requested, or discovered ID.
 func addSpawnLaunchProps(payload map[string]any, trace sessionmanager.SpawnTraceFacts, mode domain.SessionMode) {
 	for key, ms := range trace.StepMs {
 		payload[key] = ms

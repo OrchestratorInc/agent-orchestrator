@@ -88,20 +88,19 @@ func NoteSpawnLaunch(ctx context.Context, mode domain.SessionMode, async bool) {
 	trace.async = trace.async || async
 }
 
-// customSpawnModel stands in for a model ID the saved catalog does not list.
-// Typed IDs (gateway aliases, private fine-tunes, Hermes IDs, local paths) are
-// free text that can name org-internal things, so they never leave the daemon.
+// customSpawnModel buckets all concrete model IDs, whether typed or discovered.
+// Gateway and custom-provider catalogs can list private org-internal names.
 const customSpawnModel = "custom"
 
-// NoteSpawnModel records the model a spawn resolved, as telemetry may report
-// it: the ID itself only when the saved catalog lists it or it is a Claude
-// family alias, otherwise customSpawnModel.
+// NoteSpawnModel reports only a fixed Claude family alias (optionally [1m])
+// confirmed by resolution. Every concrete or unknown ID becomes "custom".
 func NoteSpawnModel(ctx context.Context, model string, listed bool) {
 	trace := spawnTraceFrom(ctx)
 	if trace == nil || model == "" {
 		return
 	}
-	if !listed {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if !listed || !containsString(claudeFamilyAliases, strings.TrimSuffix(model, "[1m]")) {
 		model = customSpawnModel
 	}
 	trace.mu.Lock()

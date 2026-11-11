@@ -76,7 +76,7 @@ func TestSpawnFailedCarriesStepsCauseAndLaunchFacts(t *testing.T) {
 	payload := sink.events[0].Payload
 	for key, want := range map[string]any{
 		"failed_step": "worktree", "cause": "branch_exists", "mode": "chat", "async": false,
-		"model": "claude-opus-5-5", "created_by": "automation",
+		"model": "custom", "created_by": "automation",
 	} {
 		if payload[key] != want {
 			t.Errorf("spawn_failed %s = %#v, want %#v", key, payload[key], want)

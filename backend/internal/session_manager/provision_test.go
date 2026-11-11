@@ -1120,8 +1120,8 @@ func TestRuntimeEnvOmitsAgentBrowserConfigOnDesktopHosts(t *testing.T) {
 	}
 }
 
-// Telemetry reports a model only as the saved catalog knows it: a typed ID
-// (gateway alias, private fine-tune, local path) leaves the daemon as "custom".
+// Telemetry permits only fixed family aliases; discovered and typed model
+// IDs, including gateway IDs listed in a saved catalog, are bucketed.
 func TestResolveAgentConfigRecordsOnlyCatalogModelsForTelemetry(t *testing.T) {
 	listed := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "claude-sonnet-5-5", Efforts: []string{"high"}}}}
 	for _, tc := range []struct {
@@ -1130,7 +1130,7 @@ func TestResolveAgentConfigRecordsOnlyCatalogModelsForTelemetry(t *testing.T) {
 		model   string
 		want    string
 	}{
-		{"listed model", tuningCatalog{catalog: listed}, "claude-sonnet-5-5", "claude-sonnet-5-5"},
+		{"listed model", tuningCatalog{catalog: listed}, "claude-sonnet-5-5", "custom"},
 		{"family alias", tuningCatalog{catalog: listed}, "opus", "opus"},
 		{"typed model", tuningCatalog{catalog: listed}, "acme-internal/finetune-7", "custom"},
 		{"unreadable catalog", tuningCatalog{err: errors.New("offline")}, "claude-sonnet-5-5", "custom"},
@@ -1147,5 +1147,36 @@ func TestResolveAgentConfigRecordsOnlyCatalogModelsForTelemetry(t *testing.T) {
 				t.Fatalf("telemetry model = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveAgentConfigBucketsDiscoveredGatewayModels(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
+		t.Run(string(harness), func(t *testing.T) {
+			catalog := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: "acme-secret/finetune-7", Efforts: []string{"high"}}}}
+			m := &Manager{backgroundContext: context.Background(), modelCatalog: tuningCatalog{catalog: catalog}}
+			ctx, trace := WithSpawnTrace(t.Context())
+			if _, err := m.resolveAgentConfig(ctx, ports.SpawnConfig{Harness: harness, AgentConfig: ports.AgentConfig{Model: "acme-secret/finetune-7", Effort: "high"}}, domain.ProjectConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			if got := trace.Facts().Model; got != "custom" {
+				t.Fatalf("discovered gateway model = %q, want custom", got)
+			}
+		})
+	}
+}
+
+func TestSpawnModelTelemetryUsesOnlyFixedAliases(t *testing.T) {
+	for _, tc := range []struct{ model, want string }{
+		{"opus", "opus"}, {" SONNET[1m] ", "sonnet[1m]"},
+		{"haiku", "haiku"}, {"fable", "fable"},
+		{"opus[internal-project]", "custom"}, {"claude-opus-5-5", "custom"},
+		{"gpt-6-sol", "custom"}, {"/private/acme/model", "custom"},
+	} {
+		ctx, trace := WithSpawnTrace(t.Context())
+		NoteSpawnModel(ctx, tc.model, true)
+		if got := trace.Facts().Model; got != tc.want {
+			t.Errorf("model %q = %q, want %q", tc.model, got, tc.want)
+		}
 	}
 }
