@@ -14,8 +14,13 @@ app as a client. Almost everything this needs already exists.
   operates are all inside. Nothing of the agent runs on the host.
 - **Computer use is today's code, unchanged.** Inside the VM, Cua Driver and
   the existing computer-use tools work as they do on any machine.
-- **No Cloudflare, no cloud.** The app reaches the VM on its private address
-  with a pairing code. The tunnel is not used.
+- **No Cloudflare, no cloud computer.** The app reaches the VM on its private
+  address with a pairing code. The tunnel is not used.
+
+Who runs the agent: the AO daemon inside the VM starts the agent CLI (Claude
+Code, Codex, and so on) as a process in the VM. The app on the host only
+shows it. The model is still the provider's: the agent calls its model API
+over the internet, as it does today.
 
 ## What it protects
 
