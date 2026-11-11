@@ -203,6 +203,17 @@ describe("AgentModelPicker", () => {
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 	});
 
+	it("shows the agent's logo on a chat picker and its agent rows (#8129)", async () => {
+		const user = userEvent.setup();
+		open();
+		const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(trigger.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
+		await user.click(trigger);
+		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
+		const codex = await screen.findByRole("menuitemradio", { name: "Codex" });
+		expect(codex.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
+	});
+
 	it("leaves out a chat agent whose chat adapter is missing", async () => {
 		unavailableGet.mockResolvedValue({ data: { agents: [{ agent: "pi", reason: "pi-acp is not installed" }] }, error: undefined });
 		const user = userEvent.setup();
