@@ -637,14 +637,43 @@ export function isOrchestratorPlumbing(activity: ConversationActivity): boolean 
 		return typeof path === "string" && isOrchestratorGuide(path);
 	}
 	if (activity.activityKind !== "command" || !detail?.command) return false;
-	const segments = commandSegments(detail.command);
-	if (segments.length === 0) return false;
-	return segments.every((segment) => {
-		if (segment.binary === "ao") return segment.args.includes("--help") || segment.args.includes("-h") || segment.args[0] === "help";
-		if (!isPlainRead(segment)) return false;
-		const files = segment.binary === "sed" ? sedFiles(segment.args) : readerFiles(segment.binary, segment.args);
-		return files.length > 0 && files.every(isOrchestratorGuide);
-	});
+	// Every stage counts, piped ones too: `cat SKILL.md | cat > copy.md` writes a file.
+	let stages = 0;
+	for (const line of logicalLines(detail.command)) {
+		let words: Word[] = [];
+		for (const word of [...tokenize(line), { text: ";", operator: true } as Word]) {
+			if (!word.operator || word.text === ")") {
+				if (!word.operator) words.push(word);
+				continue;
+			}
+			const segment = toSegment(words);
+			words = [];
+			if (!segment || NAVIGATION.has(segment.binary) || SHELL_SYNTAX.has(segment.binary)) continue;
+			if (!isPlumbingStage(segment)) return false;
+			stages += 1;
+		}
+	}
+	return stages > 0;
+}
+
+/** One stage that only reads Orchestrator's guides or asks `ao` for help. */
+function isPlumbingStage(segment: Segment): boolean {
+	if (segment.writeTarget) return false;
+	if (segment.binary === "ao") return segment.args.includes("--help") || segment.args.includes("-h") || segment.args[0] === "help";
+	if (!isPlainRead(segment)) return false;
+	// Every operand, unfiltered: `cat SKILL.md notes` also reads `notes`.
+	const operands = guideReadOperands(segment);
+	return operands.length > 0 && operands.every(isOrchestratorGuide);
+}
+
+function guideReadOperands({ binary, args }: Segment): string[] {
+	if (binary === "sed") {
+		const hasScriptFlag = args.some((arg) => arg === "-e" || arg === "-f" || arg === "--expression" || arg === "--file");
+		const rest = positionals(args, SED_VALUE_FLAGS);
+		return hasScriptFlag ? rest : rest.slice(1);
+	}
+	const values = positionals(args, READER_VALUE_FLAGS[binary]);
+	return binary === "jq" ? values.slice(1) : values;
 }
 
 function isOrchestratorGuide(path: string): boolean {

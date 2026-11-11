@@ -318,6 +318,9 @@ describe("Orchestrator CLI", () => {
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: "ao browser --help" } }))).toBe(true);
 		expect(isOrchestratorPlumbing(toolActivity("Read", "read", { file_path: "/Users/me/.ao/data/skills/using-ao/SKILL.md" }))).toBe(true);
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cat ${guide} README.md` } }))).toBe(false);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cat ${guide} notes` } }))).toBe(false);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cat ${guide} | cat > guide-copy.md` } }))).toBe(false);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cat ${guide} | head -40` } }))).toBe(false);
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: "ao preview README.md" } }))).toBe(false);
 		expect(isOrchestratorPlumbing(toolActivity("Read", "read", { file_path: "/w/app/README.md" }))).toBe(false);
 	});
