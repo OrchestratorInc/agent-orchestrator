@@ -369,12 +369,18 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 			return CallResult{}, err
 		}
 		if drags != nil {
-			result, err := s.runOwnWindowDrags(ctx, request.SessionID, arguments["session"], drags, app)
+			batchCtx, cancel := context.WithTimeout(ctx, batchTimeout)
+			result, err := s.runOwnWindowDrags(batchCtx, request.SessionID, arguments["session"], drags, app)
+			cancel()
 			if err != nil {
 				return CallResult{}, err
 			}
 			last := drags[len(drags)-1]
-			observed := s.observeAfter(ctx, binary, saved, map[string]any{"pid": last.pid, "window_id": last.windowID, "session": arguments["session"]}, result)
+			read := map[string]any{"pid": last.pid, "window_id": last.windowID, "session": arguments["session"]}
+			if observe, _ := arguments["observe"].(map[string]any); observe["include_screenshot"] == false {
+				read["include_screenshot"] = false
+			}
+			observed := s.observeAfter(ctx, binary, saved, read, result)
 			s.images.prune(scope)
 			return CallResult{Tool: tool, Result: observed, Images: saved.images}, nil
 		}
