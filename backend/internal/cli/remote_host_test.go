@@ -137,6 +137,11 @@ func TestRemoteHostCLITunnelOnlyUsesLoopbackRoute(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
 			requests = append(requests, r.Method+" "+r.URL.Path)
 		}
+		// A daemon without pairing codes.
+		if r.URL.Path == "/api/v1/mobile/pairing-code" {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"enabled":true,"loopbackOnly":true,"hostId":"host-a","password":"pairing-secret","tunnel":{"supported":true,"running":true}}`)
 	}))
@@ -189,6 +194,11 @@ func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
 					requests = append(requests, r.Method+" "+r.URL.Path)
+				}
+				// A daemon without pairing codes.
+				if r.URL.Path == "/api/v1/mobile/pairing-code" {
+					http.NotFound(w, r)
+					return
 				}
 				_, _ = fmt.Fprintf(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false,"installing":%v}}`, installing)
 			}))
