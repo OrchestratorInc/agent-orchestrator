@@ -30,6 +30,7 @@ import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
+import type { TerminalClickMode } from "../../lib/terminal-mouse";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -347,6 +348,12 @@ export function GeneralSettingsSection({
 	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+	const terminalClickMode = useUiStore((state) => state.terminalClickMode);
+	const setTerminalClickMode = useUiStore((state) => state.setTerminalClickMode);
+	const terminalClickOptions = [
+		{ value: "app", label: t("settings.terminalClicks.app") },
+		{ value: "select", label: t("settings.terminalClicks.select") },
+	] satisfies SettingsOption<TerminalClickMode>[];
 	const projectAvatars = useUiStore((state) => state.projectAvatars);
 	const setProjectAvatars = useUiStore((state) => state.setProjectAvatars);
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);
@@ -463,6 +470,17 @@ export function GeneralSettingsSection({
 						aria-label={t("settings.terminalCopyOnSelect")}
 						checked={terminalCopyOnSelect}
 						onCheckedChange={setTerminalCopyOnSelect}
+					/>
+				</SettingsRow>
+				<SettingsRow
+					label={t("settings.terminalClicks")}
+					description={isMacPlatform() ? t("settings.terminalClicks.description.mac") : t("settings.terminalClicks.description.other")}
+				>
+					<SettingsOptionMenu
+						aria-label={t("settings.terminalClicks")}
+						value={terminalClickMode}
+						options={terminalClickOptions}
+						onChange={setTerminalClickMode}
 					/>
 				</SettingsRow>
 				<SettingsRow

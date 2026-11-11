@@ -1553,7 +1553,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List paired mobile devices with their live status */
+        /** List the devices that can reach this host, with their live status */
         get: operations["listMobileDevices"];
         put?: never;
         post?: never;
@@ -1563,7 +1563,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/mobile/devices/{installId}": {
+    "/api/v1/mobile/devices/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1573,7 +1573,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Remove a paired device from the roster */
+        /** Remove a device: revoke its token and stop its notifications */
         delete: operations["removeMobileDevice"];
         options?: never;
         head?: never;
@@ -1665,6 +1665,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mobile/pairing-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make a one-time code a new device exchanges for its own token */
+        post: operations["createMobilePairingCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mobile/regenerate": {
         parameters: {
             query?: never;
@@ -1674,7 +1691,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rotate the Connect Mobile password, dropping any connected phone */
+        /** Revoke every device: rotate the pairing password, remove all device tokens and unlink the account */
         post: operations["regenerateMobile"];
         delete?: never;
         options?: never;
@@ -1693,6 +1710,23 @@ export interface paths {
         put?: never;
         /** Look for a connector again and start it, without rotating the password */
         post: operations["startMobileRemoteAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mobile/require-device-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refuse or accept the pairing password on the remote listener */
+        post: operations["setMobileRequireDeviceCredentials"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2158,8 +2192,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Issue a host-scoped account credential using the pairing password */
+        /** Issue a host-scoped account credential using the pairing password or a device token */
         post: operations["issueRemoteHostAccountToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-host/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Exchange a one-time pairing code, or the pairing password, for this device's own token */
+        post: operations["pairRemoteHostDevice"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2474,6 +2525,23 @@ export interface paths {
         get: operations["getSessionArtifactFile"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register files in the session's artifact directory as its deliverables */
+        post: operations["registerSessionArtifacts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5064,6 +5132,17 @@ export interface components {
             data: string;
             mimeType?: string;
         };
+        AutoSpawnPause: {
+            effort?: string;
+            errorCode: string;
+            failures: number;
+            harness: string;
+            kind?: string;
+            message: string;
+            model?: string;
+            /** Format: date-time */
+            pausedAt: string;
+        };
         AutomationEnvelope: {
             automation: components["schemas"]["AutomationResponse"];
         };
@@ -5703,6 +5782,14 @@ export interface components {
             extensionVersion?: string;
             hostPath: string;
         };
+        ControllersConversationTurnArtifactResponse: {
+            path: string;
+            /** @enum {string} */
+            status: "added" | "modified";
+        };
+        ControllersConversationTurnArtifactsResponse: {
+            files: components["schemas"]["ControllersConversationTurnArtifactResponse"][];
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -5716,6 +5803,24 @@ export interface components {
         ControllersKillSessionRequest: {
             callerSessionId?: string;
             deleteArtifacts?: boolean;
+        };
+        ControllersPairDeviceRequest: {
+            /** @description Name shown in the host's device list. */
+            name?: string;
+            /** @description The device's platform, such as ios, android, darwin, win32 or linux. */
+            platform?: string;
+        };
+        ControllersPairDeviceResponse: {
+            /** @enum {string} */
+            credential: "pairing-code" | "password";
+            deviceId: string;
+            hostId: string;
+            token: string;
+        };
+        ControllersPairingCodeResponse: {
+            code: string;
+            /** Format: date-time */
+            expiresAt: string;
         };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
@@ -5769,7 +5874,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Interrupted" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -5830,6 +5935,9 @@ export interface components {
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
             lidClosed?: null | boolean;
+        };
+        ControllersSetRequireDeviceCredentialsRequest: {
+            enabled: boolean;
         };
         ControllersSetSecurePairingRequest: {
             enabled: boolean;
@@ -6149,6 +6257,7 @@ export interface components {
             truncated?: boolean;
         };
         ConversationTurnResponse: {
+            artifacts?: components["schemas"]["ControllersConversationTurnArtifactsResponse"];
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
@@ -6763,15 +6872,22 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             deviceName?: string;
+            /** @description What DELETE /api/v1/mobile/devices/{id} takes. */
+            id: string;
+            /** @description The phone's install id, or empty for a device that never registered for notifications. */
             installId: string;
+            /**
+             * @description device: holds its own token. password: a phone that still uses the pairing password, so removing it only stops its notifications. account: every device signed in to the linked account; they share one token.
+             * @enum {string}
+             */
+            kind: "device" | "password" | "account";
             /** Format: date-time */
             lastSeenAt: string;
-            /** @description True when the phone's app is open and polling. */
+            /** @description True when the device is connected, or the phone's app is open and polling. */
             live: boolean;
             /** @description True when this device has a push token registered. */
             notificationsEnabled: boolean;
-            /** @enum {string} */
-            platform?: "ios" | "android";
+            platform?: string;
             token?: string;
         };
         MobileDevicesResponse: {
@@ -6795,7 +6911,10 @@ export interface components {
             loopbackOnly: boolean;
             noPublicTunnel: boolean;
             password: string;
+            /** Format: date-time */
+            passwordLastUsedAt?: null | string;
             port: number;
+            requireDeviceCredentials: boolean;
             securePairing: components["schemas"]["ControllersSecurePairingStatus"];
             tailscaleHost: string;
             tunnel: components["schemas"]["MobileTunnelStatus"];
@@ -6955,6 +7074,7 @@ export interface components {
             project: components["schemas"]["Project"];
         };
         ProjectSummary: {
+            autoSpawnPauses?: components["schemas"]["AutoSpawnPause"][];
             folderMissing: boolean;
             id: string;
             /** @enum {string} */
@@ -7023,6 +7143,18 @@ export interface components {
             pat: string;
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
+        };
+        RegisterArtifactsRequest: {
+            /** @description Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it. */
+            paths: string[];
+        };
+        RegisterArtifactsResponse: {
+            /** @description How many of the session's files are not registered. */
+            otherFiles: number;
+            /** @description The unregistered files at the root of the artifact directory. */
+            otherRootFiles: string[];
+            /** @description The requested paths, relative to the artifact directory. */
+            registered: string[];
         };
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
@@ -7282,13 +7414,16 @@ export interface components {
             total: number;
         };
         SessionArtifact: {
+            id?: string;
             inlineUrl?: string;
             /** @enum {string} */
             kind: "html" | "markdown" | "file";
             name: string;
             path: string;
             previewUrl?: string;
+            previousPaths?: string[];
             rawUrl?: string;
+            registered?: boolean;
             shareUrl?: string;
             /** Format: int64 */
             size: number;
@@ -13859,8 +13994,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The device's stable install id. */
-                installId: string;
+                /** @description The row's id from the device list. */
+                id: string;
             };
             cookie?: never;
         };
@@ -14096,6 +14231,53 @@ export interface operations {
             };
         };
     };
+    createMobilePairingCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPairingCodeResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     regenerateMobile: {
         parameters: {
             query?: never;
@@ -14150,6 +14332,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setMobileRequireDeviceCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersSetRequireDeviceCredentialsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Forbidden */
@@ -15907,6 +16140,75 @@ export interface operations {
             };
         };
     };
+    pairRemoteHostDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersPairDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPairDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listReports: {
         parameters: {
             query: {
@@ -17369,6 +17671,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    registerSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterArtifactsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterArtifactsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

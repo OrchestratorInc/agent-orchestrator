@@ -101,7 +101,14 @@ function ChatImageMenu({ url, label, children }: { url: string; label: string; c
  * A source that fails falls back to its alt text rather than a broken-image box,
  * matching `MarkdownImage` in the file viewer.
  */
-export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: string; /** A chip sized for a line of prose. */ inline?: boolean }) {
+export function ChatImage({ src, alt, inline, onError: onLoadError }: {
+	src?: string | Blob;
+	alt?: string;
+	/** A chip sized for a line of prose. */
+	inline?: boolean;
+	/** Told when `src` fails, so the caller can offer another source in its place. */
+	onError?: () => void;
+}) {
 	const { t } = useTranslation();
 	const inGallery = useContext(InGallery);
 	const inAttachmentRow = useContext(InAttachmentRow);
@@ -126,7 +133,12 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 			</span>
 		);
 
-	const onError = () => setFailedSrc(url);
+	// Batched with the caller's own update: a replacement source draws without
+	// the alt text showing in between.
+	const onError = () => {
+		setFailedSrc(url);
+		onLoadError?.();
+	};
 
 	if (inLink) {
 		return (

@@ -2026,6 +2026,9 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 						truncated: turn.diff.truncated,
 					}
 				: undefined,
+			artifacts: turn.artifacts?.files?.length
+				? turn.artifacts.files.map((file) => ({ path: file.path, status: file.status }))
+				: undefined,
 			// Current state of the turn rather than history: the provider re-sends the
 			// whole plan on every revision and the daemon overwrites this, which is why
 			// the surface reads it here instead of walking the timeline for plan rows.

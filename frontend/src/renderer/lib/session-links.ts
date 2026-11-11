@@ -1,3 +1,5 @@
+import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
+
 export type SessionLinkTarget = { projectId: string; sessionId: string };
 export type ArtifactLinkTarget = SessionLinkTarget & { path: string };
 export type ResolvedSessionLink = SessionLinkTarget & { isTerminated: boolean };
@@ -52,7 +54,7 @@ export function artifactLink(projectId: string, sessionId: string, path: string)
 	return `${SESSION_LINK_PREFIX}${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/${ARTIFACT_SEGMENT}/${encodedPath}`;
 }
 
-type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> };
+type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string; previousPaths?: string[] }> }> };
 
 /**
  * The artifact route for text naming a listed session artifact, either as
@@ -72,7 +74,8 @@ export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorks
 		const path = candidate.slice(slash + 1);
 		for (const workspace of workspaces) {
 			const session = workspace.sessions.find((entry) => entry.id === sessionId);
-			if (session?.artifactFiles?.some((file) => file.path === path)) return artifactLink(workspace.id, sessionId, path);
+			const file = artifactAtPath(session?.artifactFiles, path);
+			if (file) return artifactLink(workspace.id, sessionId, file.path);
 		}
 	}
 	return undefined;

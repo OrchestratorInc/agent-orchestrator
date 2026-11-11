@@ -29,8 +29,6 @@ import {
 	Download,
 	LayoutGrid,
 	Package,
-	Folder,
-	FolderOpen,
 	Gauge,
 	LogIn,
 	LogOut,
@@ -147,8 +145,10 @@ import {
 import { BuildInfoTooltip } from "./BuildInfoTooltip";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
+import { menuFocusReturnTarget } from "./ui/menu-focus";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SharedProjectMark } from "./teams/SharedProjectMark";
+import { ProjectIcon } from "./ProjectIcon";
 import { OrchestratorIcon } from "./icons";
 import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
 import { Badge } from "./ui/badge";
@@ -361,7 +361,9 @@ function useGrabbingCursor(active: boolean) {
 /** How the sidebar collapses. Only the "icon" mode shows a rail where every list
  *  must be fully open; "offcanvas" slides the whole sidebar away, and its lists
  *  must keep their open/closed and Show more state while it is hidden. */
-const SIDEBAR_COLLAPSIBLE: "offcanvas" | "icon" = "offcanvas";
+// Asserted rather than annotated: an annotation narrows to "offcanvas" inside
+// the memoized Sidebar, and the "icon" branches would no longer typecheck.
+const SIDEBAR_COLLAPSIBLE = "offcanvas" as "offcanvas" | "icon";
 export const SIDEBAR_DEFAULT_WIDTH = 240;
 /** Floor/ceiling for sidebar resize — pass the same values to useResizable. */
 export const SIDEBAR_MIN_WIDTH = 200;
@@ -727,7 +729,9 @@ export {
 
 // Built on shadcn's sidebar primitives (components/ui/sidebar): the provider in
 // _shell owns the persistent open state. Collapsed sidebars move fully off-canvas.
-export function Sidebar({
+// Memoized: the shell re-renders several times per route change, and each
+// sidebar render reaches every project row's presence wrapper and footer.
+export const Sidebar = memo(function Sidebar({
 	underTopbar = true,
 	topbarOffset = "toolbar",
 	workspaceError,
@@ -782,15 +786,12 @@ export function Sidebar({
 			.filter((path): path is string => Boolean(path)),
 		[workspaces],
 	);
-	const openExistingProject = useCallback(
-		(path: string) => {
-			const workspace = workspaces.find(
-				(candidate) => candidate.kind !== STANDALONE_PROJECT_KIND && candidate.path === path,
-			);
-			if (workspace) selection.goProject(workspace.id);
-		},
-		[selection, workspaces],
-	);
+	const openExistingProject = useLatestCallback((path: string) => {
+		const workspace = workspaces.find(
+			(candidate) => candidate.kind !== STANDALONE_PROJECT_KIND && candidate.path === path,
+		);
+		if (workspace) selection.goProject(workspace.id);
+	});
 	const initialActiveSessionProjectId = useRef(
 		selection.activeSessionId ? selection.activeProjectId : undefined,
 	).current;
@@ -809,7 +810,9 @@ export function Sidebar({
 	const [dismissedInitialActiveProjectIds, setDismissedInitialActiveProjectIds] = useState<ReadonlySet<string>>(
 		() => new Set(),
 	);
-	const toggleProjectDisclosure = useCallback((id: string) => {
+	// Every project row gets this handler: a new one per toggle would re-render
+	// all of them to open or close one.
+	const toggleProjectDisclosure = useLatestCallback((id: string) => {
 		const routeFallbackActive =
 			initialActiveSessionProjectId === id && !dismissedInitialActiveProjectIds.has(id);
 		const currentlyExpanded = expandedIds.has(id) || routeFallbackActive;
@@ -827,7 +830,7 @@ export function Sidebar({
 			currentlyExpanded ? next.add(id) : next.delete(id);
 			return next;
 		});
-	}, [dismissedInitialActiveProjectIds, expandedIds, initialActiveSessionProjectId]);
+	});
 	const importedProjects = useSessionImportStore((state) => state.importedCounts);
 	const revealedImports = useRef(new Set<string>());
 	useEffect(() => {
@@ -1065,7 +1068,9 @@ export function Sidebar({
 		if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
 		else selection.goSession(target.workspaceId, target.id);
 	});
-	const handlePinnedSessionKilled = useCallback(
+	// Pinned rows are memoized; the route is read when a kill lands, so a route
+	// change does not re-render them.
+	const handlePinnedSessionKilled = useLatestCallback(
 		(killedSession: WorkspaceSession) => {
 			if (killedSession.hostId) {
 				if (selection.activeRemoteHostId !== killedSession.hostId || selection.activeRemoteSessionId !== killedSession.id) return;
@@ -1085,7 +1090,6 @@ export function Sidebar({
 				selection.goProject(killedSession.workspaceId);
 			}
 		},
-		[onOpenRemoteProject, remoteNavigate, remoteWorkspaces, selection, workspaces],
 	);
 
 	return (
@@ -1517,7 +1521,7 @@ export function Sidebar({
 			/>
 		</SidebarRoot>
 	);
-}
+});
 
 type Selection = ReturnType<typeof useSelection>;
 
@@ -1844,16 +1848,18 @@ const ProjectItem = memo(function ProjectItem({
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
-	// The project's board opens its archive once it is on screen, as Cmd+K's
-	// Open archive does.
-	const openArchive = () => {
-		useUiStore.getState().requestArchiveOpen(workspace.id, workspace.hostId);
-		selection.goProject(workspace.id);
-	};
+	// The shell's archive modal opens over the current page, scoped to this
+	// project; nothing navigates. A store action, so the row takes no new prop.
+	// Closing it returns focus to the ⋮ trigger or the right-clicked row.
+	const openArchive = () => useUiStore.getState().openArchive({
+		projectId: workspace.id,
+		hostId: workspace.hostId,
+		returnFocus: menuFocusReturnTarget(),
+	});
 	// The ⋮ button and right-click show these same rows. Built only while a menu
 	// is open, so the archive count costs a closed row nothing.
 	const buildMenuEntries = (): MenuEntry[] => {
-		// The board's archive: every project row has a board, the Scratchpad's
+		// The project's archive: every project row has one, the Scratchpad's
 		// archive is its own section's entry. Hidden while empty, as the board's
 		// Archive button and Cmd+K's Open archive are.
 		const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;
@@ -3824,86 +3830,6 @@ function ShowMoreRow({
 				<span className="relative z-[1] truncate">{t(expanded ? "shell.showLess" : "shell.showMore")}</span>
 			</motion.button>
 		</AnimatePresence>
-	);
-}
-
-// Tile colours for projects without an avatar. Picked by a hash of the
-// project path, so a project keeps its colour across launches.
-const PROJECT_LETTER_TILE_COLORS = [
-	"bg-red-400/20",
-	"bg-orange-400/20",
-	"bg-amber-400/20",
-	"bg-lime-400/20",
-	"bg-emerald-400/20",
-	"bg-teal-400/20",
-	"bg-sky-400/20",
-	"bg-blue-400/20",
-	"bg-indigo-400/20",
-	"bg-violet-400/20",
-	"bg-fuchsia-400/20",
-	"bg-pink-400/20",
-] as const;
-
-function projectTileColor(seed: string): string {
-	let hash = 0;
-	for (let index = 0; index < seed.length; index++) hash = (hash * 31 + seed.charCodeAt(index)) | 0;
-	return PROJECT_LETTER_TILE_COLORS[Math.abs(hash) % PROJECT_LETTER_TILE_COLORS.length];
-}
-
-/** A project's icon. With repository avatars on: the owner avatar as a 4px-radius
- *  squircle, or a colour-coded first-letter tile while it loads and when there
- *  is no avatar or it fails. With them off: a folder. */
-function ProjectIcon({
-	avatarUrl,
-	name,
-	seed,
-	expanded,
-	className,
-}: {
-	avatarUrl?: string;
-	name: string;
-	seed: string;
-	expanded: boolean;
-	className?: string;
-}) {
-	const avatarsEnabled = useUiStore((state) => state.projectAvatars && isNewSidebarDesign(state));
-	const [loadedUrl, setLoadedUrl] = useState<string>();
-	const [failedUrl, setFailedUrl] = useState<string>();
-	if (!avatarsEnabled) {
-		const Icon = expanded ? FolderOpen : Folder;
-		return <Icon className={className} />;
-	}
-	const showAvatar = avatarUrl !== undefined && failedUrl !== avatarUrl;
-	const loaded = showAvatar && loadedUrl === avatarUrl;
-	const letter = name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?";
-	return (
-		<span className={cn("relative inline-flex shrink-0", className ?? "size-icon-md")}>
-			{loaded ? null : (
-				<span
-					className={cn(
-						"inline-flex size-full items-center justify-center rounded-[4px] font-semibold leading-none text-foreground/80",
-						className ? "text-xs" : "text-[9px]",
-						projectTileColor(seed),
-					)}
-				>
-					{letter}
-				</span>
-			)}
-			{showAvatar ? (
-				<img
-					alt=""
-					className={cn("absolute inset-0 size-full rounded-[4px] object-cover", !loaded && "invisible")}
-					draggable={false}
-					onError={() => setFailedUrl(avatarUrl)}
-					onLoad={() => setLoadedUrl(avatarUrl)}
-					// A cached image can finish before React attaches onLoad.
-					ref={(node) => {
-						if (node?.complete && node.naturalWidth > 0 && loadedUrl !== avatarUrl) setLoadedUrl(avatarUrl);
-					}}
-					src={avatarUrl}
-				/>
-			) : null}
-		</span>
 	);
 }
 

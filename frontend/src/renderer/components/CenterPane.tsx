@@ -136,7 +136,8 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 	const [dragging, setDragging] = useState(false);
 	const dragRef = useRef<{ pointerX: number; grabOffset: number; scroller: HTMLElement | null } | null>(null);
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-		if ((event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
+		// A middle-click closes the tab and a right-click opens its menu; neither drags.
+		if (event.button !== 0 || (event.target as HTMLElement).closest(PANE_DRAG_IGNORE)) return;
 		dragControls.start(event);
 		const item = itemRef.current;
 		if (item) beginPaneTabDrag(event, value, item, settleInSlot);
@@ -702,10 +703,12 @@ export function CenterPane({
 }
 
 // The interface switch arrives as a shared topbar control (28px button, or a
-// 28px status with a cancel button). In the tab's icon slot it is resized to
-// match the close and menu controls: a 16px box, 13px glyph, 28px hit area.
+// 28px status with a cancel button). In the slot after the tab's title it is
+// resized to match the close and menu controls: a 16px box, 13px glyph, 28px
+// hit area. Like them it is a pure ghost: the quiet button's hover pill
+// (its ::before) loses its fill, and ::before stays as the hit area.
 const sessionTabActionClassName = cn(
-	"grid place-items-center [&_svg]:size-icon-sm",
+	"grid place-items-center [&_svg]:size-icon-sm [&_button]:before:bg-transparent!",
 	"[&_[data-interface-switch]]:relative [&_[data-interface-switch]]:size-icon-base [&_[data-interface-switch]]:rounded-sm [&_[data-interface-switch]]:after:absolute [&_[data-interface-switch]]:after:-inset-1.5 [&_[data-interface-switch]]:after:content-['']",
 	"[&_[role=status]]:size-icon-base [&_[role=status]_button]:rounded-sm [&_[role=status]_button]:before:absolute [&_[role=status]_button]:before:-inset-1.5 [&_[role=status]_button]:before:content-['']",
 );
@@ -718,13 +721,11 @@ type SessionPaneTabProps = {
 	session?: WorkspaceSession;
 	/** The agent shown without a session; its mark is the icon and its name joins the label. */
 	provider?: string;
-	/** Off where the agent's name is enough (the chat tab): the name still joins the label. */
-	providerIcon?: boolean;
 	icon?: ReactNode;
 	title?: string;
-	/** Session-scoped controls (interface switch, handoff) in the tab's icon slot. */
+	/** The control after the tab's title: the session's ⋮ menu, or a running interface switch's status. */
 	tabAction?: ReactNode;
-	/** Keep the action showing at rest, e.g. while an interface switch runs. */
+	/** Keep the action showing at rest (the session tab's ⋮ always shows). */
 	tabActionPinned?: boolean;
 	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
 	tabMenu?: boolean;
@@ -741,7 +742,6 @@ export function SessionPaneTab({
 	onRenamed,
 	session,
 	provider = session?.provider,
-	providerIcon = true,
 	icon,
 	title,
 	tabAction,
@@ -753,7 +753,7 @@ export function SessionPaneTab({
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
 	const activityLabel = session ? getAgentActivityView(session.activity, t).label : undefined;
 	const providerLabel = provider ? agentLabel(provider) : undefined;
-	const tabIcon = provider && providerIcon ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
+	const tabIcon = provider ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project
@@ -783,8 +783,11 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			action={!rename.isEditing && tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			// Renaming hides the ⋮ but keeps its slot, so the tab keeps its width.
+			action={tabAction ? <span className={cn(sessionTabActionClassName, rename.isEditing && "invisible")} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			actionPosition="end"
 			actionPinned={tabActionPinned}
+			wide={session ? "session" : undefined}
 			active={isActive}
 			buttonProps={{
 				"aria-current": isActive,

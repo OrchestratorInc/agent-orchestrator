@@ -109,6 +109,8 @@ const FADE_SHED_MS = 450;
  */
 const StreamingProse = createContext(false);
 const InsideMarkdownLink = createContext(false);
+/** Inside a link to an artifact: its name reads in the UI font, as everywhere else artifacts are named. */
+const InsideArtifactLink = createContext(false);
 const SafeOriginContent = createContext(false);
 const REMOTE_PREVIEW_UNAVAILABLE = "This link points to the remote host. Preview is unavailable on this device.";
 const OpenChatLink = createContext<{
@@ -434,7 +436,9 @@ function MarkdownLink({ href, children, className, menuPath }: { href?: string; 
 			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
 			<ChatImageLinkScope>
-				<InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
+				<InsideMarkdownLink.Provider value>
+					<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
+				</InsideMarkdownLink.Provider>
 			</ChatImageLinkScope>
 		</AppLink>
 	);
@@ -559,22 +563,35 @@ export function useChatLinkWorkspaces() {
 	return useSessionLinkSource(sessionLinkHostId, sessionLinkSourceKind).workspaces;
 }
 
-/** Inline code naming a listed session artifact, linked to that artifact. */
-export function ArtifactPathCode({ text, children }: { text: string; children: ReactNode }) {
+/**
+ * Inline code naming a listed session artifact, linked to that artifact's
+ * preview and showing `children`; a path the session does not list shows
+ * `unlisted` (default `children`).
+ */
+export function ArtifactPathCode({ text, children, unlisted = children }: { text: string; children: ReactNode; unlisted?: ReactNode }) {
 	const workspaces = useChatLinkWorkspaces();
 	const href = artifactLinkForPath(text, workspaces);
 	const path = explicitWorkspaceFilePath(text);
-	if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
-	return path ? <ChatPathMenu path={path}><span>{children}</span></ChatPathMenu> : <>{children}</>;
+	// Every workspace refresh, for any session's status, reaches here; the same
+	// element back lets the path menu below skip it unless the link changed.
+	return useMemo(() => {
+		if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
+		return path ? <ChatPathMenu path={path}><span>{unlisted}</span></ChatPathMenu> : <>{unlisted}</>;
+	}, [children, href, path, unlisted]);
 }
 
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
 	const positions = excerptElementProps(node);
 	const { openSession } = useContext(OpenChatLink);
 	const insideLink = useContext(InsideMarkdownLink);
+	const insideArtifactLink = useContext(InsideArtifactLink);
 	const text = typeof children === "string" ? children : undefined;
 	const file = useWorkspaceFile(text);
 	if (isInlineMath(className)) return <span {...positions} data-excerpt-block=""><MathFormula tex={text ?? ""} /></span>;
+	// An artifact's name is not code: it reads in the UI font, like its rows and
+	// headers. It is still inline code in the source, so excerpts map it as one.
+	const name = <span {...positions} data-excerpt-kind="inline-code">{children}</span>;
+	if (insideArtifactLink) return name;
 	const code = (
 		<code {...positions} data-excerpt-kind="inline-code" className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
 			{children}
@@ -582,7 +599,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 	);
 	if (insideLink) return code;
 	if (!file) {
-		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text}>{code}</ArtifactPathCode>;
+		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
 	}

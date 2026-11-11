@@ -52,6 +52,7 @@
 		"@electron/fuses": "^1.8.0",
 		"@electron/rebuild": "^4.0.4",
 		"@playwright/test": "^1.60.0",
+		"@sentry/vite-plugin": "11.11.0",
 		"@tailwindcss/vite": "^4.3.0",
 		"@tanstack/router-plugin": "^1.168.18",
 		"@testing-library/jest-dom": "^6.9.1",

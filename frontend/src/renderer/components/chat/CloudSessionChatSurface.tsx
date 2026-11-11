@@ -1026,8 +1026,10 @@ export function CloudSessionChatSurface({
 	session,
 	headerActions,
 	sessionTabAction,
+	sessionTabActionPinned = false,
 	onOpenFiles,
 	onOpenFile,
+	onOpenArtifact,
 	controllerTransitioning,
 	newWorkDisabled,
 	onConversationWorkChange,
@@ -1069,6 +1071,8 @@ export function CloudSessionChatSurface({
 	workspaceFileActive?: boolean;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
+	/** Keep the session tab's action showing at rest, while an interface switch is in flight. */
+	sessionTabActionPinned?: boolean;
 	/** The Cloud reviewer terminal, shown as its own tab beside the chat as in local sessions. */
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -1088,6 +1092,8 @@ export function CloudSessionChatSurface({
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	onOpenFiles?: () => void;
 	onOpenFile?: (path: string) => void;
+	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
 	controllerTransitioning?: boolean;
 	newWorkDisabled?: boolean;
 	onConversationWorkChange?: (state: {
@@ -1750,6 +1756,7 @@ export function CloudSessionChatSurface({
 			settingsLocked={settingsLocked}
 			onOpenFiles={onOpenFiles}
 			onOpenFile={openFileFromChat}
+			onOpenArtifact={onOpenArtifact}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
 			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
 				if (attachments?.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });
@@ -1792,6 +1799,7 @@ export function CloudSessionChatSurface({
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
+			sessionTabActionPinned={sessionTabActionPinned}
 			sessionTitle={session.title}
 			// The chat tab renames the session as a local one does; the rename
 			// updates the cached session lists itself, and this catches up the rest.

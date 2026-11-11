@@ -56,8 +56,8 @@ const file = (path: string, source?: Extract<TabMenuSpec, { kind: "file" }>["fil
 
 const sessionSpec = { kind: "session", tabKey: "session", session, onRename: vi.fn(), canArchive: true } satisfies TabMenuSpec;
 
-const terminalAgent: SessionTabAgentMenu = { session, blocked: false, switchTarget: "chat", switchAction: { disabled: false, run: vi.fn() } };
-const chatAgent: SessionTabAgentMenu = { session, blocked: true, switchTarget: "tui", switchAction: { disabled: true, reason: "Busy", run: vi.fn() } };
+const terminalAgent: SessionTabAgentMenu = { session, blocked: false, picksAgent: true, switchTarget: "chat", switchAction: { disabled: false, run: vi.fn() } };
+const chatAgent: SessionTabAgentMenu = { session, blocked: true, picksAgent: false, switchTarget: "tui", switchAction: { disabled: true, reason: "Busy", run: vi.fn() } };
 
 // Every tab type with a menu, and the session tab on both surfaces.
 const cases: Array<[string, TabMenuSpec, SessionTabAgentMenu?]> = [
