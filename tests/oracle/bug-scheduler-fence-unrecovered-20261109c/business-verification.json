@@ -1,0 +1,41 @@
+{
+  "schema_version": "business-verification-v1",
+  "run_id": "bug-scheduler-fence-unrecovered-20261109c",
+  "source_sdd_hash": "",
+  "source_kb_hash": "sha256:e14be6b26bafb55f40c5ba63c3f11f0d62ca2c14bd7ca03af81f18618c649b6d",
+  "target_code_hash": "sha256:4d1a6cc4a6c81ad385f465f49a8dba1ac9f57e01131329dc6cde3736df1fc40c",
+  "target_files": [
+    "backend/internal/storage/sqlite/store/execution_permit_store.go",
+    "backend/internal/storage/sqlite/store/execution_restart_store.go"
+  ],
+  "target_file_hashes": {
+    "backend/internal/storage/sqlite/store/execution_permit_store.go": "sha256:61cbfdb5649a170f836ea8a8cd4a90df42920ea5b7817ab83c7e9cd319b1fde9",
+    "backend/internal/storage/sqlite/store/execution_restart_store.go": "sha256:1ff1da53d5a6af446faf7a21a01bddf1a3bde104f42788989a9dc714c757bd3e"
+  },
+  "assertions": [
+    {
+      "type": "state-transition",
+      "name": "recovery releases a terminated session's drifted slot",
+      "detail": "after boot adopts an old slot as uncertain, a terminated session whose slot names the pre-switch generation is released instead of blocking recovery",
+      "passed": true
+    },
+    {
+      "type": "error-code",
+      "name": "live session keeps the admission fence",
+      "detail": "a live session whose slot names another generation still returns ErrSchedulerAdmissionConflict",
+      "passed": true
+    },
+    {
+      "type": "side-effect",
+      "name": "unreconciled budget is not released with the slot",
+      "detail": "releasing a terminated slot keeps its budget reservation uncertain for reconciliation",
+      "passed": true
+    },
+    {
+      "type": "state-transition",
+      "name": "terminated session restarts from an uncertain adopted slot",
+      "detail": "the same stale-slot invariant keeps resume admission working after boot recovery",
+      "passed": true
+    }
+  ]
+}

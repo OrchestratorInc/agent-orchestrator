@@ -1,0 +1,44 @@
+{
+  "schema_version": "business-verification-v1",
+  "run_id": "bug-provider-switch-admission-drift-20261109a",
+  "source_sdd_hash": "",
+  "source_kb_hash": "sha256:e14be6b26bafb55f40c5ba63c3f11f0d62ca2c14bd7ca03af81f18618c649b6d",
+  "target_code_hash": "sha256:f333b9e005b5d78ecd07d6e2555d137dca2eb88e7074915bb9102617208dc031",
+  "target_files": [
+    "backend\\internal\\storage\\sqlite\\store\\conversation_store.go",
+    "backend\\internal\\storage\\sqlite\\store\\execution_restart_store.go",
+    "backend\\internal\\storage\\sqlite\\queries\\execution_permit.sql"
+  ],
+  "target_file_hashes": {
+    "backend\\internal\\storage\\sqlite\\store\\conversation_store.go": "sha256:2c0098967f361f3f0e04079f0f8ba2e9ca9c4eaa72de1f30d6eac95bd8b2ce4a",
+    "backend\\internal\\storage\\sqlite\\store\\execution_restart_store.go": "sha256:2a939cced12885f16aaea82ada7698ff7da4633173d029ba58a63e97cb4c37a1",
+    "backend\\internal\\storage\\sqlite\\queries\\execution_permit.sql": "sha256:16f293e0e04823d6989835883fcd192dd12d5163ce358c5af4d92a831d665c22"
+  },
+  "assertions": [
+    {
+      "type": "state-transition",
+      "name": "provider switch moves the execution admission generation",
+      "detail": "CommitProviderSwitch publishes the new controller generation on the session's active admission slot",
+      "passed": true
+    },
+    {
+      "type": "error-code",
+      "name": "terminated session restart is admitted from a stale slot",
+      "detail": "AdmitSessionRestart returns nil instead of ErrSchedulerAdmissionConflict for a terminated session whose slot names an older generation",
+      "passed": true
+    },
+    {
+      "type": "error-code",
+      "name": "live session keeps the admission fence",
+      "detail": "AdmitSessionRestart still returns ErrSchedulerAdmissionConflict for a live session whose slot names another generation",
+      "passed": true
+    },
+    {
+      "type": "state-transition",
+      "name": "uncertain slot from boot recovery becomes active again",
+      "detail": "a terminated session adopted as uncertain restarts and its slot ends active on the new generation",
+      "passed": true
+    }
+  ],
+  "test_command_exit_code": 0
+}

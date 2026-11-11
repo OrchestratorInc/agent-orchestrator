@@ -1,0 +1,116 @@
+{
+  "schema_version": "business-quality-gate-v1",
+  "run_id": "bug-provider-switch-admission-drift-20261109a",
+  "evidence_level": "code-verified",
+  "sdd_mode": "declared-none",
+  "inputs": {
+    "source_sdd_hash": "",
+    "source_kb_hash": "sha256:e14be6b26bafb55f40c5ba63c3f11f0d62ca2c14bd7ca03af81f18618c649b6d",
+    "target_code_hash": "sha256:f333b9e005b5d78ecd07d6e2555d137dca2eb88e7074915bb9102617208dc031"
+  },
+  "steps": {
+    "contract_extract": {
+      "command": [
+        "<no-sdd-declared>"
+      ],
+      "command_sha256": "",
+      "exit_code": 0,
+      "stdout_sha256": "",
+      "stderr_sha256": "",
+      "declared_skipped": true
+    },
+    "scenario_extract": {
+      "command": [
+        "D:\\tool\\python\\python.exe",
+        "E:\\code\\agent-orchestrator\\.skill-chain-workshop\\skills\\scenario-oracle-builder\\scripts\\extract.py",
+        "--kb",
+        "E:\\code\\agent-orchestrator\\docs\\project-note\\03-核心数据业务流",
+        "--output-dir",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario",
+        "--project-root",
+        "E:\\code\\agent-orchestrator"
+      ],
+      "command_sha256": "sha256:2f2236c46b8db0538b12bda6037a46e85c25305e35d1e7ff9f7361b653be0d4d",
+      "exit_code": 0,
+      "stdout_sha256": "sha256:7410116bac3eccc8f4391f444118f06913d7b026ba9b37657967323869d1a175",
+      "stderr_sha256": "sha256:0495ea394382f5cb73065c6575962efc694c760396f5b9f403ff2a9044204f02"
+    },
+    "pytest": {
+      "command": [
+        "D:\\tool\\python\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_cdc_与实时事件推送_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_chat_对话与_turn_生命周期_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_pr_观测与反馈回路_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_会话创建全链路_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_会话生命周期与终止判定_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_工作流编排与执行绑定_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_接口切换_tui_chat_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_终端会话与_mux_scenario.py"
+      ],
+      "command_sha256": "sha256:80e19655d8a0182d7c97403429560a4e6ad4383ce69d61aa71926b0930d066a5",
+      "exit_code": 0,
+      "stdout_sha256": "sha256:5d4da97d23f7f019efee490c4f0ea0f4250533ec2d87ff0d65cc2134a15dab87",
+      "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "schema_version": "pytest-results-v1",
+      "run_id": "bug-provider-switch-admission-drift-20261109a",
+      "raw_exit_code": 0,
+      "summary": {
+        "passed": 84,
+        "failed": 0,
+        "skipped": 0
+      },
+      "collected_tests": [
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_cdc_与实时事件推送_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_chat_对话与_turn_生命周期_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_pr_观测与反馈回路_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_会话创建全链路_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_会话生命周期与终止判定_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_工作流编排与执行绑定_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_接口切换_tui_chat_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a\\scenario\\test_终端会话与_mux_scenario.py"
+      ]
+    },
+    "real_verification": {
+      "command": [
+        "<redacted-verify-command>"
+      ],
+      "command_sha256": "sha256:a3b3c8e78ce77068b770b7335df24add158ce54b9bcbd1194583b63efcd6b6e9",
+      "exit_code": 0,
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "evidence_sha256": "sha256:052c96b6e001c386872fe040c9e9a7911dce7f33c9ff7fea76247cfff807267a",
+      "evidence_valid": true
+    },
+    "engine": {
+      "command": [
+        "D:\\tool\\python\\python.exe",
+        "E:\\code\\agent-orchestrator\\.skill-chain-workshop\\skills\\ai-quality-engine\\scripts\\ai-quality-check.py",
+        "check",
+        "E:\\code\\agent-orchestrator\\backend\\internal\\storage\\sqlite\\store\\conversation_store.go",
+        "E:\\code\\agent-orchestrator\\backend\\internal\\storage\\sqlite\\store\\execution_restart_store.go",
+        "--profile",
+        "code-verified",
+        "--oracle-dir",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-provider-switch-admission-drift-20261109a",
+        "--strict-gate",
+        "--format",
+        "json"
+      ],
+      "command_sha256": "sha256:c2202ae027b3707597aae16d703d0fcce88bb3fcbe836675c9bbe3ba7213792d",
+      "exit_code": 2,
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "sha256:5d31c45e6e624b29fe2cf65e61a0a2a88d2ac2442d9fc4d0f804af5ac95b5a51"
+    }
+  },
+  "engine": null,
+  "gate": {
+    "verdict": "BLOCK",
+    "reasons": [
+      "engine_output_invalid"
+    ],
+    "blocking_findings": []
+  }
+}

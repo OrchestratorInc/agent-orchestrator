@@ -1,0 +1,11 @@
+{
+  "schema_version": "contract-oracle-v1",
+  "declared_skipped": true,
+  "skip_reason": "no-cross-endpoint",
+  "run_id": "bug-scheduler-fence-unrecovered-20261109c",
+  "source_sdd_hash": "",
+  "source_kb_hash": "sha256:e14be6b26bafb55f40c5ba63c3f11f0d62ca2c14bd7ca03af81f18618c649b6d",
+  "target_code_hash": "sha256:4d1a6cc4a6c81ad385f465f49a8dba1ac9f57e01131329dc6cde3736df1fc40c",
+  "evidence_level": "code-verified",
+  "generator_version": null
+}

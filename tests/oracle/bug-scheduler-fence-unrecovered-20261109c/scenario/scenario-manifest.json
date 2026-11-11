@@ -1,0 +1,185 @@
+{
+  "schema_version": "scenario-oracle-v1",
+  "source_kb": "docs/project-note/03-核心数据业务流",
+  "generated_at": "2026-11-09T22:12:47",
+  "engine_version": "0.7.0",
+  "coverage": {
+    "covered_flows": 8,
+    "total_flows": 8,
+    "ratio": 1.0
+  },
+  "fork_coverage": {
+    "normal": 8,
+    "error": 8,
+    "boundary": 7
+  },
+  "mock_ceiling_risk": false,
+  "flows": [
+    {
+      "flow_name": "CDC 与实时事件推送",
+      "kb_doc": "CDC与实时事件推送.md",
+      "test_file": "test_cdc_与实时事件推送_scenario.py",
+      "test_class": "TestCdc与实时事件推送",
+      "test_functions": [
+        "test_cdc_与实时事件推送_happy_path",
+        "test_cdc_与实时事件推送_异常_处理",
+        "test_cdc_与实时事件推送_error_handling",
+        "test_cdc_与实时事件推送_客户端落后于保留窗口_兜底从_head_开始_客户端靠全量快照恢复",
+        "test_cdc_与实时事件推送_sse_缓冲溢出_关闭连接_客户端重连带_last_event_id",
+        "test_cdc_与实时事件推送_poller_重启_从_head_开始_历史由客户端补读",
+        "test_cdc_与实时事件推送_订阅者阻塞_这是订阅者的_bug_broadcaster_本身无超时保护",
+        "test_cdc_与实时事件推送_boundary_订阅者阻塞_这是订阅者的_bug_broadcaster_本身无超时保护"
+      ],
+      "status": "covered"
+    },
+    {
+      "flow_name": "Chat 对话与 turn 生命周期",
+      "kb_doc": "Chat对话与turn生命周期.md",
+      "test_file": "test_chat_对话与_turn_生命周期_scenario.py",
+      "test_class": "TestChat对话与Turn生命周期",
+      "test_functions": [
+        "test_chat_对话与_turn_生命周期_happy_path",
+        "test_chat_对话与_turn_生命周期_异常_处理",
+        "test_chat_对话与_turn_生命周期_error_handling",
+        "test_chat_对话与_turn_生命周期_provider_进程丢失_宿主断开_重新_connect_adopt_原生_load_resume_仅在真实_host_失败时才是修复路径",
+        "test_chat_对话与_turn_生命周期_事件迟到_旧_generation_按_controller_generation_拒绝",
+        "test_chat_对话与_turn_生命周期_工作区失效_拒绝派发_err_workspace_invalid_已入队消息仍被接受",
+        "test_chat_对话与_turn_生命周期_审批_input_超时_保持_waiting_input_不自动注入",
+        "test_chat_对话与_turn_生命周期_凭据被拒_写_auth_需求事实_ui_显示通知_恢复需满足上面的严格条件",
+        "test_chat_对话与_turn_生命周期_boundary_事件迟到_旧_generation_按_controller_generation_拒绝",
+        "test_chat_对话与_turn_生命周期_boundary_工作区失效_拒绝派发_err_workspace_invalid_已入队消息仍被接受",
+        "test_chat_对话与_turn_生命周期_boundary_审批_input_超时_保持_waiting_input_不自动注入"
+      ],
+      "status": "covered"
+    },
+    {
+      "flow_name": "PR 观测与反馈回路",
+      "kb_doc": "PR观测与反馈回路.md",
+      "test_file": "test_pr_观测与反馈回路_scenario.py",
+      "test_class": "TestPr观测与反馈回路",
+      "test_functions": [
+        "test_pr_观测与反馈回路_happy_path",
+        "test_pr_观测与反馈回路_异常_处理",
+        "test_pr_观测与反馈回路_error_handling",
+        "test_pr_观测与反馈回路_无_git_hub_git_lab_凭据_observer_进入_disabled_不报错_不刷屏",
+        "test_pr_观测与反馈回路_触发速率限制_按_provider_提示休眠并抖动_不反复冲击_api",
+        "test_pr_观测与反馈回路_轮询慢于_30s_warn_记录_仍继续",
+        "test_pr_观测与反馈回路_事实未变_不写库_不发事件_避免无效_cdc",
+        "test_pr_观测与反馈回路_会话阻塞待输入_不_nudge_避免自动化向_blocked_会话注入",
+        "test_pr_观测与反馈回路_pr_被关闭未合并_终态事实_pr_closed_unmerged_通知"
+      ],
+      "status": "covered"
+    },
+    {
+      "flow_name": "会话创建全链路",
+      "kb_doc": "会话创建全链路.md",
+      "test_file": "test_会话创建全链路_scenario.py",
+      "test_class": "Test会话创建全链路",
+      "test_functions": [
+        "test_会话创建全链路_happy_path",
+        "test_会话创建全链路_异常_处理_用户可见",
+        "test_会话创建全链路_error_handling",
+        "test_会话创建全链路_harness_未知_建行前拒绝_cli_api_明确_unknown_harness",
+        "test_会话创建全链路_显式_chat_但不可用_拒绝_不建行_typed_preflight_错误_移动端提供_tui_回退",
+        "test_会话创建全链路_默认_chat_不可用_回落_tui_warn_日志_会话正常创建_tui",
+        "test_会话创建全链路_建行后任一后续步骤失败_分阶段回滚",
+        "test_会话创建全链路_工作流_permit_存在但绑定失败_execution_coordinator_写_spawn_unknown_failed_confirmed_不伪造成功_工作流任务转_retry_wait_或_blocked",
+        "test_会话创建全链路_异步_chat_后台失败_provision_state_failed_会话卡片显示失败原因",
+        "test_会话创建全链路_boundary_harness_未知_建行前拒绝_cli_api_明确_unknown_harness",
+        "test_会话创建全链路_boundary_显式_chat_但不可用_拒绝_不建行_typed_preflight_错误_移动端提供_tui_回退",
+        "test_会话创建全链路_boundary_默认_chat_不可用_回落_tui_warn_日志_会话正常创建_tui"
+      ],
+      "status": "covered"
+    },
+    {
+      "flow_name": "会话生命周期与终止判定",
+      "kb_doc": "会话生命周期与终止判定.md",
+      "test_file": "test_会话生命周期与终止判定_scenario.py",
+      "test_class": "Test会话生命周期与终止判定",
+      "test_functions": [
+        "test_会话生命周期与终止判定_happy_path",
+        "test_会话生命周期与终止判定_异常_处理_不要做什么",
+        "test_会话生命周期与终止判定_error_handling",
+        "test_会话生命周期与终止判定_进程查询失败_windows_access_denied_等_保留占位_保留锁_描述符_run_file_不要当死亡清理",
+        "test_会话生命周期与终止判定_大面积探针同时失败_熔断_本批降级为_probe_failed_不要批量标_terminated",
+        "test_会话生命周期与终止判定_daemon_重启_restore_all_按_session_mode_恢复控制器_不要手工删_sqlite_行_host_描述_工作树",
+        "test_会话生命周期与终止判定_终止期间_revision_变化_放弃终止_等下一轮_不要用旧读强行写入",
+        "test_会话生命周期与终止判定_chat_会话无_runtime_handle_跳过探针_不要报异常",
+        "test_会话生命周期与终止判定_boundary_大面积探针同时失败_熔断_本批降级为_probe_failed_不要批量标_terminated"
+      ],
+      "status": "covered"
+    },
+    {
+      "flow_name": "工作流编排与执行绑定",
+      "kb_doc": "工作流编排与执行绑定.md",
+      "test_file": "test_工作流编排与执行绑定_scenario.py",
+      "test_class": "Test工作流编排与执行绑定",
+      "test_functions": [
+        "test_工作流编排与执行绑定_happy_path",
+        "test_工作流编排与执行绑定_异常_处理_禁止",
+        "test_工作流编排与执行绑定_error_handling",
+        "test_工作流编排与执行绑定_网关返回但无_session_spawn_unknown_冻结_不要当成功_spawn",
+        "test_工作流编排与执行绑定_绑定_cas_失败_返回_unchanged_别人先改_不要覆盖",
+        "test_工作流编排与执行绑定_多仓_worktree_缺失_reconcile_required_不要继续派发",
+        "test_工作流编排与执行绑定_领导权丢失_清_fence_本轮不授予资格_不要盲轮询重试授予",
+        "test_工作流编排与执行绑定_未知_harness_的_steer_拒绝并提示_queue_不要按名字猜能力",
+        "test_工作流编排与执行绑定_工作流终态_拒绝新消息_任务请求_不要复活工作流",
+        "test_工作流编排与执行绑定_boundary_多仓_worktree_缺失_reconcile_required_不要继续派发",
+        "test_工作流编排与执行绑定_boundary_领导权丢失_清_fence_本轮不授予资格_不要盲轮询重试授予",
+        "test_工作流编排与执行绑定_boundary_未知_harness_的_steer_拒绝并提示_queue_不要按名字猜能力",
+        "test_工作流编排与执行绑定_boundary_工作流终态_拒绝新消息_任务请求_不要复活工作流"
+      ],
+      "status": "covered"
+    },
+    {
+      "flow_name": "接口切换（TUI ↔ Chat）",
+      "kb_doc": "接口切换.md",
+      "test_file": "test_接口切换_tui_chat_scenario.py",
+      "test_class": "Test接口切换TuiChat",
+      "test_functions": [
+        "test_接口切换_tui_chat_happy_path",
+        "test_接口切换_tui_chat_异常_处理",
+        "test_接口切换_tui_chat_error_handling",
+        "test_接口切换_tui_chat_目标_preflight_失败_cas_回滚_源继续运行_消息仍在_outbox",
+        "test_接口切换_tui_chat_drain_无法证明静默_err_drain_quiescence_unverified_源未动_提示重试",
+        "test_接口切换_tui_chat_tui_有等待中的决策_err_drain_decision_pending_要求先在终端回答或改用_cancel",
+        "test_接口切换_tui_chat_daemon_中途死亡_boot_对账",
+        "test_接口切换_tui_chat_迟到事件_chat_侧按_controller_generation_拒绝_tui_侧按_launch_id_拒绝",
+        "test_接口切换_tui_chat_resume_only_agent_的_tui_chat_不静默改用全新_chat_provider_直接失败",
+        "test_接口切换_tui_chat_boundary_drain_无法证明静默_err_drain_quiescence_unverified_源未动_提示重试",
+        "test_接口切换_tui_chat_boundary_迟到事件_chat_侧按_controller_generation_拒绝_tui_侧按_launch_id_拒绝"
+      ],
+      "status": "covered"
+    },
+    {
+      "flow_name": "终端会话与 mux",
+      "kb_doc": "终端会话与mux.md",
+      "test_file": "test_终端会话与_mux_scenario.py",
+      "test_class": "Test终端会话与Mux",
+      "test_functions": [
+        "test_终端会话与_mux_happy_path",
+        "test_终端会话与_mux_异常_处理",
+        "test_终端会话与_mux_error_handling",
+        "test_终端会话与_mux_origin_不在白名单_403_升级前拒绝_不建立任何_attachment",
+        "test_终端会话与_mux_native_pty_host_启动失败_回落到_tmux_runtimeselect_不静默降级到无终端",
+        "test_终端会话与_mux_客户端断开_关闭_attachment_pty_宿主继续运行_分离式",
+        "test_终端会话与_mux_同一_pty_多客户端_primary_控网格_secondary_只读跟随",
+        "test_终端会话与_mux_输入栅栏生效期间写入_拒绝并记录_不缓冲_避免交接后误投递",
+        "test_终端会话与_mux_boundary_origin_不在白名单_403_升级前拒绝_不建立任何_attachment",
+        "test_终端会话与_mux_boundary_native_pty_host_启动失败_回落到_tmux_runtimeselect_不静默降级到无终端",
+        "test_终端会话与_mux_boundary_输入栅栏生效期间写入_拒绝并记录_不缓冲_避免交接后误投递"
+      ],
+      "status": "covered"
+    }
+  ],
+  "kb_freshness": {
+    "last_updated": "2026-11-09",
+    "stale": false
+  },
+  "generator_version": "0.7.0",
+  "source_sdd_hash": "",
+  "source_kb_hash": "sha256:e14be6b26bafb55f40c5ba63c3f11f0d62ca2c14bd7ca03af81f18618c649b6d",
+  "target_code_hash": "sha256:4d1a6cc4a6c81ad385f465f49a8dba1ac9f57e01131329dc6cde3736df1fc40c",
+  "evidence_level": "code-verified",
+  "run_id": "bug-scheduler-fence-unrecovered-20261109c"
+}

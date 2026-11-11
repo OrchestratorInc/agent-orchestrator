@@ -1,0 +1,38 @@
+{
+  "command": [
+    "D:\\tool\\python\\python.exe",
+    "-m",
+    "pytest",
+    "-q",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_cdc_与实时事件推送_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_chat_对话与_turn_生命周期_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_pr_观测与反馈回路_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_会话创建全链路_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_会话生命周期与终止判定_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_工作流编排与执行绑定_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_接口切换_tui_chat_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_终端会话与_mux_scenario.py"
+  ],
+  "command_sha256": "sha256:029dbce74d477fc0136e56248dadb4bf9f3722a594ec6984163449e2818fad83",
+  "exit_code": 0,
+  "stdout_sha256": "sha256:be2672d6ab5f2a6d52b733193835ad603f0d1e659ca2f528443a6bd3efb2ff5c",
+  "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema_version": "pytest-results-v1",
+  "run_id": "bug-scheduler-fence-unrecovered-20261109c",
+  "raw_exit_code": 0,
+  "summary": {
+    "passed": 84,
+    "failed": 0,
+    "skipped": 0
+  },
+  "collected_tests": [
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_cdc_与实时事件推送_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_chat_对话与_turn_生命周期_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_pr_观测与反馈回路_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_会话创建全链路_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_会话生命周期与终止判定_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_工作流编排与执行绑定_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_接口切换_tui_chat_scenario.py",
+    "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_终端会话与_mux_scenario.py"
+  ]
+}

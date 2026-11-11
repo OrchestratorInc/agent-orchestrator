@@ -2,6 +2,7 @@
 backend/internal/httpd/apispec/openapi.yaml text eol=lf
 frontend/src/api/schema.ts text eol=lf
 frontend/src/renderer/routeTree.gen.ts text eol=lf
+tests/oracle/** text eol=lf
 # Vitest 处理 shebang 时需要 LF，防止 Windows checkout 后导入脚本失败。
 frontend/scripts/build-mac-dmg.mjs text eol=lf
 frontend/scripts/verify-mac-artifact.sh text eol=lf

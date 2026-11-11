@@ -1,0 +1,116 @@
+{
+  "schema_version": "business-quality-gate-v1",
+  "run_id": "bug-scheduler-fence-unrecovered-20261109c",
+  "evidence_level": "code-verified",
+  "sdd_mode": "declared-none",
+  "inputs": {
+    "source_sdd_hash": "",
+    "source_kb_hash": "sha256:e14be6b26bafb55f40c5ba63c3f11f0d62ca2c14bd7ca03af81f18618c649b6d",
+    "target_code_hash": "sha256:4d1a6cc4a6c81ad385f465f49a8dba1ac9f57e01131329dc6cde3736df1fc40c"
+  },
+  "steps": {
+    "contract_extract": {
+      "command": [
+        "<no-sdd-declared>"
+      ],
+      "command_sha256": "",
+      "exit_code": 0,
+      "stdout_sha256": "",
+      "stderr_sha256": "",
+      "declared_skipped": true
+    },
+    "scenario_extract": {
+      "command": [
+        "D:\\tool\\python\\python.exe",
+        "E:\\code\\agent-orchestrator\\.skill-chain-workshop\\skills\\scenario-oracle-builder\\scripts\\extract.py",
+        "--kb",
+        "E:\\code\\agent-orchestrator\\docs\\project-note\\03-核心数据业务流",
+        "--output-dir",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario",
+        "--project-root",
+        "E:\\code\\agent-orchestrator"
+      ],
+      "command_sha256": "sha256:d13d260fad36a6c36a8a4efbd54a1cdd426d9dab2ca72c7aa78a7619fb9c03b1",
+      "exit_code": 0,
+      "stdout_sha256": "sha256:f5307c2f5ad23aa2f27d64597286864331949401637ba71d0f52104ef788892a",
+      "stderr_sha256": "sha256:0495ea394382f5cb73065c6575962efc694c760396f5b9f403ff2a9044204f02"
+    },
+    "pytest": {
+      "command": [
+        "D:\\tool\\python\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_cdc_与实时事件推送_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_chat_对话与_turn_生命周期_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_pr_观测与反馈回路_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_会话创建全链路_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_会话生命周期与终止判定_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_工作流编排与执行绑定_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_接口切换_tui_chat_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_终端会话与_mux_scenario.py"
+      ],
+      "command_sha256": "sha256:029dbce74d477fc0136e56248dadb4bf9f3722a594ec6984163449e2818fad83",
+      "exit_code": 0,
+      "stdout_sha256": "sha256:be2672d6ab5f2a6d52b733193835ad603f0d1e659ca2f528443a6bd3efb2ff5c",
+      "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "schema_version": "pytest-results-v1",
+      "run_id": "bug-scheduler-fence-unrecovered-20261109c",
+      "raw_exit_code": 0,
+      "summary": {
+        "passed": 84,
+        "failed": 0,
+        "skipped": 0
+      },
+      "collected_tests": [
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_cdc_与实时事件推送_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_chat_对话与_turn_生命周期_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_pr_观测与反馈回路_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_会话创建全链路_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_会话生命周期与终止判定_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_工作流编排与执行绑定_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_接口切换_tui_chat_scenario.py",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c\\scenario\\test_终端会话与_mux_scenario.py"
+      ]
+    },
+    "real_verification": {
+      "command": [
+        "<redacted-verify-command>"
+      ],
+      "command_sha256": "sha256:1c9caf2d7626a0fcf8d1974077bb6644ba68c7bec88c4319f4dd1e97e661732e",
+      "exit_code": 0,
+      "stdout_sha256": "sha256:f2cd0431bdf06b653cf35050df18927f61ee93e71e2d7addad163e1d519a2ab0",
+      "stderr_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "evidence_sha256": "sha256:12e8772ca1f674c332f9ea2d85d294270a814092d56fbd62964fad10496558ae",
+      "evidence_valid": true
+    },
+    "engine": {
+      "command": [
+        "D:\\tool\\python\\python.exe",
+        "E:\\code\\agent-orchestrator\\.skill-chain-workshop\\skills\\ai-quality-engine\\scripts\\ai-quality-check.py",
+        "check",
+        "E:\\code\\agent-orchestrator\\backend\\internal\\storage\\sqlite\\store\\execution_permit_store.go",
+        "E:\\code\\agent-orchestrator\\backend\\internal\\storage\\sqlite\\store\\execution_restart_store.go",
+        "--profile",
+        "code-verified",
+        "--oracle-dir",
+        "E:\\code\\agent-orchestrator\\tests\\oracle\\bug-scheduler-fence-unrecovered-20261109c",
+        "--strict-gate",
+        "--format",
+        "json"
+      ],
+      "command_sha256": "sha256:046c069e96e66f61ee61e45f324836aa002497a25a83cd8a0a8ee76c9f0b967e",
+      "exit_code": 2,
+      "stdout_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "sha256:5d31c45e6e624b29fe2cf65e61a0a2a88d2ac2442d9fc4d0f804af5ac95b5a51"
+    }
+  },
+  "engine": null,
+  "gate": {
+    "verdict": "BLOCK",
+    "reasons": [
+      "engine_output_invalid"
+    ],
+    "blocking_findings": []
+  }
+}
