@@ -68,6 +68,7 @@ const shellMocks = vi.hoisted(() => {
 			return vi.fn();
 		}),
 		resolveQuitConfirm: vi.fn(),
+		reportSessionsShown: vi.fn(),
 		onNewShellTerminalShortcut: vi.fn((listener: () => void) => {
 			state.newShellTerminalListener = listener;
 			return vi.fn();
@@ -161,6 +162,7 @@ vi.mock("../lib/bridge", () => ({
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
 			onQuitConfirmRequest: shellMocks.onQuitConfirmRequest,
 			resolveQuitConfirm: shellMocks.resolveQuitConfirm,
+			reportSessionsShown: shellMocks.reportSessionsShown,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
 			onOpenSettingsShortcut: shellMocks.onOpenSettingsShortcut,
 			onPreviousSessionShortcut: shellMocks.onPreviousSessionShortcut,
@@ -501,6 +503,21 @@ describe("shell workspace startup", () => {
 	beforeAll(async () => {
 		await import("../components/chat/OrchestratorStartingChat");
 	});
+	it("reports the first frame that shows the workspace, for launch timing", async () => {
+		shellMocks.reportSessionsShown.mockClear();
+		await renderShell();
+		await waitFor(() => expect(shellMocks.reportSessionsShown).toHaveBeenCalledTimes(1));
+	});
+
+	it("reports no frame while the startup loader is up", async () => {
+		shellMocks.reportSessionsShown.mockClear();
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		await renderShell();
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(shellMocks.reportSessionsShown).not.toHaveBeenCalled();
+	});
+
 	it("rechecks a connected host when its session queries fail", async () => {
 		useUiStore.setState({ developerMode: true, remoteHosts: true });
 		const view = await renderShell();

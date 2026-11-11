@@ -62,6 +62,7 @@ import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
 import { cliShadowEnabled } from "./shared/cli-shadow";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
+import { createLaunchTiming } from "./main/launch-timing";
 import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -350,6 +351,7 @@ app.setPath(
 // Resolve once against the launch cwd, before the daemon can chdir. The exact
 // absolute value is shared by policy bootstrap and every daemon spawn.
 const desktopLaunchWorkingDirectory = process.cwd();
+const launchTiming = createLaunchTiming(process.getCreationTime() ?? performance.timeOrigin);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
@@ -795,6 +797,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
+	if (nextStatus.state === "ready") launchTiming.mark("daemonReady");
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
@@ -1260,6 +1263,7 @@ async function createWindowInternal(): Promise<void> {
 		establishBrowserStreamLink();
 	}
 
+	mainWindow.once("show", () => launchTiming.mark("windowShown"));
 	showWhenRendererLoaded(mainWindow, shellWebContents);
 	void shellWebContents.loadURL(rendererUrl());
 
@@ -3896,6 +3900,16 @@ ipcMain.handle(
 
 // The renderer could not decode or start the bundled sound. Beep so the
 // notification still makes a sound where the OS beep works at all.
+// The shell reports the first frame that shows the workspace, which ends the
+// launch. Logged once: a reload reports the frame again.
+let launchTimingLogged = false;
+ipcMain.on("app:sessionsShown", (event) => {
+	if (event.sender !== getShellWebContents() || launchTimingLogged) return;
+	launchTimingLogged = true;
+	launchTiming.mark("sessionsShown");
+	console.info(launchTiming.line());
+});
+
 ipcMain.on("notifications:soundFailed", (event) => {
 	if (event.sender !== getShellWebContents()) return;
 	shell.beep();
@@ -4257,6 +4271,7 @@ async function writeAppStateOnLaunch(): Promise<void> {
 
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
+	launchTiming.mark("appReady");
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	void refreshGitHubOwners();
