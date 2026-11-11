@@ -22,6 +22,8 @@ export type SpawnComposerProps = {
 	onChangePrompt: (value: string) => void;
 	/** Names who will answer, as a conversation's field does: "Ask Codex". */
 	placeholder: string;
+	/** What goes with the task, drawn inside the pill over the field. */
+	attachments?: ReactNode;
 	/** Who runs the task and how freely: the controls row's content. */
 	settings: ReactNode;
 	onChoosePhoto: () => void;
@@ -34,12 +36,12 @@ export type SpawnComposerProps = {
 
 /**
  * The new task's composer, drawn as the chat's open card (`ChatComposer`):
- * the field over a controls row of who runs the task and how freely, between
+ * picked attachments over the field, the field over a controls row of who runs the task and how freely, between
  * attach and the round button. Unlike the chat's it never folds to a pill: the
  * page is for choosing who runs the task, so the model, effort and approval
  * stay in sight while the field is empty and unfocused.
  */
-export function SpawnComposer({ prompt, onChangePrompt, placeholder, settings, onChoosePhoto, onChooseFile, voice, onSpawn, busy, disabled }: SpawnComposerProps) {
+export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, voice, onSpawn, busy, disabled }: SpawnComposerProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
@@ -106,6 +108,7 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, settings, o
 	return (
 		<View style={styles.composer}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
+			{attachments}
 			<View style={[styles.composerRow, dictating ? styles.dictationInsets : styles.fieldInsets]}>
 				{/* While the mic is open the dictation takes the field's place, as
 				    in the chat's composer; the field waits hidden with the prompt. */}
