@@ -49,9 +49,11 @@ describe("ChatImage copy and save", () => {
 		expect(toast).not.toHaveBeenCalled();
 	});
 
-	it("copies an external image fetched by the main process", async () => {
+	it.each([
+		"https://example.com/image.png",
+		"https://localhost:4443/image.png",
+	])("copies %s through the main process, outside the renderer's connect-src", async (external) => {
 		const user = userEvent.setup();
-		const external = "https://example.com/image.png";
 		const mainFetch = vi.spyOn(aoBridge.chatImage, "fetch").mockResolvedValue({ bytes: png, mimeType: "image/png" });
 		const writeImage = vi.spyOn(aoBridge.clipboard, "writeImage").mockResolvedValue(undefined);
 		render(<ChatImage src={external} alt="External" />);
@@ -71,9 +73,9 @@ describe("ChatImage copy and save", () => {
 		await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith({ name: "attachment-1.png", bytes: png }));
 	});
 
-	it("reports a failed copy", async () => {
+	it("refuses a loopback response that is not an image", async () => {
 		const user = userEvent.setup();
-		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Not an image"));
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html></html>", { headers: { "content-type": "text/html" } }));
 		const toast = vi.spyOn(useUiStore.getState(), "showGlobalToast");
 		useUiStore.setState({ showGlobalToast: toast });
 		render(<ChatImage src={url} alt="Image 1" />);

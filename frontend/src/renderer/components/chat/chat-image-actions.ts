@@ -1,15 +1,15 @@
 /**
  * Copy and save for a chat image's resolved URL.
  *
- * Loopback images (the daemon and remote-host proxies) load in CORS mode, so
- * the renderer reads them itself: the remote proxy rejects a main-process fetch
+ * Loopback images on the origins connect-src allows (http 127.0.0.1 and
+ * *.localhost: the daemon and remote-host proxies) load in CORS mode, so the
+ * renderer reads them itself: the remote proxy rejects a main-process fetch
  * because it carries Sec-Fetch-Site without Origin. Other http(s) images are
  * read by the main process (see `main/chat-image-ipc.ts`); inline `data:` and
  * `blob:` sources are read in place.
  */
 
 import { aoBridge } from "../../lib/bridge";
-import { mediaCrossOrigin } from "../../lib/file-media";
 
 const EXTENSION_BY_MIME: Record<string, string> = {
 	"image/png": "png",
@@ -25,12 +25,14 @@ type ImageBytes = { bytes: Uint8Array; mimeType: string };
 
 async function loadChatImage(url: string): Promise<ImageBytes> {
 	const resolved = new URL(url, window.location.href);
-	if ((resolved.protocol === "http:" || resolved.protocol === "https:") && !mediaCrossOrigin(resolved.toString())) {
+	const loopback = resolved.protocol === "http:" && (resolved.hostname === "127.0.0.1" || resolved.hostname.endsWith(".localhost"));
+	if ((resolved.protocol === "http:" || resolved.protocol === "https:") && !loopback) {
 		return aoBridge.chatImage.fetch(resolved.toString());
 	}
 	const response = await fetch(resolved);
 	if (!response.ok) throw new Error(`Image request failed (${response.status})`);
 	const blob = await response.blob();
+	if (loopback && !blob.type.startsWith("image/")) throw new Error("Not an image");
 	return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
 }
 
