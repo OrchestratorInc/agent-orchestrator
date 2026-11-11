@@ -631,6 +631,9 @@ function ghStep(args: string[]): CommandStep {
  */
 export function isOrchestratorPlumbing(activity: ConversationActivity): boolean {
 	const detail = activity.detail;
+	// A failed call keeps its row and its error. A running one stays hidden, or the
+	// row would show and then vanish when it finishes.
+	if (activity.status === "failed" || activity.status === "cancelled") return false;
 	if (activity.activityKind === "mcp_tool") {
 		if (detail?.providerToolName !== "Read" || !isRecord(detail.input)) return false;
 		const path = detail.input.file_path ?? detail.input.path;
@@ -670,9 +673,11 @@ function isPlumbingStage(segment: Segment): boolean {
 
 function guideReadOperands({ binary, args }: Segment): string[] {
 	if (binary === "sed") {
+		// Only a plain line-range print (`1,80p`) is known to just read; any other
+		// script could write (`w copy.md`), so it has no guide-only operands.
 		const hasScriptFlag = args.some((arg) => arg === "-e" || arg === "-f" || arg === "--expression" || arg === "--file");
-		const rest = positionals(args, SED_VALUE_FLAGS);
-		return hasScriptFlag ? rest : rest.slice(1);
+		const [script, ...files] = positionals(args, SED_VALUE_FLAGS);
+		return !hasScriptFlag && script && /^(?:\d+|\$)?(?:,(?:\d+|\$))?p$/.test(script) ? files : [];
 	}
 	const values = positionals(args, READER_VALUE_FLAGS[binary]);
 	return binary === "jq" ? values.slice(1) : values;

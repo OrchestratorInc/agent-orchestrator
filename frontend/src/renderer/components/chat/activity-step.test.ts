@@ -324,6 +324,10 @@ describe("Orchestrator CLI", () => {
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `source ./setup.sh && cat ${guide}` } }))).toBe(false);
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `. ./setup.sh; cat ${guide}` } }))).toBe(false);
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cd /tmp && cat ${guide}` } }))).toBe(true);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `sed -e 'w copy.md' ${guide}` } }))).toBe(false);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `sed 'w copy.md' ${guide}` } }))).toBe(false);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: "ao browser --help" }, status: "failed" }))).toBe(false);
+		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: `cat ${guide}` }, status: "running" }))).toBe(true);
 		expect(isOrchestratorPlumbing(commandActivity({ detail: { command: "ao preview README.md" } }))).toBe(false);
 		expect(isOrchestratorPlumbing(toolActivity("Read", "read", { file_path: "/w/app/README.md" }))).toBe(false);
 	});
