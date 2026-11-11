@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useImperativeHandle, useRef, useS
 import { Copy, ExternalLink, FileText, } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
-import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
+import { isSystemBrowserLink, isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { useLinkPreview } from "../hooks/useLinkPreview";
 import { observeLinkForPreload } from "../lib/link-preload";
 import { LinkPreviewHoverCard } from "./LinkPreviewCard";
@@ -20,9 +20,15 @@ import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 export const AppBrowserLinkContext = createContext<((url: string) => void) | undefined>(undefined);
 
 /** Shared web-link behavior; native fragments and special schemes retain their handlers. */
-export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, menuPath, onFileOpen, hoverPreview, ref, ...props }: ComponentProps<"a"> & {
+export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, systemBrowser, filePath, menuPath, onFileOpen, hoverPreview, ref, ...props }: ComponentProps<"a"> & {
 	onBrowserOpen?: (url: string) => void;
 	inAppLink?: (url: string) => boolean;
+	/**
+	 * Open every activation (click, modifier click, Enter, middle click, and the
+	 * hover card's links) in the OS browser and never in the Orchestrator
+	 * Browser. Schemes other than http(s) and mailto open nothing.
+	 */
+	systemBrowser?: boolean;
 	filePath?: string;
 	/** A displayed filesystem path whose click navigates elsewhere, such as an artifact link. */
 	menuPath?: string;
@@ -33,9 +39,9 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, men
 	const sessionBrowserOpen = useContext(AppBrowserLinkContext);
 	const pathMenuContext = useContext(ChatPathMenuContext);
 	const contextPath = menuPath ?? filePath;
-	const openBrowser = onBrowserOpen ?? sessionBrowserOpen;
+	const openBrowser = systemBrowser ? undefined : onBrowserOpen ?? sessionBrowserOpen;
 	const webLink = !!href && isWebLink(href);
-	const browserLink = !!href && (inAppLink?.(href) ?? webLink);
+	const browserLink = !systemBrowser && !!href && (inAppLink?.(href) ?? webLink);
 	const showBrowserAction = browserLink && !(contextPath && pathMenuContext);
 	const hasHoverPreview = webLink || Boolean(hoverPreview);
 	const [previewOpen, setPreviewOpen] = useState(false);
@@ -51,10 +57,23 @@ export function AppLink({ href, onClick, onBrowserOpen, inAppLink, filePath, men
 			href={href}
 			onClick={(event) => {
 				onClick?.(event);
-				if (event.defaultPrevented || !href || !browserLink) return;
+				if (event.defaultPrevented || !href) return;
+				if (systemBrowser) {
+					event.preventDefault();
+					if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
+					return;
+				}
+				if (!browserLink) return;
 				event.preventDefault();
 				if (openBrowser && (!webLink || (!event.ctrlKey && !event.metaKey && !event.altKey))) openBrowser(href);
 				else void openLinkInSystemBrowser(href);
+			}}
+			onAuxClick={(event) => {
+				onAuxClick?.(event);
+				// Middle click would otherwise open a window the shell routes on its own.
+				if (!systemBrowser || event.button !== 1 || event.defaultPrevented || !href) return;
+				event.preventDefault();
+				if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
 			}}
 		/>
 	);
