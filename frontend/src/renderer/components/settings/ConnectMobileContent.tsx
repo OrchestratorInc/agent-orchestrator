@@ -257,9 +257,7 @@ interface MobileStatus {
 	tailscaleHost: string;
 	port: number;
 	password: string;
-	/** The host refuses the pairing password: a device needs its own token or the account's. */
 	requireDeviceCredentials?: boolean;
-	/** When the pairing password last authenticated a remote request. */
 	passwordLastUsedAt?: string | null;
 	warning: string;
 	securePairing: {
@@ -621,10 +619,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const status = query.data;
 	const enabled = optimisticEnabled ?? status?.enabled ?? false;
-	// The QR and the code beside it carry a one-time pairing code, not the
-	// password that works until it is rotated. Settings prefetches it with the
-	// status, so the code is there on the first paint.
 	const devices = useQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices, enabled: active && status?.enabled === true });
+	// The QR carries this one-time code, not the password. Settings prefetches it for the first paint.
 	const pairingCode = useQuery({
 		queryKey: mobilePairingCodeQueryKey,
 		queryFn: fetchPairingCode,

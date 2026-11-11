@@ -54,11 +54,8 @@ export type RemotesIpcDeps = {
 	accountDirectoryTimeoutMs?: number;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
-	/** Exchanges a pairing code or the pairing password for this device's own token. */
 	pair?: (entry: Pick<RemoteEntry, "url" | "hostId">, secret: string, device: { name: string; platform: string }) => Promise<PairDeviceResult>;
-	/** The error code of the host's 401 for the entry's credential. */
 	authErrorCode?: (entry: RemoteEntry) => Promise<string | undefined>;
-	/** The name this device pairs under. */
 	deviceName?: () => Promise<string>;
 };
 
@@ -116,11 +113,8 @@ export function registerRemotesIpc(
 	// Hosts that answered they have no device tokens, and when to ask again.
 	const askAgainAt = new Map<string, number>();
 	const ASK_AGAIN_MS = 60 * 60_000;
-	/**
-	 * Exchanges a pairing code or the pairing password for this device's own
-	 * token. The caller has confirmed the host's identity. The password is kept
-	 * as the fallback; a pairing code is spent and is not.
-	 */
+	/** Swaps the saved secret for this device's own token. The caller has confirmed the
+	 * host. A password is kept as the fallback; a spent pairing code is not. */
 	const pairOwnToken = async (entry: RemoteEntry): Promise<{ entry: RemoteEntry; result: PairDeviceResult["kind"] }> => {
 		const result = await pair(entry, entry.password, { name: await deviceName(), platform: process.platform });
 		if (result.kind === "unsupported" && entry.hostId) askAgainAt.set(entry.hostId, Date.now() + ASK_AGAIN_MS);
@@ -174,8 +168,7 @@ export function registerRemotesIpc(
 			return "offline" as RemoteHealth;
 		}
 		refuseSelf(hostId, localHostId);
-		// What was typed is a one-time pairing code or the pairing password; a
-		// host with device tokens swaps either for this device's own token.
+		// A typed code or password is swapped for this device's own token when the host supports it.
 		const typed: RemoteEntry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account };
 		await checkConnectionContext(localHostId, account);
 		const paired = await pairOwnToken(typed);
@@ -196,7 +189,6 @@ export function registerRemotesIpc(
 		const editable: RemoteChanges = { label: changes.label, url: changes.url, password: changes.password };
 		const current = (await readRemotes(file)).find((entry) => entry.url === url);
 		if (editable.password !== undefined && current) {
-			// A newly typed code or password is swapped for this device's own token, as on add.
 			const typed: RemoteEntry = { ...current, url: editable.url ?? url, password: editable.password, fallbackPassword: undefined, sealedFallbackPassword: undefined };
 			const localHostId = await requireLocalIdentity();
 			refuseSelf(typed.hostId, localHostId);
@@ -240,9 +232,8 @@ export function registerRemotesIpc(
 			throw error;
 		}
 		let current = entry;
-		// The host no longer takes this device's token. Unless it says the device
-		// was removed, it is a release without device tokens, as after a
-		// rollback: the pairing password this device kept works there.
+		// Unless the host says the device was removed, a refused token means a release
+		// without device tokens, as after a rollback: the kept password works there.
 		if (health === "unauthorized" && current.fallbackPassword && current.password.startsWith(DEVICE_TOKEN_PREFIX)
 			&& await authErrorCode(current) !== "DEVICE_REVOKED") {
 			const previous: RemoteEntry = { ...current, password: current.fallbackPassword, fallbackPassword: undefined };
