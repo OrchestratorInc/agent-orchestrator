@@ -558,8 +558,8 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 		expect(screen.getByText("2 selected")).toBeInTheDocument();
 
-		// Focus returns to the Search icon, whose tooltip takes the next Escape.
-		expect(screen.getByRole("button", { name: "Search artifacts" })).toHaveFocus();
+		// Focus returns to the Search icon on the next frame; its tooltip takes the next Escape.
+		await waitFor(() => expect(screen.getByRole("button", { name: "Search artifacts" })).toHaveFocus());
 		await user.keyboard("{Escape}");
 		expect(screen.getByText("2 selected")).toBeInTheDocument();
 		await user.keyboard("{Escape}");

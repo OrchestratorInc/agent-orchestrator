@@ -106,6 +106,34 @@ export function useShareAvailable(): boolean {
 	return available;
 }
 
+/**
+ * Brings this computer's publish records up to date with the person's link
+ * list, then reads the artifact list again. Records from before links were
+ * kept with their URL name only the link's ID, and a link unpublished
+ * elsewhere keeps its URL until the list says otherwise; the daemon serves
+ * each artifact's shareUrl from those records, so until they are reconciled
+ * a published file reads as not shared, or an unpublished one as public.
+ * Runs once per mount, and again when sign-in or the control plane changes.
+ */
+export function useReconciledShareLinks(): void {
+	const available = useShareAvailable();
+	const { baseUrl, signedIn } = useShareAccess();
+	const queryClient = useQueryClient();
+	useEffect(() => {
+		if (!available || !signedIn) return;
+		let cancelled = false;
+		aoBridge.cloudShare.list(baseUrl)
+			.then(() => {
+				if (!cancelled) void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
+			})
+			// Offline or signed out: the records stay as they are until the next list.
+			.catch(() => undefined);
+		return () => {
+			cancelled = true;
+		};
+	}, [available, signedIn, baseUrl, queryClient]);
+}
+
 /** The control plane URL and whether the person is signed in to share. */
 export function useShareAccess(): { baseUrl: string; signedIn: boolean } {
 	const { settings } = useSettings();

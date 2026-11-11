@@ -4,8 +4,9 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
-import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, useArtifactShareFile } from "./ShareArtifactPopover";
+import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
@@ -438,5 +439,36 @@ describe("useArtifactShareFile", () => {
 		expect(result.current).toEqual({ sessionId: "sess-1", path: "final/report.html", projectId: "proj-1", artifactId: "art-1" });
 		const untracked = renderHook(() => useArtifactShareFile({ sessionId: "sess-1", path: "notes.md", projectId: "proj-1" }), { wrapper });
 		expect(untracked.result.current).not.toHaveProperty("artifactId");
+	});
+});
+
+describe("useReconciledShareLinks", () => {
+	const render = () => {
+		const client = new QueryClient();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		renderHook(() => useReconciledShareLinks(), { wrapper });
+		return invalidate;
+	};
+
+	it("reconciles the publish records with the link list, then reads the artifacts again", async () => {
+		mocks.baseUrl = "https://reconcile.test";
+		vi.spyOn(aoBridge.cloudShare, "available").mockResolvedValue(true);
+		const list = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		const invalidate = render();
+		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeyForHost() }));
+		expect(list).toHaveBeenCalledExactlyOnceWith("https://reconcile.test");
+	});
+
+	it("asks for nothing while signed out", async () => {
+		mocks.baseUrl = "https://reconcile-signed-out.test";
+		mocks.status = "unauthenticated";
+		const available = vi.spyOn(aoBridge.cloudShare, "available").mockResolvedValue(true);
+		const list = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue(links);
+		const invalidate = render();
+		await waitFor(() => expect(available).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(list).not.toHaveBeenCalled();
+		expect(invalidate).not.toHaveBeenCalled();
 	});
 });

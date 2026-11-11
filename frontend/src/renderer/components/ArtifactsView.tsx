@@ -35,7 +35,7 @@ import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifact
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
-import { useArtifactShareFile } from "./ShareArtifactPopover";
+import { useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Checkbox } from "./ui/checkbox";
@@ -85,6 +85,9 @@ export function ArtifactsView() {
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
 	const orchestratorTitle = t("shell.orchestrator");
+	// Published marks and the Sharing filter read each file's shareUrl; bring
+	// the publish records behind it up to date first.
+	useReconciledShareLinks();
 	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? [], orchestratorTitle), [workspaces, orchestratorTitle]);
 	const [query, setQuery] = useState("");
 	// Each filter keeps several values at once; an empty list shows every artifact.
@@ -546,16 +549,12 @@ function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPr
 								</Tooltip>
 							) : null}
 						</span>
-						{/* "14h ago", and "Updated 14h ago" while the row is hovered or focused. */}
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<time dateTime={row.updatedAt} className="min-w-14 whitespace-nowrap text-right text-xs tabular-nums text-passive group-hover/artifact:text-foreground group-focus-within/artifact:text-foreground">
-									<span className="@lg:group-hover/artifact:hidden @lg:group-focus-within/artifact:hidden">{formatTimeCompact(row.updatedAt)}</span>
-									<span className="hidden @lg:group-hover/artifact:inline @lg:group-focus-within/artifact:inline">{t("shell.updatedAt", { time: formatTimeCompact(row.updatedAt) })}</span>
-								</time>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{new Date(row.updatedAt).toLocaleString()}</TooltipContent>
-						</Tooltip>
+						{/* "14h ago", and "Updated 14h ago" while the row is hovered or focused.
+						    A title, not a Tooltip: one per row costs too much to mount in a long list. */}
+						<time dateTime={row.updatedAt} title={new Date(row.updatedAt).toLocaleString()} className="min-w-14 whitespace-nowrap text-right text-xs tabular-nums text-passive group-hover/artifact:text-foreground group-focus-within/artifact:text-foreground">
+							<span className="@lg:group-hover/artifact:hidden @lg:group-focus-within/artifact:hidden">{formatTimeCompact(row.updatedAt)}</span>
+							<span className="hidden @lg:group-hover/artifact:inline @lg:group-focus-within/artifact:inline">{t("shell.updatedAt", { time: formatTimeCompact(row.updatedAt) })}</span>
+						</time>
 					</div>
 					{selection ? null : <div className="relative z-[2] flex shrink-0 items-center gap-1 @max-lg:[&>button]:hidden">
 						{row.bundle ? null : <DeferredArtifactActionsMenu
