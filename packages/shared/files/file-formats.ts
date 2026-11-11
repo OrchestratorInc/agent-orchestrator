@@ -45,6 +45,8 @@ export function parseDelimitedText(content: string, path: string): string[][] {
 	let row: string[] = [];
 	let cell = "";
 	let quoted = false;
+	// A quoted field begun on this line: `""` is a field even though it is empty.
+	let fieldStarted = false;
 	for (let index = 0; index < text.length; index += 1) {
 		const char = text[index];
 		if (quoted) {
@@ -56,6 +58,7 @@ export function parseDelimitedText(content: string, path: string): string[][] {
 		} else if (char === "\"" && cell.trim() === "") {
 			// A quote after only whitespace (`a, "b,c"`) still opens a quoted field.
 			quoted = true;
+			fieldStarted = true;
 			cell = "";
 		} else if (char === delimiter) {
 			row.push(cell);
@@ -66,11 +69,12 @@ export function parseDelimitedText(content: string, path: string): string[][] {
 			rows.push(row);
 			row = [];
 			cell = "";
+			fieldStarted = false;
 		} else {
 			cell += char;
 		}
 	}
-	if (cell !== "" || row.length > 0) {
+	if (cell !== "" || row.length > 0 || fieldStarted) {
 		row.push(cell);
 		rows.push(row);
 	}
