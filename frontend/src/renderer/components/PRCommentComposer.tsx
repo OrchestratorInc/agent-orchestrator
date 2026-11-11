@@ -69,8 +69,6 @@ export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = ""
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileRef = useRef<HTMLInputElement>(null);
 	// The latest text, for uploads that finish after more typing.
-	const valueRef = useRef(value);
-	valueRef.current = value;
 	// Opened to write, with the caret after any text it starts with (a quote and @mention).
 	useEffect(() => {
 		if (!autoFocus) return;
@@ -96,22 +94,28 @@ export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = ""
 	const link = () => apply((v, s, e) => insertLink(v, s, e, t("pr.comments.format.linkPlaceholder")));
 
 	const attach = async (files: File[]) => {
-		if (!upload || files.length === 0) return;
+		// While a comment posts, its text is already sent: a file added now would be lost.
+		if (!upload || files.length === 0 || busy) return;
 		setUploadError(null);
-		for (const file of files) {
-			if (file.size > PR_ATTACHMENT_MAX_BYTES) {
-				setUploadError(t("pr.comments.attach.tooLarge", { name: file.name }));
-				continue;
-			}
-			const image = file.type.startsWith("image/");
-			const holder = `${image ? "!" : ""}[${t("pr.comments.attach.uploading", { name: file.name })}]()`;
-			const element = textareaRef.current;
-			const at = element ? element.selectionEnd : valueRef.current.length;
-			const current = valueRef.current;
+		const accepted = files.filter((file) => {
+			if (file.size <= PR_ATTACHMENT_MAX_BYTES) return true;
+			setUploadError(t("pr.comments.attach.tooLarge", { name: file.name }));
+			return false;
+		});
+		if (accepted.length === 0) return;
+		const holders = accepted.map((file) => `${file.type.startsWith("image/") ? "!" : ""}[${t("pr.comments.attach.uploading", { name: file.name })}]()`);
+		// Every file holds its place before any upload finishes, so a finished link
+		// never shifts where the next placeholder goes.
+		const caret = textareaRef.current?.selectionEnd;
+		setValue((current) => {
+			const at = caret === undefined ? current.length : Math.min(caret, current.length);
 			const before = current.slice(0, at);
 			const spacer = before && !before.endsWith("\n") ? "\n" : "";
-			setValue(`${before}${spacer}${holder}\n${current.slice(at)}`);
-			setUploading((count) => count + 1);
+			return `${before}${spacer}${holders.join("\n")}\n${current.slice(at)}`;
+		});
+		setUploading((count) => count + accepted.length);
+		for (const [index, file] of accepted.entries()) {
+			const holder = holders[index]!;
 			try {
 				const markdown = await upload({ name: file.name, contentType: file.type || "application/octet-stream", data: await readAsBase64(file) });
 				setValue((text) => text.replace(holder, markdown));
@@ -156,7 +160,7 @@ export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = ""
 	const onDrop = (event: DragEvent<HTMLDivElement>) => {
 		setDragging(false);
 		const files = Array.from(event.dataTransfer.files);
-		if (!upload || files.length === 0) return;
+		if (!upload || files.length === 0 || busy) return;
 		event.preventDefault();
 		void attach(files);
 	};
@@ -211,7 +215,7 @@ export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = ""
 							{submitLabel}
 						</Button>
 						{upload ? (
-							<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} title={t("pr.comments.simpleHint")} type="button">
+							<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50" disabled={busy} onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} title={t("pr.comments.simpleHint")} type="button">
 								{uploading > 0 ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <Paperclip aria-hidden="true" className="size-icon-xs" />}
 								{t("pr.comments.attach.short")}
 							</button>

@@ -74,6 +74,8 @@ import { SessionInspector } from "./SessionInspector";
 import { PRTabChip, PRTabPane } from "./PRTabPane";
 import { activatePRTab, closePRTab, deactivatePRTab, prTabKey, prTabUrl, usePRTabs, type PRTabsState } from "../lib/pr-tabs";
 import { usePRViewEnabled } from "../lib/pr-view";
+import { sessionPRDisplaySummaries } from "../lib/pr-display";
+import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
@@ -672,7 +674,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const prTabs = prView ? prTabState : NO_PR_TABS;
 	const activePRUrl = prTabs.active ?? undefined;
 	// A PR that left the session (moved to another session) takes its tab with it.
-	const sessionPRUrls = session?.prs.map((facts) => facts.url).join("\n");
+	// The PRs are the ones the inspector shows, its summary as well as the
+	// session's facts, so a PR the summary found first keeps the tab it opened.
+	// Nothing closes until the summary has loaded.
+	const prSummaryQuery = useSessionScmSummary(session?.id, prView && Boolean(session) && !session?.cloud, undefined, false, hostId);
+	const prSummaries = prSummaryQuery.data?.prs;
+	const sessionPRUrls = session && prSummaries ? sessionPRDisplaySummaries(session, prSummaries).map((pr) => pr.url).join("\n") : undefined;
 	useEffect(() => {
 		if (sessionPRUrls === undefined) return;
 		const urls = new Set(sessionPRUrls.split("\n"));

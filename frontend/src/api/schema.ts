@@ -16328,9 +16328,9 @@ export interface operations {
     };
     getPRStack: {
         parameters: {
-            query?: {
+            query: {
                 /** @description The pull request's URL. */
-                prUrl?: string;
+                prUrl: string;
             };
             header?: never;
             path: {

@@ -572,6 +572,8 @@ const SummaryView = memo(function SummaryView({
 			comments={prView && focusedPR && !session.cloud ? (
 				<PRComments
 					hostId={hostId}
+					// A draft belongs to its PR: picking another PR starts a new one.
+					key={prFocusKey(focusedPR)}
 					onViewInDiff={onOpenReviewFile}
 					pr={focusedPR}
 					preview={{ count: SUMMARY_COMMENTS_SHOWN, onViewAll: () => openPRTab(sessionUiKey(session.id, hostId), focusedPR.url, "comments") }}

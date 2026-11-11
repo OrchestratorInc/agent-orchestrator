@@ -1,4 +1,6 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
+import { noPRDetails } from "../lib/pr-display";
+import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -958,6 +960,31 @@ function render(ui: ReactNode) {
 	};
 }
 
+/** A PR the session's summary reports, as the inspector reads it. */
+function prSummaryFixture(number: number, url: string): SessionPRSummary {
+	return {
+		...noPRDetails(),
+		url,
+		htmlUrl: url,
+		number,
+		title: `PR ${number}`,
+		state: "open",
+		provider: "github",
+		repo: "acme/app",
+		author: "ada",
+		sourceBranch: `feat/${number}`,
+		targetBranch: "main",
+		headSha: `sha-${number}`,
+		additions: 1,
+		deletions: 0,
+		changedFiles: 1,
+		ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
+		review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		mergeability: { state: "mergeable", reasons: [], prUrl: url, conflictFiles: [] },
+		updatedAt: "2026-06-15T12:00:00Z",
+	};
+}
+
 describe("SessionView", () => {
 	function inspectorWidthVariable() {
 		return screen
@@ -1114,6 +1141,25 @@ describe("SessionView", () => {
 		} finally {
 			resetPRTabs();
 			worker.prs = [];
+		}
+	});
+
+	it("keeps the tab of a PR the summary found before the session's facts did", async () => {
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/9";
+		const defaultGet = reviewGetMock.getMockImplementation()!;
+		reviewGetMock.mockImplementation(async (path: string, ...args: unknown[]) => path === "/api/v1/sessions/{sessionId}/pr"
+			? { data: { prs: [prSummaryFixture(9, url)], linkedPrs: [] }, error: undefined }
+			: defaultGet(path, ...args));
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			await waitFor(() => expect(reviewGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/pr", expect.anything()));
+			// The workspace facts don't list PR #9 yet; its tab stays open.
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
+		} finally {
+			resetPRTabs();
 		}
 	});
 

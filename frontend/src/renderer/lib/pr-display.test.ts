@@ -382,6 +382,12 @@ describe("prCardPresentation", () => {
 		expect(explained({ review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] } })).toBe(true);
 		// GitHub blocks it for a reason no row names, such as a branch rule.
 		expect(explained({ mergeability: { state: "blocked", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } })).toBe(false);
+		// A passing row doesn't say why the checks are unknown.
+		expect(explained({
+			ci: { autoInjectCI: true, state: "unknown", failingChecks: [], checks: [] },
+			mergeability: { state: "mergeable", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" },
+			review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		})).toBe(false);
 	});
 
 	it("shows checking merge readiness while provider state is pending", () => {
@@ -564,6 +570,8 @@ describe("prCheckedOut", () => {
 
 	it("is false on another branch, and true until the branch is observed", () => {
 		expect(prCheckedOut(pr, branch({ head: "def", remoteBranch: "origin/ao/task/root" }))).toBe(false);
+		// A branch whose name only ends the same way is another branch.
+		expect(prCheckedOut(pr, branch({ head: "def", remoteBranch: "origin/team/lab/show" }))).toBe(false);
 		expect(prCheckedOut(pr, branch({ head: "def" }))).toBe(false);
 		expect(prCheckedOut(pr, undefined)).toBe(true);
 	});

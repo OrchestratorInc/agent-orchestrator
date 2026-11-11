@@ -1920,6 +1920,17 @@ describe("SessionInspector PR section", () => {
     expect(card().getByText("PR #42")).toBeInTheDocument();
   });
 
+  it("starts a fresh comment for each PR, so a draft never posts on another PR", async () => {
+    renderWithQuery(<SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />);
+    const comments = () => within(screen.getByTestId("pr-comments"));
+    await userEvent.click(comments().getByTestId("pr-comments-new"));
+    await userEvent.type(comments().getByRole("textbox", { name: "Leave a comment" }), "Only for 41");
+
+    await userEvent.click(within(screen.getByTestId("pr-pills")).getByRole("button", { name: /^#42/ }));
+    expect(within(screen.getByTestId("pr-card")).getByText("PR #42")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Only for 41")).not.toBeInTheDocument();
+  });
+
   it("opens a merged PR from behind the earlier pill and gives it its own pill while it is on screen", async () => {
     renderWithQuery(<SessionInspector session={session([pr(40, "merged"), pr(41, "open")])} />);
     await userEvent.click(within(screen.getByTestId("pr-pills")).getByTestId("pr-pills-earlier"));

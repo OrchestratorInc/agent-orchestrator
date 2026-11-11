@@ -5546,6 +5546,7 @@ paths:
       - description: The pull request's URL.
         in: query
         name: prUrl
+        required: true
         schema:
           description: The pull request's URL.
           type: string

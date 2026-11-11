@@ -67,7 +67,9 @@ export function prBrowserUrl(pr: SessionPRSummary): string {
  */
 export function prCheckedOut(pr: SessionPRSummary, branch: SessionBranchState | undefined): boolean {
 	if (!branch) return true;
-	return branch.head === pr.headSha || Boolean(pr.sourceBranch && branch.remoteBranch?.endsWith(`/${pr.sourceBranch}`));
+	// remoteBranch names the remote first: "origin/feat/x".
+	const pushed = branch.remoteBranch?.slice(branch.remoteBranch.indexOf("/") + 1);
+	return branch.head === pr.headSha || Boolean(pr.sourceBranch && pushed === pr.sourceBranch);
 }
 
 /** A review comment on the provider's diff, where GitHub's own link lands on the conversation. */
@@ -314,8 +316,9 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 		}
 		const checkingReadiness = pr.ci.state === "pending" || pr.ci.state === "unknown" || pr.mergeability.state === "unknown";
 		// A failing check or a conflict says it can't merge, and a green Merge button says it can.
+		// A passing row ("No conflicts") doesn't say why readiness is unknown.
 		const readinessExplained = checkingReadiness
-			? readinessRows.some((row) => row.tone !== "passive")
+			? readinessRows.some((row) => row.tone !== "passive" && row.tone !== "success")
 			: mergeable || readinessRows.some((row) => row.tone === "error" || row.tone === "warning" || row.tone === "review");
 		return { primary, supporting, statusRows, readinessRows, readinessExplained, readiness: {
 			label: appI18n.t(checkingReadiness ? "pr.merge.checkingReadiness" : mergeable ? "pr.merge.mergeable" : "pr.merge.notMergeableYet"),

@@ -2938,7 +2938,7 @@ type PRStackParentResponse struct {
 
 // PRStackQuery is the query of GET /api/v1/prs/{id}/stack.
 type PRStackQuery struct {
-	PRURL string `query:"prUrl" description:"The pull request's URL."`
+	PRURL string `query:"prUrl" required:"true" description:"The pull request's URL."`
 }
 
 // GetPRStackResponse is the body of GET and POST /api/v1/prs/{id}/stack. Neither

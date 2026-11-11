@@ -43,7 +43,7 @@ function imageAsMarkdown(tag: string): string {
  */
 export function descriptionMarkdown(pr: SessionPRSummary): string {
 	const body = withoutRawHtml(pr.description ?? "").trim().replace(/\n{3,}/g, "\n\n");
-	const withoutHeading = body.replace(/^#{1,6}[ \t]+[^\n]*(\n+|$)/, "").trimStart();
+	const withoutHeading = body.replace(/^#{1,6}[ \t]+(?:pr[ \t]+)?(?:summary|description)[ \t]*:?[ \t]*#*[ \t]*(\n+|$)/i, "").trimStart();
 	return withoutHeading || body;
 }
 

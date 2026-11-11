@@ -76,6 +76,28 @@ describe("PRCommentComposer", () => {
 		expect(upload).not.toHaveBeenCalled();
 	});
 
+	it("keeps each finished link when several files are attached at once", async () => {
+		const upload = vi.fn(async ({ name }: { name: string }) => `![${name}](https://example.com/${name})`);
+		const { box } = renderComposer({ upload });
+		const files = ["one.png", "two.png"].map((name) => new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" }));
+		await userEvent.upload(screen.getByTestId("pr-comment-file"), files);
+
+		await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(box.value).toContain("![two.png](https://example.com/two.png)"));
+		expect(box.value).toContain("![one.png](https://example.com/one.png)");
+		expect(box.value).not.toContain("Uploading");
+	});
+
+	it("takes no file while the comment posts", () => {
+		const upload = vi.fn(async () => "");
+		renderComposer({ busy: true, upload });
+		expect(screen.getByRole("button", { name: "Attach" })).toBeDisabled();
+
+		const file = new File([new Uint8Array([1])], "late.png", { type: "image/png" });
+		fireEvent.drop(screen.getByTestId("pr-comment-composer"), { dataTransfer: { files: [file], types: ["Files"] } });
+		expect(upload).not.toHaveBeenCalled();
+	});
+
 	it("has no Attach without an upload", () => {
 		renderComposer();
 		expect(screen.queryByRole("button", { name: /Attach/ })).not.toBeInTheDocument();

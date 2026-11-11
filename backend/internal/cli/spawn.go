@@ -121,8 +121,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				if opts.kind == "orchestrator" {
 					return usageError{fmt.Errorf("standalone sessions must be workers")}
 				}
-				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
-					return usageError{fmt.Errorf("standalone sessions do not support --branch, --issue, or --claim-pr")}
+				if strings.TrimSpace(opts.branch) != "" || strings.TrimSpace(opts.baseBranch) != "" || strings.TrimSpace(opts.issue) != "" || strings.TrimSpace(opts.claimPR) != "" {
+					return usageError{fmt.Errorf("standalone sessions do not support --branch, --base, --issue, or --claim-pr")}
 				}
 				if strings.TrimSpace(opts.harness) == "" {
 					return usageError{fmt.Errorf("--agent is required with --standalone")}
@@ -158,6 +158,9 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			if isScratchProject(project) {
 				if strings.TrimSpace(opts.branch) != "" {
 					return usageError{fmt.Errorf("scratch projects do not support --branch")}
+				}
+				if strings.TrimSpace(opts.baseBranch) != "" {
+					return usageError{fmt.Errorf("scratch projects do not support --base")}
 				}
 				if strings.TrimSpace(opts.claimPR) != "" {
 					return usageError{fmt.Errorf("scratch projects do not support --claim-pr")}

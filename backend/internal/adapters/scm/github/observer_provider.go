@@ -444,7 +444,7 @@ author{ login avatarUrl }
 mergeCommit{ oid }
 commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONTEXT_LIMIT){ nodes{
   __typename
-  ... on CheckRun { `+checkRunFields+` }
+  ... on CheckRun { ` + checkRunFields + ` }
   ... on StatusContext { context state targetUrl }
 } pageInfo{ hasNextPage endCursor } } } } } }
 `)

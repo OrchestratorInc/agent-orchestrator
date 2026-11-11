@@ -52,6 +52,12 @@ describe("PRDescriptionBody", () => {
     expect(screen.getByRole("heading", { name: "Testing" })).toBeInTheDocument();
   });
 
+  it("keeps an opening heading that says something of its own", () => {
+    renderDescription(loaded({ description: "## Breaking changes\n\nThe old flag is gone." }));
+    expect(screen.getByRole("heading", { name: "Breaking changes" })).toBeInTheDocument();
+    expect(screen.getByText("The old flag is gone.")).toBeInTheDocument();
+  });
+
   it("shows raw HTML as its text, keys as code, and leaves code spans alone", () => {
     const { container } = renderDescription(loaded({
       description: "Press <kbd>⌘K</kbd> to open <b>Search</b>.<!-- template hint -->\n\nUse `<div>` here.\n\n```\n<span>kept</span>\n```",
