@@ -46,6 +46,9 @@ var ReviewerAllowedTools = []string{
 // misbehaving model cannot edit files or move the branch even if a future
 // allowlist entry would otherwise admit it.
 var ReviewerDisallowedTools = []string{
+	// A reviewer needs no MCP tool, and the user's Claude config may allow one
+	// that writes; an allow rule would approve it without reaching AO.
+	"mcp__*",
 	"Edit",
 	"Write",
 	"NotebookEdit",
@@ -74,11 +77,12 @@ const reviewerSubmitJSONLiteral = `'[^']*(?:(?:'\\''|'"'"')[^']*)*'`
 // and a single-quoted operand cannot expand or run anything.
 var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewerSubmitJSONLiteral + ` \| (?:` +
 	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
-	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews -)$`)
+	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*) --reviews -)$`)
 
 // ReviewerSubmitCommandAllowed reports whether a reviewer's Bash command is one
 // of the exact submit shapes the review prompt dictates. The `ao review submit`
-// shape must name workerSessionID; an empty workerSessionID means a broken
+// shape must name workerSessionID (dotted like the project id it inherits); an
+// empty workerSessionID means a broken
 // launch (the launcher always sets it), so nothing is admitted.
 func ReviewerSubmitCommandAllowed(command, workerSessionID string) bool {
 	m := reviewerSubmitCommandPattern.FindStringSubmatch(strings.TrimSpace(command))

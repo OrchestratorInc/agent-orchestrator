@@ -110,10 +110,12 @@ func TestLiveClaudeACPReadOnlyRejectsWrites(t *testing.T) {
 	if os.Getenv("AO_LIVE_CLAUDE_ACP") != "1" {
 		t.Skip("set AO_LIVE_CLAUDE_ACP=1 to run against the local Claude Code account")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	workspace := t.TempDir()
-	git := func(args ...string) string {
+	git := func(ctx context.Context, args ...string) string {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-c", "user.name=AO", "-c", "user.email=ao@example.invalid"}, args...)...)
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "user.name=AO", "-c", "user.email=ao@example.invalid"}, args...)...)
 		cmd.Dir = workspace
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -121,17 +123,15 @@ func TestLiveClaudeACPReadOnlyRejectsWrites(t *testing.T) {
 		}
 		return strings.TrimSpace(string(out))
 	}
-	git("init", "-q")
+	git(ctx, "init", "-q")
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	git("add", "README.md")
-	git("commit", "-q", "-m", "init")
-	head := git("rev-parse", "HEAD")
+	git(ctx, "add", "README.md")
+	git(ctx, "commit", "-q", "-m", "init")
+	head := git(ctx, "rev-parse", "HEAD")
 
 	driver := New(claudecode.New(), nil, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
 	dataDir := t.TempDir()
 	t.Cleanup(func() { _ = persistenthost.Shutdown(context.Background(), dataDir, "live-claude-readonly") })
 	conversation, err := driver.Start(ctx, ports.ChatStartConfig{
@@ -195,10 +195,10 @@ func TestLiveClaudeACPReadOnlyRejectsWrites(t *testing.T) {
 	}
 	t.Logf("answer:\n%s", answer.String())
 
-	if status := git("status", "--porcelain", "--untracked-files=all"); status != "" {
+	if status := git(ctx, "status", "--porcelain", "--untracked-files=all"); status != "" {
 		t.Fatalf("read-only Chat changed the checkout:\n%s", status)
 	}
-	if got := git("rev-parse", "HEAD"); got != head {
+	if got := git(ctx, "rev-parse", "HEAD"); got != head {
 		t.Fatalf("read-only Chat moved HEAD from %s to %s", head, got)
 	}
 }

@@ -24,6 +24,9 @@ func TestReviewerSubmitCommandAllowed(t *testing.T) {
 		{"chained command", post("ok") + "; touch pwned", "w-1", false},
 		{"submit for the worker", submit("w-1"), "w-1", true},
 		{"submit for another worker", submit("w-2"), "w-1", false},
+		{"submit for a dotted worker id", submit("acme.dev-2"), "acme.dev-2", true},
+		{"submit for a dotted prefix of the worker", submit("acme.dev"), "acme.dev-2", false},
+		{"submit with a trailing dot", submit("acme."), "acme.", false},
 		{"launch without a worker", post("ok"), "", false},
 	}
 	for _, tt := range tests {
