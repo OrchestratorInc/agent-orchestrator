@@ -115,7 +115,11 @@ func (s *Service) resetEarly(ctx context.Context, store usageLimitStore, source 
 		return false, nil
 	}
 	_, limits, err := accounts.SessionLimits(ctx, source.HandledBySessionID, harness, false)
-	if err != nil || len(limits.Windows) == 0 || !limits.FetchedAt.After(*source.CompletedAt) {
+	if err != nil {
+		s.log.Debug("usage-limit account reading unavailable; waiting for turn reset", "session", source.HandledBySessionID, "error", err)
+		limits.Windows = nil
+	}
+	if len(limits.Windows) == 0 || !limits.FetchedAt.After(*source.CompletedAt) {
 		return false, nil
 	}
 	for _, w := range limits.Windows {
