@@ -128,3 +128,49 @@ func TestStopAgentsForQuitKeepsChatStoppedWhenItsOpenWorkCannotSettle(t *testing
 		t.Fatalf("a chat whose open work could not settle must stay stopped: %+v", got)
 	}
 }
+
+type resumedAfterListStore struct{ *fakeStore }
+
+func (s resumedAfterListStore) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	records, err := s.fakeStore.ListAllSessions(ctx)
+	for _, rec := range records {
+		resumed := s.sessions[rec.ID]
+		resumed.Metadata.ControllerGeneration = "gen-2"
+		s.sessions[rec.ID] = resumed
+	}
+	return records, err
+}
+
+func TestStopAgentsForQuitSleepsTheControllerItStopped(t *testing.T) {
+	manager, store, _, _ := newManager()
+	manager.store = resumedAfterListStore{store}
+	manager.chat = &quitStopLauncher{store: store, manager: manager}
+	store.sessions["mer-busy"] = domain.SessionRecord{
+		ID: "mer-busy", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{ProviderConversationID: "native-mer-busy", ControllerGeneration: "gen-1"},
+	}
+	if err := manager.StopAgentsForQuit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.sessions["mer-busy"]; got.HibernatedAt == nil || got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("a chat resumed after the quit listed it must still end asleep and idle: state=%s hibernatedAt=%v", got.Activity.State, got.HibernatedAt)
+	}
+}
+
+func TestStopAgentsForQuitKeepsChatStoppedWhenTheSleepMarkerCannotBeWritten(t *testing.T) {
+	manager, store, _, _ := newManager()
+	manager.chat = &quitStopLauncher{store: store, manager: manager}
+	store.hibernationCASConflicts = 3
+	store.sessions["mer-busy"] = domain.SessionRecord{
+		ID: "mer-busy", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{ProviderConversationID: "native-mer-busy", ControllerGeneration: "gen-1"},
+	}
+	if err := manager.StopAgentsForQuit(context.Background()); err == nil {
+		t.Fatal("quit hid a failed sleep marker write")
+	}
+	if got := store.sessions["mer-busy"]; got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited {
+		t.Fatalf("a chat without a sleep marker must stay stopped: state=%s hibernatedAt=%v", got.Activity.State, got.HibernatedAt)
+	}
+}

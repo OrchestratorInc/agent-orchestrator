@@ -40,9 +40,9 @@ func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 					}
 				}
 			} else {
-				_, stopErr = m.exitAgent(ctx, rec.ID, func() error {
-					if canSleepStoppedChat(rec) && m.settleAbandonedChatWork(ctx, rec.ID) {
-						return m.sleepStoppedChat(ctx, rec)
+				_, stopErr = m.exitAgent(ctx, rec.ID, func(exited domain.SessionRecord) error {
+					if canSleepStoppedChat(exited) && m.settleAbandonedChatWork(ctx, exited.ID) {
+						return m.sleepStoppedChat(ctx, exited)
 					}
 					return nil
 				})
@@ -71,7 +71,7 @@ func canSleepStoppedChat(rec domain.SessionRecord) bool {
 		strings.TrimSpace(rec.Metadata.ProviderConversationID) != ""
 }
 
-func (m *Manager) sleepStoppedChat(ctx context.Context, rec domain.SessionRecord) error {
+func (m *Manager) sleepStoppedChat(ctx context.Context, rec domain.SessionRecord) (err error) {
 	store, ok := m.store.(interface {
 		SetSessionHibernated(context.Context, domain.SessionID, int64, *time.Time) (bool, error)
 	})
@@ -87,6 +87,11 @@ func (m *Manager) sleepStoppedChat(ctx context.Context, rec domain.SessionRecord
 	}); err != nil {
 		return fmt.Errorf("sleep chat %s: %w", rec.ID, err)
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, m.recordAgentExited(context.WithoutCancel(ctx), rec))
+		}
+	}()
 	for range 3 {
 		current, found, err := m.store.GetSession(ctx, rec.ID)
 		if err != nil || !found || current.IsTerminated || current.HibernatedAt != nil {
