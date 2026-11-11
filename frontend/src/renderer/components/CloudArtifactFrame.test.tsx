@@ -61,9 +61,10 @@ describe("CloudArtifactFrame", () => {
 		mocks.status = 403;
 		const refused: string[] = [];
 		renderThumbnail((state) => refused.push(state));
-		await screen.findByText("fallback icon");
+		// The fallback shows while the status is pending too, so wait for the state itself.
+		await vi.waitFor(() => expect(refused.at(-1)).toBe("failed"));
 		expect(refused[0]).toBe("loading");
-		expect(refused.at(-1)).toBe("failed");
+		expect(screen.getByText("fallback icon")).toBeTruthy();
 	});
 
 	it("ignores frames of other sessions", async () => {
