@@ -747,6 +747,18 @@ describe("registerRemotesIpc", () => {
 			expect(pair).toHaveBeenCalledTimes(2);
 		});
 
+		it("pairs a newly typed code instead of reusing an earlier attempt's token", async () => {
+			const file = await tempFile();
+			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "pairing-code" }));
+			const answers: RemoteHealth[] = ["offline", "online"];
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async () => "h_new", probe: async () => answers.shift()!, pair });
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("offline");
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code5678" })).resolves.toBe("online");
+			expect(pair).toHaveBeenLastCalledWith(expect.anything(), "Code5678", expect.anything());
+			expect(pair).toHaveBeenCalledTimes(2);
+		});
+
 		it("never reuses another account's unsaved token", async () => {
 			const file = await tempFile();
 			let account = TEST_ACCOUNT;
