@@ -103,8 +103,15 @@ func TestReviewCommandLaunchesReadOnlyOffBypass(t *testing.T) {
 	if agent.got.SessionID != "review-w1" {
 		t.Fatalf("AO session id = %q, want review-w1", agent.got.SessionID)
 	}
-	if !contains(agent.got.AllowedTools, "Read") || !contains(agent.got.AllowedTools, "Bash(ao review submit:*)") {
+	if !contains(agent.got.AllowedTools, "Read") {
 		t.Fatalf("allowlist missing read-only review tools: %#v", agent.got.AllowedTools)
+	}
+	// A prefix rule would skip the matcher: git diff/log/show write files with
+	// --output=<file>, and `ao review submit` would accept any --session.
+	for _, denied := range []string{"Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(ao review submit:*)"} {
+		if contains(agent.got.AllowedTools, denied) {
+			t.Fatalf("allowlist admits %q without the matcher: %#v", denied, agent.got.AllowedTools)
+		}
 	}
 	// A blanket Bash(gh:*) rule would admit merges and arbitrary API
 	// mutations without a prompt; only the read subcommands are allowed and the
@@ -177,7 +184,7 @@ func TestPreLaunchInstallsSelectedReviewerHooksAndTrustsWorkspace(t *testing.T) 
 	}
 }
 
-func TestAllowlistCoversPromptRequiredPipedCommands(t *testing.T) {
+func TestAllowlistLeavesSubmitCommandsToTheMatcher(t *testing.T) {
 	agent := &captureAgent{}
 	r := &Reviewer{agent: agent}
 
@@ -194,15 +201,13 @@ func TestAllowlistCoversPromptRequiredPipedCommands(t *testing.T) {
 		t.Fatalf("allowlist missing printf for piped review commands: %#v", agent.got.AllowedTools)
 	}
 
-	submit := "printf '%s' '{ \"reviews\": [] }' | ao review submit --session sess-1 --reviews -"
-	if !compoundCommandCovered(agent.got.AllowedTools, submit) {
-		t.Fatalf("allowlist does not cover prompt-required command %q with tools %#v", submit, agent.got.AllowedTools)
-	}
-
-	// The review POST is deliberately not allowlisted: `gh api` can mutate
-	// anything, so the exact POST shape is admitted only by the PermissionRequest
-	// hook (cli.reviewerPermissionDecision, #4810).
+	// Neither submit command is allowlisted, so both reach the PermissionRequest
+	// hook, which admits only the exact shapes (claudecode.ReviewerSubmitCommandAllowed).
+	// `gh api` can mutate anything (#4810), and an `ao review submit` prefix rule
+	// would accept any --session or --reviews file, skipping the worker pin.
 	for _, cmd := range []string{
+		"printf '%s' '{ \"reviews\": [] }' | ao review submit --session sess-1 --reviews -",
+		"ao review submit --session other-worker --reviews /tmp/reviews.json",
 		"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"x\" }' | gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id'",
 		"gh api --method PUT repos/o/r/pulls/1/merge",
 		"gh api -XDELETE repos/o/r",

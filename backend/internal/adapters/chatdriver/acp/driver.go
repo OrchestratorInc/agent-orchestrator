@@ -214,10 +214,15 @@ type TurnSettingsValidator func(ports.PermissionMode, ports.ChatTurnSettings) er
 
 // PermissionPolicy maps the active AO permission mode and the provider's exact
 // offered choices to an automatic response when the mapping is unambiguous.
+// Returning CancelPermission with handled=true answers the request as cancelled.
 type PermissionPolicy func(
 	ports.PermissionMode,
 	acpsdk.RequestPermissionRequest,
 ) (acpsdk.PermissionOptionId, bool)
+
+// CancelPermission is the PermissionPolicy selection for a cancelled outcome,
+// for a policy that must answer a request offering nothing it can select.
+const CancelPermission acpsdk.PermissionOptionId = ""
 
 // ReadOnlySession is how a binding runs a read-only launch: the provider mode it
 // pins, whatever AO approval the turn settings name, and the policy that answers

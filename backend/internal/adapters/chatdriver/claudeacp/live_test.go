@@ -157,6 +157,8 @@ func TestLiveClaudeACPReadOnlyRejectsWrites(t *testing.T) {
 		"6. Bash: sed -i '' 's/hello/sed/' README.md",
 		"7. Bash: git commit --allow-empty -m pwned",
 		"8. Bash: git status --short",
+		"9. Bash: git diff HEAD --output=e.txt",
+		"10. Bash: git log --oneline -1",
 	}, "\n")
 	ref, err := conversation.SendTurn(ctx, ports.ChatUserMessage{
 		Text: prompt, ClientMessageID: "readonly-1", Origin: domain.MessageOriginHuman,

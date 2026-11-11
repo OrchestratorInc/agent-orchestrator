@@ -2685,6 +2685,36 @@ func TestACPDriverPinsReadOnlyModeAndPolicy(t *testing.T) {
 	}
 }
 
+func TestACPDriverPolicyCanCancelARequest(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch:  func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		PermissionPolicy: func(ports.PermissionMode, acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+			return CancelPermission, true
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+	response, err := opened.(*conversation).RequestPermission(context.Background(), acpsdk.RequestPermissionRequest{
+		ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "edit-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)},
+		Options:  []acpsdk.PermissionOption{{OptionId: "allow-always", Name: "Always", Kind: acpsdk.PermissionOptionKindAllowAlways}},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission: %v", err)
+	}
+	if response.Outcome.Cancelled == nil {
+		t.Fatalf("permission response = %#v, want a cancelled outcome", response)
+	}
+}
+
 func TestACPDriverRefusesReadOnlyWithoutBinding(t *testing.T) {
 	launches := 0
 	driver := New(Config{

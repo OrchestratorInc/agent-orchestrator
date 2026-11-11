@@ -185,20 +185,26 @@ func claudeReadOnlySession(cfg acpdriver.LaunchConfig) acpdriver.ReadOnlySession
 
 // reviewerPermissionPolicy allows once the exact submit commands the review
 // prompt dictates and rejects every other request, as the reviewer pane's
-// PermissionRequest hook does. Bash is the only tool Claude's ACP adapter
-// reports as an execute call.
+// PermissionRequest hook does. It handles every request, so none waits for a
+// human: without a usable option it cancels. Bash is the only tool Claude's ACP
+// adapter reports as an execute call.
 func reviewerPermissionPolicy(workerSessionID string) acpdriver.PermissionPolicy {
 	return func(_ ports.PermissionMode, params acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
 		if params.ToolCall.Kind != nil && *params.ToolCall.Kind == acpsdk.ToolKindExecute {
 			input, _ := params.ToolCall.RawInput.(map[string]any)
 			if command, _ := input["command"].(string); claudecode.ReviewerSubmitCommandAllowed(command, workerSessionID) {
-				return permissionOption(params.Options, acpsdk.PermissionOptionKindAllowOnce)
+				if id, ok := permissionOption(params.Options, acpsdk.PermissionOptionKindAllowOnce); ok {
+					return id, true
+				}
 			}
 		}
-		if id, ok := permissionOption(params.Options, acpsdk.PermissionOptionKindRejectOnce); ok {
-			return id, true
+		for _, kind := range []acpsdk.PermissionOptionKind{acpsdk.PermissionOptionKindRejectOnce, acpsdk.PermissionOptionKindRejectAlways} {
+			if id, ok := permissionOption(params.Options, kind); ok {
+				return id, true
+			}
 		}
-		return permissionOption(params.Options, acpsdk.PermissionOptionKindRejectAlways)
+		// Nothing to select: cancel rather than park the request for a human.
+		return acpdriver.CancelPermission, true
 	}
 }
 

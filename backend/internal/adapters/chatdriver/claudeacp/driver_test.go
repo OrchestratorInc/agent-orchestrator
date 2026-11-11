@@ -389,6 +389,19 @@ func TestReviewerPermissionPolicyAllowsOnlyTheSubmitCommands(t *testing.T) {
 		{"no input", worker, acpsdk.RequestPermissionRequest{Options: options, ToolCall: acpsdk.ToolCallUpdate{
 			ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute),
 		}}, "reject"},
+		{"only reject always offered", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "never", Kind: acpsdk.PermissionOptionKindRejectAlways},
+			{OptionId: "allow", Kind: acpsdk.PermissionOptionKindAllowOnce},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)}}, "never"},
+		// Nothing selectable must still be answered, never parked for a human.
+		{"no reject option", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "allow_always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)}}, acpdriver.CancelPermission},
+		{"submit without allow once", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "allow_always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+			{OptionId: "reject", Kind: acpsdk.PermissionOptionKindRejectOnce},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute),
+			RawInput: map[string]any{"command": post}}}, "reject"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
