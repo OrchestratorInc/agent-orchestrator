@@ -6624,6 +6624,28 @@ func TestSystemPrompt_OrchestratorGetsArtifactGuidance(t *testing.T) {
 	}
 }
 
+// A standalone worker has no project, so its prompt is assembled on a separate
+// path; it must still name its artifact directory and the register step, or its
+// deliverables are written but never listed (#8138).
+func TestSystemPrompt_StandaloneWorkerGetsArtifactGuidance(t *testing.T) {
+	st := newFakeStore()
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
+
+	for _, chat := range []bool{false, true} {
+		sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "", "standalone-1", "", chat)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt chat=%v: %v", chat, err)
+		}
+		wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "standalone-1"))
+		for _, want := range []string{"## Orchestrator Standalone Agent", "## Session Artifacts", wantDir, "Run `ao artifact add <path>`"} {
+			if !strings.Contains(sp, want) {
+				t.Fatalf("standalone worker prompt (chat=%v) missing %q:\n%s", chat, want, sp)
+			}
+		}
+	}
+}
+
 func TestSystemPrompt_ArtifactRequestedOutput(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
