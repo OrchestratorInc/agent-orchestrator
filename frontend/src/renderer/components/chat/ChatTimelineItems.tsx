@@ -1604,7 +1604,14 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
  * kind this build does not recognize still renders as a generic row — dropping it
  * would hide work the agent really did.
  */
-export function ActivityRow({ activity }: { activity: ConversationActivity }) {
+export function ActivityRow({
+	activity,
+	repeats,
+}: {
+	activity: ConversationActivity;
+	/** Earlier calls with the same label, folded into this row. */
+	repeats?: readonly ConversationActivity[];
+}) {
 	// A call already in the chat when it opened, or scrolled back into view, is
 	// drawn in place; only a call that arrives fades in.
 	const entering = useChatEntrance(`row:${activity.id}`, activity.sequence);
@@ -1632,7 +1639,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
-	else content = <GenericActivityRow activity={activity} />;
+	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
 
 	if (!toolActivity) return content;
 	return (
@@ -1749,7 +1756,13 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * A `running` activity with no completion is a real terminal state here, not a
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
-function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
+function GenericActivityRow({
+	activity,
+	repeats = [],
+}: {
+	activity: ConversationActivity;
+	repeats?: readonly ConversationActivity[];
+}) {
 	// Closed until the reader opens it, and their choice sticks: auto-collapsing a log
 	// someone is reading is worse than leaving a finished row open. That goes for a
 	// choice made on the live row too, which the row starts from when the step moves
@@ -1909,7 +1922,13 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						<GenericActivityBody activity={activity} />
+						{repeats.length > 0 ? (
+							<div className="flex flex-col gap-1">
+								{[...repeats, activity].map((each) => <GenericActivityBody key={each.id} activity={each} />)}
+							</div>
+						) : (
+							<GenericActivityBody activity={activity} />
+						)}
 					</motion.div>
 				) : null}
 			</AnimatePresence>
