@@ -234,8 +234,10 @@ const graphQLCheckContextLimit = 100
 
 // checkRunFields is the CheckRun selection every rollup query uses. The
 // workflow name and event identify which runs are reruns of the same check
-// (see latestCheckRuns).
-const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ workflowRun{ event workflow{ name } } }`
+// (see latestCheckRuns). The check suite's conclusion tells a gate job that
+// failed because its run was cancelled from a real failure (see
+// checkStatusFromGraphQL).
+const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ conclusion workflowRun{ event workflow{ name } } }`
 
 // prObservationQuery is the GraphQL query (derived from PR #28, credited
 // to @whoisasx) that pulls everything we need in one round trip:
@@ -656,7 +658,17 @@ func checkStatusFromGraphQL(n map[string]any) domain.PRCheckStatus {
 	switch conclusion {
 	case "SUCCESS", "NEUTRAL":
 		return domain.PRCheckPassed
-	case "FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE":
+	case "FAILURE":
+		// A gate job (`needs:` + `if: always()`, e.g. build-test) fails when
+		// its dependencies were cancelled, so a run cancelled by a newer push
+		// or by hand leaves a FAILURE behind. Its check suite (the workflow
+		// run) still ends CANCELLED: report the job as cancelled, not as a
+		// failure the agent should fix.
+		if checkSuiteConclusion(n) == "CANCELLED" {
+			return domain.PRCheckCancelled
+		}
+		return domain.PRCheckFailed
+	case "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE":
 		return domain.PRCheckFailed
 	case "CANCELLED":
 		return domain.PRCheckCancelled
@@ -674,6 +686,14 @@ func checkStatusFromGraphQL(n map[string]any) domain.PRCheckStatus {
 		return domain.PRCheckUnknown
 	}
 	return domain.PRCheckUnknown
+}
+
+// checkSuiteConclusion is the upper-cased conclusion of the check suite a
+// CheckRun belongs to, or "" while the suite is running or when the field is
+// missing.
+func checkSuiteConclusion(n map[string]any) string {
+	suite, _ := n["checkSuite"].(map[string]any)
+	return strings.ToUpper(strings.TrimSpace(str(suite["conclusion"])))
 }
 
 func isFailingCheckStatus(s domain.PRCheckStatus) bool {
