@@ -41,6 +41,30 @@ function showFloorDialog(options: FloorOptions, box: MessageBoxOptions) {
   return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, box) : dialog.showMessageBox(box);
 }
 
+// A quit can be cancelled, for example to keep an unsaved chat draft. Ask again
+// after this long so the unsupported version does not stay in use.
+const REQUIRED_UPDATE_REPROMPT_MS = 60_000;
+
+async function requireUpdate(options: FloorOptions, running: string, minVersion: string, downloadUrl: string) {
+  const result = await showFloorDialog(options, {
+    type: "warning",
+    buttons: ["Download Update", "Quit"],
+    defaultId: 0,
+    cancelId: 1,
+    title: "Update Required",
+    message: `Orchestrator v${running} is no longer supported.`,
+    detail:
+      `Version ${minVersion} or later is required. ` +
+      "Download the latest release to continue using the app.",
+    noLink: true,
+  });
+  if (result.response === 0) {
+    void shell.openExternal(downloadUrl);
+  }
+  (options.quit ?? (() => app.quit()))();
+  setTimeout(() => void requireUpdate(options, running, minVersion, downloadUrl), REQUIRED_UPDATE_REPROMPT_MS).unref();
+}
+
 export async function checkDesktopVersionFloor(options: FloorOptions = {}): Promise<void> {
   if (!app.isPackaged) return;
   let floor: Floor;
@@ -66,22 +90,7 @@ export async function checkDesktopVersionFloor(options: FloorOptions = {}): Prom
   const latestVersion = usableVersion(floor.latest);
 
   if (minVersion && isBelow(running, minVersion)) {
-    const result = await showFloorDialog(options, {
-      type: "warning",
-      buttons: ["Download Update", "Quit"],
-      defaultId: 0,
-      cancelId: 1,
-      title: "Update Required",
-      message: `Orchestrator v${running} is no longer supported.`,
-      detail:
-        `Version ${minVersion} or later is required. ` +
-        "Download the latest release to continue using the app.",
-      noLink: true,
-    });
-    if (result.response === 0) {
-      void shell.openExternal(downloadUrl);
-    }
-    (options.quit ?? (() => app.quit()))();
+    await requireUpdate(options, running, minVersion, downloadUrl);
     return;
   }
 

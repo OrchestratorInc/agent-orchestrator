@@ -102,6 +102,23 @@ describe("checkDesktopVersionFloor", () => {
     expect(quit).not.toHaveBeenCalled();
   });
 
+  it("asks again when the required-update quit was cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      const { mod, dialog, quit } = await importModule({
+        version: "0.12.12",
+        floor: { min: "0.12.13" },
+      });
+      await mod.checkDesktopVersionFloor();
+      expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(dialog.showMessageBox).toHaveBeenCalledTimes(2);
+      expect(quit).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows the update nudge without a parent once the window is gone", async () => {
     const { mod, dialog } = await importModule({
       version: "0.12.12",

@@ -4349,7 +4349,14 @@ app.whenReady().then(async () => {
 	// runs once the window exists so its dialogs attach to it.
 	if (app.isPackaged) {
 		void import("./main/desktop-version-floor")
-			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({ parent: () => mainWindow, quit: desktopQuit.quitCompletely }))
+			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({
+					parent: () => mainWindow,
+					// Like updates:relaunch, an update quit keeps running agents.
+					quit: () => {
+						preserveAgentsOnQuit = true;
+						desktopQuit.quitCompletely();
+					},
+				}))
 			.catch((err) => console.warn("desktop version floor check failed:", err));
 	}
 	if (!daemonStartsWithWindow) void startDaemon();
