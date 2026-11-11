@@ -1054,6 +1054,7 @@ func Run(buildVersion string) error {
 		pushRegistry = reg
 		pushDevices = reg
 		deviceRoster = reg
+		bs.PushDevices = reg
 	}
 
 	// One presence tracker instance shared by APIDeps.Presence (the

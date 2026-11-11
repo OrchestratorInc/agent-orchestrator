@@ -45,7 +45,7 @@ func newPairingHost(t *testing.T) *pairingHost {
 		t.Fatal(err)
 	}
 	codes := mobilebridge.NewPairingCodes(nil)
-	bridge := &controllers.BridgeService{ConfigPath: mobilebridge.Path(dir), HostID: "h_test", Devices: devices, Codes: codes}
+	bridge := &controllers.BridgeService{ConfigPath: mobilebridge.Path(dir), HostID: "h_test", Devices: devices, Codes: codes, PushDevices: registry}
 	if err := mobilebridge.Save(bridge.ConfigPath, mobilebridge.State{Enabled: true, Password: "secret12", LoopbackOnly: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -389,6 +389,16 @@ func TestRegenerateRevokesEveryDevice(t *testing.T) {
 	_, issued := h.remote(http.MethodPost, "/api/v1/remote-host/account-token", phone, nil)
 	account, _ := issued["token"].(string)
 	unused := h.code()
+	// One phone registered with its token, one with the password.
+	for installID, bearer := range map[string]string{"install-phone": phone, "install-old": "secret12"} {
+		if status, _ := h.remote(http.MethodPost, "/api/v1/push/devices", bearer, map[string]string{"installId": installID}); status != http.StatusOK {
+			t.Fatalf("register %s: %d", installID, status)
+		}
+	}
+	// Both phones and the account.
+	if got := len(h.rows()); got != 3 {
+		t.Fatalf("rows before regenerate = %d", got)
+	}
 
 	status, body := h.local(http.MethodPost, "/api/v1/mobile/regenerate", nil)
 	password, _ := body["password"].(string)
