@@ -31,6 +31,7 @@ type fakeAgentAuthService struct {
 	uiOperation string
 	uiCode      string
 	codeCalls   int
+	uiOption    string
 	signedInID  string
 	releasedKey string
 	recordErr   error
@@ -56,7 +57,8 @@ func (f *fakeAgentAuthService) CancelLogin(ctx context.Context, agentID, id stri
 	return f.Login(ctx, agentID, id)
 }
 
-func (f *fakeAgentAuthService) ActOnLogin(ctx context.Context, agentID, id, action, _ string) (agentauth.LoginSnapshot, error) {
+func (f *fakeAgentAuthService) ActOnLogin(ctx context.Context, agentID, id, action, option string) (agentauth.LoginSnapshot, error) {
+	f.uiOption = option
 	f.uiMethod = action
 	return f.Login(ctx, agentID, id)
 }
@@ -338,5 +340,15 @@ func TestAgentSignInRecordRunsInTheDaemon(t *testing.T) {
 	body, status, _ = doRequest(t, server, http.MethodPost, "/api/v1/agents/claude-code/auth/signed-in", "")
 	if status != http.StatusServiceUnavailable || !strings.Contains(string(body), `"code":"AGENT_AUTH_STORE_UNAVAILABLE"`) {
 		t.Fatalf("status=%d body=%s", status, body)
+	}
+}
+
+// An option label may run to the 256 characters the API allows, in any script.
+func TestAgentUILoginActionAcceptsTheLongestOptionLabel(t *testing.T) {
+	svc := &fakeAgentAuthService{uiResult: agentauth.LoginSnapshot{ID: "login-1", AgentID: "goose", Method: "native", Status: "running", NativePrompt: "menu"}}
+	label := strings.Repeat("認", 256)
+	body, status, _ := doRequest(t, newAgentAuthTestServer(t, svc), http.MethodPost, "/api/v1/agents/goose/auth/operations/login-1/actions", `{"action":"1","option":"`+label+`"}`)
+	if status != http.StatusOK || svc.uiMethod != "1" || svc.uiOption != label {
+		t.Fatalf("status=%d method=%q option length=%d body=%s", status, svc.uiMethod, len([]rune(svc.uiOption)), body)
 	}
 }

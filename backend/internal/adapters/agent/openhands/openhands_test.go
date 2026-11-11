@@ -383,3 +383,21 @@ func TestSettingsPathHonorsPersistenceDir(t *testing.T) {
 		t.Fatalf("settingsPath = %q, want %q", got, want)
 	}
 }
+
+// The flag follows the key the session will see, not the daemon's: a project
+// key enables it, and a project that blanks the key keeps the saved settings.
+func TestOpenHandsEnvironmentOverrideFollowsTheSessionEnvironment(t *testing.T) {
+	t.Setenv("LLM_API_KEY", "")
+	cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{Env: map[string]string{"LLM_API_KEY": "project-key"}})
+	if want := []string{"openhands", "--override-with-envs"}; err != nil || !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("launch with a project key = %q, %v; want %q", cmd, err, want)
+	}
+	t.Setenv("LLM_API_KEY", "daemon-key")
+	cmd, ok, err := testPlugin().GetRestoreCommand(t.Context(), ports.RestoreConfig{
+		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "id"}},
+		Env:     map[string]string{"LLM_API_KEY": ""},
+	})
+	if want := []string{"openhands", "--resume", "id"}; err != nil || !ok || !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("restore with the key blanked = %q, %v, %v; want %q", cmd, ok, err, want)
+	}
+}

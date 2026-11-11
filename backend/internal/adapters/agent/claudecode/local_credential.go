@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
@@ -101,21 +100,11 @@ func RemoveLocalOAuthToken(dataDir string) error {
 // another menu option removes it again. The AO Cloud token applies only when
 // Claude Code has no first-party login of its own.
 //
-// AO also exports every provider key saved in it to the daemon's own
-// environment, which sessions, probes and account checks inherit. An
-// Anthropic key that Claude Code's own panel did not choose is held back, as
-// for worker sessions, so it never replaces the subscription sign-in. A key
-// the launch sets itself is kept.
+// Provider keys AO holds back from Claude Code are not this adapter's to
+// decide: the session manager applies them to launches, and callers pass
+// them to probes through ports.WithAuthEnvironment.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	p.augmentCredential(env, dataDir)
-	if strings.TrimSpace(dataDir) == "" {
-		return
-	}
-	for name, value := range providerkeys.Withheld(dataDir, "claude-code") {
-		if _, set := env[name]; !set {
-			env[name] = value
-		}
-	}
 }
 
 // augmentCredential adds the setup-token credential. It is inert unless AO

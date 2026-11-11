@@ -124,6 +124,14 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 func (p *Plugin) AuthStatusForRuntime(ctx context.Context, dataDir string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	env := make(map[string]string)
 	p.AugmentRuntimeEnv(env, dataDir)
+	// What the caller holds back from Claude Code's sessions (an Anthropic key
+	// AO exported to the daemon for another harness) is held back here too, so
+	// the probe sees what a session would.
+	for name, value := range ports.AuthEnvironmentOverrides(ctx) {
+		if _, set := env[name]; !set {
+			env[name] = value
+		}
+	}
 	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", env, false)
 	return status, report.account(), steps, err
 }

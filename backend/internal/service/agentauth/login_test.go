@@ -1353,3 +1353,33 @@ func TestRecordSignInReleasesTheKeyClaimAndEarlierSetupToken(t *testing.T) {
 		t.Fatal("recorded a sign-in for an unknown harness")
 	}
 }
+
+// A key save or CLI login started while a native sign-in still runs must not
+// drop that sign-in from the registry, where it could no longer be cancelled.
+func TestRunningNativeSignInBlocksAnotherLoginForTheHarness(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GEMINI_CLI_HOME", home)
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("GEMINI_API_KEY") })
+	pty := &guidedTerminalFake{output: "Waiting for authentication...\n"}
+	svc := NewWithAgentResolver(foundExecutable("gemini"), &signInProberFake{state: domain.AgentAuthenticationUnknown}, pty, t.TempDir())
+	t.Cleanup(svc.Close)
+	native, err := svc.StartLogin(t.Context(), "gemini", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.StartLogin(t.Context(), "gemini", "gemini_api_key", "sk-gemini")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" {
+		t.Fatalf("key save during a native sign-in = %v, want AGENT_AUTH_IN_PROGRESS", err)
+	}
+	if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
+		t.Fatalf("Gemini's home changed while the native sign-in ran: %v, %v", entries, err)
+	}
+	if snapshot, err := svc.Login(t.Context(), "gemini", native.ID); err != nil || snapshot.Status != "running" {
+		t.Fatalf("native sign-in = %+v, %v; want it still tracked and running", snapshot, err)
+	}
+	if _, err := svc.CancelLogin(t.Context(), "gemini", native.ID); err != nil {
+		t.Fatalf("the native sign-in could not be cancelled: %v", err)
+	}
+}

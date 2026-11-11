@@ -166,7 +166,9 @@ function ProviderKeyRow({ providerKey: key, hostId, editing, notice, onEdit, onN
 			{key.configured && key.checkable ? <Button type="button" size="sm" variant="outline" disabled={checking} onClick={() => void check()}>
 				{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.apiKeys.check")}
 			</Button> : null}
-			<Button ref={editButtonRef} type="button" size="sm" variant="outline" aria-expanded={false} aria-label={`${t(key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")} · ${key.label}`} onClick={onEdit}>
+			{/* Editing (or removing) waits for a running check, so its result
+			    never lands on a key that has changed meanwhile. */}
+			<Button ref={editButtonRef} type="button" size="sm" variant="outline" disabled={checking} aria-expanded={false} aria-label={`${t(key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")} · ${key.label}`} onClick={onEdit}>
 				{t(key.configured ? "settings.apiKeys.edit" : "settings.apiKeys.add")}
 			</Button>
 		</div>}

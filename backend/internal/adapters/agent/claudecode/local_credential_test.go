@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
@@ -161,23 +160,37 @@ func TestRuntimeCredentialEnvReturnsSavedSetupToken(t *testing.T) {
 	}
 }
 
-// The daemon exports AO's saved keys to itself, so its probes and account
-// checks would otherwise see an Anthropic key Claude Code's sessions never get.
-func TestRuntimeCredentialEnvHoldsBackAnAnthropicKeyClaudeDidNotChoose(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("ANTHROPIC_API_KEY", "ao-saved-key")
-	if err := providerkeys.Save(context.Background(), dataDir, "ANTHROPIC_API_KEY", "ao-saved-key"); err != nil {
-		t.Fatal(err)
+// AO exports its saved keys to the daemon, so the caller passes what Claude
+// Code's sessions do not get, and the probe must not see it either.
+func TestAuthStatusForRuntimeHoldsBackWhatTheCallerWithholds(t *testing.T) {
+	dataDir := withSavedSetupToken(t)
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+	var probed map[string]string
+	previousCommand := claudeAuthCommand
+	claudeAuthCommand = func(_ context.Context, _, _ string, env map[string]string) (claudeCommandOutput, error) {
+		probed = env
+		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}`)}, nil
 	}
-	got := New().RuntimeCredentialEnv(dataDir)
-	if value, ok := got["ANTHROPIC_API_KEY"]; !ok || value != "" {
-		t.Fatalf("RuntimeCredentialEnv = %v, want ANTHROPIC_API_KEY blanked", got)
+	t.Cleanup(func() { claudeAuthCommand = previousCommand })
+	previousValidator := claudeValidator
+	claudeValidator = func() *agentcreds.Validator {
+		return agentcreds.New(&http.Client{Transport: claudeTestTransport(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
+				Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"claude-test"}]}`)), Request: req,
+			}, nil
+		})})
 	}
-	if err := providerkeys.ClaimForHarness(context.Background(), dataDir, "ANTHROPIC_API_KEY", "claude-code"); err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { claudeValidator = previousValidator })
+	ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"ANTHROPIC_API_KEY": "", "CLAUDE_CODE_OAUTH_TOKEN": "not-this"})
+	_, _, _, _ = (&Plugin{resolvedBinary: "/fixture/claude"}).AuthStatusForRuntime(ctx, dataDir)
+	if value, ok := probed["ANTHROPIC_API_KEY"]; !ok || value != "" {
+		t.Fatalf("probe env = %v, want ANTHROPIC_API_KEY blanked", probed)
 	}
-	if got := New().RuntimeCredentialEnv(dataDir); got != nil {
-		t.Fatalf("RuntimeCredentialEnv with Claude Code's own key = %v, want nil", got)
+	// The credential a session launch gets itself is kept.
+	if probed["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
+		t.Fatalf("probe env = %v, want the saved setup token", probed)
 	}
 }
 

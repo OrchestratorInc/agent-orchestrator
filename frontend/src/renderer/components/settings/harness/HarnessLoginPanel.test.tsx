@@ -168,6 +168,22 @@ describe("HarnessLoginPanel", () => {
 		render(<HarnessLoginPanel agentId="gemini" methods={[{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true }]} providerKeys={[{ ...unsavedKey("GEMINI_API_KEY"), agents: ["gemini", "opencode", "pi"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByText("AO also gives this key to OpenCode, Pi, which read GEMINI_API_KEY.")).toBeVisible();
 	});
+	it("clears a key typed for one catalog provider when another is chosen", async () => {
+		const user = userEvent.setup();
+		vi.mocked(fetchCatalogProviders).mockResolvedValue([
+			{ id: "zai", name: "Z.AI", env: "ZAI_API_KEY", models: 14 },
+			{ id: "groq", name: "Groq", env: "GROQ_API_KEY", models: 1 },
+		]);
+		render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "provider_key", label: "Provider API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.click(await screen.findByRole("button", { name: "Provider" }));
+		await user.click(screen.getByRole("menuitem", { name: "Z.AI" }));
+		await user.type(screen.getByLabelText("API key"), "zai-secret");
+		await user.click(screen.getByRole("button", { name: "Provider" }));
+		await user.click(screen.getByRole("menuitem", { name: "Groq" }));
+		expect(screen.getByLabelText("API key")).toHaveValue("");
+		expect(screen.getByRole("button", { name: "Save and verify" })).toBeDisabled();
+		expect(startCatalogKeyLogin).not.toHaveBeenCalled();
+	});
 	it("picks a catalog provider from the searchable menu and saves its key", async () => {
 		const user = userEvent.setup();
 		vi.mocked(fetchCatalogProviders).mockResolvedValue([

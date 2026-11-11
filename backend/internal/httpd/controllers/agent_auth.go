@@ -112,7 +112,9 @@ func (c *AgentAuthController) uiLoginAction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req AgentLoginActionRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256))
+	// The action plus an option label of up to 256 characters, each up to 4
+	// bytes in UTF-8, and the JSON around them.
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*1024))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		envelope.WriteError(w, r, apierr.Invalid("INVALID_JSON", "Invalid login action.", nil))

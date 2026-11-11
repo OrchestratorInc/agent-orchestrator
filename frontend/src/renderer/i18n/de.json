@@ -4307,7 +4307,7 @@
 	"settings.harness.loginUi.nativeChoose": "Wähle, wie es weitergehen soll:",
 	"settings.harness.loginUi.nativeInteractive": "Dieser Harness benötigt interaktive Eingaben in seinem nativen Login oder Provider-Setup. Öffne den Terminal-Flow, um fortzufahren.",
 	"settings.harness.loginUi.methods.cline": "Cline-Konto im Browser",
-	"settings.harness.loginUi.methods.native": "Natürliche Anmeldung",
+	"settings.harness.loginUi.methods.native": "Native Anmeldung",
 	"settings.harness.loginUi.methods.anthropic_key": "Anthropic API-Key",
 	"settings.harness.loginUi.methods.openai_key": "OpenAI API-Key",
 	"settings.harness.loginUi.methods.openrouter_key": "OpenRouter API-Key",

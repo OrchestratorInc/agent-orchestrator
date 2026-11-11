@@ -107,7 +107,9 @@ func TestRuntimeIntegrationDeliversEnvironmentThroughAFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	waitForOutput(t, r, h, "key-length:18", 5*time.Second)
+	if out := waitForOutput(t, r, h, "key-length:18", 5*time.Second); !strings.Contains(out, "key-length:18") {
+		t.Fatalf("output = %q, want key-length:18", out)
+	}
 	entries, err := os.ReadDir(envDir)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("launch environment left behind: %v err=%v", entries, err)

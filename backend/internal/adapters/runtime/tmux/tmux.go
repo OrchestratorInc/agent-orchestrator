@@ -359,7 +359,7 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
 	}
 
-	envFile, err := r.writeLaunchEnv(cfg)
+	envFile, err := r.writeLaunchEnv(ctx, cfg)
 	if err != nil {
 		return ports.RuntimeHandle{}, tmuxCreateFailure(err)
 	}
@@ -455,7 +455,7 @@ func (r *Runtime) Restart(ctx context.Context, handle ports.RuntimeHandle, cfg p
 		return ports.RuntimeHandle{}, err
 	}
 
-	envFile, err := r.writeLaunchEnv(cfg)
+	envFile, err := r.writeLaunchEnv(ctx, cfg)
 	if err != nil {
 		return ports.RuntimeHandle{}, err
 	}
@@ -466,9 +466,14 @@ func (r *Runtime) Restart(ctx context.Context, handle ports.RuntimeHandle, cfg p
 	}
 	alive, err := r.IsAlive(ctx, handle)
 	if err != nil {
+		// A failed probe does not show the pane is gone: it may still be
+		// starting and will read, then delete, the file itself.
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: verify restarted session %s: %w", id, err)
 	}
 	if !alive {
+		// The pane exited, possibly before its shell read the file: no later
+		// reader exists, so the secrets it holds go now.
+		_ = os.Remove(envFile)
 		return ports.RuntimeHandle{}, fmt.Errorf("tmux runtime: session %s exited during restart", id)
 	}
 	return handle, nil
@@ -1760,7 +1765,13 @@ const launchEnvMaxAge = 10 * time.Minute
 // data directory, so the secrets they hold stay under ~/.ao.
 func (r *Runtime) launchEnvDir(cfg ports.RuntimeConfig) (string, error) {
 	if r.envDir != "" {
-		return r.envDir, nil
+		// The pane changes to the workspace before it sources the file, so a
+		// relative directory would name a different place there.
+		abs, err := filepath.Abs(r.envDir)
+		if err != nil {
+			return "", fmt.Errorf("tmux runtime: resolve launch environment directory: %w", err)
+		}
+		return abs, nil
 	}
 	dataDir := cfg.Env["AO_DATA_DIR"]
 	if dataDir == "" {
@@ -1782,7 +1793,10 @@ func (r *Runtime) launchEnvDir(cfg ports.RuntimeConfig) (string, error) {
 
 // writeLaunchEnv writes launchEnvScript(cfg) to a new file only this user can
 // read, in a directory only this user can enter, and returns its path.
-func (r *Runtime) writeLaunchEnv(cfg ports.RuntimeConfig) (string, error) {
+func (r *Runtime) writeLaunchEnv(ctx context.Context, cfg ports.RuntimeConfig) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	dir, err := r.launchEnvDir(cfg)
 	if err != nil {
 		return "", err
@@ -1802,7 +1816,10 @@ func (r *Runtime) writeLaunchEnv(cfg ports.RuntimeConfig) (string, error) {
 			return "", fmt.Errorf("tmux runtime: restrict launch environment directory: %w", err)
 		}
 	}
-	sweepLaunchEnv(dir)
+	sweepLaunchEnv(ctx, dir)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	f, err := os.CreateTemp(dir, "launch-*.env")
 	if err != nil {
 		return "", fmt.Errorf("tmux runtime: create launch environment: %w", err)
@@ -1820,13 +1837,17 @@ func (r *Runtime) writeLaunchEnv(cfg ports.RuntimeConfig) (string, error) {
 	return name, nil
 }
 
-// sweepLaunchEnv removes launch environment files no shell read in time.
-func sweepLaunchEnv(dir string) {
+// sweepLaunchEnv removes launch environment files no shell read in time. It
+// stops when ctx ends; the next launch sweeps what is left.
+func sweepLaunchEnv(ctx context.Context, dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return
+		}
 		if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), "launch-") || !strings.HasSuffix(entry.Name(), ".env") {
 			continue
 		}

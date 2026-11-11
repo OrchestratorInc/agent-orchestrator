@@ -134,3 +134,30 @@ func TestEnvListReplacesEarlierEntries(t *testing.T) {
 		t.Fatalf("EnvList = %q", got)
 	}
 }
+
+// Work run for a harness outside a session holds back what its sessions do,
+// but keeps a value the work set itself.
+func TestHoldBackAddsWithheldKeysWithoutReplacingSetOnes(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Cleanup(func() { _ = RestoreInherited("ANTHROPIC_API_KEY") })
+	if err := Save(context.Background(), dir, "ANTHROPIC_API_KEY", "ao-ant"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExportForProbes("ANTHROPIC_API_KEY", "ao-ant"); err != nil {
+		t.Fatal(err)
+	}
+	if got := HoldBack(nil, dir, "claude-code"); !reflect.DeepEqual(got, map[string]string{"ANTHROPIC_API_KEY": ""}) {
+		t.Fatalf("HoldBack(nil) = %v, want AO's copy blanked", got)
+	}
+	env := map[string]string{"ANTHROPIC_API_KEY": "launch-own", "CLAUDE_CODE_OAUTH_TOKEN": "tok"}
+	if got := HoldBack(env, dir, "claude-code"); got["ANTHROPIC_API_KEY"] != "launch-own" || got["CLAUDE_CODE_OAUTH_TOKEN"] != "tok" {
+		t.Fatalf("HoldBack replaced a value the work set: %v", got)
+	}
+	if got := HoldBack(nil, dir, "goose"); got != nil {
+		t.Fatalf("HoldBack for a harness without subscription keys = %v, want nil", got)
+	}
+	if got := HoldBack(nil, "", "claude-code"); got != nil {
+		t.Fatalf("HoldBack without a data directory = %v, want nil", got)
+	}
+}

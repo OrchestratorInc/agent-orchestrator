@@ -81,7 +81,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // OpenHands assigns its own conversation id and reports it through hooks, so
 // cfg.NativeSessionID is ignored.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
-	cmd, err := p.command(ctx, cfg.Permissions, cfg.Config, cfg.AllowedTools, cfg.DisallowedTools)
+	cmd, err := p.command(ctx, cfg.Permissions, cfg.Config, cfg.AllowedTools, cfg.DisallowedTools, cfg.Env)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if id == "" {
 		return nil, false, nil
 	}
-	cmd, err := p.command(ctx, cfg.Permissions, cfg.Config, cfg.AllowedTools, cfg.DisallowedTools)
+	cmd, err := p.command(ctx, cfg.Permissions, cfg.Config, cfg.AllowedTools, cfg.DisallowedTools, cfg.Env)
 	if err != nil {
 		return nil, false, err
 	}
@@ -125,8 +125,8 @@ func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.S
 // delivered as an `env` argv prefix, which the tmux runtime's shell and the
 // Windows ConPTY spawner both apply to the child environment. Note that
 // --override-with-envs also applies any LLM_API_KEY/LLM_BASE_URL already set in
-// the session environment.
-func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg ports.AgentConfig, allow, deny []string) ([]string, error) {
+// the session environment. env is that environment over the daemon's own.
+func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg ports.AgentConfig, allow, deny []string, env map[string]string) ([]string, error) {
 	if len(allow) != 0 || len(deny) != 0 {
 		return nil, fmt.Errorf("openhands: tool restrictions are not supported by this adapter")
 	}
@@ -140,7 +140,7 @@ func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg por
 	var cmd []string
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		cmd = append(cmd, "env", modelEnvVar+"="+model, bin, "--override-with-envs")
-	} else if os.Getenv("LLM_API_KEY") != "" {
+	} else if sessionEnv(env, "LLM_API_KEY") != "" {
 		// OpenHands ignores LLM_API_KEY without this flag. The saved native
 		// model remains in effect when AO did not request a model override.
 		cmd = append(cmd, bin, "--override-with-envs")
@@ -151,6 +151,15 @@ func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg por
 		cmd = append(cmd, flag)
 	}
 	return cmd, nil
+}
+
+// sessionEnv is name as the launched process sees it: the session's own value,
+// even an explicit "" that unsets it, else the daemon's inherited one.
+func sessionEnv(env map[string]string, name string) string {
+	if value, ok := env[name]; ok {
+		return value
+	}
+	return os.Getenv(name)
 }
 
 // approvalFlag maps an AO permission mode onto OpenHands' confirmation flags.

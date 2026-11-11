@@ -115,4 +115,16 @@ describe("ApiKeysSection", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
 		expect(screen.queryByRole("button", { name: "Add key · Tavily" })).toBeNull();
 	});
+
+	// A check that finishes after an edit would report on the earlier key.
+	it("keeps Edit unavailable while the key's check runs", async () => {
+		const user = userEvent.setup();
+		let finish!: (result: Awaited<ReturnType<typeof checkProviderKey>>) => void;
+		vi.mocked(checkProviderKey).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+		render(<ApiKeysSection titleHidden />);
+		await user.click(screen.getByRole("button", { name: "Check" }));
+		expect(screen.getByRole("button", { name: "Edit · OpenAI" })).toBeDisabled();
+		await act(async () => { finish({ status: "valid" } as Awaited<ReturnType<typeof checkProviderKey>>); });
+		expect(screen.getByRole("button", { name: "Edit · OpenAI" })).toBeEnabled();
+	});
 });

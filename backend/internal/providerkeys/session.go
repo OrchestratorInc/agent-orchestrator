@@ -190,6 +190,25 @@ func Withheld(dataDir, harness string) map[string]string {
 	return out
 }
 
+// HoldBack adds Withheld(dataDir, harness) to env for work run on harness's
+// behalf outside a session (account checks, model discovery), keeping any
+// value env sets itself. It returns env, or a new map when env is nil and
+// something is held back; nil stays nil when nothing is.
+func HoldBack(env map[string]string, dataDir, harness string) map[string]string {
+	if strings.TrimSpace(dataDir) == "" {
+		return env
+	}
+	for name, value := range Withheld(dataDir, harness) {
+		if env == nil {
+			env = map[string]string{}
+		}
+		if _, set := env[name]; !set {
+			env[name] = value
+		}
+	}
+	return env
+}
+
 // WithheldForSignIn is Withheld for a sign-in command of harness itself. It
 // never receives AO's copy of a key that would override that sign-in, even one
 // harness's own panel saved: the newest sign-in replaces the key, and with it

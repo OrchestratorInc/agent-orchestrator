@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 var (
@@ -630,7 +631,9 @@ func (s *Service) runtimeCredentialEnv(agentID string) map[string]string {
 	if !ok {
 		return nil
 	}
-	return source.RuntimeCredentialEnv(s.dataDir)
+	// Keys AO holds back from this harness's sessions stay out of the
+	// discovery its sessions' models come from.
+	return providerkeys.HoldBack(source.RuntimeCredentialEnv(s.dataDir), s.dataDir, agentID)
 }
 
 func (s *Service) globalModelDiscoveryRequest(request ports.AgentModelDiscoveryRequest) (ports.AgentModelDiscoveryRequest, error) {

@@ -340,6 +340,17 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		updateOperation(undefined);
 		if (!item.secret) void start(item);
 	};
+	// A key typed for one catalog provider never goes to another: choosing a
+	// different provider clears it with the rest of the form.
+	const chooseCatalogProvider = (id: string) => {
+		if (id === catalogProvider) return;
+		setCatalogProvider(id);
+		setSecret("");
+		setModel("");
+		setModels([]);
+		discardModelRequest();
+		setError("");
+	};
 	const act = (action: () => Promise<unknown>) => void action().catch(() => setError(t("settings.harness.authFailed")));
 	// Fills the model picker from the provider, using the typed or saved key.
 	const loadModels = async () => {
@@ -483,7 +494,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 						{item.id === CATALOG_METHOD && <>
 							<span id={titleId + "-provider"} className={fieldLabelClass}>{t("settings.harness.loginUi.catalogProvider")}</span>
 							{catalog
-								? <SettingsOptionMenu aria-label={t("settings.harness.loginUi.catalogProvider")} value={catalogProvider} options={catalog.map((provider) => ({ value: provider.id, label: provider.name }))} onChange={setCatalogProvider} placeholder={t("settings.harness.loginUi.catalogChoose")} searchable searchPlaceholder={t("settings.harness.loginUi.catalogSearch")} disabled={locked} triggerClassName={fieldTriggerClass} menuAlign="start" menuClassName="w-(--radix-dropdown-menu-trigger-width) max-h-72" />
+								? <SettingsOptionMenu aria-label={t("settings.harness.loginUi.catalogProvider")} value={catalogProvider} options={catalog.map((provider) => ({ value: provider.id, label: provider.name }))} onChange={chooseCatalogProvider} placeholder={t("settings.harness.loginUi.catalogChoose")} searchable searchPlaceholder={t("settings.harness.loginUi.catalogSearch")} disabled={locked} triggerClassName={fieldTriggerClass} menuAlign="start" menuClassName="w-(--radix-dropdown-menu-trigger-width) max-h-72" />
 								: catalogError ? <p role="alert" className="text-xs leading-4 text-error">{catalogError}</p>
 								: <CatalogProviderPickerSkeleton label={t("settings.harness.loginUi.catalogLoading", { agent: agentLabel(agentId) })} />}
 						</>}

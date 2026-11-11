@@ -837,8 +837,10 @@ type LaunchConfig struct {
 	WorkspacePath    string
 	// Env is the environment the runtime layers over the daemon's own for this
 	// launch (the project env plus AO's variables). The session manager sets it
-	// for PreLaunch, so an adapter prepares the provider config the launched
-	// process will actually read (for example a project CLAUDE_CONFIG_DIR).
+	// for PreLaunch and command construction, so an adapter prepares the
+	// provider config, and picks the flags, the launched process will actually
+	// read (for example a project CLAUDE_CONFIG_DIR). A key set to "" is unset
+	// in the launch; a key absent here keeps the daemon's value. Read-only.
 	Env map[string]string
 }
 
@@ -878,6 +880,9 @@ type RestoreConfig struct {
 	// system-prompt flag should re-apply this in their resume command.
 	SystemPrompt     string
 	SystemPromptFile string
+	// Env is the environment the runtime layers over the daemon's own for the
+	// resumed process, as LaunchConfig.Env is for a launch.
+	Env map[string]string
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.
