@@ -6,6 +6,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useState } from "react";
 import { ChatImage } from "./ChatImage";
 import { chatImageSaveName } from "./chat-image-actions";
+import { MAX_CHAT_IMAGE_BYTES } from "../../../shared/chat-image";
 
 const url = "http://127.0.0.1:4000/api/v1/sessions/s1/preview/files/.ao/attachments/attachment-1.png";
 const png = new Uint8Array([137, 80, 78, 71]);
@@ -71,6 +72,20 @@ describe("ChatImage copy and save", () => {
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open image: Image 1" }));
 		await user.click(screen.getByRole("menuitem", { name: "Save image" }));
 		await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith({ name: "attachment-1.png", bytes: png }));
+	});
+
+	it("refuses a loopback image over the chat image size limit before reading it", async () => {
+		const user = userEvent.setup();
+		const huge = new Response(png, { headers: { "content-type": "image/png", "content-length": String(MAX_CHAT_IMAGE_BYTES + 1) } });
+		const read = vi.spyOn(huge, "blob");
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(huge);
+		const toast = vi.spyOn(useUiStore.getState(), "showGlobalToast");
+		useUiStore.setState({ showGlobalToast: toast });
+		render(<ChatImage src={url} alt="Image 1" />);
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open image: Image 1" }));
+		await user.click(screen.getByRole("menuitem", { name: "Save image" }));
+		await waitFor(() => expect(toast).toHaveBeenCalledWith("Couldn’t save image", "Image is too large", "error"));
+		expect(read).not.toHaveBeenCalled();
 	});
 
 	it("refuses a loopback response that is not an image", async () => {

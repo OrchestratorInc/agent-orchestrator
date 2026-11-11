@@ -9,6 +9,7 @@
  * `blob:` sources are read in place.
  */
 
+import { MAX_CHAT_IMAGE_BYTES } from "../../../shared/chat-image";
 import { aoBridge } from "../../lib/bridge";
 
 const EXTENSION_BY_MIME: Record<string, string> = {
@@ -31,8 +32,10 @@ async function loadChatImage(url: string): Promise<ImageBytes> {
 	}
 	const response = await fetch(resolved);
 	if (!response.ok) throw new Error(`Image request failed (${response.status})`);
+	if (loopback && Number(response.headers.get("content-length")) > MAX_CHAT_IMAGE_BYTES) throw new Error("Image is too large");
 	const blob = await response.blob();
 	if (loopback && !blob.type.startsWith("image/")) throw new Error("Not an image");
+	if (loopback && blob.size > MAX_CHAT_IMAGE_BYTES) throw new Error("Image is too large");
 	return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: blob.type };
 }
 
