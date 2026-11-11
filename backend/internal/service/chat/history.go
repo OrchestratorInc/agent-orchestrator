@@ -435,6 +435,7 @@ func (s *Service) EditMessage(
 		branch.ReplayTruncated = replayTruncated
 	}
 	conversation := source.conversation
+	conversation.Settings = source.Settings()
 	conversation.ActiveBranchID = branchID
 	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader, cfg.ValidateWorkspace)
 	if err := s.store.CreateAndActivateConversationBranch(
@@ -876,6 +877,7 @@ func (s *Service) ActivateBranch(ctx context.Context, id domain.SessionID, branc
 	return s.activateBranchLocked(ctx, id, branchID)
 }
 
+// activateBranchLocked 在控制器门禁内恢复目标分支并继承当前设置，不重发历史消息。
 func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID, branchID string) (string, error) {
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return "", err
@@ -960,6 +962,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	}
 	generation := s.newID()
 	conversation := source.conversation
+	conversation.Settings = source.Settings()
 	conversation.ActiveBranchID = branch.ID
 	replacement := newController(id, source.owner(), conversation, generation, source.harness, provider, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.recheckAccount, s.onCodexCapacityChanged, s.reader, cfg.ValidateWorkspace)
 	if err := s.store.ActivateConversationBranch(operationCtx, id, conversation.ID, branch.ID,
@@ -981,6 +984,7 @@ func (s *Service) activateBranchLocked(ctx context.Context, id domain.SessionID,
 	return branch.ID, nil
 }
 
+// branchLaunchConfig 保留分支的启动环境，并采用用户当前选择的模型、推理强度和权限。
 func (s *Service) branchLaunchConfig(
 	source *Controller,
 ) (StartConfig, ports.ChatDriver, error) {
@@ -1001,6 +1005,10 @@ func (s *Service) branchLaunchConfig(
 	if err != nil {
 		return StartConfig{}, nil, fmt.Errorf("chat driver for %s: %w", cfg.Harness, err)
 	}
+	settings := source.Settings()
+	cfg.Model = settings.Model
+	cfg.Effort = settings.ReasoningEffort
+	cfg.Permissions = settings.ApprovalMode
 	return cloneStartConfig(cfg), driver, nil
 }
 
