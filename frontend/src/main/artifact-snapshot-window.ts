@@ -77,7 +77,8 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 	let idle: ReturnType<typeof setTimeout> | undefined;
 
 	function open(): Promise<BrowserWindow> {
-		current ??= (async () => {
+		if (current) return current;
+		const opening: Promise<BrowserWindow> = (async () => {
 			const window = new deps.BrowserWindow({
 				show: false,
 				width: ARTIFACT_SNAPSHOT_WIDTH,
@@ -100,8 +101,9 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 			contents.on("will-navigate", (event) => event.preventDefault());
 			contents.setAudioMuted(true);
 			contents.setFrameRate(IDLE_FRAME_RATE);
+			// Only the window that is current clears it: a stale one closing later must not unset its successor.
 			window.once("closed", () => {
-				current = undefined;
+				if (current === opening) current = undefined;
 			});
 			try {
 				let timer: ReturnType<typeof setTimeout> | undefined;
@@ -115,20 +117,21 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 			}
 			return window;
 		})();
-		return current;
+		current = opening;
+		return opening;
 	}
 
-	function close(): void {
-		const window = current;
-		current = undefined;
-		void window?.then((opened) => {
+	/** Closes one window, by default the current one. A render passes the window it opened, so one that timed out cannot close its successor's. */
+	function close(target: Promise<BrowserWindow> | undefined = current): void {
+		if (current === target) current = undefined;
+		void target?.then((opened) => {
 			if (!opened.isDestroyed()) opened.destroy();
 		}, () => undefined);
 	}
 
-	const renderOne: SnapshotRenderer = async (job: ArtifactSnapshotJob) => {
+	const renderOne = async (job: ArtifactSnapshotJob, owned: Promise<BrowserWindow>): Promise<Buffer> => {
 		clearTimeout(idle);
-		const window = await open();
+		const window = await owned;
 		const contents = window.webContents;
 		const read = <T>(code: string) => contents.executeJavaScript(code) as Promise<T>;
 		const deadline = Date.now() + SNAPSHOT_DEADLINE_MS;
@@ -154,25 +157,29 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 		} catch (error) {
 			// A page that failed or hung may be stuck; the next artifact gets a fresh one. A file with
 			// nothing to draw left the page healthy.
-			if (!(error instanceof SnapshotUnavailableError || error instanceof PreviewLoadError)) close();
+			if (!(error instanceof SnapshotUnavailableError || error instanceof PreviewLoadError)) close(owned);
 			throw error;
 		} finally {
 			if (!window.isDestroyed()) {
 				void read("window.__aoSnapshot.reset()").catch(() => undefined);
 				contents.stopPainting();
 			}
-			clearTimeout(idle);
-			idle = setTimeout(close, WINDOW_IDLE_MS);
+			// Only the window in use keeps the idle timer: a stale render finishing late must not arm or clear its successor's.
+			if (current === owned) {
+				clearTimeout(idle);
+				idle = setTimeout(() => close(owned), WINDOW_IDLE_MS);
+			}
 		}
 	};
 
 	/** One end-to-end bound on a render: a page that never starts, paints or encodes must not hold up every later one. */
 	const render: SnapshotRenderer = async (job) => {
 		let timer: ReturnType<typeof setTimeout> | undefined;
-		const work = renderOne(job);
+		const owned = open();
+		const work = renderOne(job, owned);
 		const stalled = new Promise<never>((_, reject) => {
 			timer = setTimeout(() => {
-				close();
+				close(owned);
 				reject(new Error("the snapshot window stalled"));
 			}, SNAPSHOT_HARD_DEADLINE_MS);
 		});

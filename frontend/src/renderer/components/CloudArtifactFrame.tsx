@@ -18,12 +18,14 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  * gets a viewport of the pane's size over zoom, shown scaled by zoom, so it
  * reflows and pans with its own scrolling.
  */
-export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGranted, onNavigate, thumbnail, zoom = 1 }: {
+export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGranted, onNavigate, onThumbnailState, thumbnail, zoom = 1 }: {
 	title: string;
 	url: string;
 	onAccessRefused?: () => void;
 	onAccessGranted?: () => void;
 	onNavigate?: (path: string) => void;
+	/** A thumbnail's state: loading until the file's status is known, failed while it shows the fallback, ready once the page is framed. */
+	onThumbnailState?: (state: "loading" | "failed" | "ready") => void;
 	/** Scale only the page; gallery fallbacks keep the card's normal size. */
 	thumbnail?: { width: number; height?: number; fallback: ReactNode };
 	/** The artifact viewer's zoom, 1 at fit. */
@@ -52,6 +54,10 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 	useEffect(() => {
 		if (status.data !== undefined && status.data >= 200 && status.data < 400) onAccessGranted?.();
 	}, [status.data, status.dataUpdatedAt, onAccessGranted]);
+	const thumbnailState = !thumbnail ? undefined : status.isPending ? "loading" : refused || status.isError || (status.data !== undefined && status.data >= 400) ? "failed" : "ready";
+	useEffect(() => {
+		if (thumbnailState) onThumbnailState?.(thumbnailState);
+	}, [thumbnailState, onThumbnailState]);
 	if (thumbnail && (status.isPending || refused || status.isError || (status.data !== undefined && status.data >= 400))) return thumbnail.fallback;
 	if (status.isPending || refused) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (status.data === 404) return <PanelMessage>{t("artifacts.unavailable")}</PanelMessage>;

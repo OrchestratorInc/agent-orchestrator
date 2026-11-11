@@ -33,6 +33,8 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	const [width, setWidth] = useState(0);
 	const [failed, setFailed] = useState(false);
 	const [pageAvailable, setPageAvailable] = useState<boolean>();
+	// A Cloud page's frame, by the URL it reported for: a frame for another URL is still loading.
+	const [frame, setFrame] = useState<{ url?: string; state: "loading" | "failed" | "ready" }>({ state: "loading" });
 	const cloud = Boolean(row.cloud);
 	const imagePath = isRasterImagePath(row.path) || isSvgPath(row.path);
 	const plainText = PLAIN_TEXT.test(row.path);
@@ -49,6 +51,8 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		? cloud ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
 		: undefined;
 	const image = imagePath ? contentUrl : undefined;
+	const onFrameState = useCallback((state: "loading" | "failed" | "ready") => setFrame({ url: page, state }), [page]);
+	const frameState = cloud && page ? (frame.url === page ? frame.state : "loading") : undefined;
 	// A local video shows the frame Chromium paints after a metadata preload,
 	// which reads only the ranges it needs rather than the whole file.
 	const video = !cloud && fileMediaKind(row.path) === "video" ? contentUrl : undefined;
@@ -150,9 +154,9 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		|| (!page && !image && !video && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
 	// A preview that failed to load for a reason that may pass (the network, an expired access link, a read error).
-	const loadFailed = failed || access.isError || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400)));
+	const loadFailed = failed || access.isError || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400))) || frameState === "failed";
 	// What a snapshot of this card may wait for: the preview drawn, nothing worth drawing for good, or a failure to try again later.
-	const previewState = accessPending || imagePending || !visible || (readText && file.isPending) || (page && !cloud && pageAvailable === undefined)
+	const previewState = accessPending || imagePending || !visible || (readText && file.isPending) || (page && !cloud && pageAvailable === undefined) || frameState === "loading"
 		? "loading"
 		: loadFailed ? "error" : unavailable ? "unavailable" : "content";
 	const placeholder = (
@@ -168,7 +172,7 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 				<video crossOrigin={mediaCrossOrigin(video)} muted onError={() => setFailed(true)} playsInline preload="metadata" src={video} tabIndex={-1} className="h-full w-full object-cover object-top" />
 			) : page ? (
 				cloud ? (
-					<CloudArtifactFrame onAccessGranted={accessGranted} onAccessRefused={refreshAccess} thumbnail={{ width, height: pageHeight, fallback: placeholder }} title={row.name} url={page} />
+					<CloudArtifactFrame onAccessGranted={accessGranted} onAccessRefused={refreshAccess} onThumbnailState={onFrameState} thumbnail={{ width, height: pageHeight, fallback: placeholder }} title={row.name} url={page} />
 				) : pageAvailable ? (
 					<iframe
 						src={page}
