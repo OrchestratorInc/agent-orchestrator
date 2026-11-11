@@ -108,6 +108,8 @@ async function runDrag(
 		.filter((name): name is string => Boolean(name));
 	const wc = view.webContents;
 	const dbg = wc.debugger;
+	let last = start;
+	let cancelled = false;
 
 	let attached = false;
 	if (!dbg.isAttached()) {
@@ -148,23 +150,26 @@ async function runDrag(
 				} else {
 					await mouse("mouseMoved", p, true, { clickCount: 0 });
 				}
+				last = p;
 				await sleep(stepDelay);
 			}
 			await sleep(30);
-			if (drag && !signal?.aborted) {
+			cancelled = Boolean(signal?.aborted);
+			if (drag && !cancelled) {
 				if (!entered) await dragEvent("dragEnter", end);
 				await dragEvent("dragOver", end);
 				await dragEvent("drop", end);
 				dropped = true;
 			}
 		} finally {
-			await mouse("mouseReleased", end, false).catch(() => {});
+			await mouse("mouseReleased", last, false).catch(() => {});
 			dbg.removeListener("message", onMessage);
 			await dbg.sendCommand("Input.setInterceptDrags", { enabled: false }).catch(() => {});
 			try {
 				dbg.detach();
 			} catch {}
 		}
+		if (cancelled) fail("APP_DRAG_ABORTED", "The drag was cancelled before it finished.");
 		return { ok: true, route: "cdp", dragIntercepted: drag !== null, html5Drop: dropped };
 	}
 
@@ -184,11 +189,14 @@ async function runDrag(
 		for (const p of path) {
 			if (signal?.aborted) break;
 			send("mouseMove", p, true);
+			last = p;
 			await sleep(stepDelay);
 		}
 		await sleep(30);
+		cancelled = Boolean(signal?.aborted);
 	} finally {
-		send("mouseUp", end, false, 1);
+		send("mouseUp", last, false, 1);
 	}
+	if (cancelled) fail("APP_DRAG_ABORTED", "The drag was cancelled before it finished.");
 	return { ok: true, route: "send_input_event", dragIntercepted: false, html5Drop: false };
 }

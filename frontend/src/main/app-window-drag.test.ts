@@ -96,4 +96,28 @@ describe("dragInAppWindow", () => {
 		]);
 		expect(shell.sent).toEqual([]);
 	});
+
+	it("releases a cancelled drag where the pointer got to and reports it cancelled", async () => {
+		const args = { windowId: 4242, fromX: 10, fromY: 48, toX: 30, toY: 68, durationMs: 0, steps: 2 };
+		const cdp = view({ x: 0, y: 0, width: 800, height: 572 }, () => {});
+		const cdpCancel = new AbortController();
+		const sendCommand = cdp.view.webContents.debugger.sendCommand;
+		cdp.view.webContents.debugger.sendCommand = async (method, params) => {
+			if (params.type === "mouseMoved" && params.buttons === 1) cdpCancel.abort();
+			return sendCommand(method, params);
+		};
+		await expect(dragInAppWindow([windowWith([cdp.view])] as never, args, cdpCancel.signal)).rejects.toMatchObject({ code: "APP_DRAG_ABORTED" });
+		expect(cdp.cdp.filter(({ method }) => method === "Input.dispatchMouseEvent").map(({ params }) => `${params.type}@${params.x},${params.y}`))
+			.toEqual(["mouseMoved@5,10", "mousePressed@5,10", "mouseMoved@10,15", "mouseReleased@10,15"]);
+
+		const input = view({ x: 0, y: 0, width: 800, height: 572 }, refuse);
+		const inputCancel = new AbortController();
+		const sendInputEvent = input.view.webContents.sendInputEvent;
+		input.view.webContents.sendInputEvent = (event) => {
+			if (event.type === "mouseMove" && event.modifiers?.includes("leftButtonDown")) inputCancel.abort();
+			return sendInputEvent(event);
+		};
+		await expect(dragInAppWindow([windowWith([input.view])] as never, args, inputCancel.signal)).rejects.toMatchObject({ code: "APP_DRAG_ABORTED" });
+		expect(input.sent.map(({ type, x, y }) => `${type}@${x},${y}`)).toEqual(["mouseMove@10,20", "mouseDown@10,20", "mouseMove@20,30", "mouseUp@20,30"]);
+	});
 });
