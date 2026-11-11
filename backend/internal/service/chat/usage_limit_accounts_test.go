@@ -165,14 +165,14 @@ func TestUsageLimitAccountResetResumesBeforeDeadline(t *testing.T) {
 	ctx := context.Background()
 	reset := h.now().Add(2 * time.Hour)
 	source := failUsageLimitedTurnAt(t, h, "Usage limit reached", reset)
-	used, readErr, reads := 100.0, error(nil), 0
+	used, readErr, reads, incomplete := 100.0, error(nil), 0, false
 	h.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(_ context.Context, _ domain.SessionID, _ domain.AgentHarness, refresh bool) (string, domain.AgentAccountLimits, error) {
 		reads++
 		if !refresh {
 			t.Fatal("early reset check used a cached reading")
 		}
 		return "bound-account", domain.AgentAccountLimits{FetchedAt: h.now(),
-			Windows: []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: used}}}, readErr
+			Windows: []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: used}}, Incomplete: incomplete}, readErr
 	}))
 	if err := h.svc.SetTurnAutoResume(ctx, testSession, source.ID, true); err != nil {
 		t.Fatal(err)
@@ -192,9 +192,12 @@ func TestUsageLimitAccountResetResumesBeforeDeadline(t *testing.T) {
 	if err != nil || stored.UsageLimit == nil || !stored.UsageLimit.ResetsAt.Equal(reset) {
 		t.Fatalf("failed reading moved the deadline: %+v, %v", stored.UsageLimit, err)
 	}
-	readErr = nil
+	readErr, incomplete = nil, true
 	h.advance(5 * time.Minute)
-	resume(2, 3, "did not resume after the account reset")
+	resume(1, 3, "resumed on an incomplete reading")
+	incomplete = false
+	h.advance(5 * time.Minute)
+	resume(2, 4, "did not resume after the account reset")
 	stored, err = h.st.TurnByID(ctx, source.ID)
 	if err != nil || stored.UsageLimit == nil || stored.UsageLimit.AutoResume {
 		t.Fatalf("consent was not consumed: %+v, %v", stored.UsageLimit, err)

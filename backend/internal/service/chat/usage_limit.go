@@ -127,7 +127,7 @@ func (s *Service) resetEarly(ctx context.Context, store usageLimitStore, source 
 		s.log.Debug("usage-limit early reset check unavailable; keeping turn reset", "session", source.HandledBySessionID, "error", err)
 		limits.Windows = nil
 	}
-	if len(limits.Windows) == 0 {
+	if len(limits.Windows) == 0 || limits.Incomplete {
 		return false, nil
 	}
 	for _, w := range limits.Windows {

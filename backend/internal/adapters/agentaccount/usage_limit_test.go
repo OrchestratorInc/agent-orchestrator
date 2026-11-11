@@ -52,6 +52,26 @@ func TestClaudeLimitsAutoResumeResetUsesOnlyUnambiguousRollingWindows(t *testing
 	}
 }
 
+func TestClaudeLimitsIncompleteWindow(t *testing.T) {
+	for _, tc := range []struct {
+		body       string
+		incomplete bool
+	}{
+		{`{"five_hour":{"utilization":2},"seven_day":{"utilization":2}}`, false},
+		{`{"five_hour":{"utilization":2},"seven_day_opus":null}`, false},
+		{`{"five_hour":{"utilization":2},"seven_day":{"resets_at":"2026-08-02T10:02:00Z"}}`, true},
+		{`{"five_hour":{"utilization":-1}}`, true},
+	} {
+		var body claudeUsageBody
+		if err := json.Unmarshal([]byte(`{"rate_limits":`+tc.body+`}`), &body); err != nil {
+			t.Fatal(err)
+		}
+		if got := body.limits(time.Now()).Incomplete; got != tc.incomplete {
+			t.Fatalf("%s: incomplete = %v, want %v", tc.body, got, tc.incomplete)
+		}
+	}
+}
+
 type limitsAccountFactory struct {
 	ports.CodexAccountClientFactory
 	client *limitsAccountClient

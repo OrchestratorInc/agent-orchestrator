@@ -228,8 +228,15 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 		return out
 	}
 	add := func(id, label string, w *claudeUsageWindow) {
-		if w == nil || w.Utilization == nil {
+		if w == nil {
 			return
+		}
+		if w.Utilization == nil {
+			out.Incomplete = true
+			return
+		}
+		if *w.Utilization < 0 || *w.Utilization > 100 {
+			out.Incomplete = true
 		}
 		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100), DurationMinutes: 7 * 24 * 60}
 		if id == "five_hour" {
