@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -106,7 +109,7 @@ func TestAsyncScheduledStartFailuresCount(t *testing.T) {
 	runID := domain.AutomationRunID("run-1")
 	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, AutomationRunID: &runID}
 	for i := 0; i < autoSpawnFailureLimit; i++ {
-		svc.settleAutoSpawn(rec, false, fmt.Errorf("spawn: %w", sessionmanager.ErrChatController))
+		svc.settleAutoSpawn(rec, false, fmt.Errorf("spawn: %w", sessionmanager.ErrUnsupportedModel))
 	}
 	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AutomationRunID: &runID}); spawnCode(err) != "AUTO_SPAWN_PAUSED" {
 		t.Fatalf("start after three failed async schedule starts = %v, want AUTO_SPAWN_PAUSED", err)
@@ -118,5 +121,99 @@ func TestAsyncScheduledStartFailuresCount(t *testing.T) {
 	}
 	if _, _, _, err := svc2.Spawn(context.Background(), intakeStart); spawnCode(err) == "AUTO_SPAWN_PAUSED" {
 		t.Fatal("cancelled starts paused automatic starts")
+	}
+}
+
+func TestAutoSpawnTransientFailuresNeverPauseAndBreakTheStreak(t *testing.T) {
+	for _, failure := range []error{context.DeadlineExceeded, errors.New("disk stall"), sessionmanager.ErrChatController, sessionmanager.ErrWorkspaceCreate} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			svc, _, fc, attempts := newBreakerService(t)
+			fc.spawnErr = sessionmanager.ErrUnsupportedModel
+			for i := 0; i < 2; i++ {
+				_, _, _, _ = svc.Spawn(t.Context(), intakeStart)
+			}
+			fc.spawnErr = failure
+			for i := 0; i < 5; i++ {
+				if _, _, _, err := svc.Spawn(t.Context(), intakeStart); spawnCode(err) == "AUTO_SPAWN_PAUSED" {
+					t.Fatal("transient failure paused automatic starts")
+				}
+			}
+			fc.spawnErr = sessionmanager.ErrUnsupportedModel
+			for i := 0; i < 2; i++ {
+				_, _, _, _ = svc.Spawn(t.Context(), intakeStart)
+			}
+			if *attempts != 9 {
+				t.Fatalf("attempts = %d, want all 9 to run", *attempts)
+			}
+		})
+	}
+}
+
+func TestAutoSpawnCooldownAllowsRecoveryWithoutSettingsChange(t *testing.T) {
+	svc, st, fc, attempts := newBreakerService(t)
+	now := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+	svc.clock = func() time.Time { return now }
+	fc.spawnErr = ports.ErrChatAuthRequired
+	for i := 0; i < 3; i++ {
+		_, _, _, _ = svc.Spawn(t.Context(), intakeStart)
+	}
+	_, _, _, err := svc.Spawn(t.Context(), intakeStart)
+	if spawnCode(err) != "AUTO_SPAWN_PAUSED" {
+		t.Fatalf("before cooldown = %v", err)
+	}
+	// Logging in changes neither the project settings nor the harness.
+	fc.spawnErr = nil
+	now = now.Add(30 * time.Minute)
+	if pauses := svc.AutoSpawnPauses(t.Context(), st.projects["mer"]); len(pauses) != 0 {
+		t.Fatalf("expired pauses = %+v", pauses)
+	}
+	if _, _, _, err := svc.Spawn(t.Context(), intakeStart); err != nil {
+		t.Fatalf("probe after login = %v", err)
+	}
+	if *attempts != 4 {
+		t.Fatalf("attempts = %d, want 4", *attempts)
+	}
+	if _, _, _, err := svc.Spawn(t.Context(), intakeStart); err != nil {
+		t.Fatalf("after recovered probe = %v", err)
+	}
+}
+
+func TestAutoSpawnCooldownAdmitsOnlyOneProbeAndRepauses(t *testing.T) {
+	svc, _, fc, attempts := newBreakerService(t)
+	now := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+	svc.clock = func() time.Time { return now }
+	fc.spawnErr = sessionmanager.ErrUnsupportedModel
+	for i := 0; i < 3; i++ {
+		_, _, _, _ = svc.Spawn(t.Context(), intakeStart)
+	}
+	now = now.Add(30 * time.Minute)
+	_, _, _, err := svc.Spawn(t.Context(), intakeStart)
+	if spawnCode(err) != "UNSUPPORTED_MODEL" || *attempts != 4 {
+		t.Fatalf("probe = %v after %d attempts", err, *attempts)
+	}
+	for i := 0; i < 5; i++ {
+		if _, _, _, err := svc.Spawn(t.Context(), intakeStart); spawnCode(err) != "AUTO_SPAWN_PAUSED" {
+			t.Fatalf("after failed probe = %v", err)
+		}
+	}
+	now = now.Add(30 * time.Minute)
+	var admitted atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Go(func() {
+			if _, paused := svc.autoSpawns.paused(autoSpawnKey{project: "mer"}, autoSpawnSettings(domain.ProjectRecord{Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "old-model"}}}), now); !paused {
+				admitted.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if admitted.Load() != 1 {
+		t.Fatalf("concurrent probes = %d, want 1", admitted.Load())
+	}
+	// A slow probe remains the only probe even beyond another cooldown.
+	key := autoSpawnKey{project: "mer"}
+	settings := autoSpawnSettings(domain.ProjectRecord{Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "old-model"}}})
+	if _, paused := svc.autoSpawns.paused(key, settings, now.Add(time.Hour)); !paused {
+		t.Fatal("an in-flight probe admitted another automatic start")
 	}
 }

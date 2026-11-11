@@ -20,6 +20,9 @@ import (
 // and tracker intake and schedules used to retry it hundreds of times.
 const autoSpawnFailureLimit = 3
 
+// A paused key admits one automatic probe after this cooldown.
+const autoSpawnCooldown = 30 * time.Minute
+
 // automaticSpawn reports a start no person asked for just now: tracker intake
 // (CreatedBy automation) or a schedule occurrence (AutomationRunID). Manual
 // starts from the desktop, CLI or mobile, and agents running `ao spawn`, are
@@ -39,6 +42,7 @@ type autoSpawnStreak struct {
 	count    int
 	settings string // the project's agent settings when the streak began
 	pausedAt time.Time
+	probing  bool
 }
 
 // autoSpawnBreaker counts consecutive automatic start failures.
@@ -61,11 +65,19 @@ func (b *autoSpawnBreaker) current(key autoSpawnKey, settings string) *autoSpawn
 }
 
 // paused returns the pause in force for key, if any.
-func (b *autoSpawnBreaker) paused(key autoSpawnKey, settings string) (domain.AutoSpawnPause, bool) {
+func (b *autoSpawnBreaker) paused(key autoSpawnKey, settings string, now time.Time) (domain.AutoSpawnPause, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	streak := b.current(key, settings)
 	if streak == nil || streak.pausedAt.IsZero() {
+		return domain.AutoSpawnPause{}, false
+	}
+	if !streak.probing && !now.Before(streak.pausedAt.Add(autoSpawnCooldown)) {
+		// Reserve the probe under the same lock so concurrent schedule/intake
+		// starts cannot all pass after the cooldown. Success clears the pause;
+		// the same failure leaves it paused for another cooldown.
+		streak.pausedAt = now
+		streak.probing = true
 		return domain.AutoSpawnPause{}, false
 	}
 	return streak.pause(key), true
@@ -86,7 +98,8 @@ func (b *autoSpawnBreaker) fail(key autoSpawnKey, settings, code, message string
 	}
 	streak.count++
 	streak.message = message
-	if streak.count >= autoSpawnFailureLimit && streak.pausedAt.IsZero() {
+	if streak.probing || (streak.count >= autoSpawnFailureLimit && streak.pausedAt.IsZero()) {
+		streak.probing = false
 		streak.pausedAt = now
 		return true
 	}
@@ -102,7 +115,7 @@ func (b *autoSpawnBreaker) succeed(key autoSpawnKey) {
 }
 
 // pauses lists the pauses in force for a project.
-func (b *autoSpawnBreaker) pauses(project domain.ProjectID, settings string) []domain.AutoSpawnPause {
+func (b *autoSpawnBreaker) pauses(project domain.ProjectID, settings string, now time.Time) []domain.AutoSpawnPause {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var out []domain.AutoSpawnPause
@@ -110,7 +123,7 @@ func (b *autoSpawnBreaker) pauses(project domain.ProjectID, settings string) []d
 		if key.project != project {
 			continue
 		}
-		if streak := b.current(key, settings); streak != nil && !streak.pausedAt.IsZero() {
+		if streak := b.current(key, settings); streak != nil && !streak.pausedAt.IsZero() && (streak.probing || now.Before(streak.pausedAt.Add(autoSpawnCooldown))) {
 			out = append(out, streak.pause(key))
 		}
 	}
@@ -141,7 +154,7 @@ func autoSpawnHarness(cfg ports.SpawnConfig, project domain.ProjectRecord) domai
 // AutoSpawnPauses lists the automatic-start pauses in force for a project,
 // for the project list the desktop reads.
 func (s *Service) AutoSpawnPauses(ctx context.Context, project domain.ProjectRecord) []domain.AutoSpawnPause {
-	return s.autoSpawns.pauses(domain.ProjectID(project.ID), autoSpawnSettings(project))
+	return s.autoSpawns.pauses(domain.ProjectID(project.ID), autoSpawnSettings(project), s.now())
 }
 
 // spawnUnlessAutoPaused runs spawn, refusing an automatic start whose project
@@ -154,9 +167,9 @@ func (s *Service) spawnUnlessAutoPaused(ctx context.Context, cfg ports.SpawnConf
 		project, ok, err := s.store.GetProject(ctx, string(cfg.ProjectID))
 		if err == nil && ok {
 			key, settings = autoSpawnKey{project: cfg.ProjectID, harness: autoSpawnHarness(cfg, project)}, autoSpawnSettings(project)
-			if pause, paused := s.autoSpawns.paused(key, settings); paused {
+			if pause, paused := s.autoSpawns.paused(key, settings, s.now()); paused {
 				return domain.Session{}, 0, 0, apierr.Conflict("AUTO_SPAWN_PAUSED",
-					fmt.Sprintf("Automatic starts for this project are paused after %d failed starts in a row (%s). Start a session yourself or change the project's agent or model settings to resume.", pause.Failures, pause.ErrorCode),
+					fmt.Sprintf("Automatic starts for this project are paused after %d failed starts in a row (%s). A probe start is allowed automatically after a 30-minute cooldown. Start a session yourself or change the project's agent or model settings to retry sooner.", pause.Failures, pause.ErrorCode),
 					map[string]any{"errorCode": pause.ErrorCode, "harness": string(pause.Harness)})
 			}
 		} else {
@@ -180,8 +193,15 @@ func (s *Service) spawnUnlessAutoPaused(ctx context.Context, cfg ports.SpawnConf
 // recordAutoSpawnFailure counts one failed automatic start. A cancelled start
 // is not a failure, and a pause refusal is not a new attempt.
 func (s *Service) recordAutoSpawnFailure(key autoSpawnKey, settings string, err error) {
-	_, code := telemetrymeta.ErrorKindAndCode(toSpawnAPIError(err))
-	if code == "" || code == "SPAWN_CANCELLED" || code == "AUTO_SPAWN_PAUSED" || errors.Is(err, context.Canceled) {
+	kind, code := telemetrymeta.ErrorKindAndCode(toSpawnAPIError(err))
+	if code == "AUTO_SPAWN_PAUSED" {
+		return
+	}
+	// Only repeatable configuration/authentication failures justify a pause.
+	// Transient failures break a streak instead of accumulating across sleep,
+	// network outages, controller crashes, or slow disk operations.
+	if kind == "internal" || errors.Is(err, context.Canceled) || !autoSpawnConfigFailure(code) {
+		s.autoSpawns.succeed(key)
 		return
 	}
 	message := code
@@ -191,7 +211,19 @@ func (s *Service) recordAutoSpawnFailure(key autoSpawnKey, settings string, err 
 	}
 	if s.autoSpawns.fail(key, settings, code, message, s.now()) && s.logger != nil {
 		s.logger.Warn("session: automatic starts paused after repeated identical failures",
-			"project", key.project, "harness", key.harness, "code", code, "failures", autoSpawnFailureLimit)
+			"project", key.project, "harness", key.harness, "code", code, "failure_limit", autoSpawnFailureLimit)
+	}
+}
+
+func autoSpawnConfigFailure(code string) bool {
+	switch code {
+	case "UNSUPPORTED_MODEL", "UNSUPPORTED_EFFORT", "UNKNOWN_HARNESS", "AGENT_REQUIRED",
+		"AGENT_BINARY_NOT_FOUND", "RUNTIME_PREREQUISITE_MISSING", "CHAT_PERMISSION_MODE_UNSUPPORTED",
+		"SESSION_MODE_UNSUPPORTED", "CHAT_AUTH_REQUIRED", "AGENT_AUTH_REQUIRED", "TARGET_AGENT_UNAUTHORIZED",
+		"CODEX_ACCOUNT_AUTH_UNVERIFIED", "AGENT_ACCOUNT_DEFAULT_UNUSABLE", "CHAT_DRIVER_INCOMPATIBLE":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -18,9 +18,8 @@ function seenPauses(): Set<string> {
 
 /**
  * Shows each automatic-start pause once. The daemon stops tracker intake and
- * schedule starts for a project and harness after three identical failures;
- * the pause stays listed on the project until a start succeeds or the
- * project's agent settings change, so "once" is remembered per pause.
+ * schedule starts for a project and harness after three identical configuration or authentication failures. A cooldown
+ * admits one automatic probe; notices are remembered per pause.
  */
 export function useAutoSpawnPauseNotice(projects: { id: string; name: string; autoSpawnPauses?: AutoSpawnPause[] }[]) {
 	const { t } = useTranslation();
@@ -37,7 +36,7 @@ export function useAutoSpawnPauseNotice(projects: { id: string; name: string; au
 				showGlobalToast(
 					t("autoSpawnPause.title", { defaultValue: "Automatic starts paused for {{project}}", project: project.name }),
 					t("autoSpawnPause.body", {
-						defaultValue: "{{failures}} automatic starts with {{harness}} failed in a row: {{message}} Start a session yourself or change the project's agent or model settings to resume.",
+						defaultValue: "{{failures}} automatic starts with {{harness}} failed in a row: {{message}} An automatic probe is allowed after a 30-minute cooldown. Start a session yourself or change the project's agent or model settings to retry sooner.",
 						failures: pause.failures,
 						harness: pause.harness,
 						message: pause.message,
