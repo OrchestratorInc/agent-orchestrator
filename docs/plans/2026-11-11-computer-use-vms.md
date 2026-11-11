@@ -1,34 +1,29 @@
-# Plan: Agents in a local VM
+# Plan: Computer-use tools that run in a local VM
 
 Status: proposed (2026-11-11). Not implemented yet.
 
 ## The idea
 
-Run AO inside a virtual machine on the user's own machine, and use the desktop
-app as a client. Almost everything this needs already exists.
+The agent stays where it runs today. Only its computer-use tool calls run in
+a virtual machine on the same machine.
 
-- **The VM is a remote host.** AO already runs its daemon on another machine
-  with the desktop app as a client ([remote hosts](../self-hosted-remote.md)).
-  A local VM is one more such machine.
-- **The agent lives in the VM.** Its shell, its worktree, and the desktop it
-  operates are all inside. Nothing of the agent runs on the host.
-- **Computer use is today's code, unchanged.** Inside the VM, Cua Driver and
-  the existing computer-use tools work as they do on any machine.
-- **No Cloudflare, no cloud computer.** The app reaches the VM on its private
-  address with a pairing code. The tunnel is not used.
-
-Who runs the agent: the AO daemon inside the VM starts the agent CLI (Claude
-Code, Codex, and so on) as a process in the VM. The app on the host only
-shows it. The model is still the provider's: the agent calls its model API
-over the internet, as it does today.
+- **The agent does not move.** Same session, same repositories, same logins,
+  on the host.
+- **The tool runs in the VM.** When the agent calls `click`, the click happens
+  on the VM's desktop, done by Cua Driver there. The host desktop is never
+  touched.
+- **Built from existing parts.** The VM runs AO with Cua Driver, using the
+  installer and the computer-use code that exist today. The host's AO forwards
+  each tool call to it over the paired connection remote hosts already use.
+- **No Cloudflare.** The host reaches the VM on its private address.
 
 ## What it protects
 
-| | Today | Local VM |
+| | Today | With the VM |
 | --- | --- | --- |
-| The user's screen, apps, sign-ins | Agents act on them | Never touched |
-| Files on the host | Readable by the agent | Not visible |
-| The agent process (shell, worktree) | On the host | In the VM |
+| The user's screen, apps, sign-ins | Computer use acts on them | Never touched |
+| Host privacy grants for Cua Driver | Required | Not needed |
+| The agent process (shell, repositories) | On the host | **Still on the host** |
 | The local network | Reachable | **Still reachable from the VM** |
 
 ## How it works
@@ -36,80 +31,82 @@ over the internet, as it does today.
 ```mermaid
 flowchart LR
   subgraph mac["Your Mac"]
-    app["AO desktop app<br/>you chat here"]
-    desk["Your desktop, files, sign-ins<br/>no agent runs here"]
-    subgraph vm["Virtual machine (agents only)"]
-      daemon["AO daemon<br/>remote host"]
-      agent["Agent<br/>shell, worktree"]
+    agent["Agent<br/>shell, repositories, logins"]
+    ao["AO<br/>on/off switch"]
+    desk["Your desktop<br/>computer use never touches it"]
+    subgraph vm["Virtual machine"]
+      vmao["AO in the VM<br/>existing computer-use code"]
       vmdesk["VM desktop<br/>its own apps and sign-ins"]
     end
   end
-  app -- "1 message" --> daemon
-  daemon -- "2 runs" --> agent
-  agent -- "3 Cua Driver" --> vmdesk
-  daemon -- "4 results" --> app
+  agent -- "1 click" --> ao
+  ao -- "2 forwards" --> vmao
+  vmao -- "3 Cua Driver" --> vmdesk
+  vmao -- "4 result" --> ao
+  ao -- "result" --> agent
 ```
 
-1. You send a message in the AO app.
-2. The app passes it to the AO daemon inside the VM, over the VM's private
-   address, with the credential it got from pairing.
-3. The agent runs inside the VM. Its shell, its worktree, and computer use all
-   act on the VM.
-4. Chat, terminal output, and screenshots stream back to the app.
+1. The agent, on the host, calls `click` as it does today.
+2. The host's AO sees that computer use is set to the VM and forwards the
+   call to AO in the VM, over the VM's private address with a pairing
+   credential.
+3. AO in the VM runs the call through the existing computer-use code. Cua
+   Driver clicks on the VM's desktop.
+4. The result and screenshot come back. The host's AO saves the screenshot
+   and returns both to the agent.
 
 ## What exists and what is missing
 
 | Need | Exists today | Gap |
 | --- | --- | --- |
-| AO inside the VM | `scripts/setup-self-hosted.sh`, for macOS and Linux. Without `--tunnel` it starts the direct listener only. | None. Confirm it on a macOS guest. |
-| Connect the app to the VM | `ao remote-host pair`, then **Settings > Remote hosts > Add host** | The desktop asks for AO sign-in before it connects a remote host. A local VM should need none, and its credential should not sync to AO Cloud. |
-| Projects, sessions, agent installs on the VM | The remote-host workflow | None |
-| Computer use in the VM | Cua Driver and the computer-use tools | No way to turn it on there: the settings route is blocked on the remote listener by design, and there is no CLI. Add `ao computer-use on\|off\|status`. |
-| Cua Driver in the VM | Cua's official installer | Run it in the VM. The user approves the macOS privacy prompts in the VM window. |
+| AO and Cua Driver in the VM | `scripts/setup-self-hosted.sh` (macOS and Linux; without `--tunnel` it starts the direct listener only), Cua's installer, the computer-use service | A command to turn computer use on inside the VM: `ao computer-use on`. Today only the Settings page can. |
+| A secure link from host to VM | The remote listener, one-time pairing codes, per-device tokens, the host-ID check | The host's daemon must store the VM's address and credential. Today only the desktop app holds remote credentials. |
+| Calling computer use on another AO | `POST /computer-use/call` and `GET /computer-use/agent-tools` | Both are blocked on the remote listener by design. Allow these two only on a VM that opts in. Needs an ADR. |
+| Screenshots | The VM's AO saves them as files | Send the image bytes back with the call; the host saves them. |
+| Choosing where computer use runs | The on/off switch | A new setting: this computer or the VM, read on every call. |
 | The VM | Nothing | Phase 1: the user creates it with Lume from a recipe. Phase 2: AO creates and manages it. |
-| The VM's address | Host-ID check stops a wrong host | The private address can change after a reboot. Phase 2: AO reads it again. |
+
+Nothing changes for the agent: the same `ao` tool server, the same eight
+tools, the same guide.
 
 ## Phases
 
-1. **Recipe.** A docs page, the `ao computer-use` command, and local hosts
-   without sign-in. The VM is set up by hand:
+1. **Recipe.** Close the gaps above. The VM is set up by hand:
    1. Install Lume, create a macOS VM, and start it.
    2. In the VM, run `setup-self-hosted.sh` without `--tunnel`. It prints an
       address and a pairing code.
-   3. In the VM, install Cua Driver, approve its privacy prompts, and run
-      `ao computer-use on`.
-   4. On the Mac, add the host in **Settings > Remote hosts** with that
-      address and code.
-   5. In **Settings > Harness**, pick the VM and install or sign in to an
-      agent. For private repositories, run `gh auth login` in the VM.
+   3. In the VM, install Cua Driver, approve its privacy prompts in the VM
+      window, and run `ao computer-use on`.
+   4. On the host, in **Settings > Computer use agents**, choose the VM and
+      enter that address and code.
 2. **One button.** AO creates the VM with Lume under `~/.ao/vms`, runs the
-   steps above, pairs itself, keeps the address current, and offers start,
-   stop, and reset.
+   recipe, pairs itself, keeps the address current, and offers start, stop,
+   and reset.
 3. **Linux hosts.** An Ubuntu x64 guest with a desktop session.
 
 ## Risks that remain
 
+- **The agent is still on the host**, with its shell and files. This plan
+  moves desktop control only.
 - **Network.** The VM can reach the internet, the user's network, and host
-  services that listen beyond loopback. AO's own host listener is
-  loopback-only.
-- **Plain HTTP between app and VM.** It stays on the machine's private
+  services that listen beyond loopback.
+- **Plain HTTP between host and VM.** It stays on the machine's private
   virtual network and needs the pairing credential.
-- **Credentials in the VM.** Agent logins and GitHub tokens placed in the VM
-  are available to the agent there. Use scoped tokens.
-- **Limits.** Apple silicon only for a macOS guest, and Apple allows two macOS
-  VMs at once.
+- **Shared VM.** Every session's computer use lands in the same VM, and
+  accounts signed in there are available to all of them.
 
-## Alternative: only the desktop in the VM
+## Alternatives
 
-The agent stays on the host and AO forwards its computer-use calls to Cua
-Driver in the VM, over MCP on SSH. It keeps repositories and logins on the
-host, but it needs more new code and leaves the agent's shell on the host.
-Choose it only if repositories and logins must not enter the VM.
+- **Move the whole agent into the VM.** Use the VM as an ordinary remote
+  host. Stronger isolation and no forwarding code, but repositories and
+  logins move into the VM.
+- **No AO in the VM.** The host talks straight to Cua Driver in the VM, over
+  MCP on SSH. A lighter VM, but more new code on the host.
 
 ## Open questions
 
-1. Is AO sign-in acceptable for this customer, or is local-only pairing
-   required from the first release?
+1. Is it acceptable to open the two computer-use routes on a VM's remote
+   listener, opt-in only?
 2. Which host and guest does the customer need: macOS, Linux, or Windows?
 3. Is network reach from the VM acceptable for the first release?
 4. Does the original proposal differ from this? It was not available when
