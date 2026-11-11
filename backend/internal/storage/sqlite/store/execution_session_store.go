@@ -137,7 +137,13 @@ func (s *Store) RecoverExecutionAdmissionSession(ctx context.Context, ad domain.
 			return domain.ErrSchedulerAdmissionConflict
 		}
 		state := domain.AdmissionUncertain
-		if !observation.Terminated && observation.Readiness == ports.SessionReadinessReady && observation.ControllerGeneration != "" && observation.ControllerGeneration == domain.SessionExecutionGeneration(rec) && (ad.ControllerGeneration == "" || ad.ControllerGeneration == observation.ControllerGeneration) {
+		sameGeneration := observation.ControllerGeneration != "" && observation.ControllerGeneration == domain.SessionExecutionGeneration(rec) &&
+			(ad.ControllerGeneration == "" || ad.ControllerGeneration == observation.ControllerGeneration)
+		// 重启后普通 Chat 的 controller 已退出是可重试的冷状态；工作流仍须保持 uncertain，
+		// 由 Attempt 结算决定，不能把一次退出误当成可再次执行。
+		if !observation.Terminated && sameGeneration &&
+			(observation.Readiness == ports.SessionReadinessReady ||
+				ad.AttemptID == "" && ad.Mode == domain.SessionModeChat && observation.Readiness == ports.SessionReadinessExited) {
 			state = domain.AdmissionActive
 		}
 		n, err := q.RecoverExecutionAdmissionSession(ctx, gen.RecoverExecutionAdmissionSessionParams{ID: ad.ID, Revision: ad.Revision, OwnerID: ad.Fence.OwnerID, Epoch: ad.Fence.Epoch, SessionID: schedulerString(string(observation.SessionID)), State: state, Now: now.UTC()})

@@ -127,3 +127,60 @@ func TestM3LegacySessionRestartCountsOneSlot(t *testing.T) {
 		t.Fatalf("occupied=%+v err=%v", occupied, err)
 	}
 }
+
+// 守护普通 Chat 重启后的退出槽：恢复必须只把同代际 observed exit 重新占位，
+// 否则下一次 Resume 会永久卡在 execution admission。
+func TestExitedChatRestartsAfterRecovery(t *testing.T) {
+	x := newRestartFixture(t)
+	ctx := context.Background()
+	x.rec.Activity.State = domain.ActivityExited
+	if err := x.s.UpdateSession(ctx, x.rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.s.RecoverExecutionAdmissionSession(ctx, x.ad, ports.SessionObservation{
+		SessionID: x.rec.ID, ClientRequestID: x.rec.ClientRequestID,
+		ControllerGeneration: x.rec.Metadata.ControllerGeneration,
+		Readiness:            ports.SessionReadinessExited, ObservedAt: x.now,
+	}, x.now); err != nil {
+		t.Fatal(err)
+	}
+	adopted, _, err := x.s.GetSchedulerAdmission(ctx, x.ad.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted.State != domain.AdmissionActive {
+		t.Fatalf("exited Chat admission = %s, want active", adopted.State)
+	}
+	if err := x.s.AdmitSessionRestart(ctx, x.rec, "resumed", x.proof); err != nil {
+		t.Fatalf("resume exited Chat: %v", err)
+	}
+}
+
+// 放行只针对普通 Chat：工作流退出仍由 Attempt 决策，旧代际仍可能是在途启动。
+func TestExitedAdmissionRecoveryKeepsWorkflowAndDriftedGenerationUncertain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		generation string
+	}{
+		{name: "controller generation drifted", generation: "replacement"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newRestartFixture(t)
+			ctx := context.Background()
+			generation := x.rec.Metadata.ControllerGeneration
+			if tc.generation != "" {
+				generation = tc.generation
+			}
+			if err := x.s.RecoverExecutionAdmissionSession(ctx, x.ad, ports.SessionObservation{
+				SessionID: x.rec.ID, ControllerGeneration: generation,
+				Readiness: ports.SessionReadinessExited, ObservedAt: x.now,
+			}, x.now); err != nil {
+				t.Fatal(err)
+			}
+			kept, _, err := x.s.GetSchedulerAdmission(ctx, x.ad.ID)
+			if err != nil || kept.State != domain.AdmissionUncertain {
+				t.Fatalf("admission = %+v err=%v, want uncertain", kept, err)
+			}
+		})
+	}
+}
