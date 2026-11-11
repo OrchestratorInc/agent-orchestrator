@@ -132,6 +132,11 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		ui.setAutoStartOrchestrator(projectId, false);
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
+	// A Cloud standalone agent has no board: its one session is the agent.
+	// Arriving on its project (archiving it from Pinned) leaves for Home.
+	useEffect(() => {
+		if (workspace?.standaloneAgent) void navigate({ to: "/", replace: true });
+	}, [navigate, workspace?.standaloneAgent]);
 	useSessionShortcut("open-orchestrator", () => {
 		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || isScratchpadWorkspace(workspace) || workspace?.shared) return;
 		projectActions.openOrchestrator();

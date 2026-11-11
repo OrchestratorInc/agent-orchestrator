@@ -918,6 +918,7 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 			entries={ownEntries}
 			me={myEmail}
 			locale={locale}
+			membersHaveAccess={!controller.standaloneAgent}
 		/>
 	);
 	const accessList = (
@@ -1470,7 +1471,7 @@ function TeamMemberLine({ member, teamId, scope }: { member: CloudCpTeamMemberAc
  * weighed against what they already have, so the line names who gains, who
  * keeps more, and who is already a workspace member.
  */
-function StagedSummary({ orgId, projectId, sessionId, scope, staged, role, modeCap, onCapChange, entries, me, locale }: {
+function StagedSummary({ orgId, projectId, sessionId, scope, staged, role, modeCap, onCapChange, entries, me, locale, membersHaveAccess = true }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string | undefined;
@@ -1482,6 +1483,8 @@ function StagedSummary({ orgId, projectId, sessionId, scope, staged, role, modeC
 	entries: CloudCpShareEntry[];
 	me: string | undefined;
 	locale: string;
+	/** False for a Cloud standalone agent: the workspace's people get only what a share gives them. */
+	membersHaveAccess?: boolean;
 }) {
 	const { t } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
@@ -1511,7 +1514,7 @@ function StagedSummary({ orgId, projectId, sessionId, scope, staged, role, modeC
 				if (member.member.you || (member.member.email && member.member.email.toLowerCase() === me)) continue;
 				const key = member.member.email || member.member.id;
 				const label = member.member.name || member.member.email || t("teams.someone");
-				if (member.member.workspaceMember) add(workspace, key, label);
+				if (membersHaveAccess && member.member.workspaceMember) add(workspace, key, label);
 				else if (member.member.invited && !member.member.name) add(onSignIn, key, label);
 				else if ((ROLE_RANK[member.access.role ?? ""] ?? 0) >= ROLE_RANK[role]!) add(keeps, key, label);
 				else add(gets, key, label);
@@ -1534,7 +1537,7 @@ function StagedSummary({ orgId, projectId, sessionId, scope, staged, role, modeC
 		if (workspace.length) parts.push(t("share.summary.workspace", { count: workspace.length, names: names(workspace) }));
 		if (parts.length === 0) parts.push(t("share.summary.nobody"));
 		return parts.join(" ");
-	}, [entries, locale, me, role, scope, staged, t, teamAccess]);
+	}, [entries, locale, me, membersHaveAccess, role, scope, staged, t, teamAccess]);
 
 	return (
 		<div className="flex flex-col gap-2 rounded-md bg-muted/40 px-3 py-2.5" data-share-summary="">
