@@ -30,7 +30,7 @@ uri="file:$HOME/Library/Application%20Support/com.conductor.app/conductor.db?mod
 sqlite3 -line "$uri" "SELECT * FROM repos WHERE root_path = '<root>'"
 ```
 
-The useful columns are `setup_script`, `archive_script`, `run_script`, `custom_prompt_general`, and `file_include_globs`. If the files and the database disagree, show the user both and ask which to keep.
+In `<root>`, write each `'` as `''`. The useful columns are `setup_script`, `archive_script`, `run_script`, `custom_prompt_general`, and `file_include_globs`. If the files and the database disagree, show the user both and ask which to keep.
 
 ## 3. Map each setting
 
