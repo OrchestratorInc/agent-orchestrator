@@ -6466,13 +6466,20 @@ function atCarryingSteer(items: ConversationItem[], deliveries: readonly Batched
 		return steer && !moved.has(delivery.turnId) ? [[delivery.turnId, steer] as const] : [];
 	}));
 	if (carriers.size === 0) return items;
-	let carried = 0;
+	const sentAt = (turnId: string) => {
+		const index = carriers.get(turnId)?.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1;
+		return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+	};
+	const place = new Map(items
+		.filter((item) => item.turnId && carriers.has(item.turnId))
+		.sort((a, b) => sentAt(a.turnId!) - sentAt(b.turnId!) || a.sequence - b.sequence)
+		.map((item, index) => [item, index + 1] as const));
 	return items
 		.map((item) => {
 			const steer = item.turnId ? carriers.get(item.turnId) : undefined;
-			if (!steer) return item;
-			carried += 1;
-			const sequence = steer.sequence + carried / 1000;
+			const placed = place.get(item);
+			if (!steer || placed === undefined) return item;
+			const sequence = steer.sequence + placed / 1000;
 			const cached = carriedRows.get(item);
 			if (cached && cached.turnId === steer.turnId && cached.sequence === sequence) return cached;
 			const row = { ...item, turnId: steer.turnId, sequence };
