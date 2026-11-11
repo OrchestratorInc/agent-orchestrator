@@ -5334,9 +5334,9 @@ paths:
       summary: Initialize a selected folder as a Git repository with an initial commit
       tags:
       - projects
-  /api/v1/prs/{id}/attachments:
-    post:
-      operationId: uploadPRAttachment
+  /api/v1/prs/{id}/attachment-access:
+    get:
+      operationId: getPRAttachmentAccess
       parameters:
       - description: PR number.
         in: path
@@ -5345,18 +5345,19 @@ paths:
         schema:
           description: PR number.
           type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UploadPRAttachmentRequest'
+      - description: The pull request's URL.
+        in: query
+        name: prUrl
         required: true
+        schema:
+          description: The pull request's URL.
+          type: string
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UploadPRAttachmentResponse'
+                $ref: '#/components/schemas/PRAttachmentAccessResponse'
           description: OK
         "400":
           content:
@@ -5370,19 +5371,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Found
-        "422":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Unprocessable Entity
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Upload a file a pull request comment can embed or link
+      summary: Whether files can be attached to a pull request's comments, and where
+        they would be stored
       tags:
       - prs
   /api/v1/prs/{id}/comments:
@@ -5415,6 +5405,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -20420,6 +20416,35 @@ components:
       - id
       - projectId
       type: object
+    PRAttachmentAccessResponse:
+      properties:
+        allowed:
+          type: boolean
+        location:
+          type: string
+        reason:
+          enum:
+          - no_write_access
+          - unsupported
+          type: string
+      required:
+      - allowed
+      type: object
+    PRCommentAttachment:
+      properties:
+        contentType:
+          type: string
+        data:
+          minLength: 1
+          type: string
+        name:
+          minLength: 1
+          type: string
+      required:
+      - name
+      - contentType
+      - data
+      type: object
     PRReviewState:
       properties:
         latestRun:
@@ -20528,6 +20553,11 @@ components:
       type: object
     PostPRCommentRequest:
       properties:
+        attachments:
+          items:
+            $ref: '#/components/schemas/PRCommentAttachment'
+          maxItems: 10
+          type: array
         body:
           minLength: 1
           type: string
@@ -24252,41 +24282,6 @@ components:
       - path
       - content
       - expectedFileFingerprint
-      type: object
-    UploadPRAttachmentRequest:
-      properties:
-        contentType:
-          type: string
-        data:
-          minLength: 1
-          type: string
-        name:
-          minLength: 1
-          type: string
-        prUrl:
-          minLength: 1
-          type: string
-      required:
-      - prUrl
-      - name
-      - contentType
-      - data
-      type: object
-    UploadPRAttachmentResponse:
-      properties:
-        markdown:
-          type: string
-        name:
-          type: string
-        ok:
-          type: boolean
-        url:
-          type: string
-      required:
-      - ok
-      - url
-      - name
-      - markdown
       type: object
     UsageHookMetadata:
       properties:

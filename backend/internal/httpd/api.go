@@ -292,6 +292,7 @@ func (a *API) Register(root chi.Router) {
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
+				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
@@ -305,6 +306,13 @@ func (a *API) Register(root chi.Router) {
 					// followed by its own read: either outlasts the REST budget.
 					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
 						computerUse.ServeHTTP(w, req)
+						return
+					}
+					// A stack merge waits up to two minutes for the provider to land
+					// it (stackMergeWait in the GitHub adapter), after the layers'
+					// own readiness reads.
+					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/prs/{id}/stack/merge" {
+						stackMerge.ServeHTTP(w, req)
 						return
 					}
 					// A spawn, an orchestrator start or a restore runs the project's
@@ -406,7 +414,8 @@ func attachmentUploadRoute(req *http.Request) bool {
 		"/api/v1/sessions/{sessionId}/conversation/steer",
 		"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit",
-		"/api/v1/reviews/{reviewId}/conversation/messages":
+		"/api/v1/reviews/{reviewId}/conversation/messages",
+		"/api/v1/prs/{id}/comments":
 		return true
 	default:
 		return false

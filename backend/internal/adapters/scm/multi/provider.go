@@ -327,21 +327,48 @@ func (m *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequ
 	return commenter.PostComment(ctx, request)
 }
 
-// UploadAttachment delegates to the sub-provider matching
-// request.PR.Repo.Provider when that provider supports comment attachments.
-func (m *Provider) UploadAttachment(ctx context.Context, request ports.SCMAttachmentRequest) (ports.SCMAttachmentResult, error) {
+// attachmentStore returns the sub-provider for name when it stores comment
+// attachments.
+func (m *Provider) attachmentStore(name string) (ports.SCMAttachmentStore, error) {
 	if m == nil {
-		return ports.SCMAttachmentResult{}, fmt.Errorf("%w: attachment provider is unavailable", ports.ErrSCMUnsupported)
+		return nil, fmt.Errorf("%w: attachment provider is unavailable", ports.ErrSCMUnsupported)
 	}
-	p, err := m.resolve(request.PR.Repo.Provider)
+	p, err := m.resolve(name)
 	if err != nil {
-		return ports.SCMAttachmentResult{}, err
+		return nil, err
 	}
-	uploader, ok := p.(ports.SCMAttachmentUploader)
+	store, ok := p.(ports.SCMAttachmentStore)
 	if !ok {
-		return ports.SCMAttachmentResult{}, fmt.Errorf("%w: attachments for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
+		return nil, fmt.Errorf("%w: attachments for provider %q", ports.ErrSCMUnsupported, name)
 	}
-	return uploader.UploadAttachment(ctx, request)
+	return store, nil
+}
+
+// AttachmentAccess delegates to the sub-provider matching pr.Repo.Provider.
+func (m *Provider) AttachmentAccess(ctx context.Context, pr ports.SCMPRRef) (ports.SCMAttachmentAccess, error) {
+	store, err := m.attachmentStore(pr.Repo.Provider)
+	if err != nil {
+		return ports.SCMAttachmentAccess{}, err
+	}
+	return store.AttachmentAccess(ctx, pr)
+}
+
+// StoreAttachments delegates to the sub-provider matching batch.PR.Repo.Provider.
+func (m *Provider) StoreAttachments(ctx context.Context, batch ports.SCMAttachmentBatch) (ports.SCMStoredAttachments, error) {
+	store, err := m.attachmentStore(batch.PR.Repo.Provider)
+	if err != nil {
+		return ports.SCMStoredAttachments{}, err
+	}
+	return store.StoreAttachments(ctx, batch)
+}
+
+// DiscardAttachments delegates to the sub-provider matching pr.Repo.Provider.
+func (m *Provider) DiscardAttachments(ctx context.Context, pr ports.SCMPRRef, handle string) error {
+	store, err := m.attachmentStore(pr.Repo.Provider)
+	if err != nil {
+		return err
+	}
+	return store.DiscardAttachments(ctx, pr, handle)
 }
 
 type branchPRLister interface {

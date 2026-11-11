@@ -22,6 +22,10 @@ var ErrSCMRejected = errors.New("scm: provider rejected mutation")
 // the requested mutation.
 var ErrSCMUnsupported = errors.New("scm: unsupported operation")
 
+// ErrSCMForbidden reports that the signed-in account may not make a change,
+// such as writing to a repository it can only read.
+var ErrSCMForbidden = errors.New("scm: forbidden")
+
 // SCMMergeMethod identifies the provider merge strategy.
 type SCMMergeMethod string
 
@@ -149,26 +153,47 @@ type SCMCommenter interface {
 	PostComment(ctx context.Context, request SCMCommentRequest) (SCMCommentResult, error)
 }
 
-// SCMAttachmentRequest uploads one comment attachment for PR. Name is already
-// sanitized to a safe file name and ContentType is the validated media type;
-// Data holds the decoded file bytes.
-type SCMAttachmentRequest struct {
-	PR          SCMPRRef
+// SCMAttachmentFile is one file attached to a pull-request comment. Name is
+// already a safe file name, ContentType the validated media type, and Data the
+// decoded file bytes.
+type SCMAttachmentFile struct {
 	Name        string
 	ContentType string
 	Data        []byte
 }
 
-// SCMAttachmentResult locates an uploaded attachment. URL is absolute.
-// Markdown is the provider's own embed snippet when it returns one; callers
-// build one from URL when it is empty.
-type SCMAttachmentResult struct {
-	URL      string
-	Markdown string
+// SCMAttachmentBatch is the files of one comment on PR, stored together.
+type SCMAttachmentBatch struct {
+	PR    SCMPRRef
+	Files []SCMAttachmentFile
 }
 
-// SCMAttachmentUploader stores a file a pull-request comment can link to or
-// embed, through an SCM provider.
-type SCMAttachmentUploader interface {
-	UploadAttachment(ctx context.Context, request SCMAttachmentRequest) (SCMAttachmentResult, error)
+// SCMStoredAttachments locates a stored batch: one absolute URL per file, in
+// the batch's order, and the handle DiscardAttachments takes to remove the
+// batch again. Handle is empty when the provider keeps nothing to remove.
+type SCMStoredAttachments struct {
+	URLs   []string
+	Handle string
+}
+
+// SCMAttachmentAccess says whether the signed-in account can store comment
+// attachments for a PR. Location names where they go, so a person can be told
+// before the first upload; Reason says why not when Allowed is false.
+type SCMAttachmentAccess struct {
+	Allowed  bool
+	Location string
+	Reason   string
+}
+
+// SCMAttachmentNoWriteAccess is the Reason when the account cannot write
+// where the provider stores attachments, such as a fork PR's base repository.
+const SCMAttachmentNoWriteAccess = "no_write_access"
+
+// SCMAttachmentStore stores the files a pull-request comment links to or
+// embeds. A comment's files are stored when it is posted, not when they are
+// picked, and are discarded again when posting fails.
+type SCMAttachmentStore interface {
+	AttachmentAccess(ctx context.Context, pr SCMPRRef) (SCMAttachmentAccess, error)
+	StoreAttachments(ctx context.Context, batch SCMAttachmentBatch) (SCMStoredAttachments, error)
+	DiscardAttachments(ctx context.Context, pr SCMPRRef, handle string) error
 }

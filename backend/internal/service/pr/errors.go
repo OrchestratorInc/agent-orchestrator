@@ -31,4 +31,7 @@ var (
 	// ErrAttachmentTypeNotAllowed is an attachment whose declared type, file
 	// extension, or content is outside the allowlist or disagrees with the others.
 	ErrAttachmentTypeNotAllowed = errors.New("pr: attachment type not allowed")
+	// ErrAttachmentsForbidden is a comment with files on a PR whose repository
+	// the signed-in account cannot write to, where the files would be stored.
+	ErrAttachmentsForbidden = errors.New("pr: no write access for attachments")
 )

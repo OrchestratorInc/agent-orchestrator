@@ -2983,10 +2983,29 @@ type MergePRStackResponse struct {
 // PostPRCommentRequest is the body of POST /api/v1/prs/{id}/comments. Without
 // threadId it posts a top-level conversation comment; with it, a reply in that
 // review thread.
+//
+// Attachments are the comment's files. Body links each one by its index, as
+// "![shot.png](attachment:0)" or "[log.txt](attachment:1)", and every file
+// must be linked. They are stored with the PR's provider only when the comment
+// posts, and removed again if it fails; on GitHub that is a commit under
+// refs/ao/attachments/ in the PR's repository, which needs write access.
 type PostPRCommentRequest struct {
-	PRURL    string `json:"prUrl" minLength:"1"`
-	Body     string `json:"body" minLength:"1"`
-	ThreadID string `json:"threadId,omitempty"`
+	PRURL       string                `json:"prUrl" minLength:"1"`
+	Body        string                `json:"body" minLength:"1"`
+	ThreadID    string                `json:"threadId,omitempty"`
+	Attachments []PRCommentAttachment `json:"attachments,omitempty" maxItems:"10"`
+}
+
+// PRCommentAttachment is one file of a PR comment. Data is the file's bytes,
+// standard base64-encoded without a "data:" prefix, at most 10 MiB decoded and
+// 25 MiB for all of a comment's files. Allowed types are PNG, JPEG, GIF, WebP,
+// MP4, QuickTime, WebM, PDF, plain text/log, JSON, CSV, and ZIP; the declared
+// type, the name's extension, and the file's content must agree. An empty or
+// application/octet-stream contentType is taken from the extension.
+type PRCommentAttachment struct {
+	Name        string `json:"name" minLength:"1"`
+	ContentType string `json:"contentType"`
+	Data        string `json:"data" minLength:"1"`
 }
 
 // PostPRCommentResponse is the body of POST /api/v1/prs/{id}/comments (200).
@@ -2997,27 +3016,19 @@ type PostPRCommentResponse struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// UploadPRAttachmentRequest is the body of POST /api/v1/prs/{id}/attachments.
-// Data is the file's bytes, standard base64-encoded without a "data:" prefix,
-// at most 10 MiB decoded. Allowed types are PNG, JPEG, GIF, WebP, MP4,
-// QuickTime, WebM, PDF, plain text/log, JSON, CSV, and ZIP; the declared type,
-// the name's extension, and the file's content must agree. An empty or
-// application/octet-stream contentType is taken from the extension.
-type UploadPRAttachmentRequest struct {
-	PRURL       string `json:"prUrl" minLength:"1"`
-	Name        string `json:"name" minLength:"1"`
-	ContentType string `json:"contentType"`
-	Data        string `json:"data" minLength:"1"`
+// PRAttachmentAccessQuery is the query of GET /api/v1/prs/{id}/attachment-access.
+type PRAttachmentAccessQuery struct {
+	PRURL string `query:"prUrl" required:"true" description:"The pull request's URL."`
 }
 
-// UploadPRAttachmentResponse is the body of POST /api/v1/prs/{id}/attachments
-// (200). Name is the sanitized file name; Markdown embeds the file (images) or
-// links it (everything else) in a comment.
-type UploadPRAttachmentResponse struct {
-	OK       bool   `json:"ok"`
-	URL      string `json:"url"`
-	Name     string `json:"name"`
-	Markdown string `json:"markdown"`
+// PRAttachmentAccessResponse is the body of GET
+// /api/v1/prs/{id}/attachment-access (200): whether files can be attached to
+// the PR's comments, and where they would be stored (on GitHub, the PR's
+// repository). Reason says why not when allowed is false.
+type PRAttachmentAccessResponse struct {
+	Allowed  bool   `json:"allowed"`
+	Location string `json:"location,omitempty"`
+	Reason   string `json:"reason,omitempty" enum:"no_write_access,unsupported"`
 }
 
 // ResolveCommentsRequest is the optional body of POST /api/v1/prs/{id}/resolve-comments.

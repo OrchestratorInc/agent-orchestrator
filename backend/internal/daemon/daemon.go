@@ -1020,7 +1020,7 @@ func Run(buildVersion string) error {
 			Commenter:     prReader,
 			CommentWriter: store,
 			Refresher:     reviewRefresher,
-			Uploader:      prReader,
+			Attachments:   prReader,
 			Stacker:       prReader,
 			Lifecycle:     lcStack.LCM,
 			Logger:        log,

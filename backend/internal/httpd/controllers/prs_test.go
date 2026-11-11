@@ -31,10 +31,9 @@ type fakePRService struct {
 	commentErr    error
 	commentReq    prsvc.CommentRequest
 	commentCalls  int
-	attachResult  prsvc.AttachmentResult
-	attachErr     error
-	attachReq     prsvc.AttachmentRequest
-	attachCalls   int
+	accessResult  prsvc.AttachmentAccessResult
+	accessErr     error
+	accessCalls   []string
 	stackResult   prsvc.StackResult
 	stackMerge    prsvc.StackMergeResult
 	stackMergeReq prsvc.StackMergeRequest
@@ -42,10 +41,9 @@ type fakePRService struct {
 	stackCalls    []string
 }
 
-func (f *fakePRService) UploadAttachment(_ context.Context, request prsvc.AttachmentRequest) (prsvc.AttachmentResult, error) {
-	f.attachCalls++
-	f.attachReq = request
-	return f.attachResult, f.attachErr
+func (f *fakePRService) AttachmentAccess(_ context.Context, prID, prURL string) (prsvc.AttachmentAccessResult, error) {
+	f.accessCalls = append(f.accessCalls, prID+" "+prURL)
+	return f.accessResult, f.accessErr
 }
 
 func (f *fakePRService) Stack(_ context.Context, prID, prURL string) (prsvc.StackResult, error) {

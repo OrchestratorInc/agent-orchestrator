@@ -98,7 +98,7 @@ type ActionDeps struct {
 	Commenter     ports.SCMCommenter
 	CommentWriter CommentWriter
 	Refresher     ReviewRefresher
-	Uploader      ports.SCMAttachmentUploader
+	Attachments   ports.SCMAttachmentStore
 	// Stacker is nil where no provider supports stacks.
 	Stacker ports.SCMStacker
 }
@@ -122,7 +122,7 @@ type ActionService struct {
 	commenter     ports.SCMCommenter
 	commentWriter CommentWriter
 	refresher     ReviewRefresher
-	uploader      ports.SCMAttachmentUploader
+	attachments   ports.SCMAttachmentStore
 	stacker       ports.SCMStacker
 }
 
@@ -164,7 +164,7 @@ func NewActionService(deps ActionDeps) *ActionService {
 		commenter:     deps.Commenter,
 		commentWriter: deps.CommentWriter,
 		refresher:     deps.Refresher,
-		uploader:      deps.Uploader,
+		attachments:   deps.Attachments,
 		stacker:       deps.Stacker,
 	}
 }
@@ -244,6 +244,23 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 		}
 	}
 	mergedAt := s.clock().UTC()
+	s.recordMerge(ctx, tracked, fresh, out.MergeCommitSHA, mergedAt)
+	return MergeResult{
+		PRNumber:       tracked.Number,
+		Method:         string(method),
+		State:          domain.PRStateMerged,
+		MergeCommitSHA: out.MergeCommitSHA,
+		StateChangedAt: mergedAt,
+	}, nil
+}
+
+// recordMerge brings AO up to date with a merge the provider confirmed, from
+// fresh, the observation read just before merging. A merged row is terminal and
+// the observer stops polling it, so this is lifecycle's one look at the merge.
+// The provider has already committed the irreversible remote mutation, so a
+// failure here only logs: callers still report the merge so it isn't retried,
+// and a row that failed to persist stays open for the observer to reconcile.
+func (s *ActionService) recordMerge(ctx context.Context, tracked domain.PullRequest, fresh ports.SCMObservation, mergeCommitSHA string, mergedAt time.Time) {
 	// Recorded before the merged row, so the usage flush can never see this
 	// merge without its client; a failed local write leaves the observer to
 	// record the merge later, still attributed correctly.
@@ -252,35 +269,25 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 			s.logger.Warn("pr merge telemetry: record merged_via", "pr", tracked.URL, "err", err)
 		}
 	}
-	persisted := false
-	if s.mergeWriter != nil {
-		if err := s.mergeWriter.MarkPRMerged(ctx, tracked.URL, out.MergeCommitSHA, mergedAt); err != nil {
-			// GitHub has already committed the irreversible remote mutation. Keep
-			// returning the authoritative success so callers do not retry a merge
-			// that already happened; the observer will reconcile the durable row.
-			s.logger.Error("pr merge succeeded but local state persistence failed", "pr", tracked.URL, "err", err)
-		} else {
-			persisted = true
-		}
+	if s.mergeWriter == nil {
+		return
 	}
-	if persisted && s.lifecycle != nil {
-		fresh.PR.Draft = false
-		fresh.PR.Merged = true
-		fresh.PR.Closed = false
-		fresh.PR.State = string(domain.PRStateMerged)
-		fresh.PR.MergeCommitSHA = out.MergeCommitSHA
-		fresh.ObservedAt = mergedAt
-		if err := s.lifecycle.ApplySCMObservation(ctx, tracked.SessionID, fresh); err != nil {
-			s.logger.Error("pr merge succeeded but lifecycle notification failed", "session", tracked.SessionID, "pr", tracked.URL, "err", err)
-		}
+	if err := s.mergeWriter.MarkPRMerged(ctx, tracked.URL, mergeCommitSHA, mergedAt); err != nil {
+		s.logger.Error("pr merge succeeded but local state persistence failed", "pr", tracked.URL, "err", err)
+		return
 	}
-	return MergeResult{
-		PRNumber:       tracked.Number,
-		Method:         string(method),
-		State:          domain.PRStateMerged,
-		MergeCommitSHA: out.MergeCommitSHA,
-		StateChangedAt: mergedAt,
-	}, nil
+	if s.lifecycle == nil {
+		return
+	}
+	fresh.PR.Draft = false
+	fresh.PR.Merged = true
+	fresh.PR.Closed = false
+	fresh.PR.State = string(domain.PRStateMerged)
+	fresh.PR.MergeCommitSHA = mergeCommitSHA
+	fresh.ObservedAt = mergedAt
+	if err := s.lifecycle.ApplySCMObservation(ctx, tracked.SessionID, fresh); err != nil {
+		s.logger.Error("pr merge succeeded but lifecycle notification failed", "session", tracked.SessionID, "pr", tracked.URL, "err", err)
+	}
 }
 
 func (s *ActionService) fetchMergeReadiness(ctx context.Context, ref ports.SCMPRRef) (ports.SCMObservation, ports.SCMReviewObservation, error) {
@@ -667,6 +674,10 @@ func (s *ActionService) PostComment(ctx context.Context, request CommentRequest)
 	if len(request.Body) > maxCommentBodyBytes {
 		return CommentResult{}, fmt.Errorf("%w: comment body exceeds %d bytes", ErrInvalidComment, maxCommentBodyBytes)
 	}
+	files, err := commentAttachments(request.Body, request.Attachments)
+	if err != nil {
+		return CommentResult{}, err
+	}
 	if s.store == nil || s.commenter == nil {
 		return CommentResult{}, errors.New("pr: comment action is not configured")
 	}
@@ -693,8 +704,17 @@ func (s *ActionService) PostComment(ctx context.Context, request CommentRequest)
 		}
 	}
 
-	posted, err := s.commenter.PostComment(ctx, ports.SCMCommentRequest{PR: ref, Body: request.Body, ThreadID: threadID})
+	// A comment's files are stored only now that it is being posted, and
+	// removed again if the post fails, so a cancelled draft writes nothing.
+	body, attachmentsHandle := request.Body, ""
+	if len(files) > 0 {
+		if body, attachmentsHandle, err = s.storeCommentAttachments(ctx, ref, request.Body, files); err != nil {
+			return CommentResult{}, err
+		}
+	}
+	posted, err := s.commenter.PostComment(ctx, ports.SCMCommentRequest{PR: ref, Body: body, ThreadID: threadID})
 	if err != nil {
+		s.discardAttachments(ctx, ref, attachmentsHandle)
 		return CommentResult{}, mapMutationError("post pull request comment", err)
 	}
 	createdAt := posted.CreatedAt

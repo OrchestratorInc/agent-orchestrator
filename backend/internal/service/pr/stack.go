@@ -252,10 +252,9 @@ func (s *ActionService) MergeStack(ctx context.Context, request StackMergeReques
 		return StackMergeResult{}, err
 	}
 	numbers := make([]int, 0, len(layers))
-	refs := make(map[int]ports.SCMPRRef, len(layers))
+	landing := make([]ports.SCMObservation, 0, len(layers))
 	for _, layer := range layers {
-		layerRef := ports.SCMPRRef{Repo: repo, Number: layer.Number}
-		fresh, review, err := s.fetchMergeReadiness(ctx, layerRef)
+		fresh, review, err := s.fetchMergeReadiness(ctx, ports.SCMPRRef{Repo: repo, Number: layer.Number})
 		if err != nil {
 			return StackMergeResult{}, err
 		}
@@ -265,8 +264,7 @@ func (s *ActionService) MergeStack(ctx context.Context, request StackMergeReques
 		if !readyToMerge(fresh, review) {
 			return StackMergeResult{}, fmt.Errorf("%w: #%d", ErrPRPreconditions, layer.Number)
 		}
-		layerRef.URL = fresh.PR.URL
-		refs[layer.Number] = layerRef
+		landing = append(landing, fresh)
 		numbers = append(numbers, layer.Number)
 	}
 
@@ -285,9 +283,13 @@ func (s *ActionService) MergeStack(ctx context.Context, request StackMergeReques
 			return StackMergeResult{}, fmt.Errorf("merge stack: %w", err)
 		}
 	}
+	// The provider has the layers now, so recording them must outlive the
+	// request: a slow merge can spend its budget, and a client that gives up
+	// must not leave AO without the merge.
+	record := context.WithoutCancel(ctx)
 	at := s.clock().UTC()
-	for _, number := range numbers {
-		s.recordStackLayer(ctx, refs[number], status, at)
+	for _, fresh := range landing {
+		s.recordStackLayer(record, fresh, status, at)
 	}
 	return StackMergeResult{PRNumber: tracked.Number, Numbers: numbers, Method: string(method), Status: string(status), StateChangedAt: at}, nil
 }
@@ -329,27 +331,24 @@ func layersToLand(stack ports.SCMStack, number int, expected []StackHead) ([]por
 }
 
 // recordStackLayer brings AO up to date with one layer after the provider took
-// the merge. The merge has already happened, so failing here only logs: the
-// observer reconciles the row, and a queued merge only needs a sooner look.
-func (s *ActionService) recordStackLayer(ctx context.Context, ref ports.SCMPRRef, status ports.SCMStackMergeStatus, at time.Time) {
-	if ref.URL == "" {
+// the merge. A landed layer is recorded as a plain merge is, lifecycle included,
+// from fresh, the observation read before merging; the refresh only fills in
+// what the merge left unknown, such as its commit. A queued or pending layer
+// stays open, so the observer sees it land; it only needs a sooner look.
+func (s *ActionService) recordStackLayer(ctx context.Context, fresh ports.SCMObservation, status ports.SCMStackMergeStatus, at time.Time) {
+	if fresh.PR.URL == "" {
 		return
 	}
-	tracked, ok, err := s.store.GetPR(ctx, ref.URL)
-	if err != nil || !ok {
+	tracked, ok, err := s.store.GetPR(ctx, fresh.PR.URL)
+	if err != nil {
+		s.logger.Warn("stack merge succeeded but loading the layer failed", "pr", fresh.PR.URL, "err", err)
 		return
 	}
-	if status != ports.SCMStackMerged {
-		if s.refresher != nil {
-			s.refresher.RequestReviewRefresh(tracked.URL)
-		}
+	if !ok {
 		return
 	}
-	if s.mergeWriter == nil {
-		return
-	}
-	if err := s.mergeWriter.MarkPRMerged(ctx, tracked.URL, "", at); err != nil {
-		s.logger.Error("stack merge succeeded but local state persistence failed", "pr", tracked.URL, "err", err)
+	if status == ports.SCMStackMerged {
+		s.recordMerge(ctx, tracked, fresh, "", at)
 	}
 	if s.refresher != nil {
 		s.refresher.RequestReviewRefresh(tracked.URL)

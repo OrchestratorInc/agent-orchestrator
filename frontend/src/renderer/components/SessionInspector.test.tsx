@@ -1436,6 +1436,78 @@ describe("SessionInspector PR section", () => {
     }));
   });
 
+  const servePRTabWithAccess = (access: { allowed: boolean; location?: string; reason?: string }) => {
+    const summary = conversationPR();
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs: [summary], linkedPrs: [] } }
+      : path === "/api/v1/prs/{id}/attachment-access"
+        ? { data: access }
+        : respond(path));
+    renderWithQuery(
+      <PRTabPane session={session([pr(summary.number, summary.state, { url: summary.url })])} url={summary.url} />,
+      undefined,
+      (client) => seedPRSummaries(client, [summary]),
+    );
+    return summary;
+  };
+
+  it("keeps a comment's files until it posts, asks once per repository, then sends them with it", async () => {
+    window.localStorage.removeItem("ao.prAttachmentsConsent");
+    const summary = servePRTabWithAccess({ allowed: true, location: "acme/repo" });
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const box = comments.getByRole("textbox", { name: "Leave a comment" });
+    const attachShot = async () => {
+      const shot = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
+      await userEvent.upload(comments.getByTestId("pr-comment-file"), shot);
+      await waitFor(() => expect(box).toHaveValue("![shot.png](attachment:0)\n"));
+    };
+    await attachShot();
+    // Picking a file sent nothing anywhere.
+    expect(postCallsFor("/api/v1/prs/{id}/comments")).toHaveLength(0);
+
+    await userEvent.click(comments.getByRole("button", { name: "Comment" }));
+    expect(await screen.findByText("Store files in acme/repo?")).toBeInTheDocument();
+    expect(postCallsFor("/api/v1/prs/{id}/comments")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Post with files" }));
+    const withFile = {
+      params: { path: { id: "7" } },
+      body: { prUrl: summary.url, body: "![shot.png](attachment:0)", attachments: [{ name: "shot.png", contentType: "image/png", data: "iVBORw==" }] },
+      headers: { "X-AO-Attachment-Upload": "1" },
+    };
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/comments", withFile));
+
+    // The repository was agreed to: the next comment with a file just posts.
+    await waitFor(() => expect(box).toHaveValue(""));
+    await attachShot();
+    await userEvent.click(comments.getByRole("button", { name: "Comment" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/comments")).toHaveLength(2));
+    expect(screen.queryByText("Store files in acme/repo?")).not.toBeInTheDocument();
+  });
+
+  it("posts nothing when the person backs out of storing the files, and keeps the draft", async () => {
+    window.localStorage.removeItem("ao.prAttachmentsConsent");
+    servePRTabWithAccess({ allowed: true, location: "acme/repo" });
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const box = comments.getByRole("textbox", { name: "Leave a comment" });
+    await userEvent.upload(comments.getByTestId("pr-comment-file"), new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" }));
+    await waitFor(() => expect(box).toHaveValue("![shot.png](attachment:0)\n"));
+
+    await userEvent.click(comments.getByRole("button", { name: "Comment" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Store files in acme/repo?")).not.toBeInTheDocument());
+    expect(postCallsFor("/api/v1/prs/{id}/comments")).toHaveLength(0);
+    expect(box).toHaveValue("![shot.png](attachment:0)\n");
+  });
+
+  it("says why files can't be attached without write access to the repository", async () => {
+    servePRTabWithAccess({ allowed: false, location: "acme/repo", reason: "no_write_access" });
+    const comments = within(await screen.findByTestId("pr-comments"));
+    await waitFor(() => expect(comments.getByRole("button", { name: "Attach" })).toHaveAttribute("aria-disabled", "true"));
+    await userEvent.click(comments.getByRole("button", { name: "Attach" }));
+    expect(await comments.findByText("You can't attach files here: you don't have write access to acme/repo.")).toBeInTheDocument();
+  });
+
   it("nests a quote reply under the comment it quotes, without repeating the quote", async () => {
     const summary = conversationPR();
     summary.conversation = [...(summary.conversation ?? []), {
@@ -1531,22 +1603,6 @@ describe("SessionInspector PR section", () => {
     await userEvent.type(box, "Draft");
     await userEvent.click(within(composer).getByRole("button", { name: "Cancel" }));
     expect(box.value).toBe("");
-  });
-
-  it("uploads a comment attachment for the PR and writes its markdown into the box", async () => {
-    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/attachments"
-      ? { data: { ok: true, name: "shot.png", url: "https://github.com/acme/repo/blob/ao-attachments/pr-7/shot.png?raw=true", markdown: "![shot.png](https://github.com/acme/repo/blob/ao-attachments/pr-7/shot.png?raw=true)" }, error: undefined }
-      : { data: { ok: true }, error: undefined });
-    servePRTab(conversationPR());
-    const comments = within(await screen.findByTestId("pr-comments"));
-    const box = comments.getByRole("textbox", { name: "Leave a comment" }) as HTMLTextAreaElement;
-    await userEvent.upload(comments.getByTestId("pr-comment-file"), new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" }));
-
-    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/attachments", {
-      params: { path: { id: "7" } },
-      body: { prUrl: "https://example.com/pr/7", name: "shot.png", contentType: "image/png", data: "iVBORw==" },
-    }));
-    await waitFor(() => expect(box.value).toContain("![shot.png](https://github.com/acme/repo/blob/ao-attachments/pr-7/shot.png?raw=true)"));
   });
 
   it("opens a reply in place in the card with a short quote, keeps the draft on a click elsewhere, and closes it on Escape", async () => {

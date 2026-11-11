@@ -118,81 +118,181 @@ func TestValidateAttachment_Rejections(t *testing.T) {
 	}
 }
 
-type fakeUploader struct {
-	result   ports.SCMAttachmentResult
-	err      error
-	requests []ports.SCMAttachmentRequest
+// fakeAttachmentStore records what a comment's files did with the provider.
+type fakeAttachmentStore struct {
+	access     ports.SCMAttachmentAccess
+	accessErr  error
+	stored     ports.SCMStoredAttachments
+	storeErr   error
+	batches    []ports.SCMAttachmentBatch
+	discarded  []string
+	accessRefs []ports.SCMPRRef
 }
 
-func (f *fakeUploader) UploadAttachment(_ context.Context, request ports.SCMAttachmentRequest) (ports.SCMAttachmentResult, error) {
-	f.requests = append(f.requests, request)
-	return f.result, f.err
+func (f *fakeAttachmentStore) AttachmentAccess(_ context.Context, pr ports.SCMPRRef) (ports.SCMAttachmentAccess, error) {
+	f.accessRefs = append(f.accessRefs, pr)
+	return f.access, f.accessErr
 }
 
-func TestActionServiceUploadAttachment_SendsSanitizedFileAndBuildsMarkdown(t *testing.T) {
+func (f *fakeAttachmentStore) StoreAttachments(_ context.Context, batch ports.SCMAttachmentBatch) (ports.SCMStoredAttachments, error) {
+	f.batches = append(f.batches, batch)
+	return f.stored, f.storeErr
+}
+
+func (f *fakeAttachmentStore) DiscardAttachments(_ context.Context, _ ports.SCMPRRef, handle string) error {
+	f.discarded = append(f.discarded, handle)
+	return nil
+}
+
+func allowedStore() *fakeAttachmentStore {
+	return &fakeAttachmentStore{
+		access: ports.SCMAttachmentAccess{Allowed: true, Location: "acme/widgets"},
+		stored: ports.SCMStoredAttachments{
+			URLs:   []string{"https://github.com/acme/widgets/blob/c1/My-Shot.png?raw=true", "https://github.com/acme/widgets/blob/c1/run.log?raw=true"},
+			Handle: "refs/ao/attachments/pr-42/x",
+		},
+	}
+}
+
+func TestPostComment_StoresItsFilesWhenPostingAndLinksThem(t *testing.T) {
 	pr := openPRFixture()
-	up := &fakeUploader{result: ports.SCMAttachmentResult{URL: "https://github.com/acme/widgets/blob/ao-attachments/pr-42/f.png?raw=true"}}
-	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Uploader: up})
-	result, err := svc.UploadAttachment(context.Background(), AttachmentRequest{PRID: "42", PRURL: pr.URL, Name: "../My Shot.png", ContentType: "image/png", Data: pngBytes})
+	scm := &fakeStateCommentSCM{commentResult: ports.SCMCommentResult{ID: "IC_1"}}
+	files := allowedStore()
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
+	_, err := svc.PostComment(context.Background(), CommentRequest{
+		PRID: "42", PRURL: pr.URL,
+		Body: "See ![My Shot](attachment:0) and [log](attachment:1), again ![](attachment:0)",
+		Attachments: []CommentAttachment{
+			{Name: "../My Shot.png", ContentType: "image/png", Data: pngBytes},
+			{Name: "run.log", Data: []byte("ok\n")},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Name != "My-Shot.png" || result.URL != up.result.URL || result.Markdown != "![My-Shot.png]("+up.result.URL+")" {
-		t.Fatalf("result = %#v", result)
+	if len(files.batches) != 1 {
+		t.Fatalf("batches = %d", len(files.batches))
 	}
-	if len(up.requests) != 1 {
-		t.Fatalf("requests = %d", len(up.requests))
+	batch := files.batches[0]
+	if len(batch.Files) != 2 || batch.Files[0].Name != "My-Shot.png" || batch.Files[0].ContentType != "image/png" || !bytes.Equal(batch.Files[0].Data, pngBytes) ||
+		batch.PR.Number != 42 || batch.PR.Repo.Owner != "acme" || batch.PR.Repo.Name != "widgets" {
+		t.Fatalf("batch = %#v", batch)
 	}
-	got := up.requests[0]
-	if got.Name != "My-Shot.png" || got.ContentType != "image/png" || !bytes.Equal(got.Data, pngBytes) ||
-		got.PR.Number != 42 || got.PR.URL != pr.URL || got.PR.Repo.Provider != "github" || got.PR.Repo.Owner != "acme" || got.PR.Repo.Name != "widgets" || got.PR.Repo.Host != "github.com" {
-		t.Fatalf("request = %#v", got)
+	want := "See ![My Shot](" + files.stored.URLs[0] + ") and [log](" + files.stored.URLs[1] + "), again ![](" + files.stored.URLs[0] + ")"
+	if len(scm.commentRequests) != 1 || scm.commentRequests[0].Body != want {
+		t.Fatalf("posted body = %q", scm.commentRequests[0].Body)
 	}
-
-	// Non-images are linked, and a provider's own markdown wins.
-	result, err = svc.UploadAttachment(context.Background(), AttachmentRequest{PRID: "42", PRURL: pr.URL, Name: "run.log", Data: []byte("ok\n")})
-	if err != nil || result.Markdown != "[run.log]("+up.result.URL+")" {
-		t.Fatalf("log markdown = %q, err %v", result.Markdown, err)
-	}
-	up.result.Markdown = "![run](/uploads/abc/run.log)"
-	result, err = svc.UploadAttachment(context.Background(), AttachmentRequest{PRID: "42", PRURL: pr.URL, Name: "run.log", Data: []byte("ok\n")})
-	if err != nil || result.Markdown != up.result.Markdown {
-		t.Fatalf("provider markdown = %q, err %v", result.Markdown, err)
+	if len(files.discarded) != 0 {
+		t.Fatalf("discarded = %q", files.discarded)
 	}
 }
 
-func TestActionServiceUploadAttachment_ValidationAndErrorMapping(t *testing.T) {
+func TestPostComment_RemovesItsFilesWhenThePostFails(t *testing.T) {
 	pr := openPRFixture()
-	ok := AttachmentRequest{PRID: "42", PRURL: pr.URL, Name: "a.png", ContentType: "image/png", Data: pngBytes}
+	scm := &fakeStateCommentSCM{commentErr: ports.ErrSCMRejected}
+	files := allowedStore()
+	files.stored.URLs = files.stored.URLs[:1]
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the request is gone; the files still go
+	_, err := svc.PostComment(ctx, CommentRequest{
+		PRID: "42", PRURL: pr.URL, Body: "![x](attachment:0)",
+		Attachments: []CommentAttachment{{Name: "a.png", ContentType: "image/png", Data: pngBytes}},
+	})
+	if !errors.Is(err, ErrPRRejected) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(files.discarded) != 1 || files.discarded[0] != "refs/ao/attachments/pr-42/x" {
+		t.Fatalf("discarded = %q", files.discarded)
+	}
+}
+
+func TestPostComment_WithoutWriteAccessStoresNothing(t *testing.T) {
+	pr := openPRFixture()
+	scm := &fakeStateCommentSCM{}
+	files := &fakeAttachmentStore{access: ports.SCMAttachmentAccess{Location: "acme/widgets", Reason: ports.SCMAttachmentNoWriteAccess}}
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
+	_, err := svc.PostComment(context.Background(), CommentRequest{
+		PRID: "42", PRURL: pr.URL, Body: "![x](attachment:0)",
+		Attachments: []CommentAttachment{{Name: "a.png", ContentType: "image/png", Data: pngBytes}},
+	})
+	if !errors.Is(err, ErrAttachmentsForbidden) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(files.batches) != 0 || len(scm.commentRequests) != 0 {
+		t.Fatalf("stored %d batches, posted %d comments", len(files.batches), len(scm.commentRequests))
+	}
+	// A provider that refuses the write mid-way reads the same.
+	files = allowedStore()
+	files.storeErr = ports.ErrSCMForbidden
+	svc = NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
+	if _, err := svc.PostComment(context.Background(), CommentRequest{
+		PRID: "42", PRURL: pr.URL, Body: "![x](attachment:0)",
+		Attachments: []CommentAttachment{{Name: "a.png", ContentType: "image/png", Data: pngBytes}},
+	}); !errors.Is(err, ErrAttachmentsForbidden) {
+		t.Fatalf("store forbidden error = %v", err)
+	}
+}
+
+func TestPostComment_FilesMustMatchTheBodysLinks(t *testing.T) {
+	pr := openPRFixture()
+	png := CommentAttachment{Name: "a.png", ContentType: "image/png", Data: pngBytes}
+	big := make([]CommentAttachment, 3)
+	for i := range big {
+		big[i] = CommentAttachment{Name: "a.zip", ContentType: "application/zip", Data: append(append([]byte{}, zipBytes...), make([]byte, MaxAttachmentBytes-len(zipBytes))...)}
+	}
+	eleven := make([]CommentAttachment, 11)
+	for i := range eleven {
+		eleven[i] = png
+	}
 	for _, tc := range []struct {
-		name    string
-		store   *fakeActionStore
-		request AttachmentRequest
-		scmErr  error
-		want    error
-		calls   int
+		name  string
+		body  string
+		files []CommentAttachment
+		want  error
 	}{
-		{name: "bad id", store: &fakeActionStore{pr: pr, ok: true}, request: AttachmentRequest{PRID: "x", PRURL: pr.URL, Name: "a.png", Data: pngBytes}, want: ErrInvalidPR},
-		{name: "renamed file", store: &fakeActionStore{pr: pr, ok: true}, request: AttachmentRequest{PRID: "42", PRURL: pr.URL, Name: "a.txt", ContentType: "text/plain", Data: pngBytes}, want: ErrAttachmentTypeNotAllowed},
-		{name: "unknown pr", store: &fakeActionStore{}, request: ok, want: ErrPRNotFound},
-		{name: "number mismatch", store: &fakeActionStore{pr: pr, ok: true}, request: AttachmentRequest{PRID: "7", PRURL: pr.URL, Name: "a.png", Data: pngBytes}, want: ErrPRNotFound},
-		{name: "provider not found", store: &fakeActionStore{pr: pr, ok: true}, request: ok, scmErr: ports.ErrSCMNotFound, want: ErrPRNotFound, calls: 1},
-		{name: "provider refused", store: &fakeActionStore{pr: pr, ok: true}, request: ok, scmErr: ports.ErrSCMRejected, want: ErrPRRejected, calls: 1},
-		{name: "unsupported", store: &fakeActionStore{pr: pr, ok: true}, request: ok, scmErr: ports.ErrSCMUnsupported, want: ErrUnsupported, calls: 1},
+		{name: "a link to no file", body: "![x](attachment:1)", files: []CommentAttachment{png}, want: ErrInvalidAttachment},
+		{name: "a link with no files", body: "![x](attachment:0)", want: ErrInvalidAttachment},
+		{name: "a file never linked", body: "no links", files: []CommentAttachment{png}, want: ErrInvalidAttachment},
+		{name: "too many files", body: "![x](attachment:0)", files: eleven, want: ErrInvalidAttachment},
+		{name: "too large together", body: "[a](attachment:0)[b](attachment:1)[c](attachment:2)", files: big, want: ErrAttachmentTooLarge},
+		{name: "renamed file", body: "[x](attachment:0)", files: []CommentAttachment{{Name: "a.txt", ContentType: "text/plain", Data: pngBytes}}, want: ErrAttachmentTypeNotAllowed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			up := &fakeUploader{err: tc.scmErr, result: ports.SCMAttachmentResult{URL: "u"}}
-			svc := NewActionService(ActionDeps{Store: tc.store, Uploader: up})
-			if _, err := svc.UploadAttachment(context.Background(), tc.request); !errors.Is(err, tc.want) {
+			scm := &fakeStateCommentSCM{}
+			files := allowedStore()
+			svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
+			if _, err := svc.PostComment(context.Background(), CommentRequest{PRID: "42", PRURL: pr.URL, Body: tc.body, Attachments: tc.files}); !errors.Is(err, tc.want) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
-			if len(up.requests) != tc.calls {
-				t.Fatalf("provider calls = %d, want %d", len(up.requests), tc.calls)
+			if len(files.batches) != 0 || len(scm.commentRequests) != 0 {
+				t.Fatalf("stored %d batches, posted %d comments", len(files.batches), len(scm.commentRequests))
 			}
 		})
 	}
-	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}})
-	if _, err := svc.UploadAttachment(context.Background(), ok); err == nil {
-		t.Fatal("upload without an uploader succeeded")
+}
+
+func TestAttachmentAccess(t *testing.T) {
+	pr := openPRFixture()
+	files := allowedStore()
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Attachments: files})
+	got, err := svc.AttachmentAccess(context.Background(), "42", pr.URL)
+	if err != nil || !got.Allowed || got.Location != "acme/widgets" {
+		t.Fatalf("access = %#v, err %v", got, err)
+	}
+	if len(files.accessRefs) != 1 || files.accessRefs[0].Number != 42 {
+		t.Fatalf("access refs = %#v", files.accessRefs)
+	}
+	if _, err := svc.AttachmentAccess(context.Background(), "7", pr.URL); !errors.Is(err, ErrPRNotFound) {
+		t.Fatalf("mismatched number error = %v", err)
+	}
+	// A provider that can't store files reads as not allowed, not as a failure.
+	files.accessErr = ports.ErrSCMUnsupported
+	if got, err := svc.AttachmentAccess(context.Background(), "42", pr.URL); err != nil || got.Allowed || got.Reason != "unsupported" {
+		t.Fatalf("unsupported access = %#v, err %v", got, err)
+	}
+	none := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}})
+	if got, err := none.AttachmentAccess(context.Background(), "42", pr.URL); err != nil || got.Allowed || got.Reason != "unsupported" {
+		t.Fatalf("no store access = %#v, err %v", got, err)
 	}
 }

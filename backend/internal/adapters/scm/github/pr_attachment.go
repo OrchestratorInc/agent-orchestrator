@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -17,85 +16,150 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var _ ports.SCMAttachmentUploader = (*Provider)(nil)
+var _ ports.SCMAttachmentStore = (*Provider)(nil)
 
-// attachmentsBranch is the branch, in the PR's own repository, that holds
-// files attached to PR comments. GitHub's public API cannot attach media to a
-// comment, so AO commits the file here and the comment links to it.
-const attachmentsBranch = "ao-attachments"
+// attachmentsRefPrefix is the ref namespace, in the PR's own repository, that
+// holds files attached to PR comments. GitHub's public API cannot attach media
+// to a comment, so AO commits each comment's files and the comment links to
+// them. The refs are not branches: they start no workflow, raise no "recent
+// pushes" banner, fall outside branch rules, and a clone doesn't fetch them.
+const attachmentsRefPrefix = "refs/ao/attachments/"
 
-// attachmentRefAttempts bounds how often an upload re-reads the branch after
-// losing a race with another upload that moved it first.
-const attachmentRefAttempts = 3
-
-// attachmentsReadme is the README of a newly created attachments branch.
-const attachmentsReadme = `# ao-attachments
-
-This branch holds files attached to pull request comments from AO (Agent Orchestrator).
-Each file lives under ` + "`pr-<number>/`" + ` and is linked from a comment on that pull request.
-
-Do not merge this branch. It shares no history with the rest of the repository,
-and deleting its files breaks the comments that link to them.
-`
-
-// UploadAttachment commits the file to the ao-attachments branch of the PR's
-// repository through the Git Data API and returns a URL GitHub renders inline
-// in comments. The first upload creates the branch as an orphan commit with a
-// README; later uploads append a commit and fast-forward the branch, retrying
-// when a concurrent upload moved it first.
-func (p *Provider) UploadAttachment(ctx context.Context, request ports.SCMAttachmentRequest) (ports.SCMAttachmentResult, error) {
+// AttachmentAccess reports whether the signed-in account can write to the PR's
+// repository, where its comments' attachments are stored. A repository the
+// account cannot see at all reads as no write access too.
+func (p *Provider) AttachmentAccess(ctx context.Context, ref ports.SCMPRRef) (ports.SCMAttachmentAccess, error) {
 	if p == nil || p.client == nil {
-		return ports.SCMAttachmentResult{}, fmt.Errorf("github scm: attachment provider is not configured")
+		return ports.SCMAttachmentAccess{}, fmt.Errorf("github scm: attachment provider is not configured")
 	}
-	ref := request.PR
-	if ref.Number <= 0 || strings.TrimSpace(ref.Repo.Owner) == "" || strings.TrimSpace(ref.Repo.Name) == "" {
-		return ports.SCMAttachmentResult{}, fmt.Errorf("github scm: invalid pull request reference")
+	if err := validAttachmentRef(ref); err != nil {
+		return ports.SCMAttachmentAccess{}, err
 	}
-	if strings.TrimSpace(request.Name) == "" || strings.ContainsAny(request.Name, `/\`) || len(request.Data) == 0 {
-		return ports.SCMAttachmentResult{}, fmt.Errorf("github scm: attachment name and content are required")
-	}
-	filePath := attachmentPath(ref.Number, p.attachmentTime(), p.attachmentSuffix(), request.Name)
-	message := fmt.Sprintf("Attach %s to PR #%d", request.Name, ref.Number)
-
-	// Blobs are content-addressed, so one blob serves every retry below.
-	blobSHA, err := p.createAttachmentBlob(ctx, ref.Repo, request.Data)
+	location := ref.Repo.Owner + "/" + ref.Repo.Name
+	resp, err := p.client.doRESTWithETag(ctx, repoPath(ref.Repo.Owner, ref.Repo.Name), nil, "")
 	if err != nil {
-		return ports.SCMAttachmentResult{}, err
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden {
+			return ports.SCMAttachmentAccess{Location: location, Reason: ports.SCMAttachmentNoWriteAccess}, nil
+		}
+		return ports.SCMAttachmentAccess{}, err
 	}
-	entry := gitTreeEntry{Path: filePath, Mode: "100644", Type: "blob", SHA: blobSHA}
+	var repo struct {
+		Permissions struct {
+			Push bool `json:"push"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(resp.Body, &repo); err != nil {
+		return ports.SCMAttachmentAccess{}, fmt.Errorf("github scm: decode repository: %w", err)
+	}
+	if !repo.Permissions.Push {
+		return ports.SCMAttachmentAccess{Location: location, Reason: ports.SCMAttachmentNoWriteAccess}, nil
+	}
+	return ports.SCMAttachmentAccess{Allowed: true, Location: location}, nil
+}
 
-	for attempt := 1; ; attempt++ {
-		head, exists, err := p.attachmentsHead(ctx, ref.Repo)
+// StoreAttachments commits a comment's files, through the Git Data API, as one
+// commit with no parent under its own ref, refs/ao/attachments/pr-<n>/<id>.
+// Each file is linked by that commit's SHA, so its URL never moves, and one
+// comment's files never race another's. The commit message carries [skip ci]
+// for CI systems that listen to every pushed ref.
+func (p *Provider) StoreAttachments(ctx context.Context, batch ports.SCMAttachmentBatch) (ports.SCMStoredAttachments, error) {
+	if p == nil || p.client == nil {
+		return ports.SCMStoredAttachments{}, fmt.Errorf("github scm: attachment provider is not configured")
+	}
+	ref := batch.PR
+	if err := validAttachmentRef(ref); err != nil {
+		return ports.SCMStoredAttachments{}, err
+	}
+	if len(batch.Files) == 0 {
+		return ports.SCMStoredAttachments{}, fmt.Errorf("github scm: no attachments to store")
+	}
+	paths := attachmentPaths(batch.Files)
+	entries := make([]gitTreeEntry, 0, len(batch.Files))
+	for i, file := range batch.Files {
+		if strings.TrimSpace(file.Name) == "" || strings.ContainsAny(file.Name, `/\`) || len(file.Data) == 0 {
+			return ports.SCMStoredAttachments{}, fmt.Errorf("github scm: attachment name and content are required")
+		}
+		blobSHA, err := p.createAttachmentBlob(ctx, ref.Repo, file.Data)
 		if err != nil {
-			return ports.SCMAttachmentResult{}, err
+			return ports.SCMStoredAttachments{}, err
 		}
-		if !exists {
-			err = p.createAttachmentsBranch(ctx, ref.Repo, entry, message)
-		} else {
-			err = p.appendAttachment(ctx, ref.Repo, head, entry, message)
+		entries = append(entries, gitTreeEntry{Path: paths[i], Mode: "100644", Type: "blob", SHA: blobSHA})
+	}
+	treeSHA, err := p.createAttachmentTree(ctx, ref.Repo, entries)
+	if err != nil {
+		return ports.SCMStoredAttachments{}, err
+	}
+	message := fmt.Sprintf("Attach files to PR #%d [skip ci]\n\nFiles attached to a pull request comment from AO (Agent Orchestrator).", ref.Number)
+	commitSHA, err := p.createAttachmentCommit(ctx, ref.Repo, message, treeSHA)
+	if err != nil {
+		return ports.SCMStoredAttachments{}, err
+	}
+	handle := attachmentsRefPrefix + "pr-" + strconv.Itoa(ref.Number) + "/" + p.attachmentTime().UTC().Format("20060102-150405") + "-" + p.attachmentSuffix()
+	payload := struct {
+		Ref string `json:"ref"`
+		SHA string `json:"sha"`
+	}{Ref: handle, SHA: commitSHA}
+	resp, err := p.client.doREST(ctx, http.MethodPost, repoPath(ref.Repo.Owner, ref.Repo.Name, "git", "refs"), nil, payload)
+	if err != nil {
+		return ports.SCMStoredAttachments{}, attachmentStatus(resp.StatusCode, err)
+	}
+	urls := make([]string, len(paths))
+	for i, filePath := range paths {
+		urls[i] = attachmentURL(ref, commitSHA, filePath)
+	}
+	return ports.SCMStoredAttachments{URLs: urls, Handle: handle}, nil
+}
+
+// DiscardAttachments deletes a batch's ref, after the comment that would have
+// linked to it failed to post. GitHub then garbage-collects the unreachable
+// commit and files. It only ever deletes refs under the attachments namespace,
+// and one that is already gone is not an error.
+func (p *Provider) DiscardAttachments(ctx context.Context, ref ports.SCMPRRef, handle string) error {
+	if p == nil || p.client == nil {
+		return fmt.Errorf("github scm: attachment provider is not configured")
+	}
+	if err := validAttachmentRef(ref); err != nil {
+		return err
+	}
+	name, ok := strings.CutPrefix(handle, attachmentsRefPrefix)
+	if !ok || name == "" || strings.Contains(name, "..") {
+		return fmt.Errorf("github scm: %q is not an attachments ref", handle)
+	}
+	elems := append([]string{"git", "refs", "ao", "attachments"}, strings.Split(name, "/")...)
+	resp, err := p.client.doREST(ctx, http.MethodDelete, repoPath(ref.Repo.Owner, ref.Repo.Name, elems...), nil, nil)
+	if err != nil {
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity {
+			return nil
 		}
-		if err == nil {
-			return ports.SCMAttachmentResult{URL: attachmentURL(ref, filePath)}, nil
-		}
-		if !errors.Is(err, errAttachmentRace) || attempt >= attachmentRefAttempts {
-			if errors.Is(err, errAttachmentRace) {
-				return ports.SCMAttachmentResult{}, fmt.Errorf("%w: %w", ports.ErrSCMRejected, err)
-			}
-			return ports.SCMAttachmentResult{}, err
-		}
+		return attachmentStatus(resp.StatusCode, err)
+	}
+	return nil
+}
+
+func validAttachmentRef(ref ports.SCMPRRef) error {
+	if ref.Number <= 0 || strings.TrimSpace(ref.Repo.Owner) == "" || strings.TrimSpace(ref.Repo.Name) == "" {
+		return fmt.Errorf("github scm: invalid pull request reference")
+	}
+	return nil
+}
+
+// attachmentStatus classifies a failed Git Data call. Without write access
+// GitHub answers 404 (or 403), which means "you can't write here", not "the PR
+// is unknown"; a repository rule refusing the ref is a rejection.
+func attachmentStatus(status int, err error) error {
+	switch status {
+	case http.StatusForbidden, http.StatusNotFound:
+		return fmt.Errorf("%w: %w", ports.ErrSCMForbidden, err)
+	default:
+		return mapMutationStatus(status, err)
 	}
 }
 
-// errAttachmentRace marks a ref update that lost to a concurrent upload: the
-// branch moved (not a fast forward) or was created in the meantime.
-var errAttachmentRace = errors.New("github scm: attachments branch moved concurrently")
-
 type gitTreeEntry struct {
-	Path    string `json:"path"`
-	Mode    string `json:"mode"`
-	Type    string `json:"type"`
-	SHA     string `json:"sha,omitempty"`
-	Content string `json:"content,omitempty"`
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+	Type string `json:"type"`
+	SHA  string `json:"sha"`
 }
 
 func (p *Provider) createAttachmentBlob(ctx context.Context, repo ports.SCMRepo, data []byte) (string, error) {
@@ -105,133 +169,31 @@ func (p *Provider) createAttachmentBlob(ctx context.Context, repo ports.SCMRepo,
 	}{Content: base64.StdEncoding.EncodeToString(data), Encoding: "base64"}
 	resp, err := p.client.doREST(ctx, http.MethodPost, repoPath(repo.Owner, repo.Name, "git", "blobs"), nil, payload)
 	if err != nil {
-		return "", mapMutationStatus(resp.StatusCode, err)
+		return "", attachmentStatus(resp.StatusCode, err)
 	}
 	return decodeGitSHA(resp.Body, "blob")
 }
 
-// attachmentsHead returns the commit the attachments branch points at, or
-// exists=false when the branch has not been created yet. It bypasses the
-// client's ETag cache so a retry always sees the branch's current head.
-func (p *Provider) attachmentsHead(ctx context.Context, repo ports.SCMRepo) (string, bool, error) {
-	resp, err := p.client.doRESTWithETag(ctx, repoPath(repo.Owner, repo.Name, "git", "ref", "heads", attachmentsBranch), nil, "")
-	if err != nil {
-		if resp.StatusCode == http.StatusNotFound {
-			return "", false, nil
-		}
-		return "", false, err
-	}
-	var out struct {
-		Object struct {
-			SHA  string `json:"sha"`
-			Type string `json:"type"`
-		} `json:"object"`
-	}
-	if err := json.Unmarshal(resp.Body, &out); err != nil {
-		return "", false, fmt.Errorf("github scm: decode attachments ref: %w", err)
-	}
-	if strings.TrimSpace(out.Object.SHA) == "" {
-		return "", false, fmt.Errorf("github scm: attachments ref has no commit")
-	}
-	return out.Object.SHA, true, nil
-}
-
-// createAttachmentsBranch creates the branch as an orphan commit holding the
-// README and the first attachment.
-func (p *Provider) createAttachmentsBranch(ctx context.Context, repo ports.SCMRepo, entry gitTreeEntry, message string) error {
-	treeSHA, err := p.createAttachmentTree(ctx, repo, "", []gitTreeEntry{
-		{Path: "README.md", Mode: "100644", Type: "blob", Content: attachmentsReadme},
-		entry,
-	})
-	if err != nil {
-		return err
-	}
-	commitSHA, err := p.createAttachmentCommit(ctx, repo, message, treeSHA, []string{})
-	if err != nil {
-		return err
-	}
+func (p *Provider) createAttachmentTree(ctx context.Context, repo ports.SCMRepo, entries []gitTreeEntry) (string, error) {
 	payload := struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
-	}{Ref: "refs/heads/" + attachmentsBranch, SHA: commitSHA}
-	resp, err := p.client.doREST(ctx, http.MethodPost, repoPath(repo.Owner, repo.Name, "git", "refs"), nil, payload)
-	if err != nil {
-		if resp.StatusCode == http.StatusUnprocessableEntity && strings.Contains(strings.ToLower(githubMessage(resp.Body)), "already exists") {
-			return fmt.Errorf("%w: %w", errAttachmentRace, err)
-		}
-		return mapMutationStatus(resp.StatusCode, err)
-	}
-	return nil
-}
-
-// appendAttachment commits entry on top of head and fast-forwards the branch.
-func (p *Provider) appendAttachment(ctx context.Context, repo ports.SCMRepo, head string, entry gitTreeEntry, message string) error {
-	baseTree, err := p.commitTreeSHA(ctx, repo, head)
-	if err != nil {
-		return err
-	}
-	treeSHA, err := p.createAttachmentTree(ctx, repo, baseTree, []gitTreeEntry{entry})
-	if err != nil {
-		return err
-	}
-	commitSHA, err := p.createAttachmentCommit(ctx, repo, message, treeSHA, []string{head})
-	if err != nil {
-		return err
-	}
-	payload := struct {
-		SHA   string `json:"sha"`
-		Force bool   `json:"force"`
-	}{SHA: commitSHA, Force: false}
-	resp, err := p.client.doREST(ctx, http.MethodPatch, repoPath(repo.Owner, repo.Name, "git", "refs", "heads", attachmentsBranch), nil, payload)
-	if err != nil {
-		if resp.StatusCode == http.StatusUnprocessableEntity && strings.Contains(strings.ToLower(githubMessage(resp.Body)), "fast forward") {
-			return fmt.Errorf("%w: %w", errAttachmentRace, err)
-		}
-		return mapMutationStatus(resp.StatusCode, err)
-	}
-	return nil
-}
-
-func (p *Provider) commitTreeSHA(ctx context.Context, repo ports.SCMRepo, commitSHA string) (string, error) {
-	resp, err := p.client.doRESTWithETag(ctx, repoPath(repo.Owner, repo.Name, "git", "commits", commitSHA), nil, "")
-	if err != nil {
-		return "", mapMutationStatus(resp.StatusCode, err)
-	}
-	var out struct {
-		Tree struct {
-			SHA string `json:"sha"`
-		} `json:"tree"`
-	}
-	if err := json.Unmarshal(resp.Body, &out); err != nil {
-		return "", fmt.Errorf("github scm: decode attachments commit: %w", err)
-	}
-	if strings.TrimSpace(out.Tree.SHA) == "" {
-		return "", fmt.Errorf("github scm: attachments commit has no tree")
-	}
-	return out.Tree.SHA, nil
-}
-
-func (p *Provider) createAttachmentTree(ctx context.Context, repo ports.SCMRepo, baseTree string, entries []gitTreeEntry) (string, error) {
-	payload := struct {
-		BaseTree string         `json:"base_tree,omitempty"`
-		Tree     []gitTreeEntry `json:"tree"`
-	}{BaseTree: baseTree, Tree: entries}
+		Tree []gitTreeEntry `json:"tree"`
+	}{Tree: entries}
 	resp, err := p.client.doREST(ctx, http.MethodPost, repoPath(repo.Owner, repo.Name, "git", "trees"), nil, payload)
 	if err != nil {
-		return "", mapMutationStatus(resp.StatusCode, err)
+		return "", attachmentStatus(resp.StatusCode, err)
 	}
 	return decodeGitSHA(resp.Body, "tree")
 }
 
-func (p *Provider) createAttachmentCommit(ctx context.Context, repo ports.SCMRepo, message, treeSHA string, parents []string) (string, error) {
+func (p *Provider) createAttachmentCommit(ctx context.Context, repo ports.SCMRepo, message, treeSHA string) (string, error) {
 	payload := struct {
 		Message string   `json:"message"`
 		Tree    string   `json:"tree"`
 		Parents []string `json:"parents"`
-	}{Message: message, Tree: treeSHA, Parents: parents}
+	}{Message: message, Tree: treeSHA, Parents: []string{}}
 	resp, err := p.client.doREST(ctx, http.MethodPost, repoPath(repo.Owner, repo.Name, "git", "commits"), nil, payload)
 	if err != nil {
-		return "", mapMutationStatus(resp.StatusCode, err)
+		return "", attachmentStatus(resp.StatusCode, err)
 	}
 	return decodeGitSHA(resp.Body, "commit")
 }
@@ -249,21 +211,32 @@ func decodeGitSHA(body []byte, kind string) (string, error) {
 	return out.SHA, nil
 }
 
-// attachmentPath is pr-<number>/<UTC yyyymmdd-hhmmss>-<suffix>-<name>.
-func attachmentPath(number int, at time.Time, suffix, name string) string {
-	return "pr-" + strconv.Itoa(number) + "/" + at.UTC().Format("20060102-150405") + "-" + suffix + "-" + name
+// attachmentPaths names each file in the batch's commit by its own name; a
+// name that repeats gets a numbered prefix, so every file keeps its own path.
+func attachmentPaths(files []ports.SCMAttachmentFile) []string {
+	paths := make([]string, len(files))
+	seen := map[string]bool{}
+	for i, file := range files {
+		name := file.Name
+		for n := 2; seen[name]; n++ {
+			name = strconv.Itoa(n) + "-" + file.Name
+		}
+		seen[name] = true
+		paths[i] = name
+	}
+	return paths
 }
 
-// attachmentURL is the blob URL with ?raw=true on the PR's web host, which
-// GitHub renders inline in comments, private repositories included for
-// viewers who can read the repository.
-func attachmentURL(ref ports.SCMPRRef, filePath string) string {
+// attachmentURL is the blob URL at the batch's commit, with ?raw=true, on the
+// PR's web host. GitHub renders it inline in comments, private repositories
+// included for viewers who can read the repository.
+func attachmentURL(ref ports.SCMPRRef, commitSHA, filePath string) string {
 	segments := strings.Split(filePath, "/")
 	for i, segment := range segments {
 		segments[i] = url.PathEscape(segment)
 	}
 	return "https://" + attachmentHost(ref) + "/" + url.PathEscape(ref.Repo.Owner) + "/" + url.PathEscape(ref.Repo.Name) +
-		"/blob/" + attachmentsBranch + "/" + strings.Join(segments, "/") + "?raw=true"
+		"/blob/" + commitSHA + "/" + strings.Join(segments, "/") + "?raw=true"
 }
 
 // attachmentHost is the web host of the PR: the repository host the observer
@@ -289,8 +262,8 @@ func (p *Provider) attachmentTime() time.Time {
 	return time.Now()
 }
 
-// attachmentSuffix is a short random token that keeps two uploads of the same
-// name in the same second apart.
+// attachmentSuffix is a short random token that keeps two comments' refs in
+// the same second apart.
 func (p *Provider) attachmentSuffix() string {
 	if p.randomSuffix != nil {
 		return p.randomSuffix()

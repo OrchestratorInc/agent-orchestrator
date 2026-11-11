@@ -13,7 +13,7 @@ type ActionManager interface {
 	ResolveComments(ctx context.Context, prID string, commentIDs []string) (ResolveResult, error)
 	ChangeState(ctx context.Context, request StateRequest) (StateResult, error)
 	PostComment(ctx context.Context, request CommentRequest) (CommentResult, error)
-	UploadAttachment(ctx context.Context, request AttachmentRequest) (AttachmentResult, error)
+	AttachmentAccess(ctx context.Context, prID, prURL string) (AttachmentAccessResult, error)
 	Stack(ctx context.Context, prID, prURL string) (StackResult, error)
 	AddToStack(ctx context.Context, prID, prURL string) (StackResult, error)
 	MergeStack(ctx context.Context, request StackMergeRequest) (StackMergeResult, error)
@@ -61,11 +61,32 @@ type StateResult struct {
 
 // CommentRequest posts Body on the tracked PR. An empty ThreadID posts a
 // top-level conversation comment; otherwise it replies in that review thread.
+//
+// Attachments are the comment's files. Body links each one by its index, as
+// "](attachment:0)"; they are stored with the PR's SCM provider only when the
+// comment is posted, and removed again if posting fails.
 type CommentRequest struct {
-	PRID     string
-	PRURL    string
-	Body     string
-	ThreadID string
+	PRID        string
+	PRURL       string
+	Body        string
+	ThreadID    string
+	Attachments []CommentAttachment
+}
+
+// CommentAttachment is one file of a comment. Data is the decoded file;
+// ContentType is what the client declared for it.
+type CommentAttachment struct {
+	Name        string
+	ContentType string
+	Data        []byte
+}
+
+// AttachmentAccessResult says whether the person can attach files to this
+// PR's comments, and where they would be stored.
+type AttachmentAccessResult struct {
+	Allowed  bool
+	Location string
+	Reason   string
 }
 
 // CommentResult is the provider's record of a posted comment.
@@ -73,22 +94,4 @@ type CommentResult struct {
 	ID        string
 	URL       string
 	CreatedAt time.Time
-}
-
-// AttachmentRequest uploads a file for a comment on the tracked PR. Data is
-// the decoded file; ContentType is what the client declared for it.
-type AttachmentRequest struct {
-	PRID        string
-	PRURL       string
-	Name        string
-	ContentType string
-	Data        []byte
-}
-
-// AttachmentResult locates an uploaded attachment. Name is the sanitized file
-// name and Markdown embeds (images) or links (other files) URL.
-type AttachmentResult struct {
-	URL      string
-	Name     string
-	Markdown string
 }

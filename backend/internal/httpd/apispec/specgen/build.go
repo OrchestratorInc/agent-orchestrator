@@ -635,8 +635,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersChangePRStateResponse":      "ChangePRStateResponse",
 	"ControllersPostPRCommentRequest":       "PostPRCommentRequest",
 	"ControllersPostPRCommentResponse":      "PostPRCommentResponse",
-	"ControllersUploadPRAttachmentRequest":  "UploadPRAttachmentRequest",
-	"ControllersUploadPRAttachmentResponse": "UploadPRAttachmentResponse",
+	"ControllersPRCommentAttachment":        "PRCommentAttachment",
+	"ControllersPRAttachmentAccessResponse": "PRAttachmentAccessResponse",
 	// httpd/controllers — review wire envelopes
 	"ControllersListReviewsResponse":   "ListReviewsResponse",
 	"ControllersReviewRunResponse":     "ReviewRunResponse",
@@ -4135,22 +4135,20 @@ func prOperations() []operation {
 			resps: []respUnit{
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusOK, controllers.PostPRCommentResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
 		{
-			method: http.MethodPost, path: "/api/v1/prs/{id}/attachments", id: "uploadPRAttachment", tag: "prs",
-			summary:    "Upload a file a pull request comment can embed or link",
-			pathParams: []any{controllers.PRIDParam{}},
-			reqBody:    controllers.UploadPRAttachmentRequest{},
+			method: http.MethodGet, path: "/api/v1/prs/{id}/attachment-access", id: "getPRAttachmentAccess", tag: "prs",
+			summary:    "Whether files can be attached to a pull request's comments, and where they would be stored",
+			pathParams: []any{controllers.PRIDParam{}, controllers.PRAttachmentAccessQuery{}},
 			resps: []respUnit{
 				{http.StatusBadRequest, envelope.APIError{}},
-				{http.StatusOK, controllers.UploadPRAttachmentResponse{}},
+				{http.StatusOK, controllers.PRAttachmentAccessResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
-				{http.StatusUnprocessableEntity, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
 		// GitHub PAT + repos (local daemon storage)

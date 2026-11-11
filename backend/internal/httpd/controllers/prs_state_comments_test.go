@@ -115,7 +115,7 @@ func TestPRsRoutes_PostComment_200(t *testing.T) {
 	if !out.OK || out.ID != "PRRC_1" || out.URL != "https://x/r1" || !out.CreatedAt.Equal(createdAt) {
 		t.Fatalf("response = %+v", out)
 	}
-	if svc.commentReq != (prsvc.CommentRequest{PRID: "42", PRURL: prURLForTests, Body: "Fixed", ThreadID: "PRRT_1"}) {
+	if got := svc.commentReq; got.PRID != "42" || got.PRURL != prURLForTests || got.Body != "Fixed" || got.ThreadID != "PRRT_1" || len(got.Attachments) != 0 {
 		t.Fatalf("request = %#v", svc.commentReq)
 	}
 }

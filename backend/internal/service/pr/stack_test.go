@@ -3,11 +3,16 @@ package pr
 import (
 	"context"
 	"errors"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 const (
@@ -26,6 +31,8 @@ type fakeStacker struct {
 	merge       []ports.SCMStackMergeRequest
 	status      ports.SCMStackMergeStatus
 	mergeErr    error
+	// onMerge runs once the provider has taken the merge.
+	onMerge func()
 }
 
 func (f *fakeStacker) PullRequestStack(_ context.Context, ref ports.SCMPRRef) (ports.SCMStack, bool, error) {
@@ -44,6 +51,9 @@ func (f *fakeStacker) RegisterStacked(_ context.Context, request ports.SCMStackR
 
 func (f *fakeStacker) MergeStack(_ context.Context, request ports.SCMStackMergeRequest) (ports.SCMStackMergeStatus, error) {
 	f.merge = append(f.merge, request)
+	if f.onMerge != nil {
+		f.onMerge()
+	}
 	return f.status, f.mergeErr
 }
 
@@ -51,9 +61,13 @@ func (f *fakeStacker) MergeStack(_ context.Context, request ports.SCMStackMergeR
 type stackReader struct {
 	byNumber map[int]ports.SCMObservation
 	review   ports.SCMReviewObservation
+	err      error
 }
 
 func (r *stackReader) FetchPullRequests(_ context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
 	out := make([]ports.SCMObservation, 0, len(refs))
 	for _, ref := range refs {
 		out = append(out, r.byNumber[ref.Number])
@@ -217,6 +231,169 @@ func TestMergeStack_SkipsLayersAlreadyMerged(t *testing.T) {
 	got, err := f.svc.MergeStack(context.Background(), StackMergeRequest{PRID: "2", PRURL: "https://github.com/acme/widgets/pull/2", ExpectedHeads: headsThrough(2)})
 	if err != nil || len(got.Numbers) != 1 {
 		t.Fatalf("got=%#v err=%v", got, err)
+	}
+}
+
+// layerBook is the store, merge writer and lifecycle behind a stack merge. It
+// keeps one row per layer and logs each bookkeeping step in order. Like the
+// real ones, every step fails on a cancelled context.
+type layerBook struct {
+	rows     map[string]domain.PullRequest
+	steps    []string
+	observed []ports.SCMObservation
+}
+
+func layerURL(number int) string {
+	return "https://github.com/acme/widgets/pull/" + strconv.Itoa(number)
+}
+
+func (b *layerBook) GetPR(ctx context.Context, url string) (domain.PullRequest, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.PullRequest{}, false, err
+	}
+	pr, ok := b.rows[url]
+	return pr, ok, nil
+}
+
+func (b *layerBook) RecordWorkerPRMergedVia(ctx context.Context, prURL, mergedVia string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.steps = append(b.steps, "via "+mergedVia+" "+prURL)
+	return nil
+}
+
+func (b *layerBook) MarkPRMerged(ctx context.Context, prURL, _ string, _ time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.steps = append(b.steps, "merged "+prURL)
+	return nil
+}
+
+func (b *layerBook) ApplySCMObservation(ctx context.Context, sessionID domain.SessionID, obs ports.SCMObservation) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.steps = append(b.steps, "lifecycle "+string(sessionID)+" "+obs.PR.URL)
+	b.observed = append(b.observed, obs)
+	return nil
+}
+
+// newLandingFixture tracks every layer of the stack, each in its own session.
+func newLandingFixture() (stackFixture, *layerBook, *fakeRefresher) {
+	f := newStackFixture(2)
+	book := &layerBook{rows: map[string]domain.PullRequest{}}
+	for n := 1; n <= 3; n++ {
+		book.rows[layerURL(n)] = domain.PullRequest{URL: layerURL(n), Number: n, Provider: "github", Host: "github.com", Repo: "acme/widgets", SessionID: domain.SessionID("s-" + strconv.Itoa(n))}
+	}
+	refresher := &fakeRefresher{}
+	f.svc = NewActionService(ActionDeps{
+		Store:       book,
+		Reader:      f.reader,
+		Stacker:     f.stacker,
+		MergeWriter: book,
+		Lifecycle:   book,
+		Refresher:   refresher,
+		Clock:       func() time.Time { return time.Unix(100, 0) },
+	})
+	return f, book, refresher
+}
+
+func mergeStackThrough2(ctx context.Context, f stackFixture) (StackMergeResult, error) {
+	return f.svc.MergeStack(ctx, StackMergeRequest{PRID: "2", PRURL: layerURL(2), ExpectedHeads: headsThrough(1, 2)})
+}
+
+// A merged row is terminal, so the observer's one forced refresh was lifecycle's
+// only chance to see the merge: a failed read meant no teardown and no merged
+// notification. Lifecycle hears of every landed layer however reads go after.
+func TestMergeStack_TellsLifecycleAboutEveryLandedLayer(t *testing.T) {
+	f, book, refresher := newLandingFixture()
+	f.stacker.onMerge = func() { f.reader.err = errors.New("rate limited") }
+	if _, err := mergeStackThrough2(context.Background(), f); err != nil {
+		t.Fatal(err)
+	}
+	if len(book.observed) != 2 {
+		t.Fatalf("lifecycle saw %d layers, want 2: %v", len(book.observed), book.steps)
+	}
+	for i, obs := range book.observed {
+		number := i + 1
+		if obs.PR.URL != layerURL(number) || !obs.Fetched || !obs.PR.Merged || obs.PR.Closed || obs.PR.State != string(domain.PRStateMerged) || !obs.ObservedAt.Equal(time.Unix(100, 0).UTC()) {
+			t.Fatalf("layer %d observation = %+v", number, obs)
+		}
+	}
+	want := []string{
+		"merged " + layerURL(1), "lifecycle s-1 " + layerURL(1),
+		"merged " + layerURL(2), "lifecycle s-2 " + layerURL(2),
+	}
+	if !slices.Equal(withoutVia(book.steps), want) {
+		t.Fatalf("steps = %v, want %v", book.steps, want)
+	}
+	if !slices.Equal(refresher.urls, []string{layerURL(1), layerURL(2)}) {
+		t.Fatalf("refreshed = %v", refresher.urls)
+	}
+}
+
+func withoutVia(steps []string) []string {
+	return slices.DeleteFunc(slices.Clone(steps), func(step string) bool { return strings.HasPrefix(step, "via ") })
+}
+
+// ao.usage.worker_pr_merged attributes a stacked merge to the client that asked
+// for it, as it does a plain merge, and each layer is attributed before its row
+// turns merged so the usage flush never reports it unattributed.
+func TestMergeStack_RecordsMergedViaForEveryLandedLayer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ctx  context.Context
+		want string
+	}{
+		"from the desktop": {ctx: telemetrymeta.WithSurface(context.Background(), domain.RequestSurfaceDesktop), want: deliverytelemetry.MergedViaDesktop},
+		"from the CLI":     {ctx: context.Background(), want: deliverytelemetry.MergedViaCLI},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, book, _ := newLandingFixture()
+			if _, err := mergeStackThrough2(tc.ctx, f); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{
+				"via " + tc.want + " " + layerURL(1), "merged " + layerURL(1), "lifecycle s-1 " + layerURL(1),
+				"via " + tc.want + " " + layerURL(2), "merged " + layerURL(2), "lifecycle s-2 " + layerURL(2),
+			}
+			if !slices.Equal(book.steps, want) {
+				t.Fatalf("steps = %v, want %v", book.steps, want)
+			}
+		})
+	}
+}
+
+// A slow merge outlives its request: the context is gone by the time GitHub
+// answers. The layers it took are still recorded, and still attributed.
+func TestMergeStack_RecordsLayersAfterTheRequestIsCancelled(t *testing.T) {
+	for name, tc := range map[ports.SCMStackMergeStatus][]string{
+		ports.SCMStackMerged: {
+			"via desktop " + layerURL(1), "merged " + layerURL(1), "lifecycle s-1 " + layerURL(1),
+			"via desktop " + layerURL(2), "merged " + layerURL(2), "lifecycle s-2 " + layerURL(2),
+		},
+		// Still landing: the rows stay open for the observer to see them merge.
+		ports.SCMStackPending:  nil,
+		ports.SCMStackEnqueued: nil,
+	} {
+		t.Run(string(name), func(t *testing.T) {
+			f, book, refresher := newLandingFixture()
+			ctx, cancel := context.WithCancel(telemetrymeta.WithSurface(context.Background(), domain.RequestSurfaceDesktop))
+			defer cancel()
+			f.stacker.status = name
+			f.stacker.onMerge = cancel
+			got, err := mergeStackThrough2(ctx, f)
+			if err != nil || got.Status != string(name) {
+				t.Fatalf("got=%#v err=%v", got, err)
+			}
+			if !slices.Equal(book.steps, tc) {
+				t.Fatalf("steps = %v, want %v", book.steps, tc)
+			}
+			if !slices.Equal(refresher.urls, []string{layerURL(1), layerURL(2)}) {
+				t.Fatalf("refreshed = %v", refresher.urls)
+			}
+		})
 	}
 }
 

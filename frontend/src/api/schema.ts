@@ -2098,17 +2098,17 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/prs/{id}/attachments": {
+    "/api/v1/prs/{id}/attachment-access": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Whether files can be attached to a pull request's comments, and where they would be stored */
+        get: operations["getPRAttachmentAccess"];
         put?: never;
-        /** Upload a file a pull request comment can embed or link */
-        post: operations["uploadPRAttachment"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7098,6 +7098,17 @@ export interface components {
             projectId: string;
             projectName?: string;
         };
+        PRAttachmentAccessResponse: {
+            allowed: boolean;
+            location?: string;
+            /** @enum {string} */
+            reason?: "no_write_access" | "unsupported";
+        };
+        PRCommentAttachment: {
+            contentType: string;
+            data: string;
+            name: string;
+        };
         PRReviewState: {
             latestRun?: components["schemas"]["ReviewRun"];
             prNumber: number;
@@ -7137,6 +7148,7 @@ export interface components {
             url: string;
         };
         PostPRCommentRequest: {
+            attachments?: components["schemas"]["PRCommentAttachment"][];
             body: string;
             prUrl: string;
             threadId?: string;
@@ -8602,18 +8614,6 @@ export interface components {
             content: string;
             expectedFileFingerprint: string;
             path: string;
-        };
-        UploadPRAttachmentRequest: {
-            contentType: string;
-            data: string;
-            name: string;
-            prUrl: string;
-        };
-        UploadPRAttachmentResponse: {
-            markdown: string;
-            name: string;
-            ok: boolean;
-            url: string;
         };
         UsageHookMetadata: {
             /** @enum {string} */
@@ -16078,9 +16078,12 @@ export interface operations {
             };
         };
     };
-    uploadPRAttachment: {
+    getPRAttachmentAccess: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description The pull request's URL. */
+                prUrl: string;
+            };
             header?: never;
             path: {
                 /** @description PR number. */
@@ -16088,11 +16091,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UploadPRAttachmentRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {
@@ -16100,7 +16099,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UploadPRAttachmentResponse"];
+                    "application/json": components["schemas"]["PRAttachmentAccessResponse"];
                 };
             };
             /** @description Bad Request */
@@ -16114,24 +16113,6 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Unprocessable Entity */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16168,6 +16149,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

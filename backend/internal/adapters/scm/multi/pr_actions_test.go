@@ -13,12 +13,22 @@ type actingProvider struct {
 	fakeProvider
 	stateRequests   []ports.SCMPRStateRequest
 	commentRequests []ports.SCMCommentRequest
-	attachRequests  []ports.SCMAttachmentRequest
+	attachBatches   []ports.SCMAttachmentBatch
+	discarded       []string
 }
 
-func (a *actingProvider) UploadAttachment(_ context.Context, request ports.SCMAttachmentRequest) (ports.SCMAttachmentResult, error) {
-	a.attachRequests = append(a.attachRequests, request)
-	return ports.SCMAttachmentResult{URL: "https://x/f.png"}, nil
+func (a *actingProvider) AttachmentAccess(context.Context, ports.SCMPRRef) (ports.SCMAttachmentAccess, error) {
+	return ports.SCMAttachmentAccess{Allowed: true, Location: "o/r"}, nil
+}
+
+func (a *actingProvider) StoreAttachments(_ context.Context, batch ports.SCMAttachmentBatch) (ports.SCMStoredAttachments, error) {
+	a.attachBatches = append(a.attachBatches, batch)
+	return ports.SCMStoredAttachments{URLs: []string{"https://x/f.png"}, Handle: "refs/ao/attachments/pr-1/x"}, nil
+}
+
+func (a *actingProvider) DiscardAttachments(_ context.Context, _ ports.SCMPRRef, handle string) error {
+	a.discarded = append(a.discarded, handle)
+	return nil
 }
 
 func (a *actingProvider) ChangePullRequestState(_ context.Context, request ports.SCMPRStateRequest) error {
@@ -58,13 +68,20 @@ func TestPRActionsRouteByProviderAndReportUnsupported(t *testing.T) {
 	if err := nilProvider.ChangePullRequestState(context.Background(), ports.SCMPRStateRequest{PR: ghRef}); !errors.Is(err, ports.ErrSCMUnsupported) {
 		t.Fatalf("nil provider error = %v, want unsupported", err)
 	}
-	if got, err := m.UploadAttachment(context.Background(), ports.SCMAttachmentRequest{PR: ghRef, Name: "f.png"}); err != nil || got.URL != "https://x/f.png" || len(gh.attachRequests) != 1 {
-		t.Fatalf("attachment = %#v, err = %v, calls = %d", got, err, len(gh.attachRequests))
+	batch := ports.SCMAttachmentBatch{PR: ghRef, Files: []ports.SCMAttachmentFile{{Name: "f.png"}}}
+	if got, err := m.StoreAttachments(context.Background(), batch); err != nil || len(got.URLs) != 1 || got.URLs[0] != "https://x/f.png" || len(gh.attachBatches) != 1 {
+		t.Fatalf("attachments = %#v, err = %v, calls = %d", got, err, len(gh.attachBatches))
 	}
-	if _, err := m.UploadAttachment(context.Background(), ports.SCMAttachmentRequest{PR: glRef, Name: "f.png"}); !errors.Is(err, ports.ErrSCMUnsupported) {
+	if access, err := m.AttachmentAccess(context.Background(), ghRef); err != nil || !access.Allowed {
+		t.Fatalf("access = %#v, err = %v", access, err)
+	}
+	if err := m.DiscardAttachments(context.Background(), ghRef, "refs/ao/attachments/pr-1/x"); err != nil || len(gh.discarded) != 1 {
+		t.Fatalf("discard err = %v, calls = %d", err, len(gh.discarded))
+	}
+	if _, err := m.StoreAttachments(context.Background(), ports.SCMAttachmentBatch{PR: glRef}); !errors.Is(err, ports.ErrSCMUnsupported) {
 		t.Fatalf("attachment error = %v, want unsupported", err)
 	}
-	if _, err := nilProvider.UploadAttachment(context.Background(), ports.SCMAttachmentRequest{PR: ghRef}); !errors.Is(err, ports.ErrSCMUnsupported) {
+	if _, err := nilProvider.AttachmentAccess(context.Background(), ghRef); !errors.Is(err, ports.ErrSCMUnsupported) {
 		t.Fatalf("nil provider attachment error = %v, want unsupported", err)
 	}
 }

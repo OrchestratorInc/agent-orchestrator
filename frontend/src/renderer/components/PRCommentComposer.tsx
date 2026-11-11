@@ -6,6 +6,8 @@ import { Button } from "./ui/button";
 
 /** Largest file the daemon takes for a comment attachment. */
 export const PR_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+/** Largest a comment's files can be together. */
+export const PR_ATTACHMENTS_TOTAL_MAX_BYTES = 25 * 1024 * 1024;
 /** What the file picker offers; the daemon checks the bytes again. */
 const PR_ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm,application/pdf,text/plain,application/json,text/csv,application/zip,.log,.txt,.csv,.json,.zip,.mov";
 
@@ -27,7 +29,7 @@ export function insertLink(value: string, start: number, end: number, placeholde
 	return { text, selectionStart: urlStart, selectionEnd: urlStart + url.length };
 }
 
-function readAsBase64(file: File): Promise<string> {
+export function readAsBase64(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
 		reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
@@ -36,15 +38,43 @@ function readAsBase64(file: File): Promise<string> {
 	});
 }
 
-export type PRAttachmentUpload = (file: { name: string; contentType: string; data: string }) => Promise<string>;
+/** A comment body's link to one of its files: "](attachment:0)". */
+const ATTACHMENT_LINK = /\]\(attachment:(\d+)\)/g;
+
+/**
+ * The files a comment links, in the order the text first links them, with the
+ * text renumbered to match. A file whose link was deleted is left out, so it
+ * never leaves this machine.
+ */
+export function linkedAttachments(text: string, files: ReadonlyMap<number, File>): { body: string; files: File[] } {
+	const order: number[] = [];
+	for (const match of text.matchAll(ATTACHMENT_LINK)) {
+		const index = Number(match[1]);
+		if (files.has(index) && !order.includes(index)) order.push(index);
+	}
+	const body = text.replace(ATTACHMENT_LINK, (link, index: string) => {
+		const position = order.indexOf(Number(index));
+		return position < 0 ? link : `](attachment:${position})`;
+	});
+	return { body, files: order.map((index) => files.get(index)!) };
+}
+
+/** A file's link label: its name, without what would end the markdown link early. */
+const linkLabel = (name: string) => name.replace(/[[\]()]/g, "_");
 
 /**
  * The box a PR comment or reply is written in: text that grows as it is
- * written, and attachments (picked, pasted or dropped; uploaded to the PR's
- * repository while a placeholder holds their place). ⌘B, ⌘I, ⌘K and ⌘E
- * format the selection; ⌘↵ posts and Escape cancels.
+ * written, and attachments (picked, pasted or dropped). A file stays on this
+ * machine, linked from the text as "![name](attachment:0)", until the comment
+ * posts: it goes with the comment then, so a cancelled draft uploads nothing.
+ * ⌘B, ⌘I, ⌘K and ⌘E format the selection; ⌘↵ posts and Escape cancels.
  */
-export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = "", onCancel, onSubmit, placeholder, roomy, submitLabel, upload }: {
+export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error, initial = "", onCancel, onSubmit, placeholder, roomy, submitLabel }: {
+	/**
+	 * Files can be attached. Without it there is no Attach; with blockedReason,
+	 * Attach is off and that says why (no write access to the repository).
+	 */
+	attachments?: { blockedReason?: string };
 	/** Takes focus as it opens, with the caret after any text it starts with. */
 	autoFocus?: boolean;
 	/** Who is writing, beside the text. */
@@ -53,22 +83,22 @@ export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = ""
 	error?: string | null;
 	initial?: string;
 	onCancel?: () => void;
-	onSubmit: (body: string) => Promise<unknown>;
+	/** Posts the text with the files it links, in the order it links them. */
+	onSubmit: (body: string, files: File[]) => Promise<unknown>;
 	placeholder: string;
 	/** Reading size, for the PR's tab; the sidebar stays compact. */
 	roomy?: boolean;
 	submitLabel: string;
-	/** Uploads a file and returns its markdown; without it there is no Attach. */
-	upload?: PRAttachmentUpload;
 }) {
 	const { t } = useTranslation();
 	const [value, setValue] = useState(initial);
-	const [uploading, setUploading] = useState(0);
+	// The files the text links, by the number in their link.
+	const [files, setFiles] = useState<ReadonlyMap<number, File>>(() => new Map());
+	const nextFile = useRef(0);
 	const [uploadError, setUploadError] = useState<string | null>(null);
 	const [dragging, setDragging] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileRef = useRef<HTMLInputElement>(null);
-	// The latest text, for uploads that finish after more typing.
 	// Opened to write, with the caret after any text it starts with (a quote and @mention).
 	useEffect(() => {
 		if (!autoFocus) return;
@@ -93,46 +123,49 @@ export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = ""
 	const code = () => apply((v, s, e) => (v.slice(s, e).includes("\n") ? wrapSelection(v, s, e, "\n```\n", "") : wrapSelection(v, s, e, "`", t("pr.comments.format.codePlaceholder"))));
 	const link = () => apply((v, s, e) => insertLink(v, s, e, t("pr.comments.format.linkPlaceholder")));
 
-	const attach = async (files: File[]) => {
+	const attach = (picked: File[]) => {
 		// While a comment posts, its text is already sent: a file added now would be lost.
-		if (!upload || files.length === 0 || busy) return;
+		if (!attachments || picked.length === 0 || busy) return;
+		if (attachments.blockedReason) {
+			setUploadError(attachments.blockedReason);
+			return;
+		}
 		setUploadError(null);
-		const accepted = files.filter((file) => {
-			if (file.size <= PR_ATTACHMENT_MAX_BYTES) return true;
-			setUploadError(t("pr.comments.attach.tooLarge", { name: file.name }));
-			return false;
-		});
+		let total = [...files.values()].reduce((sum, file) => sum + file.size, 0);
+		const accepted: File[] = [];
+		for (const file of picked) {
+			if (file.size > PR_ATTACHMENT_MAX_BYTES) {
+				setUploadError(t("pr.comments.attach.tooLarge", { name: file.name }));
+				continue;
+			}
+			if (total + file.size > PR_ATTACHMENTS_TOTAL_MAX_BYTES) {
+				setUploadError(t("pr.comments.attach.tooLargeTotal"));
+				continue;
+			}
+			total += file.size;
+			accepted.push(file);
+		}
 		if (accepted.length === 0) return;
-		const holders = accepted.map((file) => `${file.type.startsWith("image/") ? "!" : ""}[${t("pr.comments.attach.uploading", { name: file.name })}]()`);
-		// Every file holds its place before any upload finishes, so a finished link
-		// never shifts where the next placeholder goes.
+		const numbered = accepted.map((file) => [nextFile.current++, file] as const);
+		setFiles((current) => new Map([...current, ...numbered]));
+		const links = numbered.map(([index, file]) => `${file.type.startsWith("image/") ? "!" : ""}[${linkLabel(file.name)}](attachment:${index})`);
 		const caret = textareaRef.current?.selectionEnd;
 		setValue((current) => {
 			const at = caret === undefined ? current.length : Math.min(caret, current.length);
 			const before = current.slice(0, at);
 			const spacer = before && !before.endsWith("\n") ? "\n" : "";
-			return `${before}${spacer}${holders.join("\n")}\n${current.slice(at)}`;
+			return `${before}${spacer}${links.join("\n")}\n${current.slice(at)}`;
 		});
-		setUploading((count) => count + accepted.length);
-		for (const [index, file] of accepted.entries()) {
-			const holder = holders[index]!;
-			try {
-				const markdown = await upload({ name: file.name, contentType: file.type || "application/octet-stream", data: await readAsBase64(file) });
-				setValue((text) => text.replace(holder, markdown));
-			} catch (failure) {
-				setValue((text) => text.replace(`${holder}\n`, "").replace(holder, ""));
-				setUploadError(failure instanceof Error ? failure.message : t("pr.comments.attach.failed", { name: file.name }));
-			} finally {
-				setUploading((count) => count - 1);
-			}
-		}
 	};
 
 	const submit = async () => {
-		if (!value.trim() || busy || uploading > 0) return;
+		if (!value.trim() || busy) return;
+		const linked = linkedAttachments(value.trim(), files);
 		try {
-			await onSubmit(value.trim());
+			await onSubmit(linked.body, linked.files);
 			setValue("");
+			setFiles(new Map());
+			nextFile.current = 0;
 		} catch {
 			// The mutation shows the error; the draft stays so nothing typed is lost.
 		}
@@ -152,39 +185,39 @@ export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = ""
 		}
 	};
 	const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-		const files = Array.from(event.clipboardData.files);
-		if (!upload || files.length === 0) return;
+		const pasted = Array.from(event.clipboardData.files);
+		if (!attachments || pasted.length === 0) return;
 		event.preventDefault();
-		void attach(files);
+		attach(pasted);
 	};
 	const onDrop = (event: DragEvent<HTMLDivElement>) => {
 		setDragging(false);
-		const files = Array.from(event.dataTransfer.files);
-		if (!upload || files.length === 0 || busy) return;
+		const dropped = Array.from(event.dataTransfer.files);
+		if (!attachments || dropped.length === 0 || busy) return;
 		event.preventDefault();
-		void attach(files);
+		attach(dropped);
 	};
 
-	const fileInput = upload ? (
+	const fileInput = attachments ? (
 		<input
 			accept={PR_ATTACHMENT_ACCEPT}
 			aria-hidden="true"
 			className="hidden"
 			data-testid="pr-comment-file"
 			multiple
-			onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void attach(files); }}
+			onChange={(event) => { const picked = Array.from(event.target.files ?? []); event.target.value = ""; attach(picked); }}
 			ref={fileRef}
 			tabIndex={-1}
 			type="file"
 		/>
 	) : null;
-	const clear = () => { setValue(""); setUploadError(null); onCancel?.(); textareaRef.current?.blur(); };
+	const clear = () => { setValue(""); setFiles(new Map()); nextFile.current = 0; setUploadError(null); onCancel?.(); textareaRef.current?.blur(); };
 	return (
 		<div
 			className={cn("flex min-w-0 flex-col gap-1.5", roomy ? "text-sm" : "text-xs")}
 			data-testid="pr-comment-composer"
 			onDragLeave={() => setDragging(false)}
-			onDragOver={(event) => { if (upload && event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
+			onDragOver={(event) => { if (attachments && !attachments.blockedReason && event.dataTransfer.types.includes("Files")) { event.preventDefault(); setDragging(true); } }}
 			onDrop={onDrop}
 		>
 			<div
@@ -210,13 +243,13 @@ export function PRCommentComposer({ autoFocus, avatar, busy, error, initial = ""
 						value={value}
 					/>
 					<div className="flex min-w-0 items-center gap-1.5 text-xs">
-						<Button className="h-7 gap-1 rounded-full px-3 text-xs" disabled={busy || uploading > 0 || !value.trim()} onClick={() => void submit()} size="sm" type="button">
+						<Button className="h-7 gap-1 rounded-full px-3 text-xs" disabled={busy || !value.trim()} onClick={() => void submit()} size="sm" type="button">
 							{busy ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
 							{submitLabel}
 						</Button>
-						{upload ? (
-							<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50" disabled={busy} onClick={() => fileRef.current?.click()} onMouseDown={(event) => event.preventDefault()} title={t("pr.comments.simpleHint")} type="button">
-								{uploading > 0 ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <Paperclip aria-hidden="true" className="size-icon-xs" />}
+						{attachments ? (
+							<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50" aria-disabled={attachments.blockedReason ? true : undefined} disabled={busy} onClick={() => (attachments.blockedReason ? setUploadError(attachments.blockedReason) : fileRef.current?.click())} onMouseDown={(event) => event.preventDefault()} title={attachments.blockedReason ?? t("pr.comments.simpleHint")} type="button">
+								<Paperclip aria-hidden="true" className="size-icon-xs" />
 								{t("pr.comments.attach.short")}
 							</button>
 						) : null}

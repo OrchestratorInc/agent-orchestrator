@@ -17,7 +17,9 @@ import (
 var _ ports.SCMStacker = (*Provider)(nil)
 
 // How long a stack merge is waited on, and the gaps between looks at it.
-// Variables so tests don't sleep through them.
+// Variables so tests don't sleep through them. The wait stays under the stack
+// merge route's three-minute budget (httpd/api.go), which also covers the
+// layers' readiness reads before the merge.
 var (
 	stackMergeWait      = 2 * time.Minute
 	stackMergeFirstPoll = time.Second

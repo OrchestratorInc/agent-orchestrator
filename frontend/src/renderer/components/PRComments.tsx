@@ -1,7 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileCode2, Loader2, MessageSquare, MoreHorizontal, Plus, Reply } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
@@ -16,7 +16,8 @@ import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode"
 import { cn } from "../lib/utils";
 import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import type { WorkspaceSession } from "../types/workspace";
-import { PRCommentComposer, type PRAttachmentUpload } from "./PRCommentComposer";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { PRCommentComposer, readAsBase64 } from "./PRCommentComposer";
 import { PRMarkdown } from "./PRMarkdown";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
@@ -271,6 +272,60 @@ function Card({ author, at, body, bot, children, foot, label, location, menu, mu
  * now and the GitHub links. Reading is free (the daemon already stored it); only
  * posting calls the provider.
  */
+/** Repositories the person agreed to keep comment files in, so it is asked once each. */
+const ATTACHMENT_CONSENT_KEY = "ao.prAttachmentsConsent";
+
+function attachmentConsentGiven(location: string): boolean {
+	try {
+		const stored: unknown = JSON.parse(window.localStorage.getItem(ATTACHMENT_CONSENT_KEY) ?? "[]");
+		return Array.isArray(stored) && stored.includes(location);
+	} catch {
+		return false;
+	}
+}
+
+function rememberAttachmentConsent(location: string) {
+	try {
+		const stored: unknown = JSON.parse(window.localStorage.getItem(ATTACHMENT_CONSENT_KEY) ?? "[]");
+		const list = Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : [];
+		window.localStorage.setItem(ATTACHMENT_CONSENT_KEY, JSON.stringify([...new Set([...list, location])]));
+	} catch {
+		// Without storage the person is asked again next time; nothing else depends on it.
+	}
+}
+
+/** A comment whose files the person chose not to store; it stays a draft. */
+class AttachmentConsentDeclined extends Error {}
+
+/**
+ * Asks once per repository before a comment's files are stored there: they go
+ * into the repository, where anyone who can read it can open them for good.
+ */
+function useAttachmentConsent(location: string) {
+	const { t } = useTranslation();
+	const [pending, setPending] = useState<((agreed: boolean) => void) | null>(null);
+	const confirm = useCallback(() => {
+		if (!location || attachmentConsentGiven(location)) return Promise.resolve(true);
+		return new Promise<boolean>((resolve) => setPending(() => resolve));
+	}, [location]);
+	const settle = (agreed: boolean) => {
+		if (agreed) rememberAttachmentConsent(location);
+		pending?.(agreed);
+		setPending(null);
+	};
+	const dialog = (
+		<ConfirmDialog
+			confirmLabel={t("pr.comments.attach.consentConfirm")}
+			description={t("pr.comments.attach.consentDescription", { repo: location })}
+			onConfirm={() => settle(true)}
+			onOpenChange={(open) => { if (!open) settle(false); }}
+			open={pending !== null}
+			title={t("pr.comments.attach.consentTitle", { repo: location })}
+		/>
+	);
+	return { confirm, dialog };
+}
+
 export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 	hostId?: string;
 	/**
@@ -325,10 +380,17 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 	]);
 
 	const post = useMutation({
-		mutationFn: async ({ body, threadId }: { body: string; threadId?: string }) => {
+		mutationFn: async ({ body, threadId, files = [] }: { body: string; threadId?: string; files?: File[] }) => {
+			// The files travel with the comment: the daemon stores them only now.
+			const attachments = await Promise.all(files.map(async (file) => ({
+				name: file.name,
+				contentType: file.type || "application/octet-stream",
+				data: await readAsBase64(file),
+			})));
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/comments", {
 				params: { path: { id: String(pr.number) } },
-				body: { prUrl: pr.url, body, ...(threadId ? { threadId } : {}) },
+				body: { prUrl: pr.url, body, ...(threadId ? { threadId } : {}), ...(attachments.length ? { attachments } : {}) },
+				headers: attachments.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 			});
 			if (error) throw apiErrorException(error, t("pr.comments.postFailed"));
 		},
@@ -337,14 +399,32 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 			await refresh();
 		},
 	});
-	const upload: PRAttachmentUpload | undefined = canWrite ? async (file) => {
-		const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/attachments", {
-			params: { path: { id: String(pr.number) } },
-			body: { prUrl: pr.url, ...file },
-		});
-		if (error || !data) throw apiErrorException(error, t("pr.comments.attach.failed", { name: file.name }));
-		return data.markdown;
-	} : undefined;
+	// Whether files can be attached here, asked before any is picked.
+	const access = useQuery({
+		queryKey: ["pr-attachment-access", hostId ?? "", pr.url],
+		queryFn: async () => {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/prs/{id}/attachment-access", {
+				params: { path: { id: String(pr.number) }, query: { prUrl: pr.url } },
+			});
+			if (error || !data) throw apiErrorException(error, t("pr.comments.postFailed"));
+			return data;
+		},
+		enabled: canWrite,
+		staleTime: 10 * 60_000,
+	});
+	const repository = access.data?.location || pr.repo || "";
+	const attachBlocked = access.data && !access.data.allowed
+		? access.data.reason === "no_write_access"
+			? t("pr.comments.attach.noWriteAccess", { repo: repository })
+			: t("pr.comments.attach.unsupported")
+		: undefined;
+	const attachments = canWrite ? { blockedReason: attachBlocked } : undefined;
+	const consent = useAttachmentConsent(repository);
+	// Files are stored in the repository: asked once per repository, before the first.
+	const postWithFiles = async (input: { body: string; threadId?: string; files: File[] }) => {
+		if (input.files.length > 0 && !(await consent.confirm())) throw new AttachmentConsentDeclined();
+		return post.mutateAsync(input);
+	};
 	const resolve = useMutation({
 		mutationFn: async (thread: Thread) => {
 			const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/comments/resolve", {
@@ -452,11 +532,11 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 			error={post.error instanceof Error ? post.error.message : null}
 			initial={initial}
 			onCancel={closeReply}
-			onSubmit={(body) => post.mutateAsync({ body, threadId })}
+			onSubmit={(body, files) => postWithFiles({ body, threadId, files })}
 			placeholder={t("pr.comments.replyPlaceholder")}
 			roomy={roomy}
 			submitLabel={t("pr.comments.reply")}
-			upload={upload}
+			attachments={attachments}
 		/>
 	) : undefined;
 	// Reply is offered on someone else's words, and hides while its box is open.
@@ -612,17 +692,18 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 			busy={post.isPending && replying === null}
 			error={replying === null && post.error instanceof Error ? post.error.message : null}
 			onCancel={preview ? () => { post.reset(); setComposing(false); } : undefined}
-			onSubmit={async (body) => { await post.mutateAsync({ body }); setComposing(false); }}
+			onSubmit={async (body, files) => { await postWithFiles({ body, files }); setComposing(false); }}
 			placeholder={t("pr.comments.leaveComment")}
 			roomy={roomy}
 			submitLabel={t("pr.comments.comment")}
-			upload={upload}
+			attachments={attachments}
 		/>
 	);
 	const shown = preview ? main.slice(0, preview.count) : [...main].reverse();
 
 	return (
 		<div className={cn("flex min-w-0 flex-col", roomy ? "gap-3 text-sm" : "gap-2 text-xs")} data-testid="pr-comments">
+			{consent.dialog}
 			{preview ? heading : null}
 			{/* In the preview a new comment is written in place, above the list: the cards below move down while it is open, and the posted comment lands first. */}
 			{preview && canWrite && composing ? newComment : null}

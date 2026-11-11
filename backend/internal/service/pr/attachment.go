@@ -8,7 +8,10 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -248,52 +251,150 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// attachmentMarkdown embeds images and links everything else.
-func attachmentMarkdown(name, url string, image bool) string {
-	if image {
-		return "![" + name + "](" + url + ")"
+// maxCommentAttachments caps the files of one comment.
+const maxCommentAttachments = 10
+
+// MaxCommentAttachmentsBytes caps the decoded files of one comment together.
+const MaxCommentAttachmentsBytes = 25 << 20
+
+// attachmentLink is a comment body's link to one of its files, by index:
+// "![shot.png](attachment:0)" or "[log.txt](attachment:1)".
+var attachmentLink = regexp.MustCompile(`\]\(attachment:(\d+)\)`)
+
+// commentAttachments validates a comment's files against its body: each file
+// passes validateAttachment, together they stay under the cap, and the body
+// links every file and no file it doesn't have.
+func commentAttachments(body string, inputs []CommentAttachment) ([]ports.SCMAttachmentFile, error) {
+	if len(inputs) > maxCommentAttachments {
+		return nil, fmt.Errorf("%w: a comment takes at most %d files", ErrInvalidAttachment, maxCommentAttachments)
 	}
-	return "[" + name + "](" + url + ")"
+	files := make([]ports.SCMAttachmentFile, 0, len(inputs))
+	total := 0
+	for _, in := range inputs {
+		file, err := validateAttachment(in.Name, in.ContentType, in.Data)
+		if err != nil {
+			return nil, err
+		}
+		total += len(in.Data)
+		files = append(files, ports.SCMAttachmentFile{Name: file.name, ContentType: file.contentType, Data: in.Data})
+	}
+	if total > MaxCommentAttachmentsBytes {
+		return nil, fmt.Errorf("%w: a comment's files exceed %d bytes together", ErrAttachmentTooLarge, MaxCommentAttachmentsBytes)
+	}
+	linked := make([]bool, len(inputs))
+	for _, match := range attachmentLink.FindAllStringSubmatch(body, -1) {
+		i, err := strconv.Atoi(match[1])
+		if err != nil || i >= len(inputs) {
+			return nil, fmt.Errorf("%w: the comment links a file it doesn't have", ErrInvalidAttachment)
+		}
+		linked[i] = true
+	}
+	for i, ok := range linked {
+		if !ok {
+			return nil, fmt.Errorf("%w: file %d is not linked from the comment", ErrInvalidAttachment, i)
+		}
+	}
+	return files, nil
 }
 
-// UploadAttachment validates a comment attachment and stores it with the PR's
-// SCM provider, returning a URL and the markdown that embeds it in a comment.
-func (s *ActionService) UploadAttachment(ctx context.Context, request AttachmentRequest) (AttachmentResult, error) {
-	prNumber, err := parsePRNumber(request.PRID)
-	if err != nil || strings.TrimSpace(request.PRURL) == "" {
-		return AttachmentResult{}, fmt.Errorf("%w: invalid pull request identity", ErrInvalidPR)
+// linkAttachments points the body's attachment links at the stored files.
+func linkAttachments(body string, urls []string) string {
+	return attachmentLink.ReplaceAllStringFunc(body, func(link string) string {
+		i, _ := strconv.Atoi(attachmentLink.FindStringSubmatch(link)[1])
+		return "](" + urls[i] + ")"
+	})
+}
+
+// AttachmentAccess says whether files can be attached to this PR's comments
+// and where they would be stored, so the composer can explain both before
+// anything is uploaded. A provider that can't store attachments reads as not
+// allowed, with reason "unsupported".
+func (s *ActionService) AttachmentAccess(ctx context.Context, prID, prURL string) (AttachmentAccessResult, error) {
+	prNumber, err := parsePRNumber(prID)
+	if err != nil || strings.TrimSpace(prURL) == "" {
+		return AttachmentAccessResult{}, fmt.Errorf("%w: invalid pull request identity", ErrInvalidPR)
 	}
-	file, err := validateAttachment(request.Name, request.ContentType, request.Data)
+	if s.store == nil {
+		return AttachmentAccessResult{}, errors.New("pr: attachment action is not configured")
+	}
+	tracked, ok, err := s.store.GetPR(ctx, prURL)
 	if err != nil {
-		return AttachmentResult{}, err
-	}
-	if s.store == nil || s.uploader == nil {
-		return AttachmentResult{}, errors.New("pr: attachment action is not configured")
-	}
-	tracked, ok, err := s.store.GetPR(ctx, request.PRURL)
-	if err != nil {
-		return AttachmentResult{}, fmt.Errorf("load pull request: %w", err)
+		return AttachmentAccessResult{}, fmt.Errorf("load pull request: %w", err)
 	}
 	if !ok || tracked.Number != prNumber {
-		return AttachmentResult{}, ErrPRNotFound
+		return AttachmentAccessResult{}, ErrPRNotFound
 	}
 	repo, ok := scmRepoForPR(tracked)
 	if !ok {
-		return AttachmentResult{}, fmt.Errorf("%w: pull request repository is unknown", ErrPRPreconditions)
+		return AttachmentAccessResult{}, fmt.Errorf("%w: pull request repository is unknown", ErrPRPreconditions)
 	}
-	ref := ports.SCMPRRef{Repo: repo, Number: tracked.Number, URL: tracked.URL}
-	uploaded, err := s.uploader.UploadAttachment(ctx, ports.SCMAttachmentRequest{
-		PR: ref, Name: file.name, ContentType: file.contentType, Data: request.Data,
-	})
+	if s.attachments == nil {
+		return AttachmentAccessResult{Reason: attachmentsUnsupported}, nil
+	}
+	access, err := s.attachments.AttachmentAccess(ctx, ports.SCMPRRef{Repo: repo, Number: tracked.Number, URL: tracked.URL})
 	if err != nil {
-		return AttachmentResult{}, mapMutationError("upload pull request attachment", err)
+		if errors.Is(err, ports.ErrSCMUnsupported) {
+			return AttachmentAccessResult{Reason: attachmentsUnsupported}, nil
+		}
+		return AttachmentAccessResult{}, mapAttachmentError("check attachment access", err)
 	}
-	if strings.TrimSpace(uploaded.URL) == "" {
-		return AttachmentResult{}, errors.New("upload pull request attachment: provider returned no URL")
+	return AttachmentAccessResult{Allowed: access.Allowed, Location: access.Location, Reason: access.Reason}, nil
+}
+
+// attachmentsUnsupported is the access reason when the PR's provider can't
+// store attachments.
+const attachmentsUnsupported = "unsupported"
+
+// storeCommentAttachments stores a comment's files and returns its body with
+// every attachment link pointing at its file, plus the handle that removes
+// them again. It checks write access first, so a read-only repository fails
+// with a clear reason before anything is written.
+func (s *ActionService) storeCommentAttachments(ctx context.Context, ref ports.SCMPRRef, body string, files []ports.SCMAttachmentFile) (string, string, error) {
+	if s.attachments == nil {
+		return "", "", fmt.Errorf("%w: attachments", ErrUnsupported)
 	}
-	markdown := uploaded.Markdown
-	if markdown == "" {
-		markdown = attachmentMarkdown(file.name, uploaded.URL, file.image)
+	access, err := s.attachments.AttachmentAccess(ctx, ref)
+	if err != nil {
+		return "", "", mapAttachmentError("check attachment access", err)
 	}
-	return AttachmentResult{URL: uploaded.URL, Name: file.name, Markdown: markdown}, nil
+	if !access.Allowed {
+		return "", "", ErrAttachmentsForbidden
+	}
+	stored, err := s.attachments.StoreAttachments(ctx, ports.SCMAttachmentBatch{PR: ref, Files: files})
+	if err != nil {
+		return "", "", mapAttachmentError("store comment attachments", err)
+	}
+	if len(stored.URLs) != len(files) {
+		s.discardAttachments(ctx, ref, stored.Handle)
+		return "", "", fmt.Errorf("store comment attachments: provider returned %d URLs for %d files", len(stored.URLs), len(files))
+	}
+	linked := linkAttachments(body, stored.URLs)
+	if len(linked) > maxCommentBodyBytes {
+		s.discardAttachments(ctx, ref, stored.Handle)
+		return "", "", fmt.Errorf("%w: comment body exceeds %d bytes with its file links", ErrInvalidComment, maxCommentBodyBytes)
+	}
+	return linked, stored.Handle, nil
+}
+
+// discardAttachments removes a stored batch whose comment never posted. It
+// outlives the request, which may already be cancelled, and only logs a
+// failure: the comment's own error is what the person needs to see.
+func (s *ActionService) discardAttachments(ctx context.Context, ref ports.SCMPRRef, handle string) {
+	if handle == "" || s.attachments == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := s.attachments.DiscardAttachments(ctx, ref, handle); err != nil && s.logger != nil {
+		s.logger.Warn("discard unposted comment attachments failed", "pr", ref.URL, "handle", handle, "err", err)
+	}
+}
+
+// mapAttachmentError reads a provider's "forbidden" as no write access for
+// attachments, and maps the rest as any other PR mutation.
+func mapAttachmentError(op string, err error) error {
+	if errors.Is(err, ports.ErrSCMForbidden) {
+		return fmt.Errorf("%w: %w", ErrAttachmentsForbidden, err)
+	}
+	return mapMutationError(op, err)
 }

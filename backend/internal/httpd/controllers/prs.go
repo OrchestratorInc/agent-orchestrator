@@ -28,7 +28,7 @@ func (c *PRsController) Register(r chi.Router) {
 	r.Post("/prs/{id}/resolve-comments", c.resolveComments)
 	r.Post("/prs/{id}/state", c.changeState)
 	r.Post("/prs/{id}/comments", c.postComment)
-	r.Post("/prs/{id}/attachments", c.uploadAttachment)
+	r.Get("/prs/{id}/attachment-access", c.attachmentAccess)
 	r.Get("/prs/{id}/stack", c.stack)
 	r.Post("/prs/{id}/stack", c.addToStack)
 	r.Post("/prs/{id}/stack/merge", c.mergeStack)
@@ -263,48 +263,9 @@ func (c *PRsController) postComment(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
 		return
 	}
+	// A comment can carry its files, so this route reads a body that large.
+	r.Body = http.MaxBytesReader(w, r.Body, maxPRCommentBodyBytes)
 	var in PostPRCommentRequest
-	if err := decodeJSON(r, &in); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
-		return
-	}
-	if strings.TrimSpace(in.PRURL) == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR URL is required", nil)
-		return
-	}
-	if strings.TrimSpace(in.Body) == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_COMMENT", "Comment body is required", nil)
-		return
-	}
-	res, err := c.Svc.PostComment(r.Context(), prsvc.CommentRequest{PRID: prID, PRURL: in.PRURL, Body: in.Body, ThreadID: in.ThreadID})
-	if err != nil {
-		writePRError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, PostPRCommentResponse{OK: true, ID: res.ID, URL: res.URL, CreatedAt: res.CreatedAt})
-}
-
-// maxPRAttachmentDataChars is the base64 length of the largest allowed
-// attachment, so an oversized file is refused before it is decoded.
-var maxPRAttachmentDataChars = base64.StdEncoding.EncodedLen(prsvc.MaxAttachmentBytes)
-
-// maxPRAttachmentBodyBytes bounds the attachment upload body: the base64 file
-// plus headroom for the name, URL, and JSON envelope. Only this route reads a
-// body this large.
-var maxPRAttachmentBodyBytes = int64(maxPRAttachmentDataChars) + (1 << 20)
-
-func (c *PRsController) uploadAttachment(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "POST", "/api/v1/prs/{id}/attachments")
-		return
-	}
-	prID := chi.URLParam(r, "id")
-	if !prIDPattern.MatchString(prID) {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxPRAttachmentBodyBytes)
-	var in UploadPRAttachmentRequest
 	if err := decodeJSON(r, &in); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -318,31 +279,68 @@ func (c *PRsController) uploadAttachment(w http.ResponseWriter, r *http.Request)
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR URL is required", nil)
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" || in.Data == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT", "Attachment name and data are required", nil)
+	if strings.TrimSpace(in.Body) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_COMMENT", "Comment body is required", nil)
 		return
 	}
-	if len(in.Data) > maxPRAttachmentDataChars {
-		writeAttachmentTooLarge(w, r)
-		return
+	attachments := make([]prsvc.CommentAttachment, 0, len(in.Attachments))
+	for _, file := range in.Attachments {
+		if strings.TrimSpace(file.Name) == "" || file.Data == "" {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT", "Attachment name and data are required", nil)
+			return
+		}
+		if len(file.Data) > maxPRAttachmentDataChars {
+			writeAttachmentTooLarge(w, r)
+			return
+		}
+		data, err := base64.StdEncoding.DecodeString(file.Data)
+		if err != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT", "Attachment data must be standard base64", nil)
+			return
+		}
+		attachments = append(attachments, prsvc.CommentAttachment{Name: file.Name, ContentType: file.ContentType, Data: data})
 	}
-	data, err := base64.StdEncoding.DecodeString(in.Data)
-	if err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT", "Attachment data must be standard base64", nil)
-		return
-	}
-	res, err := c.Svc.UploadAttachment(r.Context(), prsvc.AttachmentRequest{
-		PRID: prID, PRURL: in.PRURL, Name: in.Name, ContentType: in.ContentType, Data: data,
-	})
+	res, err := c.Svc.PostComment(r.Context(), prsvc.CommentRequest{PRID: prID, PRURL: in.PRURL, Body: in.Body, ThreadID: in.ThreadID, Attachments: attachments})
 	if err != nil {
 		writePRError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, UploadPRAttachmentResponse{OK: true, URL: res.URL, Name: res.Name, Markdown: res.Markdown})
+	envelope.WriteJSON(w, http.StatusOK, PostPRCommentResponse{OK: true, ID: res.ID, URL: res.URL, CreatedAt: res.CreatedAt})
+}
+
+// maxPRAttachmentDataChars is the base64 length of the largest allowed
+// attachment, so an oversized file is refused before it is decoded.
+var maxPRAttachmentDataChars = base64.StdEncoding.EncodedLen(prsvc.MaxAttachmentBytes)
+
+// maxPRCommentBodyBytes bounds a comment's body: all of its files, base64,
+// plus headroom for the text, URL, and JSON envelope.
+var maxPRCommentBodyBytes = int64(base64.StdEncoding.EncodedLen(prsvc.MaxCommentAttachmentsBytes)) + (1 << 20)
+
+func (c *PRsController) attachmentAccess(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/prs/{id}/attachment-access")
+		return
+	}
+	prID := chi.URLParam(r, "id")
+	if !prIDPattern.MatchString(prID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
+		return
+	}
+	prURL := strings.TrimSpace(r.URL.Query().Get("prUrl"))
+	if prURL == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR URL is required", nil)
+		return
+	}
+	res, err := c.Svc.AttachmentAccess(r.Context(), prID, prURL)
+	if err != nil {
+		writePRError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, PRAttachmentAccessResponse{Allowed: res.Allowed, Location: res.Location, Reason: res.Reason})
 }
 
 func writeAttachmentTooLarge(w http.ResponseWriter, r *http.Request) {
-	envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_TOO_LARGE", "Attachment exceeds 10 MiB", nil)
+	envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_TOO_LARGE", "An attachment exceeds 10 MiB, or a comment's attachments exceed 25 MiB together", nil)
 }
 
 // writePRError maps PR sentinel errors to their locked HTTP envelopes,
@@ -361,6 +359,8 @@ func writePRError(w http.ResponseWriter, r *http.Request, err error) {
 		writeAttachmentTooLarge(w, r)
 	case errors.Is(err, prsvc.ErrAttachmentTypeNotAllowed):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_TYPE_NOT_ALLOWED", "Attachment type is not allowed", nil)
+	case errors.Is(err, prsvc.ErrAttachmentsForbidden):
+		envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ATTACHMENTS_FORBIDDEN", "No write access to the pull request's repository, where its comments' files are stored", nil)
 	case errors.Is(err, prsvc.ErrUnsupported):
 		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "SCM_UNSUPPORTED", "The PR's SCM provider does not support this action", nil)
 	case errors.Is(err, prsvc.ErrInvalidTransition):
