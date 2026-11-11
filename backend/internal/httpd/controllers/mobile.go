@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -886,13 +887,6 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 	wasRunning := b.LAN.Running()
 	prevSt, _ := mobilebridge.Load(b.ConfigPath)
 
-	// A new password revokes everything paired before it: device tokens and
-	// unused pairing codes go with it, as the account token does below.
-	if prevSt.Password != "" && prevSt.Password != pw {
-		if err := b.revokeAllDevices(); err != nil {
-			return MobileStatusResponse{}, err
-		}
-	}
 	b.applyPasswordLogin(prevSt)
 
 	// A fresh listener must be armed before binding. For an already-running
@@ -941,6 +935,13 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		}
 		return MobileStatusResponse{}, err
 	}
+	// A new password revokes everything paired before it, once it is saved:
+	// device tokens and unused pairing codes go with it, as the account token
+	// does below. A start or save that failed above revokes nothing.
+	var revokeErr error
+	if prevSt.Password != "" && prevSt.Password != pw {
+		revokeErr = b.revokeAllDevices()
+	}
 	if wasRunning {
 		b.LAN.SetPasswordHash(nextHash)
 	}
@@ -958,6 +959,9 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 	// this same post-Start apply. A failure is recorded, never fatal: the
 	// bridge stays up in plaintext mode and Status reports serve_failed.
 	b.startConnectorsLocked(port, nextSt)
+	if revokeErr != nil {
+		return MobileStatusResponse{}, fmt.Errorf("the password changed, but device tokens were not revoked: %w", revokeErr)
+	}
 	return b.Status(), nil
 }
 
@@ -1126,15 +1130,20 @@ func (b *BridgeService) applyPasswordLogin(st mobilebridge.State) {
 }
 
 // revokeAllDevices removes every device token, unused pairing code and push
-// registration. The caller rotates the password, which closes the listener's
-// connections.
+// registration, and closes the devices' connections.
 func (b *BridgeService) revokeAllDevices() error {
 	if b.Codes != nil {
 		b.Codes.Clear()
 	}
 	if b.Devices != nil {
+		devices := b.Devices.List()
 		if err := b.Devices.RevokeAll(); err != nil {
 			return err
+		}
+		if lan, ok := b.LAN.(interface{ DisconnectCredential(string) }); ok {
+			for _, device := range devices {
+				lan.DisconnectCredential(device.TokenHash)
+			}
 		}
 	}
 	// Best effort: access is already revoked. A phone that pairs again
