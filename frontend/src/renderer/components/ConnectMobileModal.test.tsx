@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "./ui/tooltip";
 import { apiClient } from "../lib/api-client";
+import { fetchPairingCode } from "../lib/mobile-pairing-code";
 import { useUiStore } from "../stores/ui-store";
 
 // vi.mock is hoisted above module-level consts, so the shared double has to be
@@ -59,7 +60,11 @@ vi.mock("../hooks/useAwake", () => ({
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("../lib/mobile-pairing-code", () => {
 	let made = 0;
-	return { mobilePairingCodeQueryKey: ["mobile-pairing-code"], PAIRING_CODE_REFRESH_MS: 540_000, fetchPairingCode: async () => `Next${++made}` };
+	return {
+		mobilePairingCodeQueryKey: ["mobile-pairing-code"],
+		PAIRING_CODE_REFRESH_MS: 540_000,
+		fetchPairingCode: vi.fn(async () => ({ code: `Next${++made}`, expiresAt: Date.now() + 600_000 })),
+	};
 });
 // An app with no AO sign-in pairs signed out; signing in to pair is covered in
 // settings/ConnectMobileContent.signin.test.tsx.
@@ -92,7 +97,7 @@ function renderMobileSettings(
 	client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 ) {
 	// Settings prefetches the one-time pairing code with the status.
-	client.setQueryData(["mobile-pairing-code"], "Code1234");
+	client.setQueryData(["mobile-pairing-code"], { code: "Code1234", expiresAt: Date.now() + 600_000 });
 	return render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider>
@@ -1258,3 +1263,32 @@ test("requiring device credentials posts the choice and takes the password off t
 	expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent("Code1234");
 });
 
+test("never shows an expired pairing code", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	client.setQueryData(["mobile-pairing-code"], { code: "Expired1", expiresAt: Date.now() - 1 });
+	render(
+		<QueryClientProvider client={client}>
+			<TooltipProvider>
+				<ConnectMobileContent active />
+			</TooltipProvider>
+		</QueryClientProvider>,
+	);
+	await waitFor(() => expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent(/^Next\d+$/));
+	expect(document.body).not.toHaveTextContent("Expired1");
+	expect(qrPayload()).not.toContain("Expired1");
+});
+
+test("offers to try again when no pairing code could be made", async () => {
+	vi.mocked(fetchPairingCode).mockRejectedValueOnce(new Error("remote access is off; turn it on before pairing a device"));
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(
+		<QueryClientProvider client={client}>
+			<TooltipProvider>
+				<ConnectMobileContent active />
+			</TooltipProvider>
+		</QueryClientProvider>,
+	);
+	await userEvent.click(await screen.findByTestId("mobile-pairing-code-retry"));
+	await waitFor(() => expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent(/^Next\d+$/));
+	expect(screen.queryByTestId("mobile-pairing-code-retry")).not.toBeInTheDocument();
+});
