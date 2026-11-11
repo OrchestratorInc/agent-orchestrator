@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight, Gauge, RefreshCw } from "lucide-react";
+import { Filter } from "@/components/app-icons";
 import { ScrollArea } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,12 +11,19 @@ import type { UsageUnit } from "../../lib/usage-report";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
-import { HARNESS_TAB_CLASS, HARNESS_TABS_CLASS } from "../settings/harness/harness-ui";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { PageTopbar, PageTopbarTitle } from "../PageTopbar";
+import { FilterChip } from "../PageToolbar";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { UsageLimits } from "./UsageLimits";
 import { UsageSkeleton } from "./UsageSkeleton";
@@ -93,82 +101,98 @@ export function UsageView() {
 	const failed = (error: Error) => <p role="alert" className="py-16 text-center text-sm text-destructive">{error.message}</p>;
 	const staleError = (error: Error | null) => (error ? <p role="alert" className="mb-4 text-xs text-destructive">{error.message}</p> : null);
 	const range = report.data ? formatRange(report.data.since, report.data.until, i18n.language) : null;
+	const views: UsageTab[] = developerMode ? ["spend", "limits", "windows"] : ["spend", "limits"];
+	const selectedProjectName = projectFilter === ALL_PROJECTS ? null : projectNames.get(projectFilter) ?? projectFilter;
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			<PageTopbar
-				lead={<PageTopbarTitle as="h1" icon={<Gauge className="size-icon-md" aria-hidden="true" />}>{t("usage.title")}</PageTopbarTitle>}
-				actions={
-					<>
-						{tab === "spend" && filterProjects.length > 0 ? (
-							<SettingsOptionMenu
-								aria-label={t("usage.projectFilter")}
-								value={projectFilter}
-								options={[{ value: ALL_PROJECTS, label: t("usage.allProjects") }, ...filterProjects.map((project) => ({ value: project.id, label: projectNames.get(project.id) ?? project.name }))]}
-								onChange={setProjectFilter}
-								menuAlign="end"
-								menuClassName="max-h-72"
-								triggerClassName="h-(--size-control-md)! text-xs!"
-							/>
-						) : null}
-						{tab === "spend" ? (
-							<div className="flex items-center gap-0.5">
-								<Button variant="ghost" size="icon" aria-label={t("usage.period.previous")} onClick={() => setOffset((value) => value + 1)} className="size-8">
-									<ChevronLeft aria-hidden="true" className="size-icon-sm" />
-								</Button>
-								<SettingsOptionMenu
-									aria-label={t("usage.period")}
-									value={String(days)}
-									options={PERIODS.map((period) => ({ value: String(period.days), label: t(period.label) }))}
-									onChange={(value) => {
-										setDays(Number(value));
-										setOffset(0);
-									}}
-									menuAlign="end"
-									triggerClassName="h-(--size-control-md)! text-xs!"
-									renderTrigger={(selected) => (
-										<span className="min-w-0 truncate">
-											{offset === 0 || !range ? selected?.label : null}
-											{range ? <span className="text-muted-foreground">{offset === 0 ? ` · ${range}` : range}</span> : null}
-										</span>
-									)}
-								/>
-								<Button variant="ghost" size="icon" aria-label={t("usage.period.next")} disabled={offset === 0} onClick={() => setOffset((value) => Math.max(0, value - 1))} className="size-8">
-									<ChevronRight aria-hidden="true" className="size-icon-sm" />
-								</Button>
-							</div>
-						) : null}
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button variant="ghost" size="icon" aria-label={t("usage.refresh")} disabled={refreshing} onClick={() => void refresh()} className="size-8">
-									<RefreshCw aria-hidden="true" className={cn("size-icon-sm", refreshing && "animate-spin")} />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>{t("usage.refresh")}</TooltipContent>
-						</Tooltip>
-					</>
-				}
-			/>
+			<PageTopbar lead={<PageTopbarTitle as="h1" icon={<Gauge className="size-icon-md" aria-hidden="true" />}>{t("usage.title")}</PageTopbarTitle>} />
 			<div className="shrink-0">
-				<div className="mx-auto w-full max-w-6xl px-6">
-					<Tabs value={tab} onValueChange={(value) => setTab(value as UsageTab)}>
-						<TabsList aria-label={t("usage.views")} className={HARNESS_TABS_CLASS}>
-							<TabsTrigger value="spend" className={HARNESS_TAB_CLASS}>{t("usage.view.spend")}</TabsTrigger>
-							<TabsTrigger value="limits" className={HARNESS_TAB_CLASS}>{t("usage.view.limits")}</TabsTrigger>
-							{developerMode ? (
-								<TabsTrigger value="windows" className={cn(HARNESS_TAB_CLASS, "gap-1.5")}>
-									{t("usage.view.windows")}
-									<Badge className="h-4 px-1.5 text-2xs font-normal">{t("usage.windows.experimental")}</Badge>
-								</TabsTrigger>
+				<div className="mx-auto w-full max-w-6xl px-6 pt-3">
+					<div className="flex min-h-control-md items-center gap-2">
+						<div role="group" aria-label={t("usage.views")} className="flex min-w-0 items-center gap-1">
+							{views.map((view) => (
+								<Button key={view} type="button" size="sm" variant="ghost" aria-pressed={tab === view} onClick={() => setTab(view)} className={view === "windows" ? "gap-1.5" : undefined}>
+									{t(`usage.view.${view}`)}
+									{view === "windows" ? <Badge className="h-4 px-1.5 text-2xs font-normal">{t("usage.windows.experimental")}</Badge> : null}
+								</Button>
+							))}
+						</div>
+						<div className="ms-auto flex shrink-0 items-center gap-0.5">
+							{tab === "spend" && filterProjects.length > 0 ? (
+								<DropdownMenu>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<DropdownMenuTrigger asChild>
+												<Button type="button" size="icon-sm" variant="quiet" aria-label={t("usage.filter")} data-active={projectFilter !== ALL_PROJECTS ? "true" : undefined}>
+													<Filter aria-hidden="true" className="size-icon-sm" />
+												</Button>
+											</DropdownMenuTrigger>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">{t("usage.filter")}</TooltipContent>
+									</Tooltip>
+									<DropdownMenuContent align="end" className="max-h-72 min-w-52 overflow-y-auto" data-browser-native-overlay="true">
+										<DropdownMenuLabel>{t("usage.projectFilter")}</DropdownMenuLabel>
+										<DropdownMenuRadioGroup value={projectFilter} onValueChange={setProjectFilter}>
+											<DropdownMenuRadioItem value={ALL_PROJECTS}>{t("usage.allProjects")}</DropdownMenuRadioItem>
+											{filterProjects.map((project) => <DropdownMenuRadioItem key={project.id} value={project.id}><span className="truncate">{projectNames.get(project.id) ?? project.name}</span></DropdownMenuRadioItem>)}
+										</DropdownMenuRadioGroup>
+									</DropdownMenuContent>
+								</DropdownMenu>
 							) : null}
-						</TabsList>
-					</Tabs>
+							{tab === "spend" ? (
+								<div className="flex items-center gap-0.5">
+									<Button type="button" variant="quiet" size="icon-sm" aria-label={t("usage.period.previous")} onClick={() => setOffset((value) => value + 1)}>
+										<ChevronLeft aria-hidden="true" className="size-icon-sm" />
+									</Button>
+									<SettingsOptionMenu
+										aria-label={t("usage.period")}
+										value={String(days)}
+										options={PERIODS.map((period) => ({ value: String(period.days), label: t(period.label) }))}
+										onChange={(value) => {
+											setDays(Number(value));
+											setOffset(0);
+										}}
+										menuAlign="end"
+										triggerClassName="h-(--size-control-md)! text-xs!"
+										renderTrigger={(selected) => (
+											<span className="min-w-0 truncate">
+												{offset === 0 || !range ? selected?.label : null}
+												{range ? <span className="text-muted-foreground">{offset === 0 ? ` · ${range}` : range}</span> : null}
+											</span>
+										)}
+									/>
+									<Button type="button" variant="quiet" size="icon-sm" aria-label={t("usage.period.next")} disabled={offset === 0} onClick={() => setOffset((value) => Math.max(0, value - 1))}>
+										<ChevronRight aria-hidden="true" className="size-icon-sm" />
+									</Button>
+								</div>
+							) : null}
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<Button type="button" variant="quiet" size="icon-sm" aria-label={t("usage.refresh")} disabled={refreshing} onClick={() => void refresh()}>
+										<RefreshCw aria-hidden="true" className={cn("size-icon-sm", refreshing && "animate-spin motion-reduce:animate-none")} />
+									</Button>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{t("usage.refresh")}</TooltipContent>
+							</Tooltip>
+						</div>
+					</div>
+					{tab === "spend" && selectedProjectName ? (
+						<div className="mt-2 flex flex-wrap items-center gap-1.5">
+							<FilterChip
+								label={t("usage.projectFilter")}
+								value={selectedProjectName}
+								removeLabel={t("usage.removeFilter", { filter: `${t("usage.projectFilter")}: ${selectedProjectName}` })}
+								onRemove={() => setProjectFilter(ALL_PROJECTS)}
+							/>
+						</div>
+					) : null}
 				</div>
 			</div>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
-						<div className="mx-auto w-full max-w-6xl px-6 py-6">
+						<div className="mx-auto w-full max-w-6xl px-6 pt-5 pb-6">
 							{isWindows ? (
 								limitWindows.data ? (
 									<>

@@ -547,12 +547,21 @@ type SessionView struct {
 
 // SessionArtifactView is one inferred file artifact for a session.
 type SessionArtifactView struct {
-	Path       string                     `json:"path"`
-	Name       string                     `json:"name"`
-	Kind       domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
-	Size       int64                      `json:"size"`
-	UpdatedAt  time.Time                  `json:"updatedAt"`
-	PreviewURL string                     `json:"previewUrl,omitempty"`
+	// ID is the artifact's identity. It stays the same when the file is
+	// renamed or moved; empty for a file AO has not tracked yet.
+	ID        string                     `json:"id,omitempty"`
+	Path      string                     `json:"path"`
+	Name      string                     `json:"name"`
+	Kind      domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
+	Size      int64                      `json:"size"`
+	UpdatedAt time.Time                  `json:"updatedAt"`
+	// Registered is set on a file the agent registered with ao artifact add. A
+	// session with no registered file falls back to showing its root files.
+	Registered bool `json:"registered,omitempty"`
+	// PreviousPaths are the paths the artifact had before a rename, most
+	// recent last, so a link that names one still opens it.
+	PreviousPaths []string `json:"previousPaths,omitempty"`
+	PreviewURL    string   `json:"previewUrl,omitempty"`
 	// RawURL fetches this artifact's raw bytes on the artifact preview
 	// origin — a distinct host from the workspace preview origin, so a
 	// workspace-relative path can never collide with an artifact-relative
@@ -564,6 +573,20 @@ type SessionArtifactView struct {
 	// unlike PreviewURL the page cannot call the daemon. HTML only.
 	InlineURL string `json:"inlineUrl,omitempty"`
 	ShareURL  string `json:"shareUrl,omitempty"`
+}
+
+// RegisterArtifactsRequest is the body of POST
+// /api/v1/sessions/{sessionId}/artifact-registrations.
+type RegisterArtifactsRequest struct {
+	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+}
+
+// RegisterArtifactsResponse reports what a registration did, so the agent can
+// see what stays unlisted.
+type RegisterArtifactsResponse struct {
+	Registered     []string `json:"registered" description:"The requested paths, relative to the artifact directory."`
+	OtherFiles     int      `json:"otherFiles" description:"How many of the session's files are not registered."`
+	OtherRootFiles []string `json:"otherRootFiles" description:"The unregistered files at the root of the artifact directory."`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.
@@ -3014,15 +3037,16 @@ type ResolveFileReferenceResponse sessionsvc.FileReferenceResolution
 // ConversationFileReferenceRequest carries bounded, user-supplied captured code.
 type ConversationFileReferenceRequest ports.ChatFileReference
 
-// ConversationExcerptReferenceRequest attaches verified selected transcript
-// text to the next message.
+// ConversationExcerptReferenceRequest attaches a captured snapshot, or a legacy
+// verified transcript reference, to the next message.
 type ConversationExcerptReferenceRequest struct {
-	ID             string `json:"id,omitempty"`
-	Order          int64  `json:"order,omitempty"`
-	ConversationID string `json:"conversationId"`
-	MessageID      string `json:"messageId"`
-	Revision       int64  `json:"revision"`
-	Text           string `json:"text"`
+	Snapshot       *domain.ChatExcerptSnapshot `json:"snapshot,omitempty"`
+	ID             string                      `json:"id,omitempty"`
+	Order          int64                       `json:"order,omitempty"`
+	ConversationID string                      `json:"conversationId"`
+	MessageID      string                      `json:"messageId"`
+	Revision       int64                       `json:"revision"`
+	Text           string                      `json:"text"`
 }
 
 // ProviderSwitchRequest switches an idle session to another provider. See
@@ -3153,8 +3177,10 @@ type EditConversationMessageRequest struct {
 }
 
 // ConversationContentSummaryResponse is a lightweight attachment/resource chip.
-// Image bytes and embedded resource text never leave the durable server record.
+// Image bytes and ordinary embedded resource text stay in the server record;
+// captured excerpts expose the context the user attached.
 type ConversationContentSummaryResponse struct {
+	Snapshot        *domain.ChatExcerptSnapshot       `json:"snapshot,omitempty"`
 	FileReference   *ConversationFileReferenceRequest `json:"fileReference,omitempty"`
 	AnnotationID    string                            `json:"annotationId,omitempty"`
 	AnnotationOrder int64                             `json:"annotationOrder,omitempty"`
@@ -3162,14 +3188,13 @@ type ConversationContentSummaryResponse struct {
 	MIMEType        string                            `json:"mimeType,omitempty"`
 	URI             string                            `json:"uri,omitempty"`
 	Name            string                            `json:"name,omitempty"`
-	// Text is exposed only for verified chat excerpts, so the timeline can show
-	// what the user referred to without exposing internal resource URIs.
+	// Text is the readable chat excerpt, separate from captured raw source.
 	Text string `json:"text,omitempty"`
 	// SourceMessageID and SourceRevision let the renderer navigate back to the
-	// verified transcript message without exposing the internal excerpt URI.
+	// original transcript message without exposing the internal excerpt URI.
 	SourceConversationID string `json:"sourceConversationId,omitempty"`
 	SourceMessageID      string `json:"sourceMessageId,omitempty"`
-	SourceRevision       int64  `json:"sourceRevision,omitempty"`
+	SourceRevision       *int64 `json:"sourceRevision,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its
@@ -3359,6 +3384,12 @@ type ConversationTurnResponse struct {
 	// list is right here. It also keeps the changed-file view and the timeline from
 	// disagreeing, which two independently-timed fetches would eventually do.
 	Diff *ConversationTurnDiffResponse `json:"diff,omitempty"`
+	// Artifacts are the session artifact files this turn created or edited, as
+	// the daemon saw them in the artifact directory when the turn ended. Unlike
+	// Diff it does not depend on the provider, so it lists files an agent wrote
+	// through a shell command. Absent for a turn the daemon did not watch from its
+	// start, or one that changed no artifact.
+	Artifacts *ConversationTurnArtifactsResponse `json:"artifacts,omitempty"`
 	// Plan is the agent's plan for this turn, or absent when it made none. The
 	// provider re-sends the whole plan on every change, so this is the current answer
 	// rather than a history of one: the earlier versions are the same plan with fewer
@@ -3394,6 +3425,19 @@ type ConversationPlanResponse struct {
 type ConversationPlanStepResponse struct {
 	Text   string `json:"text"`
 	Status string `json:"status" enum:"pending,in_progress,completed"`
+}
+
+// ConversationTurnArtifactsResponse lists the session artifacts a turn changed.
+type ConversationTurnArtifactsResponse struct {
+	Files []ConversationTurnArtifactResponse `json:"files"`
+}
+
+// ConversationTurnArtifactResponse is one session artifact file a turn changed.
+type ConversationTurnArtifactResponse struct {
+	// Path is relative to the session's artifact directory, slash-separated, as
+	// the session's artifactFiles list it.
+	Path   string `json:"path"`
+	Status string `json:"status" enum:"added,modified"`
 }
 
 // ConversationTurnDiffResponse is a turn's changed-file summary.

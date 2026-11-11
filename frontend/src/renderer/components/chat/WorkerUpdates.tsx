@@ -387,7 +387,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 				<p key={path} className="ml-6 flex h-6 min-w-0 items-center gap-1.5 text-muted-foreground">
 					<FileText aria-hidden="true" className="size-3.5 shrink-0" />
 					{/* A listed artifact links to its preview; one the session no longer lists stays a name. */}
-					<span className="min-w-0 truncate font-mono" title={path}>
+					<span className="min-w-0 truncate" title={path}>
 						<ArtifactPathCode text={artifactReference(path, update.sessionId)}>{path.split("/").at(-1)}</ArtifactPathCode>
 					</span>
 				</p>

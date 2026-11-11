@@ -1,5 +1,5 @@
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -61,16 +61,12 @@ import {
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
-import { SessionArchiveModal } from "./SessionArchiveModal";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
 	projectId?: string;
 	hostId?: string;
 };
-
-/** How long Cmd+K's "Open archive" waits for the board it navigated to. */
-const ARCHIVE_REQUEST_TTL_MS = 5000;
 
 export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const { t } = useTranslation();
@@ -152,9 +148,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// the owner's orchestrator: they can't start tasks or an orchestrator
 	// here, so the board offers neither and doesn't ask them to.
 	const guest = Boolean(workspace?.shared);
-	const archived = sessions
-		.filter(isArchivedSession)
-		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+	// The archive itself is the shell's modal; the board only shows its count.
+	const archivedCount = sessions.filter(isArchivedSession).length;
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
 	// Who is in each shared cloud session, read without joining any of them.
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
@@ -198,23 +193,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		return (session: WorkspaceSession): ChipTone =>
 			chipTone(pressure ?? "fine", facts.find((f) => f.id === session.id) ?? toSessionFacts(session, memoryBySession?.get(session.id), now), largest);
 	}, [sessions, memoryBySession, pressure]);
-	const hasArchive = archived.length > 0;
+	const hasArchive = archivedCount > 0;
 	const terminateSession = useTerminateSession();
 	const activeScopeRef = useRef(scopeKey);
 	activeScopeRef.current = scopeKey;
-	const [archiveOpen, setArchiveOpen] = useState(false);
-	useEffect(() => setArchiveOpen(false), [scopeKey]);
-	// Cmd+K's "Open archive" asks this project's board to open it, from here or
-	// from a page that navigates here first.
-	const archiveOpenRequest = useUiStore((state) => state.archiveOpenRequest);
-	useEffect(() => {
-		if (!archiveOpenRequest || !projectId) return;
-		if (archiveOpenRequest.projectId !== projectId || (archiveOpenRequest.hostId ?? "") !== (hostId ?? "")) return;
-		useUiStore.getState().clearArchiveOpenRequest(archiveOpenRequest.nonce);
-		if (Date.now() - archiveOpenRequest.at > ARCHIVE_REQUEST_TTL_MS) return;
-		setArchiveOpen(true);
-	}, [archiveOpenRequest, hostId, projectId]);
-
 	const openSession = useCallback((session: WorkspaceSession) => {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
 		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
@@ -366,29 +348,20 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				<div className="flex h-9 shrink-0 items-center border-t border-border px-2">
 					<Button
 						aria-haspopup="dialog"
-						aria-label={t("shell.archiveSessionsAria", { count: archived.length })}
+						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
 						data-testid="board-archive-button"
-						onClick={() => setArchiveOpen(true)}
+						// The shell's archive modal, the same one the sidebar and Cmd+K open.
+						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
 						size="xs"
 						type="button"
 						variant="quiet"
 					>
 						<Archive className="size-icon-sm" aria-hidden="true" />
 						{t("shell.archive")}
-						<span className="tabular-nums text-passive">{archived.length}</span>
+						<span className="tabular-nums text-passive">{archivedCount}</span>
 					</Button>
 				</div>
 			) : null}
-			{/* Stays mounted while open even if the last archived session goes. */}
-			<SessionArchiveModal
-				connected={!hostId || connected}
-				hostId={hostId}
-				onOpenChange={setArchiveOpen}
-				onOpenSession={openSession}
-				open={archiveOpen}
-				resetKey={scopeKey}
-				sessions={archived}
-			/>
 			{showStartup ? <DaemonStartupLoader /> : null}
 		</div>
 	);
