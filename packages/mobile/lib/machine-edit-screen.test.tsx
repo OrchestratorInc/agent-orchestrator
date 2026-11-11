@@ -163,7 +163,14 @@ describe("editing a machine", () => {
 		expect(fixtures.reloadHostMetadata).toHaveBeenCalledOnce();
 		expect(fixtures.haptics.success).toHaveBeenCalledOnce();
 		expect(fixtures.back).toHaveBeenCalledOnce();
-		expect(fixtures.preventRemove.prevent).toBe(false);
+		// It leaves through the hold rather than letting go in the commit that
+		// pops it: on Android that changes the header of a page already out of
+		// its stack, and react-native-screens throws (the app went black).
+		expect(fixtures.preventRemove.prevent).toBe(true);
+		const action = { type: "GO_BACK" };
+		act(() => fixtures.preventRemove.callback?.({ data: { action } }));
+		expect(fixtures.dispatch).toHaveBeenCalledWith(action);
+		expect(fixtures.alert).not.toHaveBeenCalled();
 	});
 
 	it("reconnects the default machine over a changed route", async () => {

@@ -16,7 +16,6 @@ import (
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -885,12 +884,8 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	}
 	if discoverErr != nil {
 		warningCode := modelCatalogWarningCode(discoverErr)
-		// Discovery failures answer 200 with the problem in the catalog, so the
-		// request logger never sees them. Auth states (signed out, expired or
-		// rejected login) carry a warning code and are user state, not faults.
-		if warningCode == "" {
-			sentryobs.CaptureBackground(persistCtx, discoverErr, "agent_catalog", "model_discovery", map[string]string{"agent": agentID})
-		}
+		// Discovery failures are not sent to Sentry: a missing, outdated or
+		// misconfigured agent CLI (exec_exit included) is user setup state.
 		// Provider model IDs are credential-scoped. Reuse a cached catalog only
 		// when it was produced from the same discovery inputs; otherwise a revoked
 		// key or provider switch could leave invalid IDs in the picker.
@@ -1032,7 +1027,7 @@ func applyCustomModelEntryPolicy(catalog, policy ports.AgentModelCatalog) ports.
 }
 
 func appendCacheWarning(current string) string {
-	const next = "Models loaded, but AO could not update the model cache."
+	const next = "Models loaded, but Orchestrator could not update the model cache."
 	if current == "" {
 		return next
 	}

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { KeyRound } from "lucide-react";
+import { KeyRound } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../../hooks/useCloudCp";
@@ -67,7 +67,7 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 						</Pressable>
 						{!connected && loginAgent !== agentId ? <Button type="button" data-harness-primary-action="" size="default" className="min-w-20" onClick={openLogin}>{t("settings.harness.login")}</Button> : null}
 						<div id={`cloud-harness-options-${agentId}`} hidden={!expanded} className={cn("basis-full pl-10", !expanded && "hidden")}>
-							{loginAgent === agentId ? <CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /> : connected ? <Button type="button" size="default" variant="outline" onClick={openLogin}>{t("settings.harness.refreshLogin")}</Button> : null}
+							{loginAgent === agentId ? <CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /> : connected ? <Button type="button" size="default" variant="secondary" onClick={openLogin}>{t("settings.harness.refreshLogin")}</Button> : null}
 						</div>
 					</div>;
 				})}
@@ -136,14 +136,14 @@ function CloudGitHubPatRow() {
 				disabled={githubPATBusy}
 				error={githubPATError}
 				submitLabel={githubPATBusy ? t("settings.cloudAgents.github.saving") : t("settings.cloudAgents.github.save")}
-				submitVariant="outline"
+				submitVariant="secondary"
 				submitDisabled={githubPATBusy}
 				onChange={setGitHubPAT}
 				onSubmit={() => void saveGitHubPAT()}
 			/>
 			{githubPATConnected ? (
 				<div className="mt-2 flex justify-end">
-					<Button type="button" variant="footer" disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
+					<Button type="button" variant="secondary" disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
 						{t("settings.cloudAgents.github.remove")}
 					</Button>
 				</div>

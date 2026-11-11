@@ -495,6 +495,9 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanu
 	} else if len(rows) > 0 && !m.workspaceCleanupSettled(ctx, rec) {
 		return fmt.Errorf("delete %s: %w", id, ErrWorkspaceNotReleased)
 	}
+	if m.usageFlusher != nil {
+		m.usageFlusher.Flush(ctx)
+	}
 	deleted, err := deleter.DeleteTerminatedSession(ctx, id)
 	if err != nil {
 		return fmt.Errorf("delete %s: %w", id, err)

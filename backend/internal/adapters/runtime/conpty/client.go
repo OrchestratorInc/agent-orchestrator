@@ -328,8 +328,30 @@ func clientKill(addr string) error {
 }
 
 // clientWatchForeground calls fn for every MsgForegroundState until ctx ends
-// or the host goes away. The replay sent before the request is ignored.
+// or the host goes away.
 func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundPayload)) error {
+	return clientWatchFrames(ctx, addr, MsgWatchForegroundReq, MsgForegroundState, func(payload []byte) {
+		var state ForegroundPayload
+		if json.Unmarshal(payload, &state) == nil {
+			fn(state)
+		}
+	})
+}
+
+// clientWatchTitle calls fn for every MsgTitleState until ctx ends or the host
+// goes away. The host sends its current title first.
+func clientWatchTitle(ctx context.Context, addr string, fn func(TitlePayload)) error {
+	return clientWatchFrames(ctx, addr, MsgWatchTitleReq, MsgTitleState, func(payload []byte) {
+		var state TitlePayload
+		if json.Unmarshal(payload, &state) == nil {
+			fn(state)
+		}
+	})
+}
+
+// clientWatchFrames subscribes with request and passes each response frame's
+// payload to fn. The replay sent before the request is ignored.
+func clientWatchFrames(ctx context.Context, addr string, request, response byte, fn func(payload []byte)) error {
 	conn, err := dialHostContext(ctx, addr, dialTimeout)
 	if err != nil {
 		return err
@@ -338,7 +360,7 @@ func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundP
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 
-	frame, err := EncodeMessage(MsgWatchForegroundReq, nil)
+	frame, err := EncodeMessage(request, nil)
 	if err != nil {
 		return err
 	}
@@ -346,12 +368,8 @@ func clientWatchForeground(ctx context.Context, addr string, fn func(ForegroundP
 		return err
 	}
 	parser := NewMessageParser(func(msgType byte, payload []byte) {
-		if msgType != MsgForegroundState {
-			return
-		}
-		var state ForegroundPayload
-		if json.Unmarshal(payload, &state) == nil {
-			fn(state)
+		if msgType == response {
+			fn(payload)
 		}
 	})
 	buf := make([]byte, 32*1024)

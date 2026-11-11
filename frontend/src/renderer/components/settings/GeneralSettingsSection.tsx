@@ -11,9 +11,10 @@ import { isNewSidebarDesign } from "../../lib/new-sidebar-design";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { CliShadowSettingsRow } from "./CliShadowSettingsRow";
 import { openChromeAgentsSettings } from "./BrowserChromeSection";
 import { Button } from "../ui/button";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight } from "@/components/app-icons";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
@@ -502,10 +503,10 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
+				<CliShadowSettingsRow />
 				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <NewSidebarDesignRow />}
-				{developerMode && <SimplifiedTopbarRow />}
 				{developerMode && <ChromeAgentsRow />}
 				{/* Dev builds only: IS_DEV folds to false in production, stripping the row. */}
 				{IS_DEV && developerMode && <SimulateNewMachineRow />}
@@ -633,18 +634,6 @@ function NewSidebarDesignRow() {
 	return (
 		<SettingsRow label={t("settings.newSidebarDesign")} description={t("settings.newSidebarDesignHint")}>
 			<Switch aria-label={t("settings.newSidebarDesign")} checked={newSidebarDesign} onCheckedChange={setNewSidebarDesign} />
-		</SettingsRow>
-	);
-}
-
-/** Developer Mode-only switch for the simplified, floating top bar. On by default. */
-function SimplifiedTopbarRow() {
-	const { t } = useTranslation();
-	const simplifiedTopbar = useUiStore((state) => state.simplifiedTopbar);
-	const setSimplifiedTopbar = useUiStore((state) => state.setSimplifiedTopbar);
-	return (
-		<SettingsRow label={t("settings.simplifiedTopbar")} description={t("settings.simplifiedTopbarHint")}>
-			<Switch aria-label={t("settings.simplifiedTopbar")} checked={simplifiedTopbar} onCheckedChange={setSimplifiedTopbar} />
 		</SettingsRow>
 	);
 }

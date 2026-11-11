@@ -50,11 +50,11 @@ function renderMobileSettings(active = true) {
 }
 
 function openEvents() {
-	return captureRendererEvent.mock.calls.filter((c) => c[0] === "ao.renderer.mobile_connect_opened");
+	return captureRendererEvent.mock.calls.filter((c) => c[0] === "ao.mobile.connect_opened");
 }
 
 function toggleEvents() {
-	return captureRendererEvent.mock.calls.filter((c) => c[0] === "ao.renderer.mobile_bridge_toggled");
+	return captureRendererEvent.mock.calls.filter((c) => c[0] === "ao.mobile.bridge_toggled");
 }
 
 describe("Connect Mobile telemetry", () => {

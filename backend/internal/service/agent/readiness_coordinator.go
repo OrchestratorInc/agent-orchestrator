@@ -658,7 +658,7 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		// A definite observation — a credential exists — but not a verified
 		// one. It is recorded as a success so the coordinator does not retry
 		// it as a failure, and it derives to unknown readiness, not ready.
-		reason := item.Manifest.Name + " has credentials configured, but AO could not verify them."
+		reason := item.Manifest.Name + " has credentials configured, but Orchestrator could not verify them."
 		if slices.ContainsFunc(diagnostics, func(d domain.AgentAuthDiagnostic) bool { return d.Code == "token_renewal_pending" }) {
 			reason = item.Manifest.Name + " is signed in; its access token renews the next time it runs."
 		}

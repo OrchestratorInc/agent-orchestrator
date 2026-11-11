@@ -184,12 +184,12 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	}
 	installed, ok := parseCodexVersion(versionOutput)
 	if !ok {
-		return nil, fmt.Errorf("%w: unrecognized Codex version %q (AO requires %s or newer)",
+		return nil, fmt.Errorf("%w: unrecognized Codex version %q (Orchestrator requires %s or newer)",
 			ports.ErrChatDriverIncompatible, strings.TrimSpace(versionOutput), minimumCodexVersion)
 	}
 	minimum, _ := parseCodexVersion(minimumCodexVersion)
 	if installed.less(minimum) {
-		return nil, fmt.Errorf("%w: Codex %s is older than AO's tested minimum %s",
+		return nil, fmt.Errorf("%w: Codex %s is older than Orchestrator's tested minimum %s",
 			ports.ErrChatDriverIncompatible, installed, minimumCodexVersion)
 	}
 

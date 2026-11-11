@@ -69,7 +69,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	// signing sessions in over the login the user just completed. The sign-in
 	// itself already succeeded, so failing to clear the token is only a warning.
 	if err := clearClaudeSetupToken(); err != nil {
-		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; AO sessions may keep using the earlier setup token.\n", err); writeErr != nil {
+		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; Orchestrator-managed sessions may keep using the earlier setup token.\n", err); writeErr != nil {
 			return writeErr
 		}
 	}
@@ -80,7 +80,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 func clearClaudeSetupToken() error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("resolve AO data directory to clear the saved setup token: %w", err)
+		return fmt.Errorf("resolve Orchestrator data directory to clear the saved setup token: %w", err)
 	}
 	return claudecode.RemoveLocalOAuthToken(cfg.DataDir)
 }
@@ -103,7 +103,7 @@ func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style
 	}
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("resolve AO data directory: %w", err)
+		return fmt.Errorf("resolve Orchestrator data directory: %w", err)
 	}
 	if err := claudecode.SaveLocalOAuthToken(cfg.DataDir, secret); err != nil {
 		return err

@@ -6,7 +6,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactChangeError, artifactCount, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { artifactChangeError, artifactCount, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -56,6 +56,16 @@ describe("groupArtifactsByProject", () => {
 		expect(artifactCount(groups)).toBe(4);
 	});
 
+	it("leaves out files the session did not register", () => {
+		const registered = { ...artifact("brand.html", "2026-10-09T10:00:00Z", "html"), registered: true };
+		const groups = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [session("ao-1", [registered, artifact("draft.md", "2026-10-11T10:00:00Z")])]),
+		]);
+
+		expect(groups[0].rows.map((row) => row.name)).toEqual(["brand.html"]);
+		expect(artifactCount(groups)).toBe(1);
+	});
+
 	it("hides archived and terminated sessions and drops projects left empty", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
@@ -80,14 +90,56 @@ describe("groupArtifactsByProject", () => {
 		expect(group.rows[0].projectId).toBeUndefined();
 	});
 
-	it("skips orchestrators, remote hosts, and PR-only output", () => {
+	it("skips remote hosts and PR-only output", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
-				session("ao-orchestrator", [artifact("orch.md", "2026-10-09T10:00:00Z")], { kind: "orchestrator" }),
 				session("ao-1", [artifact("pr-only.md", "2026-10-09T10:00:00Z")], { outputType: "pr" }),
 			]),
 			workspace("remote", "remote-project", [session("r-1", [artifact("remote.md", "2026-10-09T10:00:00Z")])], { hostId: "host-2" }),
 		]);
+
+		expect(groups).toEqual([]);
+	});
+
+	it("lists an orchestrator's artifacts beside its workers', titled as the orchestrator", () => {
+		const groups = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [
+				session("ao-48", [artifact("status-report.md", "2026-10-11T10:00:00Z")], { kind: "orchestrator", title: "ao-48" }),
+				session("ao-1", [artifact("plan.md", "2026-10-10T10:00:00Z")]),
+			]),
+		], "Orchestrator");
+
+		expect(groups[0].rows.map((row) => [row.name, row.sessionId, row.sessionTitle])).toEqual([
+			["status-report.md", "ao-48", "Orchestrator"],
+			["plan.md", "ao-1", "Session ao-1"],
+		]);
+		expect(artifactCount(groups)).toBe(2);
+	});
+
+	it("keeps an orchestrator to its registered deliverables, with bundles as one entry", () => {
+		const page = { ...artifact("brief.html", "2026-10-11T10:00:00Z", "html"), registered: true };
+		const asset = artifact("assets/chart.png", "2026-10-11T10:00:00Z", "file");
+		const draft = artifact("draft.md", "2026-10-11T09:00:00Z");
+		const icon = [
+			{ ...artifact("brand.icon/icon.json", "2026-10-11T08:00:00Z", "file"), registered: true },
+			{ ...artifact("brand.icon/Assets/glyph.svg", "2026-10-11T08:00:00Z", "file"), registered: true },
+		];
+		const [group] = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [
+				session("ao-48", [page, asset, draft, ...icon], { kind: "orchestrator" }),
+			]),
+		], "Orchestrator");
+
+		expect(group.rows.map((row) => row.name)).toEqual(["brief.html", "brand.icon"]);
+		expect(group.rows[1].bundle).toEqual({ path: "brand.icon", fileCount: 2 });
+	});
+
+	it("hides a replaced orchestrator's artifacts as it does a killed worker's", () => {
+		const groups = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [
+				session("ao-40", [artifact("old-report.md", "2026-10-09T10:00:00Z")], { kind: "orchestrator", isTerminated: true }),
+			]),
+		], "Orchestrator");
 
 		expect(groups).toEqual([]);
 	});
@@ -112,19 +164,53 @@ describe("filterArtifactGroups", () => {
 			session("ao-2", [artifact("notes.md", "2026-10-10T10:00:00Z")], { title: "Review pricing" }),
 		]),
 		workspace("px0", "px0", [session("px0-1", [artifact("metrics.html", "2026-10-11T12:00:00Z", "html")])]),
+		workspace("cloud", "cloud-project", [
+			session("c-1", [artifact("report.pdf", "2026-10-09T10:00:00Z", "file"), artifact("chart.png", "2026-10-09T09:00:00Z", "file"), artifact("demo.mp4", "2026-10-09T08:00:00Z", "file")], { cloud: { orgId: "org-1" } }),
+		], { kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1" }),
 	]);
+	const names = (filtered: ReturnType<typeof filterArtifactGroups>) => filtered.flatMap((group) => group.rows.map((row) => row.name));
 
 	it("matches the file name or the session title, case-insensitively", () => {
-		expect(filterArtifactGroups(groups, "USER-FLOW", "").flatMap((group) => group.rows.map((row) => row.name))).toEqual(["artifacts-user-flow.html"]);
-		expect(filterArtifactGroups(groups, "pricing", "").flatMap((group) => group.rows.map((row) => row.name))).toEqual(["notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "USER-FLOW", projectId: "" }))).toEqual(["artifacts-user-flow.html"]);
+		expect(names(filterArtifactGroups(groups, { query: "pricing", projectId: "" }))).toEqual(["notes.md"]);
 	});
 
 	it("keeps only the chosen project's group", () => {
-		expect(filterArtifactGroups(groups, "", "px0").map((group) => group.id)).toEqual(["px0"]);
+		expect(filterArtifactGroups(groups, { query: "", projectId: "px0" }).map((group) => group.id)).toEqual(["px0"]);
+	});
+
+	it("keeps only artifacts on this machine or only cloud ones", () => {
+		expect(filterArtifactGroups(groups, { query: "", projectId: "", location: "local" }).map((group) => group.id)).toEqual(["px0", "ao"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", location: "cloud" }))).toEqual(["report.pdf", "chart.png", "demo.mp4"]);
+	});
+
+	it("keeps only the chosen file type, together with the other filters", () => {
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", type: "document" }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md", "report.pdf"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "ao", type: "document" }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", type: "image" }))).toEqual(["chart.png"]);
+		expect(names(filterArtifactGroups(groups, { query: "", projectId: "", location: "cloud", type: "video" }))).toEqual(["demo.mp4"]);
+		expect(filterArtifactGroups(groups, { query: "", projectId: "", location: "local", type: "video" })).toEqual([]);
+	});
+
+	it("keeps a project's rows of the chosen type when the query names the project", () => {
+		expect(names(filterArtifactGroups(groups, { query: "agent-orch", projectId: "", type: "document" }))).toEqual(["artifacts-user-flow.html", "notes.md"]);
 	});
 
 	it("returns nothing when no row matches", () => {
-		expect(filterArtifactGroups(groups, "pricing", "px0")).toEqual([]);
+		expect(filterArtifactGroups(groups, { query: "pricing", projectId: "px0" })).toEqual([]);
+	});
+});
+
+describe("artifactType", () => {
+	it("sorts images and videos by extension, and everything else into documents", () => {
+		expect(artifactType({ path: "a.png" })).toBe("image");
+		expect(artifactType({ path: "a.svg" })).toBe("image");
+		expect(artifactType({ path: "a.MP4" })).toBe("video");
+		expect(artifactType({ path: "a.webm" })).toBe("video");
+		expect(artifactType({ path: "a.html" })).toBe("document");
+		expect(artifactType({ path: "a.md" })).toBe("document");
+		expect(artifactType({ path: "a.pdf" })).toBe("document");
+		expect(artifactType({ path: "a.csv" })).toBe("document");
 	});
 });
 

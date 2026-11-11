@@ -197,11 +197,22 @@ func summarizePRStateChangedAt(pr domain.PullRequest) time.Time {
 func summarizeCI(pr domain.PullRequest, checks []domain.PullRequestCheck) PRCISummary {
 	state := ciOrUnknown(pr.CI)
 	out := PRCISummary{State: state, AutoInjectCI: pr.AutoInjectCI}
-	if state != domain.CIFailing || pr.Merged || pr.Closed {
+	// Failing lists what failed. Unknown lists cancelled checks, so clients can
+	// show a run cancelled with no replacement as settled rather than loading.
+	var listed domain.PRCheckStatus
+	switch state {
+	case domain.CIFailing:
+		listed = domain.PRCheckFailed
+	case domain.CIUnknown:
+		listed = domain.PRCheckCancelled
+	default:
+		return out
+	}
+	if pr.Merged || pr.Closed {
 		return out
 	}
 	for _, ch := range checks {
-		if ch.Status != domain.PRCheckFailed && ch.Status != domain.PRCheckCancelled {
+		if ch.Status != listed {
 			continue
 		}
 		if pr.HeadSHA != "" && ch.CommitHash != "" && !strings.EqualFold(ch.CommitHash, pr.HeadSHA) {

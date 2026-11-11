@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { effortGaugeNeedle, fallbackEffortIndex, magneticOffset, nearestStop, spawnEffortChoices, withFallbackEffort } from "./modelEffort";
+import { effortGaugeNeedle, fallbackEffortIndex, magneticOffset, nearestStop, spawnEffortChoices, spawnEffortToSend, withFallbackEffort } from "./modelEffort";
 
 describe("new task effort choices", () => {
 	const opus = { efforts: ["low", "medium", "high"], defaultEffort: "medium" };
@@ -23,6 +23,41 @@ describe("new task effort choices", () => {
 	it("offers nothing for a model that takes no effort", () => {
 		expect(spawnEffortChoices({ efforts: [] }, undefined)).toEqual([]);
 		expect(spawnEffortChoices(undefined, "high")).toEqual([]);
+	});
+});
+
+describe("new task effort sent", () => {
+	const opus = { efforts: ["low", "medium", "high"], defaultEffort: "medium" };
+	const noDefault = { efforts: ["low", "medium", "high"] };
+
+	it("leaves the model's own default to the model", () => {
+		expect(spawnEffortToSend(spawnEffortChoices(opus, undefined), undefined, opus, false)).toBeUndefined();
+	});
+
+	it("sends a picked level, even the model's default", () => {
+		expect(spawnEffortToSend(spawnEffortChoices(opus, "high"), "high", opus, false)).toBe("high");
+		expect(spawnEffortToSend(spawnEffortChoices(opus, "medium"), "medium", opus, false)).toBe("medium");
+	});
+
+	it("sends the fallback shown for a running model that names no default", () => {
+		expect(spawnEffortToSend(spawnEffortChoices(noDefault, undefined), undefined, noDefault, false)).toBe("medium");
+	});
+
+	// #7979: Standalone, "Default model", a catalog naming no default. The
+	// levels shown are a stand-in's and no model is sent, so an untouched
+	// gauge must send no effort, or the daemon has no model to check it against.
+	it("sends no fallback drawn from a stand-in", () => {
+		expect(spawnEffortToSend(spawnEffortChoices(noDefault, undefined), undefined, noDefault, true)).toBeUndefined();
+	});
+
+	// Tapping a level pins the stand-in as the model, and the level is sent.
+	it("sends a level picked on the stand-in", () => {
+		expect(spawnEffortToSend(spawnEffortChoices(noDefault, "high"), "high", noDefault, true)).toBe("high");
+		expect(spawnEffortToSend(spawnEffortChoices(noDefault, "medium"), "medium", noDefault, false)).toBe("medium");
+	});
+
+	it("sends nothing for a model that takes no effort", () => {
+		expect(spawnEffortToSend([], "high", undefined, false)).toBeUndefined();
 	});
 });
 

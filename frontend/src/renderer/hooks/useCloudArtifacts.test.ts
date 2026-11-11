@@ -88,4 +88,14 @@ describe("usePinnedArtifactUrl", () => {
 		rerender({ root: second });
 		expect(result.current.url).toBe(`${first}a.png?v=v1`);
 	});
+
+	// The open file's viewer starts over when its onAccessRefused changes,
+	// which would drop an edit begun from the file's menu.
+	it("keeps repin and refresh the same across renders", () => {
+		const { result, rerender } = renderHook(({ root }) => usePinnedArtifactUrl(root, "a.md", "v1"), { initialProps: { root: first } });
+		const { repin, refresh } = result.current;
+		rerender({ root: second });
+		expect(result.current.repin).toBe(repin);
+		expect(result.current.refresh).toBe(refresh);
+	});
 });

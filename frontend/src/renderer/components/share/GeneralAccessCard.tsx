@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Globe, Lock } from "lucide-react";
+import { Check, ChevronDown, Globe, Lock } from "@/components/app-icons";
 import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";

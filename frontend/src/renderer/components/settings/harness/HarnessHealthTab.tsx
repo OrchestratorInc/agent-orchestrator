@@ -1,4 +1,4 @@
-import { Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
+import { Check, Copy, LoaderCircle, RefreshCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { versionLabel } from "../../../hooks/useHarnessUpdates";
 import { MiddleTruncatedText } from "../../MiddleTruncatedText";
@@ -70,7 +70,7 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 			</HarnessDetailRow> : null}
 		</HarnessDetailGroup> : null}
 		<div className="flex flex-wrap gap-2">
-			<Button type="button" size="sm" variant="outline" disabled={checking || details.busy} onClick={onCheckAgain}>
+			<Button type="button" size="sm" variant="secondary" disabled={checking || details.busy} onClick={onCheckAgain}>
 				{checking ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}
 				{t(checking ? "settings.harness.health.checking" : "settings.harness.health.checkAgain")}
 			</Button>

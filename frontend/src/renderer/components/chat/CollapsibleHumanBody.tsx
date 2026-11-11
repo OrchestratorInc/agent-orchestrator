@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type 
 import { flushSync } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useReducedMotion } from "motion/react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "@/components/app-icons";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
@@ -36,12 +36,15 @@ type Animation = { height: number; collapsing: boolean };
 
 /**
  * The user's bubble body, folded when it is taller than about ten lines. The fold
- * is measured from the rendered content, so pasted text, code and attachments
- * all count by the room they take. Short messages render exactly as before.
+ * is measured from the rendered content, so pasted text and code count by the room
+ * they take. Attachments stay outside it: a normal screenshot is taller than the
+ * fold, so inside it would always be cut off. Short messages render exactly as before.
  */
-export function CollapsibleHumanBody({ stateKey, children }: {
+export function CollapsibleHumanBody({ stateKey, scrollWhenFolded = false, children }: {
 	/** Stays the same across the echo-to-stored handoff; the message's visible text. */
 	stateKey: string;
+	/** The message editor keeps the fold's height but scrolls, so every line stays reachable. */
+	scrollWhenFolded?: boolean;
 	children: ReactNode;
 }) {
 	const { t } = useTranslation();
@@ -123,8 +126,9 @@ export function CollapsibleHumanBody({ stateKey, children }: {
 			<div
 				ref={clip}
 				id={clipId}
-				className={cn(folds && "chat-human-fold")}
+				className={cn(folds && "chat-human-fold", folds && scrollWhenFolded && "chat-composer-scrollbar")}
 				data-folded={folded ? "" : undefined}
+				data-scroll-folded={scrollWhenFolded ? "" : undefined}
 				data-animating={animation ? "" : undefined}
 				// While it shrinks, the browser anchors the view on what follows (the
 				// toggle) instead of the text inside, so "Show less" stays under the pointer.

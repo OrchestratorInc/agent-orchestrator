@@ -26,6 +26,10 @@ export type Host = {
 	lastConnected: number;
 	/** Present only for a machine discovered through AO Cloud. */
 	accountUserId?: string;
+	/** The account's label for the machine at the last sync. While `name` still
+	 * equals it, the name follows renames made on the account; a rename on the
+	 * phone makes them differ and keeps the phone's name. */
+	accountLabel?: string;
 };
 
 /** activeHost() uses explicit selection or the most recent machine. */

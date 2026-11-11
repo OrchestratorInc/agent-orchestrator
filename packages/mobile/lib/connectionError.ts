@@ -207,15 +207,21 @@ export function describeConnectionFailure(
 				showLocalNetworkHint: false,
 			};
 		case "rate-limited":
-			// The daemon locks a device out for one minute after 5 failed auths, and
-			// clears it automatically. Saying so stops people from power-cycling
-			// things that were never the problem.
+			// The daemon blocks a source for one minute after 5 wrong passwords from
+			// it, and clears it automatically. Saying so stops people from
+			// power-cycling things that were never the problem. On the LAN and over
+			// Tailscale the source is this phone's own address, so the password it
+			// sent is the cause. Through a tunnel it is the visitor's public IP, which
+			// other devices on the same network share, so this password may be right.
 			return {
 				title: "Too many attempts",
 				icon: "timer",
 				message:
-					"Your machine locked this device out after too many failed attempts. " +
-					"It clears on its own in about a minute — check the password, then try again.",
+					isLocalNetworkHost(target.host) || isTailscaleHost(target.host)
+						? "Your machine paused this phone after too many wrong passwords. " +
+							"Check the password, then try again. It clears on its own in about a minute."
+						: "Your machine is pausing connections from this network after too many wrong passwords, " +
+							"possibly from another device on the same network. It clears on its own in about a minute.",
 				showLocalNetworkHint: false,
 			};
 		case "server-error":
@@ -379,7 +385,7 @@ export function userFacingError(error: unknown, fallback = "Something went wrong
 	if (failure) {
 		const { status } = failure;
 		if (status === 401 || status === 403) return "Your machine rejected this phone's password. Re-scan the pairing code on that machine.";
-		if (status === 429) return "Your machine locked this device out after too many failed attempts. It clears on its own in about a minute.";
+		if (status === 429) return "Your machine is pausing connections from this network after too many wrong passwords. It clears on its own in about a minute.";
 		if (status >= 500) {
 			if (status === 503) return "Your machine is busy or still starting up. Try again in a moment.";
 			const ref = typeof failure.requestId === "string" && failure.requestId ? ` (Reference: ${failure.requestId})` : "";

@@ -222,3 +222,16 @@ func (r *hybridRuntime) WatchTerminalForeground(ctx context.Context, handle port
 	}
 	return watcher.WatchTerminalForeground(ctx, raw, fn)
 }
+
+var _ ports.TerminalTitleWatcher = (*hybridRuntime)(nil)
+
+// WatchTerminalTitle routes to the backend that owns the handle; legacy tmux
+// handles have no host to report titles.
+func (r *hybridRuntime) WatchTerminalTitle(ctx context.Context, handle ports.RuntimeHandle, fn func(string)) error {
+	backend, raw := r.route(handle)
+	watcher, ok := backend.(ports.TerminalTitleWatcher)
+	if !ok {
+		return ports.ErrTerminalTitleUnavailable
+	}
+	return watcher.WatchTerminalTitle(ctx, raw, fn)
+}

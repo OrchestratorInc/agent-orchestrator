@@ -1,5 +1,6 @@
 import { OrchestratorIcon, type AppIcon } from "../components/icons";
 import {
+	Archive,
 	ArrowRight,
 	Copy,
 	File,
@@ -7,6 +8,7 @@ import {
 	Folder,
 	FolderPlus,
 	FileText,
+	Gauge,
 	GitPullRequest,
 	House,
 	Keyboard,
@@ -15,7 +17,7 @@ import {
 	Plus,
 	RotateCcw,
 	Sun,
-} from "lucide-react";
+} from "@/components/app-icons";
 import type { CommandGroupId, CommandItem } from "./command-palette";
 
 /** Exact-id icons for known actions. Add new command ids here as they ship. */
@@ -23,10 +25,12 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"current-new-task": Plus,
 	"current-open-orchestrator": OrchestratorIcon,
 	"current-project-settings": Settings,
+	"current-open-archive": Archive,
 	"current-copy-branch": Copy,
 	"current-search-files": FileSearch,
 	"global-home": House,
 	"global-new-project": FolderPlus,
+	"global-usage": Gauge,
 	"global-settings": Settings,
 	"global-theme": Sun,
 };

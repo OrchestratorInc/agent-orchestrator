@@ -71,7 +71,7 @@ const refreshedUrls = new Set<string>();
 // sidebar paints them instantly; project details then confirm the owner and
 // refresh the cache in the background. A failed refresh keeps the cached
 // image. Empty when the setting is off.
-export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, string> {
+export function useProjectAvatars(workspaces: readonly WorkspaceSummary[]): Map<string, string> {
 	const enabled = useUiStore((state) => state.projectAvatars && isNewSidebarDesign(state));
 	const [cache, setCache] = useState(readCache);
 	const [knownUrls] = useState(() => readStrings(urlsKey));

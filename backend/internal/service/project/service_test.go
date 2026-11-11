@@ -618,7 +618,7 @@ func TestManager_AddEmitsProjectAndFirstProjectTelemetry(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want projects.created + first_project_added", sink.events)
 	}
-	if sink.events[0].Name != "ao.projects.created" || sink.events[1].Name != "ao.onboarding.first_project_added" {
+	if sink.events[0].Name != "ao.projects.created" || sink.events[1].Name != "ao.projects.first_added" {
 		t.Fatalf("event names = %#v", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	// The emit path detaches from the request context on purpose; the request id
@@ -649,7 +649,7 @@ func TestManager_AddDoesNotRepeatFirstProjectTelemetry(t *testing.T) {
 	}
 	var firstProjectCount int
 	for _, ev := range sink.events {
-		if ev.Name == "ao.onboarding.first_project_added" {
+		if ev.Name == "ao.projects.first_added" {
 			firstProjectCount++
 		}
 	}
@@ -2548,7 +2548,7 @@ func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *te
 			if got := ev.Payload["first_for_install"]; got != false {
 				t.Fatalf("first_for_install = %#v, want false with an archived prior project", got)
 			}
-		case "ao.onboarding.first_project_added":
+		case "ao.projects.first_added":
 			legacy++
 		}
 	}

@@ -1,10 +1,10 @@
-import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
-import { useResolvedTheme } from "../../stores/ui-store";
+import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
@@ -87,6 +87,14 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		setLogin(undefined);
 		void actions.cancelLogin(current.operationId).catch(() => undefined);
 	};
+	const requestedLogin = useUiStore((state) => state.accountLogin);
+	useEffect(() => {
+		const account = rows.find((row) => row.id === requestedLogin);
+		if (!account || (account.device && (!cliLogin || cliLogin.disabled))) return;
+		useUiStore.setState({ accountLogin: null });
+		if (account.device) cliLogin?.onSignIn();
+		else void startLogin(account.id);
+	}, [requestedLogin, accounts.data, cliLogin?.disabled]);
 
 	return <>
 		<HarnessDetailGroup
@@ -120,7 +128,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
 			description={t("settings.agentAccounts.removeDescription", { email: agentAccountName(removing, t) })}
-			confirmLabel={t("settings.agentAccounts.remove")}
+			confirmLabel={t(busy === `remove:${removing.id}` ? "settings.agentAccounts.removing" : "settings.agentAccounts.remove")}
 			busy={busy === `remove:${removing.id}`}
 			error={error || undefined}
 			onConfirm={() => void run(`remove:${removing.id}`, async () => { await actions.remove(removing.id); setRemoving(null); })}
@@ -195,7 +203,7 @@ export function AccountLimits({ account }: { account: AgentAccount }) {
 	</div>;
 }
 
-function formatPlanName(plan: string | null | undefined): string | null {
+export function formatPlanName(plan: string | null | undefined): string | null {
 	const value = plan?.trim();
 	if (!value) return null;
 	const known: Record<string, string> = { free: "Free", plus: "Plus", pro: "Pro", max: "Max", team: "Team", business: "Business", enterprise: "Enterprise" };
@@ -273,7 +281,7 @@ function LoginTerminal({ login, note, pending, onCheck, onClose }: {
 		<div className="h-[300px] min-h-0"><TerminalPane key={login.operationId} daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={state === "attached"} fontSize={12} onTerminalStateChange={handleState} terminalTarget={{ kind: "shell", handleId: login.shellTerminal.handleId, generation: login.shellTerminal.createdAt, title: login.shellTerminal.title }} theme={theme} /></div>
 		<div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2">
 			<p className="min-w-0 truncate text-xs text-muted-foreground" role="status" aria-live="polite">{note}</p>
-			<Button type="button" size="sm" variant="outline" disabled={pending} onClick={() => onCheck(login)}>{pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.agentAccounts.checkSignIn")}</Button>
+			<Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => onCheck(login)}>{pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.agentAccounts.checkSignIn")}</Button>
 		</div>
 	</div>;
 }

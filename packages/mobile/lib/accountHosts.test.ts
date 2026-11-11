@@ -196,11 +196,58 @@ it("replaces an account machine's routes when its listed address moves", async (
 });
 
 it("does not replace a phone's chosen machine name with the account directory label", async () => {
-	const item = host("h_00000000-0000-0000-0000-000000000010");
-	saved.hosts = [{ id: item.hostId, name: "My production Mac", platform: "darwin", token, lastConnected: 0, accountUserId: account.id, endpoints: [] }];
+	const item = { ...host("h_00000000-0000-0000-0000-000000000010"), label: "Studio Mac" };
+	saved.hosts = [{ id: item.hostId, name: "My production Mac", platform: "darwin", token, lastConnected: 0, accountUserId: account.id, accountLabel: "studio", endpoints: [] }];
 	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ hosts: [item] }) }));
 	await syncAccountHosts(account);
 	expect(saved.hosts[0]?.name).toBe("My production Mac");
+	expect(saved.hosts[0]?.accountLabel).toBe("Studio Mac");
+});
+
+it("picks up a machine renamed on the account without a new sign-in, keeping its connected routes", async () => {
+	const tunnel = { kind: "tunnel", host: "h-00000000000000000013.useao.dev", port: 443, secure: true } as const;
+	let item = { ...host("h_00000000-0000-0000-0000-000000000013"), label: "mac-mini", url: "https://h-00000000000000000013.useao.dev:443" };
+	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ hosts: [item] }) }));
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]).toMatchObject({ name: "mac-mini", accountLabel: "mac-mini" });
+	const lan = { kind: "lan", host: "192.168.1.20", port: 3011, secure: false } as const;
+	saved.hosts = [{ ...saved.hosts[0]!, endpoints: [lan, tunnel], appearance: { symbol: "mac-mini" }, lastConnected: 42 }];
+	// Only the label changes: same token, same listed address.
+	item = { ...item, label: "Prateek's Mac mini" };
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]).toMatchObject({ name: "Prateek's Mac mini", accountLabel: "Prateek's Mac mini", endpoints: [lan, tunnel], appearance: { symbol: "mac-mini" }, lastConnected: 42 });
+});
+
+it("keeps a name chosen on the phone when the account renames the machine later", async () => {
+	let item = { ...host("h_00000000-0000-0000-0000-000000000014"), label: "MacBook" };
+	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ hosts: [item] }) }));
+	await syncAccountHosts(account);
+	saved.hosts = [{ ...saved.hosts[0]!, name: "Travel laptop" }];
+	item = { ...item, label: "Prateek's MacBook Air" };
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]).toMatchObject({ name: "Travel laptop", accountLabel: "Prateek's MacBook Air" });
+	// The phone clearing its rename back to the account's name follows the account again.
+	saved.hosts = [{ ...saved.hosts[0]!, name: "Prateek's MacBook Air" }];
+	item = { ...item, label: "Work MacBook" };
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]?.name).toBe("Work MacBook");
+});
+
+it("adopts the account's label once for a machine saved before labels were tracked", async () => {
+	const listed = { kind: "lan" as const, host: "h_00000000-0000-0000-0000-000000000015.example.com", port: 443, secure: true };
+	const item = { ...host("h_00000000-0000-0000-0000-000000000015"), label: "Prateek's Mac mini" };
+	saved.hosts = [{ id: item.hostId, name: "mac-mini", platform: "darwin", token, lastConnected: 0, accountUserId: account.id, endpoints: [listed] }];
+	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ hosts: [item] }) }));
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]).toMatchObject({ name: "Prateek's Mac mini", accountLabel: "Prateek's Mac mini", endpoints: [listed] });
+});
+
+it("keeps the saved name when the account lists a machine without a label", async () => {
+	const item = { ...host("h_00000000-0000-0000-0000-000000000016"), label: "  " };
+	saved.hosts = [{ id: item.hostId, name: "Studio", platform: "darwin", token, lastConnected: 0, accountUserId: account.id, accountLabel: "Studio", endpoints: [] }];
+	vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => ({ hosts: [item] }) }));
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]?.name).toBe("Studio");
 });
 
 it("coalesces repeated sync requests while the directory request is pending", async () => {
@@ -279,7 +326,7 @@ it("keeps the phone's machines when the same person signs in under a new WorkOS 
 	const listed = { kind: "lan" as const, host: `${kept}.example.com`, port: 443, secure: true };
 	saved.previous = { id: "legacy-user", email: "Person@Example.com" };
 	saved.hosts = [
-		{ id: kept, name: "Studio Mac", appearance: { symbol: "desktop" }, platform: "darwin", endpoints: [listed], token, lastConnected: 42, accountUserId: "legacy-user" },
+		{ id: kept, name: "Studio Mac", appearance: { symbol: "desktop" }, platform: "darwin", endpoints: [listed], token, lastConnected: 42, accountUserId: "legacy-user", accountLabel: "studio" },
 		{ id: dropped, name: "Old box", platform: "linux", endpoints: [lan], token, lastConnected: 0, accountUserId: "legacy-user" },
 	];
 	saved.ignored.set("ao.accountHosts.ignored.legacy-user", JSON.stringify([hidden]));
@@ -289,7 +336,7 @@ it("keeps the phone's machines when the same person signs in under a new WorkOS 
 	// account no longer lists is unpaired.
 	expect(saved.unpaired).toEqual([dropped]);
 	expect(saved.hosts).toHaveLength(1);
-	expect(saved.hosts[0]).toEqual({ id: kept, name: "Studio Mac", appearance: { symbol: "desktop" }, platform: "darwin", endpoints: [listed], token, lastConnected: 42, accountUserId: account.id });
+	expect(saved.hosts[0]).toEqual({ id: kept, name: "Studio Mac", appearance: { symbol: "desktop" }, platform: "darwin", endpoints: [listed], token, lastConnected: 42, accountUserId: account.id, accountLabel: kept });
 	// The hidden machine stays hidden under the new ID.
 	expect(JSON.parse(saved.ignored.get(`ao.accountHosts.ignored.${account.id}`) ?? "[]")).toEqual([hidden]);
 	expect(saved.ignored.has("ao.accountHosts.ignored.legacy-user")).toBe(false);

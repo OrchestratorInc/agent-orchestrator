@@ -15,20 +15,45 @@
 
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, KeyRound, Plug, TriangleAlert } from "lucide-react";
+import { CircleArrowUp, Download, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
+import { agentAccountProviderFor, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
 import { agentLabel } from "../../lib/agent-options";
+import type { AgentBlock } from "../../lib/session-import";
 import { labelForHost } from "../../lib/host-clients";
 import { cn, truncateMiddle } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
-import { CloseButton } from "../ui/close-button";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
+export function ImportedAgentBlocked({ agent, block }: { agent: string; block: AgentBlock }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const signedOut = block === "signed_out";
+	const Icon = signedOut ? KeyRound : Download;
+	return (
+		<div role="status" className="flex items-center gap-2.5 rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5">
+			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<p className="min-w-0 flex-1 text-sm text-foreground">
+				{t(signedOut ? "sessionImport.blockedSignedOut" : "sessionImport.blockedMissing", { agent: agentLabel(agent) })}
+			</p>
+			<Button
+				type="button"
+				size="sm"
+				variant="primary"
+				className="shrink-0"
+				onClick={() => openGlobalSettings("harness", { focusAgentId: agent, startLogin: signedOut, preserveProject: true })}
+			>
+				{t(signedOut ? "sessionImport.signIn" : "sessionImport.install")}
+			</Button>
+		</div>
+	);
+}
+
 /**
- * The provider refused this session's login; dismissal affects presentation only.
+ * The provider refused this session's login.
  *
  * An expired login is routine, so the notice says so plainly and offers one way
  * out: the Harness page, which signs in on the computer that runs the session,
@@ -38,23 +63,22 @@ import type { ConversationAccount, ConversationThreadState, McpServer } from "..
 export const ReauthBanner = memo(function ReauthBanner({
 	account,
 	harness,
+	sessionId,
 	hostId,
 	cloud = false,
 }: {
 	account: ConversationAccount;
 	harness: string;
+	sessionId?: string;
 	/** The remote host that runs the session; omitted for this computer's. */
 	hostId?: string;
 	/** The session runs in the cloud, so its login is the cloud connection's. */
 	cloud?: boolean;
 }) {
 	const { t } = useTranslation();
-	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
-	const [dismissedFailure, setDismissedFailure] = useState<string>();
-	const failure = account.authFailureId ?? `${harness}:${account.reauthRequiredAt}:${account.reauthReason}`;
 	const required = account.authenticationState === "required" ||
 		(account.authenticationState === undefined && Boolean(account.reauthRequiredAt));
-	if (!required || dismissedFailure === failure) return null;
+	if (!required) return null;
 	const agent = agentLabel(harness);
 	const host = hostId ? labelForHost(hostId) ?? hostId : undefined;
 	return (
@@ -63,22 +87,30 @@ export const ReauthBanner = memo(function ReauthBanner({
 			<p className="min-w-0 flex-1 text-xs leading-snug text-foreground">
 				{host ? t("chat.reauth.expiredOnHost", { agent, host }) : t("chat.reauth.expired", { agent })}
 			</p>
-			<Button type="button" size="sm" variant="outline" className="shrink-0"
-				onClick={() => openGlobalSettings("harness", {
-					focusAgentId: harness,
-					...(hostId ? { hostId } : {}),
-					harnessView: cloud ? "cloud" : "local",
-					startLogin: true,
-					preserveProject: true,
-				})}>
-				{t("chat.reauth.logInAgain")}
-			</Button>
-			<CloseButton size="icon-xs" className="shrink-0"
-				aria-label="Dismiss authentication notice" title="Hide this notice; authentication state is unchanged"
-				onClick={() => setDismissedFailure(failure)} />
+			<ReauthLogInButton harness={harness} sessionId={sessionId} hostId={hostId} cloud={cloud} />
 		</div>
 	);
 });
+
+function ReauthLogInButton({ harness, sessionId, hostId, cloud }: { harness: string; sessionId?: string; hostId?: string; cloud: boolean }) {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	const provider = !hostId && !cloud && sessionId ? agentAccountProviderFor(harness) : null;
+	const sessionAccounts = useSessionAgentAccounts(provider ? sessionId : undefined);
+	const sessionAccountId = provider ? sessionAccounts.data?.[provider] : undefined;
+	return (
+		<Button type="button" size="sm" variant="secondary" className="shrink-0" disabled={provider !== null && sessionAccounts.isPending}
+			onClick={() => openGlobalSettings("harness", {
+				focusAgentId: harness,
+				...(hostId ? { hostId } : {}),
+				harnessView: cloud ? "cloud" : "local",
+				...(sessionAccountId ? { loginAccountId: sessionAccountId } : { startLogin: true }),
+				preserveProject: true,
+			})}>
+			{t("chat.reauth.logInAgain")}
+		</Button>
+	);
+}
 
 /**
  * The provider's own view of the thread, when it is bad.
@@ -105,11 +137,11 @@ export const ThreadStateBanner = memo(function ThreadStateBanner({
 		status === "system_error"
 			? {
 					title: "The agent's thread hit an internal error",
-					body: "The provider reported a fault in this thread, not in AO's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
+					body: "The provider reported a fault in this thread, not in Orchestrator's connection to it. New turns will usually fail; the conversation and the worktree are kept.",
 				}
 			: {
 					title: "The agent closed this thread",
-					body: "The provider dropped the conversation on its side. AO kept the history, but the agent no longer holds it.",
+					body: "The provider dropped the conversation on its side. Orchestrator kept the history, but the agent no longer holds it.",
 				};
 
 	return (

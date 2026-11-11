@@ -582,17 +582,27 @@ func ciSummaryFromRollupState(pr map[string]any) domain.CIState {
 }
 
 // scmCISummary is GitHub's rollup state, except a FAILURE that only superseded
-// check runs cause: rollup state counts every run on the commit, so with the
-// full context list in hand the verdict comes from the newest run per check.
+// or cancelled check runs cause: rollup state counts every run on the commit
+// and treats cancelled as failed, so with the full context list in hand the
+// verdict comes from the newest run per check.
 func scmCISummary(pr map[string]any) domain.CIState {
 	ci := ciSummaryFromRollupState(pr)
 	if ci != domain.CIFailing || scmContextsPaginated(pr) {
 		return ci
 	}
-	if latest := ciSummaryFromGraphQL(pr); latest != domain.CIUnknown {
+	if latest := ciSummaryFromGraphQL(pr); latest != domain.CIUnknown || hasCancelledCheck(pr) {
 		return latest
 	}
 	return ci
+}
+
+func hasCancelledCheck(pr map[string]any) bool {
+	for _, n := range latestCheckRuns(nodes(statusContexts(pr)["nodes"])) {
+		if checkStatusFromGraphQL(n) == domain.PRCheckCancelled {
+			return true
+		}
+	}
+	return false
 }
 
 func scmContextsPaginated(pr map[string]any) bool {
@@ -635,8 +645,7 @@ func scmChecksFromGraphQL(pr map[string]any) []ports.SCMCheckObservation {
 func failedSCMChecks(checks []ports.SCMCheckObservation) []ports.SCMCheckObservation {
 	out := make([]ports.SCMCheckObservation, 0, len(checks))
 	for _, ch := range checks {
-		status := domain.PRCheckStatus(ch.Status)
-		if status == domain.PRCheckFailed || status == domain.PRCheckCancelled {
+		if isFailingCheckStatus(domain.PRCheckStatus(ch.Status)) {
 			out = append(out, ch)
 		}
 	}

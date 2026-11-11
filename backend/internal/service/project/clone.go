@@ -72,7 +72,7 @@ func (m *Service) CheckCloneDestination(ctx context.Context, in CloneInput) (Clo
 		return result, nil
 	}
 	if err != nil {
-		return result, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not inspect this destination. Choose another folder.", nil)
+		return result, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not inspect this destination. Choose another folder.", nil)
 	}
 	result.Exists = true
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -102,7 +102,7 @@ func (m *Service) Clone(ctx context.Context, in CloneInput) (Project, error) {
 	}
 	if !repoHasCommit(ctx, prepared.Path) {
 		m.cleanupPreparedCloneAfterFailure(ctx, prepared)
-		return Project{}, apierr.Invalid("CLONE_EMPTY_REPOSITORY", "AO needs a repository with at least one commit.", nil)
+		return Project{}, apierr.Invalid("CLONE_EMPTY_REPOSITORY", "Orchestrator needs a repository with at least one commit.", nil)
 	}
 
 	project, err := m.Add(ctx, AddInput{
@@ -160,7 +160,7 @@ func (m *Service) CleanupPreparedClone(ctx context.Context, in ClonePreparationC
 	}
 	if in.KeepCheckout {
 		if err := os.Remove(filepath.Join(path, ".git", clonePreparationMarker)); err != nil {
-			return apierr.Invalid("CLONE_CLEANUP_FAILED", "AO could not release this checkout. Retry before leaving this flow.", nil)
+			return apierr.Invalid("CLONE_CLEANUP_FAILED", "Orchestrator could not release this checkout. Retry before leaving this flow.", nil)
 		}
 		return nil
 	}
@@ -212,11 +212,11 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress fu
 	}
 
 	if err := os.MkdirAll(parent, 0o750); err != nil {
-		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not create the destination folder.", nil)
+		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not create the destination folder.", nil)
 	}
 	temporaryPath, err := os.MkdirTemp(parent, ".ao-clone-")
 	if err != nil {
-		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not prepare the selected clone destination.", nil)
+		return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not prepare the selected clone destination.", nil)
 	}
 	cleanupPath := temporaryPath
 	defer func() {
@@ -259,7 +259,7 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress fu
 			}
 			// Only discard this attempt's private staging folder, never target.
 			if err := os.RemoveAll(temporaryPath); err != nil {
-				return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "AO could not reset the temporary clone. Choose another destination.", nil)
+				return ClonePreparationResult{}, apierr.Invalid("CLONE_DESTINATION_UNAVAILABLE", "Orchestrator could not reset the temporary clone. Choose another destination.", nil)
 			}
 			if onProgress != nil {
 				onProgress(CloneProgress{Phase: ClonePhaseRetrying, Attempt: attempt + 2})
@@ -280,10 +280,10 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, onProgress fu
 	}
 	preparationID, err := newClonePreparationID()
 	if err != nil {
-		return ClonePreparationResult{}, apierr.Internal("CLONE_PREPARATION_FAILED", "AO could not identify the prepared clone")
+		return ClonePreparationResult{}, apierr.Internal("CLONE_PREPARATION_FAILED", "Orchestrator could not identify the prepared clone")
 	}
 	if err := os.WriteFile(filepath.Join(temporaryPath, ".git", clonePreparationMarker), []byte(preparationID+"\n"), 0o600); err != nil {
-		return ClonePreparationResult{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "AO could not mark the prepared clone for cleanup.", nil)
+		return ClonePreparationResult{}, apierr.Invalid("CLONE_PREPARATION_FAILED", "Orchestrator could not mark the prepared clone for cleanup.", nil)
 	}
 	if err := os.Rename(temporaryPath, target); err != nil {
 		return ClonePreparationResult{}, apierr.Conflict("CLONE_DESTINATION_EXISTS", "The clone destination became unavailable before the repository could be created.", map[string]any{"path": target})

@@ -8,6 +8,11 @@ const versionRefreshSetting = vi.hoisted(() => ({ enabled: true }));
 vi.mock("../../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: { versionRefresh: versionRefreshSetting.enabled }, isLoading: false, error: undefined }),
 }));
+const sessionAccounts = vi.hoisted(() => ({ bound: {} as Record<string, string> | undefined }));
+vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
+	useSessionAgentAccounts: (sessionId?: string) => ({ data: sessionId ? sessionAccounts.bound : undefined, isPending: Boolean(sessionId) && !sessionAccounts.bound }),
+}));
 vi.mock("../../lib/host-clients", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/host-clients")>()),
 	labelForHost: (hostId: string) => (hostId === "host-air" ? "Macbook Air M1" : undefined),
@@ -25,6 +30,7 @@ describe("ReauthBanner", () => {
 	afterEach(() => {
 		useUiStore.setState({ openGlobalSettings: original });
 		openGlobalSettings.mockReset();
+		sessionAccounts.bound = {};
 	});
 
 	it("says the login expired in plain words, without the provider's error", () => {
@@ -40,6 +46,30 @@ describe("ReauthBanner", () => {
 		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
 			focusAgentId: "codex", harnessView: "local", startLogin: true, preserveProject: true,
 		});
+	});
+
+	it("signs in the saved account the session runs on", async () => {
+		sessionAccounts.bound = { claude: "acct-b" };
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "claude-code", harnessView: "local", loginAccountId: "acct-b", preserveProject: true,
+		});
+	});
+
+	it("signs in this computer's login when the session runs on it", async () => {
+		sessionAccounts.bound = { claude: "device-claude" };
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		await userEvent.click(screen.getByRole("button", { name: "Log in again" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", {
+			focusAgentId: "claude-code", harnessView: "local", loginAccountId: "device-claude", preserveProject: true,
+		});
+	});
+
+	it("waits to learn the session's account before it signs in", () => {
+		sessionAccounts.bound = undefined;
+		render(<ReauthBanner account={failed} harness="claude-code" sessionId="s1" />);
+		expect(screen.getByRole("button", { name: "Log in again" })).toBeDisabled();
 	});
 
 	// A remote session runs on its host, so that host's login is the one to fix.
@@ -65,15 +95,12 @@ describe("ReauthBanner", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("dismisses only this failure and displays a new failure", async () => {
+	it("stays until the login works, with sign-in as its only action", () => {
 		const account = { authenticationState: "required" as const, authFailureId: "first", reauthRequiredAt: "2026-08-03T00:00:00Z" };
 		const { rerender } = render(<ReauthBanner account={account} harness="codex" />);
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss authentication notice" }));
+		expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Log in again"]);
+		rerender(<ReauthBanner account={{ ...account, authenticationState: "authenticated" }} harness="codex" />);
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		rerender(<ReauthBanner account={{ ...account, planLabel: "Pro" }} harness="codex" />);
-		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		rerender(<ReauthBanner account={{ ...account, authFailureId: "second" }} harness="codex" />);
-		expect(screen.getByRole("status")).toBeInTheDocument();
 	});
 
 	it("uses current authentication state even when historical failure evidence exists", () => {
@@ -86,7 +113,7 @@ describe("ThreadStateBanner", () => {
 	it("reports a provider-side fault as the provider's, not AO's connection", () => {
 		render(<ThreadStateBanner threadState={{ status: "system_error" }} />);
 		expect(screen.getByText(/thread hit an internal error/i)).toBeInTheDocument();
-		expect(screen.getByText(/not in AO's connection to it/)).toBeInTheDocument();
+		expect(screen.getByText(/not in Orchestrator's connection to it/)).toBeInTheDocument();
 	});
 
 	it("reports a closed thread as history AO kept and the agent did not", () => {

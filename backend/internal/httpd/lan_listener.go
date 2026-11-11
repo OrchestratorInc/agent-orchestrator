@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
@@ -150,7 +151,7 @@ func expectedHostGuard(hostID string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if expected := r.Header.Get("X-AO-Expected-Host-ID"); expected != "" && expected != hostID {
-				envelope.WriteAPIError(w, r, http.StatusMisdirectedRequest, "conflict", "HOST_ID_MISMATCH", "This address belongs to another AO host; reconnect to the intended host.", nil)
+				envelope.WriteAPIError(w, r, http.StatusMisdirectedRequest, "conflict", "HOST_ID_MISMATCH", "This address belongs to another Orchestrator host; reconnect to the intended host.", nil)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -197,6 +198,54 @@ func (m *LANManager) SetAccountTokenHash(hash string) {
 	if ln != nil && previous != "" {
 		_ = ln.closeConnections(previous)
 	}
+}
+
+// UseDeviceCredentials makes the listener accept device tokens and pairing
+// codes. Call it before Start.
+func (m *LANManager) UseDeviceCredentials(devices *mobilebridge.AccessDevices, codes *mobilebridge.PairingCodes) {
+	m.state.devices, m.state.codes = devices, codes
+}
+
+// SetPasswordLoginDisabled turns the pairing password off or on. Off closes its connections.
+func (m *LANManager) SetPasswordLoginDisabled(off bool) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	if m.state.passwordOff.Swap(off) == off || !off {
+		return
+	}
+	m.DisconnectCredential(m.state.currentHash())
+}
+
+// DisconnectCredential closes the connections of the credential with this SHA-256.
+func (m *LANManager) DisconnectCredential(hash string) {
+	if hash == "" {
+		return // closeConnections("") would close every connection
+	}
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	if ln != nil {
+		_ = ln.closeConnections(hash)
+	}
+}
+
+// ConnectedCredentials returns the SHA-256 of each credential with an open connection.
+func (m *LANManager) ConnectedCredentials() map[string]bool {
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	connected := map[string]bool{}
+	if ln == nil {
+		return connected
+	}
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+	for conn := range ln.conns {
+		if conn.tokenHash != "" {
+			connected[conn.tokenHash] = true
+		}
+	}
+	return connected
 }
 
 // AccountTokenHash returns the currently accepted account credential digest.

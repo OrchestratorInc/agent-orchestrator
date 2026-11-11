@@ -60,7 +60,7 @@ const changesRequested = [
 	"Review URL: https://github.com/o/r/pull/6974#pullrequestreview-1",
 	"Review ID: PRR_1",
 	"",
-	"Address the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what AO has provided here.",
+	"Address the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what Orchestrator has provided here.",
 ].join("\n");
 
 const mergeConflict = `There are merge conflicts on ${PR}. Rebase onto the base branch and resolve them.\nPR: ${URL}`;

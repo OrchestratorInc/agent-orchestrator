@@ -476,11 +476,11 @@ func TestObserve_CIStates(t *testing.T) {
 			wantCI: domain.CIPending,
 		},
 		{
-			name: "cancelled is failing",
+			name: "cancelled with nothing running is unknown",
 			nodes: []any{
 				map[string]any{"__typename": "CheckRun", "name": "deploy", "status": "COMPLETED", "conclusion": "CANCELLED"},
 			},
-			wantCI: domain.CIFailing,
+			wantCI: domain.CIUnknown,
 		},
 		{
 			name: "legacy statuscontext failure",
@@ -1347,6 +1347,79 @@ func TestCISummaryIgnoresSupersededCheckRuns(t *testing.T) {
 			}
 			if tc.wantCI == domain.CIPassing && obs.CI.FailedFingerprint != "" {
 				t.Fatalf("failed fingerprint = %q, want empty so no CI-failure nudge fires", obs.CI.FailedFingerprint)
+			}
+		})
+	}
+}
+
+// GitHub's rollup state stays FAILURE for cancelled checks, so every case here
+// starts from that rollup. PR #7964: runs cancelled by a PR body edit showed
+// "CI failing" while their replacements ran.
+func TestCISummaryCancelledChecksAreNotFailures(t *testing.T) {
+	inProgress := func(workflow, name string, id float64) map[string]any {
+		n := actionsCheckRun(workflow, name, "", id)
+		n["status"] = "IN_PROGRESS"
+		return n
+	}
+	cases := []struct {
+		name       string
+		nodes      []any
+		wantCI     domain.CIState
+		wantFailed []string
+	}{
+		{
+			name:   "replacement of the same check still running",
+			nodes:  []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), inProgress("Go", "lint", 2)},
+			wantCI: domain.CIPending,
+		},
+		{
+			name:   "another check still running",
+			nodes:  []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), inProgress("Frontend", "build", 2)},
+			wantCI: domain.CIPending,
+		},
+		{
+			name:   "cancelled by hand with no replacement settles as unknown",
+			nodes:  []any{actionsCheckRun("Go", "lint", "CANCELLED", 1)},
+			wantCI: domain.CIUnknown,
+		},
+		{
+			name:   "cancelled beside passing checks is not passing",
+			nodes:  []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), actionsCheckRun("Go", "build", "SUCCESS", 2)},
+			wantCI: domain.CIUnknown,
+		},
+		{
+			name:       "a real failure still wins and lists only itself",
+			nodes:      []any{actionsCheckRun("Go", "lint", "CANCELLED", 1), actionsCheckRun("Go", "build", "FAILURE", 2)},
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"build"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var pr map[string]any
+			basePRFixture().prData(func(m map[string]any) {
+				pr = m
+				commit := m["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)["commit"].(map[string]any)
+				roll := commit["statusCheckRollup"].(map[string]any)
+				roll["state"] = "FAILURE"
+				roll["contexts"] = map[string]any{"nodes": tc.nodes, "pageInfo": map[string]any{"hasNextPage": false}}
+			})
+			if got := ciSummaryFromGraphQL(pr); got != tc.wantCI {
+				t.Fatalf("ciSummaryFromGraphQL = %q, want %q", got, tc.wantCI)
+			}
+			obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello", Repo: "octocat/hello"}, Number: 42}, pr)
+			if obs.CI.Summary != string(tc.wantCI) {
+				t.Fatalf("observer CI summary = %q, want %q", obs.CI.Summary, tc.wantCI)
+			}
+			var failed []string
+			for _, ch := range obs.CI.FailedChecks {
+				failed = append(failed, ch.Name)
+			}
+			if !slices.Equal(failed, tc.wantFailed) {
+				t.Fatalf("failed checks = %v, want %v", failed, tc.wantFailed)
+			}
+			if tc.wantCI != domain.CIFailing && obs.CI.FailedFingerprint != "" {
+				t.Fatalf("failed fingerprint = %q, want empty", obs.CI.FailedFingerprint)
 			}
 		})
 	}

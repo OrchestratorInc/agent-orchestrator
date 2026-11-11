@@ -13,7 +13,7 @@ ao import [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--dry-run` | Parse and report the planned import without writing | - |
-| `--from string` | Legacy AO root to read | `~/.agent-orchestrator` |
+| `--from string` | Legacy Orchestrator root to read | `~/.agent-orchestrator` |
 | `--json` | Output the import report as JSON | - |
 | `-y, --yes` | Skip the confirmation prompt (for non-interactive use) | - |
 

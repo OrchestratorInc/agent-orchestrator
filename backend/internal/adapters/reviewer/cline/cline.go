@@ -14,7 +14,7 @@ import (
 
 // HostTrustWarning documents that Cline retains its normal approval flow. AO
 // deliberately avoids --auto-approve and --yolo for reviews.
-const HostTrustWarning = "experimental user-approved reviewer: Cline uses normal permission prompts; AO does not enable --auto-approve or --yolo"
+const HostTrustWarning = "experimental user-approved reviewer: Cline uses normal permission prompts; Orchestrator does not enable --auto-approve or --yolo"
 
 // Reviewer builds Cline's persistent interactive reviewer command.
 type Reviewer struct {

@@ -1,5 +1,5 @@
 import { useContext } from "react";
-import { Check, ChevronRight } from "lucide-react";
+import { Check, ChevronRight } from "@/components/app-icons";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { composeMenuCloseAutoFocus, ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter, useMenuReturnTarget } from "./menu-focus";
