@@ -71,19 +71,26 @@ tools, the same guide.
   it recorded at pairing and refuses anything else, including a replayed
   call. Each AO machine already has such a key (`host.key`).
 
-## Risks
+## Risks it adds over remote hosts today
 
-- **Cloudflare can read the calls and screenshots**, as it can already read
-  chat and terminal traffic on remote hosts. Phase 2 fixes this.
-- **Whoever can message an agent can use it.** Anyone with access to AO on
-  either machine can tell an agent to act, as they can today. The switch and
-  idle-off limit when that is possible. Signing only stops forged or replayed
-  calls on the way.
-- **The agent is still on the user's machine**, with its shell and files.
-- **It needs the connection.** No internet means no computer use, and each
-  action is slower because the screenshot travels back.
-- **Use a host set aside for agents.** Accounts signed in on its desktop are
-  available to every agent that uses it.
+| New risk | What limits it |
+| --- | --- |
+| The host accepts computer-use calls over the remote connection. This is blocked today, and a bug in the new route could be reached from the internet. | Off by default, turned on only at the host, off again when idle. Later: signed and encrypted calls. |
+| Cloudflare sees more: every screenshot of the host and everything the agent types there, passwords included. | Phase 2 encryption. |
+| The host's screen reaches an agent that has a shell on the user's machine. A page or app on the host can show text that tries to steer that agent. | Agents are told screen content is untrusted. Use a host you control. |
+| AO on the user's machine holds the host's credential, so any local program that can call AO can drive the host's desktop. Today only the desktop app holds it. | The on/off switch on the user's machine. Store the credential encrypted, as the desktop app does. |
+| Computer use depends on the connection. No internet or a tunnel outage stops it, and each action is slower. | A direct connection where the host is reachable without the tunnel. |
+| Sessions share one desktop and its signed-in accounts. | A host set aside for agents, with dedicated accounts. |
+
+Already true for remote hosts today, and unchanged:
+
+- Cloudflare can read chat, terminal traffic, and the connection password.
+- Anyone holding the host's credential can open a terminal there and message
+  its agents. If computer use is on at that machine, they can have an agent
+  drive its screen.
+- Computer use cannot be turned on remotely. It is switched on at the machine
+  itself.
+- The agent runs on the user's machine, with its shell and files.
 
 ## Phases
 
