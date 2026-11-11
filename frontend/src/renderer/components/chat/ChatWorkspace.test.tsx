@@ -2684,10 +2684,33 @@ describe("ChatWorkspace timeline", () => {
 		// Earlier settled turns may keep their own rollback, so look only at this outcome.
 		expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
 		expect(within(unknownOutcome as HTMLElement).queryByRole("button", { name: "Roll back to here" })).not.toBeInTheDocument();
+		// The earlier turn keeps its rollback, but the daemon refuses it while this turn is open.
+		const rollbacks = screen.getAllByRole("button", { name: "Roll back to here" });
+		expect(rollbacks.length).toBeGreaterThan(0);
+		for (const rollback of rollbacks) expect(rollback).toBeDisabled();
 		await user.click(screen.getByRole("button", { name: "Resume agent" }));
 		await user.click(screen.getByRole("button", { name: "Open shell" }));
 		expect(resume).toHaveBeenCalledOnce();
 		expect(openShell).toHaveBeenCalledOnce();
+	});
+
+	it("does not dress a stopped opening turn as live again", () => {
+		const opening = structuredClone(chatFixture);
+		const first = { ...opening.turns[0]!, state: "running" as const, completedAt: undefined };
+		opening.turns = [first];
+		opening.items = opening.items.filter((item) => item.turnId === first.id);
+
+		render(
+			<ChatWorkspace
+				snapshot={{ ...opening, controller: { state: "stopped" } }}
+				openingStartedAt={first.requestedAt}
+				onResumeAgent={vi.fn()}
+			/>,
+		);
+
+		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("response-spinner")).not.toBeInTheDocument();
+		expect(screen.getByText("The agent stopped before this turn finished")).toBeInTheDocument();
 	});
 
 	it("keeps a running turn live while a stopped controller is only handing off", () => {

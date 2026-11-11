@@ -895,7 +895,11 @@ function ChatWorkspaceContent({
 		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
 		[assetBaseUrl],
 	);
-	const canContinue = Boolean(onContinueTurn) && !activeTurn(snapshot) && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
+	// The turn the daemon still holds open, whatever the controller is doing. It
+	// gates history mutations (continue, rollback, edit, retry): the daemon refuses
+	// them while a turn is open, even one settled on screen for a stopped controller.
+	const durableTurn = activeTurn(snapshot);
+	const canContinue = Boolean(onContinueTurn) && !durableTurn && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
 	const latestSettledTurn = snapshot.turns.findLast((entry) =>
 		!entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled",
 	);
@@ -1848,7 +1852,7 @@ function ChatWorkspaceContent({
 		setTimeout(() => headerSlidSessions.delete(slideKey), 15_000);
 		return true;
 	});
-	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !firstTurnSettled(snapshot) &&
+	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !openingTurnSettled(snapshot, controllerStopped) &&
 		!(turn?.state === "running" && snapshot.controller.state !== "connecting");
 	const conversationEmpty = !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
@@ -2128,13 +2132,13 @@ function ChatWorkspaceContent({
 									composerRecoveryTurnId={retryControl ? limitedTurn?.id : undefined}
 									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
 									editPending={editMessagePending}
-									editBusy={Boolean(turn)}
+									editBusy={Boolean(durableTurn)}
 									editError={editMessageError}
 									onActivateBranch={onActivateBranch}
 									activateBranchPending={activateBranchPending}
 									activateBranchError={activateBranchError}
 									newWorkDisabled={newWorkDisabled}
-									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
+									rollbackDisabled={Boolean(durableTurn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									openingStartedAt={openingStartedAt}
@@ -2164,7 +2168,7 @@ function ChatWorkspaceContent({
 											? (enabled) => { void Promise.resolve(retryControl.setAutoResume?.(limitedTurn.id, enabled)).catch(() => undefined); }
 											: undefined}
 										pending={retryControl.pending || retryControl.autoResumePending}
-										disabled={Boolean(turn || busy || newWorkDisabled || agentInputDisabled || controllerTransitioning || agentResuming)}
+										disabled={Boolean(durableTurn || busy || newWorkDisabled || agentInputDisabled || controllerTransitioning || agentResuming)}
 										error={(retryControl.turnId === limitedTurn.id ? retryControl.error : undefined) ??
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
 									/>
@@ -2309,7 +2313,7 @@ function ChatWorkspaceContent({
 										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
 										compacting={compacting}
 										compactUnavailable={compactUnavailable}
-										compactBlocked={Boolean(turn)}
+										compactBlocked={Boolean(durableTurn)}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
 										assetBaseUrl={assetBaseUrl}
@@ -3407,6 +3411,8 @@ export function Timeline({
 		inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId),
 	);
 	const turn = activeTurn(snapshot, { controllerStopped });
+	// The daemon refuses a retry while any turn is open, settled on screen or not.
+	const durableTurn = activeTurn(snapshot);
 	const [scrollbar, setScrollbar] = useState({
 		visible: false,
 		top: 0,
@@ -3980,7 +3986,7 @@ export function Timeline({
 	}, [localEchos, requestGlideToEnd]);
 	// The brief that started this chat reads as working from the moment it was
 	// sent, through the agent connecting, until its turn settles.
-	const openingPending = Boolean(openingStartedAt) && !firstTurnSettled(snapshot);
+	const openingPending = Boolean(openingStartedAt) && !openingTurnSettled(snapshot, controllerStopped);
 	const batchedReports = useMemo(
 		() => workerUpdates ? placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items) : NO_BATCHED_REPORTS,
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
@@ -4947,7 +4953,7 @@ export function Timeline({
 										pending: retryControl.pending && retrySelected,
 										error: retrySelected ? retryControl.error : undefined,
 										disabled:
-											Boolean(turn) ||
+											Boolean(durableTurn) ||
 											Boolean(retryControl.pending) ||
 											Boolean(newWorkDisabled),
 									}
@@ -6206,6 +6212,17 @@ const headerSlidSessions = new Set<string>();
 function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
 	const first = snapshot.turns[0];
 	return Boolean(first && first.state !== "queued" && first.state !== "running");
+}
+
+/**
+ * Whether the opening brief has stopped reading as working. A running first turn
+ * under a really stopped controller is settled too (#6064): its group shows the
+ * unknown outcome, so the opening must not dress it as live again. Only a running
+ * one: a queued first turn under a stopped controller can still be a chat that is
+ * provisioning, whose brief rightly reads as setting up.
+ */
+function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: boolean): boolean {
+	return firstTurnSettled(snapshot) || (controllerStopped && snapshot.turns[0]?.state === "running");
 }
 
 /**
