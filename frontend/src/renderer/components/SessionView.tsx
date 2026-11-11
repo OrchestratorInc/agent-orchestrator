@@ -602,6 +602,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
 	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
+	const setArtifactsUnseen = useUiStore((state) => state.setArtifactsUnseen);
 	const { daemonStatus } = useShell();
 	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
 	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
@@ -2130,6 +2131,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// watches opens in the Artifacts tab, whatever its file type; agents no
 	// longer hand artifacts to the Browser panel. Artifacts already registered
 	// when the session is entered are the baseline and never reveal anything.
+	// While the user is watching a live page in Browser or reviewing Files,
+	// docked or popped out, a registration only badges Artifacts instead of
+	// taking the view, so an agent registering screenshots as it iterates on a
+	// UI does not steal the running app.
 	// A remote host's session can first show what the sidebar kept from an
 	// earlier read, which can predate artifacts registered since. Fresh data is
 	// authoritative at once; stale data is refetched on mount, and until that
@@ -2157,9 +2162,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		);
 		for (const file of registered) baseline.keys.add(keyOf(file));
 		if (added.length === 0 || terminated) return;
+		const inspector = useUiStore.getState().inspectorSessions[uiSessionId];
+		const busy = filesPoppedOut || (browserPoppedOut && hasBrowserContent)
+			|| Boolean(inspector?.isOpen && (inspector.view === "files" || (inspector.view === "browser" && hasBrowserContent)));
+		if (busy) {
+			setArtifactsUnseen(uiSessionId, true);
+			return;
+		}
 		const newest = added.reduce((latest, file) => ((Date.parse(file.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? file : latest));
 		handleOpenArtifact({ path: newest.path });
-	}, [artifactFiles, handleOpenArtifact, hasInspector, remoteSessionStale, terminated, uiSessionId]);
+	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, hasInspector, remoteSessionStale, setArtifactsUnseen, terminated, uiSessionId]);
 
 	// A file written moments ago, or one past the artifact list cap, is not in
 	// the cached session, and the Files inspector can only show listed

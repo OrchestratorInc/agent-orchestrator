@@ -5853,6 +5853,28 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("only badges Artifacts for a registration while the user is in Files", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "files");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "shot.png", path: "shot.png", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
+
+			act(() => useUiStore.getState().setInspectorView("sess-1", "artifacts"));
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(false);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
 	it("does not reveal artifacts already registered on entry, or unregistered files", () => {
 		const worker = workerSession("sess-1");
 		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
