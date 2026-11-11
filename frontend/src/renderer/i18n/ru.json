@@ -1901,6 +1901,8 @@
 	"settings.options.searchAria": "Поиск {{label}}",
 	"settings.options.searchPlaceholder": "Поиск параметров",
 	"settings.field.edit": "Изменить {{label}}",
+	"settings.project.coAuthorCommitsDescription": "Если включено, коммиты агентов в этом проекте указывают GitHub App Orchestrator как соавтора. Автором коммитов по-прежнему остаётесь вы.",
+	"settings.project.coAuthorCommitsToggle": "Добавлять Orchestrator соавтором коммитов",
 	"settings.project.details": "Сведения о проекте",
 	"settings.project.issues": "Задачи",
 	"settings.project.pullRequests": "Pull request",

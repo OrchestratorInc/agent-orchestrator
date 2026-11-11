@@ -1520,6 +1520,8 @@
 	"settings.options.searchAria": "Rechercher {{label}}",
 	"settings.options.searchPlaceholder": "Rechercher des options",
 	"settings.field.edit": "Modifier {{label}}",
+	"settings.project.coAuthorCommitsDescription": "When enabled, commits the agents make in this project list the Orchestrator GitHub App as a co-author. Commits are still authored as you.",
+	"settings.project.coAuthorCommitsToggle": "Add Orchestrator as a commit co-author",
 	"settings.project.details": "Détails du projet",
 	"settings.project.issues": "Issues",
 	"settings.project.pullRequests": "Pull requests",

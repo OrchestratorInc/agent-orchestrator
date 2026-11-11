@@ -80,7 +80,7 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
 		// A standalone project has no repository, so no branches or pull requests to configure.
-		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, requiredAgents: true, workersRequestReview: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
+		capabilities={{ workflow: !standalone, sessionPrefix: true, intake: intakeVisible, reviewer: true, requiredAgents: true, workersRequestReview: !standalone, coAuthorCommits: !standalone, nameLimit: 120, requiredBranch: true, runtimeDefaults: true }}
 		repository={standalone ? undefined : project.repositoryUrl}
 		details={[
 			{ label: t("settings.project.id"), value: project.id },
@@ -289,7 +289,7 @@ function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAge
 function toEditorDraft(values: CloudProjectSettingsDraft): ProjectSettingsDraft {
 	return {
 		displayName: values.displayName, defaultBranch: values.defaultBranch, autoReview: values.autoReview,
-		sessionPrefix: values.sessionPrefix, workersRequestReview: values.workersRequestReview,
+		sessionPrefix: values.sessionPrefix, workersRequestReview: values.workersRequestReview, coAuthorCommits: values.coAuthorCommits,
 		intakeEnabled: values.intake.enabled, intakeRepo: values.intake.repo, intakeAssignee: values.intake.assignee,
 		workerAgent: values.worker.agent, orchestratorAgent: values.orchestrator.agent, reviewerHarness: values.reviewer.agent,
 		workerModel: values.worker.agentConfig.model, orchestratorModel: values.orchestrator.agentConfig.model, reviewerModel: values.reviewer.agentConfig.model,
@@ -316,6 +316,7 @@ function toCloudDraft(values: ProjectSettingsDraft): CloudProjectSettingsDraft {
 	return {
 		displayName: values.displayName, defaultBranch: values.defaultBranch, sessionPrefix: values.sessionPrefix, autoReview: values.autoReview,
 		workersRequestReview: values.workersRequestReview ?? false,
+		coAuthorCommits: values.coAuthorCommits ?? true,
 		intake: { enabled: values.intakeEnabled, repo: values.intakeRepo, assignee: values.intakeAssignee },
 		worker: role("worker"), orchestrator: role("orchestrator"), reviewer: role("reviewer"),
 	};

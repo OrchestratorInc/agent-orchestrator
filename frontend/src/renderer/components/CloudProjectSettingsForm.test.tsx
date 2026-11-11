@@ -408,6 +408,14 @@ describe("Cloud project settings", () => {
 		await userEvent.click(await screen.findByRole("switch", { name: "Workers request a built-in review" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
 	});
+
+	it("turns off naming Orchestrator a commit co-author through the settings patch", async () => {
+		mount("general");
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		expect(toggle).toBeChecked();
+		await userEvent.click(toggle);
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coAuthorCommits: false } }));
+	});
 });
 
 describe("Cloud project Coder template", () => {
