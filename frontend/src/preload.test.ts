@@ -84,22 +84,22 @@ describe("preload session deep link bridge", () => {
 		const listener = vi.fn();
 		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
 
-		sessionDeepLinkBufferListener?.({}, { projectId: "proj-1", sessionId: "sess-9" });
+		sessionDeepLinkBufferListener?.({}, "ao-app://sessions/proj-1/sess-9");
 
-		expect(listener).toHaveBeenCalledWith({ projectId: "proj-1", sessionId: "sess-9" });
+		expect(listener).toHaveBeenCalledWith("ao-app://sessions/proj-1/sess-9");
 		dispose();
 	});
 
 	it("buffers a deep link that arrives before ShellLayout subscribes", () => {
 		// Mirrors the cold-start race: main flushes on renderer ready (a child
 		// effect) before ShellLayout's parent effect has subscribed.
-		sessionDeepLinkBufferListener?.({}, { projectId: "proj-1", sessionId: "sess-9" });
+		sessionDeepLinkBufferListener?.({}, "ao-app://sessions/proj-1/sess-9");
 
 		const listener = vi.fn();
 		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
 
 		expect(listener).toHaveBeenCalledTimes(1);
-		expect(listener).toHaveBeenCalledWith({ projectId: "proj-1", sessionId: "sess-9" });
+		expect(listener).toHaveBeenCalledWith("ao-app://sessions/proj-1/sess-9");
 
 		// The buffer is drained, not replayed on later resubscription.
 		const lateListener = vi.fn();
@@ -113,9 +113,9 @@ describe("preload session deep link bridge", () => {
 		const listener = vi.fn();
 		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
 
-		sessionDeepLinkBufferListener?.({}, { projectId: 7, sessionId: "sess-9" });
-		sessionDeepLinkBufferListener?.({}, "sess-9");
-		sessionDeepLinkBufferListener?.({}, { projectId: "proj-1", sessionId: "" });
+		sessionDeepLinkBufferListener?.({}, { url: "ao-app://sessions/proj-1/sess-9" });
+		sessionDeepLinkBufferListener?.({}, 42);
+		sessionDeepLinkBufferListener?.({}, "");
 
 		expect(listener).not.toHaveBeenCalled();
 		dispose();
@@ -128,12 +128,12 @@ describe("preload session deep link bridge", () => {
 		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
 		dispose();
 
-		sessionDeepLinkBufferListener?.({}, { projectId: "proj-1", sessionId: "sess-9" });
+		sessionDeepLinkBufferListener?.({}, "ao-app://sessions/proj-1/sess-9");
 		expect(listener).not.toHaveBeenCalled();
 
 		const reListener = vi.fn();
 		const reDispose = exposedBridge().app.onOpenSessionDeepLink(reListener);
-		expect(reListener).toHaveBeenCalledWith({ projectId: "proj-1", sessionId: "sess-9" });
+		expect(reListener).toHaveBeenCalledWith("ao-app://sessions/proj-1/sess-9");
 		reDispose();
 	});
 });

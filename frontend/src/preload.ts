@@ -30,7 +30,7 @@ import {
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { AgentLoginRequest, AgentLoginResponse } from "./main/agent-login-ipc";
 import type { DictationEvent } from "./shared/dictation";
-import { OPEN_SESSION_DEEP_LINK_CHANNEL, type SessionDeepLinkTarget } from "./shared/deep-links";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
@@ -182,16 +182,14 @@ ipcRenderer.on("app:openFolderPath", (_event, path: string) => {
 // A session deep link (ao-app://sessions/…) flushed by main on renderer ready
 // races the same way as the folder path above: the readiness ping comes from a
 // child effect, before ShellLayout subscribes. Same dispatcher-and-buffer.
-let bufferedSessionDeepLink: SessionDeepLinkTarget | null = null;
-let activeSessionDeepLinkListener: ((target: SessionDeepLinkTarget) => void) | null = null;
-function isSessionDeepLinkTarget(value: unknown): value is SessionDeepLinkTarget {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	const candidate = value as Record<string, unknown>;
-	return typeof candidate.projectId === "string" && candidate.projectId.length > 0
-		&& typeof candidate.sessionId === "string" && candidate.sessionId.length > 0;
+// The payload is the raw URL; the shell re-reads it as its in-app ao:// form.
+let bufferedSessionDeepLink: string | null = null;
+let activeSessionDeepLinkListener: ((rawUrl: string) => void) | null = null;
+function isSessionDeepLinkUrl(value: unknown): value is string {
+	return typeof value === "string" && value.startsWith("ao-app://");
 }
 ipcRenderer.on(OPEN_SESSION_DEEP_LINK_CHANNEL, (_event, target: unknown) => {
-	if (!isSessionDeepLinkTarget(target)) return;
+	if (!isSessionDeepLinkUrl(target)) return;
 	if (activeSessionDeepLinkListener) {
 		activeSessionDeepLinkListener(target);
 	} else {
@@ -294,9 +292,10 @@ const api = {
 				if (activeOpenFolderPathListener === listener) activeOpenFolderPathListener = null;
 			};
 		},
-		// Fired by the main process for ao-app://sessions/{projectId}/{sessionId}
-		// deep links from external tools; the shell validates and navigates.
-		onOpenSessionDeepLink: (listener: (target: SessionDeepLinkTarget) => void) => {
+		// Fired by the main process for ao-app://sessions/… deep links from
+		// external tools; the payload is the raw URL and the shell resolves it
+		// with the same session-links path as in-app ao:// links.
+		onOpenSessionDeepLink: (listener: (rawUrl: string) => void) => {
 			activeSessionDeepLinkListener = listener;
 			if (bufferedSessionDeepLink) {
 				const target = bufferedSessionDeepLink;

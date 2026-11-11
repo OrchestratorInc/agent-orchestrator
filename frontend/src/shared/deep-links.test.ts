@@ -1,64 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { OPEN_SESSION_DEEP_LINK_CHANNEL, parseSessionDeepLink } from "./deep-links";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL, isSessionDeepLink } from "./deep-links";
 
-describe("parseSessionDeepLink", () => {
-	it("parses a valid session link", () => {
-		expect(parseSessionDeepLink("ao-app://sessions/proj-1/sess-9")).toEqual({
-			projectId: "proj-1",
-			sessionId: "sess-9",
-		});
+describe("isSessionDeepLink", () => {
+	it("accepts a valid session link", () => {
+		expect(isSessionDeepLink("ao-app://sessions/proj-1/sess-9")).toBe(true);
 	});
 
-	it("percent-decodes both segments", () => {
-		expect(parseSessionDeepLink("ao-app://sessions/my%2Fproject/sess%20ion")).toEqual({
-			projectId: "my/project",
-			sessionId: "sess ion",
-		});
+	it("accepts an artifact route (the shell resolves the file)", () => {
+		expect(isSessionDeepLink("ao-app://sessions/proj-1/sess-9/artifacts/report%20one.md")).toBe(true);
 	});
 
 	it("accepts a trailing slash", () => {
-		expect(parseSessionDeepLink("ao-app://sessions/proj-1/sess-9/")).toEqual({
-			projectId: "proj-1",
-			sessionId: "sess-9",
-		});
+		expect(isSessionDeepLink("ao-app://sessions/proj-1/sess-9/")).toBe(true);
 	});
 
 	it("rejects billing links (they keep their own handling)", () => {
-		expect(parseSessionDeepLink("ao-app://billing")).toBeNull();
+		expect(isSessionDeepLink("ao-app://billing")).toBe(false);
 	});
 
 	it("rejects callback links (they keep their own handling)", () => {
-		expect(parseSessionDeepLink("ao-app://callback?code=abc&state=def")).toBeNull();
+		expect(isSessionDeepLink("ao-app://callback?code=abc&state=def")).toBe(false);
 	});
 
 	it("rejects unknown hosts", () => {
-		expect(parseSessionDeepLink("ao-app://settings/proj-1/sess-9")).toBeNull();
+		expect(isSessionDeepLink("ao-app://settings/proj-1/sess-9")).toBe(false);
 	});
 
 	it("rejects non ao-app protocols", () => {
-		expect(parseSessionDeepLink("https://sessions/proj-1/sess-9")).toBeNull();
+		expect(isSessionDeepLink("https://sessions/proj-1/sess-9")).toBe(false);
 	});
 
 	it("rejects malformed URLs", () => {
-		expect(parseSessionDeepLink("not a url")).toBeNull();
-		expect(parseSessionDeepLink("")).toBeNull();
+		expect(isSessionDeepLink("not a url")).toBe(false);
+		expect(isSessionDeepLink("")).toBe(false);
 	});
 
-	it("rejects links without exactly two path segments", () => {
-		expect(parseSessionDeepLink("ao-app://sessions")).toBeNull();
-		expect(parseSessionDeepLink("ao-app://sessions/")).toBeNull();
-		expect(parseSessionDeepLink("ao-app://sessions/proj-1")).toBeNull();
-		expect(parseSessionDeepLink("ao-app://sessions//sess-9")).toBeNull();
-		expect(parseSessionDeepLink("ao-app://sessions/proj-1/sess-9/extra")).toBeNull();
-	});
-
-	it("rejects segments that decode to empty", () => {
-		expect(parseSessionDeepLink("ao-app://sessions/proj-1/%20")).toBeNull();
-		expect(parseSessionDeepLink("ao-app://sessions/%20/sess-9")).toBeNull();
-	});
-
-	it("rejects invalid percent encoding", () => {
-		expect(parseSessionDeepLink("ao-app://sessions/%ZZ/sess-9")).toBeNull();
+	it("rejects links without a target path", () => {
+		expect(isSessionDeepLink("ao-app://sessions")).toBe(false);
+		expect(isSessionDeepLink("ao-app://sessions/")).toBe(false);
+		expect(isSessionDeepLink("ao-app://sessions/proj-1")).toBe(false);
+		expect(isSessionDeepLink("ao-app://sessions//sess-9")).toBe(false);
 	});
 
 	it("exposes the dedicated IPC channel", () => {

@@ -19,6 +19,7 @@ const shellMocks = vi.hoisted(() => {
 		nextSessionListener: undefined as (() => void) | undefined,
 		appShortcutListeners: new Set<(event: AppShortcutEvent) => void>(),
 		openFolderPathListener: undefined as ((path: string) => void) | undefined,
+		sessionDeepLinkListener: undefined as ((rawUrl: string) => void) | undefined,
 		routeParams: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		routeSearch: {} as Record<string, unknown>,
 		matchRouteTarget: null as string | null,
@@ -107,6 +108,10 @@ const shellMocks = vi.hoisted(() => {
 			state.openFolderPathListener = listener;
 			return vi.fn();
 		}),
+		onOpenSessionDeepLink: vi.fn((listener: (rawUrl: string) => void) => {
+			state.sessionDeepLinkListener = listener;
+			return vi.fn();
+		}),
 		getKeybindings: vi.fn(async () => ({})),
 		setKeybindings: vi.fn(async (overrides: KeybindingOverrides) => overrides),
 		setKeybindingRecording: vi.fn(async () => undefined),
@@ -168,7 +173,7 @@ vi.mock("../lib/bridge", () => ({
 			onShortcut: shellMocks.onShortcut,
 			getPathForFile: shellMocks.getPathForFile,
 			onOpenFolderPath: shellMocks.onOpenFolderPath,
-			onOpenSessionDeepLink: () => () => {},
+			onOpenSessionDeepLink: shellMocks.onOpenSessionDeepLink,
 		},
 		keybindings: {
 			get: shellMocks.getKeybindings,
@@ -457,6 +462,8 @@ beforeEach(() => {
 	shellMocks.state.previousSessionListener = undefined;
 	shellMocks.state.nextSessionListener = undefined;
 	shellMocks.state.openFolderPathListener = undefined;
+	shellMocks.state.sessionDeepLinkListener = undefined;
+	shellMocks.onOpenSessionDeepLink.mockClear();
 	shellMocks.state.routeParams = {};
 	shellMocks.state.routeSearch = {};
 	shellMocks.state.matchRouteTarget = null;
@@ -1595,5 +1602,91 @@ describe("shell taskbar-icon folder drop subscription", () => {
 
 		expect(useUiStore.getState().folderDropRequest).toEqual({ nonce: 1, path: "/dropped-on-icon/my-project" });
 		expect(screen.getByTestId("create-project-flow")).toHaveAttribute("data-path", "/dropped-on-icon/my-project");
+	});
+});
+
+/** Delivers an ao-app:// session deep link the way the main process does. */
+function emitSessionDeepLink(rawUrl: string) {
+	const listener = shellMocks.state.sessionDeepLinkListener;
+	if (!listener) throw new Error("session deep link listener was not registered");
+	act(() => listener(rawUrl));
+}
+
+describe("shell session deep links", () => {
+	it("navigates to a live session named by an ao-app link", async () => {
+		await renderShell();
+		emitSessionDeepLink("ao-app://sessions/proj-1/sess-1");
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-1" },
+		});
+	});
+
+	it("holds a link that arrives before the first workspace page succeeds, then flushes it", async () => {
+		// Daemon-not-ready startup: the query sits in error with no data, so the
+		// workspace lists are empty and a naive handler would toast not-found
+		// for a session that exists.
+		shellMocks.state.workspaces = [];
+		shellMocks.state.workspaceQuery = { data: [], dataUpdatedAt: 0, isError: true, isSuccess: false };
+		const view = await renderShell();
+
+		emitSessionDeepLink("ao-app://sessions/proj-1/sess-1");
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast).toBeNull();
+
+		// The daemon becomes ready and the first page lands.
+		shellMocks.state.workspaces = workspaces;
+		shellMocks.state.workspaceQuery = { data: workspaces, dataUpdatedAt: 0, isError: false, isSuccess: true };
+		await act(async () => {
+			view.rerender(
+				<Suspense fallback={null}>
+					<ShellRoute />
+				</Suspense>,
+			);
+		});
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-1" },
+		});
+	});
+
+	it("refuses a terminated session with the same toast as in-app ao:// links", async () => {
+		await renderShell();
+		emitSessionDeepLink("ao-app://sessions/proj-1/sess-2");
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast?.title).toContain("sess-2");
+		expect(useUiStore.getState().globalToast?.title).toContain("terminated");
+	});
+
+	it("shows the quiet not-found toast for a stale link", async () => {
+		await renderShell();
+		emitSessionDeepLink("ao-app://sessions/proj-1/sess-gone");
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast?.title).toContain("Session not found");
+	});
+
+	it("falls back to a remote workspace when the session is not local", async () => {
+		shellMocks.state.remoteWorkspaces = [
+			{ id: "proj-remote", hostId: "box-a", sessions: [{ id: "sess-remote", status: "working" }] },
+		] as unknown as WorkspaceSummary[];
+		await renderShell();
+		emitSessionDeepLink("ao-app://sessions/proj-remote/sess-remote");
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "box-a", projectId: "proj-remote", sessionId: "sess-remote" },
+		});
+	});
+
+	it("opens an artifact link in the destination session", async () => {
+		await renderShell();
+		const openSpy = vi.spyOn(useUiStore.getState(), "requestWorkspaceFileOpen").mockImplementation(() => {});
+		emitSessionDeepLink("ao-app://sessions/proj-1/sess-1/artifacts/report.md");
+		expect(openSpy).toHaveBeenCalledWith("sess-1", "report.md", undefined, "artifact");
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-1" },
+		});
+		openSpy.mockRestore();
 	});
 });

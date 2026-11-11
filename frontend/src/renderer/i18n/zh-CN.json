@@ -840,6 +840,7 @@
 	"daemon.title.notReady": "Orchestrator 守护进程尚未就绪",
 	"daemon.title.unreachable": "无法连接 Orchestrator 守护进程",
 	"deepLink.sessionNotFound": "未找到会话",
+	"deepLink.sessionTerminated": "会话 {{sessionId}} 已终止",
 	"editor.open": "打开",
 	"editor.opening": "正在打开…",
 	"editor.preparingWorkspace": "正在准备工作区…",

@@ -72,7 +72,7 @@ import {
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
-import type { SessionDeepLinkTarget } from "../../shared/deep-links";
+import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/session-links";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
@@ -1412,42 +1412,62 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[queryClient],
 	);
 
-	// ao-app://sessions/{projectId}/{sessionId} deep links from external tools.
-	// Validate against the loaded workspace lists so a stale link focuses the
-	// app with a quiet toast instead of navigating to a wrong session. A
-	// cold-start link is flushed as soon as the shell mounts, before the
-	// workspace query has data — hold it until the first page lands.
-	const pendingSessionDeepLinkRef = useRef<SessionDeepLinkTarget | null>(null);
+	// ao-app://sessions/… deep links from external tools. The raw URL is
+	// re-read as its in-app ao:// form and resolved through the same
+	// session-links path as ao:// links, so both schemes behave alike:
+	// artifact routes open the file in the destination session, a terminated
+	// session refuses with the same toast, and a stale link focuses the app
+	// with a quiet toast instead of navigating to a wrong session. A
+	// cold-start link is flushed as soon as the shell mounts; a link that
+	// arrives before the first workspace page succeeds (startup loader,
+	// daemon not ready — the query then sits in error with no data) is held
+	// until that first success.
+	const pendingSessionDeepLinkRef = useRef<string | null>(null);
 	const handleSessionDeepLink = useCallback(
-		(target: SessionDeepLinkTarget) => {
-			const findIn = (workspaces: WorkspaceSummary[]) =>
-				workspaces.find((workspace) => workspace.id === target.projectId
-					&& workspace.sessions.some((session) => session.id === target.sessionId));
-			const workspace = findIn(workspacesRef.current) ?? findIn(remoteWorkspacesRef.current);
-			if (!workspace) {
+		(rawUrl: string) => {
+			const link = `ao://${rawUrl.slice("ao-app://".length)}`;
+			const artifact = parseArtifactLink(link);
+			const target = parseSessionLink(link) ?? artifact;
+			const workspaces = workspacesRef.current;
+			const remoteWorkspaces = remoteWorkspacesRef.current;
+			const resolved = target
+				? resolveSessionLink(link, workspaces) ?? resolveSessionLink(link, remoteWorkspaces)
+				: undefined;
+			const workspace = resolved
+				? workspaces.find((entry) => entry.id === resolved.projectId)
+					?? remoteWorkspaces.find((entry) => entry.id === resolved.projectId)
+				: undefined;
+			if (!resolved || !workspace) {
 				useUiStore.getState().showGlobalToast(t("deepLink.sessionNotFound"));
 				return;
 			}
-			void navigate(sessionNavigateTarget(target.projectId, target.sessionId, workspace.hostId));
+			// Same refusal as in-app ao:// links; a terminated session's
+			// artifact files are still served.
+			if (resolved.isTerminated && !artifact) {
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionTerminated", { sessionId: resolved.sessionId }));
+				return;
+			}
+			if (artifact) useUiStore.getState().requestWorkspaceFileOpen(resolved.sessionId, artifact.path, workspace.hostId, "artifact");
+			void navigate(sessionNavigateTarget(resolved.projectId, resolved.sessionId, workspace.hostId));
 		},
 		[navigate, t],
 	);
 	useEffect(() => {
-		return aoBridge.app.onOpenSessionDeepLink((target) => {
-			if (workspaceQuery.isPending) {
-				pendingSessionDeepLinkRef.current = target;
+		return aoBridge.app.onOpenSessionDeepLink((rawUrl) => {
+			if (!workspaceQuery.isSuccess) {
+				pendingSessionDeepLinkRef.current = rawUrl;
 				return;
 			}
-			handleSessionDeepLink(target);
+			handleSessionDeepLink(rawUrl);
 		});
-	}, [handleSessionDeepLink, workspaceQuery.isPending]);
+	}, [handleSessionDeepLink, workspaceQuery.isSuccess]);
 	useEffect(() => {
-		if (workspaceQuery.isPending) return;
+		if (!workspaceQuery.isSuccess) return;
 		const pending = pendingSessionDeepLinkRef.current;
 		if (!pending) return;
 		pendingSessionDeepLinkRef.current = null;
 		handleSessionDeepLink(pending);
-	}, [handleSessionDeepLink, workspaceQuery.isPending]);
+	}, [handleSessionDeepLink, workspaceQuery.isSuccess]);
 
 	useEffect(() => {
 		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));
