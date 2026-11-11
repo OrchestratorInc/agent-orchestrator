@@ -725,6 +725,19 @@ describe("registerRemotesIpc", () => {
 			}
 		});
 
+		it("keeps an issued token when the host does not answer the probe after pairing", async () => {
+			const file = await tempFile();
+			const ipc = fakeIpc();
+			registerRemotes(ipc.ipcMain, {
+				file, registry: new RemoteRegistry(proxy()), requireAccount: signedIn, identity: async (entry) => entry.url === "https://new.example" ? "h_new" : "h_workbox",
+				probe: async () => "offline", pair: async () => ({ kind: "paired", token, credential: "pairing-code" }),
+			});
+			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("offline");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toMatchObject({ password: token });
+			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code5678" })).resolves.toBe("offline");
+			expect((await saved(file)).find((entry) => entry.hostId === "h_workbox")).toMatchObject({ password: token });
+		});
+
 		it("swaps a newly typed code when a saved host is edited", async () => {
 			const file = await tempFile();
 			const pair = vi.fn<Pair>(async () => ({ kind: "paired", token, credential: "pairing-code" }));

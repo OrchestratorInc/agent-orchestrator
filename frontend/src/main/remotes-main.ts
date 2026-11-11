@@ -172,7 +172,8 @@ export function registerRemotesIpc(
 		if (paired.result === "unauthorized") return "unauthorized" as RemoteHealth;
 		const entry = paired.entry;
 		const health = await checkedProbe(entry, account);
-		if (health === "online") {
+		// An issued token is saved even when the probe fails: the code it replaced is spent.
+		if (health === "online" || paired.result === "paired") {
 			const previous = (await owned()).find((saved) => saved.hostId === hostId);
 			await addRemote(file, entry);
 			if (previous && previous.url !== entry.url) await disconnect(previous.url);
@@ -202,6 +203,11 @@ export function registerRemotesIpc(
 			if (paired.result === "unauthorized") return "unauthorized";
 			editable.password = paired.entry.password;
 			editable.fallbackPassword = paired.entry.fallbackPassword;
+			if (paired.result === "paired") {
+				const saved = await updateRemote(file, url, editable);
+				await disconnect(url);
+				return checkedProbe(saved, account);
+			}
 		}
 		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
 	}));
