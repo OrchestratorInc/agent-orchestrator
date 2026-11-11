@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -104,6 +105,10 @@ type APIDeps struct {
 	// DeviceRoster and DeviceLive back the desktop-only mobile device roster.
 	DeviceRoster controllers.DeviceRoster
 	DeviceLive   controllers.LiveSet
+	// DeviceAccess adds device tokens and the account to the device list. Nil skips them.
+	DeviceAccess controllers.DeviceAccess
+	// AccessDevices links push registrations to device tokens.
+	AccessDevices *mobilebridge.AccessDevices
 }
 
 // normalizeAPIDeps closes the Presence/DeviceLive duplication trap structurally.
@@ -216,7 +221,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		reviews:       &controllers.ReviewsController{Svc: deps.Reviews},
 		notifications: &controllers.NotificationsController{Svc: deps.Notifications, Stream: deps.NotificationStream},
 		reports:       &controllers.ReportsController{Svc: deps.Reports},
-		push:          &controllers.PushController{Registry: deps.Push},
+		push:          &controllers.PushController{Registry: deps.Push, Devices: deps.AccessDevices},
 		imports:       &controllers.ImportController{Svc: deps.Import},
 		sessionImport: &controllers.SessionImportController{Svc: deps.SessionImport},
 		fs:            &controllers.FSController{Svc: deps.Directories},
@@ -254,6 +259,13 @@ func setupRoute(req *http.Request) bool {
 	}
 	return false
 }
+
+// setupRequestBudget is the base budget of a Setup route before its Setup
+// steps extend it. A cold spawn fetches the default branch, creates a worktree
+// and starts the agent inside one request, which can outlast the general
+// REST timeout on a slow machine or a large repository.
+// A var only so tests can shorten it.
+var setupRequestBudget = 120 * time.Second
 
 // serveWithSetupBudget serves a Setup route under budget, like
 // middleware.Timeout, except that the operation may extend the deadline
@@ -307,7 +319,7 @@ func (a *API) Register(root chi.Router) {
 					// than one REST request: the operation extends this budget by its
 					// Setup steps' limits once it knows its project.
 					if setupRoute(req) {
-						budget := timeout
+						budget := max(timeout, setupRequestBudget)
 						// Resuming an agent reads its whole native history, which takes
 						// over a minute for a large imported Codex thread.
 						if attachmentUploadRoute(req) ||

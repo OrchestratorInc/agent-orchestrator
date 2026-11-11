@@ -622,7 +622,7 @@ describe("shell workspace startup", () => {
 			params: { projectId: "proj-1", sessionId: "orch-existing" },
 		}));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
-			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex" },
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex", async: true },
 		});
 		expect(apiClient.POST).toHaveBeenCalledTimes(3);
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
@@ -775,6 +775,9 @@ describe("shell workspace startup", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-new", sessionId: "orch-new" },
 		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-new", kind: "orchestrator", harness: "codex", async: true },
+		});
 		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
 		expect(publish([{ ...workspaces[0], id: "proj-new", name: "New", sessions: [] }])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false);

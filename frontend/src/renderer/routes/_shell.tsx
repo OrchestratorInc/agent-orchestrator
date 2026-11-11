@@ -1,5 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
+import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
@@ -104,6 +105,8 @@ const loadOrchestratorStartingChat = () => import("../components/chat/Orchestrat
 const OrchestratorStartingChat = lazy(() =>
 	loadOrchestratorStartingChat().then((module) => ({ default: module.OrchestratorStartingChat })),
 );
+
+const EMPTY_PAUSE_PROJECTS: never[] = [];
 function preloadOrchestratorStartingChat(): void {
 	void loadOrchestratorStartingChat().catch(() => undefined);
 }
@@ -350,6 +353,7 @@ function ShellLayout() {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
 	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
@@ -722,6 +726,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					projectId: workspace.id,
 					kind: "orchestrator",
 					harness: input.orchestratorAgent as components["schemas"]["SpawnSessionRequest"]["harness"],
+					// The daemon already starts orchestrators in the background; say so
+					// explicitly, as the CLI does, so the request never holds a Setup.
+					async: true,
 				},
 			});
 			if (spawnError || !spawnData?.session?.id) {

@@ -45,6 +45,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
   [commands/session.md](commands/session.md) for identity, encoding, and safety
   rules before constructing one.
 - When the user asks to save a repeatable task as a Cue, use `ao cue list --json` to check existing definitions, then `ao cue create`. An agent Cue stores a reusable instruction; a command Cue stores an exact shell command. This agent-facing command can create and read Cues, but cannot edit or delete them. Direct the user to project settings for changes to existing Cues.
+- When the user asks to bring a repository's Conductor settings (scripts, run actions, environment variables, prompt) into Orchestrator, read [commands/conductor.md](commands/conductor.md) first.
 - `--agent` is an alias for `--harness` on `ao spawn`.
 - Every command accepts `-h / --help` for the full flag list.
 - For frontend launch, preview selection, or artifact handoff, read
