@@ -1239,7 +1239,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.ExpectedControllerOwner.ControllerGeneration = controller.Generation()
 	}
 	s.mu.Lock()
-	controller.started = s.now()
+	if !liveReconnect {
+		controller.started = s.now()
+	}
 	s.ownerControllers[owner] = controller
 	if owner.Kind == domain.ConversationOwnerSession {
 		s.controllers[cfg.SessionID] = controller
@@ -1378,7 +1380,18 @@ func (s *Service) Send(
 	if err := validateFileReferenceContent(msg, string(id)); err != nil {
 		return domain.ConversationTurn{}, err
 	}
-	if s.switchBeforeSend(ctx, record) || s.stopForOtherWriter(ctx, record) {
+	stopped := s.switchBeforeSend(ctx, record)
+	if !stopped {
+		held, holdErr := s.stopForOtherWriter(ctx, record)
+		if holdErr != nil {
+			return domain.ConversationTurn{}, holdErr
+		}
+		if held {
+			stopped = true
+			defer s.startBackgroundWake(id)
+		}
+	}
+	if stopped {
 		// The provider stopped. The hibernated path below queues this message
 		// and wakes the session.
 		if record, err = s.requireChatSession(ctx, id); err != nil {

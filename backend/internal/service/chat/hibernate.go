@@ -717,23 +717,35 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 
 var otherWriterPoll = 2 * time.Second
 
-func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionRecord) bool {
+// ErrChatOpenElsewhere reports a send refused because another process writes
+// the chat and its provider could not be stopped yet.
+var ErrChatOpenElsewhere = errors.New("this chat is open in another Claude Code process; close it there, then send again")
+
+func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionRecord) (bool, error) {
 	if s.otherWriter == nil || rec.HibernatedAt != nil {
-		return false
+		return false, nil
 	}
 	controller, err := s.Controller(rec.ID)
-	if err != nil || controller.State() != ports.ChatControllerReady || !s.otherWriter(ctx, rec, controller.started) {
-		return false
+	if ready := err == nil && controller.State() == ports.ChatControllerReady; !ready {
+		return false, nil
+	}
+	since := controller.started
+	if since.IsZero() {
+		since = rec.CreatedAt
+	}
+	if !s.otherWriter(ctx, rec, since) {
+		return false, nil
 	}
 	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{otherWriter: true, ignoreViews: true})
-	if err != nil {
-		s.log.Warn("could not stop a chat another process writes", "session", rec.ID, "err", err)
+	if !stopped {
+		if err != nil {
+			s.log.Warn("could not stop a chat another process writes", "session", rec.ID, "err", err)
+		}
+		return false, ErrChatOpenElsewhere
 	}
-	if stopped {
-		s.setHeldElsewhere(rec.ID, true)
-		s.log.Info("chat session stopped because another process writes it", "session", rec.ID)
-	}
-	return stopped
+	s.setHeldElsewhere(rec.ID, true)
+	s.log.Info("chat session stopped because another process writes it", "session", rec.ID)
+	return true, nil
 }
 
 func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) bool {

@@ -152,6 +152,7 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_CONTROLLER_NOT_READY",
 	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
+	"CHAT_OPEN_ELSEWHERE",
 	// A shared session refused the send because someone else holds its
 	// composer; nothing was accepted, so the text goes back to the draft.
 	"COMPOSER_LOCKED",
