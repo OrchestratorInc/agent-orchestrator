@@ -30,7 +30,7 @@ vi.mock("expo-file-system", () => {
 	};
 });
 
-const { useEncryptedFile } = await import("./useEncryptedFile");
+const { staysInCache, useEncryptedFile } = await import("./useEncryptedFile");
 
 const config = { host: "h", httpPort: "1", muxPort: "", password: "aod_x", hostKey: "k".repeat(43) };
 let result: { uri?: string; readAccess?: string; failed: boolean } = { failed: false };
@@ -115,5 +115,16 @@ describe("useEncryptedFile", () => {
 		expect(result.failed).toBe(true);
 		expect(cancel).toHaveBeenCalled();
 		expect(getReader).not.toHaveBeenCalled();
+	});
+});
+
+describe("staysInCache", () => {
+	it("keeps the viewer on the cached file and off the machine", () => {
+		const folder = "file:///cache/encrypted-files";
+		expect(staysInCache(`${folder}/a.pdf`, folder)).toBe(true);
+		expect(staysInCache(`${folder}/a.pdf#page=2`, folder)).toBe(true);
+		expect(staysInCache("http://192.168.1.5:3011/api/v1/sessions/s/artifacts/x?token=1", folder)).toBe(false);
+		expect(staysInCache("https://example.com/", folder)).toBe(false);
+		expect(staysInCache("file:///etc/hosts", folder)).toBe(false);
 	});
 });

@@ -26,7 +26,7 @@ import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { HostImage, useHostImage } from "../../lib/hostImage";
-import { useEncryptedFile } from "../../lib/useEncryptedFile";
+import { staysInCache, useEncryptedFile } from "../../lib/useEncryptedFile";
 import { imageSourceForPlatform } from "../../lib/imageSource";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -484,7 +484,13 @@ function ArtifactWeb({ config, url, version, page }: {
 				// cookie, and it cannot reach the daemon.
 				source={html ? { html } : file.uri ? { uri: file.uri } : { uri: url, headers: authHeaders(config) }}
 				// A file read through the encrypted channel loads from the app's cache.
-				{...(file.uri ? { originWhitelist: ["file://*"], allowFileAccess: true, allowingReadAccessToURL: file.readAccess } : {})}
+				// Every URL passes the whitelist so none is handed to the system browser; staysInCache decides.
+				{...(file.uri && file.readAccess ? {
+					originWhitelist: ["*"],
+					allowFileAccess: true,
+					allowingReadAccessToURL: file.readAccess,
+					onShouldStartLoadWithRequest: (request: { url: string }) => staysInCache(request.url, file.readAccess ?? ""),
+				} : {})}
 				style={styles.web}
 				// Under the clear glass bar, the page scrolls on beneath it.
 				contentInsetAdjustmentBehavior="automatic"

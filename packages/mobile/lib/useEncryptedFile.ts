@@ -27,6 +27,15 @@ function writeFile(bytes: Uint8Array, path: string, contentType: string): File {
 	return file;
 }
 
+/**
+ * Whether a WebView showing a cached file may load `url`: only from the file's
+ * folder. A link to the machine would leave the encrypted channel, and one
+ * handed to the system browser would carry its path in the clear.
+ */
+export function staysInCache(url: string, readAccess: string): boolean {
+	return url.startsWith(readAccess) || url === "about:blank";
+}
+
 /** The body, read until it passes `max` bytes; a body without a length can be any size. */
 async function readUpTo(res: HostResponse, max: number): Promise<Uint8Array> {
 	const reader = res.body?.getReader();
