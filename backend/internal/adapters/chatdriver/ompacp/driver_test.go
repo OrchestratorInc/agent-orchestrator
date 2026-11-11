@@ -61,6 +61,17 @@ func TestSessionOptionsUseAdvertisedModelOption(t *testing.T) {
 	}
 }
 
+func TestSessionOptionsPassOMPThinkingAfterModel(t *testing.T) {
+	got := sessionOptions(ports.ChatTurnSettings{Model: "zai/glm-5.2", Effort: "max"})
+	want := []acpdriver.SessionOption{
+		{ID: "model", Value: "zai/glm-5.2"},
+		{ID: "thinking", Value: "max"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("session options = %#v, want %#v", got, want)
+	}
+}
+
 func TestValidateTurnSettingsRejectsApprovalModeChange(t *testing.T) {
 	tests := []struct {
 		name      string

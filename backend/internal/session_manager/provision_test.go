@@ -553,6 +553,34 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 	}
 }
 
+func TestResolveOMPChatInheritsProjectEffort(t *testing.T) {
+	m := &Manager{}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOMP,
+		RequestedMode: domain.SessionModeChat,
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "max"}}})
+	if err != nil {
+		t.Fatalf("resolveAgentConfig: %v", err)
+	}
+	if resolved.Effort != "max" {
+		t.Fatalf("effort = %q, want max", resolved.Effort)
+	}
+}
+
+func TestResolveOMPTUIStillClearsInheritedEffort(t *testing.T) {
+	m := &Manager{}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOMP,
+		RequestedMode: domain.SessionModeTUI,
+	}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "max"}}})
+	if err != nil {
+		t.Fatalf("resolveAgentConfig: %v", err)
+	}
+	if resolved.Effort != "" {
+		t.Fatalf("effort = %q, want provider default", resolved.Effort)
+	}
+}
+
 func TestResolveClaudeModelWithoutEffortStillRequiresCatalog(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{err: errors.New("gateway does not list models")}}
 
