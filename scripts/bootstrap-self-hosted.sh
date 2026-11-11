@@ -60,8 +60,8 @@ else
 	tools="$HOME/.local/ao-build-tools"
 	mkdir -p "$tools"
 	if [[ ! -x "$tools/go/bin/go" ]]; then
-		curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o "$stage/go.tar.gz"
-		printf '%s  %s\n' 63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445 "$stage/go.tar.gz" | sha256sum -c -
+		curl -fsSL https://go.dev/dl/go1.27.4.linux-amd64.tar.gz -o "$stage/go.tar.gz"
+		printf '%s  %s\n' 7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840 "$stage/go.tar.gz" | sha256sum -c -
 		tar -xzf "$stage/go.tar.gz" -C "$tools"
 	fi
 	if [[ ! -x "$tools/node-v22.23.2-linux-x64/bin/node" ]]; then
