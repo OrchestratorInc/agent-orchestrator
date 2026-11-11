@@ -330,7 +330,6 @@ function abortError(): Error {
 	return Object.assign(new Error("Request cancelled"), { name: "AbortError" });
 }
 
-/** Closes every pooled channel, as after a machine is forgotten. */
 export function closeIdleChannels(): void {
 	for (const list of idle.values()) {
 		for (const entry of list.splice(0)) {

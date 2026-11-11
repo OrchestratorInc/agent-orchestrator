@@ -23,6 +23,9 @@ export type ServerConfig = {
 	 * from the single-server config until its first connect.
 	 */
 	hostId?: string;
+	/** The machine's Ed25519 public key from the pairing code. When set, every
+	 * request to the machine is encrypted to it (lib/e2ee). */
+	hostKey?: string;
 	/**
 	 * Which kind of endpoint won the race. Drives how often we poll: the
 	 * conversation event stream cannot deliver over a Cloudflare quick tunnel

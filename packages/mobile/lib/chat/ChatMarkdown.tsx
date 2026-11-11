@@ -10,6 +10,7 @@ import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
+import { useHostImage } from "../hostImage";
 import { imageSourceForPlatform } from "../imageSource";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { FirstLineMarker } from "./FirstLineMarker";
@@ -235,8 +236,9 @@ function MarkdownImage({ alt, url, selectionColor, showCaption = true, resolve }
 	const styles = useThemedStyles(makeStyles);
 	const [failed, setFailed] = useState(false);
 	const source = resolve ? resolve(url) : { uri: url };
+	const shown = useHostImage(source);
 	if (failed || !source) return <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
-	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={source.headers ? imageSourceForPlatform(source) : source} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt && showCaption ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
+	return <View style={styles.imageCard}>{shown ? <Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={"headers" in shown ? imageSourceForPlatform(shown) : shown} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} /> : null}{alt && showCaption ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
 }
 
 // React Native has no grid layout, so a column's width is estimated from its

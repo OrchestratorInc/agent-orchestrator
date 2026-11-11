@@ -42,7 +42,10 @@ function SessionPreviewContent() {
 	// An explicit choice wins over the initial disabled-sharing fallback.
 	const [active, setActive] = useState<"browser" | "app" | null>(null);
 	const [loaded, setLoaded] = useState<{ config: NonNullable<typeof config>; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);
-	const preview = loaded?.id === sessionID ? previewForConfig(loaded, config, routeHostId) : null;
+	const found = loaded?.id === sessionID ? previewForConfig(loaded, config, routeHostId) : null;
+	// The app view loads the machine's page natively with the token, so a machine
+	// whose traffic is encrypted offers only the live browser view.
+	const preview = found?.authenticated && config?.hostKey ? null : found;
 	const currentConfig = useRef(config);
 	currentConfig.current = config;
 	const currentRoute = useRef(`${routeHostId ?? ""}|${sessionID}`);

@@ -1,7 +1,7 @@
 import { sha1 } from "@noble/hashes/legacy.js";
-import { getRandomBytes } from "expo-crypto";
 import { E2EEError } from "./handshake";
 import { openWire, readHead, requestHead, type SecureTarget, type Wire } from "./http";
+import { loadRandomBytes } from "./random";
 
 const ACCEPT_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_MESSAGE = 64 * 1024 * 1024;
@@ -38,12 +38,14 @@ export class SecureWebSocket {
 	onerror: ((event: object) => void) | null = null;
 	onclose: ((event: { code: number; reason: string }) => void) | null = null;
 	private wire: Wire | null = null;
+	private randomBytes: (count: number) => Uint8Array = () => {
+		throw new Error("WebSocket is not open");
+	};
 
 	constructor(
 		target: SecureTarget,
 		path: string,
 		headers: Record<string, string>,
-		private readonly randomBytes: (count: number) => Uint8Array = getRandomBytes,
 		connect: (target: SecureTarget) => Promise<Wire> = openWire,
 	) {
 		void this.run(target, path, headers, connect);
@@ -75,6 +77,7 @@ export class SecureWebSocket {
 
 	private async run(target: SecureTarget, path: string, headers: Record<string, string>, connect: (target: SecureTarget) => Promise<Wire>) {
 		try {
+			this.randomBytes = await loadRandomBytes();
 			const wire = await connect(target);
 			if (this.readyState !== SecureWebSocket.CONNECTING) return wire.close();
 			this.wire = wire;

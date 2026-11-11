@@ -1,4 +1,5 @@
 import { authHeaders, muxUrl, type ServerConfig } from "./config";
+import { hostSocket } from "./e2ee/host";
 import { space } from "./tokens";
 
 // Mirrors AO's mux-protocol.ts (the bits we use).
@@ -136,10 +137,7 @@ export class MuxClient {
 			// upgrade is rejected even though the REST API (fetch sends no Origin) works.
 			// Pin a loopback Origin so the upgrade passes. RN honors this third `options`
 			// arg; web browsers ignore it (and set Origin to the page), which is fine.
-			const WS = WebSocket as unknown as {
-				new (url: string, protocols?: string | string[], options?: { headers?: Record<string, string> }): WebSocket;
-			};
-			ws = new WS(muxUrl(this.cfg), undefined, { headers: { Origin: "http://localhost", ...authHeaders(this.cfg) } });
+			ws = hostSocket(this.cfg, muxUrl(this.cfg), { Origin: "http://localhost", ...authHeaders(this.cfg) });
 		} catch (e) {
 			this.handlers.onStatus?.("error", String(e));
 			this.scheduleReconnect();

@@ -154,7 +154,7 @@ export async function flushMachineUnpairs(options: { ignoreBackoff?: boolean } =
 				await removeJobs([job.key]);
 				return;
 			}
-			await unpairFromDaemon(configForEndpoint(outcome.endpoint, job.host.token, job.host.id), job.installId);
+			await unpairFromDaemon(configForEndpoint(outcome.endpoint, job.host.token, job.host.id, job.host.hostKey), job.installId);
 			await removeJobs([job.key]);
 		} catch (error) {
 			// The verified machine rejected this credential: it was revoked or

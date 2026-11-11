@@ -1,4 +1,5 @@
 import type { ServerConfig } from "./config";
+import { hostFetch } from "./e2ee/host";
 
 export const DEVICE_TOKEN_PREFIX = "aod_";
 
@@ -16,10 +17,6 @@ export type PairDeviceResult =
 
 export const PAIR_DEVICE_TIMEOUT_MS = 8_000;
 
-function base(config: ServerConfig): string {
-	return `${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}`;
-}
-
 function headers(config: ServerConfig): Record<string, string> {
 	return {
 		Authorization: `Bearer ${config.password}`,
@@ -32,12 +29,12 @@ function headers(config: ServerConfig): Record<string, string> {
 export async function pairDevice(
 	config: ServerConfig,
 	device: { name?: string; platform: string },
-	fetchImpl: typeof fetch = fetch,
+	fetchImpl: typeof hostFetch = hostFetch,
 ): Promise<PairDeviceResult> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), PAIR_DEVICE_TIMEOUT_MS);
 	try {
-		const response = await fetchImpl(`${base(config)}/api/v1/remote-host/devices`, {
+		const response = await fetchImpl(config, "/api/v1/remote-host/devices", {
 			method: "POST",
 			headers: { ...headers(config), "Content-Type": "application/json" },
 			body: JSON.stringify(device),
@@ -60,12 +57,12 @@ export async function pairDevice(
 }
 
 /** Hands this phone's token in config back to the machine. Best effort. */
-export async function releaseDeviceToken(config: ServerConfig, fetchImpl: typeof fetch = fetch): Promise<void> {
+export async function releaseDeviceToken(config: ServerConfig, fetchImpl: typeof hostFetch = hostFetch): Promise<void> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), PAIR_DEVICE_TIMEOUT_MS);
 	try {
 		// The machine revokes the device token that calls its unpair route.
-		await fetchImpl(`${base(config)}/api/v1/push/pairings/released`, { method: "DELETE", headers: headers(config), signal: controller.signal });
+		await fetchImpl(config, "/api/v1/push/pairings/released", { method: "DELETE", headers: headers(config), signal: controller.signal });
 	} catch {
 		// A token not handed back stays listed on the machine, where it can be removed.
 	} finally {

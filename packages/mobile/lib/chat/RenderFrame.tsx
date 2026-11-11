@@ -6,6 +6,7 @@ import { useIsFocused } from "expo-router/react-navigation";
 import { WebView } from "react-native-webview";
 import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
+import { hostFetch } from "../e2ee/host";
 import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
 import { useApp } from "../store";
@@ -88,19 +89,37 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 	const theme = useRenderTheme();
 	const themeRef = useRef(theme);
 	themeRef.current = theme;
-	const pageUrl = config ? `${httpBase(config)}${path}` : undefined;
+	// For a machine with a pinned key the page is read through the encrypted
+	// channel and shown from memory; a URL load would send the token in plaintext.
+	const encrypted = Boolean(config?.hostKey);
+	const failedRef = useRef(onFailed);
+	failedRef.current = onFailed;
+	const [fetched, setFetched] = useState<{ path: string; html: string }>();
+	useEffect(() => {
+		if (!encrypted || html || !config) return;
+		let live = true;
+		void hostFetch(config, path, { headers: authHeaders(config) })
+			.then(async (res) => {
+				if (!res.ok) throw new Error(String(res.status));
+				return res.text();
+			})
+			.then((text) => { if (live) setFetched({ path, html: text }); }, () => { if (live) failedRef.current(); });
+		return () => { live = false; };
+	}, [encrypted, html, config, path]);
+	const page = html ?? (fetched?.path === path ? fetched.html : undefined);
+	const pageUrl = config && !encrypted ? `${httpBase(config)}${path}` : undefined;
 	// The fragment only seeds first paint; a theme change is posted instead.
 	const uri = useMemo(() => pageUrl && `${pageUrl}${renderThemeFragment(themeRef.current, displayMode)}`, [pageUrl, displayMode]);
 	const fullscreen = displayMode === "fullscreen";
 	// A stable source: a new object each render would make the WebView re-check it.
 	// A page from memory has no fragment, so the theme is written into it for first paint.
-	const source = useMemo(() => html ? { html: withRenderTheme(html, themeRef.current) } : uri && config ? { uri, headers: authHeaders(config) } : undefined, [html, uri, config]);
+	const source = useMemo(() => page ? { html: withRenderTheme(page, themeRef.current) } : uri && config ? { uri, headers: authHeaders(config) } : undefined, [page, uri, config]);
 
 	useEffect(() => {
 		if (loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
 	}, [theme]);
 
-	if (!source || (!html && !uri)) return null;
+	if (!source || (!page && !uri)) return null;
 	return <View style={styles.document} onTouchStart={() => { lastTouch.current = Date.now(); }} onTouchEnd={() => { lastTouch.current = Date.now(); }}>
 		<WebView
 			ref={web}
@@ -113,7 +132,7 @@ export function RenderDocument({ path, html, displayMode, onHeight, onReady, onG
 				else if (message?.type === "link" && fullscreen && Date.now() - lastTouch.current < LINK_TAP_WINDOW_MS) void Linking.openURL(message.url);
 			}}
 			// Only the page itself loads in the frame; a frame inside the page may load its own.
-			onShouldStartLoadWithRequest={(request) => request.isTopFrame === false || (html ? /^(about:|data:)/.test(request.url) : Boolean(uri) && isRenderPageLoad(request.url, uri!))}
+			onShouldStartLoadWithRequest={(request) => request.isTopFrame === false || (page ? /^(about:|data:)/.test(request.url) : Boolean(uri) && isRenderPageLoad(request.url, uri!))}
 			onLoadEnd={() => {
 				loaded.current = true;
 				web.current?.injectJavaScript(renderThemeScript(themeRef.current));

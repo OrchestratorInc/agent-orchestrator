@@ -4,6 +4,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } fr
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { backdropOpacity, boundTranslation, clamp, DOUBLE_TAP_ZOOM, MAX_ZOOM, MIN_ZOOM, shouldDismiss, zoomTranslation } from "./imageZoom";
+import { useHostImage } from "./hostImage";
 import { NativeHeaderButton } from "./native-header-button";
 import { useTheme } from "./ThemeProvider";
 import { duration, space, spring } from "./tokens";
@@ -38,8 +39,9 @@ function ZoomableImage({ name, source, onClose }: { name: string; source: ImageV
 	const insets = useSafeAreaInsets();
 	const { width, height } = useWindowDimensions();
 	const reduceMotion = useReducedMotion();
+	const shown = useHostImage(source);
 	// RN Android forwards HTTP headers only for array sources.
-	const imageSource = Platform.OS === "android" ? [source] : source;
+	const imageSource = shown && (Platform.OS === "android" ? [shown] : shown);
 
 	const scale = useSharedValue(1);
 	const x = useSharedValue(0);
@@ -143,7 +145,7 @@ function ZoomableImage({ name, source, onClose }: { name: string; source: ImageV
 			<GestureDetector gesture={gesture}>
 				<View collapsable={false} style={styles.fill}>
 					<Animated.View style={imageStyle}>
-						<Image accessibilityLabel={name} accessibilityIgnoresInvertColors source={imageSource} resizeMode="contain" style={{ width, height }} />
+						{imageSource ? <Image accessibilityLabel={name} accessibilityIgnoresInvertColors source={imageSource} resizeMode="contain" style={{ width, height }} /> : null}
 					</Animated.View>
 				</View>
 			</GestureDetector>

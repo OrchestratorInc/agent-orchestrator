@@ -1,5 +1,5 @@
-import { getRandomBytes } from "expo-crypto";
 import { E2EEError, MAX_PLAIN, startHandshake } from "./handshake";
+import { loadRandomBytes } from "./random";
 
 /** An encrypted byte stream to one machine. */
 export type Channel = {
@@ -16,15 +16,15 @@ export type ChannelDeps = {
 	randomBytes: (count: number) => Uint8Array;
 };
 
-const defaultDeps: ChannelDeps = { WebSocket, randomBytes: getRandomBytes };
-
 export const HANDSHAKE_TIMEOUT_MS = 10_000;
 
 /** Opens `url` (the host's /api/v1/e2ee) and checks the host holds `hostKey`. */
-export function openChannel(url: string, hostKey: Uint8Array, deps: ChannelDeps = defaultDeps): Promise<Channel> {
+export async function openChannel(url: string, hostKey: Uint8Array, deps: Partial<ChannelDeps> = {}): Promise<Channel> {
+	const randomBytes = deps.randomBytes ?? (await loadRandomBytes());
+	const Socket = deps.WebSocket ?? WebSocket;
 	return new Promise((resolve, reject) => {
-		const handshake = startHandshake(deps.randomBytes(32));
-		const ws = new deps.WebSocket(url);
+		const handshake = startHandshake(randomBytes(32));
+		const ws = new Socket(url);
 		ws.binaryType = "arraybuffer";
 		let records: ReturnType<typeof handshake.finish> | null = null;
 		let pending: Uint8Array[] = [];

@@ -156,6 +156,18 @@ describe("pairFromCode", () => {
 		);
 	});
 
+	it("pins the code's host key on the machine and encrypts the exchange to it", async () => {
+		const hostKey = "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0";
+		const keyed = encodePairingCode({ v: 2, hostId: "h_paired", name: "prasad-mbp", platform: "darwin", endpoints: [lan], token: "pw", hostKey });
+		const pair = vi.fn(async () => ({ kind: "paired" as const, token: "aod_t", credential: "pairing-code" as const }));
+		const d = deps({ pair });
+		const got = await pairFromCode(`aomobile://pair#${keyed}`, d);
+
+		expect(got.ok && got.config.hostKey).toBe(hostKey);
+		expect(pair).toHaveBeenCalledWith(expect.objectContaining({ hostKey, password: "pw" }));
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ hostKey, token: "aod_t" }));
+	});
+
 	it("returns a config for the endpoint that won the race", async () => {
 		const got = await pairFromCode(`aomobile://pair#${code}`, deps());
 

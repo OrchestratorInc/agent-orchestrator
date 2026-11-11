@@ -45,7 +45,7 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 	// New pairings start blank; editing preloads only the pairing the user selected.
 	const [cfg, setCfg] = useState<ServerConfig>(() => {
 		const endpoint = editingHost?.endpoints[editingEndpointIndex];
-		return endpoint ? configForEndpoint(endpoint, editingHost.token, editingHost.id) : { ...DEFAULT_CONFIG, password: editingHost?.token ?? "" };
+		return endpoint ? configForEndpoint(endpoint, editingHost.token, editingHost.id, editingHost.hostKey) : { ...DEFAULT_CONFIG, password: editingHost?.token ?? "" };
 	});
 	const [machineName, setMachineName] = useState(editingHost?.name ?? "");
 	const [busy, setBusy] = useState(false);

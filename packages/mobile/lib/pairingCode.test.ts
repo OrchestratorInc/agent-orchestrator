@@ -26,6 +26,12 @@ describe("parsePairingCode", () => {
 	// The QR encodes a URL so the system camera can open the app. The payload
 	// rides in the fragment, which browsers never send to a server, keeping the
 	// token out of web logs and referrer headers.
+	it("keeps a host key it can read and drops one it cannot", () => {
+		const hostKey = "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0";
+		expect(parsePairingCode(encodePairingCode({ ...offer, hostKey }))?.hostKey).toBe(hostKey);
+		expect(parsePairingCode(encodePairingCode({ ...offer, hostKey: "short" }))).not.toHaveProperty("hostKey");
+	});
+
 	it("reads the payload out of a deep link fragment", () => {
 		const got = parsePairingCode(pairingUrl(offer, "aomobile://pair"));
 

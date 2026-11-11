@@ -47,6 +47,7 @@ Module._load = function(name, parent, main) {
   if (name === "../pressFeedback") return { usePressFeedback: () => ({}) };
   if (name === "../icons" || name === "./icons") return { Feather: "Feather" };
   if (name === "./messageAttachments") return attachmentHelpers;
+  if (name === "../hostImage" || name === "./hostImage") return { useHostImage: source => source };
   if (name !== "react" && name !== "react/jsx-runtime") return new Proxy({}, { get: (_, key) => key === "__esModule" ? true : () => null });
  }
  return originalLoad.call(this, name, parent, main);

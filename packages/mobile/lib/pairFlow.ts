@@ -86,7 +86,7 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	let token = offer.token;
 	let fallbackToken: string | undefined;
 	let issued = false;
-	let config = configForEndpoint(outcome.endpoint, token, offer.hostId || outcome.hostId);
+	let config = configForEndpoint(outcome.endpoint, token, offer.hostId || outcome.hostId, offer.hostKey);
 	if (deps.pair && isPairingSecret(token)) {
 		const paired = await deps.pair(config);
 		if (paired.kind === "unauthorized") return { ok: false, reason: "verify-failed", endpoint: outcome.endpoint, status: 401 };
@@ -94,7 +94,7 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 			issued = true;
 			if (paired.credential === "password") fallbackToken = token;
 			token = paired.token;
-			config = configForEndpoint(outcome.endpoint, token, offer.hostId || outcome.hostId);
+			config = configForEndpoint(outcome.endpoint, token, offer.hostId || outcome.hostId, offer.hostKey);
 		}
 	}
 	try {
@@ -140,6 +140,7 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 		endpoints: offer.endpoints,
 		token,
 		...(fallbackToken ? { fallbackToken } : {}),
+		...(offer.hostKey ? { hostKey: offer.hostKey } : {}),
 		lastConnected: Date.now(),
 	};
 	await deps.saveHost(host);

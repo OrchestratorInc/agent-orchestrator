@@ -1,7 +1,9 @@
 import { clearPreviousAccount, getAccountAccessToken, loadAccount, loadPreviousAccount, type Account } from "./account";
 import { ignoredAccountHosts, moveIgnoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
+import type { ServerConfig } from "./config";
 import { isTailscaleHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
+import { hostFetch, hostPath } from "./e2ee/host";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
 import { isQuickTunnelHost } from "./staleTunnel";
@@ -57,14 +59,15 @@ export function syncAccountHosts(account: Account): Promise<void> {
 	return promise;
 }
 
-async function syncFetch(url: string, init: RequestInit, timeoutMs: number, signal: AbortSignal): Promise<{ ok: boolean; status: number; body: unknown }> {
+/** `via` sends the request to that machine, encrypted to its key when its pairing has one. */
+async function syncFetch(url: string, init: RequestInit, timeoutMs: number, signal: AbortSignal, via?: ServerConfig): Promise<{ ok: boolean; status: number; body: unknown }> {
 	const controller = new AbortController();
 	const abort = () => controller.abort();
 	signal.addEventListener("abort", abort);
 	if (signal.aborted) controller.abort();
 	const timer = setTimeout(abort, timeoutMs);
 	try {
-		const response = await fetch(url, { ...init, signal: controller.signal });
+		const response = via ? await hostFetch(via, hostPath(url), { ...init, signal: controller.signal }) : await fetch(url, { ...init, signal: controller.signal });
 		// Keep cancellation and the timeout alive until the body finishes too.
 		const body: unknown = response.ok && init.method !== "PUT" ? await response.json() : undefined;
 		return { ok: response.ok, status: response.status, body };
@@ -121,7 +124,9 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 				if (!await current() || (await ignoredAccountHosts(account.id)).has(manual.id)) break;
 				const claim = await syncFetch(`${base}/api/v1/remote-host/account-token`, {
 					method: "POST", headers: { Authorization: `Bearer ${manual.token}`, "X-AO-Expected-Host-ID": manual.id, "X-AO-Account-ID": account.id },
-				}, 5_000, signal);
+				}, 5_000, signal, manual.hostKey
+					? { host: address.host, httpPort: String(address.port), muxPort: "", secure: address.secure, password: manual.token, hostId: manual.id, hostKey: manual.hostKey }
+					: undefined);
 				if (!claim.ok) continue;
 				const issued = claim.body as { hostId?: string; token?: string; hostKey?: string };
 				if (issued.hostId !== manual.id || !/^[0-9a-f]{64}$/.test(issued.token ?? "")) continue;

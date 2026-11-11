@@ -26,6 +26,9 @@ export type Host = {
 	/** The pairing password swapped for the token, used again if the machine forgets the token. Keystore only. */
 	fallbackToken?: string;
 	lastConnected: number;
+	/** The machine's Ed25519 public key from the pairing code. Every request to
+	 * the machine is encrypted to it, and never sent without it. */
+	hostKey?: string;
 	/** Present only for a machine discovered through AO Cloud. */
 	accountUserId?: string;
 	/** The account's label for the machine at the last sync. While `name` still
@@ -38,7 +41,7 @@ export type Host = {
 
 /** Ignore recency-only writes so another host reconnecting does not restart live connections. */
 export function sameHostConnections(left: Host[], right: Host[]): boolean {
-	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, appearance, platform, endpoints, token, accountUserId }) => [id, name, appearance, platform, endpoints, token, accountUserId]);
+	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, appearance, platform, endpoints, token, hostKey, accountUserId }) => [id, name, appearance, platform, endpoints, token, hostKey, accountUserId]);
 	return JSON.stringify(connectionFields(left)) === JSON.stringify(connectionFields(right));
 }
 
