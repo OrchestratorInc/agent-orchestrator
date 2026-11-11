@@ -371,6 +371,10 @@ export function AgentModelPicker({
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	const setups = favorites.filter((entry) => !terminal || entry.harness !== currentHarness);
+	// A favourite shows its agent's mark. The name is drawn too only where another
+	// agent's favourite has the same model name: OpenCode and OpenCode 2 share a mark.
+	const namesAgent = (favorite: ModelFavorite) =>
+		setups.some((other) => other.label === favorite.label && other.harness !== favorite.harness);
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	const searchRows = (open ? agents : []).flatMap((agent) => {
 		const listed = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
@@ -454,13 +458,13 @@ export function AgentModelPicker({
 								>
 									<ProviderMark provider={favorite.harness} className="mr-2 size-3.5" />
 									<span className="min-w-0 truncate">{favorite.label}</span>
-									<span className="sr-only">{`, ${agentLabel(favorite.harness)}`}</span>
 									{favorite.fast ? <Zap aria-label={t("agentSwitch.fastMode")} className="ml-1.5 size-3 shrink-0 fill-current" /> : null}
 									{favorite.thinking ? <Brain aria-label={t("agentSwitch.thinking")} className="ml-1.5 size-3 shrink-0" /> : null}
 									{favorite.effortLabel ? <span className="ml-1.5 shrink-0 text-muted-foreground">{favorite.effortLabel}</span> : null}
-									{/* Named as search rows are: two agents can share a mark (OpenCode, OpenCode 2) and a model. The sr-only name above reads it once. */}
-									<span aria-hidden="true" className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(favorite.harness)}</span>
-									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} className="ml-2" />
+									{/* Read after the model and its settings, so they are not taken for the agent's. */}
+									<span className="sr-only">{t("agentSwitch.favoriteAgent", { agent: agentLabel(favorite.harness) })}</span>
+									{namesAgent(favorite) ? <span aria-hidden="true" className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(favorite.harness)}</span> : null}
+									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} className={namesAgent(favorite) ? "ml-2" : undefined} />
 								</OptionMenuItem>
 							))}
 							<div className={setups.length > 0 ? DIVIDER : undefined}>

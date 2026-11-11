@@ -237,6 +237,7 @@
 	"agentSwitch.autoCompactHint": "Cuándo Claude Code compacta la conversación por sí solo.",
 	"agentSwitch.addFavourite": "Añadir a favoritos",
 	"agentSwitch.removeFavourite": "Quitar de favoritos",
+	"agentSwitch.favoriteAgent": ", {{agent}}",
 	"agentSwitch.busy": "El agente está trabajando. Cambia cuando esté inactivo.",
 	"agentSwitch.switchTerminalTo": "Cambiar este terminal a {{target}}",
 	"agentSwitch.switchToChat": "Cambiar a la vista de chat",

@@ -236,6 +236,7 @@
 	"agentSwitch.autoCompactHint": "Claude Code 自动压缩对话的时机。",
 	"agentSwitch.addFavourite": "添加到收藏",
 	"agentSwitch.removeFavourite": "从收藏中移除",
+	"agentSwitch.favoriteAgent": "，{{agent}}",
 	"agentSwitch.busy": "智能体正在工作。请在其空闲时切换。",
 	"agentSwitch.switchTerminalTo": "将此终端切换到 {{target}}",
 	"agentSwitch.switchToChat": "切换到聊天界面",

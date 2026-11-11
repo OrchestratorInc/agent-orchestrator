@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import claudeCodeLogo from "../../assets/agents/claude-code.svg";
+import codexLogo from "../../assets/agents/codex.svg";
 import { toggleModelFavorite } from "../../lib/model-favorites";
 import { useUiStore } from "../../stores/ui-store";
 import { AgentModelPicker, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
@@ -195,18 +197,50 @@ describe("AgentModelPicker", () => {
 		}
 	});
 
-	it("names a favourite's agent beside its logo, since two agents can share a mark", async () => {
+	it("shows a favourite's logo without its agent's name, as before #7822", async () => {
 		const user = userEvent.setup();
 		const saved = { harness: "opencode-v2", row: "gpt-x", model: "gpt-x", label: "GPT X" };
 		toggleModelFavorite(saved);
 		try {
 			open();
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			const row = await screen.findByRole("menuitemradio", { name: /GPT X/ });
+			const row = await screen.findByRole("menuitemradio", { name: "GPT X, OpenCode 2" });
 			expect(row.querySelector("img")).toBeInTheDocument();
-			expect(row).toHaveTextContent("OpenCode 2");
+			expect(within(row).queryByText("OpenCode 2")).not.toBeInTheDocument();
 		} finally {
-			toggleModelFavorite(saved);
+			act(() => toggleModelFavorite(saved));
+		}
+	});
+
+	it("draws the agent's name where two agents' favourites share a logo and a model name", async () => {
+		const user = userEvent.setup();
+		const favorites = [
+			{ harness: "opencode", row: "gpt-x", model: "gpt-x", label: "GPT X" },
+			{ harness: "opencode-v2", row: "gpt-x", model: "gpt-x", label: "GPT X" },
+		];
+		favorites.forEach(toggleModelFavorite);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const first = await screen.findByRole("menuitemradio", { name: "GPT X, OpenCode" });
+			const second = screen.getByRole("menuitemradio", { name: "GPT X, OpenCode 2" });
+			expect(within(first).getByText("OpenCode")).toHaveAttribute("aria-hidden", "true");
+			expect(within(second).getByText("OpenCode 2")).toHaveAttribute("aria-hidden", "true");
+		} finally {
+			act(() => favorites.forEach(toggleModelFavorite));
+		}
+	});
+
+	it("reads a favourite's agent after its model's settings", async () => {
+		const user = userEvent.setup();
+		const saved = { harness: "codex", row: "gpt-x", model: "gpt-x", label: "GPT X", effort: "high", effortLabel: "High", fast: true };
+		toggleModelFavorite(saved);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			expect(await screen.findByRole("menuitemradio", { name: /^GPT X.*Fast mode.*High, Codex$/ })).toBeInTheDocument();
+		} finally {
+			act(() => toggleModelFavorite(saved));
 		}
 	});
 
@@ -244,6 +278,22 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("menuitem", { name: /Agent/ }));
 		const codex = await screen.findByRole("menuitemradio", { name: "Codex" });
 		expect(codex.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
+	});
+
+	it("shows the pending agent's logo on the chat picker", () => {
+		open({ harness: "codex" });
+		const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(trigger.querySelector("img")).toHaveAttribute("src", codexLogo);
+		expect(trigger.querySelector("img")).not.toHaveAttribute("src", claudeCodeLogo);
+	});
+
+	it("shows each agent's logo on chat search rows", async () => {
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
+		const row = await screen.findByRole("menuitemradio", { name: /GPT X.*Codex/ });
+		expect(row.querySelector("img")).toHaveAttribute("src", codexLogo);
 	});
 
 	it("leaves out a chat agent whose chat adapter is missing", async () => {

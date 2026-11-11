@@ -236,6 +236,7 @@
 	"agentSwitch.autoCompactHint": "Claude Code が会話を自動で圧縮するタイミング。",
 	"agentSwitch.addFavourite": "お気に入りに追加",
 	"agentSwitch.removeFavourite": "お気に入りから削除",
+	"agentSwitch.favoriteAgent": "、{{agent}}",
 	"agentSwitch.busy": "エージェントが作業中です。待機状態になってから切り替えてください。",
 	"agentSwitch.switchTerminalTo": "このターミナルを {{target}} に切り替え",
 	"agentSwitch.switchToChat": "チャット UI に切り替え",

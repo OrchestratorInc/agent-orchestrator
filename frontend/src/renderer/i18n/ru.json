@@ -238,6 +238,7 @@
 	"agentSwitch.autoCompactHint": "Когда Claude Code автоматически сжимает переписку.",
 	"agentSwitch.addFavourite": "Добавить в избранное",
 	"agentSwitch.removeFavourite": "Убрать из избранного",
+	"agentSwitch.favoriteAgent": ", {{agent}}",
 	"agentSwitch.busy": "Агент работает. Переключитесь, когда он освободится.",
 	"agentSwitch.switchTerminalTo": "Переключить этот терминал на {{target}}",
 	"agentSwitch.switchToChat": "Переключиться на интерфейс чата",
