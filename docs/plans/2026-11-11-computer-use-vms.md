@@ -59,14 +59,25 @@ tools, the same guide.
 | Screenshots | The host's AO saves them as files | Send the image bytes back with the call. |
 | Choosing where computer use runs | The on/off switch | A new setting: this computer or one remote host, read on every call. |
 
+## Safeguards on the remote host
+
+- **A switch.** Remote computer use is off by default. It is turned on at the
+  host itself and can be turned off from either side.
+- **Off when idle.** After a set time with no calls, the host stops accepting
+  them and stops Cua Driver's background service. The next signed call from
+  the paired machine wakes it.
+- **Every call is signed.** The user's machine signs each call with its own
+  key, a timestamp, and a one-time number. The host checks it against the key
+  it recorded at pairing and refuses anything else, including a replayed
+  call. Each AO machine already has such a key (`host.key`).
+
 ## Risks
 
 - **Cloudflare can read the calls and screenshots**, as it can already read
   chat and terminal traffic on remote hosts. Phase 2 fixes this.
-- **Anyone with the host's credential can use it**, as they can already open
-  a terminal there. What computer use adds is the screen and signed-in apps,
-  so the host only accepts these calls after it is turned on at the machine
-  itself.
+- **A leaked host credential is not enough.** It opens a terminal there, as
+  it does today, but computer-use calls must also be signed by the paired
+  machine.
 - **The agent is still on the user's machine**, with its shell and files.
 - **It needs the connection.** No internet means no computer use, and each
   action is slower because the screenshot travels back.
@@ -96,8 +107,10 @@ tools, the same guide.
 1. Is it acceptable to accept computer-use calls on the remote listener, when
    turned on at the machine itself?
 2. Is end-to-end encryption needed in the first release, or can it follow?
-3. One target for every session, or a choice per project?
-4. Does the original proposal differ from this? It was not available when
+3. Is a signature from the user's machine enough, or should the user also
+   approve each session's use of the remote computer?
+4. One target for every session, or a choice per project?
+5. Does the original proposal differ from this? It was not available when
    this was written.
 
 Nothing here was tested on a real host. Facts about Cua Driver come from
