@@ -2,7 +2,7 @@ import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Coffee, Copy, Eye, EyeOff, Globe, Info, KeyRound, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "@/components/app-icons";
+import { Check, Coffee, Copy, Eye, EyeOff, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "@/components/app-icons";
 import { apiClient } from "../../lib/api-client";
 import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../../lib/mobile-pairing-code";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
@@ -258,7 +258,6 @@ interface MobileStatus {
 	port: number;
 	password: string;
 	requireDeviceCredentials?: boolean;
-	passwordLastUsedAt?: string | null;
 	warning: string;
 	securePairing: {
 		enabled: boolean;
@@ -556,23 +555,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const stayAwake = useStayAwake(active);
 
 
-	const setRequireDeviceCredentials = useMutation({
-		mutationFn: async (requireDeviceCredentials: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/require-device-credentials", { body: { enabled: requireDeviceCredentials } });
-			if (error) throw apiErrorException(error);
-			return data;
-		},
-		onMutate: async (requireDeviceCredentials) => {
-			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
-			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
-			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, requireDeviceCredentials });
-			return { previous };
-		},
-		onError: (_error, _enabled, context) => {
-			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
-		},
-		onSettled: invalidate,
-	});
 	const setBrowserRemoteAccess = useMutation({
 		mutationFn: async (browserRemoteAccess: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
@@ -679,7 +661,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.isPending ||
 		setSecure.isPending ||
 		setBrowserRemoteAccess.isPending ||
-		setRequireDeviceCredentials.isPending ||
 		stayAwake.busy;
 
 	const clearActionErrors = () => {
@@ -689,7 +670,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.reset();
 		setSecure.reset();
 		setBrowserRemoteAccess.reset();
-		setRequireDeviceCredentials.reset();
 		setLinkError("");
 	};
 
@@ -743,7 +723,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
-		(setRequireDeviceCredentials.error instanceof Error && setRequireDeviceCredentials.error.message) ||
 		(pairingCodeFailed && pairing.error instanceof Error && pairing.error.message) ||
 		stayAwake.error ||
 		linkError ||
@@ -1048,31 +1027,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						else stayAwake.set(false, true);
 					}}
 				/>
-			)}
-			{enabled && (
-				<SettingsRow
-					icon={KeyRound}
-					label={t("mobile.requireDeviceCredentials.label")}
-					description={
-						<>
-							{t("mobile.requireDeviceCredentials.help")}
-							{status.passwordLastUsedAt && !status.requireDeviceCredentials
-								? ` ${t("mobile.requireDeviceCredentials.lastUsed", { when: new Date(status.passwordLastUsedAt).toLocaleString() })}`
-								: null}
-						</>
-					}
-					data-testid="mobile-require-device-credentials"
-				>
-					<Switch
-						aria-label={t("mobile.requireDeviceCredentials.label")}
-						disabled={busy}
-						checked={status.requireDeviceCredentials ?? false}
-						onCheckedChange={(next) => {
-							clearActionErrors();
-							setRequireDeviceCredentials.mutate(next);
-						}}
-					/>
-				</SettingsRow>
 			)}
 			<SettingsRow
 				icon={MonitorSmartphone}
