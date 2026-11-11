@@ -39,6 +39,7 @@ import {
 	CircleAlert,
 	CircleCheck,
 	CircleDot,
+	CircleHelp,
 	CircleStop,
 	Clock,
 	Copy,
@@ -605,6 +606,13 @@ const TURN_OUTCOME_COPY = {
 		tone: "font-medium text-destructive",
 		iconTone: "text-destructive",
 	},
+	// The controller went away mid-turn, so nothing reported how it ended.
+	unknown: {
+		label: "The agent stopped before this turn finished",
+		icon: CircleHelp,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
 } as const;
 
 /**
@@ -628,7 +636,7 @@ export function TurnOutcome({
 	rollbackDisabled,
 	timestamp,
 }: {
-	state: "recovered" | "interrupted" | "failed";
+	state: "recovered" | "interrupted" | "failed" | "unknown";
 	error?: string;
 	failureCode?: "provider_key_missing";
 	onConfigure?: () => void;

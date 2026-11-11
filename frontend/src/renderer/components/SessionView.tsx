@@ -950,7 +950,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const renderReviewerChat = (reviewId: string) => session?.cloud ? (
 		<CloudReviewerChatSurface hideHeader session={session} reviewId={reviewId} harness={reviewerChat?.harness ?? "claude-code"} />
 	) : (
-		<ReviewerChatSurface hideHeader hostId={hostId} hostUnreachable={hostUnreachable} workerSessionId={sessionId} reviewId={reviewId} />
+		<ReviewerChatSurface
+			hideHeader
+			hostId={hostId}
+			hostUnreachable={hostUnreachable}
+			workerSessionId={sessionId}
+			reviewId={reviewId}
+			// The reviewer runs in this session's worktree, so its stopped banner's
+			// Open shell opens the same shell the worker's banner does.
+			onOpenShell={addShellTerminal}
+			openingShell={openShellTerminal.isPending}
+			shellError={openShellTerminal.error ? apiErrorMessage(openShellTerminal.error) : undefined}
+		/>
 	);
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
