@@ -191,6 +191,8 @@ describe("connectHost with device tokens", () => {
 		const got = await connectHost("h_paired", d);
 		expect(d.saveToken).not.toHaveBeenCalled();
 		expect(got.ok && got.config.password).toBe("pw");
+		// A refused password is not sent again for the refresh.
+		expect(d.refreshEndpoints).toHaveBeenCalledTimes(kind === "unauthorized" ? 0 : 1);
 	});
 
 	it("leaves a device token and an account token alone", async () => {

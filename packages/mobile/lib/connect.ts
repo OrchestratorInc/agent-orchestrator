@@ -73,13 +73,14 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
 
 	let token = host.token;
-	const swapPairingPassword = async () => {
-		if (!deps.saveToken || !deps.pair || !isPairingSecret(token)) return;
+	const swapPairingPassword = async (): Promise<PairDeviceResult["kind"] | undefined> => {
+		if (!deps.saveToken || !deps.pair || !isPairingSecret(token)) return undefined;
 		const paired = await deps.pair(config);
-		if (paired.kind !== "paired") return;
+		if (paired.kind !== "paired") return paired.kind;
 		await deps.saveToken(hostKey, paired.token, paired.credential === "password" ? token : undefined);
 		token = paired.token;
 		config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
+		return paired.kind;
 	};
 	const refreshEndpoints = async () => {
 		const advertised = await deps.refreshEndpoints(config);
@@ -95,7 +96,12 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		);
 	};
 
-	await swapPairingPassword();
+	// A password the machine just refused would be refused again by the refresh,
+	// one more failure toward its lockout.
+	if (await swapPairingPassword() === "unauthorized") {
+		await deps.touch(hostKey);
+		return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };
+	}
 	try {
 		await refreshEndpoints();
 	} catch (error) {
