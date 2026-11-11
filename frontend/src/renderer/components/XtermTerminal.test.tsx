@@ -3089,6 +3089,24 @@ describe("XtermTerminal", () => {
 			expect(window.ao!.clipboard.readText).not.toHaveBeenCalled();
 		});
 
+		it("does not let a late OSC 52 write replace a newer local copy", async () => {
+			const { container } = render(<XtermTerminal theme="dark" />);
+			const host = container.querySelector(".terminal-xterm-host")!;
+			const terminal = state.lastTerminal!;
+
+			// A drag goes to the program, then a Shift-drag copies a local selection.
+			fireEvent.pointerDown(host, { button: 0 });
+			fireEvent.pointerUp(document, { button: 0 });
+			terminal.selection = "newer local selection";
+			fireEvent.pointerDown(host, { button: 0, shiftKey: true });
+			fireEvent.pointerUp(document, { button: 0, shiftKey: true });
+			await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("newer local selection"));
+
+			terminal.oscHandlers.get(52)!(`c;${btoa("late program copy")}`);
+			await new Promise((resolve) => window.setTimeout(resolve, 0));
+			expect(window.ao!.clipboard.writeText).toHaveBeenCalledTimes(1);
+		});
+
 		it("ignores OSC 52 writes when copy on select is off", async () => {
 			const { container } = render(<XtermTerminal theme="dark" />);
 			act(() => useUiStore.getState().setTerminalCopyOnSelect(false));

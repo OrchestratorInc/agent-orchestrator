@@ -1360,7 +1360,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				return;
 			}
 			if (!useUiStore.getState().terminalCopyOnSelect) return;
-			copySelection();
+			// A local copy is newer than anything the program might still send for
+			// an earlier gesture; a late OSC 52 write must not replace it.
+			if (copySelection()) appGestureEndedAt = Number.NEGATIVE_INFINITY;
 		};
 		host.addEventListener("pointerdown", pointerDown);
 		document.addEventListener("pointermove", pointerMove);
