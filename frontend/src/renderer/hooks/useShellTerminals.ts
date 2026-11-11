@@ -31,7 +31,7 @@ export type ShellTerminal = {
 	 * restarted). The tab stays so the user can reopen or close it; it has no
 	 * PTY to attach to.
 	 */
-	endedAt?: string;
+	endedAt?: string | null;
 	/** For an ended shell, the agent last seen in it that reopening can resume. */
 	resumeHarness?: string;
 	/** Owning daemon; absent for local and cloud shells. */
