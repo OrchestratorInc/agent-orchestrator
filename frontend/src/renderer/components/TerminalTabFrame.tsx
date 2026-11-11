@@ -4,12 +4,21 @@ import { Pressable } from "./ui/pressable";
 
 type TerminalTabFrameProps = {
 	active: boolean;
-	wide?: boolean;
+	/** Room for an agent's name; `"session"` is the session's own tab, the widest. */
+	wide?: boolean | "session";
 	/** Optional: without one the label starts at the tab's edge. */
 	icon?: ReactNode;
 	label: string;
-	/** Shown on hover or focus: the tab's close button or menu. It takes the icon's slot, or the tab's right edge when there is no icon. */
+	/**
+	 * The tab's control. At `"icon"` (a close button) it shows on hover or
+	 * focus in the icon's slot, or at the tab's right edge when there is no
+	 * icon. At `"end"` (the session tab's ⋮) it sits after the title in a slot
+	 * of its own, so it never covers the icon.
+	 */
 	action?: ReactNode;
+	actionPosition?: "icon" | "end";
+	/** Closes the tab; a middle-click runs it, as the close button does. */
+	onClose?: () => void;
 	/** Keep the action showing at rest (unsaved dot, running switch). */
 	actionPinned?: boolean;
 	buttonRef?: Ref<HTMLButtonElement>;
@@ -18,13 +27,11 @@ type TerminalTabFrameProps = {
 	editingContent?: ReactNode;
 	/** The text being edited; it sizes the field so the tab does not jump. */
 	editingValue?: string;
-	/** A status glyph after the label, e.g. the live state of an agent in a shell. */
-	trailing?: ReactNode;
 };
 
-/** The control in a tab's icon slot, shared so close buttons and menus match. */
+/** A tab's close button or menu, shared so they match. A pure ghost: hover only brightens the glyph, never a fill. */
 export const terminalTabActionClassName =
-	"relative grid size-icon-base cursor-pointer place-items-center rounded-sm text-passive before:absolute before:-inset-1.5 before:content-[''] hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover focus-visible:text-foreground";
+	"relative grid size-icon-base cursor-pointer place-items-center text-passive before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground focus-visible:text-foreground";
 
 // Laid over the label's own box, growing outward by its padding so the text
 // stays exactly where the label drew it. The ring takes no layout space.
@@ -40,18 +47,21 @@ export function TerminalTabFrame({
 	icon,
 	label,
 	action,
+	actionPosition = "icon",
 	actionPinned = false,
+	onClose,
 	buttonRef,
 	buttonProps,
 	editingContent,
 	editingValue,
-	trailing,
 }: TerminalTabFrameProps) {
+	const iconAction = actionPosition === "icon" ? action : undefined;
+	const endAction = actionPosition === "end" ? action : undefined;
 	return (
 		<span
 			className={cn(
 				"group relative inline-flex h-full min-w-shell-tab-min shrink-0 self-stretch items-center border-r border-border",
-				wide ? "max-w-agent-shell-tab-max" : "max-w-shell-tab-max",
+				wide === "session" ? "max-w-session-tab-max" : wide ? "max-w-agent-shell-tab-max" : "max-w-shell-tab-max",
 				// Focus rings are off app-wide, so keyboard focus shows as the hover wash.
 				active
 					? "bg-overlay text-foreground"
@@ -63,23 +73,30 @@ export function TerminalTabFrame({
 				if (event.target !== event.currentTarget) return;
 				buttonProps?.onClick?.(event as unknown as ReactMouseEvent<HTMLButtonElement>);
 			}}
+			// No autoscroll or selection paste on the press; the release closes.
+			onMouseDown={onClose ? (event) => { if (event.button === 1) event.preventDefault(); } : undefined}
+			onAuxClick={onClose ? (event) => {
+				if (event.button !== 1) return;
+				event.preventDefault();
+				onClose();
+			} : undefined}
 		>
 			{editingContent ? (
-				<span className="flex h-full min-w-0 flex-1 items-center gap-2 px-2 text-control leading-none">
+				<span className={cn("flex h-full min-w-0 flex-1 items-center gap-2 text-control leading-none", endAction ? "pl-2 pr-1.5" : "px-2")}>
 					{icon ? <span className="grid size-icon-base shrink-0 place-items-center">{icon}</span> : null}
 					<span className="relative flex min-w-0 flex-1">
 						<span aria-hidden="true" className="invisible min-w-0 truncate whitespace-pre">{editingValue || "\u200b"}</span>
 						{editingContent}
 					</span>
-					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</span>
 			) : (
 				<Pressable
 					ref={buttonRef}
 					className={cn(
-						"inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-control leading-none in-data-dragging:cursor-grabbing!",
+						"inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 text-control leading-none in-data-dragging:cursor-grabbing!",
+						endAction ? "pl-2 pr-1.5" : "px-2",
 						// Without an icon the action takes the tab's right edge; keep the label clear of it.
-						!icon && action && "pr-7",
+						!icon && iconAction && "pr-7",
 					)}
 					{...buttonProps}
 				>
@@ -90,17 +107,29 @@ export function TerminalTabFrame({
 						<span
 							className={cn(
 								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-								action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
+								iconAction && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
 							)}
 						>
 							{icon}
 						</span>
 					) : null}
 					<span className="truncate">{label}</span>
-					{trailing ? <span className="grid shrink-0 place-items-center">{trailing}</span> : null}
 				</Pressable>
 			)}
-			{action ? (
+			{endAction ? (
+				<span
+					className={cn(
+						"mr-2 grid size-icon-base shrink-0 place-items-center",
+						actionPinned
+							? undefined
+							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100",
+					)}
+					data-terminal-tab-action
+				>
+					{endAction}
+				</span>
+			) : null}
+			{iconAction ? (
 				<span
 					className={cn(
 						"absolute top-1/2 grid size-icon-base -translate-y-1/2 place-items-center",
@@ -113,7 +142,7 @@ export function TerminalTabFrame({
 					)}
 					data-terminal-tab-action
 				>
-					{action}
+					{iconAction}
 				</span>
 			) : null}
 			{active ? (

@@ -385,6 +385,8 @@
 	--size-shell-tab-max: 140px;
 	/* Agent names and their status glyph need more room in Developer Mode. */
 	--size-agent-shell-tab-max: 192px;
+	/* The session's own tab carries its title and an always-visible ⋮, so it reads the most text. */
+	--size-session-tab-max: 260px;
 	--size-dialog-md: 420px;
 	--size-dialog-lg: 440px;
 	--size-dialog-orchestrator: 460px;
