@@ -953,6 +953,46 @@ describe("CloudClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("gives up explicitly after repeated empty reconnects", async () => {
+    // A server that accepts the stream and closes it immediately, forever.
+    const fetchMock = vi.fn(
+      async () => new Response("", { status: 200 }),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    // Backoff is real time; drive it with fake timers so the assertion is about
+    // the reconnect budget, not about how long the test is willing to wait.
+    vi.useFakeTimers();
+    try {
+      const outcome = client
+        .streamEvents("tenant", "session")
+        .next()
+        .then(
+          () => ({ resolved: true as const }),
+          (error: unknown) => ({ error }),
+        );
+      await vi.advanceTimersByTimeAsync(120_000);
+      const result = await outcome;
+      const error = "error" in result ? result.error : undefined;
+      expect(error).toMatchObject({
+        code: "EVENT_STREAM_INTERRUPTED",
+      });
+      // Terminal even though status is 5xx-shaped: an outer retry loop must
+      // check this flag instead of the status alone.
+      expect(error).toBeInstanceOf(CloudApiError);
+      expect((error as CloudApiError).terminal).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+    // One initial attempt plus the bounded reconnect budget, not an endless loop.
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(9);
+  });
+
   it("durably requests turn cancellation with an idempotency key", async () => {
     const fetchMock = vi.fn<
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>

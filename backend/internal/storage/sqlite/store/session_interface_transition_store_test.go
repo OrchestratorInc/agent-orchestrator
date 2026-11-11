@@ -477,3 +477,53 @@ func TestSessionInterfaceTransitionNoticeAcknowledgementRoundTripAndCDC(t *testi
 		t.Fatalf("idempotent acknowledgement emitted duplicate events: %+v", events)
 	}
 }
+
+// TestControllerEpochClearsSignalReceipt proves the durable half of the
+// interface-switch receipt rule: the committed target controller has not yet
+// proven its hook pipeline, so its row must stop carrying the source
+// controller's first_signal_at. A rollback keeps it because the source
+// controller never stopped.
+func TestControllerEpochClearsSignalReceipt(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "switch")
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := sampleRecord("switch")
+	rec.ID = "switch-receipt"
+	rec.Mode = domain.SessionModeTUI
+	rec.Metadata.AgentSessionID = "native-receipt"
+	rec.FirstSignalAt = now
+	created, err := st.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if changed, err := st.CommitSessionControllerEpoch(ctx, created.ID,
+		domain.SessionModeTUI, domain.SessionModeChat, "native-receipt", now.Add(time.Second)); err != nil || !changed {
+		t.Fatalf("commit epoch: changed=%v err=%v", changed, err)
+	}
+	switched, ok, err := st.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get switched session: ok=%v err=%v", ok, err)
+	}
+	if !switched.FirstSignalAt.IsZero() {
+		t.Fatalf("switched controller inherited the source signal receipt: %v", switched.FirstSignalAt)
+	}
+
+	// The new controller proves itself, then the handoff rolls back.
+	switched.FirstSignalAt = now.Add(2 * time.Second)
+	if err := st.UpdateSession(ctx, switched); err != nil {
+		t.Fatalf("stamp target receipt: %v", err)
+	}
+	if changed, err := st.RestoreSessionControllerEpoch(ctx, created.ID,
+		domain.SessionModeChat, domain.SessionModeTUI, "native-receipt", now.Add(3*time.Second)); err != nil || !changed {
+		t.Fatalf("restore epoch: changed=%v err=%v", changed, err)
+	}
+	restored, ok, err := st.GetSession(ctx, created.ID)
+	if err != nil || !ok {
+		t.Fatalf("get restored session: ok=%v err=%v", ok, err)
+	}
+	if restored.FirstSignalAt.IsZero() {
+		t.Fatal("rollback cleared the still-live source controller's receipt")
+	}
+}

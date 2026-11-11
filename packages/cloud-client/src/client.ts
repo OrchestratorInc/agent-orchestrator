@@ -111,8 +111,15 @@ export class CloudApiError extends Error {
   readonly requestId: string;
   readonly details?: Record<string, unknown>;
   readonly envelope: ErrorEnvelope;
+  /**
+   * True when retrying cannot succeed. A caller that wraps the client in its
+   * own retry loop must check this instead of only looking at `status` — a
+   * terminal error is reported with a 5xx-shaped envelope, which a
+   * status-only retry policy would otherwise treat as transient.
+   */
+  readonly terminal: boolean;
 
-  constructor(status: number, envelope: ErrorEnvelope) {
+  constructor(status: number, envelope: ErrorEnvelope, terminal = false) {
     super(envelope.message);
     this.name = "CloudApiError";
     this.status = status;
@@ -120,6 +127,7 @@ export class CloudApiError extends Error {
     this.requestId = envelope.requestId;
     this.details = envelope.details;
     this.envelope = envelope;
+    this.terminal = terminal;
   }
 }
 
@@ -794,6 +802,10 @@ export class CloudClient {
       `/sessions/${encodeURIComponent(sessionId)}/events`,
     );
     let after = options.after ?? 0;
+    // Consecutive reconnects without a delivered event. A server that closes
+    // the stream immediately, or a transport that fails on every attempt, would
+    // otherwise spin this loop forever: the reset below only happens when an
+    // event actually arrives, so this counts real progress, not time.
     let retryAttempt = 0;
 
     while (!options.signal?.aborted) {
@@ -853,7 +865,27 @@ export class CloudClient {
       }
 
       if (options.signal?.aborted) return;
-      retryAttempt = receivedEvent ? 0 : retryAttempt + 1;
+      if (receivedEvent) {
+        retryAttempt = 0;
+      } else {
+        retryAttempt += 1;
+        if (retryAttempt > maxStreamReconnectAttempts) {
+          // Terminal: the reconnect budget is spent, so neither this generator
+          // nor a caller's outer retry loop should reconnect again without a
+          // fresh user action. `terminal` makes that explicit for callers that
+          // only inspect the error afterwards.
+          throw new CloudApiError(
+            503,
+            {
+              error: "Event Stream Interrupted",
+              code: "EVENT_STREAM_INTERRUPTED",
+              message: `The cloud event stream reconnected ${maxStreamReconnectAttempts} times without delivering an event.`,
+              requestId: "",
+            },
+            true,
+          );
+        }
+      }
       await waitForRetry(retryAttempt, options.signal);
     }
   }
@@ -1438,6 +1470,8 @@ function parseSSEBlock(block: string): ClientEvent | undefined {
 
 function isRetryableStreamError(error: unknown): boolean {
   if (!(error instanceof CloudApiError)) return true;
+  // A terminal error must never be retried, even with a 5xx-shaped status.
+  if (error.terminal) return false;
   return (
     error.status === 408 ||
     error.status === 425 ||
@@ -1445,6 +1479,11 @@ function isRetryableStreamError(error: unknown): boolean {
     error.status >= 500
   );
 }
+
+// Consecutive reconnects streamEvents may attempt without delivering an event.
+// With waitForRetry's capped backoff a healthy stream resets this on the first
+// event, so only a persistently failing endpoint reaches the ceiling.
+const maxStreamReconnectAttempts = 8;
 
 async function waitForRetry(
   attempt: number,

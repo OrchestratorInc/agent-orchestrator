@@ -120,6 +120,10 @@ SET session_mode = ?1,
     native_checkpoint_evidence = CASE WHEN ?1 = 'tui' THEN '' ELSE native_checkpoint_evidence END,
     activity_state = 'idle',
     activity_last_at = ?4,
+    -- The committed target controller has not yet proven its hook pipeline.
+    -- Clearing the receipt makes a relaunch that never signals degrade to
+    -- no_signal instead of inheriting the source controller's receipt.
+    first_signal_at = NULL,
     updated_at = ?5
 WHERE id = ?6 AND session_mode = ?7 AND is_terminated = 0
 `
@@ -1702,7 +1706,8 @@ type RestoreSessionControllerEpochParams struct {
 
 // Rollback owns the same controller/activity facts but retains the source replay
 // checkpoint: the failed target never accepted it, so a later strict retry must
-// prove the same checkpoint again.
+// prove the same checkpoint again. The source controller never stopped, so its
+// first_signal_at receipt stays valid and is deliberately not cleared here.
 func (q *Queries) RestoreSessionControllerEpoch(ctx context.Context, arg RestoreSessionControllerEpochParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, restoreSessionControllerEpoch,
 		arg.TargetMode,

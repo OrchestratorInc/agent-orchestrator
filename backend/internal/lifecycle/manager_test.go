@@ -224,6 +224,9 @@ func (f *fakeStore) changeSessionControllerEpoch(
 		rec.Metadata.ConversationCheckpointNativeID = ""
 	}
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}
+	if !restore {
+		rec.FirstSignalAt = time.Time{}
+	}
 	rec.UpdatedAt = now
 	rec.Revision++
 	f.sessions[id] = rec
@@ -2008,6 +2011,43 @@ func TestMarkTerminatedRetriesFinalizationAfterSameLaunchRevisionChange(t *testi
 	}
 }
 
+// TestMarkTerminatedRepeatedFinalizationIsIdempotent pins the ordering
+// invariant that keeps finalization inside the retry loop: it must be sent
+// before the CAS, because its write requires the pre-termination revision and
+// is_terminated = 0. Repeating it for the same (launch, revision) — as a
+// contention retry or a second MarkTerminated does — is therefore safe, and the
+// finalization must still be attempted rather than skipped.
+func TestMarkTerminatedRepeatedFinalizationIsIdempotent(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	st.sessions[rec.ID] = rec
+	finalizer := &fakeUsageFinalizer{store: st}
+	m.SetUsageFinalizer(finalizer)
+
+	if err := m.MarkTerminated(ctx, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if finalizer.calls != 1 {
+		t.Fatalf("finalize calls = %d, want 1", finalizer.calls)
+	}
+	if finalizer.sawTerminated {
+		t.Fatal("finalization ran after the CAS; its write requires is_terminated = 0")
+	}
+	if finalizer.launchID != "launch-1" || finalizer.sessionRevision != rec.Revision {
+		t.Fatalf("finalized (launch=%q revision=%d), want (%q, %d)",
+			finalizer.launchID, finalizer.sessionRevision, "launch-1", rec.Revision)
+	}
+
+	// A second termination of the already-terminal session must not re-finalize.
+	if err := m.MarkTerminated(ctx, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if finalizer.calls != 1 {
+		t.Fatalf("already-terminated session re-finalized: calls = %d", finalizer.calls)
+	}
+}
+
 func TestMarkSpawnedStoresRuntimeMetadata(t *testing.T) {
 	m, st, _ := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -2166,6 +2206,55 @@ func TestCommitControllerEpochAllowsExplicitFreshHandoff(t *testing.T) {
 		ctx, "mer-1", domain.SessionModeChat, domain.SessionModeTUI, "", false,
 	); err == nil {
 		t.Fatal("blank native id without explicit fresh handoff was accepted")
+	}
+}
+
+// TestCommitControllerEpochClearsSignalReceipt is the regression for a session
+// inheriting the previous controller's "signals worked once" receipt across an
+// interface switch. MarkSpawned clears it for a new launch; the epoch commit is
+// the other way a fresh controller starts, so it must clear it too — otherwise
+// a target whose hooks never report keeps the source's receipt and can be
+// written to during its startup window instead of degrading to no_signal.
+func TestCommitControllerEpochClearsSignalReceipt(t *testing.T) {
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeTUI,
+		Activity:      domain.Activity{State: domain.ActivityIdle},
+		FirstSignalAt: time.Unix(90, 0),
+		Metadata:      domain.SessionMetadata{AgentSessionID: "native-1"},
+	}
+
+	changed, err := m.CommitControllerEpoch(
+		ctx, "mer-1", domain.SessionModeTUI, domain.SessionModeChat, "native-1", false,
+	)
+	if err != nil || !changed {
+		t.Fatalf("CommitControllerEpoch: changed=%v err=%v", changed, err)
+	}
+	if got := st.sessions["mer-1"].FirstSignalAt; !got.IsZero() {
+		t.Fatalf("commit carried the source controller's signal receipt: %v", got)
+	}
+}
+
+// TestRestoreControllerEpochKeepsSignalReceipt pins the rollback half: the
+// source controller never stopped running, so its receipt stays a true fact.
+func TestRestoreControllerEpochKeepsSignalReceipt(t *testing.T) {
+	m, st, _ := newManager()
+	receipt := time.Unix(90, 0)
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity:      domain.Activity{State: domain.ActivityIdle},
+		FirstSignalAt: receipt,
+		Metadata:      domain.SessionMetadata{AgentSessionID: "native-1"},
+	}
+
+	changed, err := m.RestoreControllerEpoch(
+		ctx, "mer-1", domain.SessionModeChat, domain.SessionModeTUI, "native-1", false,
+	)
+	if err != nil || !changed {
+		t.Fatalf("RestoreControllerEpoch: changed=%v err=%v", changed, err)
+	}
+	if got := st.sessions["mer-1"].FirstSignalAt; !got.Equal(receipt) {
+		t.Fatalf("rollback cleared the live controller's receipt: got %v want %v", got, receipt)
 	}
 }
 
@@ -4414,6 +4503,58 @@ func newManagerWithContainerReaper(cr ports.ContainerReaper, pl projectConfigLoa
 	msg := &fakeMessenger{}
 	m := New(st, msg, WithContainerReaper(cr, pl))
 	return m, st, msg
+}
+
+// churningStore advances a session's revision on every read, modelling a
+// concurrent writer that always wins the CAS. MarkTerminated must surface
+// contention instead of retrying forever.
+type churningStore struct {
+	*fakeStore
+}
+
+func (f *churningStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return rec, false, nil
+	}
+	rec.Revision++
+	f.sessions[id] = rec
+	return rec, true, nil
+}
+
+func TestMarkTerminated_BoundsContentionRetries(t *testing.T) {
+	st := &churningStore{fakeStore: newFakeStore()}
+	session := working("mer-1")
+	st.sessions["mer-1"] = session
+	m := New(st, &fakeMessenger{})
+
+	err := m.MarkTerminated(ctx, "mer-1")
+	if !errors.Is(err, ports.ErrActivityProjectionContention) {
+		t.Fatalf("MarkTerminated against an always-churning revision = %v, want ErrActivityProjectionContention", err)
+	}
+	if st.sessions["mer-1"].IsTerminated {
+		t.Fatal("a losing termination attempt must not mark the session terminated")
+	}
+}
+
+// TestMarkTerminated_ProjectSessionWithoutLoaderSkipsReap pins the opt-out
+// guarantee: ContainerReap.Disabled can only be honoured when the project
+// loader is wired, so a project session must not be reaped without it.
+func TestMarkTerminated_ProjectSessionWithoutLoaderSkipsReap(t *testing.T) {
+	cr := &fakeLifecycleContainerReaper{removed: 1}
+	st := newFakeStore()
+	m := New(st, &fakeMessenger{}, WithContainerReaper(cr, nil))
+	st.sessions["mer-1"] = working("mer-1")
+
+	if err := m.MarkTerminated(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(cr.sessions) != 0 {
+		t.Fatalf("project session reaped without a project loader, so the opt-out was unenforceable: %v", cr.sessions)
+	}
+	if !st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session must still be marked terminated")
+	}
 }
 
 // TestMarkTerminated_ReapsContainers is the #2652 regression for hooking the

@@ -12,6 +12,14 @@
 // The adapter reuses the SCM provider's TokenSource chain
 // (AO_GITLAB_TOKEN / GITLAB_TOKEN / glab auth status --show-token).
 //
+// # Self-managed hosts
+//
+// AllowedHosts plus HostTokens mirror the SCM provider's host routing: a
+// self-managed host must be allowlisted, and may carry its own token. A
+// configuration whose only credentials are HostTokens is valid — the tracker is
+// built for that host and gitlab.com lookups fail with ErrNoToken, rather than
+// the whole tracker being disabled at boot.
+//
 // # State mapping
 //
 // GitLab issues have two native states: opened and closed. They map onto

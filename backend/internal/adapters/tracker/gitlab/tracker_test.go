@@ -104,6 +104,60 @@ func TestNewRejectsMissingToken(t *testing.T) {
 	}
 }
 
+// TestNewAcceptsHostTokenOnlyConfig is the regression for a self-managed-only
+// setup: the default env/glab chain resolves nothing, but the allowlisted host
+// carries its own token. Construction must succeed (the SCM provider accepts the
+// same shape) and read that host, while gitlab.com fails closed at call time
+// instead of the whole tracker being disabled at boot.
+func TestNewAcceptsHostTokenOnlyConfig(t *testing.T) {
+	selfSrv := newFakeGL(t)
+	tr, err := New(Options{
+		Token:        scmgitlab.StaticTokenSource(""), // no gitlab.com credential
+		AllowedHosts: []string{"gitlab.internal"},
+		HostTokens:   map[string]scmgitlab.TokenSource{"gitlab.internal": scmgitlab.StaticTokenSource("tkn-host")},
+	})
+	if err != nil {
+		t.Fatalf("New with only a host token = %v, want success", err)
+	}
+	tr.hosts["gitlab.internal"] = hostEntry{
+		baseURL: selfSrv.server.URL,
+		tokens:  scmgitlab.StaticTokenSource("tkn-host"),
+	}
+	selfSrv.on("GET", "/projects/group/project/issues/1", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer tkn-host" {
+			t.Errorf("Authorization = %q, want Bearer tkn-host", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"iid":1,"title":"host only","description":"","state":"opened","web_url":"https://gitlab.internal/group/project/-/issues/1"}`))
+	})
+	issue, err := tr.Get(ctx(), domain.TrackerID{
+		Provider: domain.TrackerProviderGitLab,
+		Host:     "gitlab.internal",
+		Native:   "group/project#1",
+	})
+	if err != nil || issue.Title != "host only" {
+		t.Fatalf("Get via host token = %q, %v", issue.Title, err)
+	}
+	// The absent gitlab.com credential surfaces as ErrNoToken, not a panic or a
+	// request sent without a bearer header.
+	if _, err := tr.Get(ctx(), domain.TrackerID{Provider: domain.TrackerProviderGitLab, Native: "o/r#1"}); !errors.Is(err, ErrNoToken) {
+		t.Fatalf("gitlab.com lookup without a default token = %v, want ErrNoToken", err)
+	}
+}
+
+// TestNewRejectsUnusableHostOnlyConfig keeps the fail-fast boot behaviour: a
+// configuration with no usable credential anywhere is still an error.
+func TestNewRejectsUnusableHostOnlyConfig(t *testing.T) {
+	_, err := New(Options{
+		Token:        scmgitlab.StaticTokenSource(""),
+		AllowedHosts: []string{"gitlab.internal"},
+		HostTokens:   map[string]scmgitlab.TokenSource{"gitlab.internal": scmgitlab.StaticTokenSource("")},
+	})
+	if !errors.Is(err, scmgitlab.ErrNoToken) {
+		t.Fatalf("New with no usable credential = %v, want ErrNoToken", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ID parsing
 // ---------------------------------------------------------------------------
