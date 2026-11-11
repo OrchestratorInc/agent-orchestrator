@@ -689,9 +689,7 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			s.wakeMu.Unlock()
 		}()
 		ctx := context.Background()
-		if !s.waitForOtherWriter(ctx, id) {
-			return
-		}
+		s.waitForOtherWriter(ctx, id)
 		if err := s.wakeHibernated(ctx, id); err != nil {
 			if s.stoppedForUpdate(id) {
 				s.log.Warn("chat session could not wake during a harness update; queued messages kept for its resume", "session", id, "err", err)
@@ -751,18 +749,29 @@ func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionReco
 	return true, nil
 }
 
-func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) bool {
-	if !s.isHeldElsewhere(id) {
-		return true
+func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) {
+	if s.otherWriter == nil {
+		return
 	}
-	defer s.setHeldElsewhere(id, false)
+	held := s.isHeldElsewhere(id)
+	defer func() {
+		if held {
+			s.setHeldElsewhere(id, false)
+		}
+	}()
 	for {
 		rec, err := s.requireChatSession(ctx, id)
-		if err != nil || rec.IsTerminated {
-			return false
-		}
-		if rec.HibernatedAt == nil || !s.otherWriter(ctx, rec, time.Time{}) {
-			return true
+		switch {
+		case err == nil:
+			if rec.IsTerminated || rec.HibernatedAt == nil || !s.otherWriter(ctx, rec, time.Time{}) {
+				return
+			}
+			held = true
+			s.setHeldElsewhere(id, true)
+		case !held || errors.Is(err, ports.ErrSessionNotFound) || errors.Is(err, ErrNotChatMode):
+			return
+		default:
+			s.log.Warn("could not read a chat another process holds; retrying", "session", id, "err", err)
 		}
 		time.Sleep(otherWriterPoll)
 	}

@@ -420,6 +420,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 // startLocked is the launch implementation shared by ordinary starts and the
 // provider-switch saga. Callers must hold the typed controller gate.
 func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller, error) {
+	startedAt := s.now()
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
 		cfg.ReadOnly = true
@@ -1240,7 +1241,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	}
 	s.mu.Lock()
 	if !liveReconnect {
-		controller.started = s.now()
+		controller.started = startedAt
 	}
 	s.ownerControllers[owner] = controller
 	if owner.Kind == domain.ConversationOwnerSession {

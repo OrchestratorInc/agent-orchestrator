@@ -253,3 +253,177 @@ func TestSendDuringTheStopForAnotherProcessDoesNotWakeTheChat(t *testing.T) {
 		t.Fatal("chat did not wake after the other process stopped")
 	}
 }
+
+// expectHeldUntilWriterLeaves checks a queued message waits, with the chat
+// marked open elsewhere, until the other process leaves, then reaches the
+// resumed provider.
+func expectHeldUntilWriterLeaves(t *testing.T, h *harness, woke <-chan struct{}, elsewhere *atomic.Bool, resumed *fakeConversation, text string) {
+	t.Helper()
+	ctx := context.Background()
+	select {
+	case <-woke:
+		t.Fatal("the chat woke while another process holds it")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if snapshot, err := h.svc.Snapshot(ctx, testSession); err != nil || !snapshot.OpenElsewhere {
+		t.Fatalf("snapshot while held = elsewhere %v, %v", snapshot.OpenElsewhere, err)
+	}
+	elsewhere.Store(false)
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the chat did not wake after the other process left")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := resumed.sentTexts(); len(got) == 1 && got[0] == text {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("resumed provider received %v", resumed.sentTexts())
+}
+
+func TestSendToASleepingChatWaitsWhileAnotherProcessHoldsIt(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return true }
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped {
+		t.Fatalf("idle hibernation = %v, %v", stopped, err)
+	}
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+
+	if turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "while asleep", ClientMessageID: "elsewhere-7"}); err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("send = %+v, %v; want it queued", turn, err)
+	}
+	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "while asleep")
+}
+
+func TestSendThatSwitchesReleaseWaitsWhileAnotherProcessHoldsIt(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	h, old, resumed := versionRefreshHarness(t)
+	ctx := context.Background()
+	markStale(t, h)
+	h.advance(refreshIdle)
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+
+	if turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "after update", ClientMessageID: "elsewhere-8"}); err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("send = %+v, %v; want it queued", turn, err)
+	}
+	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "after update")
+}
+
+type failingSessionRead struct {
+	*hibernationSessionStore
+	failNext atomic.Bool
+}
+
+func (s *failingSessionRead) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	if s.failNext.CompareAndSwap(true, false) {
+		return domain.SessionRecord{}, false, errors.New("database is locked")
+	}
+	return s.hibernationSessionStore.GetSession(ctx, id)
+}
+
+func TestHeldChatSurvivesAFailedSessionRead(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	var reads *failingSessionRead
+	h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+		reads = &failingSessionRead{hibernationSessionStore: opts.Sessions.(*hibernationSessionStore)}
+		opts.Sessions = reads
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+	if turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "while the terminal is open", ClientMessageID: "elsewhere-9"}); err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("send = %+v, %v; want it queued", turn, err)
+	}
+
+	reads.failNext.Store(true)
+	for deadline := time.Now().Add(2 * time.Second); reads.failNext.Load(); {
+		if time.Now().After(deadline) {
+			t.Fatal("the waiter stopped reading the session")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "while the terminal is open")
+}
+
+func TestSendSeesTurnsWrittenWhileTheProviderStarted(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	var h *harness
+	var old *hibernationConversation
+	var terminalTurn atomic.Pointer[time.Time]
+	resumes := make(chan *hibernationConversation, 4)
+	h, old = hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return true }
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) {
+			h.advance(time.Second)
+			written := h.now()
+			terminalTurn.Store(&written)
+			h.advance(time.Second)
+			conv := &hibernationConversation{fakeConversation: newFakeConversation()}
+			conv.turnSeq = 1
+			resumes <- conv
+			return conv, nil
+		}
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped {
+		t.Fatalf("idle hibernation = %v, %v", stopped, err)
+	}
+	woke := wakeOnNewRelease(t, h, old, nil)
+	if err := h.svc.SetChatView(ctx, testSession, "view-1", true); err != nil {
+		t.Fatal(err)
+	}
+	<-woke
+	first := <-resumes
+	h.svc.SetOtherWriterCheck(func(_ context.Context, _ domain.SessionRecord, since time.Time) bool {
+		written := terminalTurn.Load()
+		return !since.IsZero() && written != nil && since.Before(*written)
+	})
+
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "after the terminal", ClientMessageID: "elsewhere-10"})
+	if err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("send = %+v, %v; want it held for a reload", turn, err)
+	}
+	if sent := first.sentTexts(); len(sent) != 0 {
+		t.Fatalf("provider started before the terminal's turn received %v", sent)
+	}
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the chat did not wake to reload the transcript")
+	}
+	second := <-resumes
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(second.sentTexts()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sent := second.sentTexts(); len(sent) != 1 || sent[0] != "after the terminal" {
+		t.Fatalf("reloaded provider received %v", sent)
+	}
+}
