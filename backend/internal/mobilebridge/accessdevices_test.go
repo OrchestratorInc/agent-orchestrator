@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ func TestAccessDevicesIssueMatchRevoke(t *testing.T) {
 	if strings.Contains(string(raw), token) {
 		t.Fatal("the token is stored in the registry file")
 	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("registry mode = %v, want 0600", info.Mode().Perm())
 	}
 
@@ -138,6 +139,26 @@ func TestAccessDevicesCapAndDamagedFile(t *testing.T) {
 	// The empty registry is usable: a device can pair again.
 	if _, _, err := damaged.Issue("again", "ios", now); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A registry that cannot be read is moved aside, so pairing a device does not
+// write over it.
+func TestAnUnreadableRegistryIsMovedAside(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "access-devices.json")
+	// A directory in the file's place fails to read on every platform.
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := LoadAccessDevices(path)
+	if err == nil {
+		t.Fatal("an unreadable registry loaded without an error")
+	}
+	if _, err := os.Stat(path + ".bad"); err != nil {
+		t.Fatalf("the unreadable registry was not moved aside: %v", err)
+	}
+	if _, _, err := devices.Issue("Phone", "ios", time.Now()); err != nil {
+		t.Fatalf("pair after an unreadable registry: %v", err)
 	}
 }
 
