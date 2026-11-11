@@ -1280,6 +1280,8 @@ export interface CloudCpHarnessVersion {
 	defaultVersion: string;
 	/** The newer release the organization chose in its place; absent while it runs the default. */
 	selectedVersion?: string;
+	/** A release the organization chose that AO's tested release has since caught up with; new sessions run `defaultVersion`. */
+	supersededVersion?: string;
 	plan: {
 		agentId: string;
 		automatic: boolean;

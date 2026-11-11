@@ -75,4 +75,11 @@ describe("describeCloudHarness", () => {
 		expect(describeCloudHarness({ editable: true, agents: [] }, "codex")).toBeUndefined();
 		expect(describeCloudHarness(null, "codex")).toBeUndefined();
 	});
+
+	it("shows the AO-tested release once it has caught up with the organization's choice", () => {
+		const superseded = { ...cloudHarnessEntry("claude-code", { current: "2.1.322", latest: "2.1.330", editable: true }), supersededVersion: "2.1.300" };
+		expect(describeCloudHarness({ editable: true, agents: [superseded] }, "claude-code")).toMatchObject({
+			currentVersion: "2.1.322", defaultVersion: "2.1.322", onDefault: true, updateExists: true, actionable: true,
+		});
+	});
 });

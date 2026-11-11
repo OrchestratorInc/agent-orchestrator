@@ -2767,6 +2767,8 @@ export interface components {
             defaultVersion: string;
             /** @description The newer release the organization chose in its place; absent while it runs the default. */
             selectedVersion?: string;
+            /** @description A release the organization chose that AO's tested release has since caught up with or passed. New sessions run `defaultVersion` instead, never an older CLI than AO tests; absent otherwise. */
+            supersededVersion?: string;
             plan: components["schemas"]["CloudHarnessInstallPlan"];
             advisory: components["schemas"]["CloudHarnessUpdateAdvisory"];
             job?: components["schemas"]["CloudHarnessInstallJob"];
@@ -8488,7 +8490,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description INVALID_HARNESS_VERSION (not a stable release of the harness), HARNESS_VERSION_NOT_NEWER (not newer than the AO-tested release), or UNKNOWN_HARNESS_VERSION (the publisher has no such release). */
+            /** @description INVALID_HARNESS_VERSION (not a stable release of the harness), HARNESS_VERSION_NOT_NEWER (not newer than the AO-tested release), UNKNOWN_HARNESS_VERSION (the publisher has no such release), or UNVERIFIABLE_HARNESS_VERSION (the release installs something AO Cloud cannot check against its publisher's listing). */
             422: {
                 headers: {
                     [name: string]: unknown;
