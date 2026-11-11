@@ -91,9 +91,9 @@ export default function PairScreen() {
 		mounted.current = true;
 		return () => { mounted.current = false; };
 	}, []);
-	const [repairHost, setRepairHost] = useState<Host | null | undefined>(() => repairHostId ? undefined : null);
+	const [repairHost, setRepairHost] = useState<Host | null | undefined>(() => repairHostId !== undefined ? undefined : null);
 	useEffect(() => {
-		if (!repairHostId) {
+		if (repairHostId === undefined) {
 			setRepairHost(null);
 			return;
 		}
@@ -328,7 +328,7 @@ export default function PairScreen() {
 	if (repairHost === undefined) {
 		return <View style={styles.center}><Spinner /></View>;
 	}
-	if (repairHostId && !repairHost) {
+	if (repairHostId !== undefined && !repairHost) {
 		return (
 			<View style={styles.screen}>
 				<EmptyState
