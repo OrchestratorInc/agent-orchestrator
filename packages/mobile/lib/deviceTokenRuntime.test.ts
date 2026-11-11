@@ -21,4 +21,12 @@ describe("pairThisDevice", () => {
 		await pairThisDevice(config, { fresh: true });
 		expect(pairDevice).toHaveBeenCalledTimes(2);
 	});
+
+	it("pairs again for a password, which a retry can still use", async () => {
+		vi.mocked(pairDevice).mockReset().mockResolvedValue({ kind: "paired", token, credential: "password" });
+		const password = { ...config, password: "pairing1" };
+		await pairThisDevice(password);
+		await pairThisDevice(password);
+		expect(pairDevice).toHaveBeenCalledTimes(2);
+	});
 });
