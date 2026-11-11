@@ -13,8 +13,8 @@ describe("staleSavedTuning", () => {
 	it("resets a model the account's catalog does not list, with its effort", () => {
 		expect(staleSavedTuning(catalog, "claude-gone-4", "high", "claude-code")).toEqual({ model: true, effort: true });
 	});
-	it("resets a model that needs a newer Claude Code", () => {
-		expect(staleSavedTuning(catalog, "claude-fable-5-1", "", "claude-code")).toEqual({ model: true, effort: false });
+	it("preserves a model that needs a newer Claude Code", () => {
+		expect(staleSavedTuning(catalog, "claude-fable-5-1", "max", "claude-code")).toBeUndefined();
 	});
 	it("resets only an effort the listed model does not support", () => {
 		expect(staleSavedTuning(catalog, "claude-sonnet-5-5", "max", "claude-code")).toEqual({ model: false, effort: true });

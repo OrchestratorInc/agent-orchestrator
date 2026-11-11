@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +17,17 @@ function wrapper({ children }: { children: ReactNode }) {
 const catalog = { refreshState: "idle", models: [{ id: "claude-sonnet-5-5", efforts: ["low", "high"] }] };
 const config = { env: { KEEP: "1" }, worker: { agent: "claude-code", agentConfig: { model: "claude-gone-4", effort: "high" } } };
 
+async function confirmReset() {
+	await waitFor(() => expect(useUiStore.getState().globalToasts[0]?.action?.label).toBe("Reset saved settings"));
+	expect(getMock).not.toHaveBeenCalled();
+	expect(putMock).not.toHaveBeenCalled();
+	const toast = useUiStore.getState().globalToasts[0];
+	await act(async () => {
+		toast.action?.run();
+		useUiStore.getState().dismissGlobalToast(toast.nonce);
+	});
+}
+
 describe("useResetStaleProjectTuning", () => {
 	beforeEach(() => {
 		getMock.mockReset().mockResolvedValue({ data: { status: "ok", project: { id: "mer", name: "Mer", config } } });
@@ -27,13 +38,14 @@ describe("useResetStaleProjectTuning", () => {
 	it("resets a saved worker model the catalog no longer lists, once, keeping the rest of the config", async () => {
 		const props = { projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code", config, catalog };
 		const { rerender } = renderHook((p) => useResetStaleProjectTuning(p), { wrapper, initialProps: props });
+		await confirmReset();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
 			params: { path: { id: "mer" } },
 			body: { displayName: "Mer", config: { env: { KEEP: "1" }, worker: { agent: "claude-code", agentConfig: {} } } },
 		});
 		await waitFor(() => expect(useUiStore.getState().globalToasts).toHaveLength(1));
-		expect(useUiStore.getState().globalToasts[0].body).toContain("claude-gone-4 is no longer available for Claude Code");
+		expect(useUiStore.getState().globalToasts[0].title).toBe("Project model settings reset");
 		rerender({ ...props });
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(putMock).toHaveBeenCalledTimes(1);
@@ -67,6 +79,7 @@ describe("useResetStaleProjectTuning", () => {
 			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
 			config: savedConfig, catalog,
 		}), { wrapper });
+		await confirmReset();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
 			params: { path: { id: "mer" } },
@@ -95,6 +108,7 @@ describe("useResetStaleProjectTuning", () => {
 			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
 			config: { agentConfig: { model: "claude-gone-4", effort: "high" } }, catalog,
 		}), { wrapper });
+		await confirmReset();
 		await waitFor(() => expect(getMock).toHaveBeenCalledOnce());
 		expect(putMock).not.toHaveBeenCalled();
 	});
@@ -106,11 +120,55 @@ describe("useResetStaleProjectTuning", () => {
 			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
 			config: saved, catalog: { models: [{ id: "claude-haiku-4-5" }] },
 		}), { wrapper });
+		await confirmReset();
 		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
 		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
 			params: { path: { id: "mer" } },
 			body: { displayName: "Mer", config: { worker: { agentConfig: { model: "claude-haiku-4-5" } } } },
 		});
+	});
+
+	it("keeps settings when the user dismisses the reset proposal", async () => {
+		renderHook(() => useResetStaleProjectTuning({
+			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code", config, catalog,
+		}), { wrapper });
+		await waitFor(() => expect(useUiStore.getState().globalToasts).toHaveLength(1));
+		const toast = useUiStore.getState().globalToasts[0];
+		expect(toast.dismissible).toBe(true);
+		act(() => useUiStore.getState().dismissGlobalToast(toast.nonce));
+		expect(getMock).not.toHaveBeenCalled();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it("reports a failed confirmed reset without claiming settings changed", async () => {
+		putMock.mockResolvedValue({ error: { code: "SAVE_FAILED" } });
+		renderHook(() => useResetStaleProjectTuning({
+			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code", config, catalog,
+		}), { wrapper });
+		await confirmReset();
+		await waitFor(() => expect(useUiStore.getState().globalToasts[0]?.title).toBe("Could not reset saved model settings"));
+		expect(useUiStore.getState().globalToasts[0].tone).toBe("error");
+	});
+
+	it("preserves saved model and effort when Claude Code only needs updating", () => {
+		renderHook(() => useResetStaleProjectTuning({
+			projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code",
+			config: { agentConfig: { model: "claude-sonnet-5-5", effort: "max" } },
+			catalog: { models: [{ id: "claude-sonnet-5-5", efforts: ["high"], requiresVersion: "99.0.0" }] },
+		}), { wrapper });
+		expect(useUiStore.getState().globalToasts).toHaveLength(0);
+		expect(getMock).not.toHaveBeenCalled();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it("does not apply an old proposal after catalog capabilities change", async () => {
+		const props = { projectId: "mer", agent: "claude-code", agentLabel: "Claude Code", projectAgent: "claude-code", config, catalog };
+		const { rerender } = renderHook((p) => useResetStaleProjectTuning(p), { wrapper, initialProps: props });
+		const toast = useUiStore.getState().globalToasts[0];
+		rerender({ ...props, catalog: { ...catalog, models: [{ id: "claude-gone-4", efforts: ["high"] }] } });
+		await act(async () => { toast.action?.run(); });
+		expect(getMock).not.toHaveBeenCalled();
+		expect(putMock).not.toHaveBeenCalled();
 	});
 
 	it("leaves valid settings and other agents alone", async () => {

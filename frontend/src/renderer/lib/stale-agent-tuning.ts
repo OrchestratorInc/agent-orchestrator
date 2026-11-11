@@ -20,7 +20,9 @@ export function staleSavedTuning(catalog: Catalog | undefined, model: string, ef
 	if (!catalog?.models?.length || catalog.stale || (catalog.refreshState && catalog.refreshState !== "idle")) return undefined;
 	if (!isConcreteModelID(model)) return undefined;
 	const listed = catalog.models.find((item) => item.id === model);
-	if ((!listed && catalog.customModelEntry !== "direct") || listed?.requiresVersion) {
+	// An upgrade requirement is actionable in the picker, not stale settings.
+	if (listed?.requiresVersion) return undefined;
+	if (!listed && catalog.customModelEntry !== "direct") {
 		return { model: true, effort: effort !== "" };
 	}
 	const effortModel = listed && agent === "claude-code" && !listed.efforts?.length

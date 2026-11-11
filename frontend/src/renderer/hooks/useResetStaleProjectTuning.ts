@@ -24,12 +24,7 @@ function effectiveSavedTuning(config?: TuningConfig) {
 	};
 }
 
-/**
- * Resets a project's saved worker (or project-wide) model or effort that the
- * agent's current catalog no longer accepts, so a start never carries a
- * setting the spawn would refuse, and says once what changed. Runs only for
- * the project's own worker agent against an authoritative catalog.
- */
+/** Offers an explicit reset for stale saved worker tuning; opening the composer never writes settings. */
 export function useResetStaleProjectTuning(args: {
 	projectId?: string;
 	hostId?: string;
@@ -42,6 +37,8 @@ export function useResetStaleProjectTuning(args: {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const attempted = useRef(new Set<string>());
+	const latest = useRef(args);
+	latest.current = args;
 	const { projectId, hostId, agent, agentLabel, projectAgent, config, catalog } = args;
 	const { model, effort, modelSlot, effortSlot } = effectiveSavedTuning(config);
 	const stale = agent !== "" && agent === projectAgent ? staleSavedTuning(catalog, model, effort, agent) : undefined;
@@ -50,11 +47,22 @@ export function useResetStaleProjectTuning(args: {
 		const key = `${hostId ?? ""}|${projectId}|${modelSlot}|${model}|${effortSlot}|${effort}`;
 		if (attempted.current.has(key)) return;
 		attempted.current.add(key);
-		void (async () => {
+		const stillCurrent = () => {
+			const current = latest.current;
+			if (current.projectId !== projectId || current.hostId !== hostId || current.agent !== agent || current.projectAgent !== projectAgent) return false;
+			const tuning = effectiveSavedTuning(current.config);
+			const invalid = staleSavedTuning(current.catalog, tuning.model, tuning.effort, current.agent);
+			return tuning.model === model && tuning.effort === effort
+				&& tuning.modelSlot === modelSlot && tuning.effortSlot === effortSlot
+				&& invalid?.model === stale.model && invalid?.effort === stale.effort;
+		};
+		const reset = async () => {
+			if (!stillCurrent()) return;
 			const client = hostId ? clientForHost(hostId) : apiClient;
 			// Re-read before the whole-config PUT so no other change is erased.
 			const current = await client.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
-			if (current.error || current.data?.status !== "ok" || !current.data.project) return;
+			if (current.error) throw current.error;
+			if (current.data?.status !== "ok" || !current.data.project) return;
 			const project = current.data.project as Project;
 			const next = structuredClone(project.config ?? {}) as NonNullable<Project["config"]>;
 			const currentTuning = effectiveSavedTuning(next);
@@ -64,27 +72,43 @@ export function useResetStaleProjectTuning(args: {
 			const effortTarget = effortSlot === "worker" ? next.worker?.agentConfig : next.agentConfig;
 			if (stale.model && modelTarget) delete modelTarget.model;
 			if (stale.effort && effortTarget) delete effortTarget.effort;
+			if (!stillCurrent()) return;
 			const { error } = await client.PUT("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },
 				body: { displayName: project.name, config: next },
 			});
-			if (error) return;
+			if (error) throw error;
 			void queryClient.invalidateQueries({ queryKey: hostId ? ["project", hostId, projectId] : ["project", projectId] });
 			useUiStore.getState().showGlobalToast(
 				t("newTask.staleTuningReset.title", { defaultValue: "Project model settings reset" }),
-				stale.model
-					? t("newTask.staleTuningReset.model", {
-						defaultValue: "{{model}} is no longer available for {{agent}}, so this project now uses the {{agent}} default model and effort.",
-						model,
-						agent: agentLabel,
-					})
-					: t("newTask.staleTuningReset.effort", {
-						defaultValue: "{{model}} no longer supports {{effort}} effort, so this project now uses its default effort.",
-						model,
-						effort,
-					}),
-				{ tone: "info", durationMs: 12_000 },
+				undefined, { tone: "success" },
 			);
-		})();
-	}, [agentLabel, effort, effortSlot, hostId, model, modelSlot, projectId, queryClient, stale, t]);
+		};
+		let confirmed = false;
+		useUiStore.getState().showGlobalToast(
+			t("newTask.staleTuningReset.proposalTitle", { defaultValue: "Saved model settings need attention" }),
+			stale.model
+				? t("newTask.staleTuningReset.proposalModel", {
+					defaultValue: "{{model}} is not listed for {{agent}}. Reset this project's saved model and effort?",
+					model, agent: agentLabel,
+				})
+				: t("newTask.staleTuningReset.proposalEffort", {
+					defaultValue: "{{model}} does not support {{effort}} effort. Reset this project's saved effort?",
+					model, effort,
+				}),
+			{
+				tone: "info", durationMs: 20_000, dismissible: true,
+				action: {
+					label: t("newTask.staleTuningReset.confirm", { defaultValue: "Reset saved settings" }),
+					run: () => {
+						if (confirmed) return;
+						confirmed = true;
+						void reset().catch(() => useUiStore.getState().showGlobalToast(
+							t("newTask.staleTuningReset.failed", { defaultValue: "Could not reset saved model settings" }), undefined, { tone: "error" },
+						));
+					},
+				},
+			},
+		);
+	}, [agent, agentLabel, effort, effortSlot, hostId, model, modelSlot, projectAgent, projectId, queryClient, stale, t]);
 }
