@@ -125,15 +125,17 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 				} else if err != nil || alive != tc.retainPane {
 					t.Fatalf("host after child exit = %v, %v; want retained=%v", alive, err, tc.retainPane)
 				}
+				// The exited session shell is kept as an ended tab, not deleted.
 				if reconcile == "desktop relaunch" {
-					if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 1 {
+					if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 0 {
 						t.Fatalf("exited reap = %d, %v", n, err)
 					}
-				} else if listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 0 {
-					t.Fatalf("exited list = %+v, %v", listed, err)
 				}
-				if len(st.records) != 0 {
-					t.Fatalf("exited shell row retained: %+v", st.records)
+				if listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 1 || listed[0].EndedAt == nil {
+					t.Fatalf("exited list = %+v, %v; want one ended tab", listed, err)
+				}
+				if len(st.records) != 1 || st.records[0].EndedAt == nil {
+					t.Fatalf("exited shell row = %+v; want it kept and ended", st.records)
 				}
 				// Destroy clears the runtime's socket cache. Inspect this exact
 				// fixture server instead of probing an uncached legacy fallback.

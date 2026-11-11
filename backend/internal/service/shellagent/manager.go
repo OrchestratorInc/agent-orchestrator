@@ -67,6 +67,11 @@ type Manager struct {
 	log    *slog.Logger
 	base   context.Context
 
+	// record, when set, remembers each harness seen in a shell; recorded
+	// dedupes calls per terminal.
+	record   func(handleID string, harness domain.AgentHarness)
+	recorded map[string]domain.AgentHarness
+
 	mu      sync.Mutex
 	tracked map[string]*shellWatch // nil: tracked, not watched
 	current map[string]Agent
@@ -83,10 +88,18 @@ func NewManager(ctx context.Context, rt Runtime, agents ports.AgentResolver, log
 	styled, _ := rt.(ports.StyledTerminalOutputReader)
 	return &Manager{
 		rt: rt, styled: styled, agents: agents, log: log, base: ctx,
-		tracked: map[string]*shellWatch{},
-		current: map[string]Agent{},
-		subs:    map[int]func(json.RawMessage){},
+		tracked:  map[string]*shellWatch{},
+		recorded: map[string]domain.AgentHarness{},
+		current:  map[string]Agent{},
+		subs:     map[int]func(json.RawMessage){},
 	}
+}
+
+// SetHarnessRecorder registers fn to be told the harness seen in a shell,
+// once per change. fn may block briefly; it is never called with the lock
+// held. Call once at boot, before tracking starts.
+func (m *Manager) SetHarnessRecorder(fn func(handleID string, harness domain.AgentHarness)) {
+	m.record = fn
 }
 
 // TrackShellTerminal starts following a shell terminal; tracking twice is a no-op.
@@ -117,6 +130,7 @@ func (m *Manager) UntrackShellTerminal(handleID string) {
 		w.cancel()
 	}
 	delete(m.tracked, handleID)
+	delete(m.recorded, handleID)
 	m.setLocked(handleID, nil)
 }
 
@@ -199,6 +213,7 @@ func (m *Manager) observe(ctx context.Context, handleID string, fg ports.Termina
 		m.apply(ctx, handleID, nil)
 		return
 	}
+	m.recordHarness(handleID, harness)
 	state := StateWorking
 	if !fg.Busy {
 		// Typing at an idle agent's prompt only echoes: keep the idle reading
@@ -311,4 +326,21 @@ func looksLikeApprovalPrompt(screen string) bool {
 		}
 	}
 	return approvalPrompt.MatchString(strings.Join(kept, "\n"))
+}
+
+// recordHarness reports a harness the first time it is seen in a shell.
+func (m *Manager) recordHarness(handleID string, harness domain.AgentHarness) {
+	if m.record == nil {
+		return
+	}
+	m.mu.Lock()
+	_, tracked := m.tracked[handleID]
+	changed := tracked && m.recorded[handleID] != harness
+	if changed {
+		m.recorded[handleID] = harness
+	}
+	m.mu.Unlock()
+	if changed {
+		m.record(handleID, harness)
+	}
 }

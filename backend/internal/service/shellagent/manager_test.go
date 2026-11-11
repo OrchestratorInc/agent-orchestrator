@@ -278,3 +278,44 @@ func TestManagerRestartsAGivenUpWatchForANewSubscriber(t *testing.T) {
 		t.Fatalf("dials = %d after a new subscriber, want the watch restarted", got)
 	}
 }
+
+// The harness seen in a shell is reported once per change, so an ended tab
+// can later offer to resume that agent.
+func TestManagerRecordsHarnessOncePerChange(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
+	m := NewManager(ctx, rt, nil, nil)
+	recorded := make(chan domain.AgentHarness, 4)
+	m.SetHarnessRecorder(func(handleID string, harness domain.AgentHarness) {
+		if handleID == "shell-1" {
+			recorded <- harness
+		}
+	})
+	m.TrackShellTerminal("shell-1")
+	defer m.SubscribeShellAgents(func(json.RawMessage) {})()
+	for _, fg := range []ports.TerminalForeground{
+		{Argv: []string{"claude"}, Busy: true},
+		{Argv: []string{"claude"}, Busy: true},
+		{Argv: []string{"zsh"}},
+		{Argv: []string{"codex"}, Busy: true},
+	} {
+		rt.readings <- fg
+	}
+	want := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex}
+	for _, harness := range want {
+		select {
+		case got := <-recorded:
+			if got != harness {
+				t.Fatalf("recorded %q, want %q", got, harness)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("harness %q not recorded", harness)
+		}
+	}
+	select {
+	case extra := <-recorded:
+		t.Fatalf("recorded %q again", extra)
+	case <-time.After(50 * time.Millisecond):
+	}
+}

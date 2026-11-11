@@ -43,7 +43,7 @@ const insertShellTerminal = `-- name: InsertShellTerminal :one
 INSERT INTO shell_terminals (
     handle_id, project_id, session_id, working_dir, title, app_run_id, created_at, transient, preview_capability_verifier, command_owner, title_explicit
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
+RETURNING handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title, ended_at, last_agent_harness
 `
 
 type InsertShellTerminalParams struct {
@@ -88,12 +88,33 @@ func (q *Queries) InsertShellTerminal(ctx context.Context, arg InsertShellTermin
 		&i.CommandOwner,
 		&i.TitleExplicit,
 		&i.AppTitle,
+		&i.EndedAt,
+		&i.LastAgentHarness,
 	)
 	return i, err
 }
 
+const markShellTerminalEnded = `-- name: MarkShellTerminalEnded :execrows
+UPDATE shell_terminals
+SET ended_at = ?1
+WHERE handle_id = ?2 AND ended_at IS NULL
+`
+
+type MarkShellTerminalEndedParams struct {
+	EndedAt  sql.NullTime
+	HandleID string
+}
+
+func (q *Queries) MarkShellTerminalEnded(ctx context.Context, arg MarkShellTerminalEndedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markShellTerminalEnded, arg.EndedAt, arg.HandleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const selectRestorableShellTerminals = `-- name: SelectRestorableShellTerminals :many
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title FROM shell_terminals
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title, ended_at, last_agent_harness FROM shell_terminals
 WHERE transient = FALSE OR app_run_id = ?
 ORDER BY created_at
 `
@@ -120,6 +141,8 @@ func (q *Queries) SelectRestorableShellTerminals(ctx context.Context, appRunID s
 			&i.CommandOwner,
 			&i.TitleExplicit,
 			&i.AppTitle,
+			&i.EndedAt,
+			&i.LastAgentHarness,
 		); err != nil {
 			return nil, err
 		}
@@ -135,7 +158,7 @@ func (q *Queries) SelectRestorableShellTerminals(ctx context.Context, appRunID s
 }
 
 const selectShellTerminalByHandleID = `-- name: SelectShellTerminalByHandleID :one
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title, ended_at, last_agent_harness
 FROM shell_terminals
 WHERE handle_id = ?
 `
@@ -156,12 +179,14 @@ func (q *Queries) SelectShellTerminalByHandleID(ctx context.Context, handleID st
 		&i.CommandOwner,
 		&i.TitleExplicit,
 		&i.AppTitle,
+		&i.EndedAt,
+		&i.LastAgentHarness,
 	)
 	return i, err
 }
 
 const selectShellTerminalsByAppRunID = `-- name: SelectShellTerminalsByAppRunID :many
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title, ended_at, last_agent_harness
 FROM shell_terminals
 WHERE app_run_id = ?
 ORDER BY created_at
@@ -189,6 +214,8 @@ func (q *Queries) SelectShellTerminalsByAppRunID(ctx context.Context, appRunID s
 			&i.CommandOwner,
 			&i.TitleExplicit,
 			&i.AppTitle,
+			&i.EndedAt,
+			&i.LastAgentHarness,
 		); err != nil {
 			return nil, err
 		}
@@ -204,7 +231,7 @@ func (q *Queries) SelectShellTerminalsByAppRunID(ctx context.Context, appRunID s
 }
 
 const selectShellTerminalsBySessionID = `-- name: SelectShellTerminalsBySessionID :many
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title, ended_at, last_agent_harness
 FROM shell_terminals
 WHERE session_id = ?
 ORDER BY created_at
@@ -232,6 +259,8 @@ func (q *Queries) SelectShellTerminalsBySessionID(ctx context.Context, sessionID
 			&i.CommandOwner,
 			&i.TitleExplicit,
 			&i.AppTitle,
+			&i.EndedAt,
+			&i.LastAgentHarness,
 		); err != nil {
 			return nil, err
 		}
@@ -247,7 +276,7 @@ func (q *Queries) SelectShellTerminalsBySessionID(ctx context.Context, sessionID
 }
 
 const selectShellTerminalsFromPreviousAppRuns = `-- name: SelectShellTerminalsFromPreviousAppRuns :many
-SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
+SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title, ended_at, last_agent_harness
 FROM shell_terminals
 WHERE app_run_id <> ?
 ORDER BY created_at
@@ -275,6 +304,8 @@ func (q *Queries) SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, a
 			&i.CommandOwner,
 			&i.TitleExplicit,
 			&i.AppTitle,
+			&i.EndedAt,
+			&i.LastAgentHarness,
 		); err != nil {
 			return nil, err
 		}
@@ -287,6 +318,25 @@ func (q *Queries) SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, a
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateShellTerminalAgentHarness = `-- name: UpdateShellTerminalAgentHarness :execrows
+UPDATE shell_terminals
+SET last_agent_harness = ?1
+WHERE handle_id = ?2 AND last_agent_harness <> ?1
+`
+
+type UpdateShellTerminalAgentHarnessParams struct {
+	LastAgentHarness string
+	HandleID         string
+}
+
+func (q *Queries) UpdateShellTerminalAgentHarness(ctx context.Context, arg UpdateShellTerminalAgentHarnessParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateShellTerminalAgentHarness, arg.LastAgentHarness, arg.HandleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateShellTerminalAppTitle = `-- name: UpdateShellTerminalAppTitle :execrows
@@ -312,7 +362,7 @@ const updateShellTerminalTitle = `-- name: UpdateShellTerminalTitle :one
 UPDATE shell_terminals
 SET title = ?, title_explicit = 1
 WHERE handle_id = ?
-RETURNING handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
+RETURNING handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title, ended_at, last_agent_harness
 `
 
 type UpdateShellTerminalTitleParams struct {
@@ -336,6 +386,8 @@ func (q *Queries) UpdateShellTerminalTitle(ctx context.Context, arg UpdateShellT
 		&i.CommandOwner,
 		&i.TitleExplicit,
 		&i.AppTitle,
+		&i.EndedAt,
+		&i.LastAgentHarness,
 	)
 	return i, err
 }
