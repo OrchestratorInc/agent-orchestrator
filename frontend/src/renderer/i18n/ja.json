@@ -390,7 +390,6 @@
 	"firstRun.signInPerkCloud": "クラウドサンドボックス",
 	"firstRun.signIn": "サインイン",
 	"firstRun.toolsTitle": "ツール",
-	"firstRun.toolsBody": "作業はコーディングエージェントが行います。GitHub CLI があれば、その成果を GitHub で共有できます。",
 	"firstRun.toolsChecking": "ツールを確認しています…",
 	"firstRun.githubTitle": "GitHub CLI",
 	"firstRun.ghSignInHint": "下でサインインしてください。",

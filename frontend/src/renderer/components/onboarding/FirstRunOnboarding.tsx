@@ -451,10 +451,13 @@ function NextButton({ busy = false, children, ...props }: ComponentProps<typeof 
  * persistent scene (OnboardingScene), driven by the step. */
 function StepSplit({
 	title,
+	titleHidden = false,
 	body,
 	children,
 }: {
 	title: string;
+	/** Kept for assistive tech only: the step's content says it on its own. */
+	titleHidden?: boolean;
 	body?: ReactNode;
 	children?: ReactNode;
 }) {
@@ -465,10 +468,10 @@ function StepSplit({
 		// than justify-center so a tall step still scrolls from its top.
 		<div className="flex min-h-0 w-full flex-col overflow-y-auto bg-background pb-14 pl-12 pr-10 pt-[max(6rem,16vh)]">
 			<div className="my-auto flex w-full max-w-md flex-col">
-				<h1 className="text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground">{title}</h1>
+				<h1 className={titleHidden ? "sr-only" : "text-balance text-heading-lg font-semibold leading-tight tracking-tight text-foreground"}>{title}</h1>
 				{body ? <p className="max-w-sm pt-3 text-pretty text-sm leading-relaxed text-muted-foreground">{body}</p> : null}
 				<ActionSlotContext.Provider value={actionSlot}>
-					{children ? <div className="flex flex-col gap-4 pt-6">{children}</div> : null}
+					{children ? <div className={cn("flex flex-col gap-4", !titleHidden && "pt-6")}>{children}</div> : null}
 				</ActionSlotContext.Provider>
 				<StepActions setSlot={setActionSlot} />
 			</div>
@@ -1057,7 +1060,8 @@ function ToolsStep({ onNext }: { onNext: () => void }) {
 	return (
 		<StepSplit
 			title={t("firstRun.toolsTitle")}
-			body={t("firstRun.toolsBody")}
+			// The Harnesses and Tools groups say what this page is for.
+			titleHidden
 		>
 			{ghChecking || readiness.isPending ? (
 				<Waiting>{t("firstRun.toolsChecking")}</Waiting>

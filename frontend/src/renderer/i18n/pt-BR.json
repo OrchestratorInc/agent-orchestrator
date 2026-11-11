@@ -391,7 +391,6 @@
 	"firstRun.signInPerkCloud": "Sandboxes na nuvem",
 	"firstRun.signIn": "Entrar",
 	"firstRun.toolsTitle": "Suas ferramentas",
-	"firstRun.toolsBody": "Os agentes de código fazem o trabalho. A CLI do GitHub permite que eles o compartilhem no GitHub.",
 	"firstRun.toolsChecking": "Verificando suas ferramentas…",
 	"firstRun.githubTitle": "GitHub CLI",
 	"firstRun.ghSignInHint": "Entre abaixo.",

@@ -390,7 +390,6 @@
 	"firstRun.signInPerkCloud": "클라우드 샌드박스",
 	"firstRun.signIn": "로그인",
 	"firstRun.toolsTitle": "도구",
-	"firstRun.toolsBody": "작업은 코딩 에이전트가 합니다. GitHub CLI가 있으면 결과를 GitHub에 공유할 수 있습니다.",
 	"firstRun.toolsChecking": "도구를 확인하는 중…",
 	"firstRun.githubTitle": "GitHub CLI",
 	"firstRun.ghSignInHint": "아래에서 로그인하세요.",

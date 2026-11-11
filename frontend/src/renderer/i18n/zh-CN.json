@@ -390,7 +390,6 @@
 	"firstRun.signInPerkCloud": "云端沙盒",
 	"firstRun.signIn": "登录",
 	"firstRun.toolsTitle": "你的工具",
-	"firstRun.toolsBody": "编程智能体负责干活。有了 GitHub CLI，它们可以在 GitHub 上分享成果。",
 	"firstRun.toolsChecking": "正在检查你的工具…",
 	"firstRun.githubTitle": "GitHub CLI",
 	"firstRun.ghSignInHint": "请在下方登录。",

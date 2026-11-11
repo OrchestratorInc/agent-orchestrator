@@ -354,7 +354,6 @@
 	"firstRun.signInPerkCloud": "Облачные песочницы",
 	"firstRun.signIn": "Войти",
 	"firstRun.toolsTitle": "Ваши инструменты",
-	"firstRun.toolsBody": "Работу выполняют агенты-программисты. GitHub CLI позволяет им делиться ею на GitHub.",
 	"firstRun.toolsChecking": "Проверяем инструменты…",
 	"firstRun.githubTitle": "GitHub CLI",
 	"firstRun.ghSignInHint": "Войдите ниже.",
