@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../lib/api-client", async (importOriginal) => ({
@@ -106,6 +106,35 @@ describe("useGhInstall", () => {
 		expect(await screen.findByRole("progressbar", { name: "GitHub CLI" })).toHaveAttribute("aria-valuenow", "40");
 		await waitFor(() => expect(onInstalled).toHaveBeenCalledOnce(), { timeout: 3000 });
 		expect(screen.getByTestId("busy")).toHaveTextContent("false");
+	});
+});
+
+describe("useGhInstall polling", () => {
+	afterEach(() => vi.useRealTimers());
+
+	it("starts one install however fast the clicks come", async () => {
+		api.POST.mockReturnValue(new Promise(() => undefined));
+		render(wrap(<GhHarness />));
+		const button = screen.getByRole("button", { name: "install gh" });
+		await act(async () => {
+			button.click();
+			button.click();
+		});
+		expect(api.POST).toHaveBeenCalledOnce();
+	});
+
+	it("rides out a failed poll and stops waiting once the daemon stays gone", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		api.POST.mockResolvedValue({ data: { target: "gh", status: "installing", command: "brew install gh" } });
+		render(wrap(<GhHarness />));
+		await act(async () => screen.getByRole("button", { name: "install gh" }).click());
+		// The mount's own check answered; every poll from here on is refused.
+		api.GET.mockRejectedValue(new TypeError("Failed to fetch"));
+		await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		expect(screen.getByTestId("busy")).toHaveTextContent("true");
+		await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+		expect(screen.getByTestId("busy")).toHaveTextContent("false");
+		expect(screen.getByRole("alert")).toHaveTextContent("The install didn't finish.");
 	});
 });
 
