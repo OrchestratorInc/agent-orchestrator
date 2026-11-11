@@ -1090,29 +1090,6 @@ describe("SessionsBoard", () => {
 		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
 	});
 
-	it("widens the archive from its project to every project", async () => {
-		workspaceQueryMock.mockReturnValue({
-			data: twoProjectsWithArchives(),
-			isError: false,
-			isSuccess: true,
-		});
-
-		renderBoard("p1");
-
-		const archive = await expandArchive();
-		expect(within(archive).getByText("dead worker")).toBeInTheDocument();
-		expect(within(archive).queryByText("p2 worker")).not.toBeInTheDocument();
-
-		await userEvent.click(within(archive).getByRole("button", { name: "Search all projects, not only radic" }));
-
-		expect(await within(archive).findByText("p2 worker")).toBeInTheDocument();
-		expect(within(archive).getByText("dead worker")).toBeInTheDocument();
-		expect(within(archive).queryByTestId("archive-scope-chip")).not.toBeInTheDocument();
-		// The chip went, the caret stayed in the search.
-		expect(within(archive).getByRole("combobox")).toHaveFocus();
-		expect(navigateMock).not.toHaveBeenCalled();
-	});
-
 	it("opens over any page from a request, without a board or navigation", async () => {
 		workspaceQueryMock.mockReturnValue({
 			data: twoProjectsWithArchives(),
@@ -1137,11 +1114,6 @@ describe("SessionsBoard", () => {
 		expect(search).toHaveValue("dead");
 		expect(await within(archive).findByText("dead worker")).toBeInTheDocument();
 		expect(within(archive).queryByText("p2 worker")).not.toBeInTheDocument();
-
-		// Backspace on an empty search drops the project, as in a token field.
-		await userEvent.clear(search);
-		await userEvent.keyboard("{Backspace}");
-		expect(await within(archive).findByText("p2 worker")).toBeInTheDocument();
 
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());

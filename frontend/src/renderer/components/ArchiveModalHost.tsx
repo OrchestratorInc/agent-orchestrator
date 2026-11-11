@@ -7,7 +7,7 @@ import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { isArchivedSession } from "../lib/standalone-archive";
 import { useUiStore, type ArchiveModalRequest } from "../stores/ui-store";
-import { STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, workerSessions, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { workerSessions, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { SessionArchiveModal } from "./SessionArchiveModal";
 
 /**
@@ -30,9 +30,6 @@ export function ArchiveModalHost() {
 function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalRequest }) {
 	const navigate = useNavigate();
 	const { hostId, projectId } = request;
-	// Widening to every project lasts for the request it was made in.
-	const [widenedRequest, setWidenedRequest] = useState<number | null>(null);
-	const allProjects = !projectId || widenedRequest === request.nonce;
 	const connectedHosts = useConnectedHosts();
 	const connected = !hostId || connectedHosts.includes(hostId);
 	// Subscribed only while open: closed (or closing), workspace polls leave
@@ -40,14 +37,11 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 	const local = useWorkspaceQuery({ subscribed: open && !hostId });
 	const remote = useRemoteHostWorkspacesQuery(hostId ?? "", { enabled: open && Boolean(hostId), subscribed: open && Boolean(hostId) });
 	const workspaces = hostId ? remote.data : local.data;
-	const project = projectId ? workspaces?.find((workspace) => workspace.id === projectId) : undefined;
 
 	const sessions = useMemo(() => {
-		const scoped = (workspaces ?? []).filter((workspace) =>
-			allProjects ? isProjectWorkspace(workspace) : workspace.id === projectId,
-		);
+		const scoped = projectId ? (workspaces ?? []).filter((workspace) => workspace.id === projectId) : workspaces ?? [];
 		return archivedNewestFirst(scoped);
-	}, [allProjects, projectId, workspaces]);
+	}, [projectId, workspaces]);
 
 	const openSession = useCallback((session: WorkspaceSession) => {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
@@ -78,19 +72,12 @@ function ArchiveModal({ open, request }: { open: boolean; request: ArchiveModalR
 			onCloseAutoFocus={onCloseAutoFocus}
 			onOpenChange={onOpenChange}
 			onOpenSession={openSession}
-			onWidenScope={allProjects ? undefined : () => setWidenedRequest(request.nonce)}
 			open={open}
 			requestId={request.nonce}
-			resetKey={refKey({ host: hostId ?? LOCAL_HOST, id: allProjects || !projectId ? "all" : projectId })}
-			scopeLabel={allProjects ? undefined : project?.name ?? projectId}
+			resetKey={refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" })}
 			sessions={sessions}
 		/>
 	);
-}
-
-/** The Scratchpad keeps its own archive page; "all projects" means projects. */
-function isProjectWorkspace(workspace: WorkspaceSummary): boolean {
-	return workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND;
 }
 
 function archivedNewestFirst(workspaces: WorkspaceSummary[]): WorkspaceSession[] {
