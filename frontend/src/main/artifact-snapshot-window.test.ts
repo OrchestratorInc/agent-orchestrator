@@ -35,14 +35,21 @@ describe("the snapshot renderer without the app window", () => {
 		try {
 			let shell = true;
 			const created = vi.fn();
-			// A window whose page never answers, so the first render stays under way while the shell closes.
+			let pageLoaded: () => void = () => undefined;
+			const loading = new Promise<void>((resolve) => {
+				pageLoaded = resolve;
+			});
+			// A window whose page loads only when told to, so the first render is under way while the shell closes.
 			class FakeWindow {
 				webContents = {
 					setWindowOpenHandler: () => undefined,
 					on: () => undefined,
 					setAudioMuted: () => undefined,
 					setFrameRate: () => undefined,
-					loadURL: () => new Promise<void>(() => undefined),
+					loadURL: () => loading,
+					startPainting: () => undefined,
+					stopPainting: () => undefined,
+					executeJavaScript: () => Promise.reject(new Error("the window is gone")),
 				};
 				constructor() {
 					created();
@@ -55,7 +62,7 @@ describe("the snapshot renderer without the app window", () => {
 			}
 			const renderer = createArtifactSnapshotRenderer({ BrowserWindow: FakeWindow as never, pageUrl: () => "app://renderer/artifact-snapshot.html", preload: "preload.js", shellOpen: () => shell });
 			const store = createArtifactSnapshotStore({ directory, render: renderer.render, gapMs: 0 });
-			void store.request(job("first.html"));
+			const first = store.request(job("first.html"));
 			await vi.waitFor(() => expect(created).toHaveBeenCalledTimes(1));
 			const queued = [1, 2, 3].map((n) => store.request(job(`queued-${n}.html`)));
 			// What main does when the shell window closes.
@@ -63,7 +70,9 @@ describe("the snapshot renderer without the app window", () => {
 			store.cancel();
 			renderer.close();
 			expect(await Promise.all(queued)).toEqual([SNAPSHOT_DROPPED, SNAPSHOT_DROPPED, SNAPSHOT_DROPPED]);
-			// Later requests, with the shell still closed, open nothing either.
+			// The render under way ends, and the queue has nothing left to start.
+			pageLoaded();
+			expect(await first).toBeNull();
 			expect(await store.request(job("after.html"))).toBeNull();
 			expect(created).toHaveBeenCalledTimes(1);
 		} finally {
