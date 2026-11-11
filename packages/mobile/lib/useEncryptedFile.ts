@@ -12,6 +12,22 @@ const MAX_ENCRYPTED_FILE_BYTES = 25 * 1024 * 1024;
 const folder = () => new Directory(Paths.cache, "encrypted-files");
 let cleared = false;
 
+// A cached page requests nothing: a request to the machine would leave the
+// encrypted channel with its path in the clear, and WebView offers no per-request block.
+const NO_REQUESTS = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data:; font-src data:; style-src 'unsafe-inline'">`;
+
+/** The bytes to cache and their extension: HTML gets the policy, and SVG is shown inside a page that has it. */
+export function cachedDocument(bytes: Uint8Array, path: string, contentType: string): { bytes: Uint8Array; extension: string } {
+	if (/^text\/html\b/i.test(contentType)) {
+		return { bytes: new TextEncoder().encode(NO_REQUESTS + new TextDecoder().decode(bytes)), extension: "html" };
+	}
+	if (/^image\/svg\+xml\b/i.test(contentType) || /\.svg$/i.test(path)) {
+		const page = `<!doctype html>${NO_REQUESTS}<style>body{margin:0}svg{max-width:100%;height:auto}</style><body>${new TextDecoder().decode(bytes)}</body>`;
+		return { bytes: new TextEncoder().encode(page), extension: "html" };
+	}
+	return { bytes, extension: /\.([a-z0-9]{1,8})$/i.exec(path)?.[1] ?? "bin" };
+}
+
 function writeFile(bytes: Uint8Array, path: string, contentType: string): File {
 	const dir = folder();
 	// Files left by an earlier run, as after a crash, go before the first new one.
@@ -21,9 +37,9 @@ function writeFile(bytes: Uint8Array, path: string, contentType: string): File {
 	}
 	dir.create({ intermediates: true, idempotent: true });
 	// The WebView takes the type from the extension, and a large Markdown file arrives rendered as HTML.
-	const extension = /^text\/html\b/i.test(contentType) ? "html" : /\.([a-z0-9]{1,8})$/i.exec(path)?.[1] ?? "bin";
-	const file = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.${extension}`);
-	file.write(bytes);
+	const cached = cachedDocument(bytes, path, contentType);
+	const file = new File(dir, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}.${cached.extension}`);
+	file.write(cached.bytes);
 	return file;
 }
 

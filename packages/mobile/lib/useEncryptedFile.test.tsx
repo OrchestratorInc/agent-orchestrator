@@ -30,7 +30,7 @@ vi.mock("expo-file-system", () => {
 	};
 });
 
-const { staysInCache, useEncryptedFile } = await import("./useEncryptedFile");
+const { cachedDocument, staysInCache, useEncryptedFile } = await import("./useEncryptedFile");
 
 const config = { host: "h", httpPort: "1", muxPort: "", password: "aod_x", hostKey: "k".repeat(43) };
 let result: { uri?: string; readAccess?: string; failed: boolean } = { failed: false };
@@ -126,5 +126,20 @@ describe("staysInCache", () => {
 		expect(staysInCache("http://192.168.1.5:3011/api/v1/sessions/s/artifacts/x?token=1", folder)).toBe(false);
 		expect(staysInCache("https://example.com/", folder)).toBe(false);
 		expect(staysInCache("file:///etc/hosts", folder)).toBe(false);
+	});
+});
+
+describe("cachedDocument", () => {
+	const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+	it("gives a cached page a policy that blocks every request, and shows SVG inside one", () => {
+		const page = cachedDocument(new TextEncoder().encode("<h1>Notes</h1><img src=\"http://192.168.1.5:3011/x\">"), "notes.md", "text/html; charset=utf-8");
+		expect(page.extension).toBe("html");
+		expect(text(page.bytes)).toMatch(/^<meta http-equiv="Content-Security-Policy" content="default-src 'none';/);
+		const svg = cachedDocument(new TextEncoder().encode("<svg><image href=\"http://h/logo.png\"/></svg>"), "chart.svg", "image/svg+xml");
+		expect(svg.extension).toBe("html");
+		expect(text(svg.bytes)).toContain("default-src 'none'");
+		expect(text(svg.bytes)).toContain("<svg><image");
+		const pdf = cachedDocument(Uint8Array.of(37, 80), "report.pdf", "application/pdf");
+		expect(pdf).toEqual({ bytes: Uint8Array.of(37, 80), extension: "pdf" });
 	});
 });
