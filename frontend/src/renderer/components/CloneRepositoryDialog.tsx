@@ -38,6 +38,7 @@ export default function CloneRepositoryDialog({
 	firstRun = false,
 	onOpenLocalFolder,
 	onStartStandaloneAgent,
+	onImportChats,
 	cloning = false,
 	disabled,
 	error,
@@ -61,6 +62,7 @@ export default function CloneRepositoryDialog({
 	firstRun?: boolean;
 	onOpenLocalFolder?: () => void;
 	onStartStandaloneAgent?: () => void;
+	onImportChats?: () => void;
 	cloning?: boolean;
 	disabled: boolean;
 	error: string | null;
@@ -303,6 +305,7 @@ export default function CloneRepositoryDialog({
 							}}
 							onOpenLocalFolder={onOpenLocalFolder}
 							onStartStandaloneAgent={onStartStandaloneAgent}
+							onImportChats={onImportChats}
 						/>
 					) : null}
 					{!firstRun || firstRunStep === "clone" ? <>

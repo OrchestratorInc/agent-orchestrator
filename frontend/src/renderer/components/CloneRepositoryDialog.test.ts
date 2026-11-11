@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import CloneRepositoryDialog, { joinCloneDestination, repositoryNameFromGitUrl, sameProjectPath } from "./CloneRepositoryDialog";
+import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 
 // The first run prompt reads the GitHub CLI state from the daemon; drive it directly.
 const gitHub = vi.hoisted(() => ({
@@ -83,6 +84,28 @@ describe("clone repository input", () => {
 		await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
 		fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 		expect(props.onContinue).toHaveBeenCalledWith(expect.objectContaining({ destinationParent: "/code", targetPath: "/code/web-app" }));
+	});
+
+	it.each([
+		["offers", [{ id: "codex", installation: { state: "installed" }, authentication: { state: "authorized" } }], true],
+		["does not offer", [{ id: "codex", installation: { state: "not_installed" }, authentication: { state: "authorized" } }], false],
+	] as const)("%s importing earlier chats in the first run sources", (_, agents, offered) => {
+		const onImportChats = vi.fn();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentReadinessQueryKey, { agents });
+		render(React.createElement(QueryClientProvider, { client }, React.createElement(CloneRepositoryDialog, cloneDialogProps({
+			firstRun: true,
+			value: { remoteUrl: "", destinationParent: "/code" },
+			onImportChats,
+		}))));
+		fireEvent.click(screen.getByRole("button", { name: "Get started" }));
+		const tile = screen.queryByRole("button", { name: "Import earlier chats" });
+		if (!offered) {
+			expect(tile).not.toBeInTheDocument();
+			return;
+		}
+		fireEvent.click(tile!);
+		expect(onImportChats).toHaveBeenCalledOnce();
 	});
 
 	it("cannot dismiss the first run welcome step, but the close button works afterwards", () => {

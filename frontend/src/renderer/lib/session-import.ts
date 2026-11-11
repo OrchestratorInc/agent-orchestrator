@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
+import type { AgentId } from "./agent-options";
+import { IMPORTABLE_AGENTS } from "./session-import-agents";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
@@ -43,7 +45,16 @@ function captureOncePerRun(key: string, event: string, properties: Record<string
 	void captureRendererEvent(event, properties);
 }
 
-export function useImportOfferShown(surface: "home" | "project_board", shown: boolean): void {
+/** Installed agents whose earlier chats can be imported. A sign-in check that
+ * was inconclusive still counts; only a known signed-out agent is left out. */
+export function useImportableAgents(enabled: boolean): AgentId[] {
+	const readiness = useAgentReadinessQuery(enabled);
+	return (readiness.data?.agents ?? [])
+		.filter((agent) => IMPORTABLE_AGENTS.has(agent.id) && agent.installation.state === "installed" && agent.authentication.state !== "unauthorized")
+		.map((agent) => agent.id as AgentId);
+}
+
+export function useImportOfferShown(surface: "onboarding" | "project_board", shown: boolean): void {
 	useEffect(() => {
 		if (shown) captureOncePerRun(`offer:${surface}`, "ao.session_imports.offer_shown", { surface });
 	}, [surface, shown]);

@@ -185,7 +185,6 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 	const workspaces = useQuery(workspaceQueryOptions);
 	const preview = useQuery({ ...sessionImportPreviewQuery, staleTime: 60_000 });
 	const blockOf = useAgentBlocks();
-	const closeSessionImportOffer = useUiStore((state) => state.closeSessionImportOffer);
 	const recordImport = useSessionImportStore((state) => state.recordImport);
 	const showImported = useImportedToast();
 	const [picked, setPicked] = useState<Set<string>>();
@@ -230,7 +229,6 @@ function Folders({ onClose, onImporting }: { onClose: () => void; onImporting: (
 		});
 	const { importing, error, failures, run } = useImportRun("home_folders", (results) => {
 		const imported = showImported(results);
-		if (results.some((result) => result.status === "created")) closeSessionImportOffer();
 		for (const [projectId, count] of countBy(imported.flatMap((chat) => (chat.projectId ? [chat.projectId] : [])))) recordImport(projectId, count);
 		if (!results.some((result) => result.status === "failed")) onClose();
 	}, onImporting);

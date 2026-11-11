@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronLeft, FolderClosed, MessageSquarePlus } from "@/components/app-icons";
+import { ChevronLeft, Download, FolderClosed, MessageSquarePlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -8,6 +8,7 @@ import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
 import { completeOnboardingStepIfViewed, reportOnboardingStep } from "../lib/onboarding-telemetry";
+import { useImportableAgents, useImportOfferShown } from "../lib/session-import";
 import { useShellMaybe } from "../lib/shell-context";
 import { useResolvedTheme } from "../stores/ui-store";
 import { TerminalPane } from "./TerminalPane";
@@ -207,6 +208,14 @@ export function FirstRunGitHubStep({ onDone, onBack, onClose }: { onDone: () => 
 	);
 }
 
+/** Importing earlier chats is a one-time step for a new user, so it is offered
+ * here rather than on Home, and only while an agent with chats is installed. */
+function WithImportableAgents({ children }: { children: (canImport: boolean) => ReactNode }) {
+	const canImport = useImportableAgents(true).length > 0;
+	useImportOfferShown("onboarding", canImport);
+	return <>{children(canImport)}</>;
+}
+
 /** The "what do you want to start with" step. Same borderless tiles as the Add Project modal. */
 export function FirstRunSources({
 	disabled,
@@ -217,6 +226,7 @@ export function FirstRunSources({
 	onSubmitUrl,
 	onOpenLocalFolder,
 	onStartStandaloneAgent,
+	onImportChats,
 }: {
 	disabled?: boolean;
 	gh: GitHubState;
@@ -226,6 +236,8 @@ export function FirstRunSources({
 	onSubmitUrl: (remoteUrl: string) => void;
 	onOpenLocalFolder?: () => void;
 	onStartStandaloneAgent?: () => void;
+	/** Offered only while an agent with chats to import is installed. */
+	onImportChats?: () => void;
 }) {
 	const { t } = useTranslation();
 	const [url, setUrl] = useState("");
@@ -242,6 +254,13 @@ export function FirstRunSources({
 				<span className="mt-1 block text-pretty text-[12px] leading-5 text-muted-foreground">{hint}</span>
 			</span>
 		</Pressable>
+	);
+	const tiles = (canImport: boolean) => (
+		<div className={`grid gap-3 px-4 pb-4 max-[520px]:grid-cols-1 ${canImport ? "grid-cols-3" : "grid-cols-2"}`}>
+			{tile(<FolderClosed className="size-6" aria-hidden="true" />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
+			{tile(<MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
+			{canImport ? tile(<Download className="size-6" aria-hidden="true" />, t("sessionImport.offerTitle"), t("sessionImport.offerDescription"), onImportChats) : null}
+		</div>
 	);
 	return (
 		<div>
@@ -275,10 +294,7 @@ export function FirstRunSources({
 				)}
 			</div>
 			<p className="px-4 pb-2 text-[13px] font-semibold text-[var(--color-text-import-title)]">{t("firstRun.orStart")}</p>
-			<div className="grid grid-cols-2 gap-3 px-4 pb-4 max-[520px]:grid-cols-1">
-				{tile(<FolderClosed className="size-6" aria-hidden="true" />, t("createProject.openLocal"), t("createProject.openLocalDesc"), onOpenLocalFolder)}
-				{tile(<MessageSquarePlus className="size-6" aria-hidden="true" />, t("home.newStandaloneAgent"), t("createProject.standaloneDesc"), onStartStandaloneAgent)}
-			</div>
+			{onImportChats ? <WithImportableAgents>{(canImport) => tiles(canImport)}</WithImportableAgents> : tiles(false)}
 		</div>
 	);
 }
