@@ -544,8 +544,9 @@ function MoreHarnessesRow({ ids, onShow }: { ids: string[]; onShow: () => void }
 				onClick={onShow}
 			>
 				<span className="flex shrink-0 -space-x-1.5" aria-hidden="true">
-					{marks.map((id) => (
-						<span key={id} className="grid size-5 place-items-center rounded-full bg-(--schematic-solid) ring-2 ring-(--schematic-solid)">
+					{/* Each mark sits over the one after it. */}
+					{marks.map((id, index) => (
+						<span key={id} className="relative grid size-5 place-items-center rounded-full bg-(--schematic-solid) ring-2 ring-(--schematic-solid)" style={{ zIndex: marks.length - index }}>
 							<AgentAvatar provider={id} className="size-icon-base" decorative />
 						</span>
 					))}
