@@ -23,6 +23,7 @@ import { useOpenPage } from "./pageNavigation";
 import { iconSize, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 import { reviewRouteForSession } from "./reviewView";
+import { isCloudHost } from "./cloud/mapping";
 import { MachineIdentity } from "./MachineIdentity";
 import type { MachineAppearance } from "./machineAppearance";
 
@@ -165,6 +166,8 @@ export const WorkerListRow = memo(
 		});
 	}, [router, session, hostId]);
 
+	const cloudRow = isCloudHost(sessionHostId(session) ?? hostId);
+	// The PR page reads the worker's own host: its machine's daemon, or Orchestrator Cloud.
 	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? hostId);
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
@@ -174,6 +177,7 @@ export const WorkerListRow = memo(
 		// session around it is still intact, so resuming is the lighter fix.
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),
 		hasPr: Boolean(reviewRoute),
+		cloud: cloudRow,
 	});
 
 	const runAction = useCallback((id: WorkerActionId) => {

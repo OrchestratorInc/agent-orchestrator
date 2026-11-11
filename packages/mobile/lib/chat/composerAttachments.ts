@@ -33,6 +33,16 @@ export function updateComposerAttachments(key: string, update: (current: Compose
 	listeners.get(key)?.forEach((listener) => listener());
 }
 
+/** Drops every session's unsent attachments on one machine (`machine.` keys). */
+export function forgetMachineComposerAttachments(machine: string): void {
+	const prefix = `${machine}.`;
+	for (const key of [...states.keys()]) {
+		if (!key.startsWith(prefix)) continue;
+		states.delete(key);
+		listeners.get(key)?.forEach((listener) => listener());
+	}
+}
+
 /** Drops one attachment the user removed, keeping what the last pick had to say. */
 export function removeComposerAttachment(key: string, id: string): void {
 	updateComposerAttachments(key, (current) => ({ items: current.items.filter((item) => item.id !== id), notice: current.notice }));

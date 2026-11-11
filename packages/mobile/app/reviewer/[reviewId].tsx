@@ -4,6 +4,8 @@ import { StyleSheet, Text, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { ReviewerComposer } from "../../lib/chat/ReviewerComposer";
 import { ChatTimeline } from "../../lib/chat/ChatTimeline";
+import { CloudReviewerScreen } from "../../lib/cloud/CloudReviewerScreen";
+import { isCloudHost } from "../../lib/cloud/mapping";
 import { useChatKeyboard } from "../../lib/chat/useChatKeyboard";
 import { useMobileConversation } from "../../lib/chat/useConversation";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -19,7 +21,9 @@ import { Button, EmptyState } from "../../lib/ui";
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 export default function ReviewerConversationScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	const { hostId, reviewId = "", sessionId = "", title } = useLocalSearchParams<{ hostId?: string; reviewId?: string; sessionId?: string; title?: string }>();
+	// A Cloud review's conversation comes from Orchestrator Cloud, not a daemon.
+	if (isCloudHost(hostId)) return <CloudReviewerScreen reviewId={reviewId} sessionId={sessionId.trim()} title={title} />;
 	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewerConversationContent /></HostScope> : <ReviewerConversationContent />;
 }
 

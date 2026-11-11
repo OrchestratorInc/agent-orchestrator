@@ -22,6 +22,10 @@ export default function SettingsLayout() {
 			{/* A machine's page renames itself to the machine once it loads. */}
 			<Stack.Screen name="machine/[id]/index" options={{ title: "Machine" }} />
 			<Stack.Screen name="machine/[id]/edit" options={{ title: "Edit machine" }} />
+			{/* Orchestrator Cloud's machine row opens its page; a coding agent's
+			    page renames itself to the agent. */}
+			<Stack.Screen name="cloud/index" options={{ title: "Orchestrator Cloud" }} />
+			<Stack.Screen name="cloud/agent/[agent]" options={{ title: "Coding agent" }} />
 		</Stack>
 	);
 }

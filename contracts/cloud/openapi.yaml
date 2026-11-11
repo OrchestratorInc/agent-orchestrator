@@ -31,6 +31,8 @@ tags:
   - name: Worker Orchestration
   - name: Worker Transport
   - name: Remote Hosts
+  - name: Push Devices
+  - name: Billing
 paths:
   /api/cloud/v1/me:
     get:
@@ -3882,6 +3884,33 @@ paths:
           $ref: "#/components/responses/WorkerScopeRequired"
         "409":
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/billing:
+    get:
+      operationId: getOrgBilling
+      tags: [Billing]
+      description: |
+        The organization's plan, its limits and its usage against them, for
+        any member. billingMode is self_serve only when the deployment has
+        Stripe and the organization is offered a billed provider; otherwise
+        plans do not apply and nothing is enforced. A self-serve organization
+        without an entitled subscription (active, trialing, or past due
+        within the grace period) is on Free, which runs no billed sessions:
+        creating or waking one answers 402 PLAN_REQUIRED. Usage counts every
+        running billed session per minute. Plans lists what the organization
+        can buy, cheapest first, for self-serve organizations only.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: The organization's billing summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/notifications:
     get:
       operationId: listCloudNotifications
@@ -4050,6 +4079,48 @@ paths:
           $ref: "#/components/responses/BadRequest"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/push-devices/{installId}:
+    parameters:
+      - $ref: "#/components/parameters/PushInstallId"
+    put:
+      operationId: putPushDevice
+      tags: [Push Devices]
+      description: |
+        Registers this app install's Expo push token, so the account's new
+        cloud notifications reach the phone as pushes, or replaces the
+        install's earlier registration. Registrations follow the account, not
+        an organization; an account keeps its 20 most recent. A token already
+        registered under another account or install moves to this one. A
+        deployment that does not send pushes still accepts registrations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutPushDeviceInput"
+      responses:
+        "204":
+          description: Registered.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          description: "`validation_error`: the token is not an Expo push token, the platform is unknown, or the device name is too long."
+          $ref: "#/components/responses/ValidationError"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deletePushDevice
+      tags: [Push Devices]
+      description: |
+        Stops pushes to this app install, as on sign-out. Removing an install
+        that is not registered also succeeds.
+      responses:
+        "204":
+          description: Removed, or was not registered.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/remote-hosts/{hostId}/address:
     parameters:
       - $ref: "#/components/parameters/RemoteHostId"
@@ -4202,6 +4273,14 @@ components:
       schema:
         type: string
         pattern: "^h_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    PushInstallId:
+      name: installId
+      in: path
+      required: true
+      description: The app install's stable identifier.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9_-]{8,128}$"
     CloudHarnessAgent:
       name: agent
       in: path
@@ -4434,6 +4513,157 @@ components:
           type: string
           pattern: "^[A-Za-z0-9_-]{43}$"
           description: The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it.
+    BillingSummary:
+      type: object
+      additionalProperties: false
+      required: [enabled, billingMode, exempt, plan, entitled, features, plans]
+      properties:
+        enabled:
+          type: boolean
+          description: Stripe billing is configured on the deployment.
+        billingMode:
+          type: string
+          enum: [self_serve, contract, "off"]
+          description: Plans apply only to self_serve. contract is no longer sent and is kept for older clients.
+        exempt:
+          type: boolean
+          description: Always false; kept for older desktop releases.
+        plan:
+          type: string
+          description: The plan recorded on the organization; free without a subscription.
+        subscriptionStatus:
+          type: string
+          description: Stripe's status for the subscription (active, trialing, past_due, canceled, ...).
+        entitled:
+          type: boolean
+          description: The subscription may run billed sessions now.
+        currentPeriodEnd:
+          type: string
+          format: date-time
+        cancelAt:
+          type: string
+          format: date-time
+          description: When a subscription set to cancel ends and the organization moves to Free.
+        limits:
+          $ref: "#/components/schemas/PlanLimits"
+        usage:
+          $ref: "#/components/schemas/BillingUsage"
+        features:
+          type: array
+          description: Paywalled features the organization's plan includes.
+          items:
+            type: string
+        plans:
+          type: array
+          description: Plans the organization can choose, cheapest first; empty unless billingMode is self_serve.
+          items:
+            $ref: "#/components/schemas/PlanOffer"
+    PlanLimits:
+      type: object
+      additionalProperties: false
+      description: A plan's limits, from its Stripe product metadata.
+      required: [plan, maxActiveSandboxes, maxRunningSandboxes, orchestratorSlots, windowHours, windowSessionHours, weeklySessionHours, manualResetsPerMonth]
+      properties:
+        plan:
+          type: string
+        maxActiveSandboxes:
+          type: integer
+          description: Sessions with a sandbox, running or paused, orchestrators included.
+        maxRunningSandboxes:
+          type: integer
+          description: How many of them may run at once.
+        orchestratorSlots:
+          type: integer
+          description: Running slots reserved for orchestrators.
+        windowHours:
+          type: integer
+          description: Length of the rolling usage window.
+        windowSessionHours:
+          type: number
+        weeklySessionHours:
+          type: number
+        manualResetsPerMonth:
+          type: integer
+        features:
+          type: array
+          items:
+            type: string
+    BillingUsage:
+      type: object
+      additionalProperties: false
+      description: Usage against the plan, in session-minutes of running billed sandbox time.
+      required: [windowUsedMinutes, windowLimitMinutes, windowHours, weeklyUsedMinutes, weeklyLimitMinutes, manualResetsAllowed, manualResetsUsed, activeOrchestrators, activeWorkers, runningOrchestrators, runningWorkers]
+      properties:
+        windowUsedMinutes:
+          type: integer
+        windowLimitMinutes:
+          type: integer
+        windowHours:
+          type: integer
+        windowResetsAt:
+          type: string
+          format: date-time
+        weeklyUsedMinutes:
+          type: integer
+        weeklyLimitMinutes:
+          type: integer
+        weeklyResetsAt:
+          type: string
+          format: date-time
+        manualResetsAllowed:
+          type: integer
+        manualResetsUsed:
+          type: integer
+        manualResetsRenewAt:
+          type: string
+          format: date-time
+        activeOrchestrators:
+          type: integer
+        activeWorkers:
+          type: integer
+        runningOrchestrators:
+          type: integer
+        runningWorkers:
+          type: integer
+    PlanOffer:
+      type: object
+      additionalProperties: false
+      description: A plan the organization can choose. The price fields are zero or empty when Stripe could not be read.
+      required: [name, id, unitAmount, currency, interval]
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+          description: The Stripe price.
+        unitAmount:
+          type: integer
+          format: int64
+          description: In the currency's smallest unit.
+        currency:
+          type: string
+        interval:
+          type: string
+        limits:
+          $ref: "#/components/schemas/PlanLimits"
+    PutPushDeviceInput:
+      type: object
+      additionalProperties: false
+      required: [token, platform]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          pattern: "^Expo(nent)?PushToken\\[[^\\]\\s]+\\]$"
+          description: The Expo push token the app minted.
+        platform:
+          type: string
+          enum: [ios, android]
+        deviceName:
+          type: string
+          maxLength: 200
+          description: The phone's name, shown wherever the account lists its devices.
     RemoteHostAddress:
       type: object
       additionalProperties: false
@@ -7724,6 +7954,17 @@ components:
           $ref: "#/components/schemas/SessionInterfaceMode"
         policy:
           $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
+        model:
+          type: string
+          description: >-
+            The model the terminal agent starts with, as the Chat ran it.
+            Chat to terminal handoff only; validated as a Chat turn's model.
+        reasoningEffort:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            The effort the terminal agent starts at, as the Chat ran it. Chat
+            to terminal handoff only; validated as a Chat turn's effort.
     Session:
       type: object
       additionalProperties: false

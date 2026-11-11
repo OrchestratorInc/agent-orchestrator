@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { shouldPoll } from "../../lib/appStatePoll";
 import { ChatSessionScreen } from "../../lib/chat/ChatSessionScreen";
+import { CloudSessionScreen } from "../../lib/cloud/CloudSessionScreen";
+import { isCloudHost } from "../../lib/cloud/mapping";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { rememberLastProject } from "../../lib/lastProject";
 import { lookUpSession } from "../../lib/session/sessionLookup";
@@ -27,7 +29,10 @@ import { Button, EmptyState } from "../../lib/ui";
  * `sessionRouteView`, and when the route asks is `sessionLookupDue`.
  */
 export default function MobileSessionRoute() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	const { id, hostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
+	// Orchestrator Cloud sessions open the same route with the cloud host: their chat and
+	// terminal come from the control plane rather than a paired daemon.
+	if (isCloudHost(hostId)) return <CloudSessionScreen key={String(id ?? "")} sessionId={String(id ?? "")} />;
 	return hostId ? <HostScope key={hostId} hostId={hostId}><SessionRouteContent /></HostScope> : <SessionRouteContent />;
 }
 

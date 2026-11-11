@@ -130,8 +130,9 @@ export function SpawnComposerControls({
 						{...menu("host")}
 						label={hostLabel}
 						accessibilityLabel={`Run on ${hostLabel}`}
-						leading={<Icon source={materialDrawable("laptop")} size={iconSize.lg} tint={t.textSecondary} />}
-						options={hosts}
+						leading={<HostGlyph host={hosts.find((host) => host.id === hostId)} />}
+						// Each machine with its glyph, as each project has its folder.
+						options={hosts.map((host) => ({ ...host, leading: <HostGlyph host={host} /> }))}
 						selectedId={hostId}
 						onSelect={choose(hostId, onSelectHost)}
 						testTag="spawn-host"
@@ -319,9 +320,15 @@ function SelectorMenu({ label, accessibilityLabel, leading, options, selectedId,
 	);
 }
 
+/** A machine's glyph: a computer, or Orchestrator Cloud's cloud. */
+function HostGlyph({ host }: { host?: SpawnComposerOption }) {
+	const t = useTheme();
+	return <Icon source={materialDrawable(host?.icon === "cloud" ? "cloud" : "laptop")} size={iconSize.lg} tint={t.textSecondary} />;
+}
+
 function ProjectGlyph({ project }: { project?: SpawnComposerOption }) {
 	const t = useTheme();
-	const source = project?.icon === "message-square-plus" ? materialDrawable("add_comment") : materialDrawable("folder");
+	const source = materialDrawable(project?.icon === "message-square-plus" ? "add_comment" : project?.icon === "folder-plus" ? "create_new_folder" : "folder");
 	return <Icon source={source} size={iconSize.lg} tint={t.textSecondary} />;
 }
 

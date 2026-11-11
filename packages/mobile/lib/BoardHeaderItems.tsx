@@ -30,9 +30,9 @@ export type BoardHeaderItemsProps = {
 	 */
 	filter?: ReactElement | null;
 	/**
-	 * The tab's create action, ending the bar as a "+" on iOS, which has no
-	 * floating button. Android draws no header item for it: the page floats
-	 * Material's FAB (`AddFab`) with the same action.
+	 * The tab's create action, ending the bar as a "+". A page that draws it
+	 * elsewhere (iOS Projects puts it at the end of its own title line) leaves
+	 * it out there.
 	 */
 	onAdd?: () => void;
 	/** What the "+" does, for VoiceOver. */
@@ -79,7 +79,7 @@ export function BoardHeaderItems({ unread, notifications = true, filter = null, 
 					{unread > 0 ? <Stack.Toolbar.Badge>{unread > MAX_BADGE ? `${MAX_BADGE}+` : String(unread)}</Stack.Toolbar.Badge> : null}
 				</Stack.Toolbar.Button>
 			) : null}
-			{ios && onAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel={addLabel} onPress={onAdd} /> : null}
+			{onAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel={addLabel} onPress={onAdd} /> : null}
 		</Stack.Toolbar>
 	), [addLabel, filter, ios, notifications, onAdd, router, unread]);
 	return (
