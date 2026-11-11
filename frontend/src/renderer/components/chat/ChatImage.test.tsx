@@ -9,6 +9,7 @@ import { chatImageSaveName } from "./chat-image-actions";
 
 const url = "http://127.0.0.1:4000/api/v1/sessions/s1/preview/files/.ao/attachments/attachment-1.png";
 const png = new Uint8Array([137, 80, 78, 71]);
+const pngResponse = () => new Response(new Blob([png], { type: "image/png" }));
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -32,9 +33,10 @@ describe("ChatImage copy and save", () => {
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy image", "Save image"]);
 	});
 
-	it("copies the image bytes fetched by the main process without a toast", async () => {
+	it("copies a loopback image fetched by the renderer, not the main process", async () => {
 		const user = userEvent.setup();
-		const fetchImage = vi.spyOn(aoBridge.chatImage, "fetch").mockResolvedValue({ bytes: png, mimeType: "image/png" });
+		const fetchImage = vi.spyOn(globalThis, "fetch").mockResolvedValue(pngResponse());
+		const mainFetch = vi.spyOn(aoBridge.chatImage, "fetch");
 		const writeImage = vi.spyOn(aoBridge.clipboard, "writeImage").mockResolvedValue(undefined);
 		const toast = vi.spyOn(useUiStore.getState(), "showGlobalToast");
 		useUiStore.setState({ showGlobalToast: toast });
@@ -42,13 +44,26 @@ describe("ChatImage copy and save", () => {
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open image: Image 1" }));
 		await user.click(screen.getByRole("menuitem", { name: "Copy image" }));
 		await waitFor(() => expect(writeImage).toHaveBeenCalledExactlyOnceWith(png));
-		expect(fetchImage).toHaveBeenCalledExactlyOnceWith(url);
+		expect(String(fetchImage.mock.calls[0]?.[0])).toBe(url);
+		expect(mainFetch).not.toHaveBeenCalled();
 		expect(toast).not.toHaveBeenCalled();
+	});
+
+	it("copies an external image fetched by the main process", async () => {
+		const user = userEvent.setup();
+		const external = "https://example.com/image.png";
+		const mainFetch = vi.spyOn(aoBridge.chatImage, "fetch").mockResolvedValue({ bytes: png, mimeType: "image/png" });
+		const writeImage = vi.spyOn(aoBridge.clipboard, "writeImage").mockResolvedValue(undefined);
+		render(<ChatImage src={external} alt="External" />);
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open image: External" }));
+		await user.click(screen.getByRole("menuitem", { name: "Copy image" }));
+		await waitFor(() => expect(writeImage).toHaveBeenCalledExactlyOnceWith(png));
+		expect(mainFetch).toHaveBeenCalledExactlyOnceWith(external);
 	});
 
 	it("saves under the attachment's own file name", async () => {
 		const user = userEvent.setup();
-		vi.spyOn(aoBridge.chatImage, "fetch").mockResolvedValue({ bytes: png, mimeType: "image/png" });
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(pngResponse());
 		const save = vi.spyOn(aoBridge.chatImage, "save").mockResolvedValue(true);
 		render(<ChatImage src={url} alt="Image 1" />);
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open image: Image 1" }));
@@ -58,7 +73,7 @@ describe("ChatImage copy and save", () => {
 
 	it("reports a failed copy", async () => {
 		const user = userEvent.setup();
-		vi.spyOn(aoBridge.chatImage, "fetch").mockRejectedValue(new Error("Not an image"));
+		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Not an image"));
 		const toast = vi.spyOn(useUiStore.getState(), "showGlobalToast");
 		useUiStore.setState({ showGlobalToast: toast });
 		render(<ChatImage src={url} alt="Image 1" />);
