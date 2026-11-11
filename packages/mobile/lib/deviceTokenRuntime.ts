@@ -10,7 +10,8 @@ const ASK_AGAIN_MS = 60 * 60_000;
 // A password is not spent, so a retry with it pairs again.
 const issued = new Map<string, { result: Extract<PairDeviceResult, { kind: "paired" }>; until: number }>();
 const REUSE_MS = 10 * 60_000;
-const issuedKey = (config: ServerConfig) => `${config.hostId ?? ""}\n${config.password}`;
+// Without a machine id the address stands in, so one machine's token is never handed to another.
+const issuedKey = (config: ServerConfig) => `${config.hostId || `${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}`}\n${config.password}`;
 
 /** A reconnect does not ask a machine without device tokens again within the hour; pairing by hand always asks. */
 export async function pairThisDevice(config: ServerConfig, options: { fresh?: boolean } = {}): Promise<PairDeviceResult> {
