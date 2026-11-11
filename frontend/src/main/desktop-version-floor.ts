@@ -1,4 +1,4 @@
-import { app, dialog, shell } from "electron";
+import { app, dialog, shell, type BaseWindow, type MessageBoxOptions } from "electron";
 import semver from "semver";
 
 const FLOOR_URL =
@@ -29,7 +29,19 @@ function isBelow(running: string, floor: string): boolean {
   return semver.lt(r, f);
 }
 
-export async function checkDesktopVersionFloor(): Promise<void> {
+type FloorOptions = {
+  // The window the dialogs attach to, so they block it (a sheet on macOS).
+  parent?: () => BaseWindow | null;
+  // Quits past the macOS tray; app.quit alone would leave the app running.
+  quit?: () => void;
+};
+
+function showFloorDialog(options: FloorOptions, box: MessageBoxOptions) {
+  const parent = options.parent?.();
+  return parent && !parent.isDestroyed() ? dialog.showMessageBox(parent, box) : dialog.showMessageBox(box);
+}
+
+export async function checkDesktopVersionFloor(options: FloorOptions = {}): Promise<void> {
   if (!app.isPackaged) return;
   let floor: Floor;
   try {
@@ -54,7 +66,7 @@ export async function checkDesktopVersionFloor(): Promise<void> {
   const latestVersion = usableVersion(floor.latest);
 
   if (minVersion && isBelow(running, minVersion)) {
-    const result = await dialog.showMessageBox({
+    const result = await showFloorDialog(options, {
       type: "warning",
       buttons: ["Download Update", "Quit"],
       defaultId: 0,
@@ -69,12 +81,12 @@ export async function checkDesktopVersionFloor(): Promise<void> {
     if (result.response === 0) {
       void shell.openExternal(downloadUrl);
     }
-    app.quit();
+    (options.quit ?? (() => app.quit()))();
     return;
   }
 
   if (latestVersion && isBelow(running, latestVersion)) {
-    const result = await dialog.showMessageBox({
+    const result = await showFloorDialog(options, {
       type: "info",
       buttons: ["Download Update", "Later"],
       defaultId: 0,

@@ -4192,12 +4192,6 @@ app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
-	// Not awaited: launch must not wait on this network fetch (up to 10 s).
-	if (app.isPackaged) {
-		void import("./main/desktop-version-floor")
-			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor())
-			.catch((err) => console.warn("desktop version floor check failed:", err));
-	}
 	void refreshGitHubOwners();
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
@@ -4351,6 +4345,13 @@ app.whenReady().then(async () => {
 	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
+	// Not awaited: launch must not wait on this network fetch (up to 10 s). It
+	// runs once the window exists so its dialogs attach to it.
+	if (app.isPackaged) {
+		void import("./main/desktop-version-floor")
+			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({ parent: () => mainWindow, quit: desktopQuit.quitCompletely }))
+			.catch((err) => console.warn("desktop version floor check failed:", err));
+	}
 	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();
 
