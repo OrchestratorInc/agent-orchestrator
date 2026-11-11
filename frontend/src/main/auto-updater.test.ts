@@ -3605,17 +3605,25 @@ describe("returnToHome", () => {
   });
 });
 
-// stubProcess swaps process.platform/execPath for one test. The install
-// preflight reads both at call time, so no module re-import is needed after
-// the swap, but the restore MUST run even when the assertion throws.
-function stubProcess(platform: NodeJS.Platform, execPath: string): () => void {
+// stubProcess supplies platform, execPath and a macOS UID for one test.
+// The preflight reads them at call time, so no module re-import is needed
+// after the swap, but restore MUST run even when the assertion throws.
+function stubProcess(platform: NodeJS.Platform, execPath: string, uid?: number): () => void {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
   const originalExecPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
+  const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
+  const currentUid = uid ?? process.getuid?.() ?? 0;
   Object.defineProperty(process, "platform", { value: platform });
   Object.defineProperty(process, "execPath", { value: execPath });
+  // Windows has no getuid; a simulated macOS process still needs a UID.
+  if (platform === "darwin") {
+    Object.defineProperty(process, "getuid", { configurable: true, writable: true, value: () => currentUid });
+  }
   return () => {
     Object.defineProperty(process, "platform", originalPlatform);
     Object.defineProperty(process, "execPath", originalExecPath);
+    if (originalGetuid) Object.defineProperty(process, "getuid", originalGetuid);
+    else delete process.getuid;
   };
 }
 
@@ -4054,7 +4062,7 @@ describe("quitAndInstallUpdate", () => {
 
   it.each([true, false])("identifies a foreign bundle owner when parent writable is %s", async (parentWritable) => {
     const { root, bundle, execPath } = makeBundle();
-    const restore = stubProcess("darwin", execPath);
+    const restore = stubProcess("darwin", execPath, 501);
     try {
       vi.doMock("node:fs", async (importOriginal) => {
         const actualFs = await importOriginal<typeof import("node:fs")>();
@@ -4064,7 +4072,6 @@ describe("quitAndInstallUpdate", () => {
           statSync: (file: PathLike) => file === bundle ? { uid: 502 } : actualFs.statSync(file),
         };
       });
-      vi.spyOn(process, "getuid").mockReturnValue(501);
       const { module, autoUpdater } = await importAutoUpdater();
       const blocker = module.getMacInstallBlocker();
       expect(blocker).toContain(`app bundle isn't writable: ${bundle}`);
@@ -4103,6 +4110,32 @@ describe("quitAndInstallUpdate", () => {
       restore();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("reports bundle ownership when the host has no getuid and restores the missing API", async () => {
+    const { root, bundle, execPath } = makeBundle();
+    const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
+    const uid = process.getuid?.() ?? 0;
+    delete process.getuid;
+    const restore = stubProcess("darwin", execPath, uid);
+    let restoredGetuid: typeof process.getuid;
+    try {
+      vi.doMock("node:fs", async (importOriginal) => {
+        const actualFs = await importOriginal<typeof import("node:fs")>();
+        return { ...actualFs, accessSync: denyWritesTo(actualFs, [bundle]) };
+      });
+      const { module } = await importAutoUpdater();
+      const blocker = module.getMacInstallBlocker();
+      expect(blocker).toContain(`app bundle isn't writable: ${bundle}`);
+      expect(blocker).toContain(`owner UID ${uid}`);
+      expect(blocker).not.toContain("another user account");
+    } finally {
+      restore();
+      restoredGetuid = process.getuid;
+      if (originalGetuid) Object.defineProperty(process, "getuid", originalGetuid);
+      rmSync(root, { recursive: true, force: true });
+    }
+    expect(restoredGetuid).toBeUndefined();
   });
 
   it("does not quit without a staged update even in a writable app", async () => {
