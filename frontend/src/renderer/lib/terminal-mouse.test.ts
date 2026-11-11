@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	forcesTerminalSelection,
 	isForwardableMouseReport,
+	isMouseHoverReport,
 	parseOsc52Write,
 	shouldForceTerminalSelection,
 } from "./terminal-mouse";
@@ -65,6 +66,20 @@ describe("isForwardableMouseReport", () => {
 	it("rejects anything that is not exactly one report", () => {
 		for (const data of ["", "a", "\x1b[<0;1;1", "\x1b[<0;1;1Mx", "\x1b[<0;1;1M\x1b[<0;1;1m", "\x1b[A", "\x1b[7;21R", "\x1b[M!!"]) {
 			expect(isForwardableMouseReport(data), JSON.stringify(data)).toBe(false);
+		}
+	});
+});
+
+describe("isMouseHoverReport", () => {
+	it("recognizes motion with no button held, with or without modifiers", () => {
+		expect(isMouseHoverReport("\x1b[<35;5;5M")).toBe(true);
+		expect(isMouseHoverReport("\x1b[<39;5;5M")).toBe(true);
+		expect(isMouseHoverReport("\x1b[MC!!")).toBe(true);
+	});
+
+	it("does not treat presses, releases or drags as hover", () => {
+		for (const data of ["\x1b[<0;5;5M", "\x1b[<0;5;5m", "\x1b[<32;5;5M", "\x1b[<34;5;5M", "\x1b[M !!", "\x1b[M@!!", "x"]) {
+			expect(isMouseHoverReport(data), JSON.stringify(data)).toBe(false);
 		}
 	});
 });

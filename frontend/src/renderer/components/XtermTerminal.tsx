@@ -41,6 +41,7 @@ import { droppedPathsText } from "../lib/terminal-drop";
 import {
 	forcesTerminalSelection,
 	isForwardableMouseReport,
+	isMouseHoverReport,
 	parseOsc52Write,
 	shouldForceTerminalSelection,
 	type TerminalClickMode,
@@ -1743,7 +1744,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			if (clickMode() !== "app") return;
 			if (performance.now() - mouseEventSeenAt > MOUSE_REPORT_EVENT_WINDOW_MS) return;
 			if (!isForwardableMouseReport(data)) return;
-			emitUserInput(data, "mouse");
+			emitUserInput(data, isMouseHoverReport(data) ? "hover" : "mouse");
 		};
 		const protocolInput = term.onData((data) => {
 			// xterm answers old colour queries in a replayed scrollback, and the agent, no longer

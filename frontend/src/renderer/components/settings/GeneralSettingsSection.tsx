@@ -474,7 +474,7 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				<SettingsRow
 					label={t("settings.terminalClicks")}
-					description={t("settings.terminalClicks.description", { key: isMacPlatform() ? "⌥ Option" : "Shift" })}
+					description={isMacPlatform() ? t("settings.terminalClicks.description.mac") : t("settings.terminalClicks.description.other")}
 				>
 					<SettingsOptionMenu
 						aria-label={t("settings.terminalClicks")}

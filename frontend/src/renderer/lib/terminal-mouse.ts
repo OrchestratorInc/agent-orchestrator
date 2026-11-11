@@ -62,6 +62,21 @@ export function isForwardableMouseReport(data: string): boolean {
 	return ((x10[1].charCodeAt(0) - 32) & WHEEL_BUTTON_BIT) === 0;
 }
 
+const MOTION_BIT = 32;
+const NO_BUTTON = 3;
+
+/**
+ * Whether a forwardable report is pointer movement with no button held
+ * (DECSET 1003 any-event tracking). The program still gets it, but it is not
+ * the user acting on the session: hovering must not count as interaction.
+ */
+export function isMouseHoverReport(data: string): boolean {
+	const sgr = SGR_MOUSE_REPORT.exec(data);
+	const code = sgr ? Number(sgr[1]) : X10_MOUSE_REPORT.test(data) ? data.charCodeAt(3) - 32 : null;
+	if (code === null) return false;
+	return (code & MOTION_BIT) !== 0 && (code & 3) === NO_BUTTON;
+}
+
 /**
  * Decode an OSC 52 clipboard *write* (`Pc ; base64`) to its text. Returns null
  * for a query (`?`), a clear (empty data) or malformed input: AO never answers

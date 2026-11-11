@@ -27,7 +27,7 @@ import { recordDirectWorkerInteraction } from "../lib/session-management-telemet
  * The slice of xterm's Terminal the attachment needs. Structural, so tests can
  * drive the hook with a tiny fake instead of a real xterm + DOM.
  */
-export type TerminalUserInputSource = "keyboard" | "paste" | "composition" | "shortcut" | "wheel" | "mouse" | "protocol";
+export type TerminalUserInputSource = "keyboard" | "paste" | "composition" | "shortcut" | "wheel" | "mouse" | "hover" | "protocol";
 export type TerminalWriteSource = "live" | "replay";
 
 export type AttachableTerminal = {
@@ -823,6 +823,14 @@ export function useTerminalSession(session: WorkspaceSession | undefined, option
 			// flush the replay gate or reveal the tail (that was the theme-toggle jank).
 			if (optionsRef.current.inputDisabled || optionsRef.current.isVisible === false) {
 				return false;
+			}
+			// Pointer movement with no button held, reported to a program that
+			// tracks every mouse event. The program needs it, but it is not the user
+			// acting on the session: it must not end the replay gate or count as
+			// interaction.
+			if (source === "hover") {
+				mux.sendInput(handle, data);
+				return true;
 			}
 			// Input is accepted from `opened`, which lands before the replay — so a
 			// user can type while the gate still holds the burst, and their echo

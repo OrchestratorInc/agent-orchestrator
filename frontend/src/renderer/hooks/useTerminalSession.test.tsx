@@ -7,6 +7,12 @@ import type { MuxConnectionState, TerminalMux } from "../lib/terminal-mux";
 import type { WorkspaceSession } from "../types/workspace";
 import { useTerminalSession, type AttachableTerminal } from "./useTerminalSession";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
+
+vi.mock("../lib/session-management-telemetry", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/session-management-telemetry")>()),
+	recordDirectWorkerInteraction: vi.fn(),
+}));
 
 const session: WorkspaceSession = {
 	id: "sess-1",
@@ -98,6 +104,7 @@ type FakeTerminal = AttachableTerminal & {
 	compose(data: string): void;
 	shortcut(data: string): void;
 	wheel(data: string): void;
+	hover(data: string): void;
 	protocol(data: string): void;
 	emitResize(cols: number, rows: number): void;
 	completeWrites(): void;
@@ -150,6 +157,7 @@ function createFakeTerminal(): FakeTerminal {
 		compose: (data) => inputListeners.forEach((listener) => listener(data, "composition")),
 		shortcut: (data) => inputListeners.forEach((listener) => listener(data, "shortcut")),
 		wheel: (data) => inputListeners.forEach((listener) => listener(data, "wheel")),
+		hover: (data) => inputListeners.forEach((listener) => listener(data, "hover")),
 		protocol: (data) => inputListeners.forEach((listener) => listener(data, "protocol")),
 		emitResize: (cols, rows) => resizeListeners.forEach((listener) => listener({ cols, rows })),
 		completeWrites: () => {
@@ -279,6 +287,21 @@ describe("useTerminalSession", () => {
 			["handle-1", "\x1b[1;5D"],
 			["handle-1", "\x1b[<64;1;1M"],
 		]);
+	});
+
+	it("sends hover reports without counting them as the user acting on the session", () => {
+		const { terminal, muxes } = setup();
+		act(() => muxes[0].emitOpened("handle-1"));
+		vi.mocked(recordDirectWorkerInteraction).mockClear();
+		const revealsBefore = terminal.latestOutputRequests;
+
+		terminal.hover("\x1b[<35;4;2M");
+		expect(muxes[0].inputs).toEqual([["handle-1", "\x1b[<35;4;2M"]]);
+		expect(recordDirectWorkerInteraction).not.toHaveBeenCalled();
+		expect(terminal.latestOutputRequests).toBe(revealsBefore);
+
+		terminal.typeKeys("a");
+		expect(recordDirectWorkerInteraction).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps the attachment live but refuses input while a controller handoff owns it", () => {

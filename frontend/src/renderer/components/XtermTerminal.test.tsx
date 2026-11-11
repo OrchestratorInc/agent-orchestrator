@@ -3050,6 +3050,7 @@ describe("XtermTerminal", () => {
 			emitData("\x1b[<0;5;3M");
 			emitData("\x1b[<32;6;3M");
 			emitData("\x1b[<0;6;3m");
+			emitData("\x1b[<35;7;3M");
 			emitBinary("\x1b[M !!");
 			// Wheel reports are AO's own job; X10 bytes above 0x7f cannot cross the text path.
 			emitData("\x1b[<64;5;3M");
@@ -3060,6 +3061,7 @@ describe("XtermTerminal", () => {
 				["\x1b[<0;5;3M", "mouse"],
 				["\x1b[<32;6;3M", "mouse"],
 				["\x1b[<0;6;3m", "mouse"],
+				["\x1b[<35;7;3M", "hover"],
 				["\x1b[M !!", "mouse"],
 			]);
 
