@@ -1835,7 +1835,7 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 			return (data?.skills ?? []) as ChatSkill[];
 		},
 	});
-	return { skills: query.data ?? [], isLoading: query.isLoading, loaded: query.data !== undefined };
+	return { skills: query.data ?? [], isLoading: query.isLoading, loaded: query.data !== undefined, updatedAt: query.dataUpdatedAt };
 }
 
 /**

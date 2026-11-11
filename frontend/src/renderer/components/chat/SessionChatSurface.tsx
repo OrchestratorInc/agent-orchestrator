@@ -399,17 +399,19 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hostId,
 	);
 	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
-	const { skills: liveSkills, loaded: liveSkillsLoaded } = useConversationSkills(
+	const { skills: liveSkills, loaded: liveSkillsLoaded, updatedAt: liveSkillsUpdatedAt } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
 	);
 	// A new chat of this agent offers these "/" skills before its own session runs.
 	const skillsHarness = snapshot?.harness;
+	const skillsOpenedAt = useRef({ chat: "", at: 0 });
 	useEffect(() => {
-		if (session.kind !== "worker" || !skillsHarness || !liveSkillsLoaded) return;
+		if (skillsOpenedAt.current.chat !== uiSessionId) skillsOpenedAt.current = { chat: uiSessionId, at: Date.now() };
+		if (session.kind !== "worker" || !skillsHarness || !liveSkillsLoaded || liveSkillsUpdatedAt < skillsOpenedAt.current.at) return;
 		rememberChatSkills(skillsHarness, session.workspaceId, hostId, liveSkills);
-	}, [hostId, session.kind, session.workspaceId, liveSkills, liveSkillsLoaded, skillsHarness]);
+	}, [hostId, session.kind, session.workspaceId, liveSkills, liveSkillsLoaded, liveSkillsUpdatedAt, skillsHarness, uiSessionId]);
 	const skills = useMemo(
 		() => liveSkillsLoaded || !skillsHarness || session.cloud
 			? liveSkills
