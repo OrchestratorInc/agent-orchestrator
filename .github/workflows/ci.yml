@@ -75,7 +75,7 @@ jobs:
           node-version: 24
 
       - name: Test CI scripts
-        run: node --test scripts/ci-lanes.test.mjs scripts/ci-sharding.test.mjs scripts/create-migration.test.mjs
+        run: node --test scripts/ci-lanes.test.mjs scripts/ci-sharding.test.mjs scripts/create-migration.test.mjs integrations/grok-bot/manifest.test.mjs
 
   ci-ok:
     if: always()

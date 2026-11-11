@@ -26,6 +26,18 @@ test("creates a UTC millisecond migration and preserves existing files", (t) => 
 	assert.equal(readFileSync(filename, "utf8"), "SQL already written");
 });
 
+test("reports a version another migration already claimed instead of an opaque EEXIST", (t) => {
+	const directory = mkdtempSync(join(tmpdir(), "ao-migration-clash-"));
+	t.after(() => rmSync(directory, { recursive: true, force: true }));
+	t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 9, 13, 9, 30, 0, 123) });
+	writeFileSync(join(directory, "20261013093000123_first.sql"), "SQL");
+
+	assert.throws(
+		() => createMigration("second", directory),
+		/version 20261013093000123 is already claimed by 20261013093000123_first\.sql/,
+	);
+});
+
 test("rejects invalid migration names before writing", () => {
 	for (const name of [undefined, "", "../escape", "add-reports", "AddReports", "add reports"]) {
 		assert.throws(() => createMigration(name), /Migration name must/);

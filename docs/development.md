@@ -160,7 +160,7 @@ npm run api
 
 ```bash
 cd frontend
-npm install
+npm ci
 ```
 
 ### Run in development mode

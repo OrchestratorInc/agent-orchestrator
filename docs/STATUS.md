@@ -18,7 +18,7 @@ cd backend && go build ./... && go test -race ./...
 ```
 
 `npm run lint` (from the repo root) runs `go test ./...` plus golangci-lint.
-Frontend checks live under `frontend/` (`npm run typecheck`, `npm run build`).
+Frontend checks live under `frontend/` (`npm run typecheck`, `npm test`).
 See [`AGENTS.md`](../AGENTS.md) for the regen workflow when touching the API
 surface (`npm run sqlc`, `npm run api`).
 

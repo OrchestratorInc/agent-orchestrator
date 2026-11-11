@@ -3,6 +3,12 @@ import { pathToFileURL } from 'node:url';
 
 const FRONTEND = /^(frontend\/(?!src\/docs\/|native\/)|packages\/(product-ui|shared|cloud-client)\/)/;
 
+// The config lane runs integrations/grok-bot/manifest.test.mjs, which checks the
+// manifest against the skills it hashes. Keep the rule to exactly what that job
+// verifies: a skill, the manifest, or the test itself. An unrelated integration
+// file cannot affect the result, so it must not start a lane.
+const GROK_BOT_MANIFEST = /^integrations\/grok-bot\/(skills\/|manifest\.json$|manifest\.test\.mjs$)/;
+
 export const LANES = {
   go: [/^backend\//, /^pricing\//, /^go\.work(\.sum)?$/, /^contracts\/session-start-interface\.json$/, /^frontend\/scripts\/prepare-cloudflared\.mjs$/, /^frontend\/src\/api\/schema\.ts$/, /^package(-lock)?\.json$/, /^\.github\/scripts\/go-test-parallel\.sh$/],
   'cli-e2e': [/^backend\//, /^test\/cli\//],
@@ -13,7 +19,7 @@ export const LANES = {
   'product-ui': [/^packages\/product-ui\//],
   mobile: [/^packages\/(mobile|shared)\//],
   'mac-native': [/^frontend\/native\//, /^frontend\/scripts\/build-(mac|update|wake|dictation)/, /^frontend\/assets\/(icon\.icns$|dmg\/)/],
-  config: [/^\.github\//, /^scripts\//],
+  config: [/^\.github\//, /^scripts\//, GROK_BOT_MANIFEST],
 };
 
 export const FRONTEND_WORKFLOW_LANES = ['frontend', 'docs', 'boundary', 'cloud', 'product-ui', 'mac-native'];

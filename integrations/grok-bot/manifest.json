@@ -1,6 +1,6 @@
 {
  "name": "ao-grok-bot",
- "version": "2026.11.07.1",
+ "version": "2026.11.11.1",
  "skills": [
   {
    "id": "ao-actions",
@@ -29,8 +29,8 @@
   {
    "id": "ao-setup",
    "path": "skills/ao-setup/SKILL.md",
-   "bytes": 14238,
-   "sha256": "61876e14c8d8723d6b091dbb8ee9f6a2e519978783547d0ddcd2da28fe1a05cd"
+   "bytes": 14254,
+   "sha256": "9bace343886fe10046714d9c689458dffd9c228e08499f3f593c00093f68b129"
   },
   {
    "id": "ao-status",
