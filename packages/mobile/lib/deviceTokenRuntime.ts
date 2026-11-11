@@ -8,11 +8,8 @@ import { updateHostToken } from "./hosts";
 const askAgainAt = new Map<string, number>();
 const ASK_AGAIN_MS = 60 * 60_000;
 
-/**
- * Exchanges the pairing secret in config for this phone's own token. A
- * reconnect does not ask a machine again within the hour after it answered
- * that it has no device tokens; pairing by hand (fresh) always asks.
- */
+/** Exchanges the pairing secret for this phone's own token. A reconnect does not ask a
+ * machine without device tokens again within the hour; pairing by hand always asks. */
 export async function pairThisDevice(config: ServerConfig, options: { fresh?: boolean } = {}): Promise<PairDeviceResult> {
 	const machine = config.hostId ?? "";
 	if (!options.fresh && machine && Date.now() < (askAgainAt.get(machine) ?? 0)) return { kind: "unsupported" };
@@ -24,7 +21,6 @@ export async function pairThisDevice(config: ServerConfig, options: { fresh?: bo
 	return result;
 }
 
-/** The device-token part of the production dependency set for connectHost. */
 export function deviceTokenConnectDeps(): Pick<ConnectDeps, "pair" | "saveToken"> {
 	return {
 		pair: (config) => pairThisDevice(config),

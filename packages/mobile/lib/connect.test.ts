@@ -243,8 +243,7 @@ describe("connectHost with device tokens", () => {
 		}
 	});
 
-	// The refresh already presents the token, so a phone that kept a password
-	// asks the machine nothing more on a connect that works.
+	// The refresh already presents the token, so no extra request is needed.
 	it("makes no extra request for a working token with a kept password", async () => {
 		const d = deps(host({ token, fallbackToken: "pw" }));
 		const got = await connectHost("h_paired", d);

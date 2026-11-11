@@ -41,9 +41,7 @@ export type PairDeps = {
 	race: (endpoints: Endpoint[], expectedHostId: string) => Promise<RaceOutcome>;
 	/** Proves the winning endpoint actually serves us, with our credential. */
 	verify: (config: ServerConfig) => Promise<void>;
-	/** Exchanges the code's one-time pairing code, or the pairing password of
-	 * an older code, for this phone's own token. Absent: the code's token is
-	 * saved as it is. */
+	/** Absent: the code's token is saved as it is. */
 	pair?: (config: ServerConfig) => Promise<PairDeviceResult>;
 	/** New pairings are not persisted until the user confirms a readable name.
 	 * The icon is offered alongside it, starting from the machine's default. */
@@ -84,10 +82,8 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	const outcome = await deps.race(offer.endpoints, offer.hostId);
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };
 
-	// The race has confirmed which machine answers, so the code's secret may
-	// be sent to it now. A machine with device tokens swaps it for this
-	// phone's own token; the pairing password is kept as the fallback, a
-	// one-time code is spent.
+	// The race has confirmed the machine, so the secret may be sent now. A password
+	// is kept as the fallback; a one-time code is spent.
 	let token = offer.token;
 	let fallbackToken: string | undefined;
 	let config = configForEndpoint(outcome.endpoint, token, offer.hostId || outcome.hostId);

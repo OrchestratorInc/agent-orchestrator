@@ -23,11 +23,7 @@ export type Host = {
 	endpoints: Endpoint[];
 	/** Connection token. Lives in the device keystore, never in AsyncStorage. */
 	token: string;
-	/**
-	 * The pairing password this phone swapped for its own token, which is now
-	 * `token`. Used again if the machine stops knowing the token, as after a
-	 * rollback to a release without device tokens. Keystore only.
-	 */
+	/** The pairing password swapped for the token, used again if the machine forgets the token. Keystore only. */
 	fallbackToken?: string;
 	lastConnected: number;
 	/** Present only for a machine discovered through AO Cloud. */
@@ -127,7 +123,6 @@ export async function saveHost(host: Host): Promise<void> {
 	await writeSecret(fallbackTokenKey(host.id), fallbackToken);
 }
 
-/** Replaces a machine's token, and the pairing password kept as its fallback. */
 export async function updateHostToken(id: string, token: string, fallbackToken?: string): Promise<void> {
 	await writeSecret(tokenKey(id), token);
 	await writeSecret(fallbackTokenKey(id), fallbackToken);

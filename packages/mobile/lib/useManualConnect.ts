@@ -92,8 +92,7 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 			// and the daemon locks a device out for a minute after 5 failed auths,
 			// so a persisted wrong password locks the user out on its own in ~40s,
 			// with no further input from them.
-			// What was typed is a one-time pairing code or the pairing password; a
-			// machine with device tokens swaps either for this phone's own token.
+			// A typed code or password is swapped for this phone's own token when the machine supports it.
 			let connection = target;
 			let fallbackToken: string | undefined;
 			if (isPairingSecret(target.password)) {

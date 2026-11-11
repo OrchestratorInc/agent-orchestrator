@@ -1,24 +1,18 @@
 import type { ServerConfig } from "./config";
 
-/** A device's own token for a machine, as the machine issues it. */
 export const DEVICE_TOKEN_PREFIX = "aod_";
 
 /** The account's token for a machine: 32 random bytes in hex. */
 const ACCOUNT_TOKEN = /^[0-9a-f]{64}$/;
 
-/**
- * Whether a saved token is a pairing secret: the pairing password, or a
- * one-time code not yet exchanged. A machine with device tokens swaps either
- * for this phone's own token.
- */
+/** Whether a saved token is the pairing password or an unexchanged one-time code. */
 export function isPairingSecret(token: string): boolean {
 	return token !== "" && !token.startsWith(DEVICE_TOKEN_PREFIX) && !ACCOUNT_TOKEN.test(token);
 }
 
 export type PairDeviceResult =
-	/** The machine issued this phone its own token. credential is what was presented. */
 	| { kind: "paired"; token: string; credential: "pairing-code" | "password" }
-	/** The machine has no device tokens, or will not issue one: keep the token as it is. */
+	/** No device token: keep the token as it is. */
 	| { kind: "unsupported" }
 	| { kind: "unauthorized" }
 	| { kind: "offline" };
@@ -36,11 +30,8 @@ function headers(config: ServerConfig): Record<string, string> {
 	};
 }
 
-/**
- * Exchanges the pairing secret in config for this phone's own token. Call it
- * only for an endpoint whose identity the race has confirmed: it sends the
- * secret.
- */
+/** Exchanges the pairing secret in config for this phone's own token. Call it only
+ * for an endpoint whose identity the race confirmed: it sends the secret. */
 export async function pairDevice(
 	config: ServerConfig,
 	device: { name?: string; platform: string },

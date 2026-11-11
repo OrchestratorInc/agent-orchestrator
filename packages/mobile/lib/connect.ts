@@ -42,9 +42,7 @@ export type ConnectDeps = {
 	/** Records the identity a machine reported that had none stored. */
 	adoptIdentity: (oldId: string, hostId: string) => Promise<void>;
 	touch: (hostId: string) => Promise<void>;
-	/** Exchanges the pairing password in config for this phone's own token. */
 	pair?: (config: ServerConfig) => Promise<PairDeviceResult>;
-	/** Saves a machine's token and the pairing password kept as its fallback. */
 	saveToken?: (hostId: string, token: string, fallbackToken?: string) => Promise<void>;
 };
 
@@ -76,8 +74,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
 
 	let token = host.token;
-	// Swap a pairing password for this phone's own token, keeping the password
-	// as the fallback.
+	// The password is kept as the fallback.
 	const swapPairingPassword = async () => {
 		if (!deps.saveToken || !deps.pair || !isPairingSecret(token)) return;
 		const paired = await deps.pair(config);
@@ -107,10 +104,8 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		// A failed refresh must not cost us a working connection: the endpoints
 		// already stored are what got us here and remain good enough.
 		//
-		// One failure is acted on. The machine answered 401 to this phone's own
-		// token without saying the phone was removed: it is a release without
-		// device tokens, as after a rollback, and the pairing password this phone
-		// kept works there.
+		// One failure is acted on: a 401 to this phone's token that does not say it was
+		// removed means a release without device tokens, where the kept password works.
 		const { status, code } = (typeof error === "object" && error !== null ? error : {}) as { status?: unknown; code?: unknown };
 		if (deps.saveToken && host.fallbackToken && token.startsWith(DEVICE_TOKEN_PREFIX) && status === 401 && code !== "DEVICE_REVOKED") {
 			token = host.fallbackToken;

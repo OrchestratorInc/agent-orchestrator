@@ -17,7 +17,6 @@ export type PersistManualHostEditDeps = {
 	ping: (cfg: ServerConfig) => Promise<unknown>;
 	saveHost: (host: Host) => Promise<void>;
 	renameHost: (id: string, name: string) => Promise<void>;
-	/** Exchanges a newly typed pairing code or password for this phone's own token. */
 	pair?: (cfg: ServerConfig) => Promise<PairDeviceResult>;
 };
 
@@ -54,7 +53,6 @@ export async function adoptManualConnection(
 	cfg: ServerConfig,
 	deps: AdoptManualDeps,
 	name: string,
-	/** The pairing password cfg's device token was swapped for, if any. */
 	fallbackToken?: string,
 ): Promise<string> {
 	const machineName = name.trim();
@@ -121,8 +119,7 @@ export async function persistManualHostEdit(
 		if (host.id && hostId !== host.id) throw new DifferentMachineError();
 		let credential = { ...target, hostId: host.id || hostId };
 		let saved = edited;
-		// A newly typed pairing code or password is swapped for this phone's
-		// own token; the password is kept as the fallback, a code is spent.
+		// Swap a typed code or password for this phone's own token. A password is kept as the fallback.
 		if (deps.pair && host.token !== target.password && isPairingSecret(target.password)) {
 			const paired = await deps.pair(credential);
 			if (paired.kind === "paired") {
