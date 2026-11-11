@@ -10,7 +10,9 @@ import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { isMacPlatform } from "../lib/platform";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { Search, X } from "@/components/app-icons";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
+import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { ArchivedSessionCardAdapter, DeleteArchivedSessionDialog } from "./SessionsBoardAdapters";
 import {
@@ -50,27 +52,42 @@ function searchText(session: WorkspaceSession): string {
 }
 
 /**
- * The board's archive: a searchable grid of ended-session cards in the Cmd+K
- * surface. Sessions arrive newest first. Restore state lives here, and
- * in-flight restores are dropped when the board scope changes or this
- * unmounts so a late completion cannot navigate after the user left.
+ * The archive: a searchable grid of ended-session cards in the Cmd+K surface,
+ * opened over whatever page is showing (see ArchiveModalHost). Sessions arrive
+ * newest first. Restore state lives here, and in-flight restores are dropped
+ * when the scope changes, the modal closes or this unmounts, so a late
+ * completion cannot navigate after the user left.
  */
 export function SessionArchiveModal({
 	connected,
 	hostId,
+	initialQuery,
+	onCloseAutoFocus,
 	onOpenChange,
 	onOpenSession,
+	onWidenScope,
 	open,
+	requestId,
 	resetKey,
+	scopeLabel,
 	sessions,
 }: {
 	connected: boolean;
 	hostId?: string;
+	/** The search each request starts from. */
+	initialQuery?: string;
+	onCloseAutoFocus?: (event: Event) => void;
 	onOpenChange: (open: boolean) => void;
 	onOpenSession: (session: WorkspaceSession) => void;
+	/** Drops the project scope, to search every project. */
+	onWidenScope?: () => void;
 	open: boolean;
-	/** The board scope; a change drops restore state. */
+	/** Changes with every request to open, so each starts from its own search. */
+	requestId: number;
+	/** The scope; a change drops restore state. */
 	resetKey: string;
+	/** The project the list is scoped to, shown as a removable chip in the search bar. */
+	scopeLabel?: string;
 	sessions: WorkspaceSession[];
 }) {
 	const { t } = useTranslation();
@@ -92,13 +109,16 @@ export function SessionArchiveModal({
 	const restoreGenerationRef = useRef(0);
 	const resetKeyRef = useRef(resetKey);
 	resetKeyRef.current = resetKey;
+	const inputRef = useRef<HTMLInputElement>(null);
 
-	// Each opening starts from an empty search at the newest session.
-	const [wasOpen, setWasOpen] = useState(open);
-	if (open !== wasOpen) {
-		setWasOpen(open);
-		if (open) {
-			setQuery("");
+	// Each request starts from its own search (usually empty) at the newest
+	// session, including one that retargets the modal while it is open.
+	const [seenRequest, setSeenRequest] = useState<number | null>(null);
+	const currentRequest = open ? requestId : null;
+	if (currentRequest !== seenRequest) {
+		setSeenRequest(currentRequest);
+		if (currentRequest !== null) {
+			setQuery(initialQuery ?? "");
 			setLimit(PAGE_SIZE);
 			setKeyboardSelecting(false);
 		}
@@ -111,6 +131,14 @@ export function SessionArchiveModal({
 		setDeleteTarget(undefined);
 		restoreGenerationRef.current += 1;
 	}, [resetKey]);
+
+	// Closed, the modal no longer stands for where the user is: a restore that
+	// finishes later must not take them to its session.
+	useEffect(() => {
+		if (open) return;
+		restoreGenerationRef.current += 1;
+		setRestoringSessionId(undefined);
+	}, [open]);
 
 	useEffect(() => () => {
 		restoreGenerationRef.current += 1;
@@ -201,9 +229,22 @@ export function SessionArchiveModal({
 		requestDelete: (session) => actionsRef.current.requestDelete(session),
 	}), []);
 
+	const widenScope = () => {
+		// The chip is about to go; the caret stays in the search.
+		inputRef.current?.focus();
+		onWidenScope?.();
+	};
+	const canWiden = Boolean(scopeLabel && onWidenScope);
+
 	const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
 		if (["ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) setKeyboardSelecting(true);
 		if (event.nativeEvent.isComposing) return;
+		// Backspace on an empty search removes the project chip, as in a token field.
+		if (event.key === "Backspace" && canWiden && event.currentTarget.value === "") {
+			event.preventDefault();
+			widenScope();
+			return;
+		}
 		const mod = isMac ? event.metaKey : event.ctrlKey;
 		if (!mod || event.key !== "Enter") return;
 		// cmdk owns the selection; ask the list which card it has.
@@ -231,6 +272,7 @@ export function SessionArchiveModal({
 				// Wider and taller than the palette so cards sit at least three to a
 				// row. `!` because tailwind-merge does not know the palette's sizes.
 				className="top-[6vh]! w-[min(1200px,calc(100vw-4rem))]!"
+				contentProps={onCloseAutoFocus ? { onCloseAutoFocus } : undefined}
 				commandProps={{
 					shouldFilter: false,
 					onValueChange: (value) => {
@@ -243,6 +285,7 @@ export function SessionArchiveModal({
 				}}
 			>
 				<CommandInput
+					ref={inputRef}
 					autoFocus
 					value={query}
 					onValueChange={(next) => {
@@ -251,6 +294,25 @@ export function SessionArchiveModal({
 					}}
 					onKeyDown={onInputKeyDown}
 					placeholder={t("archiveModal.searchPlaceholder")}
+					leading={canWiden ? (
+						<>
+							<Search className="size-icon-base shrink-0 text-muted-foreground" aria-hidden="true" />
+							<Button
+								aria-label={t("archiveModal.searchAllProjects", { project: scopeLabel })}
+								className="-my-1 max-w-48 shrink-0"
+								data-testid="archive-scope-chip"
+								onClick={widenScope}
+								// As the close button: the list would take Enter as "open the selected card".
+								onKeyDown={(event) => event.stopPropagation()}
+								size="xs"
+								type="button"
+								variant="secondary"
+							>
+								<span className="min-w-0 truncate">{scopeLabel}</span>
+								<X aria-hidden="true" className="size-3 shrink-0" />
+							</Button>
+						</>
+					) : undefined}
 					trailing={
 						<CloseButton
 							aria-label={t("command.close")}
@@ -297,6 +359,7 @@ export function SessionArchiveModal({
 						<FooterHint keys={[MOD_KEY, "Enter"]} label={t("archiveModal.restore")} />
 					) : null}
 					<FooterHint keys={["Esc"]} label={t("command.close")} />
+					{canWiden && query === "" ? <FooterHint keys={["⌫"]} label={t("archiveModal.allProjects")} /> : null}
 				</CommandFooter>
 			</CommandDialog>
 			{/* Outside the list: portals bubble React events up the React tree, and

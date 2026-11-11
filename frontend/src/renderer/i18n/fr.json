@@ -1762,6 +1762,8 @@
 	"archiveModal.searchPlaceholder": "Rechercher dans les sessions archivées",
 	"archiveModal.empty": "Aucune session archivée",
 	"archiveModal.restore": "Restaurer",
+	"archiveModal.allProjects": "Tous les projets",
+	"archiveModal.searchAllProjects": "Rechercher dans tous les projets, pas seulement {{project}}",
 	"shell.board": "Tableau",
 	"shell.closeInspector": "Fermer le panneau inspecteur",
 	"shell.cloudProjectBadge": "Cloud",

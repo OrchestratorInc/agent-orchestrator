@@ -156,6 +156,26 @@ export type ChatMessageFocusRequest = {
 	nonce: number;
 };
 
+/** What the archive modal shows. */
+export type ArchiveModalRequest = {
+	/** The project it starts scoped to; unset shows every project on the host. */
+	projectId?: string;
+	hostId?: string;
+	/** Prefills the search. */
+	query?: string;
+	/**
+	 * Where focus goes once the modal closes, for an opener whose own focus
+	 * will not survive it (Cmd+K closes as the modal opens). A menu needs none:
+	 * its focus hand-off already returns to the trigger or row.
+	 */
+	returnFocus?: HTMLElement | null;
+	/** New for every request, so a request made while open retargets it. */
+	nonce: number;
+};
+
+// Monotonic across closes, so a request is never mistaken for the last one.
+let archiveModalNonce = 0;
+
 // Selection (which project/session is open) now lives in the URL — the router
 // is the single source of truth, read via route params. This store holds only
 // ephemeral UI: theme, sidebar collapse, command palette, per-session inspector
@@ -222,10 +242,10 @@ export type UiState = {
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
-	// One-shot "open this project's archive" from Cmd+K. The project's board
-	// consumes it when it is (or becomes) the visible page; `at` lets a request
-	// whose board never showed up expire instead of firing on a later visit.
-	archiveOpenRequest: { projectId: string; hostId?: string; nonce: number; at: number } | null;
+	// The archive modal, open over whatever page is showing (the shell hosts
+	// it). Null while closed. Every entry point (the board's Archive button,
+	// a sidebar project's menu, Cmd+K) opens it here; none navigates.
+	archiveModal: ArchiveModalRequest | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
@@ -316,8 +336,8 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
-	requestArchiveOpen: (projectId: string, hostId?: string) => void;
-	clearArchiveOpenRequest: (nonce: number) => void;
+	openArchive: (request: Omit<ArchiveModalRequest, "nonce">) => void;
+	closeArchive: () => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
@@ -472,7 +492,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
-	archiveOpenRequest: null,
+	archiveModal: null,
 	firstRunPromptActive: false,
 	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
@@ -869,12 +889,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
-	requestArchiveOpen: (projectId, hostId) =>
-		set((state) => ({
-			archiveOpenRequest: { projectId, hostId, nonce: (state.archiveOpenRequest?.nonce ?? 0) + 1, at: Date.now() },
-		})),
-	clearArchiveOpenRequest: (nonce) =>
-		set((state) => (state.archiveOpenRequest?.nonce === nonce ? { archiveOpenRequest: null } : state)),
+	openArchive: (request) =>
+		set(() => {
+			archiveModalNonce += 1;
+			return { archiveModal: { ...request, nonce: archiveModalNonce } };
+		}),
+	closeArchive: () => set((state) => (state.archiveModal ? { archiveModal: null } : state)),
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {

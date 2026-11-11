@@ -56,6 +56,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: workspaceQueryMock,
 	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
+	useRemoteHostWorkspacesQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
 	useCloudProjectsQuery: () => ({ data: cloudProjectsMock() }),
 	useWorkspaceScope: (projectId?: string) => {
 		const query = workspaceQueryMock();
@@ -129,6 +130,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 
 import { isMacPlatform } from "../lib/platform";
 import { useUiStore } from "../stores/ui-store";
+import { ArchiveModalHost } from "./ArchiveModalHost";
 import { SessionsBoard } from "./SessionsBoard";
 import { latestSessionArtifacts, toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
@@ -139,17 +141,19 @@ function renderBoard(projectId?: string) {
 	return queryClient;
 }
 
+/** The board with the shell's archive modal host beside it, as the app mounts them. */
 function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<SessionsBoard projectId={projectId} />
+				<ArchiveModalHost />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
 }
 
-/** Opens the board's archive modal; its cards mount the frame after it opens. */
+/** Opens the archive modal from the board's button; its cards mount the frame after it opens. */
 async function expandArchive() {
 	await userEvent.click(screen.getByRole("button", { name: /^Archive, \d+ sessions?$/ }));
 	const dialog = await screen.findByRole("dialog", { name: "Archived sessions" });
@@ -159,7 +163,7 @@ async function expandArchive() {
 
 beforeEach(() => {
 	// The memory light and card chips are Developer mode tools behind the Diagnostics toggle.
-	useUiStore.setState({ developerMode: true, diagnostics: true });
+	useUiStore.setState({ developerMode: true, diagnostics: true, archiveModal: null });
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
@@ -1086,6 +1090,65 @@ describe("SessionsBoard", () => {
 		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
 	});
 
+	it("widens the archive from its project to every project", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: twoProjectsWithArchives(),
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		expect(within(archive).getByText("dead worker")).toBeInTheDocument();
+		expect(within(archive).queryByText("p2 worker")).not.toBeInTheDocument();
+
+		await userEvent.click(within(archive).getByRole("button", { name: "Search all projects, not only radic" }));
+
+		expect(await within(archive).findByText("p2 worker")).toBeInTheDocument();
+		expect(within(archive).getByText("dead worker")).toBeInTheDocument();
+		expect(within(archive).queryByTestId("archive-scope-chip")).not.toBeInTheDocument();
+		// The chip went, the caret stayed in the search.
+		expect(within(archive).getByRole("combobox")).toHaveFocus();
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("opens over any page from a request, without a board or navigation", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: twoProjectsWithArchives(),
+			isError: false,
+			isSuccess: true,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ArchiveModalHost />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument();
+
+		// What the sidebar's menu and Cmd+K do.
+		act(() => useUiStore.getState().openArchive({ projectId: "p1", query: "dead" }));
+
+		const archive = await screen.findByRole("dialog", { name: "Archived sessions" });
+		const search = within(archive).getByRole("combobox");
+		expect(search).toHaveValue("dead");
+		expect(await within(archive).findByText("dead worker")).toBeInTheDocument();
+		expect(within(archive).queryByText("p2 worker")).not.toBeInTheDocument();
+
+		// Backspace on an empty search drops the project, as in a token field.
+		await userEvent.clear(search);
+		await userEvent.keyboard("{Backspace}");
+		expect(await within(archive).findByText("p2 worker")).toBeInTheDocument();
+
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
+		expect(useUiStore.getState().archiveModal).toBeNull();
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
 	it("hides PR progress for a live merged session that has not actually terminated", () => {
 		const liveMergedSession = terminatedSession({
 			id: "s-live-merged",
@@ -1289,7 +1352,7 @@ describe("SessionsBoard", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("ignores restore completion after navigating to another project board", async () => {
+	it("ignores restore completion after the archive closes", async () => {
 		let finishRestore: ((value: { data: Record<string, never> }) => void) | undefined;
 		postMock.mockReturnValueOnce(
 			new Promise((resolve) => {
@@ -1310,18 +1373,13 @@ describe("SessionsBoard", () => {
 			isSuccess: true,
 		});
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const view = renderBoardWithClient(queryClient, "p1");
+		renderBoardWithClient(queryClient, "p1");
 
 		await expandArchive();
 		await userEvent.click(screen.getByRole("button", { name: "Restore dead worker" }));
 
-		view.rerender(
-			<QueryClientProvider client={queryClient}>
-				<TooltipProvider>
-					<SessionsBoard projectId="p2" />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
+		// Closed, the modal no longer stands for where the user is.
+		act(() => useUiStore.getState().closeArchive());
 		await act(async () => {
 			finishRestore?.({ data: {} });
 		});
@@ -1330,7 +1388,7 @@ describe("SessionsBoard", () => {
 		expect(screen.queryByText("Session can no longer be restored")).not.toBeInTheDocument();
 	});
 
-	it("ignores restore-unavailable completion after navigating to another project board", async () => {
+	it("ignores restore-unavailable completion after the archive closes", async () => {
 		let finishRestore: ((value: { error: { code: string } }) => void) | undefined;
 		postMock.mockReturnValueOnce(
 			new Promise((resolve) => {
@@ -1351,18 +1409,13 @@ describe("SessionsBoard", () => {
 			isSuccess: true,
 		});
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const view = renderBoardWithClient(queryClient, "p1");
+		renderBoardWithClient(queryClient, "p1");
 
 		await expandArchive();
 		await userEvent.click(screen.getByRole("button", { name: "Restore dead worker" }));
 
-		view.rerender(
-			<QueryClientProvider client={queryClient}>
-				<TooltipProvider>
-					<SessionsBoard projectId="p2" />
-				</TooltipProvider>
-			</QueryClientProvider>,
-		);
+		// Closed, the modal no longer stands for where the user is.
+		act(() => useUiStore.getState().closeArchive());
 		await act(async () => {
 			finishRestore?.({ error: { code: "SESSION_NOT_RESUMABLE" } });
 		});
@@ -1929,6 +1982,20 @@ describe("SessionsBoard artifacts", () => {
 		expect(screen.queryByTestId("board-session-artifacts")).not.toBeInTheDocument();
 	});
 });
+
+/** p1 ("radic") and p2 ("other"), each with one archived worker. */
+function twoProjectsWithArchives(): WorkspaceSummary[] {
+	return [
+		workspaceWithSessions([terminatedSession()]),
+		{
+			id: "p2",
+			name: "other",
+			path: "/tmp/other",
+			kind: "single_repo",
+			sessions: [terminatedSession({ id: "s-p2", workspaceId: "p2", workspaceName: "other", title: "p2 worker", branch: "ao/p2-worker", prs: [] })],
+		},
+	];
+}
 
 function workspaceWithSessions(sessions: WorkspaceSession[]): WorkspaceSummary {
 	return {

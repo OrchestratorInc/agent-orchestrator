@@ -1853,16 +1853,13 @@ const ProjectItem = memo(function ProjectItem({
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
-	// The project's board opens its archive once it is on screen, as Cmd+K's
-	// Open archive does.
-	const openArchive = () => {
-		useUiStore.getState().requestArchiveOpen(workspace.id, workspace.hostId);
-		selection.goProject(workspace.id);
-	};
+	// The shell's archive modal opens over the current page, scoped to this
+	// project; nothing navigates. A store action, so the row takes no new prop.
+	const openArchive = () => useUiStore.getState().openArchive({ projectId: workspace.id, hostId: workspace.hostId });
 	// The ⋮ button and right-click show these same rows. Built only while a menu
 	// is open, so the archive count costs a closed row nothing.
 	const buildMenuEntries = (): MenuEntry[] => {
-		// The board's archive: every project row has a board, the Scratchpad's
+		// The project's archive: every project row has one, the Scratchpad's
 		// archive is its own section's entry. Hidden while empty, as the board's
 		// Archive button and Cmd+K's Open archive are.
 		const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;

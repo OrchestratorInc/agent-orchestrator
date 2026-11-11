@@ -2136,6 +2136,8 @@
 	"archiveModal.searchPlaceholder": "Поиск по архивным сессиям",
 	"archiveModal.empty": "Нет архивных сессий",
 	"archiveModal.restore": "Восстановить",
+	"archiveModal.allProjects": "Все проекты",
+	"archiveModal.searchAllProjects": "Искать во всех проектах, а не только в {{project}}",
 	"shell.board": "Доска",
 	"shell.closeInspector": "Закрыть панель инспектора",
 	"shell.cloudProjectBadge": "Облако",

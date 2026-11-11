@@ -4439,9 +4439,9 @@ describe("Memoized Sidebar with unchanged props", () => {
 		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual(["bravo"]);
 	});
 
-	it("counts archived sessions from the latest workspaces and asks the ui store to open that archive", async () => {
+	it("counts archived sessions from the latest workspaces and opens that archive in place", async () => {
 		const user = userEvent.setup();
-		useUiStore.setState({ archiveOpenRequest: null });
+		useUiStore.setState({ archiveModal: null });
 		const client = newClient();
 		const view = render(shell(client, <Sidebar workspaces={[alpha]} {...handlers} />));
 		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
@@ -4455,8 +4455,9 @@ describe("Memoized Sidebar with unchanged props", () => {
 		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
 		await user.click(await screen.findByRole("menuitem", { name: "Archive, 1 session" }));
 
-		expect(useUiStore.getState().archiveOpenRequest).toMatchObject({ projectId: "alpha" });
-		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "alpha" } });
+		expect(useUiStore.getState().archiveModal).toMatchObject({ projectId: "alpha" });
+		// The modal opens over the current page; the menu never goes to the board.
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	describe("remote pins through the real remote hook", () => {

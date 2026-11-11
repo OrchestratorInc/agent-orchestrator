@@ -1762,6 +1762,8 @@
 	"archiveModal.searchPlaceholder": "Pesquisar sessões arquivadas",
 	"archiveModal.empty": "Nenhuma sessão arquivada",
 	"archiveModal.restore": "Restaurar",
+	"archiveModal.allProjects": "Todos os projetos",
+	"archiveModal.searchAllProjects": "Pesquisar em todos os projetos, não só em {{project}}",
 	"shell.board": "Quadro",
 	"shell.closeInspector": "Fechar painel do inspetor",
 	"shell.cloudProjectBadge": "Nuvem",

@@ -770,13 +770,15 @@ export const CommandPalette = memo(function CommandPalette() {
 							await openOrchestrator(action.projectId, isCurrentRun);
 							break;
 					case "open-archive": {
-						// The project's board opens its archive once it is on screen.
-						useUiStore.getState().requestArchiveOpen(action.projectId, params.hostId);
-						if (params.hostId) {
-							void navigate({ to: "/host/$hostId/project/$projectId", params: { hostId: params.hostId, projectId: action.projectId } });
-						} else {
-							void navigate({ to: "/projects/$projectId", params: { projectId: action.projectId } });
-						}
+						// Over the current page, with no navigation. The palette's own
+						// focus goes with it, so the modal returns to where the palette
+						// was opened from (a composer, a terminal) when it closes.
+						const returnFocus = returnFocusRef.current;
+						useUiStore.getState().openArchive({
+							projectId: action.projectId,
+							hostId: params.hostId,
+							returnFocus: returnFocus instanceof HTMLElement ? returnFocus : null,
+						});
 						closePalette();
 						break;
 					}
