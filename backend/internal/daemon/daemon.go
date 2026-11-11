@@ -740,7 +740,7 @@ func Run(buildVersion string) error {
 	// behind them. They reuse the same runtime adapter (and therefore the same
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
-	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
+	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, termMgr, log)
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
