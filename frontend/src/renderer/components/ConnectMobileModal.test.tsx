@@ -1292,3 +1292,22 @@ test("offers to try again when no pairing code could be made", async () => {
 	await waitFor(() => expect(screen.getByTestId("mobile-pairing-code")).toHaveTextContent(/^Next\d+$/));
 	expect(screen.queryByTestId("mobile-pairing-code-retry")).not.toBeInTheDocument();
 });
+
+test("drops a spent pairing code even when its replacement fails", async () => {
+	let devices: Array<{ id: string; kind: string; live: boolean }> = [];
+	const get = vi.spyOn(apiClient, "GET").mockImplementation(async (path) =>
+		path === "/api/v1/mobile/devices" ? { data: { devices }, error: undefined } : { data: { ...mobileStatus }, error: undefined });
+	try {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderMobileSettings(client);
+		expect(await screen.findByTestId("mobile-pairing-code")).toHaveTextContent("Code1234");
+		await waitFor(() => expect(client.getQueryData(["mobile-devices"])).toEqual([]));
+		vi.mocked(fetchPairingCode).mockRejectedValueOnce(new Error("pairing code failed"));
+		devices = [{ id: "dev_1", kind: "device", live: true }];
+		await act(() => client.invalidateQueries({ queryKey: ["mobile-devices"] }));
+		expect(await screen.findByTestId("mobile-pairing-code-retry")).toBeInTheDocument();
+		expect(document.body).not.toHaveTextContent("Code1234");
+	} finally {
+		get.mockRestore();
+	}
+});
