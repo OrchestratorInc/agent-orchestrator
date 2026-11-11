@@ -19,14 +19,12 @@ const TILE_RADIUS = radius.lg;
 const TILE_INSET = space.xs;
 const FILE_TILE_MAX_WIDTH = 160;
 // The remove disc sits inside the tile's corner so it never leaves the pill;
-// its hit area is grown to a full touch target around it.
+// its hit area is grown to a full touch target around it. A tile clips touches
+// to its own bounds (hit slop does not count as overflow), so the disc is inset
+// by its slop and the whole target stays inside the tile.
 const REMOVE_DISC_SIZE = iconSize.xl;
-const REMOVE_INSET = space.xs;
 export const removeSlop = (touchTarget - REMOVE_DISC_SIZE) / 2;
-// How far that target reaches past a tile's top and right edges. The scroll
-// view drops touches outside its bounds, so the tray keeps at least this much
-// room there.
-const REMOVE_REACH = Math.max(0, removeSlop - REMOVE_INSET);
+const REMOVE_INSET = Math.max(space.xs, removeSlop);
 
 /**
  * The attachments waiting in a composer, drawn inside its pill above the
@@ -98,7 +96,7 @@ export function ComposerAttachmentTray({ items, onRemove }: { items: readonly Co
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	tray: { flexGrow: 0, flexShrink: 0 },
-	content: { gap: space.sm, paddingTop: Math.max(TILE_INSET, REMOVE_REACH), paddingHorizontal: Math.max(TILE_INSET, REMOVE_REACH), paddingBottom: space.xxs },
+	content: { gap: space.sm, paddingTop: TILE_INSET, paddingHorizontal: TILE_INSET, paddingBottom: space.xxs },
 	thumb: { width: TRAY_TILE_SIZE, height: TRAY_TILE_SIZE },
 	thumbOpen: { borderRadius: TILE_RADIUS, borderCurve: "continuous", overflow: "hidden" },
 	thumbImage: { width: TRAY_TILE_SIZE, height: TRAY_TILE_SIZE, borderRadius: TILE_RADIUS, borderCurve: "continuous", backgroundColor: t.bgSubtle, borderWidth: rowDividerWidth, borderColor: t.borderSubtle },

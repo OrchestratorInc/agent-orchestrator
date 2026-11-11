@@ -105,24 +105,21 @@ describe("ComposerAttachmentTray", () => {
 		expect(fixtures.tap).toHaveBeenCalledOnce();
 	});
 
-	// The remove disc sits inside the tile's corner; the scroll view drops
-	// touches outside its bounds, so the tray keeps room for the slop that
-	// reaches past a tile's top and right edges.
-	it("reaches a full touch target to remove", async () => {
+	// A tile clips touches to its own bounds (hit slop is not overflow), so the
+	// disc sits far enough inside the corner that its whole target is in the tile.
+	it("reaches a full touch target to remove, inside the tile", async () => {
 		await act(async () => { renderer = create(<ComposerAttachmentTray items={[photo, notes]} onRemove={vi.fn()} />); });
 		const root = renderer!.root;
 		const removes = root.findAll((node) => String(node.type) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Remove "));
 		expect(removes).toHaveLength(2);
 		for (const remove of removes) {
 			const disc = remove.props.style({ pressed: false })[0];
-			expect(disc.width + remove.props.hitSlop * 2).toBe(touchTarget);
+			expect(remove.props.hitSlop).toBe(removeSlop);
 			expect(disc.width).toBe(iconSize.xl);
+			expect(disc.width + remove.props.hitSlop * 2).toBe(touchTarget);
+			expect(disc.top).toBeGreaterThanOrEqual(remove.props.hitSlop);
+			expect(disc.right).toBeGreaterThanOrEqual(remove.props.hitSlop);
 		}
-		expect(removes[0].props.hitSlop).toBe(removeSlop);
-		const disc = removes[0].props.style({ pressed: false })[0];
-		const content = root.findAll((node) => String(node.type) === "ScrollView")[0].props.contentContainerStyle;
-		expect(content.paddingTop).toBeGreaterThanOrEqual(removeSlop - disc.top);
-		expect(content.paddingHorizontal).toBeGreaterThanOrEqual(removeSlop - disc.right);
 	});
 
 	it("draws nothing without attachments", async () => {
