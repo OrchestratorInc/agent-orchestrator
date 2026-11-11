@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
+	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -101,6 +102,9 @@ type APIDeps struct {
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
 	Presence *presence.Tracker
+	// ClientTimeZone records the time zone the desktop app reports, which
+	// agent prompts prefer over this daemon's own. Nil disables recording.
+	ClientTimeZone *clienttz.Recorder
 
 	// DeviceRoster and DeviceLive back the desktop-only mobile device roster.
 	DeviceRoster controllers.DeviceRoster
@@ -346,6 +350,7 @@ func (a *API) Register(root chi.Router) {
 				})
 			})
 			r.Use(presenceMiddleware(a.deps.Presence))
+			r.Use(clientTimeZoneMiddleware(a.deps.ClientTimeZone))
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
 			a.agentAccounts.Register(r)

@@ -39,7 +39,9 @@ type systemPromptConfig struct {
 	OrchestratorSessionID string
 	ProjectRules          string
 	OrchestratorRules     string
-	AdditionalSections    []string
+	// TimeZone is the user's IANA zone name; empty omits the section.
+	TimeZone           string
+	AdditionalSections []string
 }
 
 // projectRulesConfig loads standing rules text plus an optional repo-relative
@@ -106,7 +108,11 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	default:
 		return ""
 	}
-	sections = append(sections, userOrientationPrompt(), publishingScopePrompt(), systemPromptGuard())
+	sections = append(sections, userOrientationPrompt(), publishingScopePrompt())
+	if zone := timeZonePrompt(cfg.TimeZone); zone != "" {
+		sections = append(sections, zone)
+	}
+	sections = append(sections, systemPromptGuard())
 	for _, section := range cfg.AdditionalSections {
 		if section := strings.TrimSpace(section); section != "" {
 			sections = append(sections, section)
