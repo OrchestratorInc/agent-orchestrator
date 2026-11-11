@@ -23,17 +23,11 @@ var continueProviders = map[string]string{
 	"DEEPSEEK_API_KEY":   "deepseek",
 }
 
-// saveContinueProvider adds a model to Continue's native config and stores the
-// key in its global .env. Continue's IDE extension does not read a shell env;
-// both the CLI and IDE resolve ${{ secrets.NAME }} from this file.
-func saveContinueProvider(ctx context.Context, envName, modelID, secret string) error {
-	_, err := saveContinueProviderUndoable(ctx, envName, modelID, secret)
-	return err
-}
-
-// saveContinueProviderUndoable is saveContinueProvider that also returns a
-// function restoring Continue's .env and config.yaml as they were, for a
-// caller whose later step fails.
+// saveContinueProviderUndoable adds a model to Continue's native config and
+// stores the key in its global .env. Continue's IDE extension does not read
+// a shell env; both the CLI and IDE resolve ${{ secrets.NAME }} from this
+// file. The returned function restores Continue's .env and config.yaml as
+// they were, for a caller whose later step fails.
 func saveContinueProviderUndoable(ctx context.Context, envName, modelID, secret string) (func(), error) {
 	provider, ok := continueProviders[envName]
 	if !ok {

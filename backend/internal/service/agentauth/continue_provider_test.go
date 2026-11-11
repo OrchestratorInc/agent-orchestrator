@@ -92,7 +92,7 @@ func TestContinueProviderFollowsContinuesOwnConfigChoice(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(`{"models":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveContinueProvider(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); code(err) != "AGENT_AUTH_STORE_LEGACY" {
+	if _, err := saveContinueProviderUndoable(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); code(err) != "AGENT_AUTH_STORE_LEGACY" {
 		t.Fatalf("saved beside a legacy config.json: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(legacy, "config.yaml")); !os.IsNotExist(err) {
@@ -101,7 +101,7 @@ func TestContinueProviderFollowsContinuesOwnConfigChoice(t *testing.T) {
 	// CONTINUE_GLOBAL_DIR moves the whole global folder.
 	global := t.TempDir()
 	t.Setenv("CONTINUE_GLOBAL_DIR", global)
-	if err := saveContinueProvider(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); err != nil {
+	if _, err := saveContinueProviderUndoable(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(global, ".env")); err != nil {
@@ -114,13 +114,13 @@ func TestContinueProviderFollowsContinuesOwnConfigChoice(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(shared), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveContinueProvider(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); code(err) != "AGENT_AUTH_STORE_SHARED" {
+	if _, err := saveContinueProviderUndoable(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); code(err) != "AGENT_AUTH_STORE_SHARED" {
 		t.Fatalf("rewrote an anchored value: %v", err)
 	}
 	if data, _ := os.ReadFile(configPath); string(data) != shared {
 		t.Fatalf("changed a refused config: %s", data)
 	}
-	if err := saveContinueProvider(t.Context(), "OPENAI_API_KEY", "other", "test-secret"); err != nil {
+	if _, err := saveContinueProviderUndoable(t.Context(), "OPENAI_API_KEY", "other", "test-secret"); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(configPath)
