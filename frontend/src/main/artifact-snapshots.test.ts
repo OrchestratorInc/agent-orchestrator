@@ -135,31 +135,101 @@ describe("artifact snapshot store", () => {
 		clearInterval(opener);
 	});
 
-	it("keeps Cloud snapshots in their own folder and removes them, only them, on sign-out", async () => {
-		const store = createArtifactSnapshotStore({ directory, render: async () => Buffer.from("x"), gapMs: 0 });
+	describe("Cloud snapshots", () => {
 		const cloudJob = job({ path: "cloud.html", cloud: { orgId: "org-1" } });
-		await store.request(job({ path: "local.html" }));
-		await store.request(cloudJob);
-		expect(await fs.readdir(path.join(directory, "cloud"))).toHaveLength(1);
-		expect(await store.get(cloudJob)).not.toBeNull();
-		await store.clearCloud();
-		expect(await store.get(cloudJob)).toBeNull();
-		expect(await store.get(job({ path: "local.html" }))).not.toBeNull();
-	});
+		const store = (render = async () => Buffer.from("x")) => createArtifactSnapshotStore({ directory, render, gapMs: 0 });
 
-	it("does not write a Cloud render that finished after a sign-out", async () => {
-		let finish: (() => void) | undefined;
-		const render = vi.fn(() => new Promise<Buffer>((resolve) => {
-			finish = () => resolve(Buffer.from("x"));
-		}));
-		const store = createArtifactSnapshotStore({ directory, render, gapMs: 0 });
-		const cloudJob = job({ path: "late.html", cloud: { orgId: "org-1" } });
-		const pending = store.request(cloudJob);
-		await vi.waitFor(() => expect(render).toHaveBeenCalled());
-		await store.clearCloud();
-		finish?.();
-		expect(await pending).toBeNull();
-		expect(await store.get(cloudJob)).toBeNull();
+		it("are made and served only for the signed-in account, from their own folder", async () => {
+			const cache = store();
+			expect(await cache.request(cloudJob)).toBeNull();
+			await cache.bindCloudAccount("user-1");
+			await cache.request(job({ path: "local.html" }));
+			expect(await cache.request(cloudJob)).not.toBeNull();
+			expect(await fs.readdir(path.join(directory, "cloud"))).toHaveLength(1);
+			expect(await cache.get(cloudJob)).not.toBeNull();
+		});
+
+		it("are removed, and only they, on sign-out", async () => {
+			const cache = store();
+			await cache.bindCloudAccount("user-1");
+			await cache.request(job({ path: "local.html" }));
+			await cache.request(cloudJob);
+			await cache.clearCloud();
+			expect(await cache.get(cloudJob)).toBeNull();
+			expect(await cache.get(job({ path: "local.html" }))).not.toBeNull();
+		});
+
+		it("go when another account signs in or this one is lost, even across a restart", async () => {
+			const first = store();
+			await first.bindCloudAccount("user-1");
+			await first.request(cloudJob);
+			// The same account again keeps them, across a restart too.
+			const second = store();
+			await second.bindCloudAccount("user-1");
+			expect(await second.get(cloudJob)).not.toBeNull();
+			// Another account clears them before it can be served any.
+			const third = store();
+			await third.bindCloudAccount("user-2");
+			expect(await third.get(cloudJob)).toBeNull();
+			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
+			// No account at all (a session that expired for good) clears them as well.
+			await third.request(cloudJob);
+			const fourth = store();
+			await fourth.bindCloudAccount(null);
+			expect(await fourth.get(cloudJob)).toBeNull();
+			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
+		});
+
+		it("are not served until a failed delete has been retried", async () => {
+			const first = store();
+			await first.bindCloudAccount("user-1");
+			await first.request(cloudJob);
+			const second = store();
+			const remove = vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("busy"));
+			await expect(second.bindCloudAccount("user-2")).rejects.toThrow("busy");
+			remove.mockRestore();
+			expect(await second.get(cloudJob)).toBeNull();
+			// The old owner is still on record, so the next bind deletes them.
+			await second.bindCloudAccount("user-2");
+			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
+			expect(await second.request(cloudJob)).not.toBeNull();
+		});
+
+		it("are not written by a render that finished after a sign-out", async () => {
+			let finish: (() => void) | undefined;
+			const render = vi.fn(() => new Promise<Buffer>((resolve) => {
+				finish = () => resolve(Buffer.from("x"));
+			}));
+			const cache = createArtifactSnapshotStore({ directory, render, gapMs: 0 });
+			await cache.bindCloudAccount("user-1");
+			const pending = cache.request(cloudJob);
+			await vi.waitFor(() => expect(render).toHaveBeenCalled());
+			await cache.clearCloud();
+			finish?.();
+			expect(await pending).toBeNull();
+			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
+		});
+
+		it("are not left behind by a write that was already under way when the account was lost", async () => {
+			const cache = store();
+			await cache.bindCloudAccount("user-1");
+			const realMkdir = fs.mkdir.bind(fs);
+			let release: (() => void) | undefined;
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const mkdir = vi.spyOn(fs, "mkdir").mockImplementation((async (...args: Parameters<typeof fs.mkdir>) => {
+				await held;
+				return realMkdir(...args);
+			}) as unknown as typeof fs.mkdir);
+			const pending = cache.request(cloudJob);
+			await vi.waitFor(() => expect(mkdir).toHaveBeenCalled());
+			const clearing = cache.clearCloud();
+			release?.();
+			await Promise.all([pending, clearing]);
+			mkdir.mockRestore();
+			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
+		});
 	});
 
 	it("prunes the oldest-read files once the cache is over its limit", async () => {

@@ -18,7 +18,7 @@ import { isThemeStyle, DEFAULT_THEME_STYLE } from "./lib/theme-palettes";
 import type { ArtifactRow } from "./lib/artifacts";
 import { ARTIFACT_SNAPSHOT_HEIGHT, ARTIFACT_SNAPSHOT_WIDTH, type ArtifactSnapshotJob } from "../shared/artifact-snapshot";
 
-type State = "loading" | "ready" | "unavailable";
+type State = "loading" | "ready" | "unavailable" | "error";
 
 /** How long the preview must stay still before it counts as drawn; a PDF paints its canvas later than the DOM. */
 const QUIET_MS = 500;
@@ -29,6 +29,7 @@ let activity = Date.now();
 let quietMs = QUIET_MS;
 let started = false;
 let mounted: { root: Root; observer: MutationObserver } | undefined;
+const loadedFrames = new WeakSet<Element>();
 
 function bump() {
 	activity = Date.now();
@@ -39,10 +40,13 @@ function state(): State {
 	const marker = root?.querySelector<HTMLElement>("[data-preview-state]");
 	const reported = marker?.dataset.previewState;
 	if (reported === "unavailable") return "unavailable";
+	if (reported === "error") return "error";
 	if (!started || reported !== "content" || !root) return "loading";
 	if (Date.now() - activity < quietMs || document.fonts.status !== "loaded") return "loading";
 	for (const image of root.querySelectorAll("img")) if (!image.complete) return "loading";
 	for (const video of root.querySelectorAll("video")) if (video.readyState < 2) return "loading";
+	// An HTML page can take longer than the quiet period to load; a frame still loading is a blank or half-drawn card.
+	for (const frame of root.querySelectorAll("iframe")) if (!loadedFrames.has(frame)) return "loading";
 	return "ready";
 }
 
@@ -111,4 +115,7 @@ async function encode(png: string, quality: number): Promise<string> {
 void preloadMarkdownFonts();
 // Loads and errors do not bubble, but they do capture; listen once for every artifact.
 for (const type of ["load", "loadeddata", "error"]) document.getElementById("root")?.addEventListener(type, bump, true);
+document.getElementById("root")?.addEventListener("load", (event) => {
+	if (event.target instanceof HTMLIFrameElement) loadedFrames.add(event.target);
+}, true);
 (window as unknown as { __aoSnapshot: unknown }).__aoSnapshot = { start, state, encode, reset };

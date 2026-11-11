@@ -166,6 +166,7 @@ import {
 	handleCloudDeepLink,
 	getCloudAccessToken,
 	getCloudSession,
+	getCloudSessionCached,
 	installCloudIPC,
 	registerCloudProtocol,
 	resolveCloudAuthDir,
@@ -3993,6 +3994,13 @@ ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 // The account this run last told the renderer about, to notice another one signing in.
 let notifiedCloudUserId: string | undefined;
 
+function bindArtifactSnapshotsToCloudAccount(userId: string | null): void {
+	artifactSnapshotStore.bindCloudAccount(userId).catch((error) => {
+		// The old files stay on record as another account's, so the next sign-in, or the next launch, tries again.
+		console.warn("AO: could not delete the cached Cloud artifact previews", error);
+	});
+}
+
 function notifyRenderersOfCloudSession(
 	account: import("./shared/cloud-account").CloudAccount | null,
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
@@ -4006,6 +4014,9 @@ function notifyRenderersOfCloudSession(
 		void sessionShareUrls.clear().catch(() => undefined);
 	}
 	notifiedCloudUserId = account?.user.id;
+	// The Cloud artifact previews on disk belong to one account: another one signing in, or this one
+	// being lost (a sign-out, or a refresh that failed for good), clears them.
+	bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();
@@ -4019,8 +4030,10 @@ function notifyRenderersOfCloudSession(
 // the renderer later hands the sign-out to the daemon: the app can quit first,
 // and a CLI-started daemon would then restore the departed account.
 installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, async () => {
-	// Cloud artifact previews cached on disk go with the account.
-	await artifactSnapshotStore.clearCloud().catch(() => undefined);
+	// Cloud artifact previews cached on disk go with the account, before the app can quit.
+	await artifactSnapshotStore.clearCloud().catch((error) => {
+		console.warn("AO: could not delete the cached Cloud artifact previews", error);
+	});
 	await telemetryIdentity.signOut();
 });
 
@@ -4340,6 +4353,12 @@ app.whenReady().then(async () => {
 
 	registerRendererProtocol();
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
+	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
+	// even if the app quit before it could.
+	void getCloudSessionCached(cloudDataDir()).then(
+		(account) => bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null),
+		() => bindArtifactSnapshotsToCloudAccount(null),
+	);
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))

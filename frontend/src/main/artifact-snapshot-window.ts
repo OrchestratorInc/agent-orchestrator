@@ -18,10 +18,14 @@ import {
 import { type SnapshotRenderer, SnapshotUnavailableError } from "./artifact-snapshots";
 
 /** The page reports one of these while it draws the preview. */
-type PageState = "loading" | "ready" | "unavailable";
+type PageState = "loading" | "ready" | "unavailable" | "error";
 
 /** A page that has not finished by now is left uncached; some load slowly from the cloud. */
 const SNAPSHOT_DEADLINE_MS = 20_000;
+/** The whole render, from the page starting to the encoded bytes, may take this much longer than the preview's own deadline. */
+const SNAPSHOT_HARD_DEADLINE_MS = SNAPSHOT_DEADLINE_MS + 15_000;
+/** The snapshot page has this long to load before the window is given up on. */
+const PAGE_LOAD_DEADLINE_MS = 15_000;
 const POLL_MS = 100;
 /** A frame painted after the page settles: the compositor lags the DOM by a frame or two. */
 const PAINT_ATTEMPTS = 12;
@@ -54,6 +58,9 @@ async function paintedFrame(window: BrowserWindow): Promise<NativeImage> {
 	}
 	throw new Error("the snapshot window never painted the whole preview");
 }
+
+/** A preview that failed to load, as opposed to one with nothing to show: asked again after the retry delay. */
+class PreviewLoadError extends Error {}
 
 /** The window stays warm between artifacts, so a screen of cards does not start a renderer process for each. */
 const WINDOW_IDLE_MS = 30_000;
@@ -97,7 +104,11 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 				current = undefined;
 			});
 			try {
-				await contents.loadURL(deps.pageUrl());
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const stalled = new Promise<never>((_, reject) => {
+					timer = setTimeout(() => reject(new Error("the snapshot page did not load")), PAGE_LOAD_DEADLINE_MS);
+				});
+				await Promise.race([contents.loadURL(deps.pageUrl()), stalled]).finally(() => clearTimeout(timer));
 			} catch (error) {
 				window.destroy();
 				throw error;
@@ -115,7 +126,7 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 		}, () => undefined);
 	}
 
-	const render: SnapshotRenderer = async (job: ArtifactSnapshotJob) => {
+	const renderOne: SnapshotRenderer = async (job: ArtifactSnapshotJob) => {
 		clearTimeout(idle);
 		const window = await open();
 		const contents = window.webContents;
@@ -130,6 +141,7 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 				state = await read<PageState>("window.__aoSnapshot.state()");
 			}
 			if (state === "unavailable") throw new SnapshotUnavailableError("the artifact has no preview");
+			if (state === "error") throw new PreviewLoadError("the preview could not be loaded");
 			if (state !== "ready") throw new Error("the preview did not finish loading");
 			const frame = await paintedFrame(window);
 			const png = frame.getSize().width === ARTIFACT_SNAPSHOT_WIDTH
@@ -142,7 +154,7 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 		} catch (error) {
 			// A page that failed or hung may be stuck; the next artifact gets a fresh one. A file with
 			// nothing to draw left the page healthy.
-			if (!(error instanceof SnapshotUnavailableError)) close();
+			if (!(error instanceof SnapshotUnavailableError || error instanceof PreviewLoadError)) close();
 			throw error;
 		} finally {
 			if (!window.isDestroyed()) {
@@ -151,6 +163,25 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 			}
 			clearTimeout(idle);
 			idle = setTimeout(close, WINDOW_IDLE_MS);
+		}
+	};
+
+	/** One end-to-end bound on a render: a page that never starts, paints or encodes must not hold up every later one. */
+	const render: SnapshotRenderer = async (job) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const work = renderOne(job);
+		const stalled = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				close();
+				reject(new Error("the snapshot window stalled"));
+			}, SNAPSHOT_HARD_DEADLINE_MS);
+		});
+		try {
+			return await Promise.race([work, stalled]);
+		} finally {
+			clearTimeout(timer);
+			// Once the window is closed under it, whatever the render was waiting on may reject later.
+			work.catch(() => undefined);
 		}
 	};
 

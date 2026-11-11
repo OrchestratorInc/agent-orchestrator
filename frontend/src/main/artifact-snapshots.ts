@@ -30,6 +30,8 @@ export const SNAPSHOT_RETRY_MS = 60_000;
 export const SNAPSHOT_MAX_QUEUED = 64;
 const PRUNE_EVERY_WRITES = 25;
 const CLOUD_FOLDER = "cloud";
+/** Names the account the Cloud folder belongs to (a hash of its user id), so another account never sees its files. */
+const OWNER_FILE = "cloud-owner";
 /** A pause after each render, so a long queue leaves the app room to draw and scroll. */
 export const SNAPSHOT_GAP_MS = 150;
 
@@ -70,8 +72,16 @@ export function createArtifactSnapshotStore(options: {
 	// unmounts the previous one's preview, so two at once would wipe each other mid-render.
 	let running = false;
 	let writes = 0;
-	// Bumped when the Cloud snapshots are cleared, so a render that began before a sign-out is not written after it.
+	// Bumped whenever the Cloud snapshots are cleared or change owner, so a render that began for an
+	// earlier account is not written after it.
 	let cloudEpoch = 0;
+	// The account the Cloud folder belongs to, once known: until then (and when signed out) no Cloud snapshot is served or made.
+	let cloudOwner: string | undefined;
+	let bindSeq = 0;
+	let binding: Promise<void> = Promise.resolve();
+	// Cloud writes in flight, which a clear waits for so none lands after it.
+	const cloudWrites = new Set<Promise<void>>();
+	const ownerFile = path.join(directory, OWNER_FILE);
 	let pruning: Promise<void> | undefined;
 
 	async function read(key: string, cloud: boolean): Promise<Buffer | null> {
@@ -134,6 +144,13 @@ export function createArtifactSnapshotStore(options: {
 		return pruning;
 	}
 
+	/** Deletes the Cloud folder once the writes already under way have finished, so none recreates it. */
+	async function clearCloudFiles(): Promise<void> {
+		cloudEpoch += 1;
+		await Promise.allSettled([...cloudWrites]);
+		await fs.rm(cloudDirectory, { recursive: true, force: true });
+	}
+
 	function pump(): void {
 		if (running) return;
 		// The newest first: a card asks once it has been on screen a while, so the last to ask is the one being looked at.
@@ -143,7 +160,7 @@ export function createArtifactSnapshotStore(options: {
 	function enqueue(job: ArtifactSnapshotJob, key: string): Promise<SnapshotResult> {
 		const cloud = Boolean(job.cloud);
 		const epoch = cloudEpoch;
-		const signedOut = () => cloud && epoch !== cloudEpoch;
+		const signedOut = () => cloud && (epoch !== cloudEpoch || cloudOwner === undefined);
 		return new Promise((resolve) => {
 			waiting.push({
 				drop: () => resolve(SNAPSHOT_DROPPED),
@@ -154,7 +171,13 @@ export function createArtifactSnapshotStore(options: {
 							if (signedOut()) throw new Error("signed out before the render began");
 							const bytes = await render(job);
 							if (signedOut()) throw new Error("signed out during the render");
-							await write(key, bytes, cloud);
+							const writing = write(key, bytes, cloud);
+							if (cloud) {
+								cloudWrites.add(writing);
+								const done = () => void cloudWrites.delete(writing);
+								writing.then(done, done);
+							}
+							await writing;
 							failedAt.delete(key);
 							resolve(bytes);
 						} catch (error) {
@@ -177,6 +200,7 @@ export function createArtifactSnapshotStore(options: {
 	return {
 		/** The image already cached for the snapshot, or null. */
 		async get(snapshot: ArtifactSnapshotIdentity): Promise<Buffer | null> {
+			if (snapshot.cloud && cloudOwner === undefined) return null;
 			return read(artifactSnapshotKey(snapshot), Boolean(snapshot.cloud));
 		},
 		/**
@@ -184,6 +208,7 @@ export function createArtifactSnapshotStore(options: {
 		 * SNAPSHOT_DROPPED when the queue was full and the request should be made again.
 		 */
 		async request(job: ArtifactSnapshotJob): Promise<SnapshotResult> {
+			if (job.cloud && cloudOwner === undefined) return null;
 			const key = artifactSnapshotKey(job);
 			const cached = await read(key, Boolean(job.cloud));
 			if (cached) return cached;
@@ -201,8 +226,37 @@ export function createArtifactSnapshotStore(options: {
 		prune,
 		/** Deletes every Cloud snapshot, for a sign-out: nothing of an account's content stays on disk. */
 		async clearCloud(): Promise<void> {
+			cloudOwner = undefined;
+			bindSeq += 1;
+			await clearCloudFiles();
+			await fs.rm(ownerFile, { force: true });
+		},
+		/**
+		 * Tells the store which account is signed in, or null for none. The Cloud folder belongs to
+		 * one account: when it was left by another (or by none), it is deleted first, and Cloud
+		 * snapshots are served only once that has worked. A failed delete leaves the old owner on
+		 * record, so the next call (a restart, a new sign-in) tries again, and rejects so the caller can report it.
+		 */
+		bindCloudAccount(userId: string | null): Promise<void> {
+			const seq = (bindSeq += 1);
+			cloudOwner = undefined;
 			cloudEpoch += 1;
-			await fs.rm(cloudDirectory, { recursive: true, force: true });
+			const owner = userId ? createHash("sha256").update(userId).digest("hex").slice(0, 32) : "";
+			const run = binding.then(async () => {
+				const recorded = ((await fs.readFile(ownerFile, "utf8").catch(() => "")) ?? "").trim();
+				if (recorded !== owner) {
+					await clearCloudFiles();
+					if (owner) {
+						await fs.mkdir(directory, { recursive: true });
+						await fs.writeFile(ownerFile, owner);
+					} else {
+						await fs.rm(ownerFile, { force: true });
+					}
+				}
+				if (seq === bindSeq && owner) cloudOwner = owner;
+			});
+			binding = run.catch(() => undefined);
+			return run;
 		},
 	};
 }
