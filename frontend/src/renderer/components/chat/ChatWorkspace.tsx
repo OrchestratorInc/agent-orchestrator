@@ -2618,7 +2618,6 @@ function ChatHeader({
 											label={label}
 											onSelect={timelineActive ? undefined : onSelectChat}
 											onRenamed={onSessionRenamed}
-											providerIcon={false}
 											session={session}
 											tabAction={sessionTabAction}
 											tabActionPinned={sessionTabActionPinned}
@@ -2629,7 +2628,6 @@ function ChatHeader({
 											label={label}
 											onSelect={timelineActive ? undefined : onSelectChat}
 											provider={snapshot.harness}
-											providerIcon={false}
 											title={label}
 										/>
 									)}
