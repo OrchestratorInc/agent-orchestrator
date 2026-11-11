@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
@@ -24,7 +24,7 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 	onAccessRefused?: () => void;
 	onAccessGranted?: () => void;
 	onNavigate?: (path: string) => void;
-	/** A thumbnail's state: loading until the file's status is known, failed while it shows the fallback, ready once the page is framed. */
+	/** A thumbnail's state: loading until the file's status is known and its page has loaded, failed while it shows the fallback, ready once the page is drawn. */
 	onThumbnailState?: (state: "loading" | "failed" | "ready") => void;
 	/** Scale only the page; gallery fallbacks keep the card's normal size. */
 	thumbnail?: { width: number; height?: number; fallback: ReactNode };
@@ -32,6 +32,8 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 	zoom?: number;
 }) {
 	const { t } = useTranslation();
+	// The URL whose page has finished loading, so a new URL starts over.
+	const [loadedUrl, setLoadedUrl] = useState<string>();
 	useEffect(() => {
 		const prefix = artifactFilesPrefix(url);
 		if (!prefix) return;
@@ -54,7 +56,7 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 	useEffect(() => {
 		if (status.data !== undefined && status.data >= 200 && status.data < 400) onAccessGranted?.();
 	}, [status.data, status.dataUpdatedAt, onAccessGranted]);
-	const thumbnailState = !thumbnail ? undefined : status.isPending ? "loading" : refused || status.isError || (status.data !== undefined && status.data >= 400) ? "failed" : "ready";
+	const thumbnailState = !thumbnail ? undefined : status.isPending ? "loading" : refused || status.isError || (status.data !== undefined && status.data >= 400) ? "failed" : loadedUrl === url ? "ready" : "loading";
 	useEffect(() => {
 		if (thumbnailState) onThumbnailState?.(thumbnailState);
 	}, [thumbnailState, onThumbnailState]);
@@ -74,6 +76,7 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 			sandbox="allow-scripts allow-forms"
 			src={url}
 			title={title}
+			onLoad={() => setLoadedUrl(url)}
 		/>
 	);
 }

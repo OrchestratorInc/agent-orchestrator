@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
 import { artifactPathUnder, CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -54,9 +54,12 @@ describe("CloudArtifactFrame", () => {
 		);
 		const framed: string[] = [];
 		const first = renderThumbnail((state) => framed.push(state));
-		await screen.findByTitle("index.html");
+		const frame = await screen.findByTitle("index.html");
+		// Framed but not loaded yet: the card keeps waiting.
+		expect(framed.at(-1)).toBe("loading");
+		fireEvent.load(frame);
+		await vi.waitFor(() => expect(framed.at(-1)).toBe("ready"));
 		expect(framed[0]).toBe("loading");
-		expect(framed.at(-1)).toBe("ready");
 		first.unmount();
 		mocks.status = 403;
 		const refused: string[] = [];
