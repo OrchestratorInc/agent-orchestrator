@@ -903,11 +903,6 @@ func (d *Driver) initialize(
 			persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
 		},
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
-		ClientInfo: &acpsdk.Implementation{
-			Name:    "agent-orchestrator",
-			Title:   pointer("Agent Orchestrator"),
-			Version: "0.1.0",
-		},
 		ClientCapabilities: acpsdk.ClientCapabilities{
 			// These two Claude bridge extensions enrich the transcript. They do
 			// not grant the agent access to AO's terminal or filesystem APIs.
