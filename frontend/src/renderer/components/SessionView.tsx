@@ -2126,6 +2126,31 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
 
+	// A deliverable the agent registers with `ao artifact add` while the user
+	// watches opens in the Artifacts tab, whatever its file type; agents no
+	// longer hand artifacts to the Browser panel. Artifacts already registered
+	// when the session is entered are the baseline and never reveal anything.
+	const registeredArtifactsBaselineRef = useRef<{ sessionId: string; keys: Set<string> } | null>(null);
+	const artifactFiles = session?.artifactFiles;
+	useEffect(() => {
+		if (!hasInspector) return;
+		const registered = (artifactFiles ?? []).filter((file) => file.registered);
+		const keyOf = (file: SessionArtifact) => file.id ?? file.path;
+		const baseline = registeredArtifactsBaselineRef.current;
+		if (!baseline || baseline.sessionId !== uiSessionId) {
+			registeredArtifactsBaselineRef.current = { sessionId: uiSessionId, keys: new Set(registered.map(keyOf)) };
+			return;
+		}
+		// A rename keeps its id; a file without one counts as known under an old path.
+		const added = registered.filter(
+			(file) => !baseline.keys.has(keyOf(file)) && !(file.previousPaths ?? []).some((previous) => baseline.keys.has(previous)),
+		);
+		for (const file of registered) baseline.keys.add(keyOf(file));
+		if (added.length === 0 || terminated) return;
+		const newest = added.reduce((latest, file) => ((Date.parse(file.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? file : latest));
+		handleOpenArtifact({ path: newest.path });
+	}, [artifactFiles, handleOpenArtifact, hasInspector, terminated, uiSessionId]);
+
 	// A file written moments ago, or one past the artifact list cap, is not in
 	// the cached session, and the Files inspector can only show listed
 	// artifacts. Refresh once before deciding it cannot be opened.

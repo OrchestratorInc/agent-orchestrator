@@ -5790,6 +5790,44 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("opens a newly registered artifact of any file type in the Artifacts view", async () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "data.parquet", path: "data.parquet", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(await screen.findByText("selected data.parquet")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(inspectorOpen("sess-1")).toBe(true);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("does not reveal artifacts already registered on entry, or unregistered files", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ kind: "file", name: "scratch.txt", path: "scratch.txt", size: 1, updatedAt: "2026-06-11T00:00:00Z" },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+			expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
 	it("opens an absolute orchestrator chat path to a listed artifact", async () => {
 		const orchestrator = workerSession("sess-orch");
 		orchestrator.mode = "chat";
