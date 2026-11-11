@@ -399,11 +399,15 @@ func TestRegenerateRevokesEveryDevice(t *testing.T) {
 	if got := len(h.rows()); got != 3 {
 		t.Fatalf("rows before regenerate = %d", got)
 	}
+	phoneConn := h.openConnection(phone)
 
 	status, body := h.local(http.MethodPost, "/api/v1/mobile/regenerate", nil)
 	password, _ := body["password"].(string)
 	if status != http.StatusOK || password == "" || password == "secret12" {
 		t.Fatalf("regenerate: status=%d body=%v", status, body)
+	}
+	if !closedByHost(phoneConn) {
+		t.Fatal("the device's connection stayed open after regenerate")
 	}
 	for name, credential := range map[string]string{"device token": phone, "account token": account, "old password": "secret12"} {
 		if got := h.sessions(credential); got != http.StatusUnauthorized {

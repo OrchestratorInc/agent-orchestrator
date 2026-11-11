@@ -208,7 +208,7 @@ export function MobileDevicesSection() {
 					<div role="list" className="divide-y divide-border">
 					{sortedDevices.map((device) => {
 						const name = device.kind === "account" ? t("mobile.devices.account") : device.deviceName || t("mobile.devices.unnamed");
-						const icon = device.kind === "account" ? Users : desktopPlatforms.has(device.platform ?? "") ? Laptop : Smartphone;
+						const icon = device.kind === "account" ? Users : isPhone(device) ? Smartphone : Laptop;
 						// Only what changes the decision to remove: these two rows do not
 						// simply revoke one device.
 						const description = device.kind === "account" ? t("mobile.devices.accountDescription")
