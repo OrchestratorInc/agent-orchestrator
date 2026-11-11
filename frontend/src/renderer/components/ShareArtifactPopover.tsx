@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, Copy, Globe, Loader2, Lock, Share } from "@/components/app-icons";
@@ -203,6 +203,32 @@ export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" 
 const POPOVER_CLASS = "w-[min(22rem,90vw)] p-4";
 
 /**
+ * Closes an open popover when focus moves into a framed page. A click inside
+ * an artifact preview lands in its iframe and never reaches this document, so
+ * the popover's own click-outside cannot see it; the window's blur, with the
+ * frame left as the active element, can. Read a tick later, once focus settles.
+ */
+function useCloseWhenFrameFocused(open: boolean, close: () => void): void {
+	const closeRef = useRef(close);
+	closeRef.current = close;
+	useEffect(() => {
+		if (!open) return;
+		let timer: number | undefined;
+		const check = () => {
+			timer = window.setTimeout(() => {
+				const active = document.activeElement;
+				if (active instanceof HTMLIFrameElement || active?.tagName === "WEBVIEW") closeRef.current();
+			}, 0);
+		};
+		window.addEventListener("blur", check);
+		return () => {
+			window.removeEventListener("blur", check);
+			window.clearTimeout(timer);
+		};
+	}, [open]);
+}
+
+/**
  * The publish panel a menu's Publish or Unpublish item opens, anchored to the
  * menu's trigger. Unpublish opens on its confirmation and never publishes.
  */
@@ -214,6 +240,7 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, inten
 	intent?: "publish" | "unpublish";
 	children: ReactElement;
 }) {
+	useCloseWhenFrameFocused(open, () => onOpenChange(false));
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
 			<PopoverAnchor asChild>{children}</PopoverAnchor>
@@ -303,13 +330,17 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 		else recheck();
 		setOpen(next);
 	};
-	const AccessIcon = share && !isPrivateShare(share) ? Globe : Lock;
+	useCloseWhenFrameFocused(open, () => onOpenChange(false));
+	const isPublic = Boolean(share && !isPrivateShare(share));
+	const AccessIcon = isPublic ? Globe : Lock;
+	// A public link's globe is green, as in General access: anyone can open it.
+	const accessIconClass = cn("size-icon-sm", isPublic && "text-success");
 	const label = publishing ? t("artifacts.share.publishing")
 		: outdated ? t("artifacts.share.republish")
 		: share ? t("artifacts.share.published")
 		: t("artifacts.share.publish");
 	const icon = publishing ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin motion-reduce:animate-none" />
-		: share && !outdated ? <AccessIcon aria-hidden="true" className="size-icon-sm" />
+		: share && !outdated ? <AccessIcon aria-hidden="true" className={accessIconClass} />
 		: <Share aria-hidden="true" className="size-icon-sm" />;
 	const amberDot = <span aria-hidden="true" className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-status-in-review ring-1 ring-background" data-share-outdated="" />;
 	const panel = (
@@ -360,7 +391,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 							type="button"
 							variant="quiet"
 						>
-							<AccessIcon aria-hidden="true" className="size-icon-sm" />
+							<AccessIcon aria-hidden="true" className={accessIconClass} />
 							<ChevronDown aria-hidden="true" className="size-3" />
 						</Button>
 					</span>
@@ -753,7 +784,7 @@ function SharePanel({
 				<>
 					{titled(t("artifacts.share.title.publishing"))}
 					<div className="mt-3.5 flex items-start gap-2.5 rounded-md bg-muted/40 py-2 pr-2 pl-2.5" data-share-uploading="">
-						<span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground" aria-hidden="true">
+						<span className={cn("grid size-6 shrink-0 place-items-center rounded-full bg-muted", phase.access === "anyone" ? "text-success" : "text-muted-foreground")} aria-hidden="true">
 							<Icon className="size-3.5" />
 						</span>
 						<span className="flex min-w-0 flex-col">

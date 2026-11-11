@@ -305,6 +305,20 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
+	it("closes when a click lands in an artifact preview's frame", async () => {
+		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		await openPopover(cloudFile, "report.html", "Published");
+		await screen.findByRole("dialog");
+		// A click inside a preview goes to its iframe: this document only sees its window blur.
+		const frame = document.createElement("iframe");
+		frame.tabIndex = 0;
+		document.body.append(frame);
+		frame.focus();
+		window.dispatchEvent(new Event("blur"));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		frame.remove();
+	});
+
 	it("opens a published file from the artifact menu without publishing again", async () => {
 		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		const popover = await openMenuPanel();

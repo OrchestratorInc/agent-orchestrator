@@ -43,10 +43,10 @@ export function ArtifactGeneralAccess({ access, invited, onChange, choosable = t
 	const Icon = access === "anyone" ? Globe : Lock;
 	const name = accessName(t, access, invited);
 	return (
-		<section className="flex flex-col gap-1" aria-label={t("artifacts.share.access.title")} data-artifact-access={access}>
+		<section className="flex flex-col gap-2" aria-label={t("artifacts.share.access.title")} data-artifact-access={access}>
 			<p className="text-xs text-muted-foreground">{t("artifacts.share.access.title")}</p>
 			<div className={cn("flex items-start gap-2.5 rounded-md bg-muted/40 py-2 pr-2 pl-2.5", disabled && "opacity-70")} aria-busy={disabled || undefined}>
-				<span className="grid size-6 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground" aria-hidden="true">
+				<span className={cn("grid size-6 shrink-0 place-items-center rounded-full bg-muted", access === "anyone" ? "text-success" : "text-muted-foreground")} aria-hidden="true">
 					<Icon className="size-3.5" />
 				</span>
 				<div className="flex min-w-0 flex-1 flex-col">
@@ -75,7 +75,7 @@ export function ArtifactGeneralAccess({ access, invited, onChange, choosable = t
 								/>
 								<AccessOption
 									description={t("artifacts.share.access.anyoneOption")}
-									icon={<Globe />}
+									icon={<Globe className="text-success!" />}
 									label={t("artifacts.share.access.anyone")}
 									onSelect={() => access !== "anyone" && onChange("anyone")}
 									selected={access === "anyone"}

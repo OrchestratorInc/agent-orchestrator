@@ -25,7 +25,7 @@ export function ArtifactPeopleList({ owner, people, onRemove, removing }: {
 	const { t } = useTranslation();
 	const ownerName = owner.name?.trim() || owner.email || t("artifacts.share.people.you");
 	return (
-		<section className="flex flex-col gap-1" aria-label={t("artifacts.share.people.title")} data-artifact-people="">
+		<section className="flex flex-col gap-2" aria-label={t("artifacts.share.people.title")} data-artifact-people="">
 			<p className="text-xs text-muted-foreground">{t("artifacts.share.people.title")}</p>
 			<ul className="-mx-1 flex max-h-44 flex-col overflow-y-auto">
 				<li className="flex min-h-9 items-center gap-2 px-1">
