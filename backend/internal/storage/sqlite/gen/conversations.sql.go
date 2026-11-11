@@ -541,6 +541,30 @@ func (q *Queries) CancelQueuedConversationTurns(ctx context.Context, arg CancelQ
 	return err
 }
 
+const compactProviderEventPayloads = `-- name: CompactProviderEventPayloads :execrows
+UPDATE conversation_provider_events SET payload_json = '{}'
+WHERE id IN (
+    SELECT old.id FROM conversation_provider_events AS old
+    WHERE old.received_at < ?1 AND old.method <> 'turn.completed' AND old.payload_json <> '{}'
+    LIMIT ?2
+)
+`
+
+type CompactProviderEventPayloadsParams struct {
+	Before    time.Time
+	BatchSize int64
+}
+
+// Old archive rows keep their provider_event_id, which dedupes a provider replay,
+// but drop their payload. turn.completed keeps it for SelectVerifiedAuthenticationTurn.
+func (q *Queries) CompactProviderEventPayloads(ctx context.Context, arg CompactProviderEventPayloadsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, compactProviderEventPayloads, arg.Before, arg.BatchSize)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const completeQueuedConversationBatchMember = `-- name: CompleteQueuedConversationBatchMember :execrows
 UPDATE conversation_turns
 SET state = 'completed',

@@ -4997,6 +4997,19 @@ func activityToDomain(row gen.ConversationActivity) domain.ConversationActivity 
 	return activity
 }
 
+// CompactProviderEventPayloads empties the payload of up to batchSize archived
+// provider events received before before, keeping each row so a replayed event
+// is still recognized. It returns how many rows changed.
+func (s *Store) CompactProviderEventPayloads(ctx context.Context, before time.Time, batchSize int) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	n, err := s.qw.CompactProviderEventPayloads(ctx, gen.CompactProviderEventPayloadsParams{Before: before, BatchSize: int64(batchSize)})
+	if err != nil {
+		return 0, fmt.Errorf("compact provider event payloads: %w", err)
+	}
+	return n, nil
+}
+
 // ProviderEventsSince reads the raw provider-event archive forward from an id.
 // This is the recovery path: when a projection turns out to be wrong, these rows
 // are the only account of what the provider actually said.

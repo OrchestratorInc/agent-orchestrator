@@ -1839,6 +1839,16 @@ INSERT OR IGNORE INTO conversation_provider_events (
     COALESCE((SELECT active_branch_id FROM conversations WHERE id = sqlc.arg(conversation_id)), '')
 );
 
+-- Old archive rows keep their provider_event_id, which dedupes a provider replay,
+-- but drop their payload. turn.completed keeps it for SelectVerifiedAuthenticationTurn.
+-- name: CompactProviderEventPayloads :execrows
+UPDATE conversation_provider_events SET payload_json = '{}'
+WHERE id IN (
+    SELECT old.id FROM conversation_provider_events AS old
+    WHERE old.received_at < sqlc.arg(before) AND old.method <> 'turn.completed' AND old.payload_json <> '{}'
+    LIMIT sqlc.arg(batch_size)
+);
+
 -- name: SelectConversationProviderEvents :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)

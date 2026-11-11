@@ -102,6 +102,31 @@ const chatHibernateSweepTick = 30 * time.Second
 // Its work is retry and bookkeeping, not anything a user waits on.
 const workspaceCleanupSweepTick = 10 * time.Minute
 
+// Raw provider events older than this keep their row but lose their payload.
+// The table otherwise grows by tens of MB a day of streaming deltas.
+const (
+	providerEventPayloadRetention = 7 * 24 * time.Hour
+	providerEventCompactBatch     = 500
+)
+
+// compactProviderEvents empties old provider event payloads in small batches so
+// the single writer is never held for long.
+func compactProviderEvents(ctx context.Context, store *sqlite.Store, log *slog.Logger) {
+	before := time.Now().UTC().Add(-providerEventPayloadRetention)
+	for ctx.Err() == nil {
+		n, err := store.CompactProviderEventPayloads(ctx, before, providerEventCompactBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Warn("compact provider event payloads failed", "err", err)
+			}
+			return
+		}
+		if n < providerEventCompactBatch {
+			return
+		}
+	}
+}
+
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
 func sentryEnvironment(version string) string {
@@ -1422,6 +1447,7 @@ func Run(buildVersion string) error {
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
 					log.Warn("delete expired sessions failed", "err", err)
 				}
+				compactProviderEvents(ctx, store, log)
 				select {
 				case <-ctx.Done():
 					return
