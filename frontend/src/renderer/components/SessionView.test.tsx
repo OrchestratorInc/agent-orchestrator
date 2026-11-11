@@ -1,4 +1,5 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
+import { sessionUiKey } from "../lib/hosts";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -261,7 +262,7 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 		{ id: "proj-1", name: "my-app", path: "/p", type: "main", sessions: [worker, secondWorker, orchestrator] },
 		{ id: "proj-2", name: "other-app", path: "/q", type: "main", sessions: [crossProjectWorker] },
 	];
-	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean } = {
+	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean; dataUpdatedAt?: number } = {
 		data: workspaces,
 		isLoading: false,
 	};
@@ -846,6 +847,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 			?.flatMap((workspace) => workspace.sessions)
 			.find((session) => session.id === sessionId),
 		isLoading: workspaceQueryState.directLoading ?? workspaceQueryState.isLoading,
+		dataUpdatedAt: workspaceQueryState.dataUpdatedAt ?? 0,
 		});
 	},
 }));
@@ -1000,6 +1002,7 @@ describe("SessionView", () => {
 		workspaceQueryState.data = workspaces;
 		workspaceQueryState.isLoading = false;
 		workspaceQueryState.directLoading = undefined;
+		workspaceQueryState.dataUpdatedAt = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
 			workspaceFileOpenRequest: null,
@@ -5806,6 +5809,29 @@ describe("SessionView", () => {
 			expect(await screen.findByText("selected data.parquet")).toBeInTheDocument();
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
 			expect(inspectorOpen("sess-1")).toBe(true);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("does not reveal a remote host's artifact that only its first read after entry lists", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		workspaceQueryState.dataUpdatedAt = 1;
+		try {
+			// The sidebar's kept list from an earlier visit predates the artifact.
+			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+			workspaceQueryState.dataUpdatedAt = Date.now() + 1;
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[sessionUiKey("sess-1", "box-a")]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[sessionUiKey("sess-1", "box-a")]?.view).toBe("artifacts");
 		} finally {
 			delete worker.artifactFiles;
 		}
