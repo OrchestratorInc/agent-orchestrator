@@ -199,6 +199,21 @@ describe("AgentModelPicker", () => {
 
 	it("shows a favourite's logo without its agent's name, as before #7822", async () => {
 		const user = userEvent.setup();
+		const saved = { harness: "codex", row: "gpt-x", model: "gpt-x", label: "GPT X" };
+		toggleModelFavorite(saved);
+		try {
+			open();
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const row = await screen.findByRole("menuitemradio", { name: "GPT X, Codex" });
+			expect(row.querySelector("img")).toBeInTheDocument();
+			expect(within(row).queryByText("Codex")).not.toBeInTheDocument();
+		} finally {
+			act(() => toggleModelFavorite(saved));
+		}
+	});
+
+	it("draws the agent's name on a lone favourite whose logo another agent shares", async () => {
+		const user = userEvent.setup();
 		const saved = { harness: "opencode-v2", row: "gpt-x", model: "gpt-x", label: "GPT X" };
 		toggleModelFavorite(saved);
 		try {
@@ -206,7 +221,7 @@ describe("AgentModelPicker", () => {
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			const row = await screen.findByRole("menuitemradio", { name: "GPT X, OpenCode 2" });
 			expect(row.querySelector("img")).toBeInTheDocument();
-			expect(within(row).queryByText("OpenCode 2")).not.toBeInTheDocument();
+			expect(within(row).getByText("OpenCode 2")).toHaveAttribute("aria-hidden", "true");
 		} finally {
 			act(() => toggleModelFavorite(saved));
 		}

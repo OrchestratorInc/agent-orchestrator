@@ -48,6 +48,7 @@ import { CloseButton } from "../ui/close-button";
 import { Pressable } from "../ui/pressable";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
+import { sharesAgentMark } from "../AgentAvatar";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
 
 export interface PendingAgentSwitch {
@@ -371,10 +372,11 @@ export function AgentModelPicker({
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	const setups = favorites.filter((entry) => !terminal || entry.harness !== currentHarness);
-	// A favourite shows its agent's mark. The name is drawn too only where another
-	// agent's favourite has the same model name: OpenCode and OpenCode 2 share a mark.
+	// A favourite shows its agent's mark. The name is drawn too where the mark does not
+	// name the agent (OpenCode and OpenCode 2 share one), or another agent's favourite
+	// has the same model name.
 	const namesAgent = (favorite: ModelFavorite) =>
-		setups.some((other) => other.label === favorite.label && other.harness !== favorite.harness);
+		sharesAgentMark(favorite.harness) || setups.some((other) => other.label === favorite.label && other.harness !== favorite.harness);
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	const searchRows = (open ? agents : []).flatMap((agent) => {
 		const listed = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
