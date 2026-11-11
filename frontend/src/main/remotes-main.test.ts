@@ -35,7 +35,6 @@ function registerRemotes(
 	registerRemotesIpc(ipcMain, {
 		localIdentity: async () => "h_this_mac",
 		cloudRequest: async () => ({ status: 200, body: '{"hosts":[]}' }),
-		// A host without device tokens, unless a test pairs.
 		pair: async () => ({ kind: "unsupported" }),
 		authErrorCode: async () => undefined,
 		deviceName: async () => "Test Mac",
@@ -673,7 +672,6 @@ describe("registerRemotesIpc", () => {
 			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.anything(), "old", expect.anything());
 			expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: token }));
 			expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, fallbackPassword: "old", accountUserId: TEST_ACCOUNT }]);
-			// A device token is not swapped again.
 			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
 			expect(pair).toHaveBeenCalledOnce();
 			expect(start).toHaveBeenCalledOnce();
@@ -687,14 +685,11 @@ describe("registerRemotesIpc", () => {
 			const registry = new RemoteRegistry(start);
 			const ipc = fakeIpc();
 			registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online", pair });
-			// The swap failed in transit; the host connects with its password.
 			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
 			expect(pair).toHaveBeenCalledTimes(1);
 			// Connected: the new credential would restart the proxy, so no swap.
 			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
 			expect(pair).toHaveBeenCalledTimes(1);
-			// After a disconnect it is asked again, answers that it has no device
-			// tokens, and is then left alone.
 			await registry.disconnect("http://192.0.2.1:1");
 			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
 			await registry.disconnect("http://192.0.2.1:1");
@@ -713,7 +708,6 @@ describe("registerRemotesIpc", () => {
 			const ipc = fakeIpc();
 			registerRemotes(ipc.ipcMain, {
 				file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity: async () => "h_workbox",
-				// The host refuses the token and still takes the pairing password.
 				probe: async (entry) => entry.password === "old" ? "online" : "unauthorized",
 				authErrorCode: async () => code,
 			});
@@ -738,7 +732,6 @@ describe("registerRemotesIpc", () => {
 			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { password: "Code1234" })).resolves.toBe("online");
 			expect(pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ hostId: "h_workbox" }), "Code1234", expect.anything());
 			expect(await saved(file)).toEqual([{ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: token, accountUserId: TEST_ACCOUNT }]);
-			// A rename alone pairs nothing.
 			await expect(ipc.invoke("remotes:update", "http://192.0.2.1:1", { label: "renamed" })).resolves.toBe("online");
 			expect(pair).toHaveBeenCalledOnce();
 		});

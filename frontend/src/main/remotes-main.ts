@@ -110,11 +110,9 @@ export function registerRemotesIpc(
 		await checkConnectionContext(localHostId, account);
 		return health;
 	};
-	// Hosts that answered they have no device tokens, and when to ask again.
 	const askAgainAt = new Map<string, number>();
 	const ASK_AGAIN_MS = 60 * 60_000;
-	/** Swaps the saved secret for this device's own token. The caller has confirmed the
-	 * host. A password is kept as the fallback; a spent pairing code is not. */
+	// A password is kept as the fallback; a spent pairing code is not.
 	const pairOwnToken = async (entry: RemoteEntry): Promise<{ entry: RemoteEntry; result: PairDeviceResult["kind"] }> => {
 		const result = await pair(entry, entry.password, { name: await deviceName(), platform: process.platform });
 		if (result.kind === "unsupported" && entry.hostId) askAgainAt.set(entry.hostId, Date.now() + ASK_AGAIN_MS);
@@ -168,7 +166,6 @@ export function registerRemotesIpc(
 			return "offline" as RemoteHealth;
 		}
 		refuseSelf(hostId, localHostId);
-		// A typed code or password is swapped for this device's own token when the host supports it.
 		const typed: RemoteEntry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account };
 		await checkConnectionContext(localHostId, account);
 		const paired = await pairOwnToken(typed);

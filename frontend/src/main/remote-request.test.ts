@@ -146,7 +146,6 @@ describe("pairDevice", () => {
 
 	it.each([
 		[401, "unauthorized"],
-		// A release without device tokens answers 404 or 405.
 		[404, "unsupported"], [405, "unsupported"], [403, "unsupported"], [409, "unsupported"],
 		[429, "offline"], [500, "offline"],
 	])("maps %i to %s", async (status, kind) => {
