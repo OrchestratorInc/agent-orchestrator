@@ -273,6 +273,9 @@ describe("drawing AO's automation messages", () => {
 			"</dl>",
 			"</details>",
 			"",
+			"<pre>first",
+			"  second</pre>",
+			"",
 			"<!-- This is an auto-generated comment by CodeRabbit -->",
 		].join("\n");
 		draw(reviewComment.replace("A failed turn-on does not undo what it started.\n\nThe switch then shows **off**.", body));
@@ -288,6 +291,7 @@ describe("drawing AO's automation messages", () => {
 		expect(details).not.toHaveAttribute("open");
 		expect(details?.querySelector("summary")).toHaveTextContent("Prompt for AI Agents");
 		expect(details).toHaveTextContent("Bind the root as a parameter.");
+		expect([...event.querySelectorAll("pre")].map((pre) => pre.textContent)).toContain("first\n  second");
 
 		await userEvent.click(within(details as HTMLElement).getByText("Prompt for AI Agents"));
 		expect(details).toHaveAttribute("open");

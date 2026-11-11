@@ -47,7 +47,7 @@ import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
-import { fenceOf } from "../../lib/markdown-fence";
+import { fenceOf, textOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
@@ -688,7 +688,7 @@ const COMPONENTS: Components = {
 	// on the class alone rendered those as inline code.
 	pre: ({ children, node }) => {
 		const fence = fenceOf(children);
-		if (!fence) return <>{children}</>;
+		if (!fence) return <CodeBlock code={textOf(children).replace(/\n$/, "")} sourceNode={node} />;
 		// Mermaid is a diagram, not source: it renders through the sandboxed SVG
 		// path rather than the highlighter. See `MermaidBlock.tsx`.
 		if (fence.language?.toLowerCase() === "mermaid") return <div {...excerptElementProps(node)} data-excerpt-block="" data-excerpt-flowchart=""><MermaidFence code={fence.code} /></div>;
