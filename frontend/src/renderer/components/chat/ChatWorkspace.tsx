@@ -6470,16 +6470,22 @@ function atCarryingSteer(items: ConversationItem[], deliveries: readonly Batched
 		const index = carriers.get(turnId)?.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1;
 		return index < 0 ? Number.MAX_SAFE_INTEGER : index;
 	};
-	const place = new Map(items
+	const blocks = new Map<string, ConversationItem[]>();
+	for (const item of items
 		.filter((item) => item.turnId && carriers.has(item.turnId))
-		.sort((a, b) => sentAt(a.turnId!) - sentAt(b.turnId!) || a.sequence - b.sequence)
-		.map((item, index) => [item, index + 1] as const));
+		.sort((a, b) => sentAt(a.turnId!) - sentAt(b.turnId!) || a.sequence - b.sequence)) {
+		const steerId = carriers.get(item.turnId!)!.id;
+		const block = blocks.get(steerId);
+		if (block) block.push(item);
+		else blocks.set(steerId, [item]);
+	}
+	const place = new Map([...blocks.values()].flatMap((block) => block.map((item, index) => [item, (index + 1) / (block.length + 1)] as const)));
 	return items
 		.map((item) => {
 			const steer = item.turnId ? carriers.get(item.turnId) : undefined;
 			const placed = place.get(item);
 			if (!steer || placed === undefined) return item;
-			const sequence = steer.sequence + placed / 1000;
+			const sequence = steer.sequence + placed;
 			const cached = carriedRows.get(item);
 			if (cached && cached.turnId === steer.turnId && cached.sequence === sequence) return cached;
 			const row = { ...item, turnId: steer.turnId, sequence };

@@ -862,6 +862,40 @@ describe("ChatWorkspace steering", () => {
 		expect(sentFirst.compareDocumentPosition(sentSecond) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it("keeps each steer's carried rows before the next row when many steers carry turns", () => {
+		const at = "2026-08-11T10:00:00Z";
+		const message = (id: string, turnId: string, sequence: number, text: string, role: "user" | "assistant" = "user") =>
+			({ kind: "message", id, turnId, sequence, revision: 0, role, origin: role === "user" ? "human" : "provider", text, streaming: false, createdAt: at }) as const;
+		const steer = (id: string, sequence: number) =>
+			({ kind: "activity", id, turnId: "run", sequence, revision: 0, activityKind: "system", status: "completed", summary: id, detail: { event: "steer", origin: "human", text: id, clientMessageId: id }, createdAt: at }) as const;
+		const early = Array.from({ length: 1000 }, (_, index) => message(`early-${index}`, `early-${index}`, 2 + index, `Early ${index}`));
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 1006,
+					turns: [{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at, startedAt: at }],
+					items: [
+						message("prompt", "run", 1, "Fix the review comments"),
+						...early,
+						steer("steer-1", 1002),
+						message("first-reply", "run", 1003, "First reply.", "assistant"),
+						message("late", "late", 1004, "Carried by the second steer."),
+						steer("steer-2", 1005),
+						message("second-reply", "run", 1006, "Second reply.", "assistant"),
+					],
+					batchedDeliveries: [
+						...early.map((item) => ({ turnId: item.turnId, deliveredWithTurnId: "run", steerActivityId: "steer-1" })),
+						{ turnId: "late", deliveredWithTurnId: "run", steerActivityId: "steer-2" },
+					],
+				}}
+			/>,
+		);
+		const late = screen.getByText("Carried by the second steer.");
+		expect(late.compareDocumentPosition(screen.getByText("Second reply.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.getByText("Early 999").compareDocumentPosition(screen.getByText("First reply.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("renders a steered browser annotation batch as its annotation card", () => {
 		const transport = [
 			"<browser_annotations>",
