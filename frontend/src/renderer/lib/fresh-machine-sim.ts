@@ -1,3 +1,4 @@
+import { AGENT_OPTIONS, agentLabel } from "./agent-options";
 import { IS_DEV } from "./is-dev";
 import { developerModeStorageKey } from "./window-translucency";
 
@@ -129,7 +130,8 @@ const baseAgent = (id: string, label: string): Agent => ({
 	authentication: { state: "authorized" },
 	usageCount: 0,
 });
-const BASE_AGENTS: { agents: Agent[] } = { agents: [baseAgent("claude-code", "Claude Code"), baseAgent("codex", "Codex")] };
+// Every harness AO knows, as on a real machine.
+const BASE_AGENTS: { agents: Agent[] } = { agents: AGENT_OPTIONS.map((id) => baseAgent(id, agentLabel(id))) };
 
 async function agentReadiness(send: () => Promise<Response>): Promise<Response> {
 	const body = await realOr(send, BASE_AGENTS);
