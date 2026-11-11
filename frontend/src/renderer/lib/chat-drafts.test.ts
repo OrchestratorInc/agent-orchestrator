@@ -54,6 +54,22 @@ class MemoryStorage implements DraftStorage {
 	}
 }
 
+it("persists and prepares a chart-only annotation without inventing selected text", () => {
+	const storage = new MemoryStorage();
+	const ref = { id: "chart", conversationId: "c", messageId: "m", revision: 1, role: "assistant" as const, text: "", snapshot: { version: 1, referenceFormat: "numbered-v1" as const, captureMode: "block" as const, containsFlowchart: true, badgeOnly: true, rawText: "```mermaid\nflowchart LR; A-->B\n```" } };
+	const anchored = { ...ref, snapshot: { ...ref.snapshot, sourceRange: { start: 50, end: 50 + ref.snapshot.rawText.length, offsetUnit: "utf-16" as const }, diagramRange: { start: 50, end: 50 + ref.snapshot.rawText.length, offsetUnit: "utf-16" as const } } };
+	writeChatExcerptReferences("anchored-chart-draft", [anchored], storage);
+	expect(readChatSessionDraft("anchored-chart-draft", storage).composer.excerpts).toEqual([anchored]);
+	expect(writeChatExcerptReferences("chart-draft", [ref], storage).ok).toBe(true);
+	expect(readChatSessionDraft("chart-draft", storage).composer.excerpts).toEqual([ref]);
+	const prepared = prepareChatComposerDelivery("chart-draft", { kind: "send", composerText: "", requestText: "", attachments: [], excerpts: [ref], clientMessageId: "chart-delivery" }, storage);
+	expect(prepared.ok).toBe(true);
+	expect(readChatSessionDraft("chart-draft", storage).composer.delivery?.excerpts).toEqual([ref]);
+	const invalid = { ...ref, snapshot: { ...ref.snapshot, rawText: "" } };
+	writeChatExcerptReferences("invalid-chart-draft", [invalid], storage);
+	expect(readChatSessionDraft("invalid-chart-draft", storage).composer.excerpts ?? []).not.toContainEqual(invalid);
+});
+
 it("refuses file reference writes during reserved preparation and accepts them after release", () => {
 	const storage = new MemoryStorage();
 	const scope = "reserved-file-intake";

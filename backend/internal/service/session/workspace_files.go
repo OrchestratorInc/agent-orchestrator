@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -2811,8 +2812,9 @@ func gitWorkspaceOutputEnv(ctx context.Context, root string, env []string, args 
 		if workspaceRepoUnavailable(root) {
 			return "", fmt.Errorf("git -C %s %s: %w", root, strings.Join(args, " "), ports.ErrWorkspaceRepoUnavailable)
 		}
-		return "", classifyWorkspaceGitError(ctx, err, detail)
+		return "", classifyWorkspaceGitError(ctx, root, strings.Join(args, "\x00"), err, detail)
 	}
+	noteWorkspaceGitReadOK(root, strings.Join(args, "\x00"))
 	return string(out), nil
 }
 
@@ -2849,8 +2851,9 @@ func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args 
 		if workspaceRepoUnavailable(root) {
 			return "", false, fmt.Errorf("workspace git command: %w", ports.ErrWorkspaceRepoUnavailable)
 		}
-		return "", false, classifyWorkspaceGitError(ctx, err, strings.TrimSpace(stderr.buffer.String()))
+		return "", false, classifyWorkspaceGitError(ctx, root, strings.Join(args, "\x00"), err, strings.TrimSpace(stderr.buffer.String()))
 	}
+	noteWorkspaceGitReadOK(root, strings.Join(args, "\x00"))
 	return stdout.buffer.String(), stdout.truncated, nil
 }
 
@@ -2859,7 +2862,7 @@ func gitWorkspaceOutputCapped(ctx context.Context, root string, limit int, args 
 // envelope rendered as an indistinguishable INTERNAL_ERROR. Context deadlines
 // remain discoverable by the envelope's transient mapper, while lock/contention
 // failures are explicitly retryable.
-func classifyWorkspaceGitError(ctx context.Context, err error, detail string) error {
+func classifyWorkspaceGitError(ctx context.Context, root, operation string, err error, detail string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -2878,7 +2881,40 @@ func classifyWorkspaceGitError(ctx context.Context, err error, detail string) er
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
-	return apierr.Internal("WORKSPACE_GIT_READ_FAILED", "Unable to read workspace Git state")
+	failed := apierr.Internal("WORKSPACE_GIT_READ_FAILED", "Unable to read workspace Git state")
+	if repeatedWorkspaceGitFailure(root, operation, err, detail) {
+		return sentryobs.Repeat(failed)
+	}
+	return failed
+}
+
+// workspaceGitFailures holds each workspace root and operation's last reported
+// failure state. The desktop polls these reads, so a repository stuck in one
+// broken state answered every poll with a 500 and one Sentry event
+// (AO-DAEMON-9: 13k events from 14 installs). A root reports once per state
+// change; only a successful read of the same operation re-arms it. Separate
+// operations and workspaces cannot re-arm each other.
+type workspaceGitFailureKey struct{ root, operation string }
+
+var workspaceGitFailures sync.Map
+
+// repeatedWorkspaceGitFailure records root's failure state and reports
+// whether it is the one already reported. The state stays in memory.
+func repeatedWorkspaceGitFailure(root, operation string, err error, detail string) bool {
+	code := -1
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		code = exitErr.ExitCode()
+	}
+	firstLine, _, _ := strings.Cut(detail, "\n")
+	state := strconv.Itoa(code) + "|" + firstLine
+	previous, loaded := workspaceGitFailures.Swap(workspaceGitFailureKey{root, operation}, state)
+	return loaded && previous == state
+}
+
+// noteWorkspaceGitReadOK re-arms reporting for root after a read succeeds.
+func noteWorkspaceGitReadOK(root, operation string) {
+	workspaceGitFailures.Delete(workspaceGitFailureKey{root, operation})
 }
 
 // workspaceRepoUnavailable reports whether a worktree root can no longer reach

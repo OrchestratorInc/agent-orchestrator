@@ -1553,7 +1553,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List paired mobile devices with their live status */
+        /** List the devices that can reach this host, with their live status */
         get: operations["listMobileDevices"];
         put?: never;
         post?: never;
@@ -1563,7 +1563,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/mobile/devices/{installId}": {
+    "/api/v1/mobile/devices/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1573,7 +1573,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Remove a paired device from the roster */
+        /** Remove a device: revoke its token and stop its notifications */
         delete: operations["removeMobileDevice"];
         options?: never;
         head?: never;
@@ -1665,6 +1665,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mobile/pairing-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make a one-time code a new device exchanges for its own token */
+        post: operations["createMobilePairingCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mobile/regenerate": {
         parameters: {
             query?: never;
@@ -1674,7 +1691,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rotate the Connect Mobile password, dropping any connected phone */
+        /** Revoke every device: rotate the pairing password, remove all device tokens and unlink the account */
         post: operations["regenerateMobile"];
         delete?: never;
         options?: never;
@@ -1693,6 +1710,23 @@ export interface paths {
         put?: never;
         /** Look for a connector again and start it, without rotating the password */
         post: operations["startMobileRemoteAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mobile/require-device-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refuse or accept the pairing password on the remote listener */
+        post: operations["setMobileRequireDeviceCredentials"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2158,8 +2192,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Issue a host-scoped account credential using the pairing password */
+        /** Issue a host-scoped account credential using the pairing password or a device token */
         post: operations["issueRemoteHostAccountToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-host/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Exchange a one-time pairing code, or the pairing password, for this device's own token */
+        post: operations["pairRemoteHostDevice"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2320,6 +2371,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview readable local agent histories from Git folders and Standalone */
+        get: operations["scanSessionImport"];
+        put?: never;
+        /** Import selected histories as idle AO sessions without starting providers */
+        post: operations["importSelectedSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions": {
         parameters: {
             query?: never;
@@ -2456,6 +2525,23 @@ export interface paths {
         get: operations["getSessionArtifactFile"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register files in the session's artifact directory as its deliverables */
+        post: operations["registerSessionArtifacts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4518,6 +4604,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/limit-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn keeping limit readings, and reading limits in the background, on or off */
+        put: operations["setUsageLimitHistory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/limit-windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read each login's five-hour and weekly windows from the limit readings AO took */
+        get: operations["getUsageLimitWindows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/memory/pressure": {
         parameters: {
             query?: never;
@@ -4535,6 +4655,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the user's model prices and the catalog models a model can price as */
+        get: operations["getUsagePrices"];
+        /** Replace the user's model prices and reprice the usage they change */
+        put: operations["setUsagePrices"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read token and estimated cost usage over a window, by day or hour, for the usage page */
+        get: operations["getUsageReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions": {
         parameters: {
             query?: never;
@@ -4544,23 +4699,6 @@ export interface paths {
         };
         /** List compact token and estimated cost usage for session cards */
         get: operations["listCompactSessionUsage"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/usage/sessions/{sessionId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get detailed token and estimated cost usage for one session */
-        get: operations["getSessionUsage"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4644,6 +4782,7 @@ export interface components {
             sourceKind?: "environment" | "file" | "command" | "keychain";
         };
         AgentAccountLimitWindow: {
+            durationMinutes?: number;
             id: string;
             label: string;
             /** Format: date-time */
@@ -4993,6 +5132,17 @@ export interface components {
             data: string;
             mimeType?: string;
         };
+        AutoSpawnPause: {
+            effort?: string;
+            errorCode: string;
+            failures: number;
+            harness: string;
+            kind?: string;
+            message: string;
+            model?: string;
+            /** Format: date-time */
+            pausedAt: string;
+        };
         AutomationEnvelope: {
             automation: components["schemas"]["AutomationResponse"];
         };
@@ -5207,6 +5357,40 @@ export interface components {
         ChatAgentPermissionModes: {
             agent: string;
             modes: string[];
+        };
+        ChatExcerptRange: {
+            end: number;
+            /** @enum {string} */
+            offsetUnit: "utf-16";
+            start: number;
+        };
+        ChatExcerptSnapshot: {
+            badgeOnly?: boolean;
+            /** @enum {string} */
+            captureMode: "exact" | "block" | "legacy";
+            containsFlowchart?: boolean;
+            contextOmitted?: boolean;
+            diagramRange?: components["schemas"]["ChatExcerptRange"];
+            prefix?: string;
+            rawText: string;
+            /** @enum {string} */
+            referenceFormat?: "numbered-v1";
+            renderedRange?: components["schemas"]["ChatExcerptRange"];
+            sourceRange?: components["schemas"]["ChatExcerptRange"];
+            sourceTurnId?: string;
+            suffix?: string;
+            turn?: components["schemas"]["ChatExcerptTurnSnapshot"];
+            version: number;
+        };
+        ChatExcerptTurnMessage: {
+            /** @enum {string} */
+            role: "user" | "assistant";
+            text: string;
+        };
+        ChatExcerptTurnSnapshot: {
+            id: string;
+            messages: components["schemas"]["ChatExcerptTurnMessage"][];
+            truncated?: boolean;
         };
         ChatFileReferenceLine: {
             /** @enum {string} */
@@ -5598,6 +5782,14 @@ export interface components {
             extensionVersion?: string;
             hostPath: string;
         };
+        ControllersConversationTurnArtifactResponse: {
+            path: string;
+            /** @enum {string} */
+            status: "added" | "modified";
+        };
+        ControllersConversationTurnArtifactsResponse: {
+            files: components["schemas"]["ControllersConversationTurnArtifactResponse"][];
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -5611,6 +5803,24 @@ export interface components {
         ControllersKillSessionRequest: {
             callerSessionId?: string;
             deleteArtifacts?: boolean;
+        };
+        ControllersPairDeviceRequest: {
+            /** @description Name shown in the host's device list. */
+            name?: string;
+            /** @description The device's platform, such as ios, android, darwin, win32 or linux. */
+            platform?: string;
+        };
+        ControllersPairDeviceResponse: {
+            /** @enum {string} */
+            credential: "pairing-code" | "password";
+            deviceId: string;
+            hostId: string;
+            token: string;
+        };
+        ControllersPairingCodeResponse: {
+            code: string;
+            /** Format: date-time */
+            expiresAt: string;
         };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
@@ -5664,7 +5874,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Interrupted" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -5684,6 +5894,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            needsResume: boolean;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
             /** Format: date-time */
@@ -5724,6 +5935,9 @@ export interface components {
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
             lidClosed?: null | boolean;
+        };
+        ControllersSetRequireDeviceCredentialsRequest: {
+            enabled: boolean;
         };
         ControllersSetSecurePairingRequest: {
             enabled: boolean;
@@ -5806,10 +6020,10 @@ export interface components {
             fileReference?: components["schemas"]["ConversationFileReferenceRequest"];
             mimeType?: string;
             name?: string;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             sourceConversationId?: string;
             sourceMessageId?: string;
-            /** Format: int64 */
-            sourceRevision?: number;
+            sourceRevision?: null | number;
             text?: string;
             type: string;
             uri?: string;
@@ -5831,6 +6045,7 @@ export interface components {
             order?: number;
             /** Format: int64 */
             revision: number;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             text: string;
         };
         ConversationFileReferenceRequest: {
@@ -5847,6 +6062,8 @@ export interface components {
             order?: number;
             path: string;
             previousPath?: string;
+            /** @enum {string} */
+            referenceFormat?: "numbered-v1";
             scope?: string;
             sessionId: string;
             /** @enum {string} */
@@ -5995,6 +6212,7 @@ export interface components {
             activities: components["schemas"]["ConversationActivityResponse"][];
             /** Format: int64 */
             afterSequence?: number;
+            batchedDeliveries?: components["schemas"]["DomainConversationBatchedDelivery"][];
             branchMaterialization?: components["schemas"]["ConversationBranchMaterializationResponse"];
             branchPoints?: components["schemas"]["ConversationBranchPointResponse"][];
             branchedFromEarlierMessage: boolean;
@@ -6039,6 +6257,7 @@ export interface components {
             truncated?: boolean;
         };
         ConversationTurnResponse: {
+            artifacts?: components["schemas"]["ControllersConversationTurnArtifactsResponse"];
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
@@ -6221,6 +6440,11 @@ export interface components {
             lastActivityAt: string;
             state: string;
         };
+        DomainConversationBatchedDelivery: {
+            deliveredWithTurnId: string;
+            steerActivityId?: string;
+            turnId: string;
+        };
         DomainReviewerConfig: {
             agentConfig?: components["schemas"]["AgentConfig"];
             harness: string;
@@ -6234,10 +6458,14 @@ export interface components {
         };
         DomainSideReference: {
             conversationId: string;
+            id?: string;
             messageId: string;
+            /** Format: int64 */
+            order?: number;
             /** Format: int64 */
             revision: number;
             selection: string;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             sourceRole: string;
         };
         EditConversationMessageRequest: {
@@ -6644,15 +6872,22 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             deviceName?: string;
+            /** @description What DELETE /api/v1/mobile/devices/{id} takes. */
+            id: string;
+            /** @description The phone's install id, or empty for a device that never registered for notifications. */
             installId: string;
+            /**
+             * @description device: holds its own token. password: a phone that still uses the pairing password, so removing it only stops its notifications. account: every device signed in to the linked account; they share one token.
+             * @enum {string}
+             */
+            kind: "device" | "password" | "account";
             /** Format: date-time */
             lastSeenAt: string;
-            /** @description True when the phone's app is open and polling. */
+            /** @description True when the device is connected, or the phone's app is open and polling. */
             live: boolean;
             /** @description True when this device has a push token registered. */
             notificationsEnabled: boolean;
-            /** @enum {string} */
-            platform?: "ios" | "android";
+            platform?: string;
             token?: string;
         };
         MobileDevicesResponse: {
@@ -6676,7 +6911,10 @@ export interface components {
             loopbackOnly: boolean;
             noPublicTunnel: boolean;
             password: string;
+            /** Format: date-time */
+            passwordLastUsedAt?: null | string;
             port: number;
+            requireDeviceCredentials: boolean;
             securePairing: components["schemas"]["ControllersSecurePairingStatus"];
             tailscaleHost: string;
             tunnel: components["schemas"]["MobileTunnelStatus"];
@@ -6836,6 +7074,7 @@ export interface components {
             project: components["schemas"]["Project"];
         };
         ProjectSummary: {
+            autoSpawnPauses?: components["schemas"]["AutoSpawnPause"][];
             folderMissing: boolean;
             id: string;
             /** @enum {string} */
@@ -6904,6 +7143,18 @@ export interface components {
             pat: string;
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
+        };
+        RegisterArtifactsRequest: {
+            /** @description Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it. */
+            paths: string[];
+        };
+        RegisterArtifactsResponse: {
+            /** @description How many of the session's files are not registered. */
+            otherFiles: number;
+            /** @description The unregistered files at the root of the artifact directory. */
+            otherRootFiles: string[];
+            /** @description The requested paths, relative to the artifact directory. */
+            registered: string[];
         };
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
@@ -7163,13 +7414,16 @@ export interface components {
             total: number;
         };
         SessionArtifact: {
+            id?: string;
             inlineUrl?: string;
             /** @enum {string} */
             kind: "html" | "markdown" | "file";
             name: string;
             path: string;
             previewUrl?: string;
+            previousPaths?: string[];
             rawUrl?: string;
+            registered?: boolean;
             shareUrl?: string;
             /** Format: int64 */
             size: number;
@@ -7193,6 +7447,34 @@ export interface components {
             at: string;
             harness?: string;
             userRequest: string;
+        };
+        SessionImportCandidate: {
+            folder?: string;
+            harness: string;
+            id: string;
+            /** Format: date-time */
+            lastActivity: string;
+            messageCount: number;
+            projectId?: string;
+            sessionId?: string;
+            shortened?: boolean;
+            title: string;
+        };
+        SessionImportPreview: {
+            candidates: components["schemas"]["SessionImportCandidate"][];
+        };
+        SessionImportRequest: {
+            ids: string[];
+        };
+        SessionImportResponse: {
+            results: components["schemas"]["SessionImportResult"][];
+        };
+        SessionImportResult: {
+            error?: string;
+            id: string;
+            sessionId?: string;
+            /** @enum {string} */
+            status: "created" | "already_imported" | "failed";
         };
         SessionInterfaceTransition: {
             /** Format: date-time */
@@ -7411,12 +7693,6 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
             tool: string;
-        };
-        SessionUsageResponse: {
-            harnesses: components["schemas"]["UsageHarnessResponse"][];
-            incomplete: boolean;
-            sessionId: string;
-            totals: components["schemas"]["UsageTotalsResponse"];
         };
         SessionWait: {
             /** @enum {string} */
@@ -8119,11 +8395,6 @@ export interface components {
             expectedFileFingerprint: string;
             path: string;
         };
-        UsageHarnessResponse: {
-            harness: string;
-            models: components["schemas"]["UsageModelResponse"][];
-            totals: components["schemas"]["UsageTotalsResponse"];
-        };
         UsageHookMetadata: {
             /** @enum {string} */
             harness: "claude-code" | "codex";
@@ -8134,24 +8405,147 @@ export interface components {
             subagentTranscriptPath?: string;
             transcriptPath?: string;
         };
-        UsageModelResponse: {
-            modelId: string;
-            totals: components["schemas"]["UsageTotalsResponse"];
+        UsageLimitHistoryRequest: {
+            enabled: null | boolean;
         };
-        UsageTotalsResponse: {
-            /** @description Deprecated compatibility alias for cachedInputTokens. */
-            cacheReadTokens: null | number;
-            /** @description Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens. */
-            cachedInputTokens: null | number;
-            estimatedCost: null | components["schemas"]["EstimatedCostResponse"];
-            /** @description Total input, including cached and uncached input. */
-            inputTokens: null | number;
-            /** @description Total output, including provider-specific subsets such as reasoning output. */
-            outputTokens: null | number;
-            /** @description Canonical input plus output. Null when either component is unknown. */
-            processedTokens: null | number;
-            /** @description Input not read from an existing provider cache. Includes cache writes. */
-            uncachedInputTokens: null | number;
+        UsageLimitHistoryResponse: {
+            enabled: boolean;
+        };
+        UsageLimitLogin: {
+            accountId: string;
+            email?: string;
+            plan?: string;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            windows: components["schemas"]["UsageLimitSpan"][];
+        };
+        UsageLimitPoint: {
+            /** Format: date-time */
+            at: string;
+            /** Format: double */
+            usedPercent: number;
+        };
+        UsageLimitSpan: {
+            durationMinutes?: number;
+            /** Format: date-time */
+            firstReadAt: string;
+            label: string;
+            /** Format: date-time */
+            lastReadAt: string;
+            /** Format: double */
+            peakUsedPercent: number;
+            points?: components["schemas"]["UsageLimitPoint"][];
+            readings: number;
+            /** Format: date-time */
+            resetsAt: string;
+            /** Format: date-time */
+            startsAt?: null | string;
+            /** @enum {string} */
+            state: "final" | "partial" | "open";
+            windowId: string;
+        };
+        UsageLimitWindowsResponse: {
+            /** Format: date-time */
+            firstReadingAt?: null | string;
+            logins: components["schemas"]["UsageLimitLogin"][];
+            /** Format: date-time */
+            since: string;
+            /** Format: date-time */
+            until: string;
+        };
+        UsagePriceOverride: {
+            /** @description Decimal USD per million cache-read tokens. Defaults to the input price. */
+            cacheReadUsdPerMillion?: string;
+            /** @description Decimal USD per million cache-write tokens. Defaults to the input price. */
+            cacheWriteUsdPerMillion?: string;
+            /** @description Decimal USD per million uncached input tokens. Set with output. */
+            inputUsdPerMillion?: string;
+            /** @description Model ID as usage rows store it. */
+            modelId: string;
+            /** @description Decimal USD per million output tokens. Set with input. */
+            outputUsdPerMillion?: string;
+            /** @description Catalog model to price as, provider/model, in place of rates. */
+            priceAs?: string;
+        };
+        UsagePricesRequest: {
+            overrides: components["schemas"]["UsagePriceOverride"][];
+        };
+        UsagePricesResponse: {
+            /** @description Catalog models a model can price as, provider/model. */
+            models: string[];
+            overrides: components["schemas"]["UsagePriceOverride"][];
+        };
+        UsageReportResponse: {
+            days: number;
+            /** @description Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour. */
+            periods: string[];
+            /** @enum {string} */
+            resolution: "day" | "hour";
+            rows: components["schemas"]["UsageReportRowResponse"][];
+            sessions: components["schemas"]["UsageReportSessionResponse"][];
+            /** Format: date-time */
+            since: string;
+            timeZone: string;
+            /** Format: date-time */
+            until: string;
+        };
+        UsageReportRowResponse: {
+            /** Format: int64 */
+            cacheReadCostNanos: number;
+            /** Format: int64 */
+            cacheReadTokens: number;
+            /**
+             * Format: int64
+             * @description What cache reads saved against paying input rates for those tokens.
+             */
+            cacheSavingsNanos: number;
+            /** Format: int64 */
+            cacheWriteCostNanos: number;
+            /** Format: int64 */
+            cacheWriteTokens: number;
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: int64 */
+            inputCostNanos: number;
+            /**
+             * Format: int64
+             * @description Uncached input that was not written to the cache.
+             */
+            inputTokens: number;
+            model: string;
+            /** Format: int64 */
+            outputCostNanos: number;
+            /** Format: int64 */
+            outputTokens: number;
+            period: string;
+            /**
+             * Format: int64
+             * @description Part of costNanos above standard rates, from priority, fast or ultrafast processing.
+             */
+            premiumNanos: number;
+            /** Format: int64 */
+            pricedEvents: number;
+            /** @description standard, priority, fast, flex, ultrafast, or unknown. */
+            speed: string;
+        };
+        UsageReportSessionResponse: {
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: date-time */
+            lastUsedAt: string;
+            /** Format: int64 */
+            pricedEvents: number;
+            projectId?: string;
+            sessionId: string;
+            title: string;
+            /** Format: int64 */
+            tokens: number;
         };
         VerifyAgentAccountLoginResponse: {
             account?: components["schemas"]["AgentAccountResponse"];
@@ -13600,8 +13994,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The device's stable install id. */
-                installId: string;
+                /** @description The row's id from the device list. */
+                id: string;
             };
             cookie?: never;
         };
@@ -13837,6 +14231,53 @@ export interface operations {
             };
         };
     };
+    createMobilePairingCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPairingCodeResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     regenerateMobile: {
         parameters: {
             query?: never;
@@ -13891,6 +14332,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setMobileRequireDeviceCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersSetRequireDeviceCredentialsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Forbidden */
@@ -15648,6 +16140,75 @@ export interface operations {
             };
         };
     };
+    pairRemoteHostDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersPairDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPairDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listReports: {
         parameters: {
             query: {
@@ -16271,6 +16832,95 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    scanSessionImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportPreview"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importSelectedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionImportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17021,6 +17671,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    registerSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterArtifactsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterArtifactsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -24979,6 +25701,107 @@ export interface operations {
             };
         };
     };
+    setUsageLimitHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageLimitHistoryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLimitHistoryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageLimitWindows: {
+        parameters: {
+            query?: {
+                /** @description Days of readings to read; they are kept for 14. Defaults to 7. */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLimitWindowsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getMemoryPressure: {
         parameters: {
             query?: never;
@@ -24995,6 +25818,151 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryPressureResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsagePrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsagePricesResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setUsagePrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsagePricesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsagePricesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageReport: {
+        parameters: {
+            query?: {
+                /** @description Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7. */
+                days?: number;
+                /** @description Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0. */
+                offset?: number;
+                /** @description IANA time zone that days and hours are bucketed in. Defaults to UTC. */
+                tz?: string;
+                /** @description Read one project only. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageReportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */
@@ -25036,56 +26004,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListCompactSessionUsageResponse"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    getSessionUsage: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Session identifier, e.g. project-1. */
-                sessionId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionUsageResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

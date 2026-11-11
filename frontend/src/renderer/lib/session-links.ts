@@ -1,3 +1,4 @@
+import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
 import { decodePath } from "./workspace-file-path";
 
 export type SessionLinkTarget = { projectId: string; sessionId: string };
@@ -54,7 +55,7 @@ export function artifactLink(projectId: string, sessionId: string, path: string)
 	return `${SESSION_LINK_PREFIX}${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/${ARTIFACT_SEGMENT}/${encodedPath}`;
 }
 
-type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> };
+type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string; previousPaths?: string[] }> }> };
 
 const ARTIFACT_DIRECTORY_MARKER = `/${ARTIFACT_SEGMENT}/`;
 
@@ -111,7 +112,8 @@ function listedArtifactLink(normalized: string, workspaces: ArtifactPathWorkspac
 		const path = candidate.slice(slash + 1);
 		for (const workspace of workspaces) {
 			const session = workspace.sessions.find((entry) => entry.id === sessionId);
-			if (session?.artifactFiles?.some((file) => file.path === path)) return artifactLink(workspace.id, sessionId, path);
+			const file = artifactAtPath(session?.artifactFiles, path);
+			if (file) return artifactLink(workspace.id, sessionId, file.path);
 		}
 	}
 	return undefined;

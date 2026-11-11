@@ -1,3 +1,4 @@
+import type { ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Chat conversation view model.
@@ -157,6 +158,12 @@ export interface ConversationTurn {
 	 * empty changed-files panel as if the turn had been inspected.
 	 */
 	diff?: TurnDiff;
+	/**
+	 * The session artifacts the turn created or edited, as the daemon saw them in
+	 * the artifact directory when it ended. Independent of the provider, so it
+	 * lists files written through a shell command. Absent when there were none.
+	 */
+	artifacts?: TurnArtifactChange[];
 	/** The agent's plan for this turn, or absent when it made none. */
 	plan?: ConversationPlan;
 }
@@ -173,6 +180,12 @@ export interface DiffFile {
 	oldPath?: string;
 }
 
+/** One session artifact a turn changed, by its path in the artifact directory. */
+export interface TurnArtifactChange {
+	path: string;
+	status: "added" | "modified";
+}
+
 export interface TurnDiff {
 	files: DiffFile[];
 	/** The daemon cut the list at its cap; the change is larger than what is shown. */
@@ -181,6 +194,7 @@ export interface TurnDiff {
 
 /** Lightweight, durable prompt content retained when a human message is edited. */
 export interface ConversationContentSummary {
+ snapshot?: ChatExcerptSnapshot;
 	fileReference?: ChatFileReference;
 	annotationId?: string;
 	annotationOrder?: number;
@@ -554,6 +568,8 @@ export interface SystemEventDetail {
 	senderProjectId?: string;
 	senderDisplayName?: string;
 	clientMessageId?: string;
+	/** steer: the queued turns whose messages this steer carried into the running turn. */
+	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
 	content?: Array<{
 		type: string;
@@ -914,6 +930,8 @@ export interface ConversationSnapshot {
 	nativeForkAvailableAfterSequence?: number;
 	activeBranchId?: string;
 	branchedFromEarlierMessage?: boolean;
+	/** Queued turns AO batched into another turn's provider input; `turns` leaves them out. */
+	batchedDeliveries?: BatchedDelivery[];
 	branchPoints?: ConversationBranchPoint[];
 	/** How the active historical branch acquired its provider context. */
 	branchMaterialization?: ConversationBranchMaterialization;
@@ -1091,4 +1109,11 @@ export function pendingUserInput(snapshot: ConversationSnapshot): ConversationAc
 		(item): item is ConversationActivity =>
 			item.kind === "activity" && item.activityKind === "user_input" && item.status === "pending",
 	);
+}
+
+/** Where a batched queued turn went: a steer that carried it, or else a queue drain into `deliveredWithTurnId`. */
+export interface BatchedDelivery {
+	turnId: string;
+	deliveredWithTurnId: string;
+	steerActivityId?: string;
 }

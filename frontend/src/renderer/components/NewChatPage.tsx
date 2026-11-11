@@ -23,7 +23,7 @@ import { startingConversationSnapshot } from "./chat/OrchestratorStartingChat";
 import { LaunchSettingsBar, rememberLaunchSettings, rememberOpeningStart, type LaunchSettings } from "./chat/LaunchSettingsBar";
 import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar } from "./chat/TurnSettingsBar";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
+import { fetchDevices, isPhone, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
@@ -641,7 +641,7 @@ function MobileConnected() {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const { data } = useQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices, refetchInterval: 10_000, retry: false });
-	const live = data?.filter((device) => device.live) ?? [];
+	const live = data?.filter((device) => device.live && isPhone(device)) ?? [];
 	if (live.length === 0) return null;
 	return (
 		<Button

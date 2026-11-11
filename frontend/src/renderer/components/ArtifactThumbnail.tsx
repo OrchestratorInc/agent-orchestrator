@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { File, FileText, Globe, Image, Table2, Video, Workflow } from "@/components/app-icons";
+import { artifactFileIcon } from "./artifact-file-icon";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
@@ -24,7 +24,7 @@ const PAGE_HEIGHT = 625;
 const MARKDOWN_PAGE_WIDTH = 700;
 
 /** Gallery previews load near the viewport; pages keep the isolated inline origin. */
-export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRow; previewLive?: boolean }) {
+export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_HEIGHT }: { row: ArtifactRow; previewLive?: boolean; /** Layout height of an HTML page, for tiles taller than 16:10. */ pageHeight?: number }) {
 	const { t } = useTranslation();
 	const container = useRef<HTMLSpanElement>(null);
 	const [visible, setVisible] = useState(false);
@@ -140,7 +140,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 	const content = file.data && !file.data.binary ? file.data.content : "";
 	const preview = isMarkdown ? stripMarkdownFrontmatter(content) : content;
 	const text = plainText && content.trim() ? content.slice(0, 4000) : "";
-	const Icon = imagePath ? Image : video ? Video : row.kind === "html" ? Globe : table ? Table2 : mermaid ? Workflow : isMarkdown || plainText || pdf ? FileText : File;
+	const Icon = artifactFileIcon(row);
 	const accessPending = cloud && cloudPreviewable && !access.data && access.fetchStatus === "fetching";
 	const imagePending = checkImage && imageStatus.isPending;
 	const unavailable = failed || access.isError || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400)))
@@ -160,7 +160,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 				<video crossOrigin={mediaCrossOrigin(video)} muted onError={() => setFailed(true)} playsInline preload="metadata" src={video} tabIndex={-1} className="h-full w-full object-cover object-top" />
 			) : page ? (
 				cloud ? (
-					<CloudArtifactFrame onAccessGranted={accessGranted} onAccessRefused={refreshAccess} thumbnail={{ width, fallback: placeholder }} title={row.name} url={page} />
+					<CloudArtifactFrame onAccessGranted={accessGranted} onAccessRefused={refreshAccess} thumbnail={{ width, height: pageHeight, fallback: placeholder }} title={row.name} url={page} />
 				) : pageAvailable ? (
 					<iframe
 						src={page}
@@ -169,7 +169,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 						loading="eager"
 						tabIndex={-1}
 						className="absolute left-0 top-0 origin-top-left border-0 bg-[var(--solid-muted,var(--muted))]"
-						style={{ width: PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / PAGE_WIDTH})` }}
+						style={{ width: PAGE_WIDTH, height: pageHeight, transform: `scale(${width / PAGE_WIDTH})` }}
 					/>
 				) : null
 			) : pdf ? (

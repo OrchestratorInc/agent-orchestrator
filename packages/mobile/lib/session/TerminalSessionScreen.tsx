@@ -1,3 +1,4 @@
+import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -757,7 +758,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// Polled so the globe can advertise the optional App preview tab.
 	const hasPreview = useSessionPreview(activeConfig, id, !shellOnly);
 	// The terminal's artifacts, in its "⋯" once the agent has written something.
-	const artifactCount = !shellOnly && known && "artifacts" in known ? known.artifacts?.length ?? 0 : 0;
+	const artifactCount = !shellOnly && known && "artifacts" in known ? deliverableArtifacts(known.artifacts ?? []).length : 0;
 	const openArtifacts = useCallback(() => {
 		router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId, title: params.title, hostId: params.hostId } });
 	}, [params.hostId, params.title, router, sessionId]);
