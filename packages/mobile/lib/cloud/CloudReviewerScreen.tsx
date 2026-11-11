@@ -29,7 +29,14 @@ const noop = async () => {};
  * follow-up questions, laid out as a machine's reviewer chat is. Text only:
  * the control plane's review chat takes no files.
  */
-export function CloudReviewerScreen({ reviewId, sessionId, title }: { reviewId: string; sessionId: string; title?: string }) {
+export function CloudReviewerScreen(props: { reviewId: string; sessionId: string; title?: string }) {
+	// One account and organization's chat: another starts the screen over, so
+	// no refresh still out for the last one can fill it.
+	const { account, org } = useCloud();
+	return <CloudReviewerChat key={`${account?.id ?? ""}/${org?.id ?? ""}`} {...props} />;
+}
+
+function CloudReviewerChat({ reviewId, sessionId, title }: { reviewId: string; sessionId: string; title?: string }) {
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
 	const focused = useIsFocused();

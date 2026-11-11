@@ -24,9 +24,11 @@ function clientWith(getBilling: (orgId: string) => Promise<CloudBillingSummary>)
 
 const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
 
+// Every renderer a test makes, so none outlives it and reads into the next.
+const renderers: ReactTestRenderer[] = [];
 let renderer: ReactTestRenderer | undefined;
 afterEach(() => {
-	act(() => renderer?.unmount());
+	act(() => { for (const mounted of renderers.splice(0)) mounted.unmount(); renderer?.unmount(); });
 	renderer = undefined;
 	clearCloudPlan();
 });
@@ -38,6 +40,7 @@ function renderPlan(client: CloudClient, orgId: string | undefined) {
 		return null;
 	}
 	act(() => { renderer = create(createElement(Probe, { org: orgId })); });
+	renderers.push(renderer!);
 	return { seen, latest: () => seen[seen.length - 1], rerender: (org: string | undefined) => act(() => renderer?.update(createElement(Probe, { org }))) };
 }
 
@@ -112,5 +115,36 @@ describe("cloud plan store", () => {
 		const { latest } = renderPlan(client, undefined);
 		expect(latest()).toBeUndefined();
 		expect(getBilling).not.toHaveBeenCalled();
+	});
+});
+
+describe("cloud plan store, reads in flight", () => {
+	// A refusal while the plan is being read: the answer still lands, and the
+	// plan is read again, since it may be from before the refusal.
+	it("keeps a read that a refusal overtook, then reads again", async () => {
+		const replies = [deferred<CloudBillingSummary>(), deferred<CloudBillingSummary>()];
+		let calls = 0;
+		const { client } = clientWith(() => replies[calls++].promise);
+		const { latest } = renderPlan(client, "o");
+		act(() => invalidateCloudPlan());
+		await act(async () => { replies[0].resolve(starter); await flush(); });
+		expect(calls).toBe(2);
+		await act(async () => { replies[1].resolve(free); await flush(); });
+		expect(latest()).toMatchObject({ status: "ready", summary: free });
+	});
+
+	// Signed out and back in while the first read was out, with the same client
+	// and organization id: the screen asks again, and only that answer shows.
+	it("reads again for the screen when the account changed under its first read", async () => {
+		const replies = [deferred<CloudBillingSummary>(), deferred<CloudBillingSummary>()];
+		let calls = 0;
+		const { client } = clientWith(() => replies[calls++].promise);
+		const { latest } = renderPlan(client, "o");
+		act(() => clearCloudPlan());
+		expect(calls).toBe(2);
+		await act(async () => { replies[0].resolve(starter); await flush(); });
+		expect(latest()).toMatchObject({ status: "loading" });
+		await act(async () => { replies[1].resolve(free); await flush(); });
+		expect(latest()).toMatchObject({ status: "ready", summary: free });
 	});
 });

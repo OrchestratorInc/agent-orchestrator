@@ -105,19 +105,23 @@ function ReviewDetailContent() {
 		setReadWorker(undefined);
 	}, [scope]);
 
+	// The backend on screen: a reload started by an earlier scope's action (a
+	// review requested, a merge) finishing later must not show that scope's review.
+	const shownBackend = useRef(backend);
+	shownBackend.current = backend;
 	const load = useCallback(async (quiet = false) => {
-		if (!hostMatches || !backend || !sessionId) return;
+		if (!hostMatches || !backend || !sessionId || shownBackend.current !== backend) return;
 		const request = ++latestLoad.current;
 		if (!quiet) setError("");
 		try {
 			const [next, nextPRs] = await Promise.all([backend.reviews(sessionId), backend.pullRequests(sessionId).catch(() => undefined)]);
-			if (request === latestLoad.current) {
+			if (request === latestLoad.current && shownBackend.current === backend) {
 				setData(next);
 				if (nextPRs) setPRs(nextPRs);
 				setError("");
 			}
 		} catch (value) {
-			if (!quiet && request === latestLoad.current) setError(userFacingError(value, "Could not load this review."));
+			if (!quiet && request === latestLoad.current && shownBackend.current === backend) setError(userFacingError(value, "Could not load this review."));
 		}
 	}, [backend, hostMatches, sessionId]);
 

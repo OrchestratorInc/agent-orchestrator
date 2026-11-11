@@ -41,12 +41,17 @@ export default function ProjectsScreen() {
 		notificationsUnread,
 		refreshAll,
 	} = useApp();
-	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, projectsLoaded: cloudProjectsLoaded, client: cloudClient, org: cloudOrg } = useCloud();
+	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, projectsLoaded: cloudProjectsLoaded, projectsError: cloudProjectsError, refreshProjects: refreshCloudProjects, client: cloudClient, org: cloudOrg } = useCloud();
 	// A Free organization runs no cloud agents, so a new cloud project could never run anything.
 	const cloudPlan = useCloudPlan(cloudClient, cloud ? cloudOrg?.id : undefined);
-	const canCreateCloudProject = Boolean(cloud) && cloudAgentsOffered(cloudPlan) === true;
+	const canCreateCloudProject = Boolean(cloud) && cloudAgentsOffered(cloudPlan, cloudOrg?.offering) === true;
 	const cloudReady = Boolean(cloud) && cloudProjectsLoaded;
 	const cloudPending = !cloud && (cloudStatus === "loading" || cloudStatus === "connecting");
+	// Signed in to Cloud with its first list not in yet: still loading, not
+	// "No projects". A first read that failed says so, with Retry: projects
+	// aren't polled, so nothing else would read them again.
+	const cloudLoading = Boolean(cloud) && !cloudProjectsLoaded && !cloudProjectsError;
+	const cloudFailed = Boolean(cloud) && !cloudProjectsLoaded && Boolean(cloudProjectsError);
 	useFocusEffect(useCallback(() => watchCloud(), [watchCloud]));
 	// A cloud project starts from a GitHub repository, here or from New task.
 	const newCloudProject = useCallback(() => router.push("/cloud/new-project"), [router]);
@@ -115,7 +120,7 @@ export default function ProjectsScreen() {
 
 	return (
 		<View style={styles.screen}>
-			{(fleetLoading || cloudPending) && allProjects.length === 0 && !cloudReady ? (
+			{(fleetLoading || cloudPending || cloudLoading) && allProjects.length === 0 && !cloudReady ? (
 				<TabPageScroll>
 					{largeTitle.header}
 					{staleBanner}
@@ -145,7 +150,14 @@ export default function ProjectsScreen() {
 						/>
 					)}
 					ListEmptyComponent={
-						fleetError && !cloud ? (
+						cloudFailed ? (
+							<EmptyState
+								icon="cloud"
+								title="Couldn't load cloud projects"
+								message={cloudProjectsError ?? undefined}
+								action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={() => void refreshCloudProjects()} />}
+							/>
+						) : fleetError && !cloud ? (
 							<EmptyState
 								icon={hostStates.length > 1 ? "unplug" : failure.icon}
 								title={hostStates.length > 1 ? "No machines connected" : failure.title}
@@ -166,7 +178,6 @@ export default function ProjectsScreen() {
 			<BoardHeaderItems unread={unreadCount} onAdd={Platform.OS === "android" && canCreateCloudProject ? newCloudProject : undefined} addLabel="New cloud project" />
 			{largeTitle.edge}
 			{tabBar.frost}
-			{/* iOS adds from the title line; Android's create action is the floating button. */}
 		</View>
 	);
 }

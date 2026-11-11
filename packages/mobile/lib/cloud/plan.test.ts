@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloudAgentsOffered, cloudPlanBlock, cloudPlanView, formatPlanHours, planRefusalTitle } from "./plan";
+import { cloudAgentsOffered, cloudPlanBlock, cloudPlanView, cloudSessionBilled, formatPlanHours, planRefusalTitle } from "./plan";
 import type { CloudBillingSummary } from "./types";
 
 const NOW = Date.parse("2026-11-11T10:00:00Z");
@@ -67,6 +67,42 @@ describe("cloudPlanView", () => {
 		const view = cloudPlanView({ ...paid, usage: undefined }, NOW);
 		expect(view).toMatchObject({ kind: "paid", name: "Starter", meters: [] });
 		expect(view.kind === "paid" && view.running).toBeUndefined();
+	});
+});
+
+// The contract lets an entitled plan come without its limits: that is a paid
+// plan whose numbers aren't known, not Free.
+describe("an entitled plan without its limits", () => {
+	const unknown: CloudBillingSummary = { enabled: true, billingMode: "self_serve", plan: "starter", entitled: true };
+	it("is shown as the plan it is, with nothing to measure", () => {
+		expect(cloudPlanView(unknown, NOW)).toEqual({ kind: "paid", name: "Starter", tone: "default", meters: [] });
+	});
+	it("neither blocks a task nor hides Cloud", () => {
+		expect(cloudPlanBlock(unknown, NOW)).toBeUndefined();
+		expect(cloudAgentsOffered({ status: "ready", summary: unknown })).toBe(true);
+	});
+});
+
+// Plans sell Freestyle, and Coder for an organization that doesn't run it
+// free; one with its own Coder or the coder capability (customCoder) keeps
+// its Coder sessions on Free.
+describe("what a plan pays for", () => {
+	const coderFree = { defaultProvider: "coder", customCoder: true };
+	it("counts Freestyle always, Coder unless the organization runs it free, and nothing else", () => {
+		expect(cloudSessionBilled("freestyle", coderFree)).toBe(true);
+		expect(cloudSessionBilled("coder", coderFree)).toBe(false);
+		expect(cloudSessionBilled("coder", { defaultProvider: "freestyle", customCoder: false })).toBe(true);
+		expect(cloudSessionBilled("docker", coderFree)).toBe(false);
+		// The project names none: the organization's default.
+		expect(cloudSessionBilled(undefined, coderFree)).toBe(false);
+		// Not known yet: as billed, so Free still says so.
+		expect(cloudSessionBilled(undefined, undefined)).toBe(true);
+	});
+	it("lets a Free organization start a task on its free Coder, and keeps Cloud offered", () => {
+		expect(cloudPlanBlock(free, NOW, cloudSessionBilled("coder", coderFree))).toBeUndefined();
+		expect(cloudPlanBlock(free, NOW, cloudSessionBilled("freestyle", coderFree))).toMatchObject({ reason: "plan" });
+		expect(cloudAgentsOffered({ status: "ready", summary: free }, coderFree)).toBe(true);
+		expect(cloudAgentsOffered({ status: "ready", summary: free }, { customCoder: false })).toBe(false);
 	});
 });
 

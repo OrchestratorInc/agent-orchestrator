@@ -18,12 +18,18 @@ type Entry = {
 	fetchedAt?: number;
 	stale: boolean;
 	pending?: Promise<void>;
+	/** Which read is out: invalidating keeps it, so its answer still lands. */
+	read?: number;
 };
 
 // By organization, so screens on two organizations during a switch never
 // replace each other's read.
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
+let reads = 0;
+// Bumped by every clear, so a screen asks again even when its organization id
+// and client are the same as before (signed out and back in).
+let clears = 0;
 
 function emit(): void {
 	for (const listener of listeners) listener();
@@ -47,19 +53,29 @@ export function loadCloudPlan(client: CloudClient, orgId: string, options: { for
 	const current = entries.get(orgId);
 	if (current?.pending) return current.pending;
 	if (!options.force && current?.fetchedAt !== undefined && !current.stale && now - current.fetchedAt < FRESH_MS) return Promise.resolve();
-	const next: Entry = { orgId, summary: current?.summary, error: current?.error, fetchedAt: current?.fetchedAt, stale: current?.stale ?? false };
+	// This read answers any staleness so far; a refusal while it is out marks
+	// the entry stale again, and the screen reads once more after it.
+	const read = ++reads;
+	const next: Entry = { orgId, summary: current?.summary, error: current?.error, fetchedAt: current?.fetchedAt, stale: false, read };
+	const ownRead = () => {
+		const shown = entries.get(orgId);
+		return shown?.read === read ? shown : undefined;
+	};
 	const pending = client.getBilling(orgId).then(
 		(summary) => {
-			if (entries.get(orgId) !== next) return;
-			entries.set(orgId, { orgId, summary, fetchedAt: Date.now(), stale: false });
+			const shown = ownRead();
+			if (!shown) return;
+			entries.set(orgId, { orgId, summary, fetchedAt: Date.now(), stale: shown.stale });
 			emit();
 		},
 		(error: unknown) => {
-			if (entries.get(orgId) !== next) return;
+			if (!ownRead()) return;
 			// A control plane that predates plans has no such route: nothing to show.
 			if (error instanceof CloudError && error.status === 404) entries.set(orgId, { orgId, summary: NO_PLANS, fetchedAt: Date.now(), stale: false });
-			// A failed refresh keeps what was already shown.
-			else entries.set(orgId, { orgId, summary: next.summary, error, fetchedAt: next.fetchedAt, stale: true });
+			// A failed refresh keeps what was already shown. It is not marked
+			// stale: that would read again at once, and again on every failure;
+			// the screen reads again when it is shown.
+			else entries.set(orgId, { orgId, summary: next.summary, error, fetchedAt: next.fetchedAt, stale: false });
 			emit();
 		},
 	);
@@ -82,7 +98,12 @@ export function invalidateCloudPlan(): void {
 
 export function clearCloudPlan(): void {
 	entries.clear();
+	clears++;
 	emit();
+}
+
+function clearCount(): number {
+	return clears;
 }
 
 forgetOnCloudAccountChange(clearCloudPlan);
@@ -103,10 +124,14 @@ export type CloudPlanState = {
 export function useCloudPlan(client: CloudClient, orgId: string | undefined): CloudPlanState | undefined {
 	const read = useCallback(() => (orgId ? entries.get(orgId) : undefined), [orgId]);
 	const own = useSyncExternalStore(subscribe, read, read);
+	const cleared = useSyncExternalStore(subscribe, clearCount, clearCount);
 	const needsRead = Boolean(orgId) && (!own || own.stale);
+	// The read out, if any: when it ends stale (a refusal came while it was
+	// out), the plan is read once more.
+	const reading = own?.read;
 	useEffect(() => {
 		if (orgId && needsRead) void loadCloudPlan(client, orgId);
-	}, [client, needsRead, orgId]);
+	}, [client, cleared, needsRead, orgId, reading]);
 	const reload = useCallback(async () => {
 		if (orgId) await loadCloudPlan(client, orgId);
 	}, [client, orgId]);

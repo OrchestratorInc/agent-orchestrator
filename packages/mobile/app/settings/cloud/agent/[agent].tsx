@@ -62,7 +62,7 @@ type Flow =
 	| { kind: "choose" }
 	| { kind: "browser"; method: CloudCredentialMethod; cancel(): void; saving?: boolean }
 	| { kind: "paste"; method: CloudCredentialMethod }
-	| { kind: "claude"; method: CloudCredentialMethod; login: ClaudeLogin }
+	| { kind: "claude"; method: CloudCredentialMethod; login: ClaudeLogin; attempt: number }
 	| { kind: "codex"; method: CloudCredentialMethod; device: CodexDeviceCode; saving?: boolean };
 
 /** What the field holding a pasted credential is called. */
@@ -107,7 +107,7 @@ export default function CloudAgentScreen() {
 	const toast = useToast();
 	const { agent: raw } = useLocalSearchParams<{ agent: string }>();
 	const agent = String(raw ?? "");
-	const { status, error: cloudError, client, connections, connectionsLoaded, refresh, refreshConnections } = useCloud();
+	const { status, error: cloudError, client, account, connections, connectionsLoaded, refresh, refreshConnections } = useCloud();
 	const [flow, setFlow] = useState<Flow>({ kind: "choose" });
 	const [secret, setSecret] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -135,6 +135,19 @@ export default function CloudAgentScreen() {
 		codexAbort.current?.abort();
 		browserCancel.current?.();
 	}, []);
+	// A sign-in belongs to the Cloud account that started it: another account
+	// signing in ends it, so its credential is never saved under that one.
+	const accountId = account?.id;
+	const signedInAs = useRef(accountId);
+	useEffect(() => {
+		if (signedInAs.current === accountId) return;
+		signedInAs.current = accountId;
+		attempt.current++;
+		codexAbort.current?.abort();
+		browserCancel.current?.();
+		setBusy(false);
+		setFlow({ kind: "choose" });
+	}, [accountId]);
 
 	const titleScreen = useMemo(() => <Stack.Screen options={{ title: label }} />, [label]);
 
@@ -309,7 +322,7 @@ export default function CloudAgentScreen() {
 			void run(async () => {
 				const login = await startClaudeLogin(loginDeps);
 				if (!owns(mine)) return;
-				setFlow({ kind: "claude", method, login });
+				setFlow({ kind: "claude", method, login, attempt: mine });
 				void openSignedInBrowser(login.authorizeUrl);
 			}, mine);
 			return;
@@ -386,13 +399,16 @@ export default function CloudAgentScreen() {
 			void run(() => save(method.credentialType, method.multiline ? secret : secret.trim()));
 		};
 	} else if (current.kind === "claude") {
-		const { method, login } = current;
+		const { method, login, attempt: claudeAttempt } = current;
 		submitRef.current = () => {
 			if (!secret.trim() || busy) return;
 			void run(async () => {
 				const token = await finishClaudeLogin(login, secret, loginDeps);
+				// Gone back, left, or another account signed in while the code was
+				// exchanged: the token is dropped, never uploaded.
+				if (!owns(claudeAttempt)) return;
 				await save(method.credentialType, token);
-			});
+			}, claudeAttempt);
 		};
 	} else submitRef.current = () => {};
 

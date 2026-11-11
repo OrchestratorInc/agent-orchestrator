@@ -427,7 +427,8 @@ export function ChatComposer({
 		} finally { setSubmitting(false); }
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
 
-	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets, overflow) => {
+	// Pasting is a way to attach too, so it follows the same gate as the menu.
+	const pasteLayout = useImagePaste(stopped || submitting || attachmentsUnavailable ? null : (assets, overflow) => {
 		setLocalError(undefined);
 		if (attachComposerImages(attachmentKey, assets, overflow)) haptics.tap();
 	});
@@ -451,9 +452,10 @@ export function ChatComposer({
 		const key = attachmentKey;
 		setLocalError(undefined);
 		dismissAttachmentNotice();
-		const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: ["text/*", "application/json", "application/xml", "application/yaml"] });
-		if (result.canceled) return;
 		try {
+			// Inside the try: a picker that fails says so rather than rejecting unseen.
+			const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: ["text/*", "application/json", "application/xml", "application/yaml"] });
+			if (result.canceled) return;
 			const existing = readComposerAttachments(key).items.length;
 			const added: Attachment[] = [];
 			for (const asset of result.assets) {
@@ -476,9 +478,10 @@ export function ChatComposer({
 		const key = attachmentKey;
 		setLocalError(undefined);
 		dismissAttachmentNotice();
-		const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: "*/*" });
-		if (result.canceled) return;
 		try {
+			// Inside the try: a picker that fails says so rather than rejecting unseen.
+			const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: "*/*" });
+			if (result.canceled) return;
 			const existing = readComposerAttachments(key).items.length;
 			const added: Attachment[] = [];
 			for (const asset of result.assets) {

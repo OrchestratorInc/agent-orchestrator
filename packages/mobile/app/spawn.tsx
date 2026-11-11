@@ -26,7 +26,7 @@ import { useApp } from "../lib/store";
 import { useCloud } from "../lib/cloud/CloudProvider";
 import { connectedAgents } from "../lib/cloud/agents";
 import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
-import { cloudPlanBlock } from "../lib/cloud/plan";
+import { cloudPlanBlock, cloudSessionBilled } from "../lib/cloud/plan";
 import { useCloudPlan } from "../lib/cloud/planStore";
 import { agentModelCatalog } from "../lib/cloud/modelCatalog";
 import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
@@ -71,7 +71,6 @@ export default function SpawnScreen() {
 	// and a spent session-hour window starts none until it resets. The control
 	// plane still decides on send; this only spares writing a task it would refuse.
 	const cloudPlan = useCloudPlan(cloudState.client, cloud ? cloudState.org?.id : undefined);
-	const planBlock = cloudSelected ? cloudPlanBlock(cloudPlan?.summary) : undefined;
 	const reloadCloudPlan = cloudPlan?.reload;
 	useEffect(() => {
 		if (cloudSelected) void reloadCloudPlan?.();
@@ -93,6 +92,10 @@ export default function SpawnScreen() {
 	}, [connectedHosts, currentHostId, hostStates, machineHosts, routeHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
+	// Only a session the plan pays for is the plan's to stop: Coder the
+	// organization runs free still starts on Free.
+	const cloudProjectProvider = cloudState.projects.find((item) => item.id === projectId)?.config.sandboxProvider;
+	const planBlock = cloudSelected ? cloudPlanBlock(cloudPlan?.summary, Date.now(), cloudSessionBilled(cloudProjectProvider, cloudState.org?.offering)) : undefined;
 	const [harness, setHarness] = useState("");
 	const [agentTouched, setAgentTouched] = useState(false);
 	const [mode, setMode] = useState<SessionMode>("chat");

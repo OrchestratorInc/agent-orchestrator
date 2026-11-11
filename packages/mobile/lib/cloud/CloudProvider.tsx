@@ -7,6 +7,7 @@ import { shouldPoll } from "../appStatePoll";
 import { fetch as expoFetch } from "expo/fetch";
 import { router } from "expo-router";
 import { forgetCloudAccountCaches } from "./accountCaches";
+import { forgetCloudDrafts } from "./drafts";
 import { collectPages, createCloudClient, type CloudClient } from "./client";
 import { CLOUD_API_BASE_URL } from "./config";
 import { CloudAuthError, cloudErrorMessage } from "./errors";
@@ -27,8 +28,12 @@ export type CloudState = {
 	client: CloudClient;
 	projects: CloudProject[];
 	projectsLoaded: boolean;
+	/** Why the last project read failed, apart from the workspace's error, which another read can clear. */
+	projectsError: string | null;
 	sessions: CloudSession[];
 	sessionsLoaded: boolean;
+	/** Why the last session read failed. */
+	sessionsError: string | null;
 	connections: CloudProviderConnection[];
 	connectionsLoaded: boolean;
 	notificationsUnread: number;
@@ -84,8 +89,10 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	const [error, setError] = useState<string | null>(null);
 	const [projects, setProjects] = useState<CloudProject[]>([]);
 	const [projectsLoaded, setProjectsLoaded] = useState(false);
+	const [projectsError, setProjectsError] = useState<string | null>(null);
 	const [sessions, setSessions] = useState<CloudSession[]>([]);
 	const [sessionsLoaded, setSessionsLoaded] = useState(false);
+	const [sessionsError, setSessionsError] = useState<string | null>(null);
 	const [connections, setConnections] = useState<CloudProviderConnection[]>([]);
 	const [connectionsLoaded, setConnectionsLoaded] = useState(false);
 	const [notificationsUnread, setNotificationsUnread] = useState(0);
@@ -95,6 +102,11 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	const orgRef = useRef<CloudOrganization | null>(null);
 	orgRef.current = org;
 	const resolveRef = useRef<() => Promise<void>>(async () => {});
+	// The push registration a connect started, unawaited: sign-out lets it land
+	// before removing it, and starts no other while it runs, so a late PUT can't
+	// register the phone again after its removal.
+	const pushRegistration = useRef<Promise<unknown>>(Promise.resolve());
+	const signingOut = useRef(false);
 
 	const client = useMemo(() => createCloudClient({
 		baseUrl: CLOUD_API_BASE_URL,
@@ -118,8 +130,10 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		setOrg(null);
 		setProjects([]);
 		setProjectsLoaded(false);
+		setProjectsError(null);
 		setSessions([]);
 		setSessionsLoaded(false);
+		setSessionsError(null);
 		setConnections([]);
 		setConnectionsLoaded(false);
 		setNotificationsUnread(0);
@@ -146,7 +160,11 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			if (own !== generation.current) return;
 			setProjects(items);
 			setProjectsLoaded(true);
-		} catch (cause) { fail(cause, own); }
+			setProjectsError(null);
+		} catch (cause) {
+			if (own === generation.current) setProjectsError(cloudErrorMessage(cause));
+			fail(cause, own);
+		}
 	}, [client, fail]);
 
 	const refreshSessions = useCallback(async () => {
@@ -158,8 +176,12 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			if (own !== generation.current) return;
 			setSessions(items);
 			setSessionsLoaded(true);
+			setSessionsError(null);
 			setError(null);
-		} catch (cause) { fail(cause, own); }
+		} catch (cause) {
+			if (own === generation.current) setSessionsError(cloudErrorMessage(cause));
+			fail(cause, own);
+		}
 	}, [client, fail]);
 
 	const refreshConnections = useCallback(async () => {
@@ -211,7 +233,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			setError(null);
 			setStatus("ready");
 			await Promise.all([refreshProjects(), refreshSessions(), refreshConnections(), refreshNotifications()]);
-			void registerCloudPush(client, { ask: false }).catch(() => {});
+			if (!signingOut.current) pushRegistration.current = registerCloudPush(client, { ask: false }).catch(() => {});
 		} catch (cause) {
 			if (own !== generation.current) return;
 			setError(cloudErrorMessage(cause));
@@ -220,7 +242,14 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	}, [client, refreshConnections, refreshNotifications, refreshProjects, refreshSessions]);
 	resolveRef.current = resolve;
 
+	// The account last adopted. Drafts outlive a restart, so they go only when
+	// one account gives way to none or another, never when the app opens.
+	const adopted = useRef<Account | null>(null);
 	const adopt = useCallback((next: Account | null) => {
+		const previous = adopted.current;
+		adopted.current = next;
+		if (previous && previous.id !== next?.id) void forgetCloudDrafts().catch(() => {});
+		signingOut.current = false;
 		reset();
 		setAccount(next);
 		if (!next) {
@@ -291,8 +320,14 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	// Push devices belong to the account, not an organization, so this runs
 	// whether or not one was resolved.
 	const signOut = useCallback(async ({ keepPush = false }: { keepPush?: boolean } = {}) => {
+		signingOut.current = true;
+		await pushRegistration.current;
 		const removed = await unregisterCloudPush(client);
-		if (!removed && !keepPush) throw new CloudPushRemovalError();
+		if (!removed && !keepPush) {
+			// Still signed in: a later connect may register again.
+			signingOut.current = false;
+			throw new CloudPushRemovalError();
+		}
 		await signOutOfAccount();
 		await clearAccountHosts().catch(() => {});
 	}, [client]);
@@ -315,9 +350,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 
 	const value = useMemo<CloudState>(() => ({
 		status, account, me, org, error, client,
-		projects, projectsLoaded, sessions, sessionsLoaded, connections, connectionsLoaded, notificationsUnread,
+		projects, projectsLoaded, projectsError, sessions, sessionsLoaded, sessionsError, connections, connectionsLoaded, notificationsUnread,
 		chatHarnesses: me?.chatHarnesses ?? NO_CHAT_HARNESSES,
 		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, watch,
-	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, sessions, sessionsLoaded, signIn, signOut, status, upsertSession, watch]);
+	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsError, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, sessions, sessionsError, sessionsLoaded, signIn, signOut, status, upsertSession, watch]);
 	return <CloudContext.Provider value={value}>{children}</CloudContext.Provider>;
 }

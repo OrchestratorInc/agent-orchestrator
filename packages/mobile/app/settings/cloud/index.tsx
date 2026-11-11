@@ -197,7 +197,7 @@ export default function CloudSettingsScreen() {
 	}
 
 	const role = roleLabel(org.role);
-	const agentsOffered = cloudAgentsOffered(plan);
+	const agentsOffered = cloudAgentsOffered(plan, org.offering);
 	return (
 		<View style={[styles.fill, { backgroundColor: t.bgBase }]}>
 			<SettingsForm testID="cloud-settings-form">

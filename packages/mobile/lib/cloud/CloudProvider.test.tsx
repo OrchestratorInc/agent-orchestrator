@@ -8,6 +8,9 @@ const fixtures = vi.hoisted(() => ({
 	client: {} as Record<string, Fn>,
 	options: undefined as { onForbidden?: () => void } | undefined,
 	unregister: undefined as unknown as Fn,
+	register: undefined as unknown as Fn,
+	forgetDrafts: undefined as unknown as Fn,
+	accountChanged: undefined as undefined | ((account: { id: string; email: string } | null) => void),
 	signOutOfAccount: undefined as unknown as Fn,
 }));
 
@@ -18,14 +21,18 @@ vi.mock("expo-router", () => ({ router: { push: () => undefined } }));
 vi.mock("../account", () => ({
 	getAccountAccessToken: async () => "token",
 	loadAccount: async () => ({ id: "u1", email: "u@example.com" }),
-	onAccountChange: () => () => {},
+	onAccountChange: (listener: (account: { id: string; email: string } | null) => void) => {
+		fixtures.accountChanged = listener;
+		return () => {};
+	},
 	signInToAccount: async () => null,
 	signOutOfAccount: (...args: unknown[]) => fixtures.signOutOfAccount(...args),
 }));
 vi.mock("../accountHosts", () => ({ clearAccountHosts: async () => {}, syncAccountHosts: async () => {} }));
 vi.mock("../appStatePoll", () => ({ shouldPoll: () => false }));
+vi.mock("./drafts", () => ({ forgetCloudDrafts: (...args: unknown[]) => fixtures.forgetDrafts(...args) }));
 vi.mock("./push", () => ({
-	registerCloudPush: async () => ({ ok: true }),
+	registerCloudPush: (...args: unknown[]) => fixtures.register(...args),
 	unregisterCloudPush: (...args: unknown[]) => fixtures.unregister(...args),
 }));
 vi.mock("./client", async (actual) => ({
@@ -58,6 +65,8 @@ const reResolve = () => act(async () => { fixtures.options?.onForbidden?.(); awa
 
 beforeEach(() => {
 	fixtures.unregister = vi.fn(async () => true);
+	fixtures.register = vi.fn(async () => ({ ok: true }));
+	fixtures.forgetDrafts = vi.fn(async () => {});
 	fixtures.signOutOfAccount = vi.fn(async () => {});
 	fixtures.client = {
 		getMe: vi.fn(async () => me("a")),
@@ -119,6 +128,36 @@ describe("CloudProvider", () => {
 		expect(fixtures.signOutOfAccount).not.toHaveBeenCalled();
 		await act(async () => { await latest!.signOut({ keepPush: true }); });
 		expect(fixtures.signOutOfAccount).toHaveBeenCalledOnce();
+	});
+
+	// Connecting registers the phone without waiting for it. Were that request
+	// to land after sign-out removed the registration, the phone would be
+	// registered again and keep getting the old account's notifications.
+	it("lets a registration still out land before sign-out removes it", async () => {
+		const order: string[] = [];
+		let land!: () => void;
+		fixtures.register.mockImplementation(() => new Promise((resolve) => { land = () => { order.push("registered"); resolve({ ok: true }); }; }));
+		fixtures.unregister.mockImplementation(async () => { order.push("removed"); return true; });
+		await mount();
+		const signingOut = latest!.signOut();
+		await flush();
+		expect(order).toEqual([]);
+		land();
+		await signingOut;
+		expect(order).toEqual(["registered", "removed"]);
+		expect(fixtures.signOutOfAccount).toHaveBeenCalledOnce();
+	});
+
+	// Unsent Cloud drafts outlive a restart, but not the account that wrote them.
+	it("forgets Cloud drafts when the account signs out or changes, not when the app opens", async () => {
+		await mount();
+		expect(fixtures.forgetDrafts).not.toHaveBeenCalled();
+		await act(async () => { fixtures.accountChanged?.({ id: "u1", email: "u@example.com" }); await flush(); });
+		expect(fixtures.forgetDrafts).not.toHaveBeenCalled();
+		await act(async () => { fixtures.accountChanged?.({ id: "u2", email: "v@example.com" }); await flush(); });
+		expect(fixtures.forgetDrafts).toHaveBeenCalledTimes(1);
+		await act(async () => { fixtures.accountChanged?.(null); await flush(); });
+		expect(fixtures.forgetDrafts).toHaveBeenCalledTimes(2);
 	});
 
 	it("offers no Chat agents when the control plane doesn't say which run in Chat", async () => {

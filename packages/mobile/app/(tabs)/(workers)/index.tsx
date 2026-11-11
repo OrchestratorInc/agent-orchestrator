@@ -53,12 +53,16 @@ export default function FleetScreen() {
 	const tabBar = useTabBarFrost();
 	const headerOverlap = useHeaderOverlap();
 	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, cloud, notificationsUnread, phoneNetwork } = useApp();
-	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, sessionsLoaded: cloudSessionsLoaded } = useCloud();
+	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, sessionsLoaded: cloudSessionsLoaded, sessionsError: cloudSessionsError, refreshSessions: refreshCloudSessions } = useCloud();
 	// Cloud's own list answering is enough to draw the board: offline machines
 	// re-racing in the background must not hold it on a spinner.
 	const cloudReady = Boolean(cloud) && cloudSessionsLoaded;
 	// Signed in, with Orchestrator Cloud still answering: not unpaired yet.
 	const cloudPending = !cloud && (cloudStatus === "loading" || cloudStatus === "connecting");
+	// Signed in to Cloud with its first list not in yet: still loading, not
+	// idle. A first read that failed says so; the poll also tries again.
+	const cloudLoading = Boolean(cloud) && !cloudSessionsLoaded && !cloudSessionsError;
+	const cloudFailed = Boolean(cloud) && !cloudSessionsLoaded && Boolean(cloudSessionsError);
 	// Cloud workers on this board refresh at the live rate while it is in front.
 	useFocusEffect(useCallback(() => watchCloud(), [watchCloud]));
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
@@ -205,7 +209,8 @@ export default function FleetScreen() {
 	// Which empty state the board shows when it has no rows; only the idle one
 	// offers its own way to start a task (New agent).
 	const emptyView = unpaired ? "unpaired"
-		: resolving || (!selectedHost && fleetLoading && allSessions.length === 0 && !cloudReady) ? "loading"
+		: resolving || (!selectedHost && (fleetLoading || cloudLoading) && allSessions.length === 0 && !cloudReady) ? "loading"
+			: !selectedHost && cloudFailed && allSessions.length === 0 ? "cloud"
 			: selectedHost && selectedHost.connection !== "open" ? "machine"
 				: fleetError && !cloud ? "error"
 					: workerProjectId !== ALL_WORKER_PROJECTS ? "project"
@@ -263,6 +268,13 @@ export default function FleetScreen() {
 						<View style={styles.center}>
 							<ActivityIndicator color={t.accent} />
 						</View>
+					) : emptyView === "cloud" ? (
+						<EmptyState
+							icon="cloud"
+							title="Couldn't load cloud workers"
+							message={cloudSessionsError ?? undefined}
+							action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={() => void refreshCloudSessions()} />}
+						/>
 					) : emptyView === "machine" && selectedHost ? (
 						<WorkerMachineState
 							host={selectedHost}

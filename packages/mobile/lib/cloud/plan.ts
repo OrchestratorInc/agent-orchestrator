@@ -1,4 +1,4 @@
-import type { CloudBillingSummary, CloudPlanLimits } from "./types";
+import type { CloudBillingSummary, CloudOffering, CloudPlanLimits } from "./types";
 
 // What the phone shows of the organization's AO Cloud plan: the same numbers
 // the desktop's Plans page shows (frontend BillingSection), in the app's own
@@ -44,7 +44,9 @@ function plansApply(summary: CloudBillingSummary): boolean {
 
 export function cloudPlanView(summary: CloudBillingSummary, now = Date.now()): CloudPlanView {
 	if (!plansApply(summary)) return { kind: "none" };
-	if (!summary.entitled || !summary.limits) return { kind: "free" };
+	// Free is the entitlement's answer; an entitled plan whose limits didn't
+	// come is still that plan, with nothing to measure.
+	if (!summary.entitled) return { kind: "free" };
 	const { limits, usage } = summary;
 	const status = summary.subscriptionStatus === "past_due"
 		? "Payment failed"
@@ -53,12 +55,12 @@ export function cloudPlanView(summary: CloudBillingSummary, now = Date.now()): C
 			: summary.subscriptionStatus === "trialing" ? "Trial" : undefined;
 	const view: CloudPlanView = {
 		kind: "paid",
-		name: planName(limits.plan || summary.plan),
+		name: planName(limits?.plan || summary.plan),
 		tone: summary.subscriptionStatus === "past_due" ? "bad" : "default",
 		meters: [],
 		...(status ? { status } : {}),
 	};
-	if (!usage) return view;
+	if (!usage || !limits) return view;
 	view.meters = [
 		meter("window", windowLabel(usage.windowHours || limits.windowHours), usage.windowUsedMinutes, usage.windowLimitMinutes, resetIn(usage.windowResetsAt, now)),
 		meter("week", "This week", usage.weeklyUsedMinutes, usage.weeklyLimitMinutes, resetOn(usage.weeklyResetsAt, now)),
@@ -79,9 +81,29 @@ export function cloudPlanView(summary: CloudBillingSummary, now = Date.now()): C
  * plan that can't be read leaves them offered, as the control plane still
  * decides.
  */
-export function cloudAgentsOffered(plan: { status: "loading" | "ready" | "failed"; summary?: CloudBillingSummary } | undefined): boolean | undefined {
+export function cloudAgentsOffered(
+	plan: { status: "loading" | "ready" | "failed"; summary?: CloudBillingSummary } | undefined,
+	offering?: Pick<CloudOffering, "customCoder">,
+): boolean | undefined {
+	// Coder that the organization runs free still works on Free.
+	if (offering?.customCoder) return true;
 	if (!plan || plan.status === "failed" || !plan.summary) return plan?.status === "loading" ? undefined : true;
 	return cloudPlanView(plan.summary).kind !== "free";
+}
+
+/**
+ * Whether a session on `provider` counts against the plan, as the control
+ * plane decides (sandboxBilledTx): Freestyle always, Coder unless the
+ * organization runs it free (its own Coder, or the coder capability:
+ * `customCoder`), and no other provider. A project that names none runs on
+ * the organization's default. Unknown, it counts, so Free still says so.
+ */
+export function cloudSessionBilled(provider: string | undefined, offering: Pick<CloudOffering, "customCoder" | "defaultProvider"> | undefined): boolean {
+	if (!offering) return true;
+	const effective = provider || offering.defaultProvider;
+	if (effective === "freestyle") return true;
+	if (effective === "coder") return !offering.customCoder;
+	return false;
 }
 
 /**
@@ -90,9 +112,10 @@ export function cloudAgentsOffered(plan: { status: "loading" | "ready" | "failed
  * counts them at the moment of the request; a spent window whose reset time
  * has passed is let through, since the numbers it was read with are old.
  */
-export function cloudPlanBlock(summary: CloudBillingSummary | undefined, now = Date.now()): { reason: "plan" | "window" | "week"; message: string } | undefined {
-	if (!summary || !plansApply(summary)) return undefined;
-	if (!summary.entitled || !summary.limits) return { reason: "plan", message: "Your organization's Free plan doesn't include cloud agents." };
+export function cloudPlanBlock(summary: CloudBillingSummary | undefined, now = Date.now(), billed = true): { reason: "plan" | "window" | "week"; message: string } | undefined {
+	// A session the plan doesn't pay for (free Coder) isn't the plan's to stop.
+	if (!summary || !billed || !plansApply(summary)) return undefined;
+	if (!summary.entitled) return { reason: "plan", message: "Your organization's Free plan doesn't include cloud agents." };
 	const usage = summary.usage;
 	if (!usage) return undefined;
 	if (spent(usage.windowUsedMinutes, usage.windowLimitMinutes, usage.windowResetsAt, now)) {
