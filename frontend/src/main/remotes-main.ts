@@ -124,19 +124,20 @@ export function registerRemotesIpc(
 		};
 	};
 	// A token issued for an add or edit whose probe then failed, by account and host.
-	// The code it replaced is spent, so that account's retry uses the token. In memory only.
-	const unsaved = new Map<string, Pick<RemoteEntry, "password" | "fallbackPassword">>();
+	// The code it replaced is spent, so a retry with the same code uses the token. In memory only.
+	const unsaved = new Map<string, { typed: string } & Pick<RemoteEntry, "password" | "fallbackPassword">>();
 	const unsavedKey = (account: string, hostId: string) => `${account}\n${hostId}`;
 	const pairOrReuse = async (account: string, typed: RemoteEntry) => {
 		const kept = typed.hostId ? unsaved.get(unsavedKey(account, typed.hostId)) : undefined;
-		return kept ? { entry: { ...typed, ...kept }, result: "paired" as const } : pairOwnToken(typed);
+		if (kept?.typed !== typed.password) return pairOwnToken(typed);
+		return { entry: { ...typed, password: kept.password, fallbackPassword: kept.fallbackPassword }, result: "paired" as const };
 	};
-	const remember = (account: string, hostId: string | undefined, paired: Awaited<ReturnType<typeof pairOwnToken>>, health: RemoteHealth) => {
-		if (!hostId) return;
+	const remember = (account: string, typed: RemoteEntry, paired: Awaited<ReturnType<typeof pairOwnToken>>, health: RemoteHealth) => {
+		if (!typed.hostId) return;
 		if (paired.result === "paired" && health !== "online" && health !== "unauthorized") {
-			unsaved.set(unsavedKey(account, hostId), { password: paired.entry.password, fallbackPassword: paired.entry.fallbackPassword });
+			unsaved.set(unsavedKey(account, typed.hostId), { typed: typed.password, password: paired.entry.password, fallbackPassword: paired.entry.fallbackPassword });
 		} else {
-			unsaved.delete(unsavedKey(account, hostId));
+			unsaved.delete(unsavedKey(account, typed.hostId));
 		}
 	};
 	// Keep edits and connects ordered so an update cannot leave a stale proxy.
@@ -188,7 +189,7 @@ export function registerRemotesIpc(
 		if (paired.result === "unauthorized") return "unauthorized" as RemoteHealth;
 		const entry = paired.entry;
 		const health = await checkedProbe(entry, account);
-		remember(account, hostId, paired, health);
+		remember(account, typed, paired, health);
 		if (health === "online") {
 			const previous = (await owned()).find((saved) => saved.hostId === hostId);
 			await addRemote(file, entry);
@@ -220,7 +221,7 @@ export function registerRemotesIpc(
 			editable.password = paired.entry.password;
 			editable.fallbackPassword = paired.entry.fallbackPassword;
 			const health = await updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
-			remember(account, typed.hostId, paired, health);
+			remember(account, typed, paired, health);
 			return health;
 		}
 		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
