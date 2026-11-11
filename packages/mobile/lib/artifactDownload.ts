@@ -3,6 +3,14 @@ import { artifactCacheEvictions, type ArtifactCacheEntry, type CachedArtifactFil
 
 const pending = new Map<string, Promise<string>>();
 
+/** A download that turned out larger than the caller would keep. */
+export class ArtifactTooLargeError extends Error {
+	constructor() {
+		super("This file is too large to download to the phone.");
+		this.name = "ArtifactTooLargeError";
+	}
+}
+
 /**
  * An artifact copied into the app's cache, for a viewer that reads a local file
  * (Android's PDF renderer). The entry (artifactCacheEntry) names the file and
@@ -11,8 +19,10 @@ const pending = new Map<string, Promise<string>>();
  * once complete, so an interrupted download never leaves a cut file behind.
  * Once it is in place, the file's older copies go, and the least recently
  * written other files go while the cache is over its cap. Resolves to its URI.
+ * A download over `maxBytes` (when the server did not say its size beforehand)
+ * is deleted and rejects with ArtifactTooLargeError, so it is never kept.
  */
-export function downloadArtifact(source: { uri: string; headers: Record<string, string> }, entry: ArtifactCacheEntry): Promise<string> {
+export function downloadArtifact(source: { uri: string; headers: Record<string, string> }, entry: ArtifactCacheEntry, { maxBytes }: { maxBytes?: number } = {}): Promise<string> {
 	const inFlight = pending.get(entry.name);
 	if (inFlight) return inFlight;
 	const task = (async () => {
@@ -23,6 +33,10 @@ export function downloadArtifact(source: { uri: string; headers: Record<string, 
 			const partial = new File(directory, `${entry.name}.part`);
 			if (partial.exists) partial.delete();
 			const downloaded = await File.downloadFileAsync(source.uri, partial, { headers: source.headers, idempotent: true });
+			if (maxBytes !== undefined && (downloaded.size ?? 0) > maxBytes) {
+				downloaded.delete();
+				throw new ArtifactTooLargeError();
+			}
 			if (target.exists) target.delete();
 			downloaded.move(target);
 		}

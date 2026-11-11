@@ -768,6 +768,32 @@ export function artifactMarkdownImageSource(cfg: ServerConfig, sessionId: string
  * text. A page is read raw from the preview route: the artifact-files route
  * would write AO's bootstrap into it.
  */
+/** A text read stopped at its limit: the file is larger than the viewer loads. */
+export class ArtifactTextTooLargeError extends Error {
+	constructor() {
+		super("This file is too large to load as text.");
+		this.name = "ArtifactTextTooLargeError";
+	}
+}
+
+/**
+ * An artifact's text, read only if it is at most `maxBytes`: the read asks for
+ * one byte more than that (a range), so a file larger than the viewer loads
+ * (even one that grew after its size was known) rejects with
+ * ArtifactTextTooLargeError instead of being read whole.
+ */
+export async function getArtifactTextWithin(cfg: ServerConfig, sessionId: string, path: string, maxBytes: number, init?: Pick<RequestInit, "signal">): Promise<string> {
+	const route = /\.html?$/i.test(path) ? artifactFilePath(sessionId, path, { raw: true }) : artifactFilesPath(sessionId, path);
+	if (!route) throw new Error("This artifact's path can't be opened.");
+	const res = await req(cfg, route, { ...init, headers: { Range: `bytes=0-${maxBytes}` } });
+	const text = await res.text();
+	const total = res.status === 206 ? contentRangeTotal(res.headers.get("content-range")) : undefined;
+	// A server that ignores the range sends the whole file: its own length decides.
+	const length = total ?? Number(res.headers.get("content-length") || new TextEncoder().encode(text).length);
+	if (length > maxBytes) throw new ArtifactTextTooLargeError();
+	return text;
+}
+
 export async function getArtifactText(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<string> {
 	const route = /\.html?$/i.test(path) ? artifactFilePath(sessionId, path, { raw: true }) : artifactFilesPath(sessionId, path);
 	if (!route) throw new Error("This artifact's path can't be opened.");

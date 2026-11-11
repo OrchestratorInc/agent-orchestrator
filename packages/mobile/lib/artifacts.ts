@@ -312,6 +312,12 @@ export function contentRangeTotal(header: string | null | undefined): number | u
  */
 export const ARTIFACT_PROBE_BYTES = 64 * 1024;
 
+/**
+ * The largest file the phone downloads to preview (a PDF on Android): past it,
+ * the viewer says it is too large rather than fill the phone's storage.
+ */
+export const MAX_ARTIFACT_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+
 /** Downloaded artifacts kept in the cache at most, all files together. */
 export const MAX_ARTIFACT_CACHE_BYTES = 200 * 1024 * 1024;
 
