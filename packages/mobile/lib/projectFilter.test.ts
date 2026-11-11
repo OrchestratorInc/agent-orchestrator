@@ -94,6 +94,11 @@ describe("resolveSpawnProject", () => {
 
 	it("skips a last project the daemon no longer lists", () => {
 		expect(resolveSpawnProject(null, undefined, ALL_PROJECTS, listed, true, "removed")).toBeNull();
+		expect(resolveSpawnProject("removed", undefined, "ao", listed, true, "removed")).toBe("ao");
+	});
+
+	it("prefers the last project over the board filter before the project list is known", () => {
+		expect(resolveSpawnProject(null, undefined, "ao", [], false, "scratch")).toBe("scratch");
 	});
 });
 

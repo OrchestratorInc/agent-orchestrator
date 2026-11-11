@@ -143,7 +143,9 @@ export function resolveSpawnProject(
 		&& resolveActiveProject(currentProjectId, projects, projectsKnown) === currentProjectId
 	) return currentProjectId;
 	if (routeProjectId && projects.some((project) => project.id === routeProjectId)) return routeProjectId;
-	if (lastProjectId && projects.some((project) => project.id === lastProjectId)) return lastProjectId;
+	// Trusted before the list lands, as the board filter is: judged against it
+	// once it does, a filter picked first would otherwise stick.
+	if (lastProjectId && (!projectsKnown || projects.some((project) => project.id === lastProjectId))) return lastProjectId;
 	const active = resolveActiveProject(activeProjectId, projects, projectsKnown);
 	if (active !== ALL_PROJECTS) return active;
 	return projects.length === 1 ? projects[0].id : null;
