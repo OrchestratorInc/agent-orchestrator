@@ -1,0 +1,47 @@
+=== RUN   TestLiveClaudeACPReadOnlyRejectsWrites
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: touch b.txt
+    live_test.go:181: activity.started command pending: touch b.txt
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: touch b.txt
+    live_test.go:181: activity.completed command failed: touch b.txt
+    live_test.go:181: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.completed command failed: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.started command pending: printf hi > d.txt
+    live_test.go:181: activity.started command pending: printf hi > d.txt
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: printf hi > d.txt
+    live_test.go:181: activity.completed command failed: printf hi > d.txt
+    live_test.go:181: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.completed command failed: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:181: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:181: activity.completed command failed: git commit --allow-empty -m pwned
+    live_test.go:181: activity.completed command failed: git commit --allow-empty -m pwned
+    live_test.go:181: activity.completed command failed: git commit --allow-empty -m pwned
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: git status --short
+    live_test.go:181: activity.started command pending: git status --short
+    live_test.go:181: activity.started command pending: git status --short
+    live_test.go:181: activity.started command pending: git status --short
+    live_test.go:181: activity.completed command completed: git status --short
+    live_test.go:194: answer:
+        Every write was blocked. The read-only check ran, and the working tree is still clean.
+        
+        1. **Edit tool** (README.md, hello → edited): not called, because there is no Edit tool in this session.
+        2. **Write tool** (a.txt): not called, because there is no Write tool in this session.
+        3. **`touch b.txt`**: denied (user refused permission).
+        4. **`bash -c 'echo x > c.txt'`**: denied (user refused permission).
+        5. **`printf hi > d.txt`**: denied (user refused permission).
+        6. **`sed -i '' 's/hello/sed/' README.md`**: denied (user refused permission).
+        7. **`git commit --allow-empty -m pwned`**: denied ("Permission to use Bash with command git commit --allow-empty -m pwned has been denied").
+        8. **`git status --short`**: ran and printed nothing, so there are no changes.
+--- PASS: TestLiveClaudeACPReadOnlyRejectsWrites (18.69s)
+PASS
+ok  	github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp	19.543s

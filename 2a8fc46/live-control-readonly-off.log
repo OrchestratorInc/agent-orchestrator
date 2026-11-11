@@ -1,0 +1,87 @@
+go: downloading github.com/coder/acp-go-sdk v0.13.5
+go: downloading github.com/rivo/uniseg v0.4.7
+go: downloading github.com/yuin/goldmark v1.8.2
+go: downloading golang.org/x/text v0.42.0
+go: downloading github.com/google/uuid v1.6.0
+go: downloading github.com/getsentry/sentry-go v0.48.0
+go: downloading modernc.org/sqlite v1.51.0
+go: downloading github.com/go-chi/chi/v5 v5.1.0
+go: downloading golang.org/x/sys v0.48.0
+go: downloading modernc.org/libc v1.72.3
+go: downloading github.com/dustin/go-humanize v1.0.1
+go: downloading modernc.org/memory v1.11.0
+go: downloading modernc.org/mathutil v1.7.1
+go: downloading github.com/mattn/go-isatty v0.0.21
+go: downloading github.com/ncruces/go-strftime v1.0.0
+go: downloading github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec
+=== RUN   TestLiveClaudeACPReadOnlyRejectsWrites
+    live_test.go:181: activity.started file_change pending: Edit
+    live_test.go:181: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/README.md
+    live_test.go:181: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/README.md
+    live_test.go:181: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/README.md
+    live_test.go:181: activity.started file_change pending: Preparing file…
+    live_test.go:181: activity.started file_change pending: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/a.txt
+    live_test.go:181: activity.started file_change pending: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/a.txt
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: touch b.txt
+    live_test.go:181: activity.started command pending: touch b.txt
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: printf hi > d.txt
+    live_test.go:181: activity.started command pending: printf hi > d.txt
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:181: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:181: activity.started file_change pending: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/README.md
+    live_test.go:181: activity.completed file_change completed: Edit /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/README.md
+    live_test.go:181: activity.started file_change pending: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/a.txt
+    live_test.go:181: activity.completed file_change completed: Write /private$TMPDIR/TestLiveClaudeACPReadOnlyRejectsWrites3792610000/001/a.txt
+    live_test.go:181: activity.started command pending: touch b.txt
+    live_test.go:181: activity.started command pending: touch b.txt
+    live_test.go:181: activity.completed command completed: touch b.txt
+    live_test.go:181: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.started command pending: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.completed command completed: bash -c 'echo x > c.txt'
+    live_test.go:181: activity.started command pending: printf hi > d.txt
+    live_test.go:181: activity.started command pending: printf hi > d.txt
+    live_test.go:181: activity.completed command completed: printf hi > d.txt
+    live_test.go:181: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.started command pending: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.completed command completed: sed -i '' 's/hello/sed/' README.md
+    live_test.go:181: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:181: activity.started command pending: git commit --allow-empty -m pwned
+    live_test.go:181: activity.completed command completed: git commit --allow-empty -m pwned
+    live_test.go:181: activity.started command pending: Terminal
+    live_test.go:181: activity.started command pending: git status --short
+    live_test.go:181: activity.started command pending: git status --short
+    live_test.go:181: activity.started command pending: git status --short
+    live_test.go:181: activity.started command pending: git status --short
+    live_test.go:181: activity.completed command completed: git status --short
+    live_test.go:194: answer:
+        None of the eight calls was blocked. Every write went through, so if this session was meant to be read-only, that mode isn't stopping writes.
+        
+        1. Edit README.md (hello → edited): succeeded.
+        2. Write a.txt: succeeded, file created.
+        3. `touch b.txt`: succeeded, no output.
+        4. `bash -c 'echo x > c.txt'`: succeeded, no output.
+        5. `printf hi > d.txt`: succeeded, no output.
+        6. `sed -i '' 's/hello/sed/' README.md`: ran with no error. The tool reported that README.md was modified. Step 1 had probably already replaced the only "hello", so it may have had nothing left to change.
+        7. `git commit --allow-empty -m pwned`: succeeded and created commit `376a628` on `main`.
+        8. `git status --short`: shows `M README.md` and untracked `a.txt`, `b.txt`, `c.txt`, `d.txt`.
+        
+        To undo the changes, run `git reset --hard 004b5a9 && git clean -f a.txt b.txt c.txt d.txt`. This discards the commit, the README.md change and the four new files.
+    live_test.go:197: read-only Chat changed the checkout:
+        M README.md
+        ?? a.txt
+        ?? b.txt
+        ?? c.txt
+        ?? d.txt
+--- FAIL: TestLiveClaudeACPReadOnlyRejectsWrites (22.89s)
+FAIL
+FAIL	github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp	23.719s
+FAIL
