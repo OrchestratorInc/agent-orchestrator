@@ -34,6 +34,12 @@ const { useEncryptedFile } = await import("./useEncryptedFile");
 
 const config = { host: "h", httpPort: "1", muxPort: "", password: "aod_x", hostKey: "k".repeat(43) };
 let result: { uri?: string; readAccess?: string; failed: boolean } = { failed: false };
+// A response body that hands out these chunks in order.
+function streamed(...chunks: Uint8Array[]) {
+	let next = 0;
+	const cancel = vi.fn(async () => {});
+	return { cancel, getReader: () => ({ read: async () => next < chunks.length ? { done: false, value: chunks[next++] } : { done: true }, cancel, releaseLock: () => {} }) };
+}
 function Probe() {
 	result = useEncryptedFile(config, "http://h:1/api/v1/sessions/s/artifacts/report.pdf", "v1");
 	return null;
@@ -56,10 +62,10 @@ afterEach(() => {
 
 describe("useEncryptedFile", () => {
 	it("reads the file through the channel into the cache, and deletes it on unmount", async () => {
-		hostFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers({ "content-type": "application/pdf" }), arrayBuffer: async () => Uint8Array.of(37, 80).buffer, body: null });
+		hostFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers({ "content-type": "application/pdf" }), body: streamed(Uint8Array.of(37), Uint8Array.of(80)) });
 		act(() => { renderer = create(<Probe />); });
 		await settle();
-		expect(hostFetch).toHaveBeenCalledWith(config, "/api/v1/sessions/s/artifacts/report.pdf", { headers: { Authorization: "Bearer aod_x" } });
+		expect(hostFetch).toHaveBeenCalledWith(config, "/api/v1/sessions/s/artifacts/report.pdf", { headers: { Authorization: "Bearer aod_x" }, signal: expect.any(AbortSignal) });
 		expect(result.uri).toMatch(/^file:\/\/\/cache\/encrypted-files\/.+\.pdf$/);
 		expect(result.readAccess).toBe("file:///cache/encrypted-files");
 		expect(disk.get(result.uri!)).toEqual(Uint8Array.of(37, 80));
@@ -68,14 +74,39 @@ describe("useEncryptedFile", () => {
 		act(() => { renderer = create(<Probe />); });
 	});
 
+	it("stops reading a file without a length once it passes the size cap", async () => {
+		const chunk = new Uint8Array(13 * 1024 * 1024);
+		const body = streamed(chunk, chunk, chunk);
+		hostFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers(), body });
+		act(() => { renderer = create(<Probe />); });
+		await settle();
+		expect(result.failed).toBe(true);
+		expect(body.cancel).toHaveBeenCalled();
+		expect(disk.size).toBe(0);
+	});
+
+	it("cancels the download when the viewer closes", async () => {
+		let signal: AbortSignal | undefined;
+		hostFetch.mockImplementation((_config: unknown, _path: string, init: { signal: AbortSignal }) => {
+			signal = init.signal;
+			return new Promise(() => {});
+		});
+		act(() => { renderer = create(<Probe />); });
+		await settle();
+		expect(signal?.aborted).toBe(false);
+		act(() => renderer.unmount());
+		expect(signal?.aborted).toBe(true);
+		act(() => { renderer = create(<Probe />); });
+	});
+
 	it("fails without reading a file over the size cap", async () => {
 		const cancel = vi.fn(async () => {});
-		const arrayBuffer = vi.fn();
-		hostFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers({ "content-length": String(26 * 1024 * 1024) }), arrayBuffer, body: { cancel } });
+		const getReader = vi.fn();
+		hostFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers({ "content-length": String(26 * 1024 * 1024) }), body: { cancel, getReader } });
 		act(() => { renderer = create(<Probe />); });
 		await settle();
 		expect(result.failed).toBe(true);
 		expect(cancel).toHaveBeenCalled();
-		expect(arrayBuffer).not.toHaveBeenCalled();
+		expect(getReader).not.toHaveBeenCalled();
 	});
 });

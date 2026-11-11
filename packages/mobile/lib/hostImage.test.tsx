@@ -23,10 +23,10 @@ const image = (status: number) => ({
 let renders = 0;
 let shown: { uri: string } | undefined;
 
-function Probe({ uri, attempt }: { uri: string; attempt: number }) {
+function Probe({ uri, attempt, token = "aod_x" }: { uri: string; attempt: number; token?: string }) {
 	renders++;
 	// A new source object every render, as MarkdownImage's resolver returns.
-	shown = useHostImage(Object.assign({ uri, headers: {} }, { via: { config, headers: { Authorization: "Bearer aod_x" } } }), attempt);
+	shown = useHostImage(Object.assign({ uri, headers: {} }, { via: { config, headers: { Authorization: `Bearer ${token}` } } }), attempt);
 	return null;
 }
 
@@ -56,6 +56,17 @@ describe("useHostImage", () => {
 		expect(shown?.uri).toBe("data:image/png;base64,AQI=");
 		expect(hostFetch).toHaveBeenCalledOnce();
 		expect(renders).toBeLessThan(4);
+	});
+
+	it("reads a failed image again with a new credential", async () => {
+		hostFetch.mockResolvedValueOnce(image(401)).mockResolvedValueOnce(image(200));
+		act(() => { renderer = create(<Probe uri="http://h:1/c.png" attempt={0} token="aod_old" />); });
+		await settle();
+		expect(shown?.uri).toBe("data:,");
+		act(() => renderer.update(<Probe uri="http://h:1/c.png" attempt={0} token="aod_new" />));
+		await settle();
+		expect(shown?.uri).toBe("data:image/png;base64,AQI=");
+		expect(hostFetch).toHaveBeenLastCalledWith(config, "/c.png", { headers: { Authorization: "Bearer aod_new" } });
 	});
 
 	it("reads a failed image again on the next attempt", async () => {

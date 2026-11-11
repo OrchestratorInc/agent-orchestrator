@@ -809,17 +809,17 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						{t("mobile.generate")}
 					</Button>
 				</div>
-			) : pairingCodeFailed ? (
-				<div className="absolute inset-0 flex items-center justify-center">
-					<Button type="button" variant="primary" data-testid="mobile-pairing-code-retry" onClick={() => void pairing.refetch()}>
-						{t("mobile.generate")}
-					</Button>
-				</div>
 			) : status.hostKeyUnavailable ? (
 				<div className="absolute inset-0 flex items-center justify-center p-4" data-testid="mobile-host-key-unavailable" role="status">
 					<span className="rounded-(--radius-settings-action) bg-(--color-bg-secondary) px-3 py-2 text-center text-xs leading-5 text-settings-muted shadow-lg">
 						{t("mobile.hostKeyUnavailable")}
 					</span>
+				</div>
+			) : pairingCodeFailed ? (
+				<div className="absolute inset-0 flex items-center justify-center">
+					<Button type="button" variant="primary" data-testid="mobile-pairing-code-retry" onClick={() => void pairing.refetch()}>
+						{t("mobile.generate")}
+					</Button>
 				</div>
 			) : !qrValue && !unreachable ? (
 				<div

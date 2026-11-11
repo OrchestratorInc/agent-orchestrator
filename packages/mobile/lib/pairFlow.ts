@@ -81,12 +81,12 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	}
 	// A machine paired with its key is never paired again without one: that would
 	// send the code unencrypted and drop the key. Only an older desktop shows such a code.
-	if (!offer.hostKey && offer.hostId) {
-		const saved = options.repairHost?.id === offer.hostId ? options.repairHost : await deps.findHost(offer.hostId);
-		if (saved?.hostKey) return { ok: false, reason: "outdated-desktop" };
-	}
+	const pinned = async (id: string) => Boolean(id && (options.repairHost?.id === id ? options.repairHost : await deps.findHost(id))?.hostKey);
+	if (!offer.hostKey && await pinned(offer.hostId)) return { ok: false, reason: "outdated-desktop" };
 	const outcome = await deps.race(offer.endpoints, offer.hostId);
 	if (!outcome.ok) return { ok: false, reason: outcome.reason };
+	// A code without a machine id names the machine only once it answers.
+	if (!offer.hostKey && !offer.hostId && await pinned(outcome.hostId)) return { ok: false, reason: "outdated-desktop" };
 
 	// The race has confirmed the machine, so the secret may be sent now.
 	let token = offer.token;

@@ -43,8 +43,9 @@ export function useHostImage<T extends Source>(source: T | undefined, attempt = 
 	const viaRef = useRef(via);
 	viaRef.current = via;
 	const uri = source?.uri ?? "";
-	// Callers rebuild the source on every render, so the read is keyed on what it asks for.
-	const key = via ? `${via.config.hostKey}\n${uri}` : "";
+	// Callers rebuild the source on every render, so the read is keyed on what it
+	// asks for. A new credential reads an image the old one could not.
+	const key = via ? `${via.config.hostKey}\n${via.headers.Authorization ?? ""}\n${uri}` : "";
 	const [shown, setShown] = useState<{ key: string; attempt: number; data: string }>();
 	useEffect(() => {
 		const current = viaRef.current;

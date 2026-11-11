@@ -179,6 +179,16 @@ describe("pairFromCode", () => {
 		expect(d.saveHost).not.toHaveBeenCalled();
 	});
 
+	it("refuses a code without a machine id when the machine that answers is paired with a key", async () => {
+		const idless = encodePairingCode({ v: 2, hostId: "", name: "prasad-mbp", platform: "darwin", endpoints: [lan], token: "pw" });
+		const pair = vi.fn();
+		const d = deps({ pair, findHost: vi.fn(async (id: string) => id === "h_paired" ? { id, name: "Studio", hostKey: "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0" } : null) });
+
+		expect(await pairFromCode(`aomobile://pair#${idless}`, d)).toEqual({ ok: false, reason: "outdated-desktop" });
+		expect(pair).not.toHaveBeenCalled();
+		expect(d.verify).not.toHaveBeenCalled();
+	});
+
 	it("returns a config for the endpoint that won the race", async () => {
 		const got = await pairFromCode(`aomobile://pair#${code}`, deps());
 
