@@ -785,8 +785,8 @@ describe("GlobalSettingsForm", () => {
 		const statusLine = screen.getByTestId("update-status-line");
 		expect(statusLine).not.toHaveTextContent("Checking for updates…");
 		expect(statusLine.querySelector("svg")).toBeNull();
-		// The slot keeps its status lines' height while the button owns the feedback.
-		expect(statusLine).toHaveClass("min-h-9.5");
+		// The slot keeps one description line while the button owns the feedback.
+		expect(statusLine).toHaveClass("min-h-4");
 
 		act(() => finishCheck());
 		await waitFor(() => expect(button).toBeEnabled(), { timeout: 1_500 });

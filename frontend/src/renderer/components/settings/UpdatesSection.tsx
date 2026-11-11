@@ -480,9 +480,9 @@ function UpdateActions({
 	// Restart & install are primary; Check for updates is a quiet row action.
 	return (
 		<>
-			{/* One row: version and live status on the left, actions on the right,
-			    level with the version line so they hold still as the status changes. */}
-			<div className="update-hero settings-content-row flex min-w-0 items-start justify-between gap-6">
+			{/* One row, like the settings rows under it: version and live status on
+			    the left, actions vertically centred on the right. */}
+			<div className="update-hero settings-content-row flex min-w-0 items-center justify-between gap-6">
 				<div className="min-w-0 flex-1">
 				<p className="update-hero-version tabular-nums">
 					<span
@@ -520,7 +520,7 @@ function UpdateActions({
 							tabIndex={-1}
 							// Keep one line while the button owns the checking feedback, so
 							// the notices below do not jump up.
-							className="flex min-h-9.5 min-w-0 flex-col gap-1.5"
+							className="flex min-h-4 min-w-0 flex-col gap-1.5"
 						>
 							{/* Status on the left, bytes at the far end of the track below. */}
 							{(showStatusState || downloadedBytes) && (
@@ -551,7 +551,9 @@ function UpdateActions({
 				{/* Actions. Fixed to the right and never widened by a version string:
 				    the primary label used to carry the full nightly stamp and grew
 				    across the version. The target build is named in the status line. */}
-				<div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+				{/* -mr-2.5 cancels the quiet button's own padding, so its label ends
+				    on the edge the switch and channel picker sit on below. */}
+				<div className="-mr-2.5 flex shrink-0 flex-wrap items-center justify-end gap-2">
 					{/* Reflect every download, including automatic and channel-switch work. */}
 					{(status.state === "available" || downloading) && (
 						<Button
@@ -718,14 +720,16 @@ function UpdateStatusLine({
 	}
 
 	return (
-		<div className={cn("flex min-w-0 items-start gap-1.5", className)}>
-			{icon !== null && <span className="flex h-4 shrink-0 items-center">{icon}</span>}
-			<div className="min-w-0">
-				<p className="text-pretty">{label}</p>
-				{detail !== null && (
-					<p className="mt-0.5 truncate text-settings-muted">{detail}</p>
-				)}
+		// The detail sits under the icon, on the card's text edge, not indented
+		// under the label: every line in the card then starts at one x.
+		<div className={cn("flex min-w-0 flex-col gap-1.5", className)}>
+			<div className="flex min-w-0 items-start gap-1.5">
+				{icon !== null && <span className="flex h-4 shrink-0 items-center">{icon}</span>}
+				<p className="min-w-0 text-pretty">{label}</p>
 			</div>
+			{detail !== null && (
+				<p className="truncate text-settings-muted">{detail}</p>
+			)}
 		</div>
 	);
 }
