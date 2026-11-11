@@ -1,6 +1,7 @@
 import { agentLabel } from "@aoagents/product-ui";
 import { SquareTerminal, X } from "@/components/app-icons";
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
@@ -273,10 +274,20 @@ const AGENT_BADGE = {
 	done: { label: "terminal.agentDone", className: "bg-muted-foreground" },
 } as const;
 
+function shellAgentBadgeState(agent: ShellAgent, done: boolean) {
+	return agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
+}
+
+/** The agent's state in words, for an accessible name that would hide the badge's own text. */
+export function shellAgentStateLabel(t: TFunction, agent: ShellAgent, done: boolean): string | undefined {
+	const state = shellAgentBadgeState(agent, done);
+	return state ? t(AGENT_BADGE[state].label, { agent: agentLabel(agent.harness) }) : undefined;
+}
+
 /** A shell's agent logo, with its state as a badge on the logo's corner. */
 export function ShellAgentIcon({ agent, done }: { agent: ShellAgent; done: boolean }) {
 	const { t } = useTranslation();
-	const state = agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
+	const state = shellAgentBadgeState(agent, done);
 	return (
 		<span className="relative grid size-icon-base place-items-center" data-shell-agent-state={state}>
 			<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
@@ -286,7 +297,7 @@ export function ShellAgentIcon({ agent, done }: { agent: ShellAgent; done: boole
 						aria-hidden="true"
 						className={cn("absolute -bottom-px -right-px size-1.5 rounded-full ring-1 ring-background", AGENT_BADGE[state].className)}
 					/>
-					<span className="sr-only">{t(AGENT_BADGE[state].label, { agent: agentLabel(agent.harness) })}</span>
+					<span className="sr-only">{shellAgentStateLabel(t, agent, done)}</span>
 				</>
 			) : null}
 		</span>
