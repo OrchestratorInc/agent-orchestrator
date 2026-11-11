@@ -41,10 +41,13 @@ func (c *Coordinator) RecoverAdmissions(ctx context.Context, fence domain.Schedu
 			var applied bool
 			ad, applied, err = store.AdoptSchedulerAdmission(ctx, ad.ID, ad.Revision, fence, c.now().UTC())
 			if err != nil {
+				if expectedObservationConflict(err) {
+					continue
+				}
 				return err
 			}
 			if !applied {
-				return domain.ErrSchedulerAdmissionConflict
+				continue
 			}
 		}
 		observation, found, observeErr := c.admissionObservation(ctx, ad)
@@ -57,6 +60,9 @@ func (c *Coordinator) RecoverAdmissions(ctx context.Context, fence domain.Schedu
 			continue
 		}
 		if err := store.RecoverExecutionAdmissionSession(ctx, ad, observation, c.now().UTC()); err != nil {
+			if expectedObservationConflict(err) {
+				continue
+			}
 			return err
 		}
 		ad, found, err = store.GetSchedulerAdmission(ctx, ad.ID)
@@ -69,6 +75,9 @@ func (c *Coordinator) RecoverAdmissions(ctx context.Context, fence domain.Schedu
 		if ad.AttemptID != "" && !observation.Terminated {
 			p, err := store.LoadExecutionPermit(ctx, ad.AttemptID, fence, c.now().UTC())
 			if err != nil {
+				if expectedObservationConflict(err) {
+					continue
+				}
 				return err
 			}
 			// 已结算但未确认物理终止的 Attempt 保留占位，不能借恢复重新协调执行。
@@ -76,6 +85,9 @@ func (c *Coordinator) RecoverAdmissions(ctx context.Context, fence domain.Schedu
 				continue
 			}
 			if _, err := c.Reconcile(ports.WithExecutionPermit(ctx, p), ad.AttemptID); err != nil {
+				if expectedObservationConflict(err) {
+					continue
+				}
 				return err
 			}
 		}
