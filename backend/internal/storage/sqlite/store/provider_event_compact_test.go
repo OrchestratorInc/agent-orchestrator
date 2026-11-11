@@ -24,9 +24,29 @@ func TestCompactProviderEventPayloadsKeepsRowsForReplay(t *testing.T) {
 		}
 	}
 
-	n, err := s.CompactProviderEventPayloads(ctx, testNow.Add(-7*24*time.Hour), 100)
-	if err != nil || n != 1 {
-		t.Fatalf("CompactProviderEventPayloads = %d, %v; want 1 row", n, err)
+	// One row per step: the walk stops at the first event newer than the cutoff.
+	cutoff := testNow.Add(-7 * 24 * time.Hour)
+	var cursor int64
+	steps := 0
+	for more := true; more; steps++ {
+		next, again, err := s.CompactProviderEventPayloads(ctx, cursor, cutoff, 1)
+		if err != nil {
+			t.Fatalf("CompactProviderEventPayloads after %d: %v", cursor, err)
+		}
+		if steps > 5 {
+			t.Fatalf("compaction did not stop at the first new event")
+		}
+		cursor, more = next, again
+	}
+	var newID int64
+	if err := raw.QueryRow(`SELECT id FROM conversation_provider_events WHERE provider_event_id = 'new-delta'`).Scan(&newID); err != nil {
+		t.Fatalf("read new-delta id: %v", err)
+	}
+	if cursor == 0 || cursor >= newID {
+		t.Fatalf("cursor = %d, want it past the old events and before new-delta (%d)", cursor, newID)
+	}
+	if again, more, err := s.CompactProviderEventPayloads(ctx, cursor, cutoff, 1); err != nil || again != cursor || more {
+		t.Fatalf("second pass = %d, %v, %v; want no progress until new-delta ages", again, more, err)
 	}
 	for id, want := range map[string]string{"old-delta": "{}", "old-done": `{"text":"payload"}`, "new-delta": `{"text":"payload"}`} {
 		var payload string

@@ -109,19 +109,21 @@ const (
 	providerEventCompactBatch     = 500
 )
 
-// compactProviderEvents empties old provider event payloads in small batches so
-// the single writer is never held for long.
-func compactProviderEvents(ctx context.Context, store *sqlite.Store, log *slog.Logger) {
+// compactProviderEvents empties old provider event payloads from cursor on, in
+// steps of providerEventCompactBatch rows, so each step reads and writes a
+// bounded range. It advances cursor past every row it has compacted.
+func compactProviderEvents(ctx context.Context, store *sqlite.Store, cursor *int64, log *slog.Logger) {
 	before := time.Now().UTC().Add(-providerEventPayloadRetention)
 	for ctx.Err() == nil {
-		n, err := store.CompactProviderEventPayloads(ctx, before, providerEventCompactBatch)
+		next, more, err := store.CompactProviderEventPayloads(ctx, *cursor, before, providerEventCompactBatch)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Warn("compact provider event payloads failed", "err", err)
 			}
 			return
 		}
-		if n < providerEventCompactBatch {
+		*cursor = next
+		if !more {
 			return
 		}
 	}
@@ -1438,6 +1440,7 @@ func Run(buildVersion string) error {
 			}
 			ticker := time.NewTicker(workspaceCleanupSweepTick)
 			defer ticker.Stop()
+			var providerEventCursor int64
 			for {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
@@ -1447,7 +1450,7 @@ func Run(buildVersion string) error {
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
 					log.Warn("delete expired sessions failed", "err", err)
 				}
-				compactProviderEvents(ctx, store, log)
+				compactProviderEvents(ctx, store, &providerEventCursor, log)
 				select {
 				case <-ctx.Done():
 					return

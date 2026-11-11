@@ -4997,17 +4997,33 @@ func activityToDomain(row gen.ConversationActivity) domain.ConversationActivity 
 	return activity
 }
 
-// CompactProviderEventPayloads empties the payload of up to batchSize archived
-// provider events received before before, keeping each row so a replayed event
-// is still recognized. It returns how many rows changed.
-func (s *Store) CompactProviderEventPayloads(ctx context.Context, before time.Time, batchSize int) (int64, error) {
+// CompactProviderEventPayloads empties the payloads of archived provider events
+// after the id afterID that were received before before, reading at most
+// batchSize rows. Rows stay, so a replayed event is still recognized. It returns
+// the id to resume from and whether more old rows may follow.
+func (s *Store) CompactProviderEventPayloads(ctx context.Context, afterID int64, before time.Time, batchSize int) (int64, bool, error) {
+	rows, err := s.qr.SelectProviderEventAgesAfter(ctx, gen.SelectProviderEventAgesAfterParams{AfterID: afterID, BatchSize: int64(batchSize)})
+	if err != nil {
+		return afterID, false, fmt.Errorf("read provider event ages: %w", err)
+	}
+	through, more := afterID, len(rows) == batchSize
+	for _, row := range rows {
+		// ids and received_at grow together, so the first new row ends the pass.
+		if !row.ReceivedAt.Before(before) {
+			more = false
+			break
+		}
+		through = row.ID
+	}
+	if through == afterID {
+		return afterID, false, nil
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	n, err := s.qw.CompactProviderEventPayloads(ctx, gen.CompactProviderEventPayloadsParams{Before: before, BatchSize: int64(batchSize)})
-	if err != nil {
-		return 0, fmt.Errorf("compact provider event payloads: %w", err)
+	if _, err := s.qw.CompactProviderEventPayloads(ctx, gen.CompactProviderEventPayloadsParams{AfterID: afterID, ThroughID: through}); err != nil {
+		return afterID, false, fmt.Errorf("compact provider event payloads: %w", err)
 	}
-	return n, nil
+	return through, more, nil
 }
 
 // ProviderEventsSince reads the raw provider-event archive forward from an id.
