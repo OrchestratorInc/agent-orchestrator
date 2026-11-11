@@ -65,6 +65,8 @@ describe("the snapshot renderer without the app window", () => {
 			const first = store.request(job("first.html"));
 			await vi.waitFor(() => expect(created).toHaveBeenCalledTimes(1));
 			const queued = [1, 2, 3].map((n) => store.request(job(`queued-${n}.html`)));
+			// A request reads the disk cache before it joins the queue; let all three get there.
+			await new Promise((resolve) => setTimeout(resolve, 50));
 			// What main does when the shell window closes.
 			shell = false;
 			store.cancel();

@@ -146,6 +146,8 @@ describe("artifact snapshot store", () => {
 		const first = store.request(job({ path: "first.html" }));
 		await vi.waitFor(() => expect(render).toHaveBeenCalledTimes(1));
 		const waitingRequests = [1, 2, 3].map((n) => store.request(job({ path: `later-${n}.html` })));
+		// A request reads the disk cache before it joins the queue; let all three get there.
+		await new Promise((resolve) => setTimeout(resolve, 50));
 		store.cancel();
 		expect(await Promise.all(waitingRequests)).toEqual([SNAPSHOT_DROPPED, SNAPSHOT_DROPPED, SNAPSHOT_DROPPED]);
 		gates.shift()?.();
