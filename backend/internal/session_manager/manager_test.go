@@ -1231,6 +1231,7 @@ type fakeWorkspace struct {
 	// real time against Kill's budget.
 	destroyHook func()
 	fetchErr    error
+	resolveErr  error
 	fetches     []fetchDefaultBranchCall
 	resolves    []resolveDefaultBranchCall
 	resolved    map[string]ports.WorkspaceDefaultBranch
@@ -1288,6 +1289,9 @@ type resolveDefaultBranchCall struct {
 
 func (w *fakeWorkspace) ResolveDefaultBranch(_ context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
 	w.resolves = append(w.resolves, resolveDefaultBranchCall{repoPath: repoPath, configuredBranch: configuredBranch})
+	if w.resolveErr != nil {
+		return ports.WorkspaceDefaultBranch{}, w.resolveErr
+	}
 	if target, ok := w.resolved[repoPath]; ok {
 		return target, nil
 	}
@@ -3496,6 +3500,47 @@ func TestSpawn_WorkspaceCreationTimeoutRollsBackSeedWithDetachedContext(t *testi
 	}
 	if _, ok := base.sessions["mer-1"]; ok {
 		t.Fatal("seed session remained after workspace creation timeout")
+	}
+}
+
+func TestSpawnTimeoutAggregatesBestEffortStepFailures(t *testing.T) {
+	cases := []struct {
+		name       string
+		resolveErr error
+		fetchErr   error
+		want       string
+	}{
+		{
+			name:       "default branch resolution",
+			resolveErr: fmt.Errorf("resolve repository default: %w", context.DeadlineExceeded),
+			want:       "default branch resolution: resolve repository default: context deadline exceeded",
+		},
+		{
+			name:     "base ref refresh",
+			fetchErr: errors.New("git fetch origin main: SSL_ERROR_SYSCALL"),
+			want:     "base ref refresh: git fetch origin main: SSL_ERROR_SYSCALL",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, ws := newManager()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+			ws.resolveErr = tc.resolveErr
+			ws.fetchErr = tc.fetchErr
+			ws.createErr = context.DeadlineExceeded
+
+			_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+			if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrWorkspaceCreate) {
+				t.Fatalf("Spawn err = %v, want workspace create deadline", err)
+			}
+			var timeoutErr *SpawnTimeoutError
+			if !errors.As(err, &timeoutErr) {
+				t.Fatalf("Spawn err = %v, want SpawnTimeoutError with step failures", err)
+			}
+			if !strings.Contains(timeoutErr.Detail(), tc.want) {
+				t.Fatalf("timeout detail = %q, want it to contain %q", timeoutErr.Detail(), tc.want)
+			}
+		})
 	}
 }
 

@@ -181,6 +181,61 @@ func wrapSpawnStageEarly(stage, err error) error {
 	return fmt.Errorf("spawn: %w: %w", stage, err)
 }
 
+// SpawnTimeoutError carries the best-effort spawn step failures that preceded
+// a deadline, so the service can explain what stalled instead of reporting
+// only "timed out". Unwrap keeps errors.Is(err, context.DeadlineExceeded) true.
+type SpawnTimeoutError struct {
+	Cause   error
+	Details []string
+}
+
+func (e *SpawnTimeoutError) Error() string {
+	if len(e.Details) == 0 {
+		return e.Cause.Error()
+	}
+	return e.Cause.Error() + ": " + strings.Join(e.Details, "; ")
+}
+
+func (e *SpawnTimeoutError) Unwrap() error { return e.Cause }
+
+// Detail joins the collected step failures for a user-facing message.
+func (e *SpawnTimeoutError) Detail() string { return strings.Join(e.Details, "; ") }
+
+// spawnDiagnostics collects the best-effort step failures of one spawn so a
+// timeout can report them. It travels in the spawn context rather than on the
+// Manager, which serves concurrent spawns for different projects.
+type spawnDiagnostics struct {
+	mu    sync.Mutex
+	notes []string
+}
+
+type spawnDiagnosticsKey struct{}
+
+const maxSpawnDiagnostics = 5
+
+func (d *spawnDiagnostics) add(note string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.notes) >= maxSpawnDiagnostics {
+		return
+	}
+	d.notes = append(d.notes, note)
+}
+
+func (d *spawnDiagnostics) snapshot() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.notes...)
+}
+
+func recordSpawnStepFailure(ctx context.Context, stage string, err error, env map[string]string) {
+	d, _ := ctx.Value(spawnDiagnosticsKey{}).(*spawnDiagnostics)
+	if d == nil {
+		return
+	}
+	d.add(stage + ": " + agentlaunch.RedactValues(err.Error(), env))
+}
+
 // Env vars a spawned process reads to learn who it is. A worker that starts
 // its own Docker containers (a database, a queue, any ad-hoc service) should
 // label them `--label ao.session=$AO_SESSION_ID` so AO's container reaper
@@ -1014,7 +1069,17 @@ func New(d Deps) *Manager {
 // workspace and runtime, then reports completion to the LCM. If workspace
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
-func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (spawnRec domain.SessionRecord, spawnPromptBytes, spawnSystemPromptBytes int, spawnErr error) {
+	diagnostics := &spawnDiagnostics{}
+	ctx = context.WithValue(ctx, spawnDiagnosticsKey{}, diagnostics)
+	defer func() {
+		if spawnErr == nil || !errors.Is(spawnErr, context.DeadlineExceeded) {
+			return
+		}
+		if details := diagnostics.snapshot(); len(details) > 0 {
+			spawnErr = &SpawnTimeoutError{Cause: spawnErr, Details: details}
+		}
+	}()
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1994,6 +2059,7 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 				"defaultBranch", targets[i].configuredBranch,
 				"error", err,
 			)
+			recordSpawnStepFailure(ctx, "default branch resolution", err, project.Config.Env)
 			continue
 		}
 		targets[i].resolved = resolved
@@ -2024,6 +2090,7 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 				"baseRef", target.resolved.BaseRef,
 				"error", err,
 			)
+			recordSpawnStepFailure(ctx, "base ref refresh", err, project.Config.Env)
 		}
 	}
 	return baseRefs
