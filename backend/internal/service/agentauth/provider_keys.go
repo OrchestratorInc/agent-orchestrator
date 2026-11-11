@@ -364,11 +364,11 @@ func (s *Service) withdrawProviderKey(ctx context.Context, name, value string) (
 	}
 	// A value the user had set before AO shared it stays theirs.
 	if device[name] && !users[name] {
-		if unpublishErr := unpublishProviderKey(ctx, name, value); unpublishErr != nil {
-			return true, nil
-		}
+		// Best effort: a failure is reported, never returned, so it cannot
+		// block turning sharing off or removal.
+		failed = unpublishProviderKey(ctx, name, value) != nil
 	}
-	return false, nil
+	return failed, nil
 }
 
 // RemoveProviderKey deletes name and its companions from AO's store, this
