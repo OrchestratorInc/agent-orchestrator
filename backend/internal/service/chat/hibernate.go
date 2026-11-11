@@ -736,14 +736,17 @@ func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionReco
 	if !s.otherWriter(ctx, rec, since) {
 		return false, nil
 	}
+	alreadyHeld := s.setHeldElsewhere(rec.ID, true)
 	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{otherWriter: true, ignoreViews: true})
 	if !stopped {
+		if !alreadyHeld {
+			s.setHeldElsewhere(rec.ID, false)
+		}
 		if err != nil {
 			s.log.Warn("could not stop a chat another process writes", "session", rec.ID, "err", err)
 		}
 		return false, ErrChatOpenElsewhere
 	}
-	s.setHeldElsewhere(rec.ID, true)
 	s.log.Info("chat session stopped because another process writes it", "session", rec.ID)
 	return true, nil
 }
@@ -765,17 +768,19 @@ func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) b
 	}
 }
 
-func (s *Service) setHeldElsewhere(id domain.SessionID, held bool) {
+func (s *Service) setHeldElsewhere(id domain.SessionID, held bool) (was bool) {
 	s.wakeMu.Lock()
 	defer s.wakeMu.Unlock()
+	was = s.heldElsewhere[id]
 	if !held {
 		delete(s.heldElsewhere, id)
-		return
+		return was
 	}
 	if s.heldElsewhere == nil {
 		s.heldElsewhere = make(map[domain.SessionID]bool)
 	}
 	s.heldElsewhere[id] = true
+	return was
 }
 
 func (s *Service) isHeldElsewhere(id domain.SessionID) bool {

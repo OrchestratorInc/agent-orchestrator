@@ -203,3 +203,53 @@ func TestSendAfterLiveReconnectSeesTurnsWrittenBeforeIt(t *testing.T) {
 		t.Fatalf("reconnected provider received %v; it never loaded the terminal's turns", sent)
 	}
 }
+
+func TestSendDuringTheStopForAnotherProcessDoesNotWakeTheChat(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+	stopping, release := make(chan struct{}), make(chan struct{})
+	old.started, old.release = stopping, release
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "first", ClientMessageID: "elsewhere-5"})
+		first <- err
+	}()
+	select {
+	case <-stopping:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first send never stopped the provider")
+	}
+	if turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "second", ClientMessageID: "elsewhere-6"}); err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("send during the stop = %+v, %v; want it queued", turn, err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	select {
+	case <-woke:
+		t.Fatal("a send during the stop woke the chat while another process writes it")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	elsewhere.Store(false)
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("chat did not wake after the other process stopped")
+	}
+}
