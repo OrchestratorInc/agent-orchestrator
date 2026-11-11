@@ -14,10 +14,11 @@ import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
+import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
-import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
+import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
@@ -77,6 +78,9 @@ export default function SpawnScreen() {
 	const attachmentsRef = useRef<SpawnAttachment[]>([]);
 	const pickingAttachments = useRef(false);
 	const [attachmentError, setAttachmentError] = useState<string>();
+	// Keyed by place and name: picked files carry no id of their own, and the
+	// same file can be picked twice.
+	const trayItems = useMemo(() => attachments.map((item, index) => ({ key: `${index}-${item.name}`, name: item.name, previewUri: spawnAttachmentPreview(item) })), [attachments]);
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
 	// An effort picked here; until then the model runs at its own default.
@@ -122,18 +126,23 @@ export default function SpawnScreen() {
 		if (holding.current) event.preventDefault();
 	}), [navigation]);
 
-	// Seed from this machine's routed project, or the selected machine's active
-	// project. A project id is never carried across machines.
+	// Seed from this machine's routed project, the project last worked in on it,
+	// or the selected machine's active project. A project id is never carried
+	// across machines. Waits for the stored last project, or a board filter
+	// seeded first would stick.
+	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
+		if (!lastProject.loaded) return;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
 			routeHostId === selectedHostId ? routeProjectId : undefined,
 			selectedHostId === currentHostId ? activeProjectId : ALL_PROJECTS,
 			projects,
 			projectsKnown,
+			lastProject.projectId,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, currentHostId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+	}, [activeProjectId, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
 
 	useEffect(() => {
 		const requestedHostId = selectedHostId;
@@ -466,6 +475,7 @@ export default function SpawnScreen() {
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
+			else rememberLastProject(selectedHostId, projectId);
 			holding.current = false;
 			// Covered while the request ran (a notification or link can still
 			// open a page over this one): the worker shows up on the board, and
@@ -504,6 +514,12 @@ export default function SpawnScreen() {
 	}, [busy, navigation]);
 
 	const harnessLabel = agents.find((item) => item.id === harness)?.label;
+	// Before the list lands the seed can name a project the picker doesn't list
+	// yet. It shows under its id, the name it was created with, so Start never
+	// sends a task somewhere the picker calls "Choose project".
+	const unlistedProject = projectId && projectId !== STANDALONE_PROJECT && !projects.some((item) => item.id === projectId)
+		? [{ id: projectId, label: projectId, icon: "folder" as const }]
+		: [];
 
 	return (
 		<KeyboardAvoidingView
@@ -528,7 +544,7 @@ export default function SpawnScreen() {
 					hosts={hostOptions}
 					hostId={selectedHostId}
 					onSelectHost={chooseHost}
-					projects={[...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
+					projects={[...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={changeProject}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
@@ -553,9 +569,11 @@ export default function SpawnScreen() {
 					prompt={prompt}
 					onChangePrompt={setPrompt}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
-					attachments={<SpawnAttachmentRow
-						attachments={attachments}
-						onRemove={(item) => {
+					attachments={<ComposerAttachmentTray
+						items={trayItems}
+						onRemove={(key) => {
+							const item = attachments[trayItems.findIndex((candidate) => candidate.key === key)];
+							if (!item) return;
 							attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
 							setAttachments(attachmentsRef.current);
 						}}

@@ -152,15 +152,18 @@ paths:
       description: >-
         Starts uploading one file from a local session straight to storage,
         for a new document (project, feature, name), a revoked document to
-        restore, or an update of an active link (shareId, same name). The
+        restore, or an update of an active link (shareId). An update may give
+        the link a new name, after the file was renamed: the link keeps its
+        address and serves the file under that name. The
         file goes in partCount parts of partSize bytes, the last one shorter:
         presign them with presignArtifactShareParts, PUT each, then
         finalizeArtifactShare. There is no file size limit. Nothing reaches
         storage when the upload is refused: 415
         artifact_share_type_unsupported for video, 409
         artifact_share_limit_reached for a new or restored document over the
-        free plan's link limit, 409 artifact_share_name_changed for an update
-        with another name. Paid plans have no link limit.
+        free plan's link limit. Paid plans have no link limit. An older
+        control plane refuses an update with another name with 409
+        artifact_share_name_changed.
       requestBody:
         required: true
         content:
@@ -882,6 +885,49 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/GitHubRepositoryPage"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createGitHubRepository
+      tags: [GitHub]
+      description: >-
+        Create an empty private GitHub repository, for a folder uploaded from
+        the desktop, in an account the organization's GitHub App installation
+        covers, and grant it to the organization. With several accounts
+        connected, owner names the one (422 repository_owner_required without
+        it). An empty private repository of that name that already exists is
+        connected instead (200, created false); a public one is refused (422
+        repository_create_refused), as is a repository the member's own GitHub
+        account cannot push to when the installation is user-scoped. Push the
+        folder to pushPath, relative to the control plane, with the same bearer
+        token. That endpoint only accepts pushes to a repository this
+        operation returned for the organization, only pushes that create
+        branches, and answers 403 otherwise; GitHub's own refusals (for
+        example of .github/workflows changes the App may not make) reach git's
+        output unchanged. 422 codes: repository_owner_required,
+        github_installation_required, github_installation_ineligible,
+        repository_create_on_github, repository_create_refused,
+        validation_error. 502 SCM_BROKER_FAILED when GitHub could not be
+        reached or did not grant the repository in time; retry later.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGitHubRepositoryInput"
+      responses:
+        "200":
+          description: An existing empty repository was connected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateGitHubRepositoryResponse"
+        "201":
+          description: The repository was created and granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateGitHubRepositoryResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/github/projects:
@@ -2679,6 +2725,112 @@ paths:
                 $ref: "#/components/schemas/Offering"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listOrgHarnessVersions
+      tags: [Providers]
+      description: >-
+        The release of each coding-agent CLI the organization's new Cloud
+        sessions run, the newest release its publisher has, and how the last
+        install of a release the organization chose went (any member). A
+        harness runs the release AO tested (`defaultVersion`) until an
+        organization admin chooses a newer one (`selectedVersion`). Each entry
+        carries the local daemon's install plan, update advisory and install
+        job shapes, so a client shows AO Cloud's harnesses the way it shows a
+        computer's. `editable` says whether the caller may change them.
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          description: Look up the newest releases again instead of reading the control plane's cache.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Every harness whose version AO Cloud manages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersions"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions/{agent}/install:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CloudHarnessAgent"
+    post:
+      operationId: installOrgHarnessVersion
+      tags: [Providers]
+      description: >-
+        Have the organization's new sessions run `expectedVersion` of this
+        harness in place of the AO-tested release (organization admins). The
+        version must be a stable release newer than the AO-tested one that the
+        publisher has (the npm registry, or Cursor's download host). Only the
+        harness's CLI moves: the tools it also runs (Claude Code's Chat
+        adapter) keep the release AO tested. Each new session's worker installs
+        the release and checks it against what the publisher listed; when that
+        fails the session runs the AO-tested release and the failure shows as
+        the entry's failed `job`. Sessions already running keep their release.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloudHarnessInstallInput"
+      responses:
+        "200":
+          description: The harness as new sessions now run it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersion"
+        "403":
+          description: ORG_ADMIN_REQUIRED. Only organization owners and admins change the version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: >-
+            INVALID_HARNESS_VERSION (not a stable release of the harness),
+            HARNESS_VERSION_NOT_NEWER (not newer than the AO-tested release),
+            UNKNOWN_HARNESS_VERSION (the publisher has no such release), or
+            UNVERIFIABLE_HARNESS_VERSION (the release installs something AO
+            Cloud cannot check against its publisher's listing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: RELEASE_LOOKUP_UNAVAILABLE. The publisher could not be reached; nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions/{agent}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CloudHarnessAgent"
+    delete:
+      operationId: resetOrgHarnessVersion
+      tags: [Providers]
+      description: >-
+        Have the organization's new sessions run the AO-tested release of this
+        harness's CLI again (organization admins; 403 ORG_ADMIN_REQUIRED
+        otherwise).
+      responses:
+        "200":
+          description: The harness as new sessions now run it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersion"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/coder-config:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -3256,6 +3408,40 @@ paths:
           $ref: "#/components/responses/Error"
         "413":
           $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/registrations:
+    post:
+      operationId: registerWorkerArtifacts
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Registers the committed files at paths in the worker's own session as
+        its deliverables, including the files inside a bundle directory, which
+        is what ao artifact add calls, and returns every file the session has
+        registered. A path with no committed file registers nothing and is
+        absent from the result, so the caller asks again once the worker's sync
+        has committed it. Registering a file again changes nothing; a newly
+        registered file appends an artifact.changed event and moves its
+        updatedAt. Requires `worker:connect`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerArtifactRegistrationInput"
+      responses:
+        "200":
+          description: The committed files at the paths are registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerArtifactRegistrationResult"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/children:
@@ -4016,6 +4202,14 @@ components:
       schema:
         type: string
         pattern: "^h_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    CloudHarnessAgent:
+      name: agent
+      in: path
+      required: true
+      description: A harness whose version AO Cloud manages.
+      schema:
+        type: string
+        enum: [claude-code, codex, cursor]
     OrgId:
       name: orgId
       in: path
@@ -4464,6 +4658,176 @@ components:
         defaultProvider:
           type: string
           description: A provider from the organization's offering, or empty to clear the choice.
+    CloudHarnessVersions:
+      type: object
+      additionalProperties: false
+      required: [editable, agents]
+      properties:
+        editable:
+          type: boolean
+          description: The caller administers the organization, so may change the versions.
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudHarnessVersion"
+    CloudHarnessVersion:
+      type: object
+      additionalProperties: false
+      description: One harness as the organization's new Cloud sessions run it.
+      required: [agentId, defaultVersion, plan, advisory]
+      properties:
+        agentId:
+          type: string
+          enum: [claude-code, codex, cursor]
+        defaultVersion:
+          type: string
+          description: The release of the harness's CLI that AO tested and its images bake.
+        selectedVersion:
+          type: string
+          description: The newer release the organization chose in its place; absent while it runs the default.
+        supersededVersion:
+          type: string
+          description: >-
+            A release the organization chose that AO's tested release has since
+            caught up with or passed. New sessions run `defaultVersion` instead,
+            never an older CLI than AO tests; absent otherwise.
+        plan:
+          $ref: "#/components/schemas/CloudHarnessInstallPlan"
+        advisory:
+          $ref: "#/components/schemas/CloudHarnessUpdateAdvisory"
+        job:
+          $ref: "#/components/schemas/CloudHarnessInstallJob"
+        components:
+          type: array
+          description: Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter). They always run the release AO tested; clients show them read-only.
+          items:
+            $ref: "#/components/schemas/CloudHarnessComponent"
+    CloudHarnessComponent:
+      type: object
+      additionalProperties: false
+      required: [tool, version, defaultVersion]
+      properties:
+        tool:
+          type: string
+        version:
+          type: string
+        defaultVersion:
+          type: string
+    CloudHarnessInstallPlan:
+      type: object
+      additionalProperties: false
+      description: The local daemon's AgentInstallPlan shape. AO Cloud has one method, ao-cloud.
+      required: [agentId, automatic, available, documentationUrl, method, methods]
+      properties:
+        agentId:
+          type: string
+        automatic:
+          type: boolean
+        available:
+          type: boolean
+        documentationUrl:
+          type: string
+        method:
+          type: string
+        methods:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudHarnessInstallMethod"
+    CloudHarnessInstallMethod:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's AgentInstallMethod shape. updateAvailable is false
+        for a caller who may not change the version, with updateReason saying
+        why.
+      required: [id, label, available, recommended, reinstallAvailable, updateAvailable]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        available:
+          type: boolean
+        recommended:
+          type: boolean
+        reinstallAvailable:
+          type: boolean
+        updateAvailable:
+          type: boolean
+        updateReason:
+          type: string
+    CloudHarnessUpdateAdvisory:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's AgentUpdateAdvisory shape. currentVersion is the
+        release new sessions run; latestVersion the newest the publisher has.
+      required: [agentId, checkedAt, status]
+      properties:
+        agentId:
+          type: string
+        checkedAt:
+          type: string
+          format: date-time
+        currentVersion:
+          type: string
+        latestVersion:
+          type: string
+        maintenanceMethod:
+          type: string
+        source:
+          type: string
+        reason:
+          type: string
+          enum: [lookup_failed, build_unordered]
+        status:
+          type: string
+          enum: [unknown, current, behind_latest, ahead_of_latest]
+    CloudHarnessInstallJob:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's InstallJob shape, for the latest install of the
+        organization's chosen release a session's worker reported: failed when
+        it could not be installed (that session ran the AO-tested release),
+        succeeded once one installed it.
+      required: [target, status]
+      properties:
+        target:
+          type: string
+        status:
+          type: string
+          enum: [succeeded, failed]
+        method:
+          type: string
+        error:
+          type: string
+        output:
+          type: string
+          description: The end of the installer's output.
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CloudHarnessInstallInput:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        method:
+          type: string
+          enum: [ao-cloud]
+        operation:
+          type: string
+          enum: [update]
+        expectedVersion:
+          type: string
+          description: The release to run, as the advisory listed it (its latestVersion).
     Offering:
       type: object
       additionalProperties: false
@@ -4750,6 +5114,19 @@ components:
         source:
           type: string
           description: '"standalone" for a project created without a repository; "scratch" for one whose repository AO created.'
+        layout:
+          $ref: "#/components/schemas/ProjectLayout"
+    ProjectLayout:
+      type: string
+      enum: [workspace]
+      description: >-
+        "workspace" lays the project out like a local workspace: every session
+        checks the main repository and each additional one (repos) out side by
+        side inside one workspace folder, and the agent starts in that folder
+        (agentStartsIn is treated as parent). Set only when the project is
+        created; any settings write that includes layout is refused (422),
+        even with the project's current value. A standalone project has no
+        repository, so creating one with this layout is refused (422).
     ProjectAdditionalRepositories:
       type: array
       maxItems: 10
@@ -5959,6 +6336,34 @@ components:
         config:
           type: object
           additionalProperties: true
+    CreateGitHubRepositoryInput:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: "^[A-Za-z0-9._-]+$"
+        owner:
+          type: string
+          description: The GitHub account login to create the repository in.
+        description:
+          type: string
+          maxLength: 350
+    CreateGitHubRepositoryResponse:
+      type: object
+      additionalProperties: false
+      required: [repository, created, pushPath]
+      properties:
+        repository:
+          $ref: "#/components/schemas/GitHubRepository"
+        created:
+          type: boolean
+        pushPath:
+          type: string
+          description: The repository's push-only git smart HTTP endpoint, relative to the control plane (/api/cloud/v1/orgs/{orgId}/github/git/{owner}/{name}.git).
     CreateGitHubScratchProjectInput:
       type: object
       additionalProperties: false
@@ -7504,6 +7909,14 @@ components:
       additionalProperties: false
       required: [path, name, kind, contentType, size, sha256, updatedAt]
       properties:
+        id:
+          type: string
+          format: uuid
+          description: >-
+            The artifact's identity. It stays the same when the session's
+            agent renames or moves the file, so a client keys anything it keeps
+            about the file, such as its share link, by it. Absent from a
+            control plane that does not track artifacts across renames.
         path:
           type: string
           description: Slash-separated path in the session's artifact directory.
@@ -7525,7 +7938,25 @@ components:
           type: string
           format: date-time
           description: >-
-            When the control plane last committed a new version of the file.
+            When the control plane last committed a new version of the file,
+            or registered it as a deliverable.
+        registered:
+          type: boolean
+          description: >-
+            Set on a file the session's agent registered as a deliverable with
+            ao artifact add, or inside a bundle directory it registered. Absent
+            otherwise. A client lists only registered files as the session's
+            artifacts, or the files at the root of its artifact directory when
+            none is registered.
+        previousPaths:
+          type: array
+          maxItems: 20
+          description: >-
+            The paths the artifact had before it was renamed, most recent
+            last, so a link naming one still opens it. Absent when it was
+            never renamed.
+          items:
+            type: string
     SessionArtifactResult:
       type: object
       additionalProperties: false
@@ -7764,6 +8195,10 @@ components:
             the bytes; each part is checked against its own SHA-256.
         project:
           type: string
+          description: >-
+            With feature and name, the document the file is. On an update it
+            is optional: when sent, the link follows a file moved to another
+            document, as one moved to another folder.
         feature:
           type: string
         shareId:
@@ -7890,7 +8325,7 @@ components:
         shareId:
           type: string
           format: uuid
-          description: An active link of the caller's, for a file of the same name, to point at this file.
+          description: An active link of the caller's to point at this file, also after the file was renamed.
     PublicArtifactShare:
       type: object
       additionalProperties: false
@@ -8000,6 +8435,50 @@ components:
           type: array
           maxItems: 200
           description: Paths this worker previously synced and has since removed.
+          items:
+            type: string
+        moved:
+          type: array
+          maxItems: 200
+          description: >-
+            Files this worker previously synced that were renamed or moved:
+            each keeps its artifact, registration and version history at its
+            new path. Moves apply before files, so a file both moved and
+            changed is listed in both, with its new path in files.
+          items:
+            $ref: "#/components/schemas/WorkerArtifactMove"
+    WorkerArtifactMove:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from:
+          type: string
+          minLength: 1
+        to:
+          type: string
+          minLength: 1
+    WorkerArtifactRegistrationInput:
+      type: object
+      additionalProperties: false
+      required: [paths]
+      properties:
+        paths:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 1024
+    WorkerArtifactRegistrationResult:
+      type: object
+      additionalProperties: false
+      required: [registered]
+      properties:
+        registered:
+          type: array
+          description: Every file the session has registered.
           items:
             type: string
     SessionStartupError:

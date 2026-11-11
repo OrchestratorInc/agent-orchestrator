@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	usagepipeline "github.com/aoagents/agent-orchestrator/backend/internal/observe/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
+	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -24,6 +26,7 @@ type usagePricingRuntime struct {
 	manager    *pricing.Manager
 	backfiller *usagesvc.CostBackfiller
 	repairer   *usagepipeline.LegacyRepairer
+	overrides  *usagesvc.PriceOverrides
 	refresher  *pricing.Refresher
 	logger     *slog.Logger
 	started    atomic.Bool
@@ -40,11 +43,7 @@ func newUsagePricingRuntime(config usagePricingRuntimeConfig) (*usagePricingRunt
 	}
 	fetcher := config.Fetcher
 	if fetcher == nil {
-		production, err := pricing.NewProductionFetcher(&http.Client{})
-		if err != nil {
-			return nil, err
-		}
-		fetcher = production
+		fetcher = catalogsync.NewFetcher(&http.Client{}, catalogsync.LiteLLMURL)
 	}
 	manager := pricing.NewManager(nil)
 	backfiller := usagesvc.NewCostBackfiller(config.Store, usagesvc.CostBackfillerConfig{
@@ -53,8 +52,16 @@ func newUsagePricingRuntime(config usagePricingRuntimeConfig) (*usagePricingRunt
 	})
 	repairer := usagepipeline.NewLegacyRepairer(config.Store, manager, usagepipeline.LegacyRepairerConfig{
 		OnError: func(err error) { logger.Warn("legacy usage pricing repair failed", "err", err) },
+		OnTiersFilled: func(ctx context.Context) {
+			if err := backfiller.Rerun(ctx, manager.Snapshot()); err != nil && ctx.Err() == nil {
+				logger.Warn("enqueue usage repricing after tier repair", "err", err)
+			}
+		},
 	})
-	runtime := &usagePricingRuntime{manager: manager, backfiller: backfiller, repairer: repairer, logger: logger}
+	runtime := &usagePricingRuntime{
+		manager: manager, backfiller: backfiller, repairer: repairer, logger: logger,
+		overrides: usagesvc.NewPriceOverrides(config.Store, manager, backfiller),
+	}
 	refresher, err := pricing.NewRefresher(pricing.RefreshConfig{
 		Cache:      pricing.NewCache(config.DataDir),
 		Fetcher:    fetcher,
@@ -108,6 +115,9 @@ func (r *usagePricingRuntime) Start(ctx context.Context) error {
 	if !r.started.CompareAndSwap(false, true) {
 		return errors.New("usage pricing runtime already started")
 	}
+	if err := r.overrides.Load(ctx); err != nil {
+		r.logger.Warn("load usage price overrides", "err", err)
+	}
 	runtimeCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 	if err := r.backfiller.Start(runtimeCtx); err != nil {
@@ -135,4 +145,18 @@ func (r *usagePricingRuntime) Wait() {
 	r.refresher.Wait()
 	r.repairer.Wait()
 	r.backfiller.Wait()
+}
+
+func usagePrices(runtime *usagePricingRuntime) controllers.UsagePriceService {
+	if runtime == nil || runtime.overrides == nil {
+		return nil
+	}
+	return runtime.overrides
+}
+
+func usageReportReader(store *sqlite.Store, runtime *usagePricingRuntime) *usagesvc.ReportReader {
+	if runtime == nil || runtime.Manager() == nil {
+		return usagesvc.NewReportReader(store, nil)
+	}
+	return usagesvc.NewReportReader(store, runtime.Manager())
 }

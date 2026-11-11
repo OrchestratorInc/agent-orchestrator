@@ -13,6 +13,7 @@ vi.mock("motion/react", async (importOriginal) => {
 });
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
 import {
@@ -33,9 +34,14 @@ import { sessionInterfaceTransitionStatus } from "../test/interface-transition-f
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { resetSessionPreviewWarmth } from "../hooks/useSessionPreviewHover";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
+import { useRemoteWorkspaces } from "../hooks/useWorkspaceQuery";
+import { clearOptimisticSessionKill, trackOptimisticSessionKill } from "../hooks/optimistic-session-kills";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
+import { sessionUiKey } from "../lib/hosts";
 
 type DragOverTestEvent = {
 	active: {
@@ -59,18 +65,20 @@ const {
 	navigateMock,
 	mockLocation,
 	mockParams,
+	routeStore,
 	postMock,
 	renameSessionMock,
 	spawnMock,
 	resumeOrchestratorMock,
 	updateStatusMock,
 	commandPaletteEnabled,
+	trustedApi,
 } = vi.hoisted(
 	() => ({
 		cloudGateState: { cloudEnabled: true, localEnabled: true, client: "" },
 		cloudSessionState: {
 			configured: false,
-			session: null as null | { user: { email: string } },
+			session: null as null | { user: { email: string; displayName?: string } },
 			status: "unauthenticated" as "authenticated" | "loading" | "unauthenticated",
 			signIn: vi.fn(),
 			signOut: vi.fn().mockResolvedValue(undefined),
@@ -83,6 +91,9 @@ const {
 		navigateMock: vi.fn(),
 		mockLocation: { pathname: "/" },
 		mockParams: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+		// The router hooks subscribe to the route, as the real ones do, so a
+		// memoized Sidebar still sees a route change without new props.
+		routeStore: { version: 0, listeners: new Set<() => void>() },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
 		resumeOrchestratorMock: vi.fn(),
@@ -90,6 +101,7 @@ const {
 		downloadUpdateMock: vi.fn(),
 		checkUpdateMock: vi.fn(),
 		commandPaletteEnabled: { current: true },
+		trustedApi: { current: false },
 	}),
 );
 
@@ -162,11 +174,31 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 	return {
 		...actual,
 		useNavigate: () => navigateMock,
-		useParams: () => ({ ...mockParams }),
-		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
-			select({ location: { pathname: mockLocation.pathname } }),
+		useParams: () => {
+			useSyncExternalStore(subscribeRoute, routeVersion);
+			return { ...mockParams };
+		},
+		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) => {
+			useSyncExternalStore(subscribeRoute, routeVersion);
+			return select({ location: { pathname: mockLocation.pathname } });
+		},
 	};
 });
+
+function subscribeRoute(listener: () => void) {
+	routeStore.listeners.add(listener);
+	return () => routeStore.listeners.delete(listener);
+}
+
+function routeVersion() {
+	return routeStore.version;
+}
+
+/** Tells the mocked router hooks that `mockParams` / `mockLocation` changed. */
+function notifyRouteChange() {
+	routeStore.version += 1;
+	for (const listener of routeStore.listeners) listener();
+}
 
 vi.mock("../lib/bridge", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/bridge")>();
@@ -189,7 +221,7 @@ vi.mock("../hooks/useSettings", () => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
-	hasTrustedApiBaseUrl: () => false,
+	hasTrustedApiBaseUrl: () => trustedApi.current,
 	apiErrorMessage: (error: unknown) => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
@@ -510,11 +542,13 @@ function fireDrag(
 beforeEach(() => {
 	window.localStorage.clear();
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], pinnedProjectIds: [], sessionOrders: {} });
+	useSessionImportStore.setState({ importedCounts: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();
 	document.documentElement.style.removeProperty("--ao-sidebar-w");
 	commandPaletteEnabled.current = true;
+	trustedApi.current = false;
 	cloudGateState.cloudEnabled = true;
 	cloudGateState.localEnabled = true;
 	cloudGateState.client = "";
@@ -524,6 +558,7 @@ beforeEach(() => {
 	cloudSessionState.signIn.mockReset();
 	cloudSessionState.signOut.mockReset().mockResolvedValue(undefined);
 	useUiStore.setState({
+		developerMode: false,
 		isCommandPaletteOpen: false,
 		newTaskRequest: null,
 		settingsModal: null,
@@ -593,6 +628,23 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+	it.each([true, false])("only warms an adopted session on hover (needsResume=%s)", async (needsResume) => {
+		vi.useFakeTimers();
+		try {
+			trustedApi.current = true;
+			renderSidebar({
+				workspaces: [{ ...workspace, sessions: [{ ...session, mode: "chat", needsResume, activity: { state: "exited", lastActivityAt: session.updatedAt } }] }],
+				seed: (client) => client.setQueryData(["conversation", session.id], { pages: [], pageParams: [] }),
+			});
+			fireEvent.mouseEnter(screen.getByLabelText("Open fix login"));
+			await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+			if (needsResume) expect(postMock).not.toHaveBeenCalled();
+			else expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", { params: { path: { sessionId: session.id } } });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("creates local or remote projects from the header button", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
@@ -655,7 +707,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		const signInControls = screen.getAllByLabelText("Sign in to cloud");
+		const signInControls = screen.getAllByLabelText("Sign in");
 		expect(signInControls).toHaveLength(2);
 		const activeControl = signInControls.find((control) => control.tabIndex === 0);
 		expect(activeControl).toBeDefined();
@@ -670,6 +722,39 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
+	});
+
+	it("shows only the name in the footer row and the email in the account menu", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "ada@example.com", displayName: "Ada Park" } };
+		renderSidebar();
+
+		const account = screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!;
+		expect(account).toHaveTextContent("Ada Park");
+		expect(account).not.toHaveTextContent("ada@example.com");
+
+		await user.click(account);
+		const menu = await screen.findByRole("menu");
+		expect(within(menu).getByText("Ada Park")).toBeVisible();
+		expect(within(menu).getByText("ada@example.com")).toBeVisible();
+		await user.click(within(menu).getByRole("menuitem", { name: "Sign out" }));
+		expect(cloudSessionState.signOut).toHaveBeenCalledOnce();
+	});
+
+	it("opens the account menu from the collapsed rail avatar instead of signing out", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "user@example.com" } };
+		renderSidebar({ initialOpen: false });
+
+		const railAvatar = screen.getAllByLabelText("Signed in as user@example.com").find((el) => el.tabIndex === 0)!;
+		await user.click(railAvatar);
+
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
+		expect(await screen.findByRole("menuitem", { name: "Sign out" })).toBeVisible();
 	});
 
 	it("keeps AO account controls visible for remote hosts when Cloud execution is off", () => {
@@ -687,7 +772,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
+		expect(screen.getAllByLabelText("Sign in")).toHaveLength(2);
 	});
 
 	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
@@ -754,9 +839,11 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const footer = document.querySelector('[data-sidebar="footer"]');
-		expect(footer).toHaveClass("border-t", "border-border-strong", "!py-2");
+		expect(footer).toHaveClass("!pt-0", "!pb-2");
+		expect(footer).not.toHaveClass("border-t");
+		expect(footer?.querySelector(".border-t")).toBeNull();
 		expect(screen.getAllByRole("button", { name: "Settings" })[0]).toHaveClass("h-9");
-		expect(screen.getAllByRole("button", { name: "Connect mobile" })[0]).toHaveClass("h-9");
+		expect(screen.getAllByRole("button", { name: "Mobile" })[0]).toHaveClass("size-9");
 		expect(footer?.className).not.toContain("--size-center-panel-bottom-inset");
 		expect(footer?.className).not.toContain("--size-center-panel-inset-mac");
 	});
@@ -768,7 +855,8 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
-		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "0");
+		expect(screen.queryByTestId("awake-button")).not.toBeInTheDocument();
+		expect(screen.getByTestId("footer-mobile-menu")).toHaveAttribute("tabindex", "0");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "0");
 		expect(expandedButton?.parentElement).not.toHaveAttribute("aria-hidden");
@@ -783,7 +871,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
-		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "-1");
+		expect(screen.getByTestId("footer-mobile-menu")).toHaveAttribute("tabindex", "-1");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "-1");
 		expect(expandedButton?.closest('[aria-hidden="true"]')).toBeInTheDocument();
@@ -2265,15 +2353,30 @@ describe("Sidebar", () => {
 	it("opens the Mobile settings page from the footer and starts pairing", async () => {
 		const user = userEvent.setup();
 		renderSidebar();
-		await user.click((await screen.findAllByRole("button", { name: "Connect mobile" }))[0]);
+		await user.click((await screen.findAllByRole("button", { name: "Mobile" }))[0]);
+		await user.click(await screen.findByRole("menuitem", { name: "Connect mobile" }));
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "mobile", startPairing: true });
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("always shows Connect mobile", () => {
+	it("always shows the Mobile menu", () => {
 		renderSidebar();
 
-		expect(screen.getByRole("button", { name: "Connect mobile" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Mobile" })).toBeVisible();
+	});
+
+	it("keeps Stay Awake inside the Mobile menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		expect(screen.queryByRole("button", { name: "Stay Awake" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Mobile" }));
+		const awake = await screen.findByTestId("awake-menu-item");
+		expect(awake).toHaveTextContent("Stay Awake");
+		// A switch row, not a nested control: the row itself carries the checked state.
+		expect(awake).toHaveAttribute("role", "menuitemcheckbox");
+		expect(awake).toHaveAttribute("aria-checked", "false");
+		expect(within(awake).queryByRole("switch")).not.toBeInTheDocument();
 	});
 
 	it("opens the command palette when Search is clicked", async () => {
@@ -2948,7 +3051,7 @@ describe("Sidebar", () => {
 		renderSidebar({
 			workspaces: [{
 				...workspace,
-				sessions: [{ ...session, status: "commented", scmStatus: "commented", kanbanColumn: "validating", displayStatus: "Needs review" }],
+				sessions: [{ ...session, status: "commented", scmStatus: "commented", kanbanColumn: "validating", displayStatus: "Review scheduled" }],
 			}],
 		});
 		expect(screen.getByLabelText("Open fix login").querySelector("[data-session-marker]")).not.toBeInTheDocument();
@@ -3337,6 +3440,17 @@ describe("Sidebar", () => {
 			"aria-expanded",
 			"false",
 		);
+	});
+
+	it("expands a project once chats are imported into it", () => {
+		renderSidebar({
+			expandedProjectIds: [],
+			workspaces: [{ ...workspace, sessions: [session] }],
+		});
+		act(() => useSessionImportStore.getState().recordImport(workspace.id, 1));
+
+		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
+		expect(window.localStorage.getItem("ao.sidebar.expanded-projects")).toBe(JSON.stringify([workspace.id]));
 	});
 
 	it("reveals the active project when opening a worker-session deep link", async () => {
@@ -4176,7 +4290,7 @@ describe("Sidebar session switch rendering", () => {
 		sessionRowRenders.clear();
 		mockParams.projectId = p2.id;
 		mockParams.sessionId = "p2-a";
-		view.rerender(tree());
+		act(() => notifyRouteChange());
 
 		expect([...sessionRowRenders.keys()].sort()).toEqual(["p1-a", "p2-a"]);
 
@@ -4307,5 +4421,181 @@ describe("Sidebar active-session reveal", () => {
 		});
 		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+	});
+});
+
+// The shell's re-renders no longer reach the memoized Sidebar, so it has to
+// follow every store it reads by itself. Each test renders it once with props
+// that keep their identity, then changes only the real store.
+describe("Memoized Sidebar with unchanged props", () => {
+	const handlers = {
+		onCloneProject: vi.fn().mockResolvedValue(undefined),
+		onCreateProject: vi.fn().mockResolvedValue(undefined),
+		onInitializeProject: vi.fn().mockResolvedValue(undefined),
+		onRemoveProject: vi.fn().mockResolvedValue(undefined),
+		onCreateRemoteProject: vi.fn().mockResolvedValue(undefined),
+		onInitializeRemoteProject: vi.fn().mockResolvedValue(undefined),
+	};
+	const alpha: WorkspaceSummary = {
+		...workspace,
+		id: "alpha",
+		name: "Alpha",
+		path: "/repo/alpha",
+		sessions: [{ ...session, id: "alpha-1", workspaceId: "alpha", workspaceName: "Alpha", title: "alpha task" }],
+	};
+	const bravo: WorkspaceSummary = {
+		...workspace,
+		id: "bravo",
+		name: "Bravo",
+		path: "/repo/bravo",
+		sessions: [{ ...session, id: "bravo-1", workspaceId: "bravo", workspaceName: "Bravo", title: "bravo task" }],
+	};
+
+	function newClient() {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentReadinessQueryKey, {
+			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
+		});
+		return client;
+	}
+
+	function shell(client: QueryClient, children: React.ReactNode) {
+		return (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SidebarProvider>{children}</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+	}
+
+	afterEach(() => {
+		useRemoteUnpinStore.setState({ unpins: {} });
+	});
+
+	it("moves a project pinned through the order store to the top, and back", () => {
+		const workspaces = [alpha, bravo];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+		const labels = () => Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent);
+		expect(labels()).toEqual(["Alpha", "Bravo"]);
+
+		act(() => useSidebarOrderStore.getState().setProjectPinned("bravo", true));
+
+		expect(labels()).toEqual(["Bravo", "Alpha"]);
+		expect(screen.getByRole("button", { name: "Unpin" }).closest("[data-project-id]")).toHaveAttribute("data-project-id", "bravo");
+
+		act(() => useSidebarOrderStore.getState().setProjectPinned("bravo", false));
+
+		expect(screen.queryByRole("button", { name: "Unpin" })).not.toBeInTheDocument();
+	});
+
+	it("opens a collapsed project when the import store reports sessions imported into it", () => {
+		const workspaces = [alpha];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+		expect(screen.queryByLabelText("Open alpha task")).not.toBeInTheDocument();
+
+		act(() => useSessionImportStore.getState().recordImport("alpha", 1));
+
+		expect(screen.getByLabelText("Open alpha task")).toBeInTheDocument();
+		expect(screen.getByLabelText("Toggle Alpha sessions")).toHaveAttribute("aria-expanded", "true");
+	});
+
+	it("opens and closes projects in turn, each click seeing the state the last one left", async () => {
+		const user = userEvent.setup();
+		const workspaces = [alpha, bravo];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+
+		await user.click(screen.getByLabelText("Toggle Alpha sessions"));
+		await user.click(screen.getByLabelText("Toggle Bravo sessions"));
+		expect(screen.getByLabelText("Open alpha task")).toBeInTheDocument();
+		expect(screen.getByLabelText("Open bravo task")).toBeInTheDocument();
+
+		await user.click(screen.getByLabelText("Toggle Alpha sessions"));
+
+		expect(screen.queryByLabelText("Open alpha task")).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Open bravo task")).toBeInTheDocument();
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual(["bravo"]);
+	});
+
+	it("counts archived sessions from the latest workspaces and opens that archive in place", async () => {
+		const user = userEvent.setup();
+		useUiStore.setState({ archiveModal: null });
+		const client = newClient();
+		const view = render(shell(client, <Sidebar workspaces={[alpha]} {...handlers} />));
+		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
+		expect(await screen.findByRole("menuitem", { name: "Open dashboard" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Archive/ })).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Open dashboard" })).not.toBeInTheDocument());
+
+		const archived = { ...alpha, sessions: [...alpha.sessions, { ...alpha.sessions[0]!, id: "alpha-2", title: "old task", kanbanColumn: "archive" as const }] };
+		view.rerender(shell(client, <Sidebar workspaces={[archived]} {...handlers} />));
+		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
+		await user.click(await screen.findByRole("menuitem", { name: "Archive, 1 session" }));
+
+		expect(useUiStore.getState().archiveModal).toMatchObject({ projectId: "alpha" });
+		// The modal opens over the current page; the menu never goes to the board.
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	describe("remote pins through the real remote hook", () => {
+		const hosts: RemoteHost[] = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3011", status: "offline" }];
+		const savedHostIds = ["box-a"];
+		const noLocalWorkspaces: WorkspaceSummary[] = [];
+		const pinnedAt = "2026-11-01T00:00:00Z";
+		// The host's own project row may list the same session; look only in Pinned.
+		const pinnedRow = () => {
+			const list = screen.queryByTestId("pinned-session-list");
+			return list ? within(list).queryByRole("button", { name: "Open remote task · Box A" }) : null;
+		};
+
+		// The shell's wiring: a saved, offline host's cached lists go through
+		// useRemoteWorkspaces into the memoized Sidebar.
+		function RemoteShell() {
+			const remote = useRemoteWorkspaces({ cachedHostIds: savedHostIds });
+			return <Sidebar workspaces={noLocalWorkspaces} remoteHosts={hosts} remoteWorkspaces={remote.data} {...handlers} />;
+		}
+
+		function renderRemote() {
+			const client = newClient();
+			client.setQueryData(["remote-workspaces", "box-a", "projects"], [{ id: "remote-project", name: "Remote Project", path: "/remote" }]);
+			client.setQueryData(["remote-workspaces", "box-a", "sessions"], [{
+				id: "remote-1",
+				projectId: "remote-project",
+				harness: "codex",
+				status: "working",
+				prs: [],
+				displayName: "remote task",
+				isPinned: true,
+				pinnedAt,
+			}]);
+			render(shell(client, <RemoteShell />));
+		}
+
+		it("drops a pinned row unpinned here while its host is offline, and restores it when the unpin is cleared", () => {
+			renderRemote();
+			expect(pinnedRow()).toBeInTheDocument();
+
+			act(() => useRemoteUnpinStore.getState().add("box-a", "remote-1", pinnedAt));
+
+			expect(pinnedRow()).not.toBeInTheDocument();
+
+			act(() => useRemoteUnpinStore.getState().remove([sessionUiKey("remote-1", "box-a")]));
+
+			expect(pinnedRow()).toBeInTheDocument();
+		});
+
+		it("drops a pinned remote row while its kill is in flight, before the host's lists change", () => {
+			renderRemote();
+			expect(pinnedRow()).toBeInTheDocument();
+			try {
+				act(() => trackOptimisticSessionKill("remote-1", "box-a"));
+
+				expect(pinnedRow()).not.toBeInTheDocument();
+			} finally {
+				act(() => clearOptimisticSessionKill("remote-1", "box-a"));
+			}
+			expect(pinnedRow()).toBeInTheDocument();
+		});
 	});
 });

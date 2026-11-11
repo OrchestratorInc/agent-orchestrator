@@ -1,6 +1,7 @@
 import { agentLabel } from "@aoagents/product-ui";
-import { CircleAlert, LoaderCircle, SquareTerminal, X } from "@/components/app-icons";
+import { SquareTerminal, X } from "@/components/app-icons";
 import { type KeyboardEvent, type MouseEvent, useEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
@@ -9,7 +10,7 @@ import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../sto
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { TabContextMenu } from "./TabContextMenu";
-import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
+import { TerminalTabFrame, terminalTabActionClassName, terminalTabRenameInputClassName } from "./TerminalTabFrame";
 import { Pressable } from "./ui/pressable";
 
 type ShellTerminalTabProps = {
@@ -65,7 +66,10 @@ export function ShellTerminalTab({
 		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
-	const title = agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title;
+	const terminalTitle = developerMode ? shell.terminalTitle : undefined;
+	const title = terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
+	// An agent's name is display only, so renaming starts from the real title.
+	const renameBase = terminalTitle ?? shell.title;
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(title);
 	useEffect(() => {
 		if (isActive && unseenDone) markSeen(shell.handleId);
@@ -79,7 +83,7 @@ export function ShellTerminalTab({
 
 	const beginEdit = () => {
 		if (!canEdit || isEditing) return;
-		setDraft(shell.title);
+		setDraft(renameBase);
 		setIsEditing(true);
 	};
 
@@ -118,12 +122,13 @@ export function ShellTerminalTab({
 		if (!isEditing) return;
 		setIsEditing(false);
 		const next = draft.trim();
-		if (next && next !== shell.title) onRename?.(next);
+		// Confirming unchanged must not pin a program's title as the tab's name.
+		if (next && next !== renameBase) onRename?.(next);
 	};
 
 	const cancel = () => {
 		setIsEditing(false);
-		setDraft(shell.title);
+		setDraft(renameBase);
 	};
 
 	const closeControl = {
@@ -145,7 +150,7 @@ export function ShellTerminalTab({
 		const editingContent = isEditing ? (
 			<input
 				aria-label={t("terminal.rename", { title })}
-				className="min-w-0 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
+				className={terminalTabRenameInputClassName}
 				onBlur={commit}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
@@ -169,6 +174,7 @@ export function ShellTerminalTab({
 				<TerminalTabFrame
 					wide={Boolean(agent)}
 					action={closeAction}
+					onClose={closeAction ? onClose : undefined}
 					active={isActive}
 					buttonProps={{
 						"aria-current": isActive,
@@ -184,15 +190,15 @@ export function ShellTerminalTab({
 					}}
 					buttonRef={ref}
 					editingContent={editingContent}
+					editingValue={draft}
 					icon={
 						agent ? (
-							<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
+							<ShellAgentIcon agent={agent} done={unseenDone && !isActive} />
 						) : (
 							<SquareTerminal aria-hidden="true" className="size-icon-sm" />
 						)
 					}
 					label={title}
-					trailing={agent && !isEditing ? <ShellAgentStatus agent={agent} done={unseenDone && !isActive} /> : undefined}
 				/>
 			</TabContextMenu>
 		);
@@ -259,26 +265,41 @@ export function ShellTerminalTab({
 	);
 }
 
-const AGENT_STATUS = {
-	working: {
-		label: "terminal.agentWorking",
-		icon: <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-muted-foreground motion-reduce:animate-none" />,
-	},
-	waiting: { label: "terminal.agentWaiting", icon: <CircleAlert aria-hidden="true" className="size-3 text-destructive" /> },
-	done: { label: "terminal.agentDone", icon: <span aria-hidden="true" className="size-2 rounded-full bg-muted-foreground/60" /> },
+// The agent's state as a dot on its logo, the sidebar's vocabulary: pulsing
+// while it works, red while it waits on the user, muted for a finished turn
+// not yet seen. It sits on the icon, so it never moves the title.
+const AGENT_BADGE = {
+	working: { label: "terminal.agentWorking", className: "bg-foreground animate-pulse motion-reduce:animate-none" },
+	waiting: { label: "terminal.agentWaiting", className: "bg-destructive" },
+	done: { label: "terminal.agentDone", className: "bg-muted-foreground" },
 } as const;
 
-// The sidebar's status vocabulary: a spinner while the agent works, the red
-// alert while it waits on the user, and a dot for a finished turn not yet seen.
-export function ShellAgentStatus({ agent, done }: { agent: ShellAgent; done: boolean }) {
+function shellAgentBadgeState(agent: ShellAgent, done: boolean) {
+	return agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
+}
+
+/** The agent's state in words, for an accessible name that would hide the badge's own text. */
+export function shellAgentStateLabel(t: TFunction, agent: ShellAgent, done: boolean): string | undefined {
+	const state = shellAgentBadgeState(agent, done);
+	return state ? t(AGENT_BADGE[state].label, { agent: agentLabel(agent.harness) }) : undefined;
+}
+
+/** A shell's agent logo, with its state as a badge on the logo's corner. */
+export function ShellAgentIcon({ agent, done }: { agent: ShellAgent; done: boolean }) {
 	const { t } = useTranslation();
-	const state = agent.state === "idle" ? (done ? "done" : undefined) : agent.state;
-	if (!state) return null;
-	const label = t(AGENT_STATUS[state].label, { agent: agentLabel(agent.harness) });
+	const state = shellAgentBadgeState(agent, done);
 	return (
-		<span className="inline-flex size-3 items-center justify-center" data-shell-agent-state={state} title={label}>
-			{AGENT_STATUS[state].icon}
-			<span className="sr-only">{label}</span>
+		<span className="relative grid size-icon-base place-items-center" data-shell-agent-state={state}>
+			<AgentAvatar className="size-icon-sm!" decorative provider={agent.harness} />
+			{state ? (
+				<>
+					<span
+						aria-hidden="true"
+						className={cn("absolute -bottom-px -right-px size-1.5 rounded-full ring-1 ring-background", AGENT_BADGE[state].className)}
+					/>
+					<span className="sr-only">{shellAgentStateLabel(t, agent, done)}</span>
+				</>
+			) : null}
 		</span>
 	);
 }

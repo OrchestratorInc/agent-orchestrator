@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -18,6 +19,10 @@ import (
 // sessions start on, when they start on one, and otherwise by Codex's
 // structured account check.
 func (s *Service) authenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	// Accounts sign in to OpenAI; the adapter checks a custom provider's key instead.
+	if agentID == string(domain.HarnessCodex) && codexagent.UsesCustomModelProvider() {
+		return domain.AgentAuthenticationObservation{}, false
+	}
 	if observation, handled := s.savedDefaultAuthentication(ctx, agentID); handled {
 		return observation, true
 	}
