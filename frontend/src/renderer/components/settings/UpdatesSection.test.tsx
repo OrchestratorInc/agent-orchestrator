@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { UpdatesSection } from "./UpdatesSection";
 import { useUiStore } from "../../stores/ui-store";
@@ -199,7 +199,7 @@ it("shows a rewritten error status in the person's language (#5755)", async () =
 	}
 });
 
-it.each(["downloaded", "error"] as const)("shows updating feedback immediately until the update reaches %s", async (state) => {
+it.each(["downloaded", "error"] as const)("keeps focus on the live status while downloading until the update reaches %s", async (state) => {
 	let emit: (status: UpdateStatus) => void = () => undefined;
 	updOnStatus.mockImplementation((listener: typeof emit) => {
 		emit = listener;
@@ -211,25 +211,24 @@ it.each(["downloaded", "error"] as const)("shows updating feedback immediately u
 	const update = await screen.findByRole("button", { name: "Update to v9.9.9" });
 	update.focus();
 	fireEvent.click(update);
-	const updating = screen.getByRole("button", { name: "Updating… Update to v9.9.9" });
-	expect(updating).toBeVisible();
-	expect(updating).toHaveAttribute("aria-disabled", "true");
-	expect(updating).not.toBeDisabled();
-	expect(updating).toHaveFocus();
-	fireEvent.click(updating);
+	// The button leaves once clicked, so it cannot be pressed twice; focus
+	// waits on the live status line, which now carries the download.
+	const statusLine = screen.getByTestId("update-status-line");
+	expect(update).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: /Update to v9\.9\.9/ })).toBeNull();
+	expect(statusLine).toHaveFocus();
 	expect(updDownload).toHaveBeenCalledTimes(1);
-	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "true");
+	expect(statusLine).toHaveAttribute("aria-busy", "true");
 
 	act(() => emit({ state: "downloading", version: "9.9.9", percent: 42 }));
-	expect(screen.getByRole("button", { name: "Updating… Update to v9.9.9" })).toHaveFocus();
-	expect(updating).toHaveTextContent(/^Updating…$/);
+	expect(statusLine).toHaveFocus();
 	expect(screen.getByRole("progressbar")).toHaveAttribute("value", "42");
+	expect(screen.queryByRole("button", { name: "Check for updates" })).toBeNull();
 	act(() => emit({ state: "preparing", version: "9.9.9" }));
-	expect(screen.getByRole("button", { name: "Updating… Update to v9.9.9" })).toHaveFocus();
+	expect(statusLine).toHaveFocus();
 
 	act(() => emit({ state, version: "9.9.9", ...(state === "error" ? { message: "Download failed" } : {}) }));
-	expect(updating).not.toBeInTheDocument();
-	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "false");
+	expect(statusLine).toHaveAttribute("aria-busy", "false");
 	if (state === "downloaded") expect(screen.getByRole("button", { name: "Restart & install" })).toHaveFocus();
 	else {
 		expect(screen.getByText("Download failed")).toBeVisible();
@@ -242,14 +241,14 @@ it.each(["downloading", "preparing"] as const)("shows an existing %s update with
 	updGetStatus.mockResolvedValue({ state, version: "9.9.9" } satisfies UpdateStatus);
 	renderUpdates();
 
-	const updating = await screen.findByRole("button", { name: "Updating… Update to v9.9.9" });
-	expect(updating).toBeVisible();
-	expect(updating).toHaveAttribute("aria-disabled", "true");
-	expect(updating).not.toBeDisabled();
-	expect(updating).not.toHaveFocus();
-	fireEvent.click(updating);
+	// The status line alone carries a download already under way: no button
+	// to press, and nothing takes focus.
+	const statusLine = await screen.findByTestId("update-status-line");
+	await waitFor(() => expect(statusLine).toHaveAttribute("aria-busy", "true"));
+	expect(screen.queryByRole("button", { name: /Update to v9\.9\.9/ })).toBeNull();
+	expect(screen.queryByRole("button", { name: "Check for updates" })).toBeNull();
+	expect(statusLine).not.toHaveFocus();
 	expect(updDownload).not.toHaveBeenCalled();
-	expect(screen.getByTestId("update-status-line")).toHaveAttribute("aria-busy", "true");
 });
 
 it.each(["downloaded", "error"] as const)("does not steal focus when an update reaches %s", async (state) => {

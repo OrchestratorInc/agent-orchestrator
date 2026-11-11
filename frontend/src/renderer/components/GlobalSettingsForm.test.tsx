@@ -870,10 +870,9 @@ describe("GlobalSettingsForm", () => {
 		renderForm();
 
 		const formatted = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "medium" }).format(checkedAt);
-		// The line reads as a relative time; the exact moment is its tooltip.
-		const checked = await screen.findByTestId("update-checked-at");
-		expect(checked).toHaveTextContent(/^Checked \d+ minutes ago$/);
-		expect(checked).toHaveAttribute("title", formatted);
+		// Read out by assistive tech and shown as the status line's tooltip.
+		expect(await screen.findByTestId("update-checked-at")).toHaveTextContent(formatted);
+		expect(screen.getByTestId("update-status-line")).toHaveAttribute("title", expect.stringContaining(formatted));
 		expect(screen.getByTestId("update-status-line")).toHaveTextContent("You're on the latest version.");
 	});
 
