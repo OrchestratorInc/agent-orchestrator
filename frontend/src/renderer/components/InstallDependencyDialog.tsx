@@ -129,7 +129,11 @@ export function useInstallRunner(onSucceeded: () => void) {
 		}
 	}, []);
 
+	const startingRef = useRef(false);
 	const start = async (nextTarget: InstallTarget) => {
+		// One install request at a time: a second click before the daemon answers does nothing.
+		if (startingRef.current) return;
+		startingRef.current = true;
 		stopPolling();
 		setTarget(nextTarget);
 		setJob(undefined);
@@ -146,6 +150,7 @@ export function useInstallRunner(onSucceeded: () => void) {
 		} catch (err) {
 			setStartError(err instanceof Error ? err.message : "Could not start the install.");
 		} finally {
+			startingRef.current = false;
 			setIsStarting(false);
 		}
 	};
@@ -154,7 +159,7 @@ export function useInstallRunner(onSucceeded: () => void) {
 	const jobFor = (nextTarget: InstallTarget) => (target === nextTarget ? job : previews[nextTarget]);
 	const inspectionFinished = (nextTarget: InstallTarget) => inspectedTargets[nextTarget] === true;
 	const succeeded = (nextTarget: InstallTarget) => succeededTargets.has(nextTarget);
-	return { target, startError, running, start, inspect, jobFor, inspectionFinished, succeeded };
+	return { target, startError, running, isStarting, start, inspect, jobFor, inspectionFinished, succeeded };
 }
 
 export function InstallDependencyDialog({
@@ -211,6 +216,7 @@ export function InstallDependencyDialog({
 			job={install.jobFor(target)}
 			planChecked={install.inspectionFinished(target)}
 			succeeded={install.succeeded(target)}
+			starting={install.isStarting && install.target === target}
 			disabled={install.running && install.target !== target}
 			error={install.target === target ? install.startError : undefined}
 			onInstall={() => void install.start(target)}
@@ -334,6 +340,7 @@ function InstallRow({
 	job,
 	planChecked,
 	succeeded,
+	starting,
 	disabled,
 	error,
 	onInstall,
@@ -345,12 +352,14 @@ function InstallRow({
 	job: InstallJobWithNotice | undefined;
 	planChecked: boolean;
 	succeeded: boolean;
+	/** The install request is out; the daemon hasn't answered yet. */
+	starting: boolean;
 	disabled: boolean;
 	error: string | undefined;
 	onInstall: () => void;
 	t: TFunction;
 }) {
-	const running = isActiveInstallJob(job);
+	const running = starting || isActiveInstallJob(job);
 	const failed = job?.status === "failed";
 	const unsupported = job?.status === "unsupported";
 
