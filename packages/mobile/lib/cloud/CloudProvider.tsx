@@ -35,7 +35,12 @@ export type CloudState = {
 	/** Harnesses that can start in Chat; the rest start in the terminal. */
 	chatHarnesses: readonly string[];
 	signIn(): Promise<Account | null>;
-	signOut(): Promise<void>;
+	/**
+	 * Stops Orchestrator Cloud pushing to this phone, then signs out. Throws
+	 * CloudPushRemovalError, still signed in, when the push registration
+	 * could not be removed, unless `keepPush` says to sign out anyway.
+	 */
+	signOut(options?: { keepPush?: boolean }): Promise<void>;
 	refresh(): Promise<void>;
 	refreshProjects(): Promise<void>;
 	refreshSessions(): Promise<void>;
@@ -59,7 +64,17 @@ export function useCloud(): CloudState {
 // the unread badge and the sidebar honest without spending battery.
 const LIVE_POLL_MS = 5_000;
 const IDLE_POLL_MS = 30_000;
-const DEFAULT_CHAT_HARNESSES = ["claude-code", "codex", "cursor"];
+// A control plane that doesn't say which harnesses run in Chat starts every
+// session in the terminal, as the desktop reads it.
+const NO_CHAT_HARNESSES: readonly string[] = [];
+
+/** Sign-out stopped because Orchestrator Cloud would have kept pushing to this phone. */
+export class CloudPushRemovalError extends Error {
+	constructor() {
+		super("Orchestrator Cloud couldn't be told to stop sending this account's notifications to this phone.");
+		this.name = "CloudPushRemovalError";
+	}
+}
 
 export function CloudProvider({ children }: { children: ReactNode }) {
 	const [status, setStatus] = useState<CloudStatus>("loading");
@@ -172,13 +187,24 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	}, [client]);
 
 	const resolve = useCallback(async () => {
-		const own = generation.current;
+		let own = generation.current;
 		setStatus((previous) => (previous === "ready" ? previous : "connecting"));
 		try {
 			const nextMe = await client.getMe();
 			if (own !== generation.current) return;
 			const nextOrg = await resolveOrganization(client, nextMe);
 			if (own !== generation.current) return;
+			// Another organization than the one shown (a 403 re-resolved it):
+			// what was loaded for the old one goes, and its loads still out are dropped.
+			if (orgRef.current && orgRef.current.id !== nextOrg.id) {
+				own = ++generation.current;
+				forgetCloudAccountCaches();
+				setProjects([]);
+				setProjectsLoaded(false);
+				setSessions([]);
+				setSessionsLoaded(false);
+				setNotificationsUnread(0);
+			}
 			setMe(nextMe);
 			setOrg(nextOrg);
 			orgRef.current = nextOrg;
@@ -262,14 +288,21 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		return value;
 	}, []);
 
-	const signOut = useCallback(async () => {
-		if (orgRef.current) await unregisterCloudPush(client);
+	// Push devices belong to the account, not an organization, so this runs
+	// whether or not one was resolved.
+	const signOut = useCallback(async ({ keepPush = false }: { keepPush?: boolean } = {}) => {
+		const removed = await unregisterCloudPush(client);
+		if (!removed && !keepPush) throw new CloudPushRemovalError();
 		await signOutOfAccount();
 		await clearAccountHosts().catch(() => {});
-	}, []);
+	}, [client]);
 
+	const statusRef = useRef(status);
+	statusRef.current = status;
 	const refresh = useCallback(async () => {
-		if (!orgRef.current) {
+		// A workspace in error resolves again: refreshing its lists alone never
+		// brings it back to ready.
+		if (!orgRef.current || statusRef.current === "error") {
 			await resolve();
 			return;
 		}
@@ -283,7 +316,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	const value = useMemo<CloudState>(() => ({
 		status, account, me, org, error, client,
 		projects, projectsLoaded, sessions, sessionsLoaded, connections, connectionsLoaded, notificationsUnread,
-		chatHarnesses: me?.chatHarnesses ?? DEFAULT_CHAT_HARNESSES,
+		chatHarnesses: me?.chatHarnesses ?? NO_CHAT_HARNESSES,
 		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, watch,
 	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, sessions, sessionsLoaded, signIn, signOut, status, upsertSession, watch]);
 	return <CloudContext.Provider value={value}>{children}</CloudContext.Provider>;

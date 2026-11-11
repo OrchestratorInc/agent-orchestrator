@@ -62,7 +62,9 @@ export default function SpawnScreen() {
 	const cloudSelected = isCloudHost(selectedHostId);
 	const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
 	const projects = cloudSelected ? cloud?.projects ?? [] : selectedHost?.projects ?? [];
-	const projectsKnown = cloudSelected ? Boolean(cloud) : selectedHost?.projectsKnown ?? false;
+	// Cloud's list is known once it loaded, not as soon as Cloud is signed in:
+	// before that, an empty list would ask to create a project that exists.
+	const projectsKnown = cloudSelected ? Boolean(cloud) && cloudState.projectsLoaded : selectedHost?.projectsKnown ?? false;
 	const connection = cloudSelected ? (cloud ? "open" : "closed") : selectedHost?.connection ?? "closed";
 	const cloudAgentsKey = connectedAgents(cloudState.connections).join(",");
 	// Known before anything is typed: a Free organization runs no cloud agents,
@@ -460,6 +462,8 @@ export default function SpawnScreen() {
 			agentId,
 			projectId: projectId && projectId !== STANDALONE_PROJECT ? projectId : "",
 			selected: agentId === harness && modelTouched ? model : "",
+			// A cloud task browses Orchestrator Cloud's catalog, not the machine's.
+			...(cloudSelected ? { hostId: CLOUD_HOST_ID } : {}),
 			// The sheet's default row answers "".
 			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
 		}));

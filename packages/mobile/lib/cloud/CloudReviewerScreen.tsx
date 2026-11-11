@@ -16,6 +16,7 @@ import { Button, EmptyState } from "../ui";
 import { useGlassBarInset } from "../useHeaderOverlap";
 import { useCloud } from "./CloudProvider";
 import { CloudSignIn } from "./components";
+import { cloudErrorMessage } from "./errors";
 import type { CloudSession } from "./types";
 import { useCloudReviewerConversation } from "./useCloudReviewerConversation";
 
@@ -36,12 +37,20 @@ export function CloudReviewerScreen({ reviewId, sessionId, title }: { reviewId: 
 	const listed = sessions.find((item) => item.id === sessionId);
 	// An archived worker is not in the list; read it once.
 	const [read, setRead] = useState<CloudSession>();
+	// A failed read says why and can be asked again: without the session the
+	// conversation has nothing to load.
+	const [readError, setReadError] = useState<string>();
+	const [readAttempt, setReadAttempt] = useState(0);
 	useEffect(() => {
 		if (listed || !org?.id || !sessionId) return;
 		let current = true;
-		void client.getSession(org.id, sessionId).then(({ session }) => { if (current) setRead(session); }, () => {});
+		setReadError(undefined);
+		void client.getSession(org.id, sessionId).then(
+			({ session }) => { if (current) setRead(session); },
+			(cause: unknown) => { if (current) setReadError(cloudErrorMessage(cause)); },
+		);
 		return () => { current = false; };
-	}, [client, listed, org?.id, sessionId]);
+	}, [client, listed, org?.id, readAttempt, sessionId]);
 	const session = listed ?? read;
 	const conversation = useCloudReviewerConversation({ client, orgId: org?.id, session, reviewRunId: reviewId, active: focused && status === "ready", newKey });
 	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
@@ -51,6 +60,7 @@ export function CloudReviewerScreen({ reviewId, sessionId, title }: { reviewId: 
 	useLayoutEffect(() => navigation.setOptions({ title: title ? `Review · ${title}` : "Reviewer chat" }), [navigation, title]);
 
 	if (status === "signed-out") return <CloudSignIn />;
+	if (!session && readError) return <EmptyState icon="chat" title="Reviewer chat unavailable" message={readError} action={<Button title="Try again" icon="refresh" onPress={() => setReadAttempt((count) => count + 1)} />} />;
 	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Loading reviewer chat" /></View>;
 	if (!conversation.snapshot) return <EmptyState icon="chat" title="Reviewer chat unavailable" message={conversation.error || "The reviewer conversation has not started yet."} action={<Button title="Try again" icon="refresh" onPress={() => void conversation.refresh()} />} />;
 

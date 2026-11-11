@@ -21,6 +21,8 @@ import { useReviewBackend } from "../../lib/reviewBackend";
 import { ReviewActionButton } from "../../lib/review-action-button";
 import { reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit, workerRouteForSession } from "../../lib/reviewView";
+import { useCloud } from "../../lib/cloud/CloudProvider";
+import { isCloudHost } from "../../lib/cloud/mapping";
 import { HostScope, useApp } from "../../lib/store";
 import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -88,6 +90,20 @@ function ReviewDetailContent() {
 	const rowFeedback = usePressFeedback("row");
 	const dismissFeedback = usePressFeedback("icon");
 	const latestLoad = useRef(0);
+	// A Cloud review belongs to one account and organization: another one
+	// (a sign-out, a switch) clears what this page shows and drops its loads still out.
+	const { account: cloudAccount, org: cloudOrg } = useCloud();
+	const scope = isCloudHost(currentHostId) ? `${cloudAccount?.id ?? ""}/${cloudOrg?.id ?? ""}` : "";
+	const shownScope = useRef(scope);
+	useEffect(() => {
+		if (shownScope.current === scope) return;
+		shownScope.current = scope;
+		latestLoad.current++;
+		setData(undefined);
+		setPRs([]);
+		setMergedURL(undefined);
+		setReadWorker(undefined);
+	}, [scope]);
 
 	const load = useCallback(async (quiet = false) => {
 		if (!hostMatches || !backend || !sessionId) return;

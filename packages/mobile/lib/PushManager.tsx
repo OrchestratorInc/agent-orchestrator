@@ -7,7 +7,7 @@ import * as Notifications from "expo-notifications";
 import { useRootNavigationState, useRouter, type Href } from "expo-router";
 import { useOpenPage } from "./pageNavigation";
 import { useEffect, useRef } from "react";
-import { AppState, Platform } from "react-native";
+import { Alert, AppState, Platform } from "react-native";
 import { markNotificationRead } from "./api";
 import { shouldPoll } from "./appStatePoll";
 import { getInstallId } from "./installId";
@@ -16,7 +16,7 @@ import { notificationTarget } from "./notificationView";
 import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
 import { useApp } from "./store";
 import { useCloud } from "./cloud/CloudProvider";
-import { cloudPushTarget } from "./cloud/pushTarget";
+import { cloudPushTarget, foreignCloudPushOrganization } from "./cloud/pushTarget";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
 
@@ -122,7 +122,14 @@ export function PushManager(): null {
 		const cloudTarget = cloudPushTarget(data);
 		if (cloudTarget) {
 			mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target: "cloud", cold_start: coldStart });
-			const { client, org } = cloudRef.current;
+			const { client, org, me } = cloudRef.current;
+			// From an organization the phone isn't working in: its page can't load
+			// here, so say where it came from rather than open one that fails.
+			const elsewhere = foreignCloudPushOrganization(data, org?.id, me?.organizations ?? []);
+			if (elsewhere && org) {
+				Alert.alert(`From ${elsewhere}`, `The app is working in ${org.displayName}, so this notification can't open here.`);
+				return;
+			}
 			if (org && data.notificationId && (!data.orgId || data.orgId === org.id)) void client.markNotificationRead(org.id, data.notificationId).catch(() => {});
 			router.navigate(cloudTarget);
 			return;

@@ -26,6 +26,17 @@ export function useFolderTree(backend: FilesBackend | null, sessionId: string, d
 	const [refreshing, setRefreshing] = useState(false);
 	const [error, setError] = useState<string>();
 	const request = useRef(0);
+	// Another backend (Cloud chose another organization), session or folder
+	// starts empty: a failed read there shows its error, never the last
+	// folder's entries. A refresh of the same folder keeps them.
+	const scope = `${backend?.key ?? ""}|${sessionId}|${dir}`;
+	const shownScope = useRef(scope);
+	useEffect(() => {
+		if (shownScope.current === scope) return;
+		shownScope.current = scope;
+		setTree(null);
+		setError(undefined);
+	}, [scope]);
 
 	const load = useCallback(async (quiet: boolean) => {
 		if (!backend) return;

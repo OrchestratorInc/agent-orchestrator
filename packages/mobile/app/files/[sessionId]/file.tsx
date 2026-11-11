@@ -87,7 +87,7 @@ function SessionFileContent() {
 	const navigation = useNavigation();
 	const { currentHostId, connection, loading: appLoading } = useApp();
 	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
-	const { backend, cloud, signedOut } = useFilesBackend();
+	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
 	const { width } = useWindowDimensions();
@@ -358,6 +358,7 @@ function SessionFileContent() {
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
 	if (signedOut) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this file." /></View>;
+	if (unreachable) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
 	if (!backend && (appLoading || cloud)) return <View style={styles.center}>{headerItems}<Spinner size="large" accessibilityLabel="Connecting" /></View>;
 	if (!backend && connection === "closed") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
 
@@ -514,9 +515,12 @@ function useImageSources(backend: FilesBackend | null, sessionId: string, path: 
 	useEffect(() => {
 		if (!backend || !detail || !image) return;
 		let current = true;
+		// A side that can't be read is no side: the page then says the image is
+		// unavailable rather than staying on Opening… with the read rejected.
+		const read = (side: "before" | "after") => backend.imageSource(sessionId, path, side, version).catch(() => undefined);
 		void Promise.all([
-			wantBefore ? backend.imageSource(sessionId, path, "before", version) : undefined,
-			wantAfter ? backend.imageSource(sessionId, path, "after", version) : undefined,
+			wantBefore ? read("before") : undefined,
+			wantAfter ? read("after") : undefined,
 		]).then(([before, after]) => { if (current) setSources({ key, before, after }); });
 		return () => { current = false; };
 		// `key` covers what the effect reads from `detail`.

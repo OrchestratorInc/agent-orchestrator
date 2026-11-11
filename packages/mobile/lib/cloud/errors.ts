@@ -72,6 +72,7 @@ export function isWorkerUnavailable(error: unknown): boolean {
 export function cloudErrorMessage(error: unknown): string {
 	if (error instanceof CloudAuthError) return "Your Orchestrator Cloud sign-in expired. Sign in again in Settings.";
 	if (error instanceof CloudError) {
+		if (error.code === "insecure_address") return error.message;
 		if (error.status === 0) return "Couldn't reach Orchestrator Cloud. Check your connection and try again.";
 		if (error.code === "agent_provider_required") return "Connect this coding agent to Orchestrator Cloud first (Settings → Coding agents).";
 		if (error.code === "invalid_credential") return error.message || "The provider rejected that credential.";

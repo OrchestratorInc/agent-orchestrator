@@ -1,4 +1,4 @@
-import { CLOUD_API_PREFIX, cloudWebSocketBase } from "./config";
+import { CLOUD_API_PREFIX, cloudAddressIsSafe, cloudWebSocketBase } from "./config";
 import { CloudAuthError, CloudError, isPlanRefusal } from "./errors";
 import type {
 	CloudArtifact,
@@ -122,7 +122,11 @@ export function createCloudClient(options: CloudClientOptions) {
 	const baseUrl = options.baseUrl.replace(/\/+$/, "");
 	const doFetch: typeof fetch = options.fetch ?? ((input, init) => fetch(input, init));
 
+	// Checked once: the address is fixed for the client's life.
+	const addressSafe = cloudAddressIsSafe(baseUrl);
+
 	async function bearer(): Promise<string> {
+		if (!addressSafe) throw new CloudError("Orchestrator Cloud's address must use https.", { status: 0, code: "insecure_address" });
 		let token: string | null;
 		try {
 			token = await options.getToken();

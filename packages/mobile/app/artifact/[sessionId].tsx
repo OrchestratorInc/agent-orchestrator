@@ -474,6 +474,10 @@ function ArtifactWeb({ backend, source, version, page }: {
 	useEffect(() => {
 		if (inlined.html && loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
 	}, [inlined.html, theme]);
+	// One fresh signed address per version: refused again with it, the page
+	// says so and offers Retry rather than renewing forever.
+	const renewed = useRef(false);
+	useEffect(() => { renewed.current = false; }, [version]);
 	// Inlining failed: the page still opens from its URL.
 	if (inline && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
@@ -504,7 +508,11 @@ function ArtifactWeb({ backend, source, version, page }: {
 				onHttpError={(event) => {
 					const status = event.nativeEvent.statusCode;
 					// Cloud's signed address ran out: a fresh one reloads the page.
-					if ((status === 401 || status === 403) && backend.renew) { backend.renew(); return; }
+					if ((status === 401 || status === 403) && backend.renew && !renewed.current) {
+						renewed.current = true;
+						backend.renew();
+						return;
+					}
 					setError(status === 404 ? (backend.cloud ? "This file is no longer in the session's artifacts." : "The worker no longer has this file.") : backend.cloud ? "This artifact didn't load. Retry." : "This artifact didn't load. Retry, or check it on that machine.");
 				}}
 				onError={(event) => setError(event.nativeEvent.description || "This artifact didn't load.")}
@@ -513,7 +521,7 @@ function ArtifactWeb({ backend, source, version, page }: {
 				<View accessibilityRole="alert" style={styles.webError}>
 					<Feather name="alert-triangle" size={iconSize.sm} color={t.red} />
 					<Text style={styles.webErrorText}>{error}</Text>
-					<Pressable onPress={() => { setError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable>
+					<Pressable onPress={() => { renewed.current = false; setError(undefined); web.current?.reload(); }}><Text style={styles.retryText}>Retry</Text></Pressable>
 				</View>
 			) : null}
 		</View>

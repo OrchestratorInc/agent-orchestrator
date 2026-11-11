@@ -9,7 +9,7 @@ import { Alert, Linking, Platform, StyleSheet, View } from "react-native";
 import { loadAccount, signInToAccount, type Account } from "../../lib/account";
 import { AccountAvatar, accountName } from "../../lib/AccountAvatar";
 import { syncAccountHosts } from "../../lib/accountHosts";
-import { useCloud } from "../../lib/cloud/CloudProvider";
+import { CloudPushRemovalError, useCloud } from "../../lib/cloud/CloudProvider";
 import { CLOUD_APPEARANCE, CLOUD_HOST_ID } from "../../lib/cloud/mapping";
 import { cloudSettingsStatus } from "../../lib/cloud/settingsStatus";
 import { formatVersionLine, type BuildInfo } from "../../lib/appInfo";
@@ -127,15 +127,27 @@ export default function SettingsScreen() {
 		}).finally(() => setAccountBusy(false));
 	}
 
-	function signOut() {
+	function signOut(options?: { keepPush?: boolean }) {
 		setAccountBusy(true);
 		// Through Orchestrator Cloud: it stops pushing to this phone before the
 		// account's token goes, then forgets the account's machines.
-		void cloud.signOut().then(async () => {
+		void cloud.signOut(options).then(async () => {
 			setAccount(null);
 			setPairedHosts(await loadHosts());
 			await reloadConfig();
-		}).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
+		}).catch((error: unknown) => {
+			// Signing out anyway leaves the account's notifications coming until
+			// the phone signs in again, so it is the person's call.
+			if (error instanceof CloudPushRemovalError) {
+				Alert.alert("Couldn't turn off Cloud notifications", "This phone may keep getting this account's notifications until you sign in again.", [
+					{ text: "Cancel", style: "cancel" },
+					{ text: "Try again", onPress: () => signOut() },
+					{ text: "Sign out anyway", style: "destructive", onPress: () => signOut({ keepPush: true }) },
+				]);
+				return;
+			}
+			Alert.alert("Could not sign out", "Try again.");
+		}).finally(() => setAccountBusy(false));
 	}
 
 	if (!loaded) {
@@ -186,7 +198,7 @@ export default function SettingsScreen() {
 						<SettingsButtonRow icon="account" label="Sign in to Orchestrator" loading={accountLoading || accountBusy} onPress={signIn} testID="settings-sign-in" />
 					)}
 					{account ? (
-						<SettingsButtonRow icon="signOut" label="Sign out" destructive disabled={accountBusy} onPress={() => confirmSignOut(signOut)} testID="settings-sign-out" />
+						<SettingsButtonRow icon="signOut" label="Sign out" destructive disabled={accountBusy} onPress={() => confirmSignOut(() => signOut())} testID="settings-sign-out" />
 					) : null}
 				</SettingsSection>
 

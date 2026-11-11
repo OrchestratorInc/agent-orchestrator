@@ -22,12 +22,22 @@ export async function hiddenCloudNotifications(orgId: string): Promise<Set<strin
 	}
 }
 
-export async function hideCloudNotifications(orgId: string, ids: readonly string[]): Promise<void> {
-	if (!ids.length) return;
-	const hidden = [...await hiddenCloudNotifications(orgId), ...ids];
-	// Newest last; the oldest fall off once the list is long.
-	const kept = [...new Set(hidden)].slice(-HIDDEN_LIMIT);
-	await AsyncStorage.setItem(hiddenKey(orgId), JSON.stringify(kept)).catch(() => {});
+// Each organization's hides run one after another, so each reads the last
+// one's write: two cleared at once would otherwise both read the old list.
+const hideChains = new Map<string, Promise<void>>();
+
+export function hideCloudNotifications(orgId: string, ids: readonly string[]): Promise<void> {
+	if (!ids.length) return Promise.resolve();
+	const previous = hideChains.get(orgId) ?? Promise.resolve();
+	const next = previous.then(async () => {
+		const hidden = [...await hiddenCloudNotifications(orgId), ...ids];
+		// Newest last; the oldest fall off once the list is long.
+		const kept = [...new Set(hidden)].slice(-HIDDEN_LIMIT);
+		await AsyncStorage.setItem(hiddenKey(orgId), JSON.stringify(kept)).catch(() => {});
+	});
+	hideChains.set(orgId, next);
+	void next.finally(() => { if (hideChains.get(orgId) === next) hideChains.delete(orgId); });
+	return next;
 }
 
 /** A cloud notification in the record shape the Notifications screen lists. */

@@ -168,8 +168,10 @@ export function ChatComposer({
 	onAcknowledgeSend(id: string): Promise<void>;
 	completedRetry?: { id: string; draftText: string };
 	onSteer(text: string): Promise<string>;
-	onPromoteQueuedTurn(turnId: string): Promise<void>;
-	onCancelQueuedTurn(turnId: string): Promise<void>;
+	/** Steers with a queued message. Left out where the host can't, which hides the action. */
+	onPromoteQueuedTurn?(turnId: string): Promise<void>;
+	/** Deletes a queued message. Left out where the host can't, which hides the action. */
+	onCancelQueuedTurn?(turnId: string): Promise<void>;
 	onInterrupt(): void;
 	onSettings(settings: TurnSettings): Promise<void>;
 	onConfigOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
@@ -625,7 +627,7 @@ export function ChatComposer({
 					return <View key={entry.turnId} style={[styles.queueRow, index > 0 && styles.queueRowDivider]}>
 						<AppSymbol name={queued} size={iconSize.sm} color={t.textTertiary} />
 						<Text numberOfLines={1} style={styles.queueText}>{entry.message.text}</Text>
-						{canSteer ? <Pressable
+						{canSteer && onPromoteQueuedTurn ? <Pressable
 							accessibilityRole="button"
 							accessibilityLabel={`Steer queued message: ${entry.message.text}`}
 							accessibilityState={{ busy: promoting, disabled: queueActionPending }}
@@ -650,7 +652,7 @@ export function ChatComposer({
 						>
 							{promoting ? <ActivityIndicator size="small" color={t.accent} /> : <AppSymbol name={steer} size={iconSize.sm} color={t.accent} />}
 						</Pressable> : null}
-						<Pressable
+						{onCancelQueuedTurn ? <Pressable
 							accessibilityRole="button"
 							accessibilityLabel={`Delete queued message: ${entry.message.text}`}
 							accessibilityState={{ busy: cancelling, disabled: queueActionPending }}
@@ -666,7 +668,7 @@ export function ChatComposer({
 							style={({ pressed }) => [styles.queueDelete, pressed && iconFeedback.pressed]}
 						>
 							{cancelling ? <ActivityIndicator size="small" color={t.textTertiary} /> : <AppSymbol name="close" size={iconSize.sm} color={t.textTertiary} />}
-						</Pressable>
+						</Pressable> : null}
 					</View>;
 				})}
 			</View> : null}

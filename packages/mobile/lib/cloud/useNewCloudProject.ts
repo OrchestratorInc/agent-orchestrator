@@ -66,20 +66,39 @@ export function useNewCloudProject({ onCreated }: {
 		if (!orchestratorAgent || !available.includes(orchestratorAgent)) setOrchestratorAgent(defaultCloudAgent(connections, orchestratorAgent));
 	}, [available, connections, orchestratorAgent, workerAgent]);
 
+	// The repositories belong to one organization: another one starts the
+	// choice over, and only the latest read may answer.
+	const reposRead = useRef(0);
+	const shownOrg = useRef(orgId);
+	useEffect(() => {
+		if (shownOrg.current === orgId) return;
+		shownOrg.current = orgId;
+		reposRead.current++;
+		requestKey.current = null;
+		setInstallations(null);
+		setRepos(null);
+		setRepoId(null);
+		setQuery("");
+		setReposFailed(false);
+		setError(null);
+	}, [orgId]);
+
 	const loadRepos = useCallback(async () => {
 		if (!orgId) return;
+		const read = ++reposRead.current;
+		const current = () => mounted.current && read === reposRead.current;
 		setLoadingRepos(true);
 		try {
 			const { installations: found } = await client.listGitHubInstallations(orgId);
-			if (!mounted.current) return;
+			if (!current()) return;
 			setInstallations(found);
 			if (hasActiveInstallation(found)) {
 				const items = await collectPages((cursor) => client.listGitHubRepositories(orgId, { cursor }));
-				if (mounted.current) setRepos(reachableRepositories(items));
+				if (current()) setRepos(reachableRepositories(items));
 			} else setRepos([]);
-			if (mounted.current) setReposFailed(false);
+			if (current()) setReposFailed(false);
 		} catch (cause) {
-			if (!mounted.current) return;
+			if (!current()) return;
 			// The GitHub App only exists on deployments that configure it.
 			if (cause instanceof CloudError && cause.status === 404) {
 				setGithubUnavailable(true);
@@ -89,7 +108,7 @@ export function useNewCloudProject({ onCreated }: {
 				setError(cloudErrorMessage(cause));
 			}
 		} finally {
-			if (mounted.current) setLoadingRepos(false);
+			if (current()) setLoadingRepos(false);
 		}
 	}, [client, orgId]);
 
@@ -167,13 +186,15 @@ export function useNewCloudProject({ onCreated }: {
 			requestKey.current = null;
 			haptics.success();
 			await refreshProjects();
-			onCreated(project.id);
+			// Left while it was made: the project is in the list, and nothing
+			// navigates from whatever screen is open now.
+			if (mounted.current) onCreated(project.id);
 		} catch (cause) {
 			// The repository already has a project: open that one instead.
 			if (cause instanceof CloudError && cause.code === "project_repository_exists" && request.source === "github") {
 				const existing = projectsRef.current.find((item) => item.githubRepositoryId === request.input.githubRepositoryId);
 				if (existing) {
-					onCreated(existing.id);
+					if (mounted.current) onCreated(existing.id);
 					return;
 				}
 			}

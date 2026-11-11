@@ -26,11 +26,18 @@ export async function registerCloudPush(client: Pick<CloudClient, "putPushDevice
 	}
 }
 
-/** Stop Orchestrator Cloud pushing to this phone. Runs before sign-out, while the token still works. */
-export async function unregisterCloudPush(client: Pick<CloudClient, "deletePushDevice">): Promise<void> {
+/**
+ * Stop Orchestrator Cloud pushing to this phone. Runs before sign-out, while
+ * the token still works, and reports whether it did: the Expo token stays
+ * valid after sign-out, so a removal that failed leaves the account's
+ * notifications coming until the phone signs in again (which moves the token
+ * to that account). A control plane without push devices has nothing to remove.
+ */
+export async function unregisterCloudPush(client: Pick<CloudClient, "deletePushDevice">): Promise<boolean> {
 	try {
 		await client.deletePushDevice(await getInstallId());
-	} catch {
-		// Best effort: an unreachable control plane drops the device when Expo reports the token dead.
+		return true;
+	} catch (error) {
+		return error instanceof CloudError && (error.status === 404 || error.status === 405);
 	}
 }

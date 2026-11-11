@@ -12,7 +12,7 @@ import { useApp } from "./store";
  */
 export function useArtifactsBackend(sessionId: string): { backend: ArtifactsBackend | null; cloud: boolean; unavailable?: string } {
 	const { config, currentHostId } = useApp();
-	const { client, org, me, status, sessions } = useCloud();
+	const { client, org, me, status, sessions, error: cloudError } = useCloud();
 	const cloud = isCloudHost(currentHostId);
 	const orgId = org?.id;
 	const offered = Boolean((org?.offering ?? me?.offering)?.artifacts);
@@ -28,7 +28,9 @@ export function useArtifactsBackend(sessionId: string): { backend: ArtifactsBack
 	);
 	const unavailable = !cloud ? undefined
 		: status === "signed-out" ? "Sign in to Orchestrator Cloud in Settings to see these files."
-			: status === "ready" && !offered ? "Artifacts aren't turned on for this organization."
-				: access.error;
+			// Cloud couldn't load: waiting on the backend would spin with nothing to say.
+			: status === "error" ? cloudError ?? "Couldn't reach Orchestrator Cloud. Try again in a moment."
+				: status === "ready" && !offered ? "Artifacts aren't turned on for this organization."
+					: access.error;
 	return { backend: cloud ? remote : daemon, cloud, unavailable };
 }

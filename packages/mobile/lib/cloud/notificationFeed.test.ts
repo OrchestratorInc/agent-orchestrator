@@ -39,3 +39,10 @@ it("treats an already-read notification as read", async () => {
 	const failing = vi.fn(async () => { throw new CloudError("down", { status: 500 }); });
 	await expect(markCloudNotificationsRead({ markNotificationRead: failing }, "o", ["n1"])).rejects.toBeInstanceOf(CloudError);
 });
+
+// Clearing two rows quickly starts two hides before either is written: each
+// must read the other's write, or the first notification comes back.
+it("keeps every hide when two run at once", async () => {
+	await Promise.all([hideCloudNotifications("o", ["n1"]), hideCloudNotifications("o", ["n2"])]);
+	expect(JSON.parse(storage.get("ao.cloud.hiddenNotifications.o") ?? "[]")).toEqual(["n1", "n2"]);
+});

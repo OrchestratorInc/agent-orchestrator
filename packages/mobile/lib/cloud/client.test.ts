@@ -126,6 +126,23 @@ describe("cloud client", () => {
 		expect(calls[0].init.method).toBe("GET");
 	});
 
+	// The account token and terminal tickets would cross the network in the clear.
+	it("never sends the account token to a plain-http address outside this machine", async () => {
+		const calls: string[] = [];
+		const getToken = vi.fn(async () => "access");
+		const client = createCloudClient({
+			baseUrl: "http://cloud.example.test",
+			getToken,
+			newKey: () => "k",
+			fetch: (async (url: string) => { calls.push(url); return ok({}); }) as unknown as typeof fetch,
+		});
+		const error = await client.getMe().catch((cause: unknown) => cause);
+		expect(error).toMatchObject({ code: "insecure_address" });
+		expect(cloudErrorMessage(error)).toMatch(/https/);
+		expect(getToken).not.toHaveBeenCalled();
+		expect(calls).toHaveLength(0);
+	});
+
 	it("never calls the network without a token", async () => {
 		const { client, calls } = harness(() => ok({}), null);
 		await expect(client.getMe()).rejects.toBeInstanceOf(CloudAuthError);

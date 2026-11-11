@@ -118,11 +118,20 @@ export default function CloudAgentScreen() {
 	const codexAbort = useRef<AbortController | null>(null);
 	const browserCancel = useRef<(() => void) | null>(null);
 	const submitRef = useRef<() => void>(() => {});
+	// Each sign-in is an attempt; cancelling, going back to the choices and
+	// leaving the page end it. Every step after a wait checks it is still the
+	// current attempt before it opens the browser, polls or saves, so a
+	// cancelled sign-in never stores its credential.
+	const attempt = useRef(0);
+	const beginAttempt = () => ++attempt.current;
+	const owns = (id: number) => attempt.current === id;
+	const endAttempt = () => { attempt.current++; };
 
 	const label = isCloudAgent(agent) ? CLOUD_AGENT_LABELS[agent] : "Coding agent";
 	// Leaving the page stops a ChatGPT code still waiting for approval, and the
 	// browser sign-in's listener.
 	useEffect(() => () => {
+		attempt.current++;
 		codexAbort.current?.abort();
 		browserCancel.current?.();
 	}, []);
@@ -197,19 +206,22 @@ export default function CloudAgentScreen() {
 		if (navigation.isFocused()) backOr(router, "/settings/cloud");
 	};
 
-	const run = async (action: () => Promise<void>) => {
+	/** Runs a step of the page; a sign-in's step passes its attempt, so only the current one reports. */
+	const run = async (action: () => Promise<void>, id?: number) => {
+		const current = () => id === undefined || owns(id);
 		setBusy(true);
 		setError(null);
 		try { await action(); }
 		catch (cause) {
-			if ((cause as { name?: string })?.name === "AbortError") return;
+			if ((cause as { name?: string })?.name === "AbortError" || !current()) return;
 			haptics.error();
 			setError(cloudErrorMessage(cause));
 		}
-		finally { setBusy(false); }
+		finally { if (current()) setBusy(false); }
 	};
 
 	const backToChoose = () => {
+		endAttempt();
 		setFlow({ kind: "choose" });
 		setSecret("");
 		setError(null);
@@ -236,6 +248,7 @@ export default function CloudAgentScreen() {
 	 * code-based sign-in when the listener cannot run here.
 	 */
 	const signInWithBrowser = (method: CloudCredentialMethod) => {
+		const mine = beginAttempt();
 		void run(async () => {
 			let session: BrowserSignIn<ClaudeLogin> | BrowserSignIn<CodexBrowserLogin>;
 			try {
@@ -243,18 +256,20 @@ export default function CloudAgentScreen() {
 					? await prepareBrowserSignIn<ClaudeLogin>(0, CLAUDE_LOOPBACK_PATH)
 					: await prepareBrowserSignIn<CodexBrowserLogin>(CODEX_LOOPBACK_PORT, CODEX_LOOPBACK_PATH);
 			} catch (cause) {
+				if (!owns(mine)) return;
 				if (cause instanceof BrowserSignInUnavailable) { signInWithCode(method); return; }
 				throw cause;
 			}
-			// Cancelled before the browser opened (the login is still being
-			// prepared), it must not open afterwards.
-			let cancelled = false;
+			// Left or cancelled while the listener started: it stops, and nothing opens.
+			if (!owns(mine)) { session.cancel(); return; }
 			const cancel = () => {
-				cancelled = true;
+				if (owns(mine)) endAttempt();
 				session.cancel();
 			};
+			// Cancelled before the browser opened, or while the credential was
+			// being exchanged, it must not open or save afterwards.
 			const stillWanted = () => {
-				if (cancelled) throw Object.assign(new Error("Sign-in cancelled."), { name: "AbortError" });
+				if (!owns(mine)) throw Object.assign(new Error("Sign-in cancelled."), { name: "AbortError" });
 			};
 			browserCancel.current = cancel;
 			setFlow({ kind: "browser", method, cancel });
@@ -273,6 +288,7 @@ export default function CloudAgentScreen() {
 					setFlow({ kind: "browser", method, cancel, saving: true });
 					secretValue = await finishCodexBrowserLogin(login, code, loginDeps);
 				}
+				stillWanted();
 				await save(method.credentialType, secretValue);
 			} catch (cause) {
 				// Back to the choices, unless the page already moved on (Use a code instead).
@@ -281,23 +297,26 @@ export default function CloudAgentScreen() {
 			} finally {
 				if (browserCancel.current === cancel) browserCancel.current = null;
 			}
-		});
+		}, mine);
 	};
 
 	/** The code-based sign-in: Claude's paste-back code, or ChatGPT's device code. */
 	const signInWithCode = (method: CloudCredentialMethod) => {
 		setError(null);
 		setSecret("");
+		const mine = beginAttempt();
 		if (agent === "claude-code") {
 			void run(async () => {
 				const login = await startClaudeLogin(loginDeps);
+				if (!owns(mine)) return;
 				setFlow({ kind: "claude", method, login });
 				void openSignedInBrowser(login.authorizeUrl);
-			});
+			}, mine);
 			return;
 		}
 		void run(async () => {
 			const device = await startCodexLogin(loginDeps);
+			if (!owns(mine)) return;
 			setFlow({ kind: "codex", method, device });
 			codexAbort.current?.abort();
 			const controller = new AbortController();
@@ -307,21 +326,23 @@ export default function CloudAgentScreen() {
 			void (async () => {
 				try {
 					const approval = await waitForCodexApproval(device, loginDeps, controller.signal);
-					if (controller.signal.aborted) return;
+					if (controller.signal.aborted || !owns(mine)) return;
 					setBusy(true);
 					markSaving(true);
 					const authJson = await finishCodexLogin(approval, loginDeps);
+					// Cancelled while the code was exchanged: the credential is dropped.
+					if (controller.signal.aborted || !owns(mine)) return;
 					await save(method.credentialType, authJson);
 				} catch (cause) {
-					if (controller.signal.aborted || (cause as { name?: string })?.name === "AbortError") return;
+					if (controller.signal.aborted || !owns(mine) || (cause as { name?: string })?.name === "AbortError") return;
 					haptics.error();
 					setError(cloudErrorMessage(cause));
 					markSaving(false);
 				} finally {
-					if (!controller.signal.aborted) setBusy(false);
+					if (!controller.signal.aborted && owns(mine)) setBusy(false);
 				}
 			})();
-		});
+		}, mine);
 	};
 
 	const cancelCodex = () => {

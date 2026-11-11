@@ -432,6 +432,15 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	}, [sessions]);
 
 	if (status === "signed-out") return <CloudSignIn />;
+	// Cloud failed before it chose an organization: no session can load, so its
+	// own error, with Retry, rather than a session that never arrives.
+	if (status === "error" && !org) {
+		return (
+			<View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>
+				<EmptyState icon="warning" iconColor={t.red} title="Can't reach Orchestrator Cloud" message={cloud.error ?? "Try again in a moment."} action={<Button title="Retry" icon="refresh" onPress={() => void cloud.refresh()} />} />
+			</View>
+		);
+	}
 	if (!session || !org) {
 		return (
 			<View accessibilityRole={conversation.error ? "alert" : undefined} style={[styles.center, { paddingTop: headerOverlap }]}>
@@ -633,8 +642,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					onSend={send}
 					onAcknowledgeSend={acknowledge}
 					onSteer={steer}
-					onPromoteQueuedTurn={acknowledge}
-					onCancelQueuedTurn={acknowledge}
+					// Cloud can't steer with or delete a queued message, so the
+					// queue beside the composer offers neither.
 					onInterrupt={() => void conversation.stop().catch((error: unknown) => Alert.alert("Couldn't stop the turn", cloudErrorMessage(error)))}
 					onSettings={chooseTurnSettings}
 					onConfigOption={chooseOption}

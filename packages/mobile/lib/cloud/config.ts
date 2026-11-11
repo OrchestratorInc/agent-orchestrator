@@ -9,6 +9,22 @@
  */
 export const CLOUD_API_BASE_URL = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/+$/, "");
 
+// Plain http reaches only a control plane on this computer: the Android
+// emulator calls its host 10.0.2.2.
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "10.0.2.2"]);
+
+/**
+ * Whether the account token may be sent to `baseUrl`: https anywhere, plain
+ * http only to this machine or from a development build, never across a
+ * network where it could be read.
+ */
+export function cloudAddressIsSafe(baseUrl: string, development: boolean = typeof __DEV__ !== "undefined" && __DEV__): boolean {
+	let url: URL;
+	try { url = new URL(baseUrl); } catch { return false; }
+	if (url.protocol === "https:") return true;
+	return url.protocol === "http:" && (development || LOOPBACK_HOSTS.has(url.hostname));
+}
+
 /** Every user route lives under this prefix; nothing else is ever called with the account token. */
 export const CLOUD_API_PREFIX = "/api/cloud/v1";
 

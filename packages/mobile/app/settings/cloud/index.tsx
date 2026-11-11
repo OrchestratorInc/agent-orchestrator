@@ -77,14 +77,24 @@ function useGitHubAccess(client: CloudClient, orgId: string | undefined) {
 		mounted.current = true;
 		return () => { mounted.current = false; };
 	}, []);
+	// What the page shows belongs to one organization: another one starts it
+	// over, and an answer for the one before is dropped.
+	const shownOrg = useRef(orgId);
+	const stillShown = (asked: string | undefined) => mounted.current && shownOrg.current === asked;
+	useEffect(() => {
+		if (shownOrg.current === orgId) return;
+		shownOrg.current = orgId;
+		setAccess({ kind: "loading" });
+		setError(null);
+	}, [orgId]);
 
 	const load = useCallback(async () => {
 		if (!orgId) return;
 		try {
 			const { installations } = await client.listGitHubInstallations(orgId);
-			if (mounted.current) setAccess({ kind: "ready", installations });
+			if (stillShown(orgId)) setAccess({ kind: "ready", installations });
 		} catch (cause) {
-			if (!mounted.current) return;
+			if (!stillShown(orgId)) return;
 			// The GitHub App only exists on deployments that configure it.
 			if (cause instanceof CloudError && cause.status === 404) setAccess({ kind: "unavailable" });
 			// A failed refresh keeps what the page already shows.
@@ -105,10 +115,10 @@ function useGitHubAccess(client: CloudClient, orgId: string | undefined) {
 		setConnecting(true);
 		setError(null);
 		try {
-			await installGitHubApp(client, orgId, installations, () => mounted.current);
-			if (mounted.current) await load();
+			await installGitHubApp(client, orgId, installations, () => stillShown(orgId));
+			if (stillShown(orgId)) await load();
 		} catch (cause) {
-			if (!mounted.current) return;
+			if (!stillShown(orgId)) return;
 			haptics.error();
 			setError(cloudErrorMessage(cause));
 		} finally {
@@ -123,10 +133,11 @@ function useGitHubAccess(client: CloudClient, orgId: string | undefined) {
 		setError(null);
 		try {
 			await Promise.all(installations.filter((item) => item.status === "active").map((item) => client.syncGitHubInstallation(orgId, item.id)));
+			if (!stillShown(orgId)) return;
 			await load();
 			haptics.success();
 		} catch (cause) {
-			if (!mounted.current) return;
+			if (!stillShown(orgId)) return;
 			haptics.error();
 			setError(cloudErrorMessage(cause));
 		} finally {
