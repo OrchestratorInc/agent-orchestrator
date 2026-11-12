@@ -7,7 +7,9 @@ This page lists open-source projects by people outside the Orchestrator team tha
 
 ## Community projects
 
-No projects are listed yet. Yours can be the first.
+| Project | What it does | Uses |
+| --- | --- | --- |
+| No projects yet | Yours can be the first: see [Add your project](#add-your-project). | |
 
 <Callout type="info" title="Built against an older version?">
 Projects written for the 0.2.x npm packages (`@aoagents/ao` and `@aoagents/ao-core`) don't work with the current release. Orchestrator no longer loads third-party npm plugins: its adapters are compiled into the app (see [Adapter development](/plugins/authoring)). If you maintain one of these projects, port it to the `ao` CLI and the current repository, then add it here.
@@ -26,12 +28,10 @@ To add an agent CLI itself to Orchestrator, open a feature request instead: harn
 
 1. Check that it works with the current release and is open source.
 2. Add a link to [orchestrator.inc](https://orchestrator.inc) or to these docs in your README, for example with the [Built with Orchestrator badge](https://orchestrator.inc/badge/), so people who find your project can find Orchestrator too.
-3. Open a pull request that adds a row to the table below. Edit `frontend/src/docs/content/related-projects.mdx` in the [repository](https://github.com/OrchestratorInc/agent-orchestrator).
+3. Open a pull request that adds your row to the [Community projects](#community-projects) table, replacing the "No projects yet" row if it's still there. Edit `frontend/src/docs/content/related-projects.mdx` in the [repository](https://github.com/OrchestratorInc/agent-orchestrator). A row looks like this:
 
-The row format:
-
-| Project | What it does | Uses |
-| --- | --- | --- |
+```md
 | [name](https://github.com/you/project) | One sentence, under 15 words. | `ao` CLI, skill, package or starter |
+```
 
 We review new rows like any other pull request. We remove projects that stop working with the current release or that go a year without an update.
