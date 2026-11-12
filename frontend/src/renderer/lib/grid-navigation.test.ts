@@ -92,14 +92,36 @@ describe("grid measurement", () => {
 		expect(measureGridColumns(withTemplate("repeat(auto-fill, minmax(17rem, 1fr))"))).toBe(1);
 	});
 
-	it("fits whole rows of the grid in the viewport", () => {
+	it("counts the whole rows that fit from the current row, by their positions", () => {
 		const viewport = document.createElement("div");
-		Object.defineProperty(viewport, "clientHeight", { value: 500 });
+		Object.defineProperty(viewport, "clientHeight", { value: 250 });
+		// Two columns; rows 190, 190, 30 and 30 px tall with no gap.
+		const heights = [190, 190, 30, 30];
 		const grid = document.createElement("div");
-		vi.spyOn(grid, "getBoundingClientRect").mockReturnValue({ height: 600 } as DOMRect);
-		// 12 cards in 3 columns: 4 rows of 150px; 3 fit in 500px.
-		expect(measureVisibleRows(viewport, grid, 12, 3)).toBe(3);
+		let top = 0;
+		for (const height of heights) {
+			for (let column = 0; column < 2; column += 1) {
+				const item = document.createElement("div");
+				const rowTop = top;
+				vi.spyOn(item, "getBoundingClientRect").mockReturnValue({ top: rowTop, bottom: rowTop + height } as DOMRect);
+				grid.append(item);
+			}
+			top += height;
+		}
+		// From the first row only it fits; the average height would say two.
+		expect(measureVisibleRows(viewport, grid, 0, 2)).toBe(1);
+		// From the second row: 190 + 30 + 30 fill the 250 px exactly.
+		expect(measureVisibleRows(viewport, grid, 3, 2)).toBe(3);
+		expect(measureVisibleRows(viewport, grid, 5, 2)).toBe(2);
+	});
+
+	it("measures one row without a viewport, items or layout", () => {
+		const viewport = document.createElement("div");
+		const grid = document.createElement("div");
+		expect(measureVisibleRows(null, grid, 0, 3)).toBe(1);
 		expect(measureVisibleRows(viewport, grid, 0, 3)).toBe(1);
-		expect(measureVisibleRows(null, grid, 12, 3)).toBe(1);
+		grid.append(document.createElement("div"), document.createElement("div"));
+		// jsdom lays nothing out: every rect is zero.
+		expect(measureVisibleRows(viewport, grid, 0, 1)).toBe(1);
 	});
 });

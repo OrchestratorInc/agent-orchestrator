@@ -57,13 +57,30 @@ export function measureGridColumns(grid: HTMLElement | null): number {
 	return columns > 0 && columns === tracks.length ? columns : 1;
 }
 
-/** Whole rows of `grid` that fit in `viewport`'s height, at least 1. */
-export function measureVisibleRows(viewport: HTMLElement | null, grid: HTMLElement | null, mountedCount: number, columns: number): number {
-	if (!viewport || !grid || mountedCount <= 0) return 1;
-	const mountedRows = Math.ceil(mountedCount / Math.max(1, columns));
-	const rowHeight = grid.getBoundingClientRect().height / mountedRows;
-	if (!(rowHeight > 0)) return 1;
-	return Math.max(1, Math.floor(viewport.clientHeight / rowHeight));
+/**
+ * Whole rows of `grid` that fit in `viewport`'s height, counted down from the
+ * row holding item `fromIndex` by the rows' laid-out positions (rows can differ
+ * in height). At least 1; 1 when there is no layout to read.
+ */
+export function measureVisibleRows(viewport: HTMLElement | null, grid: HTMLElement | null, fromIndex: number, columns: number): number {
+	const items = grid?.children;
+	if (!viewport || !items || items.length === 0) return 1;
+	const cols = Math.max(1, Math.floor(columns));
+	const height = viewport.clientHeight;
+	const firstRow = Math.floor(Math.min(Math.max(fromIndex, 0), items.length - 1) / cols);
+	const top = items[firstRow * cols]?.getBoundingClientRect().top ?? 0;
+	let rows = 0;
+	for (let start = firstRow * cols; start < items.length; start += cols) {
+		const rowTop = items[start]?.getBoundingClientRect().top ?? 0;
+		let bottom = rowTop;
+		for (let index = start; index < Math.min(start + cols, items.length); index += 1) {
+			bottom = Math.max(bottom, items[index]?.getBoundingClientRect().bottom ?? 0);
+		}
+		if (!(bottom > rowTop)) return Math.max(1, rows);
+		if (bottom - top > height) break;
+		rows += 1;
+	}
+	return Math.max(1, rows);
 }
 
 /**

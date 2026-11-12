@@ -186,9 +186,15 @@ export function SessionArchiveModal({
 	const shown = useMemo(() => (results.length > limit ? results.slice(0, limit) : results), [limit, results]);
 	const shownRef = useRef(shown);
 	shownRef.current = shown;
-	const heldPosition = active.id === undefined ? -1 : shown.findIndex((session) => session.id === active.id);
-	const activePosition = shown.length === 0 ? -1 : heldPosition >= 0 ? heldPosition : Math.min(active.index, shown.length - 1);
-	const activeSession = activePosition >= 0 ? shown[activePosition] : undefined;
+	// Looked up in all results, not just the mounted ones: a poll that adds
+	// sessions above it can push the selected card past the mounted window, and
+	// it must stay selected (and get mounted), not hand the selection to
+	// whichever card took its place.
+	const heldPosition = active.id === undefined ? -1 : results.findIndex((session) => session.id === active.id);
+	if (heldPosition >= limit) setLimit(heldPosition + 1 + PAGE_SIZE);
+	// An index into `results`; mounted, as `shown` is their first `limit`.
+	const activePosition = heldPosition >= 0 ? heldPosition : shown.length === 0 ? -1 : Math.min(active.index, shown.length - 1);
+	const activeSession = activePosition >= 0 ? results[activePosition] : undefined;
 	const restoreAvailable = connected && restoringSessionId === undefined;
 	const canDelete = (session: WorkspaceSession) =>
 		// The control plane owns a cloud session's record; this daemon cannot delete it.
@@ -293,7 +299,7 @@ export function SessionArchiveModal({
 		if (activePosition < 0) return;
 		const grid = gridRef.current;
 		const columns = measureGridColumns(grid);
-		const pageRows = measureVisibleRows(scrollerRef.current, grid, shown.length, columns);
+		const pageRows = measureVisibleRows(scrollerRef.current, grid, activePosition, columns);
 		const target = boundedGridTarget(
 			gridNavigationTarget(key, activePosition, results.length, columns, pageRows),
 			shown.length,
@@ -367,6 +373,9 @@ export function SessionArchiveModal({
 		}
 		if (event.key === "Backspace" && mod && !event.shiftKey && !event.altKey) {
 			if (!(fromInput || fromCard) || !activeSession || !activeDeletable) return;
+			// In the search it is still text editing while there is text before
+			// the caret to delete; it asks to delete the card only from there on.
+			if (fromInput && input && (input.selectionStart !== 0 || input.selectionEnd !== 0)) return;
 			event.preventDefault();
 			setDeleteTarget(activeSession);
 			return;
@@ -420,7 +429,7 @@ export function SessionArchiveModal({
 							aria-autocomplete="list"
 							aria-controls={listboxId}
 							aria-expanded={true}
-							aria-haspopup="listbox"
+							aria-haspopup="grid"
 							aria-label={t("archiveModal.searchPlaceholder")}
 							autoComplete="off"
 							autoCorrect="off"
@@ -470,7 +479,7 @@ export function SessionArchiveModal({
 							onMouseDown={onGridMouseDown}
 							onPointerMove={onGridPointerMove}
 							ref={gridRef}
-							role="listbox"
+							role="grid"
 						>
 							{shown.map((session) => (
 								<ArchiveCardCell
@@ -558,34 +567,39 @@ const ArchiveCardCell = memo(function ArchiveCardCell({
 	session: WorkspaceSession;
 }) {
 	return (
-		<div
-			aria-label={session.title}
-			aria-selected={active}
-			className="min-w-0 rounded-lg"
-			data-archive-session={session.id}
-			data-testid="session-archive-card"
-			id={id}
-			// Tabbing onto one of its controls selects the card, so the keys and
-			// the highlight follow focus.
-			onFocus={() => actions.select(session)}
-			role="option"
-		>
-			<ArchivedSessionCardAdapter
-				compact
-				hidePullRequestProgress
-				hideTerminatedStatus
-				isRestoreDisabled={restoreDisabled}
-				isRestoring={restoring}
-				onDelete={deletable ? () => actions.requestDelete(session) : undefined}
-				onOpen={() => actions.open(session)}
-				restoreAction={(event) => {
-					event.stopPropagation();
-					actions.restore(session);
-				}}
-				restoreError={restoreError}
-				selected={active}
-				session={session}
-			/>
+		// A grid, not a listbox: each card holds its own buttons and links. Each
+		// card is a row of one cell, so a column change never regroups (and
+		// remounts) cards; the arrow keys follow the visual columns regardless.
+		<div className="min-w-0" role="row">
+			<div
+				aria-label={session.title}
+				aria-selected={active}
+				className="rounded-lg"
+				data-archive-session={session.id}
+				data-testid="session-archive-card"
+				id={id}
+				// Tabbing onto one of its controls selects the card, so the keys and
+				// the highlight follow focus.
+				onFocus={() => actions.select(session)}
+				role="gridcell"
+			>
+				<ArchivedSessionCardAdapter
+					compact
+					hidePullRequestProgress
+					hideTerminatedStatus
+					isRestoreDisabled={restoreDisabled}
+					isRestoring={restoring}
+					onDelete={deletable ? () => actions.requestDelete(session) : undefined}
+					onOpen={() => actions.open(session)}
+					restoreAction={(event) => {
+						event.stopPropagation();
+						actions.restore(session);
+					}}
+					restoreError={restoreError}
+					selected={active}
+					session={session}
+				/>
+			</div>
 		</div>
 	);
 });

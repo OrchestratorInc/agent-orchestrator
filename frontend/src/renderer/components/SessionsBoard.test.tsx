@@ -1070,7 +1070,7 @@ describe("SessionsBoard", () => {
 		const archive = await expandArchive();
 		const search = within(archive).getByRole("combobox");
 		expect(search).toHaveFocus();
-		const row = within(archive).getByText("dead worker").closest<HTMLElement>("[role='option']");
+		const row = within(archive).getByText("dead worker").closest<HTMLElement>("[role='gridcell']");
 		expect(row).not.toBeNull();
 		const card = within(row!).getByTestId("board-session-card");
 		expect(within(card).getByRole("img", { name: "claude-code" })).toBeInTheDocument();
@@ -1324,7 +1324,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		await expandArchive();
-		await waitFor(() => expect(screen.getByText("dead worker").closest("[role='option']")).toHaveAttribute("aria-selected", "true"));
+		await waitFor(() => expect(screen.getByText("dead worker").closest("[role='gridcell']")).toHaveAttribute("aria-selected", "true"));
 		const mod = isMacPlatform() ? "Meta" : "Control";
 		await userEvent.keyboard(`{${mod}>}{Enter}{/${mod}}`);
 
@@ -1344,14 +1344,14 @@ describe("SessionsBoard", () => {
 
 		const archive = await expandArchive();
 		const search = within(archive).getByRole("combobox");
-		const listbox = within(archive).getByRole("listbox", { name: "Archived sessions" });
+		const grid = within(archive).getByRole("grid", { name: "Archived sessions" });
 		// Three columns, as the responsive grid would lay out a medium window:
 		//   0 1 2
 		//   3 4
 		const realGetComputedStyle = window.getComputedStyle.bind(window);
 		const styleSpy = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
 			const style = realGetComputedStyle(element, pseudo);
-			if (element !== listbox) return style;
+			if (element !== grid) return style;
 			return {
 				display: style.display,
 				pointerEvents: style.pointerEvents,
@@ -1359,13 +1359,13 @@ describe("SessionsBoard", () => {
 				getPropertyValue: (name: string) => (name === "grid-template-columns" ? "100px 100px 100px" : style.getPropertyValue(name)),
 			} as CSSStyleDeclaration;
 		});
-		const selected = () => within(listbox).getAllByRole("option").find((option) => option.getAttribute("aria-selected") === "true");
+		const selected = () => within(grid).getAllByRole("gridcell").find((option) => option.getAttribute("aria-selected") === "true");
 		const expectSelected = (title: string) => {
 			const option = selected();
 			expect(option).toHaveAccessibleName(title);
 			expect(search).toHaveAttribute("aria-activedescendant", option?.id);
 			expect(search).toHaveFocus();
-			expect(within(listbox).getAllByTestId("board-session-card").filter((card) => card.hasAttribute("data-selected"))).toHaveLength(1);
+			expect(within(grid).getAllByTestId("board-session-card").filter((card) => card.hasAttribute("data-selected"))).toHaveLength(1);
 		};
 
 		expectSelected("archived 0");
@@ -1421,7 +1421,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		const archive = await expandArchive();
-		const [first, second, third] = within(archive).getAllByRole("option");
+		const [first, second, third] = within(archive).getAllByRole("gridcell");
 		const pointerMove = (target: HTMLElement, x: number, y: number) =>
 			act(() => {
 				target.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y }));
@@ -1453,7 +1453,7 @@ describe("SessionsBoard", () => {
 		const archive = await expandArchive();
 		const search = within(archive).getByRole("combobox");
 		await userEvent.keyboard("{ArrowDown}");
-		expect(within(archive).getByRole("option", { name: "other worker" })).toHaveAttribute("aria-selected", "true");
+		expect(within(archive).getByRole("gridcell", { name: "other worker" })).toHaveAttribute("aria-selected", "true");
 
 		// Tab walks only the selected card: restore, delete, copy branch, then the close button.
 		await userEvent.tab();
@@ -1474,9 +1474,15 @@ describe("SessionsBoard", () => {
 		// An arrow from a card's control moves the selection and hands focus back to the search.
 		await userEvent.keyboard("{ArrowUp}");
 		expect(search).toHaveFocus();
-		expect(within(archive).getByRole("option", { name: "dead worker" })).toHaveAttribute("aria-selected", "true");
+		expect(within(archive).getByRole("gridcell", { name: "dead worker" })).toHaveAttribute("aria-selected", "true");
 
+		// With text before the caret, Mod+Backspace is still the search's own editing.
 		const mod = isMacPlatform() ? "Meta" : "Control";
+		await userEvent.type(search, "worker");
+		await userEvent.keyboard(`{${mod}>}{Backspace}{/${mod}}`);
+		expect(screen.queryByRole("dialog", { name: "Delete this session permanently?" })).not.toBeInTheDocument();
+		await userEvent.clear(search);
+
 		await userEvent.keyboard(`{${mod}>}{Backspace}{/${mod}}`);
 		const confirm = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
 		expect(confirm).toBeInTheDocument();
@@ -1499,7 +1505,7 @@ describe("SessionsBoard", () => {
 		const search = within(archive).getByRole("combobox");
 		fireEvent.keyDown(search, { key: "ArrowDown", isComposing: true });
 		fireEvent.keyDown(search, { key: "Enter", isComposing: true });
-		expect(within(archive).getByRole("option", { name: "dead worker" })).toHaveAttribute("aria-selected", "true");
+		expect(within(archive).getByRole("gridcell", { name: "dead worker" })).toHaveAttribute("aria-selected", "true");
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
@@ -1851,7 +1857,7 @@ describe("SessionsBoard", () => {
 		const archive = await expandArchive();
 		const archivedMergedRow = within(archive)
 			.getByText("archived merged worker")
-			.closest<HTMLElement>("[role='option']");
+			.closest<HTMLElement>("[role='gridcell']");
 		expect(archivedMergedRow).not.toBeNull();
 		expect(
 			within(archivedMergedRow!).queryByRole("button", { name: "Archive archived merged worker" }),
