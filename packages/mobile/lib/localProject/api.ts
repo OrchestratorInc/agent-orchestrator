@@ -56,8 +56,8 @@ export async function addFolderProject(cfg: ServerConfig, input: { path: string;
  * init and a first commit. With `create`, makes the folder first, which must
  * not exist yet: a new, empty project.
  */
-export async function initializeFolder(cfg: ServerConfig, path: string, options: { create?: boolean } = {}): Promise<void> {
-	const body = options.create ? { path, create: true } : { path };
+export async function initializeFolder(cfg: ServerConfig, path: string, options: { create?: boolean; createId?: string } = {}): Promise<void> {
+	const body = options.create ? { path, create: true, ...(options.createId ? { createId: options.createId } : {}) } : { path };
 	await apiRequest(cfg, "/api/v1/projects/initialize", { method: "POST", body: JSON.stringify(body) }, INITIALIZE_TIMEOUT_MS);
 }
 

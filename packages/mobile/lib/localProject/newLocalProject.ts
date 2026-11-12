@@ -57,7 +57,8 @@ export function folderNameFor(name: string): string {
 		.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-")
 		.replace(/\s+/g, "-")
 		.replace(/-{2,}/g, "-")
-		.replace(/^[.-]+|-+$/g, "")
+		// No leading dot, which would hide it, and no trailing dot, which Windows drops from the folder on disk.
+		.replace(/^[.-]+|[.-]+$/g, "")
 		.slice(0, LOCAL_PROJECT_NAME_MAX);
 }
 

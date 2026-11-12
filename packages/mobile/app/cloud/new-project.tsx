@@ -1,12 +1,12 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { backOr } from "../../lib/backNavigation";
 import { CloudSignIn } from "../../lib/cloud/components";
 import { useCloud } from "../../lib/cloud/CloudProvider";
 import { CLOUD_HOST_ID } from "../../lib/cloud/mapping";
 import { NewProjectBar, NewProjectForm } from "../../lib/cloud/NewProjectForm";
-import { useCanCreateCloudProject } from "../../lib/cloud/useCanCreateCloudProject";
+import { useCloudProjectOffer } from "../../lib/cloud/useCanCreateCloudProject";
 import { useNewCloudProject } from "../../lib/cloud/useNewCloudProject";
 import { connectedSpawnHosts } from "../../lib/hostRoute";
 import { LocalProjectForm } from "../../lib/localProject/LocalProjectForm";
@@ -35,14 +35,20 @@ export default function NewProjectScreen() {
 	const params = useLocalSearchParams<{ placement?: string }>();
 	const { hostStates } = useApp();
 	const localOffered = useMemo(() => connectedSpawnHosts(hostStates).length > 0, [hostStates]);
-	const cloudOffered = useCanCreateCloudProject();
+	const cloudOffer = useCloudProjectOffer();
+	const cloudOffered = cloudOffer === "yes";
 	const [chosen, setChosen] = useState<ProjectPlacement | null>(params.placement === "cloud" || params.placement === "local" ? params.placement : null);
-	// The face asked for while it can make a project; Local first otherwise,
-	// and Cloud when no machine is connected, which says what it needs.
-	const placement: ProjectPlacement = chosen === "cloud" && cloudOffered ? "cloud"
+	// A create in flight keeps its face: switching would unmount it and let the
+	// other face, or this one again, start a second create.
+	const [busy, setBusy] = useState(false);
+	// The face asked for while it can make a project (Cloud also while its plan
+	// is still being read, so New task's Cloud request opens Cloud); Local first
+	// otherwise, and Cloud when no machine is connected, which says what it needs.
+	const placement: ProjectPlacement = chosen === "cloud" && cloudOffer !== "no" ? "cloud"
 		: chosen === "local" && localOffered ? "local"
 		: localOffered ? "local" : "cloud";
-	const choice: PlacementChoice | undefined = localOffered && cloudOffered ? { value: placement, onChange: setChosen } : undefined;
+	const choose = useCallback((next: ProjectPlacement) => { if (!busy) setChosen(next); }, [busy]);
+	const choice: PlacementChoice | undefined = localOffered && cloudOffered ? { value: placement, onChange: choose, disabled: busy } : undefined;
 
 	// Leave the form first, then open the page, as the conversation's actions
 	// sheet does: a page pushed from a sheet lands in the stack under it, out of
@@ -60,8 +66,8 @@ export default function NewProjectScreen() {
 	return (
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]}>
 			{placement === "local"
-				? <LocalBody placement={choice} onCreated={openProject} onCancel={cancel} />
-				: <CloudBody placement={choice} onCreated={openProject} onCancel={cancel} leaveFor={leaveFor} />}
+				? <LocalBody placement={choice} onCreated={openProject} onCancel={cancel} onBusyChange={setBusy} />
+				: <CloudBody placement={choice} onCreated={openProject} onCancel={cancel} onBusyChange={setBusy} leaveFor={leaveFor} />}
 		</View>
 	);
 }
@@ -70,10 +76,13 @@ type BodyProps = {
 	placement?: PlacementChoice;
 	onCreated(hostId: string, projectId: string): void;
 	onCancel(): void;
+	/** Says when a create starts and ends, so the switch holds still meanwhile. */
+	onBusyChange(busy: boolean): void;
 };
 
-function LocalBody({ placement, onCreated, onCancel }: BodyProps) {
+function LocalBody({ placement, onCreated, onCancel, onBusyChange }: BodyProps) {
 	const project = useNewLocalProject({ onCreated });
+	useEffect(() => { onBusyChange(project.busy); }, [onBusyChange, project.busy]);
 	return (
 		<>
 			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void project.create()} />
@@ -82,13 +91,14 @@ function LocalBody({ placement, onCreated, onCancel }: BodyProps) {
 	);
 }
 
-function CloudBody({ placement, onCreated, onCancel, leaveFor }: BodyProps & { leaveFor(open: () => void): void }) {
+function CloudBody({ placement, onCreated, onCancel, onBusyChange, leaveFor }: BodyProps & { leaveFor(open: () => void): void }) {
 	const router = useRouter();
 	const cloud = useCloud();
 	const openProject = useCallback((id: string) => onCreated(CLOUD_HOST_ID, id), [onCreated]);
 	// Coding agents are connected in Orchestrator Cloud's settings.
 	const connectAgent = useCallback(() => leaveFor(() => router.push("/settings/cloud")), [leaveFor, router]);
 	const project = useNewCloudProject({ onCreated: openProject });
+	useEffect(() => { onBusyChange(project.busy); }, [onBusyChange, project.busy]);
 
 	let body: ReactNode;
 	if (project.status === "signed-out") {

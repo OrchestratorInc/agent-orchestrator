@@ -153,6 +153,7 @@ describe("new projects", () => {
 		expect(folderNameFor(" My  App ")).toBe("My-App");
 		expect(folderNameFor("a/b\\c:d")).toBe("a-b-c-d");
 		expect(folderNameFor(".hidden")).toBe("hidden");
+		expect(folderNameFor("notes.")).toBe("notes");
 		expect(folderNameFor("  ")).toBe("");
 	});
 

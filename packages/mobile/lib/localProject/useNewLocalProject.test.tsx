@@ -22,6 +22,8 @@ const fixtures = vi.hoisted(() => ({
 	prepareClone: vi.fn(),
 	cleanupClone: vi.fn(),
 	places: new Map<string, { recent: string[]; destination?: string }>(),
+	keys: 0,
+	createIds: new Map<string, string>(),
 	remembered: [] as { hostId: string; place: { folder?: string; destination?: string } }[],
 }));
 
@@ -31,6 +33,7 @@ vi.mock("../api", () => ({
 	},
 }));
 vi.mock("../store", () => ({ useApp: () => fixtures.app }));
+vi.mock("expo-crypto", () => ({ randomUUID: () => `create-${++fixtures.keys}` }));
 vi.mock("./api", () => ({
 	listDirectories: fixtures.listDirectories,
 	addFolderProject: fixtures.addFolderProject,
@@ -146,7 +149,16 @@ beforeEach(() => {
 		return listing;
 	});
 	fixtures.addFolderProject.mockReset().mockImplementation(async (_cfg: unknown, input: { path: string }) => input.path.split("/").pop());
-	fixtures.initializeFolder.mockReset().mockImplementation(async (_cfg: unknown, path: string) => {
+	// As the daemon does: a folder is made once, and a retry with the same id resumes it.
+	fixtures.keys = 0;
+	fixtures.createIds = new Map();
+	fixtures.initializeFolder.mockReset().mockImplementation(async (_cfg: unknown, path: string, options: { createId?: string } = {}) => {
+		const madeBy = fixtures.createIds.get(path);
+		if (madeBy !== undefined) {
+			if (madeBy === options.createId) return;
+			throw new ApiError(409, "", "PATH_EXISTS");
+		}
+		fixtures.createIds.set(path, options.createId ?? "");
 		fixtures.repos.set(path, { isRepo: true, hasCommit: true, hasOrigin: false });
 	});
 	fixtures.validateImport.mockReset().mockImplementation(async (_cfg: unknown, path: string) => validationFor(path));
@@ -284,7 +296,7 @@ describe("useNewLocalProject", () => {
 		expect(project().setupActions).toEqual(["git_init", "git_commit", "create_remote_repository"]);
 		await act_(() => project().setName(" My App "));
 		await act_(() => project().create());
-		expect(fixtures.initializeFolder).toHaveBeenCalledWith(expect.anything(), "~/ao/projects/My-App", { create: true });
+		expect(fixtures.initializeFolder).toHaveBeenCalledWith(expect.anything(), "~/ao/projects/My-App", { create: true, createId: "create-1" });
 		expect(fixtures.prepareImportGit.mock.calls.map(([, input]) => (input as { approvedActions: ImportAction[] }).approvedActions[0])).toEqual(["create_remote_repository"]);
 		expect(fixtures.addFolderProject).toHaveBeenCalledWith(expect.anything(), { path: "~/ao/projects/My-App", name: "My App" });
 		expect(onCreated).toHaveBeenCalledWith("studio", "My-App");
@@ -299,7 +311,9 @@ describe("useNewLocalProject", () => {
 		expect(project().error).toMatch(/Create remote repository failed/);
 		fixtures.failAction = null;
 		await act_(() => project().create());
-		expect(fixtures.initializeFolder).toHaveBeenCalledTimes(1);
+		// The retry names the same create, so the daemon resumes the folder it made.
+		const ids = fixtures.initializeFolder.mock.calls.map(([, , options]) => (options as { createId: string }).createId);
+		expect(ids).toEqual(["create-1", "create-1"]);
 		expect(onCreated).toHaveBeenCalledWith("studio", "app2");
 	});
 
@@ -345,5 +359,94 @@ describe("useNewLocalProject", () => {
 		expect(project().folder).toBeNull();
 		expect(project().browseTarget).toBe("folder");
 		expect(fixtures.listDirectories).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: "mac" }), undefined);
+	});
+
+	it("resumes a new folder whose first create lost its response", async () => {
+		let lost = true;
+		const made = fixtures.initializeFolder.getMockImplementation()!;
+		fixtures.initializeFolder.mockImplementation(async (...args: unknown[]) => {
+			await (made as (...a: unknown[]) => Promise<void>)(...args);
+			if (lost) { lost = false; throw new Error("Network request failed"); }
+		});
+		await mount();
+		await act_(() => project().chooseSource("new"));
+		await act_(() => project().setName("app3"));
+		await act_(() => project().create());
+		expect(project().error).toBeTruthy();
+		await act_(() => project().create());
+		expect(onCreated).toHaveBeenCalledWith("studio", "app3");
+	});
+
+	it("keeps an unused clone until removing it works, and tries again before cloning anew", async () => {
+		fixtures.cleanupClone.mockRejectedValueOnce(new Error("offline"));
+		fixtures.prepareClone.mockImplementation(async (_cfg: unknown, input: { remoteUrl: string; destinationParent: string }) => {
+			const path = `${input.destinationParent}/${input.remoteUrl.split("/").pop()}`;
+			fixtures.repos.set(path, { isRepo: true, hasCommit: true, hasOrigin: false });
+			return { path, preparationId: `prep-${path}` };
+		});
+		fixtures.remote.ready = false;
+		await mount();
+		await act_(() => project().chooseSource("clone"));
+		await act_(() => project().setRemoteUrl("https://x/one"));
+		// The checkout needs a remote: it stays prepared while the form asks for one.
+		await act_(() => project().create());
+		expect(fixtures.prepareClone).toHaveBeenCalledTimes(1);
+		await act_(() => project().setRemoteUrl("https://x/two"));
+		expect(fixtures.cleanupClone).toHaveBeenCalledTimes(1);
+		expect(project().error).toMatch(/couldn't remove the unused clone/);
+		// The stale clone's steps are not this URL's.
+		expect(project().setupActions).toEqual([]);
+		fixtures.remote.ready = true;
+		await act_(() => renderer?.update(<Probe />));
+		await act_(() => project().create());
+		expect(fixtures.cleanupClone).toHaveBeenCalledTimes(2);
+		expect(fixtures.cleanupClone).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: "studio" }), { path: "~/ao/projects/one", preparationId: "prep-~/ao/projects/one" });
+		expect(fixtures.prepareClone).toHaveBeenLastCalledWith(expect.anything(), { remoteUrl: "https://x/two", destinationParent: "~/ao/projects" });
+	});
+
+	it("removes a clone that finishes after the machine changed, on the machine that made it", async () => {
+		let finish!: () => void;
+		fixtures.prepareClone.mockImplementation(() => new Promise((resolve) => { finish = () => resolve({ path: "~/ao/projects/sample", preparationId: "prep-1" }); }));
+		await mount();
+		await act_(() => project().chooseSource("clone"));
+		await act_(() => project().setRemoteUrl("https://x/sample"));
+		let pending!: Promise<void>;
+		await act(async () => { pending = project().create(); });
+		// The studio goes offline while it clones.
+		app.hostStates = app.hostStates.filter((item) => item.hostId !== "studio");
+		fixtures.app = { ...app, hostStates: app.hostStates };
+		await act_(() => renderer?.update(<Probe />));
+		await act_(async () => { finish(); await pending; });
+		expect(project().hostId).toBe("mac");
+		expect(fixtures.cleanupClone).toHaveBeenCalledWith(expect.objectContaining({ hostId: "studio" }), { path: "~/ao/projects/sample", preparationId: "prep-1" });
+		expect(fixtures.addFolderProject).not.toHaveBeenCalled();
+	});
+
+	it("can't create while a folder is being browsed, and a new name clears the last error", async () => {
+		await mount();
+		await act_(() => project().chooseSource("new"));
+		await act_(() => project().setName("app"));
+		expect(project().canCreate).toBe(true);
+		await act_(() => project().changeFolder("destination"));
+		expect(project().canCreate).toBe(false);
+		await act_(() => project().cancelBrowse());
+		fixtures.initializeFolder.mockRejectedValueOnce(new ApiError(409, "", "PATH_EXISTS"));
+		await act_(() => project().create());
+		expect(project().error).toMatch(/already exists/);
+		await act_(() => project().setName("app-2"));
+		expect(project().error).toBeNull();
+	});
+
+	it("holds the machine while a create runs", async () => {
+		let finish!: () => void;
+		fixtures.addFolderProject.mockImplementation(() => new Promise((resolve) => { finish = () => resolve("app"); }));
+		await mount();
+		await act_(() => project().choose(`${HOME}/app`));
+		let pending!: Promise<void>;
+		await act(async () => { pending = project().create(); });
+		expect(project().busy).toBe(true);
+		await act_(() => project().chooseHost("mac"));
+		expect(project().hostId).toBe("studio");
+		await act_(async () => { finish(); await pending; });
 	});
 });

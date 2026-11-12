@@ -1,4 +1,6 @@
+import * as Crypto from "expo-crypto";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ServerConfig } from "../config";
 import { haptics } from "../haptics";
 import { connectedSpawnHosts } from "../hostRoute";
 import { useApp } from "../store";
@@ -34,8 +36,11 @@ import { useRemoteSetup } from "./useRemoteSetup";
 /** The steps a new, empty project goes through: the folder is made and committed, then given a remote. */
 const NEW_PROJECT_ACTIONS: readonly ImportAction[] = ["git_init", "git_commit", "create_remote_repository"];
 
-/** A clone made but not registered yet, as the desktop keeps one until the project is added. */
-type PreparedClone = { path: string; preparationId: string; remoteUrl: string; destinationParent: string };
+/**
+ * A clone made but not registered yet, as the desktop keeps one until the
+ * project is added, with the machine that made it: cleanup goes there.
+ */
+type PreparedClone = { path: string; preparationId: string; remoteUrl: string; destinationParent: string; hostId: string; config: ServerConfig };
 
 /** What the daemon said about the folder being added, and for which path. */
 type ImportCheck = { path: string; validation: ImportValidation; state: ImportState };
@@ -67,12 +72,14 @@ export function useNewLocalProject({ onCreated }: {
 		?? null;
 	const machine = machines.find((item) => item.id === hostId);
 	const config = hostId ? configForHost(hostId) : null;
+	const hostRef = useRef(hostId);
+	hostRef.current = hostId;
 
 	const [source, setSource] = useState<LocalProjectSource>("folder");
 	const [folder, setFolder] = useState<string | null>(null);
 	const [remoteUrl, setRemoteUrl] = useState("");
 	const [destinationParent, setDestinationParent] = useState(DEFAULT_CLONE_PARENT);
-	const [name, setName] = useState("");
+	const [name, setNameValue] = useState("");
 
 	// The browser: the folder it shows, the machine user's home (the first
 	// listing), and a filter over a long listing.
@@ -88,6 +95,11 @@ export function useNewLocalProject({ onCreated }: {
 
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	/** A new name no longer answers to the last failure. */
+	const setName = (value: string) => {
+		setNameValue(value);
+		setError(null);
+	};
 	// The validation of the folder being added, the step running now, and a
 	// clone or new folder already made on the machine but not added yet.
 	const [check, setCheck] = useState<ImportCheck | null>(null);
@@ -96,7 +108,9 @@ export function useNewLocalProject({ onCreated }: {
 	const [prepared, setPrepared] = useState<PreparedClone | null>(null);
 	const preparedRef = useRef<PreparedClone | null>(null);
 	preparedRef.current = prepared;
-	const [createdNew, setCreatedNew] = useState<string | null>(null);
+	// One id per new folder, kept across retries, so a create whose response
+	// was lost resumes the folder it made (the daemon records the id there).
+	const createId = useRef<{ path: string; id: string } | null>(null);
 
 	const mounted = useRef(true);
 	useEffect(() => {
@@ -138,7 +152,7 @@ export function useNewLocalProject({ onCreated }: {
 		setPlaces({ recent: [] });
 		setError(null);
 		setCheck(null);
-		setCreatedNew(null);
+		createId.current = null;
 		const shown = hostId;
 		void (async () => {
 			const remembered = await loadProjectPlaces(shown);
@@ -152,7 +166,8 @@ export function useNewLocalProject({ onCreated }: {
 	}, [browse, hostId, source]);
 
 	const chooseHost = (id: string) => {
-		if (id === hostId) return;
+		// A create in flight belongs to the machine it started on.
+		if (id === hostId || busy) return;
 		haptics.select();
 		setChosenHostId(id);
 	};
@@ -195,7 +210,6 @@ export function useNewLocalProject({ onCreated }: {
 		haptics.select();
 		if (browseTarget === "destination") {
 			setDestinationParent(path);
-			setCreatedNew(null);
 		} else {
 			setFolder(path);
 			void runCheck(path);
@@ -226,26 +240,45 @@ export function useNewLocalProject({ onCreated }: {
 	/** Shortcuts to where recent projects sat, other than the folder shown. */
 	const recentPlaces = useMemo(() => filter.trim() ? [] : places.recent.filter((path) => path !== listing?.path), [filter, listing?.path, places.recent]);
 	const atRoot = !listing || listing.parent === listing.path;
-	// A prepared clone the user moves away from (another URL, another place,
-	// another machine, or the sheet closed) is removed, as the desktop removes it.
-	const abandonPrepared = useCallback((cfg = config) => {
-		const current = preparedRef.current;
-		if (!current) return;
-		setPrepared(null);
-		setCheck(null);
-		if (cfg) void cleanupClone(cfg, { path: current.path, preparationId: current.preparationId }).catch(() => {});
-	}, [config]);
+	/**
+	 * Removes a prepared clone the user moved away from (another URL, another
+	 * place, another machine), on the machine that made it, as the desktop
+	 * removes it. The clone stays known until removal succeeds, so a failure is
+	 * said and the next Create tries again first.
+	 */
+	const cleanupPrepared = useCallback(async (clone: PreparedClone): Promise<boolean> => {
+		try {
+			await cleanupClone(clone.config, { path: clone.path, preparationId: clone.preparationId });
+		} catch {
+			if (mounted.current) setError(`Orchestrator couldn't remove the unused clone at ${clone.path}. Create tries again.`);
+			return false;
+		}
+		if (preparedRef.current === clone) {
+			preparedRef.current = null;
+			if (mounted.current) {
+				setPrepared(null);
+				setCheck((current) => current?.path === clone.path ? null : current);
+			}
+		}
+		return true;
+	}, []);
+	const preparedMatches = (clone: PreparedClone) => clone.hostId === hostId
+		&& clone.remoteUrl === remoteUrl.trim() && clone.destinationParent === destinationParent.trim();
 	useEffect(() => {
-		if (prepared && (prepared.remoteUrl !== remoteUrl.trim() || prepared.destinationParent !== destinationParent.trim())) abandonPrepared();
-	}, [abandonPrepared, destinationParent, prepared, remoteUrl]);
-	const configRef = useRef(config);
-	configRef.current = config;
-	useEffect(() => () => abandonPrepared(configRef.current), [hostId]);
+		if (prepared && !(prepared.hostId === hostId && prepared.remoteUrl === remoteUrl.trim() && prepared.destinationParent === destinationParent.trim())) {
+			void cleanupPrepared(prepared);
+		}
+	}, [cleanupPrepared, destinationParent, hostId, prepared, remoteUrl]);
+	// The sheet closed with a clone still unregistered: nothing is left to retry from, so it goes now.
+	useEffect(() => () => {
+		const clone = preparedRef.current;
+		if (clone) void cleanupClone(clone.config, { path: clone.path, preparationId: clone.preparationId }).catch(() => {});
+	}, []);
 
 	// The step list and the remote the form shows: a folder's from its check, a
 	// new project's always, a clone's only when its checkout needs one.
 	const checkFor = source === "folder" ? (check && check.path === folder ? check : null)
-		: source === "clone" ? (prepared && check?.path === prepared.path ? check : null)
+		: source === "clone" ? (prepared && preparedMatches(prepared) && check?.path === prepared.path ? check : null)
 		: null;
 	const setupActions: ImportAction[] = source === "new"
 		? [...NEW_PROJECT_ACTIONS]
@@ -259,7 +292,8 @@ export function useNewLocalProject({ onCreated }: {
 		suggestedName: source === "new" ? folderNameFor(name) : suggestedGitHubName(checkFor?.path ?? folder ?? ""),
 	});
 
-	const canCreate = Boolean(config) && !busy && !checking && !blocked
+	// Not while a folder is being browsed: Create would use the one chosen before.
+	const canCreate = Boolean(config) && !busy && !checking && !blocked && browseTarget === null
 		&& canCreateLocalProject({ source, folder, remoteUrl, destinationParent, name })
 		&& (source !== "folder" || Boolean(checkFor))
 		&& (!remoteNeeded || remote.ready);
@@ -300,10 +334,11 @@ export function useNewLocalProject({ onCreated }: {
 	};
 
 	/** Validates a folder that was just made or cloned, and reports why it can't be added. */
-	const validated = async (cfg: NonNullable<typeof config>, path: string): Promise<ImportValidation> => {
+	const validated = async (cfg: NonNullable<typeof config>, path: string, on: string): Promise<ImportValidation> => {
 		const validation = await validateImport(cfg, path);
 		const state = importState(validation);
-		if (mounted.current) setCheck({ path, validation, state });
+		// Only the machine still shown takes the answer.
+		if (mounted.current && hostRef.current === on) setCheck({ path, validation, state });
 		if (state.kind === "blocked") throw new Error(state.message);
 		return validation;
 	};
@@ -317,18 +352,29 @@ export function useNewLocalProject({ onCreated }: {
 		try {
 			if (request.source === "clone") {
 				let clone = preparedRef.current;
+				// A clone left from another URL, place or machine goes first.
+				if (clone && !preparedMatches(clone)) {
+					if (!(await cleanupPrepared(clone))) return;
+					clone = null;
+				}
 				if (!clone) {
 					const made = await prepareClone(config, { remoteUrl: request.input.remoteUrl, destinationParent: request.input.destinationParent });
-					clone = { ...made, remoteUrl: request.input.remoteUrl, destinationParent: request.input.destinationParent };
-					if (mounted.current) setPrepared(clone);
+					const fresh: PreparedClone = { ...made, remoteUrl: request.input.remoteUrl, destinationParent: request.input.destinationParent, hostId: createdOn, config };
+					// The machine changed or the sheet closed while it cloned: the clone isn't this form's.
+					if (!mounted.current || hostRef.current !== createdOn) {
+						void cleanupClone(config, { path: made.path, preparationId: made.preparationId }).catch(() => {});
+						return;
+					}
+					clone = fresh;
+					setPrepared(clone);
 					preparedRef.current = clone;
 				}
 				let validation: ImportValidation;
 				try {
-					validation = await validated(config, clone.path);
+					validation = await validated(config, clone.path, createdOn);
 				} catch (cause) {
 					// A checkout that can't become a project isn't kept.
-					abandonPrepared();
+					await cleanupPrepared(clone);
 					throw cause;
 				}
 				// The checkout needs a remote of its own: the form asks for it, and Create goes on.
@@ -341,21 +387,21 @@ export function useNewLocalProject({ onCreated }: {
 				return;
 			}
 			if (request.source === "new") {
-				// Made once: a retry after a failed setup step carries on in the same folder.
-				if (createdNew !== request.input.path) {
-					try {
-						await initializeFolder(config, request.input.path, { create: true });
-					} catch (cause) {
-						if (createUnsupported(cause)) throw new Error(UNSUPPORTED_NEW_PROJECT);
-						throw cause;
-					}
-					if (mounted.current) setCreatedNew(request.input.path);
+				// The same id on every try for this folder: the daemon resumes the folder
+				// an earlier try made (a lost response, a failed setup step) and refuses
+				// any other that is already there.
+				if (createId.current?.path !== request.input.path) createId.current = { path: request.input.path, id: Crypto.randomUUID() };
+				try {
+					await initializeFolder(config, request.input.path, { create: true, createId: createId.current.id });
+				} catch (cause) {
+					if (createUnsupported(cause)) throw new Error(UNSUPPORTED_NEW_PROJECT);
+					throw cause;
 				}
-				await runSetup(config, await validated(config, request.input.path));
+				await runSetup(config, await validated(config, request.input.path, createdOn));
 				await finish(createdOn, await addFolderProject(config, request.input), { destination: destinationParent.trim() });
 				return;
 			}
-			const validation = checkFor?.validation ?? await validated(config, request.input.path);
+			const validation = checkFor?.validation ?? await validated(config, request.input.path, createdOn);
 			const done = await runSetup(config, validation);
 			await finish(createdOn, await addFolderProject(config, { ...request.input, path: done.root.repoPath }), { folder: request.input.path });
 		} catch (cause) {

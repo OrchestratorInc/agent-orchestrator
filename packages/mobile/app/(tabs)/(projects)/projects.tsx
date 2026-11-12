@@ -58,11 +58,13 @@ export default function ProjectsScreen() {
 	// clone, or in Orchestrator Cloud; the sheet offers whichever can be made.
 	const canCreateLocalProject = useMemo(() => connectedSpawnHosts(hostStates).length > 0, [hostStates]);
 	const newProject = useCallback(() => router.push("/cloud/new-project"), [router]);
+	// With no machine connected the sheet can only make a cloud project, so it says so.
+	const newProjectLabel = canCreateLocalProject ? "New project" : "New cloud project";
 	// On iOS, New project sits at the end of the page's own title line, so
 	// the bar keeps the board's items as they are. Android's large title is the
 	// bar's own, on the row its actions sit on, so there it is the bar's "+".
 	const largeTitle = useInlineLargeTitle(boardTitle("(projects)"), {
-		action: canCreateCloudProject || canCreateLocalProject ? <TitleActionButton icon="add" accessibilityLabel="New project" onPress={newProject} testID="new-project-title" /> : undefined,
+		action: canCreateCloudProject || canCreateLocalProject ? <TitleActionButton icon="add" accessibilityLabel={newProjectLabel} onPress={newProject} testID="new-project-title" /> : undefined,
 	});
 	const tabBar = useTabBarFrost();
 	const listRef = useRef<FlatList<HostedProjectRow>>(null);
@@ -172,13 +174,13 @@ export default function ProjectsScreen() {
 								icon="folder"
 								title="No projects"
 								message={canCreateLocalProject ? (canCreateCloudProject ? "Add a folder from your computer, clone a repository, or start a cloud project." : "Add a folder from your computer or clone a repository.") : canCreateCloudProject ? "Create a cloud project from a GitHub repository, or add one in Orchestrator on your computer." : "Add a project in Orchestrator to get started."}
-								action={canCreateLocalProject || canCreateCloudProject ? <Button title="New project" icon="plus" onPress={newProject} /> : undefined}
+								action={canCreateLocalProject || canCreateCloudProject ? <Button title={newProjectLabel} icon={canCreateLocalProject ? "plus" : "cloud"} onPress={newProject} /> : undefined}
 							/>
 						)
 					}
 				/>
 			)}
-			<BoardHeaderItems unread={unreadCount} onAdd={Platform.OS === "android" && (canCreateCloudProject || canCreateLocalProject) ? newProject : undefined} addLabel="New project" />
+			<BoardHeaderItems unread={unreadCount} onAdd={Platform.OS === "android" && (canCreateCloudProject || canCreateLocalProject) ? newProject : undefined} addLabel={newProjectLabel} />
 			{largeTitle.edge}
 			{tabBar.frost}
 		</View>

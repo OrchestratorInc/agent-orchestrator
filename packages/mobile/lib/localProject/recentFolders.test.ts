@@ -24,6 +24,7 @@ describe("recent project places", () => {
 		expect(parentFolder("/Users/me/app/")).toBe("/Users/me");
 		expect(parentFolder("/app")).toBe("/");
 		expect(parentFolder("C:\\code\\app")).toBe("C:\\code");
+		expect(parentFolder("C:\\app")).toBe("C:\\");
 	});
 
 	it("remembers per machine and survives a fresh read", async () => {

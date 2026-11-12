@@ -20,7 +20,9 @@ export function cloneUrlFor(repo: Pick<CloudGitHubRepository, "htmlUrl" | "fullN
 export function useGitHubRepositories(enabled: boolean) {
 	const { status, client, org } = useCloud();
 	const orgId = status === "ready" ? org?.id : undefined;
-	const [repos, setRepos] = useState<CloudGitHubRepository[] | null>(null);
+	const [result, setResult] = useState<{ orgId: string; items: CloudGitHubRepository[] } | null>(null);
+	// Another organization's repositories are never shown, not even while its own load.
+	const repos = result && result.orgId === orgId ? result.items : null;
 	const [loading, setLoading] = useState(false);
 	const [query, setQuery] = useState("");
 	const readFor = useRef<string | null>(null);
@@ -36,10 +38,10 @@ export function useGitHubRepositories(enabled: boolean) {
 				const items = hasActiveInstallation(installations)
 					? reachableRepositories(await collectPages((cursor) => client.listGitHubRepositories(orgId, { cursor })))
 					: [];
-				if (!cancelled) setRepos(items);
+				if (!cancelled) setResult({ orgId, items });
 			} catch {
 				// No GitHub App on this deployment, or Cloud is unreachable: the URL is typed.
-				if (!cancelled) setRepos([]);
+				if (!cancelled) setResult({ orgId, items: [] });
 			} finally {
 				if (!cancelled) setLoading(false);
 			}

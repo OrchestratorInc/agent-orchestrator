@@ -169,7 +169,7 @@ function MachineSection({ project }: { project: NewLocalProject }) {
 				label="Machine"
 				selection={project.hostId ?? ""}
 				onSelectionChange={(next: string) => project.chooseHost(next)}
-				modifiers={[pickerStyle("menu"), tint(t.accent), accessibilityIdentifier("new-local-project-machine")]}
+				modifiers={[pickerStyle("menu"), tint(t.accent), disabledModifier(project.busy), accessibilityIdentifier("new-local-project-machine")]}
 			>
 				{project.machines.map((machine) => <Label key={machine.id} title={machine.label} systemImage={symbols.laptop.ios} modifiers={[tag(machine.id)]} />)}
 			</Picker>
@@ -368,7 +368,7 @@ function BrowserSection({ project, target }: { project: NewLocalProject; target:
 					{canCancel ? <Button label="Cancel" onPress={project.cancelBrowse} modifiers={[buttonStyle("borderless")]} /> : null}
 				</HStack>
 				<FolderFilterRow project={project} />
-				<Button onPress={() => project.choose(listing.path)} testID="new-local-project-choose-here">
+				<Button onPress={() => { if (!project.listingBusy) project.choose(listing.path); }} modifiers={[disabledModifier(project.listingBusy)]} testID="new-local-project-choose-here">
 					<Label title={chooseHereLabel(target, project.source)} systemImage={symbols.checkmark.ios} />
 				</Button>
 				{project.entries.map((entry) => (

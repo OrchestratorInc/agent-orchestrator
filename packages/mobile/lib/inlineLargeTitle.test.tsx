@@ -122,8 +122,9 @@ describe("the Projects board", () => {
 	// its board has no floating button any more: there the "+" is the bar's.
 	it("adds a project from its title line on iOS, and from the bar on Android", () => {
 		expect(page).toContain("useInlineLargeTitle(");
-		expect(page).toContain('accessibilityLabel="New project"');
-		expect(page).toContain('onAdd={Platform.OS === "android" && (canCreateCloudProject || canCreateLocalProject) ? newProject : undefined} addLabel="New project"');
+		expect(page).toContain('const newProjectLabel = canCreateLocalProject ? "New project" : "New cloud project";');
+		expect(page).toContain("accessibilityLabel={newProjectLabel}");
+		expect(page).toContain('onAdd={Platform.OS === "android" && (canCreateCloudProject || canCreateLocalProject) ? newProject : undefined} addLabel={newProjectLabel}');
 		expect(page).not.toContain("AddFab");
 	});
 });

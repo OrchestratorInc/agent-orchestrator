@@ -258,7 +258,8 @@ function MachineSection({ project }: { project: NewLocalProject }) {
 						headline={project.machine?.label ?? "Machine"}
 						leading={<RowIcon name="laptop" />}
 						trailing={<Icon source={materialDrawable("expand_more")} size={iconSize.xl} tint={t.textSecondary} />}
-						onPress={() => setOpen(true)}
+						onPress={() => { if (!project.busy) setOpen(true); }}
+						disabled={project.busy}
 						testID="new-local-project-machine"
 					/>
 				</DropdownMenu.Trigger>
@@ -444,7 +445,7 @@ function BrowserSection({ project, target }: { project: NewLocalProject; target:
 					onPress={project.atRoot ? undefined : () => project.openDirectory(listing.parent)}
 					testID="new-local-project-browse-path"
 				/>
-				<GroupedRow headline={chooseHereLabel(target, project.source)} leading={<RowIcon name="check" accent />} onPress={() => project.choose(listing.path)} testID="new-local-project-choose-here" />
+				<GroupedRow headline={chooseHereLabel(target, project.source)} leading={<RowIcon name="check" accent />} onPress={() => { if (!project.listingBusy) project.choose(listing.path); }} disabled={project.listingBusy} testID="new-local-project-choose-here" />
 				{project.entries.map((entry) => (
 					<GroupedRow
 						key={entry.path}

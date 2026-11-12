@@ -17,6 +17,8 @@ export const PLACEMENT_OPTIONS: readonly { key: ProjectPlacement; label: string 
 export type PlacementChoice = {
 	value: ProjectPlacement;
 	onChange(next: ProjectPlacement): void;
+	/** A create is running: the switch holds still until it ends. */
+	disabled?: boolean;
 };
 
 export const LOCAL_SOURCE_OPTIONS: readonly { key: LocalProjectSource; label: string }[] = [
@@ -29,7 +31,7 @@ export const FOLDER_NAME_NOTE = "Leave it empty to use the folder's name.";
 export const CLONE_NAME_NOTE = "Leave it empty to use the repository's name.";
 export const NEW_NAME_PLACEHOLDER = "My project";
 export const RECENT_TITLE = "Recent";
-export const TRUNCATED_NOTE = "Showing the first 500 folders. Filter to find the rest.";
+export const TRUNCATED_NOTE = "Only the first 500 folders are shown.";
 
 /** Where a clone or a new project goes, as its section is titled. */
 export function destinationTitle(source: LocalProjectSource): string {

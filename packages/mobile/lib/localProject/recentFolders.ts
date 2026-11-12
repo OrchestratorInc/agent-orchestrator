@@ -30,7 +30,9 @@ export function parentFolder(path: string): string {
 	const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
 	if (cut < 0) return path;
 	if (cut === 0) return trimmed.slice(0, 1);
-	return trimmed.slice(0, cut);
+	const parent = trimmed.slice(0, cut);
+	// A Windows drive root keeps its separator: `C:` alone is relative to the drive's current folder.
+	return /^[A-Za-z]:$/.test(parent) ? `${parent}${trimmed[cut]}` : parent;
 }
 
 function parsePlaces(raw: string | null): ProjectPlaces {
