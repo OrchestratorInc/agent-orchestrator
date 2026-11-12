@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockIsMac = vi.hoisted(() => vi.fn(() => false));
 const mockIsLinux = vi.hoisted(() => vi.fn(() => false));
 const mockIsFullScreen = vi.hoisted(() => vi.fn(() => false));
-const uiState = vi.hoisted(() => ({ isSidebarOpen: true, developerMode: true }));
+const uiState = vi.hoisted(() => ({ isSidebarOpen: true }));
 vi.mock("../lib/platform", () => ({
 	isMacPlatform: mockIsMac,
 	isLinuxPlatform: mockIsLinux,
@@ -14,7 +14,7 @@ vi.mock("../hooks/useWindowFullScreen", () => ({ useWindowFullScreen: mockIsFull
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button">Notifications</button> }));
 vi.mock("../stores/ui-store", () => ({
 	sidebarOccupiesLayout: (state: { isSidebarOpen: boolean }) => state.isSidebarOpen,
-	useUiStore: (sel: (s: { isSidebarOpen: boolean; developerMode: boolean }) => unknown) => sel(uiState),
+	useUiStore: (sel: (s: { isSidebarOpen: boolean }) => unknown) => sel(uiState),
 }));
 
 const { CenterPanelShell } = await import("./CenterPanelShell");
@@ -25,7 +25,6 @@ describe("CenterPanelShell platform classes", () => {
 		mockIsLinux.mockReturnValue(false);
 		mockIsFullScreen.mockReturnValue(false);
 		uiState.isSidebarOpen = true;
-		uiState.developerMode = true;
 	});
 
 	it("applies center-panel-shell--mac on macOS", () => {
@@ -55,16 +54,16 @@ describe("CenterPanelShell platform classes", () => {
 		expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
 	});
 
-	it("floats the top bar band above the panel on macOS by default", () => {
+	it("floats the top bar band above the panel on macOS", () => {
 		mockIsMac.mockReturnValue(true);
 		const { container } = render(<CenterPanelShell>x</CenterPanelShell>);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(true);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(false);
 	});
 
-	it("keeps the previous top bar layout without Developer Mode", () => {
+	it("does not float the top bar in native fullscreen", () => {
 		mockIsMac.mockReturnValue(true);
-		uiState.developerMode = false;
+		mockIsFullScreen.mockReturnValue(true);
 		const { container } = render(<CenterPanelShell topbar={false}>x</CenterPanelShell>);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(false);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(false);

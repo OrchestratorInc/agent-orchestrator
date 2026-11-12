@@ -31,7 +31,7 @@ Cloudflare tunnel.
    shows the same code as the terminal, and sign in to your AO account. The
    link expires after 5 minutes; run `~/.local/bin/ao remote-host link` for a
    new one. Press Ctrl-C to skip signing in; the installer then prints the
-   address and password for pairing by hand.
+   address and a one-time pairing code for pairing by hand.
 
 4. Check on the VM:
 
@@ -40,8 +40,8 @@ Cloudflare tunnel.
    ```
 
    It shows `Fixed address: it stays the same after restarts.` and an
-   `https://h-….useao.dev` address. It also prints the pairing password, so
-   do not paste its output anywhere.
+   `https://h-….useao.dev` address. To pair a device by hand, run
+   `~/.local/bin/ao remote-host pair` for a one-time code.
 
 5. On your laptop or phone, sign in to the same AO account. The VM appears
    within about 30 seconds, under the VM's hostname. The desktop app looks for
@@ -56,7 +56,9 @@ your laptop.
 Use the same channel on the VM and your desktop: stable with stable, nightly
 with nightly. Updating your laptop alone does not update the VM. A release
 without `ao remote-host link` prints an address and password instead of the
-sign-in link; pair it by hand, or install nightly.
+sign-in link; pair it by hand, or install nightly. A release without
+`ao remote-host pair` prints the pairing password where a newer one prints a
+pairing code.
 
 ### Other install options
 
@@ -93,7 +95,8 @@ in the background and read its output:
    For nightly, end it with `bash -s -- --nightly`.
 
    `pipefail` makes a failed download exit non-zero. The output ends with a
-   `Password:` line. Do not repeat it to the user or write it anywhere.
+   `Pairing code:` line (`Password:` from an older release). Do not write it
+   anywhere.
 
 2. Start the sign-in and read the link:
 
@@ -114,8 +117,27 @@ in the background and read its output:
 
 5. Remove the log: `ssh USER@HOST 'rm -f ~/.ao/link.log'`.
 
-To check the host later without exposing the password, run
-`~/.local/bin/ao remote-host status | grep -v '^Password'`.
+To check the host later, run `~/.local/bin/ao remote-host status`. It does
+not print the password unless you add `--show-password`.
+
+## Pair and revoke devices
+
+Each device that pairs by hand gets its own token, which you can revoke
+without touching the others.
+
+| Command | What it does |
+| --- | --- |
+| `ao remote-host pair` | Prints the address and a pairing code. One device can use the code, within 10 minutes. |
+| `ao remote-host devices` | Lists the devices that can reach the host. Devices signed in to the linked account share one token and show as one row. |
+| `ao remote-host devices revoke <ID>` | Revokes one device and closes its connections. |
+| `ao remote-host devices revoke --all` | Revokes every device, rotates the pairing password, and unlinks the account. |
+| `ao remote-host require-device-credentials on` | Stops accepting the pairing password. Turn it on once `devices` shows no row with `pairing password`. |
+
+A device paired before pairing codes holds the pairing password. A current
+desktop or phone swaps it for its own token the next time it connects, and
+keeps the password in case the host goes back to an older release. The host
+accepts the password until you turn on `require-device-credentials`, so a
+revoked device that still holds it can pair again until then.
 
 ## Use the VM
 
@@ -134,7 +156,8 @@ Pairing does not copy GitHub credentials from your laptop.
 
 1. Link the VM with `ao remote-host link` as above. To pair by hand instead,
    sign in to AO on one laptop and in **Settings → Remote hosts → Add host**
-   enter the VM's name, exact `Address:` and `Password:`; or sign in on mobile
+   enter the VM's name, exact `Address:` and the code from
+   `ao remote-host pair`; or sign in on mobile
    under **Settings → Account** and pair it once under **Settings → Machines**.
 2. Sign in to the same AO account on your other laptops and phones. Hosts,
    projects, and sessions load automatically. A running client may take up to
@@ -143,8 +166,8 @@ Pairing does not copy GitHub credentials from your laptop.
    **Settings → Harness**, select the VM to install/sign in to an agent there.
 
 The host publishes a changed quick-tunnel address to AO Cloud automatically.
-Desktop connections saved before account linking keep their original pairing
-password and are not attributed to whichever account signs in next. Re-pair
+Desktop connections saved before account linking keep their own credential
+and are not attributed to whichever account signs in next. Re-pair
 only if you want to replace that local credential with an account-scoped one.
 
 ## If the VM does not show up
@@ -152,7 +175,7 @@ only if you want to replace that local credential with an account-scoped one.
 | Symptom | Check |
 | --- | --- |
 | Not listed on the laptop | Open the AO window: the desktop looks for new machines only while it is visible. Sign in to the same AO account as the VM. On the VM, `remote-host status` shows `Fixed address`. |
-| Listed but does not connect, after you paired it by hand | That desktop keeps the password it paired with. If the VM's password changed since, remove the host in **Settings → Remote hosts**; it comes back with the account's credential within 30 seconds. |
+| Listed but does not connect, after you paired it by hand | That desktop keeps the credential it paired with. If the VM revoked it or its password changed since, remove the host in **Settings → Remote hosts**; it comes back with the account's credential within 30 seconds. |
 | The sign-in link expired | Run `~/.local/bin/ao remote-host link` again. |
 | No sign-in link at the end of the install | You ran it without a terminal, pressed Ctrl-C, or used `--lan`. Run `~/.local/bin/ao remote-host link`; on a `--lan` machine this adds a Cloudflare tunnel next to the LAN listener. A release without `link` needs an update, or nightly. |
 
@@ -176,8 +199,10 @@ sessions.
 ## Security and limits
 
 - AO's unauthenticated listener stays on `127.0.0.1`. The opt-in remote
-  endpoint requires a password; `--lan` is plain HTTP, so use only a trusted
-  LAN/VPN and never expose its port publicly.
+  endpoint requires a credential: a device's own token, the linked account's
+  token, or the pairing password until `require-device-credentials` is on.
+  `--lan` is plain HTTP, so use only a trusted LAN/VPN and never expose its
+  port publicly.
 - AO sign-in gates desktop discovery, not the VM's direct pairing endpoint.
   Pairing on one device issues a separate 256-bit host credential that AO Cloud
   stores encrypted and shares only with the signed-in account's devices. The
@@ -185,11 +210,14 @@ sessions.
   the scoped credential to reach the VM; removing a saved host from an account
   does not invalidate a credential already imported on another device until it
   syncs. Pairing the VM to another account rotates the scoped credential.
-  Regenerating the VM connection password revokes the scoped credential, so
-  re-pair the host with the account afterward.
+  Revoking all devices rotates the VM connection password and revokes the
+  scoped credential, so re-pair the host with the account afterward. Every
+  device signed in to the account holds the same scoped credential, so one of
+  them cannot be revoked alone; sign it out of the account.
 - Host-ID checks prevent connecting to the wrong host, but not an active
-  network attacker or a copied AO data directory. Desktop passwords are stored
-  in `~/.ao/remotes.json` (or `AO_DATA_DIR/remotes.json`) with owner-only access.
+  network attacker or a copied AO data directory. Desktop credentials are stored
+  in `~/.ao/remotes.json` (or `AO_DATA_DIR/remotes.json`) with owner-only
+  access, encrypted with the OS keychain where one is available.
 - Cloudflare terminates tunnel TLS and can see traffic. Quick tunnels have no
   uptime guarantee and change hostname on restart.
 - AO can edit host files; opening them in a client-side external editor needs

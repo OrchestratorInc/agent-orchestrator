@@ -5,7 +5,10 @@
 //   config.coder.extraRepos when config.repos is absent;
 // - every session clones them side by side, each additional one into the
 //   folder repoDirName gives it beside the main checkout;
-// - a standalone project has no repository (a scratch.ao.local placeholder).
+// - a standalone project has no repository (a scratch.ao.local placeholder);
+// - a workspace (config.layout "workspace") checks every repository out side
+//   by side in one folder, where the agent starts, like a local workspace. Its
+//   first repository is the project's main one only for authorization.
 
 import type { CloudCpAgentStartsIn, CloudCpProject, CloudCpProjectRepo } from "./cloud-cp/types";
 
@@ -13,6 +16,10 @@ export const STANDALONE_REPOSITORY_HOST = "scratch.ao.local";
 export const STANDALONE_PROJECT_SOURCE = "standalone";
 export const MAX_PROJECT_ADDITIONAL_REPOS = 10;
 export const MAX_PROJECT_RULES_BYTES = 16 * 1024;
+
+export const CLOUD_WORKSPACE_LAYOUT = "workspace";
+/** A workspace's repositories: the main one and every additional one. */
+export const MAX_WORKSPACE_REPOSITORIES = MAX_PROJECT_ADDITIONAL_REPOS + 1;
 
 /** Folders beside the main checkout that AO itself uses. */
 const RESERVED_REPO_DIR_NAMES = ["repository", ".ao"];
@@ -28,6 +35,49 @@ export function isStandaloneCloudProject(project: Pick<CloudCpProject, "reposito
 	} catch {
 		return false;
 	}
+}
+
+/** True for a project laid out as a workspace (config.layout "workspace"). */
+export function isCloudWorkspaceProject(project: Pick<CloudCpProject, "config"> | undefined): boolean {
+	return (project?.config as ConfigLike)?.layout === CLOUD_WORKSPACE_LAYOUT;
+}
+
+/** Every repository of a project, the main one first. */
+export function projectRepositoryUrls(project: Pick<CloudCpProject, "repositoryUrl" | "config">): string[] {
+	return [project.repositoryUrl, ...projectAdditionalRepos(project.config).map((repo) => repo.url)].filter((url) => url.trim() !== "");
+}
+
+/**
+ * The GitHub repository name for a local folder: GitHub's own rule (letters,
+ * digits, ".", "-" and "_", at most 100) with every other run of characters
+ * made one "-". A trailing ".git" is dropped (the control plane refuses it,
+ * since the git endpoint adds its own). A name that is left empty, or only
+ * dots, becomes "repo".
+ */
+export function gitHubRepositoryNameFromFolder(folderName: string): string {
+	let name = folderName.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "").slice(0, 100);
+	while (/[-.]$/.test(name) || /\.git$/i.test(name)) name = name.replace(/\.git$/i, "").replace(/[-.]+$/g, "");
+	return name === "" ? "repo" : name;
+}
+
+/** Whether GitHub and the control plane accept name for a new repository. */
+export function isValidGitHubRepositoryName(name: string): boolean {
+	return /^[A-Za-z0-9._-]{1,100}$/.test(name) && !name.startsWith(".") && name !== "." && name !== ".." && !/\.git$/i.test(name);
+}
+
+/**
+ * Checks a workspace's repositories, the first being its main one, the way
+ * the control plane does for a project's: each in its own folder, none twice,
+ * at most MAX_WORKSPACE_REPOSITORIES.
+ */
+export function workspaceRepositoriesProblem(urls: readonly string[]): ReturnType<typeof additionalReposProblem> {
+	const [main, ...rest] = urls.filter((url) => url.trim() !== "");
+	if (main === undefined) return undefined;
+	if (repoDirName(main).startsWith(".")) return { kind: "hidden", url: main, folder: repoDirName(main) };
+	if (RESERVED_REPO_DIR_NAMES.includes(repoDirName(main).toLowerCase())) return { kind: "reserved", url: main, folder: repoDirName(main) };
+	const problem = additionalReposProblem(main, rest);
+	// Naming the main one would read as a rule a workspace does not have.
+	return problem?.kind === "main" ? { kind: "duplicate", url: problem.url } : problem;
 }
 
 /**

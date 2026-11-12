@@ -45,9 +45,12 @@ import (
 )
 
 type fakeSessionService struct {
-	deleted       []domain.SessionID
-	deleteCleanup []bool
-	deleteErr     error
+	artifactsRegistered   []string
+	artifactsUnregistered []string
+	registerArtifactsErr  error
+	deleted               []domain.SessionID
+	deleteCleanup         []bool
+	deleteErr             error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
 	lastListFilter             sessionsvc.ListFilter
@@ -443,6 +446,19 @@ func (f *fakeSessionService) Kill(_ context.Context, id domain.SessionID) (bool,
 	s.Status = domain.StatusTerminated
 	f.sessions[id] = s
 	return true, nil
+}
+
+func (f *fakeSessionService) RegisterArtifacts(_ context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error) {
+	if f.registerArtifactsErr != nil {
+		return sessionsvc.ArtifactRegistration{}, f.registerArtifactsErr
+	}
+	f.artifactsRegistered = append(f.artifactsRegistered, references...)
+	return sessionsvc.ArtifactRegistration{Registered: references, OtherFiles: 2, OtherRootFiles: []string{"draft.md"}}, nil
+}
+
+func (f *fakeSessionService) UnregisterArtifact(_ context.Context, _ domain.SessionID, path string) error {
+	f.artifactsUnregistered = append(f.artifactsUnregistered, path)
+	return nil
 }
 
 func (f *fakeSessionService) DeleteArtifacts(_ context.Context, id domain.SessionID) error {
@@ -1153,7 +1169,7 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	s.Metadata = domain.SessionMetadata{Branch: "qa/modal-worker", WorkspacePath: "/tmp/private-worktree", RuntimeHandleID: "runtime-1", Prompt: "private prompt"}
 	s.SCMStatus = domain.StatusReviewPending
 	s.KanbanColumn = domain.KanbanNeedsReview
-	s.DisplayStatus = contract.DisplayNeedsHumanReview
+	s.DisplayStatus = contract.DisplayAwaitingReview
 	svc.sessions["ao-1"] = s
 	srv := newSessionTestServer(t, svc)
 
@@ -1171,7 +1187,7 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	if list.Sessions[0].KanbanColumn != string(domain.KanbanNeedsReview) {
 		t.Fatalf("kanbanColumn = %q, want the derived column on the wire", list.Sessions[0].KanbanColumn)
 	}
-	if list.Sessions[0].DisplayStatus != string(contract.DisplayNeedsHumanReview) {
+	if list.Sessions[0].DisplayStatus != string(contract.DisplayAwaitingReview) {
 		t.Fatalf("displayStatus = %q, want the derived phrase on the wire", list.Sessions[0].DisplayStatus)
 	}
 	if list.Sessions[0].Branch != "qa/modal-worker" {

@@ -127,17 +127,17 @@ export const aoBridge: AoBridge =
 		cloudShare: {
 			available: async () => false,
 			inspect: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			list: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			publish: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			cancel: async () => undefined,
 			unpublish: async () => {
-				throw new Error("Sharing needs the AO desktop app.");
+				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			onProgress: () => () => undefined,
 		},
@@ -196,6 +196,8 @@ export const aoBridge: AoBridge =
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
+			getLifetimeSessions: async () => null,
+			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			onPolicy: () => () => false,
@@ -380,6 +382,11 @@ export const aoBridge: AoBridge =
 			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 		},
+		cliShadow: {
+			inspect: async () => ({ kind: "unknown" as const }),
+			replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
+			reveal: async () => undefined,
+		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
 			set: async () => undefined,
@@ -414,9 +421,8 @@ export const aoBridge: AoBridge =
 		// which is the truth there.
 		remotes: {
 			list: async () => [],
-			importAccountHost: async () => undefined,
-			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => { throw new Error("remote hosts need the desktop app"); },
+			syncAccountHosts: async () => undefined,
+			linkAccountHost: async () => { throw new Error("remote hosts need the desktop app"); },
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
@@ -438,26 +444,28 @@ export const aoBridge: AoBridge =
 			},
 			localAuthAvailable: async () => false,
 			localRegister: async () => {
-				throw new Error("AO Cloud sign-in requires the desktop app.");
+				throw new Error("Orchestrator Cloud sign-in requires the desktop app.");
 			},
 			localLogin: async () => {
-				throw new Error("AO Cloud sign-in requires the desktop app.");
+				throw new Error("Orchestrator Cloud sign-in requires the desktop app.");
 			},
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
+			previewFolderUpload: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {
 			request: async () => {
-				throw new Error("AO Cloud requests require the desktop app.");
+				throw new Error("Orchestrator Cloud requests require the desktop app.");
 			},
 			requestBinary: async () => {
-				throw new Error("AO Cloud requests require the desktop app.");
+				throw new Error("Orchestrator Cloud requests require the desktop app.");
 			},
 			cancelBinary: () => undefined,
 			openStream: async () => {
-				throw new Error("AO Cloud event streams require the desktop app.");
+				throw new Error("Orchestrator Cloud event streams require the desktop app.");
 			},
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,

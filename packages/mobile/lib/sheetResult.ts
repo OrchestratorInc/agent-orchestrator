@@ -53,7 +53,8 @@ export function agentSheetRoute(opts: { selected: string; onSelect: (id: string)
 	};
 }
 
-export function modelSheetRoute(opts: { agentId: string; projectId: string; selected: string; onSelect: (id: string) => void }) {
+/** The model sheet; `hostId` names Orchestrator Cloud when its catalog is the one to browse. */
+export function modelSheetRoute(opts: { agentId: string; projectId: string; selected: string; hostId?: string; onSelect: (id: string) => void }) {
 	return {
 		pathname: "/sheets/model" as const,
 		params: {
@@ -61,6 +62,7 @@ export function modelSheetRoute(opts: { agentId: string; projectId: string; sele
 			agentId: opts.agentId,
 			projectId: opts.projectId,
 			selected: opts.selected,
+			...(opts.hostId ? { hostId: opts.hostId } : {}),
 		},
 	};
 }

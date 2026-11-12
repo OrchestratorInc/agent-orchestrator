@@ -41,12 +41,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: useWorkspaceQueryMock,
-	useWorkspaceScope: () => {
+	useWorkspaceScope: (projectId?: string, sessionId?: string) => {
 		const query = useWorkspaceQueryMock();
-		const project = query.data?.find((workspace: WorkspaceSummary) => workspace.id === paramsMock.projectId);
+		const project = query.data?.find((workspace: WorkspaceSummary) => workspace.id === projectId);
 		const session = query.data
 			?.flatMap((workspace: WorkspaceSummary) => workspace.sessions)
-			.find((candidate: WorkspaceSession) => candidate.id === paramsMock.sessionId);
+			.find((candidate: WorkspaceSession) => candidate.id === sessionId);
 		return {
 			...query,
 			data: {
@@ -253,8 +253,7 @@ beforeEach(() => {
 	postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
 	useWorkspaceQueryMock.mockReset();
 	useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
-	// The simplified top bar is a Developer Mode preview; this suite covers it.
-	useUiStore.setState({ developerMode: true, inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
+	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
 });
 
 describe("optimistic orchestrator topbar", () => {
@@ -339,36 +338,41 @@ describe("SessionTopbarActions embedded actions", () => {
 
 });
 
-describe("SessionTopbarActions without Developer Mode", () => {
-	beforeEach(() => useUiStore.setState({ developerMode: false }));
+describe("SessionTopbarActions route", () => {
+	// A session switch renders in the background while the previous session
+	// stays on screen; its actions must follow that session, not the URL.
+	function renderRouted(urlSessionId: string, routeSessionId?: string) {
+		const data: WorkspaceSummary[] = [{
+			id: "proj-1",
+			name: "my-app",
+			path: "/repo/my-app",
+			orchestratorAgent: "claude-code",
+			kind: "single_repo",
+			sessions: [worker, orchestrator],
+		}];
+		useWorkspaceQueryMock.mockReturnValue({ data, isError: false, isLoading: false, isSuccess: true });
+		paramsMock.projectId = "proj-1";
+		paramsMock.sessionId = urlSessionId;
+		const route = routeSessionId ? { projectId: "proj-1", sessionId: routeSessionId } : undefined;
+		return render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><SessionTopbarActions route={route} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+	}
 
-	it("keeps the previous orchestrator row: New task and a labeled Open Kanban", () => {
-		renderTopbar(orchestrator);
+	it("follows the session it is rendered for over the URL", () => {
+		const held = renderRouted(worker.id, orchestrator.id);
+		expect(screen.getByRole("button", { name: "New task" })).toBeInTheDocument();
+		held.unmount();
 
-		const buttons = within(screen.getByTestId("workspace-topbar-actions")).getAllByRole("button");
-		const newTask = screen.getByRole("button", { name: "New task" });
-		const kanban = screen.getByRole("button", { name: "Open Kanban" });
-		expect(kanban).toHaveTextContent("Open Kanban");
-		expect(screen.queryByRole("button", { name: "Board" })).not.toBeInTheDocument();
-		expect(buttons.indexOf(newTask)).toBeLessThan(buttons.indexOf(kanban));
-		expect(screen.queryByTestId("session-actions-divider")).not.toBeInTheDocument();
+		renderRouted(orchestrator.id, worker.id);
+		expect(screen.queryByRole("button", { name: "New task" })).toBeNull();
 	});
 
-	it("keeps the Archive button on a worker", () => {
-		renderTopbarSessions([worker, orchestrator], worker.id);
-
-		expect(screen.getByRole("button", { name: "Archive session" })).toBeInTheDocument();
-	});
-
-	it("closes the archive confirm on the first Escape", async () => {
-		const user = userEvent.setup();
-		renderTopbarSessions([worker, orchestrator], worker.id);
-
-		await user.click(screen.getByRole("button", { name: "Archive session" }));
-		await screen.findByRole("dialog");
-
-		await user.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	it("falls back to the URL without a route", () => {
+		renderRouted(orchestrator.id);
+		expect(screen.getByRole("button", { name: "New task" })).toBeInTheDocument();
 	});
 });
 

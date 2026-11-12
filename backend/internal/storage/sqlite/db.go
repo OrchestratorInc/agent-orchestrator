@@ -111,7 +111,7 @@ func checkLegacyDatabasePath(dataDir string) error {
 		return fmt.Errorf("inspect legacy database: %w", readErr)
 	}
 	if n == len(header) && string(header[:]) == "SQLite format 3\x00" {
-		return fmt.Errorf("legacy SQLite path parsing stored data at %q; refusing to create an empty database at %q: stop AO and recover the legacy database explicitly before retrying", legacy, intended)
+		return fmt.Errorf("legacy SQLite path parsing stored data at %q; refusing to create an empty database at %q: stop Orchestrator and recover the legacy database explicitly before retrying", legacy, intended)
 	}
 	return nil
 }
@@ -1660,6 +1660,19 @@ SELECT (SELECT COUNT(*) FROM sqlite_master
 	if kimiUsageShape == 2 {
 		return nil
 	}
+	var openUsageShape int
+	if err := db.QueryRow(`
+SELECT (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'table' AND name = 'usage_bindings'
+          AND instr(COALESCE(sql, ''), 'trim(harness)') > 0)
+     + (SELECT COUNT(*) FROM sqlite_master
+        WHERE type = 'table' AND name = 'usage_sources'
+          AND instr(COALESCE(sql, ''), 'trim(kind)') > 0)`).Scan(&openUsageShape); err != nil {
+		return err
+	}
+	if openUsageShape == 2 {
+		return nil
+	}
 
 	_, err := db.Exec(`DELETE FROM goose_db_version WHERE version_id = 117`)
 	return err
@@ -2109,7 +2122,7 @@ func reconcileSchema(db *sql.DB) error {
 		return fmt.Errorf("schema verification: inspect session revision fence: %w", err)
 	}
 	if revisionColumn > 0 && revisionTrigger != 1 {
-		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting AO")
+		return errors.New("schema verification: sessions_revision_update trigger is missing; restore the session revision trigger before starting Orchestrator")
 	}
 	return nil
 }

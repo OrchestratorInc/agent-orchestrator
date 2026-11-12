@@ -19,6 +19,7 @@ import type { Theme } from "../lib/theme";
 import { haptics } from "../lib/haptics";
 import { clearOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
+import { pairThisDevice, releaseThisDevice } from "../lib/deviceTokenRuntime";
 import { pairedNotice, pairFromCode, type MachineNameChoice, type PairedNotice } from "../lib/pairFlow";
 import { registerForPush } from "../lib/push";
 import { isLegacyPairingCode, parsePairingCode } from "../lib/pairingCode";
@@ -233,6 +234,8 @@ export default function PairScreen() {
 				});
 			},
 			verify: async (config) => void (await pingServer(config)),
+			pair: (config) => pairThisDevice(config, { fresh: true }),
+			release: releaseThisDevice,
 			chooseName: (suggested, appearance, hostId) => new Promise<MachineNameChoice | null>((resolve) => {
 				router.push(machineNameSheetRoute({ suggested, appearance, hostId, onSelect: resolve }));
 			}),

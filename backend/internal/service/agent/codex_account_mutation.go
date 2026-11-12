@@ -93,7 +93,7 @@ func (m *codexAccountManager) logout(ctx context.Context, accountID string) erro
 	}
 
 	if _, err := m.catalog.markSignedOut(accountID); err != nil {
-		return apierr.Conflict("CODEX_ACCOUNT_LOGOUT_UNCONFIRMED", "Codex logged out, but AO could not update the account. Try again.", nil)
+		return apierr.Conflict("CODEX_ACCOUNT_LOGOUT_UNCONFIRMED", "Codex logged out, but Orchestrator could not update the account. Try again.", nil)
 	}
 	if active {
 		m.mu.Lock()

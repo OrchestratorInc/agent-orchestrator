@@ -71,8 +71,17 @@ const (
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
 	// ACPSteerPromptMetaKey marks a session/prompt that steers the running turn
 	// (acp.SteerPrompt). The host admits it while the turn's prompt is active,
-	// and the turn's result is the latest prompt's.
+	// and the turn's result is the answer of the last of its prompts to return.
 	ACPSteerPromptMetaKey = "ao.steerPrompt"
+	// ACPSteerTurnEndedDataKey is set in the error data of a steer prompt the
+	// host refused because the turn it was meant for had already ended. The
+	// agent never saw it, so the guidance can go as a new turn.
+	ACPSteerTurnEndedDataKey = "ao.steerTurnEnded"
+	// ACPPromptHandoffMethod is an AO-private notification carrying the
+	// non-final answer of a prompt an earlier daemon attachment sent, such as
+	// a running prompt handing the turn to a steer prompt. The reattached
+	// controller has no request of its own to match it to.
+	ACPPromptHandoffMethod = "_ao/persistent_prompt_handoff"
 )
 
 var (

@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -7,7 +7,10 @@ import { orchestratorProjectSections, projectDetailSessions, projectPageStats } 
 import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
 import { Spinner } from "../../lib/Spinner";
 import { StaleBanner } from "../../lib/StaleBanner";
+import { rememberLastProject } from "../../lib/lastProject";
 import { HostScope, useApp } from "../../lib/store";
+import { useCloud } from "../../lib/cloud/CloudProvider";
+import { isCloudHost } from "../../lib/cloud/mapping";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useBoardTabBeneath } from "../../lib/useBoardTabBeneath";
@@ -30,6 +33,9 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
  */
 export default function ProjectScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	const { watch: watchCloud } = useCloud();
+	// A cloud project's workers refresh at the live rate while its page is open.
+	useFocusEffect(useCallback(() => (isCloudHost(hostId) ? watchCloud() : undefined), [hostId, watchCloud]));
 	return hostId ? <HostScope key={hostId} hostId={hostId}><ProjectScreenContent /></HostScope> : <ProjectScreenContent />;
 }
 
@@ -42,7 +48,7 @@ function ProjectScreenContent() {
 	const glassInset = useGlassBarInset();
 	const fab = useFabExpanded();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
+	const { config, currentHostId, hostStates: machineStates, cloud, connection, loading, error, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
@@ -55,6 +61,9 @@ function ProjectScreenContent() {
 			: undefined,
 		[projects, sessions, orchestrators, id, hostMatches],
 	);
+	const listedProjectId = row?.project.id;
+	// On focus, not mount: coming back here from a task started elsewhere makes this the last project again.
+	useFocusEffect(useCallback(() => { if (hostMatches) rememberLastProject(currentHostId, listedProjectId); }, [currentHostId, hostMatches, listedProjectId]));
 	const title = row?.project.name ?? "Project";
 	// The native header's title, and this page's name in the back-history menu
 	// of a page opened from here.
@@ -87,9 +96,16 @@ function ProjectScreenContent() {
 		router.push({ pathname: "/spawn", params: { projectId: id, hostId: routeHostId } });
 	}, [hostMatches, id, routeHostId, router]);
 	const canStartTask = hostMatches && !!row;
+	// One way to start a task at a time: while "No workers yet" offers Start
+	// task, the floating New task (Android) and the bottom compose (iOS) stay
+	// out; they come back once the list has a worker to show.
+	const [noWorkersShown, setNoWorkersShown] = useState(false);
+	const offerNewTask = canStartTask && !noWorkersShown;
 
 	// Memoized on what the items show. hostStates is replaced on every poll, and
 	// each new toolbar element would register the header's options again.
+	// Orchestrator Cloud counts as one more machine here, named by its cloud mark.
+	const hostStates = cloud ? [...machineStates, cloud] : machineStates;
 	const machine = hostStates.find((host) => host.hostId === currentHostId);
 	// With one machine paired, every project is on it: naming it says nothing.
 	const machineName = hostStates.length > 1 ? machine?.name : undefined;
@@ -98,7 +114,7 @@ function ProjectScreenContent() {
 	// bottom right, as the board's tab bar sets it apart and as Notes and Mail
 	// place it: a bottom toolbar's trailing item, on the system's glass. Android
 	// floats Material's FAB there instead.
-	const bottomCompose = Platform.OS === "ios" && canStartTask ? (
+	const bottomCompose = Platform.OS === "ios" && offerNewTask ? (
 		<Stack.Toolbar placement="bottom">
 			<Stack.Toolbar.Spacer />
 			{/* The label is VoiceOver's name for it: beside an icon, a bottom
@@ -166,6 +182,7 @@ function ProjectScreenContent() {
 					contentInsetAdjustmentBehavior="automatic"
 					sessions={projectSessions}
 					archiveSources={archiveSources}
+					onEmptyChange={setNoWorkersShown}
 					showProject={false}
 					contentBottomInset={insets.bottom + addFabClearance + space.xxl}
 					// The "N updated" pill floats below the glass header, not under the
@@ -194,7 +211,7 @@ function ProjectScreenContent() {
 					}
 				/>
 			)}
-			{canStartTask ? <AddFab expanded={fab.expanded} label="New task" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}
+			{offerNewTask ? <AddFab expanded={fab.expanded} label="New task" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}
 		</View>
 	);
 }

@@ -1,24 +1,32 @@
 import { useFocusEffect } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerConfig } from "../config";
-import { getWorkspaceManifest, type WorkspaceManifest } from "./api";
+import type { WorkspaceManifest } from "./api";
+import { daemonFilesBackend, type FilesBackend } from "./backend";
 
 export type ChangeSummary = WorkspaceManifest["summary"];
 
+/** A machine session's totals, read from its daemon. */
+export function useChangeSummary(config: ServerConfig | null, sessionId: string, signal: string): ChangeSummary | null {
+	const backend = useMemo(() => config ? daemonFilesBackend(config) : null, [config]);
+	return useBackendChangeSummary(backend, sessionId, signal);
+}
+
 /**
- * The session's changed-file totals from git, for the composer's changes pill.
+ * The session's changed-file totals from git, for the composer's changes pill,
+ * from whichever host holds the session (a machine's daemon or Cloud).
  * No timer: it asks when the screen gains focus (coming back from Files, say)
  * and whenever `signal` changes — the caller passes something that moves when a
  * turn reports edits — so an idle conversation costs nothing.
  */
-export function useChangeSummary(config: ServerConfig | null, sessionId: string, signal: string): ChangeSummary | null {
+export function useBackendChangeSummary(backend: FilesBackend | null, sessionId: string, signal: string): ChangeSummary | null {
 	const [summary, setSummary] = useState<ChangeSummary | null>(null);
 	const latest = useRef(0);
 
 	const load = useCallback(() => {
-		if (!config || !sessionId) return;
+		if (!backend || !sessionId) return;
 		const ticket = ++latest.current;
-		getWorkspaceManifest(config, sessionId)
+		backend.manifest(sessionId)
 			.then((manifest) => {
 				if (ticket !== latest.current) return;
 				setSummary((previous) => previous
@@ -28,9 +36,9 @@ export function useChangeSummary(config: ServerConfig | null, sessionId: string,
 			})
 			// A failed read keeps the last answer: the pill is a shortcut, not a status.
 			.catch(() => {});
-	}, [config, sessionId]);
+	}, [backend, sessionId]);
 
-	useEffect(() => { setSummary(null); }, [config, sessionId]);
+	useEffect(() => { setSummary(null); }, [backend, sessionId]);
 	useEffect(() => { load(); }, [load, signal]);
 	useFocusEffect(useCallback(() => { load(); }, [load]));
 	return summary;

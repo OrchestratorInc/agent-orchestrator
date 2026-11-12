@@ -50,6 +50,7 @@ vi.mock("./host-clients", () => ({
 }));
 
 import { createEventTransport } from "./event-transport";
+import { interfaceTransitionRefetchInterval } from "../hooks/useSessionInterfaceTransition";
 import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
 
 class EventSourceStub {
@@ -717,6 +718,50 @@ describe("createEventTransport", () => {
 		} finally {
 			unsubscribe?.();
 			disconnect?.();
+			vi.useRealTimers();
+		}
+	});
+
+	it("refreshes spent switch readiness on session-row CDC without resuming unbounded polling", async () => {
+		vi.useFakeTimers();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+		const queryKey = ["session-interface-transition", "slow-setup"] as const;
+		const waiting = { supported: false, targetMode: "chat", reasonCode: "NATIVE_SESSION_MISSING" };
+		const queryFn = vi.fn().mockResolvedValue(waiting);
+		const observer = new QueryObserver(queryClient, {
+			queryKey, queryFn, refetchInterval: interfaceTransitionRefetchInterval,
+		});
+		const unsubscribe = observer.subscribe(() => {});
+		const disconnect = createEventTransport(queryClient).connect();
+		try {
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(queryFn).toHaveBeenCalledTimes(11);
+			const emit = (payload: object) => cdcSources()[0].emit("session_updated", JSON.stringify({
+				type: "session_updated", sessionId: "slow-setup", payload,
+			}));
+			// Usage bookkeeping cannot reopen the spent readiness window.
+			emit({ id: "slow-setup" });
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(queryFn).toHaveBeenCalledTimes(11);
+			// A row update can still precede the native hook. It rechecks once,
+			// but the unchanged reason does not replenish the polling budget.
+			emit({ id: "slow-setup", activity: "active", provisionState: "ready" });
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(queryFn).toHaveBeenCalledTimes(12);
+			expect(queryClient.getQueryData(queryKey)).toEqual(waiting);
+			// Native identity changes emit the same row payload, even if activity
+			// did not change. That event must clear the stale disabled switch.
+			queryFn.mockResolvedValue({ supported: true, targetMode: "chat" });
+			emit({ id: "slow-setup", activity: "active", provisionState: "ready" });
+			await vi.advanceTimersByTimeAsync(200);
+			expect(queryClient.getQueryData(queryKey)).toEqual({ supported: true, targetMode: "chat" });
+			expect(queryFn).toHaveBeenCalledTimes(13);
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(queryFn).toHaveBeenCalledTimes(13);
+		} finally {
+			unsubscribe();
+			disconnect();
+			queryClient.clear();
 			vi.useRealTimers();
 		}
 	});

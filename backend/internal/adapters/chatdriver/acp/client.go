@@ -65,6 +65,9 @@ func (c *conversation) RequestPermission(
 	c.mu.Unlock()
 	if policy != nil {
 		if selected, handled := policy(mode, params); handled {
+			if selected == CancelPermission {
+				return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
+			}
 			for _, option := range params.Options {
 				if option.OptionId == selected {
 					return acpsdk.RequestPermissionResponse{
@@ -611,7 +614,8 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		if err == nil {
 			err = c.SessionUpdate(context.Background(), update)
 		}
-	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
+	case persistenthost.ACPPromptResultMethod, persistenthost.ACPPromptHandoffMethod,
+		persistenthost.ACPInteractionCommandMethod:
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
 	case claudeSDKMessageMethod:
 		err = c.handleClaudeSDKMessage(params)
@@ -837,6 +841,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		if limits := claudeRateLimits(update.UsageUpdate.Meta); limits != nil {
 			emit(ports.ChatEvent{Kind: ports.ChatEventRateLimits, RateLimits: limits})
 		}
+		c.trackClaudeRateLimit(update.UsageUpdate.Meta, time.Now())
 	}
 	return nil
 }
@@ -1422,6 +1427,61 @@ func claudeRateLimits(meta map[string]any) *ports.ChatRateLimits {
 		limits.PlanLabel = strings.ReplaceAll(kind, "_", " ")
 	}
 	return limits
+}
+
+const claudeUsageLimitMaxWait = 31 * 24 * time.Hour
+
+func (c *conversation) trackClaudeRateLimit(meta map[string]any, now time.Time) {
+	info := nestedMap(meta, "_claude/rateLimit")
+	if info == nil {
+		return
+	}
+	kind, _ := info["rateLimitType"].(string)
+	if kind == "" {
+		kind = "unknown"
+	}
+	status, _ := info["status"].(string)
+	overageStatus, _ := info["overageStatus"].(string)
+	usingOverage, _ := info["isUsingOverage"].(bool)
+	overageInUse, _ := info["overageInUse"].(bool)
+	overage := overageStatus == "allowed" || overageStatus == "allowed_warning" || usingOverage || overageInUse
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case status == "rejected" && !overage:
+		var reset time.Time
+		if seconds, ok := number(info["resetsAt"]); ok && seconds > 0 {
+			if at := time.Unix(int64(seconds), 0).UTC(); at.Sub(now) <= claudeUsageLimitMaxWait {
+				reset = at
+			}
+		}
+		if c.claudeRejectedLimits == nil {
+			c.claudeRejectedLimits = make(map[string]time.Time)
+		}
+		c.claudeRejectedLimits[kind] = reset
+	case status == "allowed" || status == "allowed_warning" || overage:
+		delete(c.claudeRejectedLimits, kind)
+	}
+}
+
+func (c *conversation) claudeUsageLimitReset(now time.Time) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for kind, reset := range c.claudeRejectedLimits {
+		if !reset.IsZero() && !reset.After(now) {
+			delete(c.claudeRejectedLimits, kind)
+		}
+	}
+	var latest time.Time
+	for _, reset := range c.claudeRejectedLimits {
+		if reset.IsZero() {
+			return time.Time{}, false
+		}
+		if reset.After(latest) {
+			latest = reset
+		}
+	}
+	return latest, !latest.IsZero()
 }
 
 func number(value any) (float64, bool) {

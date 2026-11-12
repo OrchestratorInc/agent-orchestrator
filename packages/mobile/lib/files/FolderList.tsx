@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
-import type { ServerConfig } from "../config";
 import { userFacingError } from "../connectionError";
 import { refreshControlColors } from "../refreshControlColors";
 import { Spinner } from "../Spinner";
@@ -8,7 +7,8 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { space, type } from "../tokens";
 import { Button, EmptyState } from "../ui";
-import { getWorkspaceTree, searchWorkspaceFiles, type WorkspaceSearchResult, type WorkspaceTreeEntry } from "./api";
+import type { WorkspaceSearchResult, WorkspaceTreeEntry } from "./api";
+import type { FilesBackend } from "./backend";
 import type { FileRowAction } from "./FileRowMenu.types";
 import { FileRowDivider, FolderRow, PathRow } from "./rows";
 
@@ -20,21 +20,32 @@ function sortEntries(entries: readonly WorkspaceTreeEntry[]): WorkspaceTreeEntry
 }
 
 /** One folder of the worktree, read when the page opens and again on a pull. */
-export function useFolderTree(config: ServerConfig | null, sessionId: string, dir: string) {
+export function useFolderTree(backend: FilesBackend | null, sessionId: string, dir: string) {
 	const [tree, setTree] = useState<Tree | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [refreshing, setRefreshing] = useState(false);
 	const [error, setError] = useState<string>();
 	const request = useRef(0);
+	// Another backend (Cloud chose another organization), session or folder
+	// starts empty: a failed read there shows its error, never the last
+	// folder's entries. A refresh of the same folder keeps them.
+	const scope = `${backend?.key ?? ""}|${sessionId}|${dir}`;
+	const shownScope = useRef(scope);
+	useEffect(() => {
+		if (shownScope.current === scope) return;
+		shownScope.current = scope;
+		setTree(null);
+		setError(undefined);
+	}, [scope]);
 
 	const load = useCallback(async (quiet: boolean) => {
-		if (!config) return;
+		if (!backend) return;
 		const ticket = ++request.current;
 		if (quiet) setRefreshing(true);
 		else setLoading(true);
 		setError(undefined);
 		try {
-			const next = await getWorkspaceTree(config, sessionId, dir);
+			const next = await backend.tree(sessionId, dir);
 			if (ticket === request.current) setTree({ ...next, entries: sortEntries(next.entries) });
 		} catch (cause) {
 			if (ticket === request.current) setError(userFacingError(cause, "Couldn't read this folder."));
@@ -44,7 +55,7 @@ export function useFolderTree(config: ServerConfig | null, sessionId: string, di
 				setRefreshing(false);
 			}
 		}
-	}, [config, dir, sessionId]);
+	}, [backend, dir, sessionId]);
 
 	useEffect(() => { void load(false); }, [load]);
 
@@ -52,23 +63,23 @@ export function useFolderTree(config: ServerConfig | null, sessionId: string, di
 }
 
 /** Paths across the whole worktree that match `query`, a beat after the typing stops. */
-export function useWorkspaceSearch(config: ServerConfig | null, sessionId: string, query: string) {
+export function useWorkspaceSearch(backend: FilesBackend | null, sessionId: string, query: string) {
 	const [results, setResults] = useState<WorkspaceSearchResult[] | null>(null);
 	const [searching, setSearching] = useState(false);
 	const trimmed = query.trim();
 
 	useEffect(() => {
-		if (!config || !trimmed) { setResults(null); setSearching(false); return; }
+		if (!backend || !trimmed) { setResults(null); setSearching(false); return; }
 		setSearching(true);
 		let cancelled = false;
 		const timer = setTimeout(() => {
-			searchWorkspaceFiles(config, sessionId, trimmed)
+			backend.search(sessionId, trimmed)
 				.then((found) => { if (!cancelled) setResults(found.results); })
 				.catch(() => { if (!cancelled) setResults([]); })
 				.finally(() => { if (!cancelled) setSearching(false); });
 		}, 250);
 		return () => { cancelled = true; clearTimeout(timer); };
-	}, [config, sessionId, trimmed]);
+	}, [backend, sessionId, trimmed]);
 
 	return { active: Boolean(trimmed), query: trimmed, results, searching };
 }
@@ -83,15 +94,15 @@ type ListProps = {
 };
 
 /** A folder's entries, one page per folder. */
-export function FolderList({ config, sessionId, dir, header, bottomInset, onOpenFile, onOpenFolder, onAction }: ListProps & {
-	config: ServerConfig | null;
+export function FolderList({ backend, sessionId, dir, header, bottomInset, onOpenFile, onOpenFolder, onAction }: ListProps & {
+	backend: FilesBackend | null;
 	sessionId: string;
 	dir: string;
 	onOpenFolder: (path: string) => void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { tree, loading, refreshing, error, reload } = useFolderTree(config, sessionId, dir);
+	const { tree, loading, refreshing, error, reload } = useFolderTree(backend, sessionId, dir);
 	return (
 		<FlatList
 			data={loading ? [] : tree?.entries ?? []}

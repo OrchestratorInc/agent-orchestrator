@@ -250,7 +250,7 @@ export class AgentBrowserRuntime {
 			if (this.disposed) throw runtimeError("AGENT_BROWSER_RUNTIME_CLOSED", "Browser automation runtime is closed");
 			if (signal?.aborted) throw runtimeError("AGENT_BROWSER_CANCELLED", "agent-browser command was cancelled");
 			if (!provider.listTargets().some((target) => target.id === requestedTabId)) {
-				throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Unable to resolve AO browser tab ${requestedTabId}`);
+				throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Unable to resolve Orchestrator browser tab ${requestedTabId}`);
 			}
 			// A native daemon restart can renumber tabs between list and close.
 			// Close the exact AO-owned target, then notify an existing daemon.
@@ -268,14 +268,14 @@ export class AgentBrowserRuntime {
 				: [];
 			const tab = matches.length === 1 ? matches[0] : undefined;
 			if (!isRecord(tab) || typeof tab.tabId !== "string" || !/^t[1-9]\d*$/.test(tab.tabId)) {
-				throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Unable to resolve AO browser tab ${requestedTabId}`);
+				throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Unable to resolve Orchestrator browser tab ${requestedTabId}`);
 			}
 			nativeArgs[nativeArgs.length - 1] = tab.tabId;
 		}
 		const result = await this.run(sessionId, [...nativeArgs, "--json"], provider, signal);
 		const parsed = parseAgentBrowserJSON(result.stdout);
 		if (requestedTabId && parsed.targetId !== requestedTabId) {
-			throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Browser automation did not target AO tab ${requestedTabId}`);
+			throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Browser automation did not target Orchestrator tab ${requestedTabId}`);
 		}
 		if (action === "tab-new" || action === "tab-select" || action === "tab-close") {
 			if (typeof parsed.targetId !== "string" || !parsed.targetId) {
@@ -329,7 +329,7 @@ export class AgentBrowserRuntime {
 			const annotated = options.annotate === true ? this.nativeAnnotations(result.stdout) : undefined;
 			const image = await readFile(target);
 			if (image.length > MAX_SCREENSHOT_BYTES) {
-				throw runtimeError("AGENT_BROWSER_OUTPUT_TOO_LARGE", "Browser screenshot exceeded AO's size limit");
+				throw runtimeError("AGENT_BROWSER_OUTPUT_TOO_LARGE", "Browser screenshot exceeded Orchestrator's size limit");
 			}
 			const { width, height } = pngDimensions(image);
 			return {
@@ -569,7 +569,7 @@ export class AgentBrowserRuntime {
 		} catch {
 			throw runtimeError(
 				"AGENT_BROWSER_NOT_INSTALLED",
-				`AO's browser automation component was not found at ${this.options.binaryPath}. Reinstall or rebuild the desktop app.`,
+				`Orchestrator's browser automation component was not found at ${this.options.binaryPath}. Reinstall or rebuild the desktop app.`,
 			);
 		}
 	}
@@ -931,22 +931,22 @@ export function validateAgentBrowserArguments(args: string[]): void {
 	}
 	const command = args[0].toLowerCase();
 	if (!ALLOWED_COMMANDS.has(command)) {
-		throw runtimeError("AGENT_BROWSER_COMMAND_BLOCKED", `agent-browser command is not enabled in AO: ${command}`);
+		throw runtimeError("AGENT_BROWSER_COMMAND_BLOCKED", `agent-browser command is not enabled in Orchestrator: ${command}`);
 	}
 	for (const arg of args) {
 		const lower = arg.toLowerCase();
 		if (FORBIDDEN_FLAGS.some((flag) => lower === flag || lower.startsWith(`${flag}=`))) {
-			throw runtimeError("AGENT_BROWSER_COMMAND_BLOCKED", `agent-browser flag is managed by AO: ${arg}`);
+			throw runtimeError("AGENT_BROWSER_COMMAND_BLOCKED", `agent-browser flag is managed by Orchestrator: ${arg}`);
 		}
 	}
 	if (command === "open" && args[1] && !args[1].startsWith("-")) {
 		assertHTTPURL(args[1]);
 	}
 	if (command === "diff" && args[1]?.toLowerCase() !== "snapshot") {
-		throw runtimeError("AGENT_BROWSER_COMMAND_BLOCKED", "Only snapshot diff is enabled in AO");
+		throw runtimeError("AGENT_BROWSER_COMMAND_BLOCKED", "Only snapshot diff is enabled in Orchestrator");
 	}
 	if (command === "get" && args[1]?.toLowerCase() === "cdp-url") {
-		throw runtimeError("AGENT_BROWSER_COMMAND_BLOCKED", "The private AO CDP endpoint cannot be displayed");
+		throw runtimeError("AGENT_BROWSER_COMMAND_BLOCKED", "The private Orchestrator CDP endpoint cannot be displayed");
 	}
 }
 
@@ -985,7 +985,7 @@ async function runNativeProcess(
 		): Buffer<ArrayBufferLike> => {
 			if (current.length + chunk.length > MAX_OUTPUT_BYTES) {
 				child.kill();
-				finish(runtimeError("AGENT_BROWSER_OUTPUT_TOO_LARGE", "agent-browser output exceeded AO's limit"));
+				finish(runtimeError("AGENT_BROWSER_OUTPUT_TOO_LARGE", "agent-browser output exceeded Orchestrator's limit"));
 				return current;
 			}
 			return Buffer.concat([current, chunk]);
@@ -1044,7 +1044,7 @@ function assertAgentBrowserSocketPath(socketDir: string, namespace: string, plat
 	if (byteLength > AGENT_BROWSER_UNIX_SOCKET_PATH_MAX_BYTES) {
 		throw runtimeError(
 			"AGENT_BROWSER_START_FAILED",
-			`Agent Browser socket path is ${byteLength} bytes; Unix supports at most ${AGENT_BROWSER_UNIX_SOCKET_PATH_MAX_BYTES}. AO needs a shorter socket directory.`,
+			`Agent Browser socket path is ${byteLength} bytes; Unix supports at most ${AGENT_BROWSER_UNIX_SOCKET_PATH_MAX_BYTES}. Orchestrator needs a shorter socket directory.`,
 		);
 	}
 }
