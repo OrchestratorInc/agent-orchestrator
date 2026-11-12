@@ -3,6 +3,7 @@ package copilot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,7 +114,11 @@ func copilotConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
 	var config map[string]json.RawMessage
-	if err := json.Unmarshal(stripJSONC(data), &config); err != nil {
+	cleaned, err := stripJSONC(data)
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, false, err
+	}
+	if err := json.Unmarshal(cleaned, &config); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
 	for _, key := range []string{"authToken", "accessToken", "token"} {
@@ -244,16 +249,32 @@ func copilotLoggedInUser(config map[string]json.RawMessage) bool {
 	return false
 }
 
+// copilotLoginRecord reports whether a loggedInUsers entry records an actual
+// account. Objects must carry at least one field, however their braces are
+// spaced; nulls and empty or whitespace-only strings are not logins.
 func copilotLoginRecord(user json.RawMessage) bool {
-	record := strings.TrimSpace(string(user))
-	return record != "" && record != "null" && record != "{}" && record != `""`
+	var value any
+	if err := json.Unmarshal(user, &value); err != nil {
+		return false
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		return len(v) > 0
+	case string:
+		return strings.TrimSpace(v) != ""
+	default:
+		return false
+	}
 }
 
 // stripJSONC removes // and /* */ comments and trailing commas so Copilot
 // CLI's JSONC config.json (issue #8219) decodes with encoding/json. String
 // contents are kept verbatim, including sequences that look like comments
-// inside URLs. It mirrors modelcatalog.stripJSONC; keep the two in sync.
-func stripJSONC(raw []byte) []byte {
+// inside URLs. It mirrors modelcatalog.stripJSONC, except that a block
+// comment left unterminated by a truncated write is reported as an error so
+// malformed input takes the GitHub CLI fallback instead of parsing as if the
+// missing tail were part of the comment; keep the two in sync otherwise.
+func stripJSONC(raw []byte) ([]byte, error) {
 	out := make([]byte, 0, len(raw))
 	inString, escaped := false, false
 	for i := 0; i < len(raw); i++ {
@@ -282,11 +303,17 @@ func stripJSONC(raw []byte) []byte {
 				out = append(out, '\n')
 			}
 		case c == '/' && i+1 < len(raw) && raw[i+1] == '*':
-			i += 2
-			for i+1 < len(raw) && (raw[i] != '*' || raw[i+1] != '/') {
-				i++
+			end := -1
+			for j := i + 2; j+1 < len(raw); j++ {
+				if raw[j] == '*' && raw[j+1] == '/' {
+					end = j + 1
+					break
+				}
 			}
-			i++
+			if end < 0 {
+				return nil, errors.New("unterminated block comment")
+			}
+			i = end
 		case c == ']' || c == '}':
 			// Drop a trailing comma left before this closer.
 			j := len(out) - 1
@@ -301,5 +328,5 @@ func stripJSONC(raw []byte) []byte {
 			out = append(out, c)
 		}
 	}
-	return out
+	return out, nil
 }

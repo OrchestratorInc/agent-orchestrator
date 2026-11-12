@@ -135,15 +135,20 @@ func TestCopilotConfigAuthStatusJSONCKeepsStringsIntact(t *testing.T) {
 	}
 }
 
-// Empty or stale login records are not evidence of any usable login.
+// Empty or stale login records are not evidence of any usable login, no
+// matter how their empty value is spelled.
 func TestCopilotConfigAuthStatusIgnoresEmptyLoginRecords(t *testing.T) {
 	for name, config := range map[string]string{
-		"empty array":    `{"loggedInUsers":[]}`,
-		"null entries":   `{"loggedInUsers":[null,null]}`,
-		"empty objects":  `{"loggedInUsers":[{},{}]}`,
-		"empty strings":  `{"loggedInUsers":["",""]}`,
-		"empty map":      `{"loggedInUsers":{}}`,
-		"null map value": `{"loggedInUsers":{"github.com":null}}`,
+		"empty array":         `{"loggedInUsers":[]}`,
+		"null entries":        `{"loggedInUsers":[null,null]}`,
+		"empty objects":       `{"loggedInUsers":[{},{}]}`,
+		"spaced objects":      `{"loggedInUsers":[ { } ]}`,
+		"newline objects":     "{\"loggedInUsers\":[{\n\t}]}",
+		"empty strings":       `{"loggedInUsers":["",""]}`,
+		"whitespace strings":  `{"loggedInUsers":["  "]}`,
+		"empty map":           `{"loggedInUsers":{}}`,
+		"null map value":      `{"loggedInUsers":{"github.com":null}}`,
+		"empty object values": `{"loggedInUsers":{"github.com":{}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			configPath := filepath.Join(t.TempDir(), "config.json")
@@ -169,6 +174,35 @@ func TestCopilotLocalAuthStatusFallsBackToGHFromMalformedJSONC(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("COPILOT_HOME", dir)
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("// header comment\n{\"loggedInUsers\": ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := authprobe.CmdRunner
+	t.Cleanup(func() { authprobe.CmdRunner = previous })
+	authprobe.CmdRunner = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "gh" || !reflect.DeepEqual(args, []string{"auth", "token"}) {
+			return nil, errors.New("unexpected auth probe command")
+		}
+		return []byte("gho_test-token"), nil
+	}
+
+	status, ok, err := copilotLocalAuthStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	}
+}
+
+// A truncated write can leave a block comment unterminated behind an
+// otherwise valid document; that is malformed input, so the probe must take
+// the GitHub CLI token fallback instead of trusting the swallowed tail.
+func TestCopilotLocalAuthStatusFallsBackToGHFromUnterminatedBlockComment(t *testing.T) {
+	clearCopilotAuthProbeEnv(t)
+	dir := t.TempDir()
+	t.Setenv("COPILOT_HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{\"loggedInUsers\":[{\"login\":\"example-user\"}]} /* truncated"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
