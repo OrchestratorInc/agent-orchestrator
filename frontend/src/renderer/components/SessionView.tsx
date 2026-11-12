@@ -2138,22 +2138,25 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// A remote host's session can first show what the sidebar kept from an
 	// earlier read, which can predate artifacts registered since. Fresh data is
 	// authoritative at once; stale data is refetched on mount, and until that
-	// read lands the baseline keeps absorbing what it sees.
+	// read lands the baseline keeps absorbing what it sees. A cloud session's
+	// artifact list loads after the session itself, so it waits for that too.
+	// A local session whose listing failed reads as having none; the next good
+	// read can then open an existing artifact, which is harmless.
 	const registeredArtifactsBaselineRef = useRef<{ sessionId: string; keys: Set<string>; settled: boolean } | null>(null);
 	const artifactFiles = session?.artifactFiles;
-	const remoteSessionStale = Boolean(hostId) && remoteSessionQuery.isStale;
+	const artifactListUnsettled = (Boolean(hostId) && remoteSessionQuery.isStale) || Boolean(session?.artifactFilesPending);
 	useEffect(() => {
 		if (!hasInspector) return;
 		const registered = (artifactFiles ?? []).filter((file) => file.registered);
 		const keyOf = (file: SessionArtifact) => file.id ?? file.path;
 		const baseline = registeredArtifactsBaselineRef.current;
 		if (!baseline || baseline.sessionId !== uiSessionId) {
-			registeredArtifactsBaselineRef.current = { sessionId: uiSessionId, keys: new Set(registered.map(keyOf)), settled: !remoteSessionStale };
+			registeredArtifactsBaselineRef.current = { sessionId: uiSessionId, keys: new Set(registered.map(keyOf)), settled: !artifactListUnsettled };
 			return;
 		}
 		if (!baseline.settled) {
 			for (const file of registered) baseline.keys.add(keyOf(file));
-			baseline.settled = !remoteSessionStale;
+			baseline.settled = !artifactListUnsettled;
 			return;
 		}
 		// A rename keeps its id; a file without one counts as known under an old path.
@@ -2171,7 +2174,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 		const newest = added.reduce((latest, file) => ((Date.parse(file.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? file : latest));
 		handleOpenArtifact({ path: newest.path });
-	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, hasInspector, remoteSessionStale, setArtifactsUnseen, terminated, uiSessionId]);
+	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, artifactListUnsettled, hasInspector, setArtifactsUnseen, terminated, uiSessionId]);
 
 	// A file written moments ago, or one past the artifact list cap, is not in
 	// the cached session, and the Files inspector can only show listed

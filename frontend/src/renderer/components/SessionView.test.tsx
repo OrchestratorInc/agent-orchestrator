@@ -5853,6 +5853,29 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("takes the baseline from a cloud session's artifact list once it loads", () => {
+		const worker = workerSession("sess-1");
+		// The session arrives before its artifact list.
+		worker.artifactFilesPending = true;
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			delete worker.artifactFilesPending;
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFilesPending;
+			delete worker.artifactFiles;
+		}
+	});
+
 	it("only badges Artifacts for a registration while the user is in Files", () => {
 		const worker = workerSession("sess-1");
 		worker.artifactFiles = [];
