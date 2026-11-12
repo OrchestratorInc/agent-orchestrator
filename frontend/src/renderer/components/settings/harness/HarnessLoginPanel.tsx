@@ -388,7 +388,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		setVerifying(true);
 		setError("");
 		try {
-			if (await verifyRef.current("native") !== true) {
+			const verified = await verifyRef.current("native");
+			if (!verified) {
 				setError(t("settings.harness.loginUi.unverified"));
 				return;
 			}
@@ -396,6 +397,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 			if (!mounted.current) return;
 			updateOperation(undefined);
 			setConnected(true);
+			// Present, not verified: shown as configured.
+			setConfigured(verified === "configured");
 		} catch (err) {
 			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
 		} finally { if (mounted.current) setVerifying(false); }

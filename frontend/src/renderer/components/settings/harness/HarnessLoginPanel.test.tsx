@@ -254,6 +254,20 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
 	});
 
+	// Gemini, Hermes and MiMo Code can only report their own credentials as
+	// present: the sign-in finishes as configured, never as verified.
+	it("finishes a native sign-in the harness can only report as configured", async () => {
+		const user = userEvent.setup();
+		const native: AgentLoginSnapshot = { ...snapshot, agentId: "hermes", method: "native", nativePrompt: "waiting", loginUrl: undefined, deviceCode: undefined };
+		vi.mocked(startAgentUILogin).mockResolvedValue(native);
+		render(<HarnessLoginPanel agentId="hermes" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+		await waitFor(() => expect(cancelAgentUILogin).toHaveBeenCalledWith("hermes", "login-1", undefined));
+		expect(await screen.findByText("Configured")).toBeVisible();
+		expect(screen.queryByText("Connected")).toBeNull();
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
 	it("hands an unrecognized first native screen straight to the terminal", async () => {
 		const native: AgentLoginSnapshot = { ...snapshot, agentId: "goose", method: "native", nativePrompt: "terminal_required", loginUrl: undefined, deviceCode: undefined };
 		vi.mocked(startAgentUILogin).mockResolvedValue(native);

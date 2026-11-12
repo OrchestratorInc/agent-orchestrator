@@ -472,16 +472,19 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			// The PTY reports no exit status, and the user may have pressed Esc
 			// or the CLI may have failed, so the harness's own probe decides.
 			// The old AO-saved key is released first so the probe cannot be
-			// satisfied by it, and given back unless the probe confirms the
-			// sign-in. Only a confirmed sign-in and a successful release
-			// succeed; a signed-out or inconclusive probe fails the operation
+			// satisfied by it, and given back unless the probe finds the
+			// harness's own sign-in. Authorized confirms it. Configured, all
+			// some harnesses (Gemini, Hermes, MiMo Code) can report, means
+			// their own credentials are there without the old key; the
+			// operation succeeds and the panel shows it as configured, not
+			// verified. A signed-out or inconclusive probe fails the operation
 			// so the panel offers a retry or the terminal.
 			probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			released, releaseErr := s.releaseSubscriptionKey(probeCtx, op.snapshot.AgentID)
 			state := domain.AgentAuthenticationUnknown
 			if releaseErr == nil {
 				state = s.nativeSignInState(probeCtx, op.snapshot.AgentID)
-				if state != domain.AgentAuthenticationAuthorized {
+				if !nativeSignInFound(state) {
 					restoreCtx, restoreCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 					_ = s.restoreSubscriptionKey(restoreCtx, op.snapshot.AgentID, released)
 					restoreCancel()
@@ -491,7 +494,7 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			s.mu.Lock()
 			if op.snapshot.Status == "running" {
 				op.snapshot.Status = "failed"
-				if releaseErr == nil && state == domain.AgentAuthenticationAuthorized {
+				if releaseErr == nil && nativeSignInFound(state) {
 					op.snapshot.Status = "succeeded"
 				}
 			}
@@ -519,6 +522,13 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 		s.mu.Unlock()
 		return
 	}
+}
+
+// nativeSignInFound reports whether the probe after a native sign-in found
+// the harness's own credential: verified, or present where the harness can
+// only say configured.
+func nativeSignInFound(state domain.AgentAuthenticationState) bool {
+	return state == domain.AgentAuthenticationAuthorized || state == domain.AgentAuthenticationConfigured
 }
 
 // signInProber runs a harness's own authentication probe. AO's agent service,

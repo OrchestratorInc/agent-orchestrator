@@ -274,6 +274,8 @@ func TestNativeSignInExitIsConfirmedByTheHarnessProbe(t *testing.T) {
 		claimKept bool
 	}{
 		{"authorized", domain.AgentAuthenticationAuthorized, "succeeded", false},
+		// Gemini, Hermes and MiMo Code can only report their own credentials as present.
+		{"configured", domain.AgentAuthenticationConfigured, "succeeded", false},
 		{"signed out", domain.AgentAuthenticationUnauthorized, "failed", true},
 		{"inconclusive", domain.AgentAuthenticationUnknown, "failed", true},
 	} {

@@ -798,7 +798,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						const result = await checkAuth(agentId, { fresh: true });
 						const cliLoggedIn = await refreshCliLogin(agentId);
 						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") return true;
-						if (agentAuthPlans.get(agentId)?.methods?.some((method) => method.id === methodId && method.secret) && result?.agent?.authStatus === "configured") return "configured";
+						// A saved key, or a native sign-in whose harness can only report
+						// its own credentials as present (Gemini, Hermes, MiMo Code),
+						// counts as configured, never as verified.
+						if (agentAuthPlans.get(agentId)?.methods?.some((method) => method.id === methodId && (method.secret || method.id === "native")) && result?.agent?.authStatus === "configured") return "configured";
 					}
 					return false;
 				}}
