@@ -79,12 +79,12 @@ describe("FileContentPane", () => {
 				editable: false,
 			},
 		});
-		const { unmount } = renderWithQuery(<FileContentPane annotation={noopAnnotation()} hostId="h1" initialMode="file" path="out/report.pdf" sessionId="sess-1" split={false} />);
+		const { unmount } = renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="out/report.pdf" sessionId="sess-1" split={false} />);
 		await userEvent.click(await screen.findByRole("button", { name: "Download" }));
 		expect(download).toHaveBeenCalledExactlyOnceWith("out/report.pdf");
 		unmount();
 		for (const historical of [{ commitSha: "abc123" }, { scope: "staged" as const }]) {
-			const view = renderWithQuery(<FileContentPane annotation={noopAnnotation()} hostId="h1" initialMode="file" path="out/report.pdf" sessionId="sess-1" split={false} {...historical} />);
+			const view = renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="out/report.pdf" sessionId="sess-1" split={false} {...historical} />);
 			await screen.findByText("report body");
 			expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
 			view.unmount();
