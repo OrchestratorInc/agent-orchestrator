@@ -55,7 +55,9 @@ export function useMenuRowWidth(): {
 	const ref = useRef<View>(null);
 	const [width, setWidth] = useState<number | undefined>(() => shared?.current);
 	const measured = useCallback((next: number) => {
-		if (shared) shared.current = next;
+		// Only a real width seeds the rows after this one: a slot laid out at
+		// zero for a moment would otherwise start every later row at zero.
+		if (shared && next > 0) shared.current = next;
 		setWidth(next);
 	}, [shared]);
 	useLayoutEffect(() => {

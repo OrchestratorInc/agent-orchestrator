@@ -114,3 +114,12 @@ it("seeds a remounted list from widths held above it", () => {
 	expect(firstRender(log, "later-g")).toBe(402.5);
 	expect(firstRender(log, "later-h")).toBe(402.5);
 });
+
+it("keeps the last real width as the seed when a row reports zero", () => {
+	const log: [string, number | undefined][] = [];
+	act(() => { renderer = create(list(["first-a"], log), { createNodeMock: firstBatchOnly }); });
+	// A slot laid out at zero for a moment (hidden, or mid-transition).
+	act(() => renderer!.root.findByProps({ testID: "first-a" }).props.onLayout({ nativeEvent: { layout: { width: 0 } } }));
+	act(() => renderer!.update(list(["first-a", "later-i"], log)));
+	expect(firstRender(log, "later-i")).toBe(402.5);
+});
