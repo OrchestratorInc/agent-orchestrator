@@ -1981,8 +1981,13 @@ func (c *Controller) dispatch(
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
 	msg = excerptDeliveryMessage(msg)
+	prepared, inputErr := c.withAdditionalInstructions(ctx, msg)
+	msg = prepared
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
-	if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
+	if inputErr == nil {
+		inputErr = c.store.RecordProviderInput(ctx, turnID, msg.Text)
+	}
+	if err := inputErr; err != nil {
 		if len(followers) > 0 {
 			ids := append([]string{turnID}, followers...)
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, ids,

@@ -468,7 +468,15 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 			cfg.MCPServers[i].Env["AO_SIDE_CONVERSATION_ID"] = idNew
 		}
 	}
-	frozenConfig, err := json.Marshal(frozenSideConfig{DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt), AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers})
+	instructions := ""
+	if policy, ok := s.store.(additionalInstructionsStore); ok {
+		var err error
+		instructions, err = policy.GetSessionAdditionalInstructions(ctx, id)
+		if err != nil {
+			return domain.SideConversation{}, err
+		}
+	}
+	frozenConfig, err := json.Marshal(frozenSideConfig{AdditionalInstructions: instructions, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env, Permissions: cfg.Permissions, ReadOnly: cfg.ReadOnly, SystemPrompt: sideIdentityPrompt(cfg.SystemPrompt), AdditionalDirectories: cfg.AdditionalDirectories, MCPServers: cfg.MCPServers})
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
@@ -1356,6 +1364,15 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 			Type: item.Type, MIMEType: item.MIMEType, Data: item.Data, URI: item.URI, Name: item.Name, Text: item.Text})
 	}
 	providerRequestID := turn.ClientMessageID
+	var frozen frozenSideConfig
+	if len(side.LaunchConfig) > 0 {
+		if err := json.Unmarshal(side.LaunchConfig, &frozen); err != nil {
+			_ = m.store.SettleSideTurn(context.WithoutCancel(ctx), side.ID, turn.ID, side.Generation, "failed", "", "read frozen instructions: "+err.Error(), m.service.now())
+			m.failOpen(side, err)
+			return
+		}
+	}
+	text = appendAdditionalInstructions(text, frozen.AdditionalInstructions)
 	if turn.DispatchAttempt > 0 {
 		providerRequestID = fmt.Sprintf("%s:retry:%d", turn.ClientMessageID, turn.DispatchAttempt)
 	}
@@ -1964,21 +1981,26 @@ func (m *sideManager) retryCleanup() {
 
 // frozenSideConfig contains the launch configuration that survives daemon recovery.
 // It is never included in renderer-facing side summaries.
+// Side instructions stay at their creation-time value across recovery; main-chat
+// deliveries instead read the latest session instructions at dispatch time.
 type frozenSideConfig struct {
-	DataDir               string
-	WorkspacePath         string
-	Env                   map[string]string
-	Permissions           domain.PermissionMode
-	ReadOnly              bool
-	SystemPrompt          string
-	AdditionalDirectories []string
-	MCPServers            []ports.ChatMCPServerConfig
+	AdditionalInstructions string
+	DataDir                string
+	WorkspacePath          string
+	Env                    map[string]string
+	Permissions            domain.PermissionMode
+	ReadOnly               bool
+	SystemPrompt           string
+	AdditionalDirectories  []string
+	MCPServers             []ports.ChatMCPServerConfig
 }
 
 func (s *Service) sideLaunchConfig(side domain.SideConversation) (StartConfig, ports.ChatDriver, error) {
 	var frozen frozenSideConfig
-	if err := json.Unmarshal(side.LaunchConfig, &frozen); err != nil {
-		return StartConfig{}, nil, fmt.Errorf("read frozen side configuration: %w", err)
+	if len(side.LaunchConfig) > 0 {
+		if err := json.Unmarshal(side.LaunchConfig, &frozen); err != nil {
+			return StartConfig{}, nil, fmt.Errorf("read frozen side configuration: %w", err)
+		}
 	}
 	driver, err := s.drivers.Driver(side.Harness)
 	return StartConfig{Harness: side.Harness, DataDir: frozen.DataDir, WorkspacePath: frozen.WorkspacePath, Env: frozen.Env, Permissions: frozen.Permissions, ReadOnly: frozen.ReadOnly, SystemPrompt: sideIdentityPrompt(frozen.SystemPrompt), AdditionalDirectories: frozen.AdditionalDirectories, MCPServers: frozen.MCPServers}, driver, err

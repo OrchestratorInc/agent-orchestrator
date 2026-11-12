@@ -4121,5 +4121,12 @@
 	"workflow.head": "HEAD",
 	"workflow.gate": "Проверка качества",
 	"workflow.review": "Проверка",
-	"workflow.sha": "SHA"
+	"workflow.sha": "SHA",
+	"sessionInstructions.title": "Дополнительные инструкции сеанса",
+	"sessionInstructions.description": "Добавляются при каждой доставке сообщения.",
+	"sessionInstructions.label": "Дополнительные инструкции",
+	"sessionInstructions.count": "{{count}} / {{limit}} символов",
+	"sessionInstructions.tooLong": "Не более 16000 символов",
+	"sessionInstructions.clear": "Очистить",
+	"sessionInstructions.save": "Сохранить"
 }

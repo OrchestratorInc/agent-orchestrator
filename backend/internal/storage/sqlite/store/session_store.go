@@ -1136,6 +1136,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		AutoInjectCI:       row.AutoInjectCI,
 		OutputType:         normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
 		Metadata: domain.SessionMetadata{
+			AdditionalInstructions:           row.AdditionalInstructions,
 			Branch:                           row.Branch,
 			WorkspacePath:                    row.WorkspacePath,
 			WorktreeRoot:                     row.WorktreeRoot,

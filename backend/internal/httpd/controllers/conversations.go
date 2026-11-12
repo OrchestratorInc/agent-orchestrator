@@ -149,6 +149,8 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
 	r.Get("/sessions/{sessionId}/conversation/skills", c.skills)
 	r.Patch("/sessions/{sessionId}/conversation/settings", c.setSettings)
+	r.Get("/sessions/{sessionId}/conversation/additional-instructions", c.additionalInstructions)
+	r.Patch("/sessions/{sessionId}/conversation/additional-instructions", c.additionalInstructions)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/rollback", c.rollback)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/edit", c.editMessage)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/retry", c.retryTurn)

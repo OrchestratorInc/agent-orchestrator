@@ -318,7 +318,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
-    worktree_root
+    worktree_root, additional_instructions
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -341,7 +341,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
-    worktree_root
+    worktree_root, additional_instructions
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -364,7 +364,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
-    worktree_root
+    worktree_root, additional_instructions
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -387,7 +387,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
-    worktree_root
+    worktree_root, additional_instructions
 FROM sessions ORDER BY project_id, num;
 
 -- name: ListChatHibernationCandidates :many
@@ -605,3 +605,10 @@ SELECT EXISTS(
 -- store runs that DELETE directly via tx.ExecContext inside
 -- Store.DeleteSession, inside the same transaction as the SessionIsSeed
 -- probe and the raw change_log cleanup.
+
+-- name: GetSessionAdditionalInstructions :one
+SELECT additional_instructions FROM sessions WHERE id = ?;
+
+-- name: SetSessionAdditionalInstructions :execrows
+UPDATE sessions SET additional_instructions = sqlc.arg(additional_instructions)
+WHERE id = sqlc.arg(id);

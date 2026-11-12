@@ -228,7 +228,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
-    worktree_root
+    worktree_root, additional_instructions
 FROM sessions WHERE id = ?
 `
 
@@ -315,6 +315,7 @@ type GetSessionRow struct {
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
 	WorktreeRoot                     string
+	AdditionalInstructions           string
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -403,8 +404,20 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.OrchestratorSessionID,
 		&i.SpawnParentSessionID,
 		&i.WorktreeRoot,
+		&i.AdditionalInstructions,
 	)
 	return i, err
+}
+
+const getSessionAdditionalInstructions = `-- name: GetSessionAdditionalInstructions :one
+SELECT additional_instructions FROM sessions WHERE id = ?
+`
+
+func (q *Queries) GetSessionAdditionalInstructions(ctx context.Context, id domain.SessionID) (string, error) {
+	row := q.db.QueryRowContext(ctx, getSessionAdditionalInstructions, id)
+	var additional_instructions string
+	err := row.Scan(&additional_instructions)
+	return additional_instructions, err
 }
 
 const getSessionByAutomationRunID = `-- name: GetSessionByAutomationRunID :one
@@ -427,7 +440,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
-    worktree_root
+    worktree_root, additional_instructions
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -514,6 +527,7 @@ type GetSessionByAutomationRunIDRow struct {
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
 	WorktreeRoot                     string
+	AdditionalInstructions           string
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -602,6 +616,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.OrchestratorSessionID,
 		&i.SpawnParentSessionID,
 		&i.WorktreeRoot,
+		&i.AdditionalInstructions,
 	)
 	return i, err
 }
@@ -798,7 +813,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
-    worktree_root
+    worktree_root, additional_instructions
 FROM sessions ORDER BY project_id, num
 `
 
@@ -885,6 +900,7 @@ type ListAllSessionsRow struct {
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
 	WorktreeRoot                     string
+	AdditionalInstructions           string
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -979,6 +995,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.OrchestratorSessionID,
 			&i.SpawnParentSessionID,
 			&i.WorktreeRoot,
+			&i.AdditionalInstructions,
 		); err != nil {
 			return nil, err
 		}
@@ -1101,7 +1118,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
     runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
-    worktree_root
+    worktree_root, additional_instructions
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -1188,6 +1205,7 @@ type ListSessionsByProjectRow struct {
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
 	WorktreeRoot                     string
+	AdditionalInstructions           string
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -1282,6 +1300,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.OrchestratorSessionID,
 			&i.SpawnParentSessionID,
 			&i.WorktreeRoot,
+			&i.AdditionalInstructions,
 		); err != nil {
 			return nil, err
 		}
@@ -1770,6 +1789,24 @@ func (q *Queries) SessionIsSeed(ctx context.Context, id domain.SessionID) (bool,
 	var is_seed bool
 	err := row.Scan(&is_seed)
 	return is_seed, err
+}
+
+const setSessionAdditionalInstructions = `-- name: SetSessionAdditionalInstructions :execrows
+UPDATE sessions SET additional_instructions = ?1
+WHERE id = ?2
+`
+
+type SetSessionAdditionalInstructionsParams struct {
+	AdditionalInstructions string
+	ID                     domain.SessionID
+}
+
+func (q *Queries) SetSessionAdditionalInstructions(ctx context.Context, arg SetSessionAdditionalInstructionsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionAdditionalInstructions, arg.AdditionalInstructions, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setSessionAutoInjectCI = `-- name: SetSessionAutoInjectCI :execrows

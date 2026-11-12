@@ -164,6 +164,7 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersSessionAdditionalInstructionsPayload":      "SessionAdditionalInstructionsPayload",
 	"ControllersAgentExecutableScanRequest":                "AgentExecutableScanRequest",
 	"ControllersAgentExecutableCandidate":                  "AgentExecutableCandidate",
 	"ControllersAgentExecutableScanResponse":               "AgentExecutableScanResponse",
@@ -2005,6 +2006,19 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation/additional-instructions", id: "getSessionAdditionalInstructions", tag: "conversations",
+			summary:    "Read session user additional instructions",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.SessionAdditionalInstructionsPayload{}}, {http.StatusInternalServerError, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/sessions/{sessionId}/conversation/additional-instructions", id: "setSessionAdditionalInstructions", tag: "conversations",
+			summary:    "Save session user additional instructions for subsequent messages",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.SessionAdditionalInstructionsPayload{},
+			resps:      []respUnit{{http.StatusOK, controllers.SessionAdditionalInstructionsPayload{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/sessions/{sessionId}/conversation/settings", id: "setSessionConversationTurnSettings", tag: "conversations",

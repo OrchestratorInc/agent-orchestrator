@@ -3975,5 +3975,12 @@
 	"workflow.head": "HEAD",
 	"workflow.gate": "质量检查",
 	"workflow.review": "审查",
-	"workflow.sha": "SHA"
+	"workflow.sha": "SHA",
+	"sessionInstructions.title": "会话附加指令",
+	"sessionInstructions.description": "每次投递消息时追加。",
+	"sessionInstructions.label": "附加指令",
+	"sessionInstructions.count": "{{count}} / {{limit}} 字符",
+	"sessionInstructions.tooLong": "最多 16000 字符",
+	"sessionInstructions.clear": "清空",
+	"sessionInstructions.save": "保存"
 }

@@ -4062,5 +4062,12 @@
 	"workflow.head": "HEAD",
 	"workflow.gate": "Verificação de qualidade",
 	"workflow.review": "Revisão",
-	"workflow.sha": "SHA"
+	"workflow.sha": "SHA",
+	"sessionInstructions.title": "Instruções adicionais da sessão",
+	"sessionInstructions.description": "Adicionadas sempre que uma mensagem é entregue.",
+	"sessionInstructions.label": "Instruções adicionais",
+	"sessionInstructions.count": "{{count}} / {{limit}} caracteres",
+	"sessionInstructions.tooLong": "Máximo de 16000 caracteres",
+	"sessionInstructions.clear": "Limpar",
+	"sessionInstructions.save": "Salvar"
 }

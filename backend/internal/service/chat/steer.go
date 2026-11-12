@@ -57,6 +57,9 @@ var (
 	// ErrSteerContentUnsupported means the provider cannot accept every structured
 	// block. The whole queued message stays undelivered.
 	ErrSteerContentUnsupported = errors.New("steer content is unsupported")
+
+	// ErrSteerInstructionsUnavailable means dispatch could not read durable session instructions.
+	ErrSteerInstructionsUnavailable = errors.New("additional instructions could not be loaded")
 	// ErrSteerTargetRequired reports a pinned steer with no turn to pin. It is a
 	// caller bug rather than a race: a caller that has no turn id should ask for
 	// the ordinary steer, which resolves the running turn itself.
@@ -585,6 +588,17 @@ func (c *Controller) steerLockedForTurn(
 		}
 	}
 
+	providerMessage, err = c.withAdditionalInstructions(ctx, providerMessage)
+	if err != nil {
+		if msg.ClientMessageID != "" {
+			err = errors.Join(err, c.store.RejectSteerDelivery(context.WithoutCancel(ctx), c.conversation.ID,
+				msg.ClientMessageID, domain.ConversationSteerRejectedInstructionsUnavailable, "Additional instructions could not be loaded", c.now()))
+		}
+		if len(batch) > 0 {
+			err = errors.Join(err, c.store.ReleaseQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch)))
+		}
+		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerInstructionsUnavailable, err)
+	}
 	ref, err := steerer.Steer(ctx, turn, providerMessage)
 	if err != nil {
 		kind, definitive, refused := classifySteerRejection(err)
@@ -859,6 +873,8 @@ func replaySteerRejection(delivery domain.ConversationSteerDelivery) error {
 		cause = ErrTurnNotSteerable
 	case domain.ConversationSteerRejectedContentUnsupported:
 		cause = ErrSteerContentUnsupported
+	case domain.ConversationSteerRejectedInstructionsUnavailable:
+		cause = ErrSteerInstructionsUnavailable
 	case domain.ConversationSteerRejectedByProvider:
 		cause = ErrProviderRefused
 	case domain.ConversationSteerRejectedInterfaceTransition:

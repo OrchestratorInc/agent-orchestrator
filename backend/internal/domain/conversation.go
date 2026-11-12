@@ -880,10 +880,11 @@ type ConversationSteerRejectionKind string
 
 // Conversation steer rejection kinds.
 const (
-	ConversationSteerRejectedNoActiveTurn        ConversationSteerRejectionKind = "no_active_turn"
-	ConversationSteerRejectedUnsupported         ConversationSteerRejectionKind = "unsupported"
-	ConversationSteerRejectedTurnNotSteerable    ConversationSteerRejectionKind = "turn_not_steerable"
-	ConversationSteerRejectedContentUnsupported  ConversationSteerRejectionKind = "content_unsupported"
-	ConversationSteerRejectedByProvider          ConversationSteerRejectionKind = "provider_refused"
-	ConversationSteerRejectedInterfaceTransition ConversationSteerRejectionKind = "interface_transition"
+	ConversationSteerRejectedNoActiveTurn            ConversationSteerRejectionKind = "no_active_turn"
+	ConversationSteerRejectedUnsupported             ConversationSteerRejectionKind = "unsupported"
+	ConversationSteerRejectedTurnNotSteerable        ConversationSteerRejectionKind = "turn_not_steerable"
+	ConversationSteerRejectedContentUnsupported      ConversationSteerRejectionKind = "content_unsupported"
+	ConversationSteerRejectedInstructionsUnavailable ConversationSteerRejectionKind = "instructions_unavailable"
+	ConversationSteerRejectedByProvider              ConversationSteerRejectionKind = "provider_refused"
+	ConversationSteerRejectedInterfaceTransition     ConversationSteerRejectionKind = "interface_transition"
 )

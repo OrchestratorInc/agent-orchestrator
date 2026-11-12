@@ -3993,5 +3993,12 @@
 	"workflow.head": "HEAD",
 	"workflow.gate": "品質チェック",
 	"workflow.review": "レビュー",
-	"workflow.sha": "SHA"
+	"workflow.sha": "SHA",
+	"sessionInstructions.title": "セッションの追加指示",
+	"sessionInstructions.description": "メッセージが配信されるたびに追加されます。",
+	"sessionInstructions.label": "追加指示",
+	"sessionInstructions.count": "{{count}} / {{limit}} 文字",
+	"sessionInstructions.tooLong": "最大 16000 文字",
+	"sessionInstructions.clear": "クリア",
+	"sessionInstructions.save": "保存"
 }

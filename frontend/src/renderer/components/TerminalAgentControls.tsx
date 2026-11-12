@@ -1,4 +1,5 @@
 import { MoreVertical } from "lucide-react";
+import { SessionInstructionsEditor } from "./SessionInstructionsEditor";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
@@ -90,6 +91,7 @@ export function SessionTabMenu({
 				</button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="min-w-48">
+				{!hostId && switching ? <SessionInstructionsEditor sessionId={session.id} /> : null}
 				{switching ? <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} /> : null}
 				{switchAction ? (
 					<DropdownMenuItem disabled={switchAction.disabled} title={switchAction.reason} onSelect={switchAction.run}>

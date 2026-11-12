@@ -936,6 +936,7 @@ type Session struct {
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
 	WorktreeRoot                     string
+	AdditionalInstructions           string
 }
 
 type SessionAgentAccount struct {

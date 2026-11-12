@@ -3993,5 +3993,12 @@
 	"workflow.head": "HEAD",
 	"workflow.gate": "품질 검사",
 	"workflow.review": "검토",
-	"workflow.sha": "SHA"
+	"workflow.sha": "SHA",
+	"sessionInstructions.title": "세션 추가 지침",
+	"sessionInstructions.description": "메시지가 전달될 때마다 추가됩니다.",
+	"sessionInstructions.label": "추가 지침",
+	"sessionInstructions.count": "{{count}} / {{limit}}자",
+	"sessionInstructions.tooLong": "최대 16000자",
+	"sessionInstructions.clear": "지우기",
+	"sessionInstructions.save": "저장"
 }

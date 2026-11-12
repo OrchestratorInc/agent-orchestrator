@@ -7298,6 +7298,71 @@ paths:
       summary: Read a chat session's durable conversation
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/additional-instructions:
+    get:
+      operationId: getSessionAdditionalInstructions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionAdditionalInstructionsPayload'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Read session user additional instructions
+      tags:
+      - conversations
+    patch:
+      operationId: setSessionAdditionalInstructions
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionAdditionalInstructionsPayload'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionAdditionalInstructionsPayload'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Save session user additional instructions for subsequent messages
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation/approvals/{requestId}/resolve:
     post:
       operationId: resolveSessionConversationApproval
@@ -20907,6 +20972,8 @@ components:
       properties:
         activity:
           $ref: '#/components/schemas/DomainActivity'
+        additionalInstructions:
+          type: string
         artifactFiles:
           items:
             $ref: '#/components/schemas/SessionArtifact'
@@ -21131,6 +21198,7 @@ components:
         workspaceCleanupReportOnly:
           type: boolean
       required:
+      - additionalInstructions
       - id
       - kind
       - autoReviewEnabled
@@ -26225,6 +26293,13 @@ components:
           type: array
       required:
       - recent
+      type: object
+    SessionAdditionalInstructionsPayload:
+      properties:
+        text:
+          type: string
+      required:
+      - text
       type: object
     SessionAgentAccountsResponse:
       properties:

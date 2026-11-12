@@ -3993,5 +3993,12 @@
 	"workflow.head": "HEAD",
 	"workflow.gate": "Qualitätsprüfung",
 	"workflow.review": "Prüfung",
-	"workflow.sha": "SHA"
+	"workflow.sha": "SHA",
+	"sessionInstructions.title": "Zusätzliche Sitzungsanweisungen",
+	"sessionInstructions.description": "Wird bei jeder Nachrichtenzustellung angehängt.",
+	"sessionInstructions.label": "Zusätzliche Anweisungen",
+	"sessionInstructions.count": "{{count}} / {{limit}} Zeichen",
+	"sessionInstructions.tooLong": "Maximal 16000 Zeichen",
+	"sessionInstructions.clear": "Leeren",
+	"sessionInstructions.save": "Speichern"
 }

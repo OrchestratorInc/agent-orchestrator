@@ -18,6 +18,7 @@ type deferredSideTestConversation struct {
 	mu           sync.Mutex
 	started      chan string
 	acknowledged chan string
+	lastText     string
 	sent         int
 	acked        bool
 }
@@ -67,12 +68,13 @@ func TestSideCompactionUsesOnlySideProviderAndRejectsBusyTurn(t *testing.T) {
 
 func (*deferredSideTestConversation) ProviderConversationID() string       { return "provider-side-1" }
 func (*deferredSideTestConversation) Capabilities() ports.ChatCapabilities { return nil }
-func (c *deferredSideTestConversation) SendTurn(context.Context, ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+func (c *deferredSideTestConversation) SendTurn(_ context.Context, msg ports.ChatUserMessage) (ports.ChatTurnRef, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.sent > 0 && !c.acked {
 		return ports.ChatTurnRef{}, errors.New("previous ACP prompt is active or not acknowledged")
 	}
+	c.lastText = msg.Text
 	c.sent++
 	c.acked = false
 	return ports.ChatTurnRef{ProviderTurnID: fmt.Sprintf("provider-turn-%d", c.sent)}, nil
@@ -202,6 +204,8 @@ func TestSideTurnStartsAndAcknowledgesDeferredACPProviderTurn(t *testing.T) {
 	if err != nil || !found || next.ID != "turn-2" {
 		t.Fatalf("claim second side turn: %#v, found=%v err=%v", next, found, err)
 	}
+	side.LaunchConfig = json.RawMessage(`{"AdditionalInstructions":"frozen policy"}`)
+	svc.store = &instructionsStore{text: "updated main policy"}
 	finished = make(chan struct{})
 	go func() { manager.runTurn(runtime, side, next); close(finished) }()
 	select {
@@ -218,6 +222,12 @@ func TestSideTurnStartsAndAcknowledgesDeferredACPProviderTurn(t *testing.T) {
 	case <-finished:
 	case <-time.After(time.Second):
 		t.Fatal("second side turn did not finish")
+	}
+	conv.mu.Lock()
+	delivered := conv.lastText
+	conv.mu.Unlock()
+	if !strings.Contains(delivered, "frozen policy") || strings.Contains(delivered, "updated main policy") || strings.Count(delivered, "<ao-user-additional-instructions>") != 1 {
+		t.Fatalf("frozen instructions delivery = %q", delivered)
 	}
 	settled, err = manager.store.SideTurn(ctx, side.ID, next.ID)
 	if err != nil || settled.State != "completed" {
