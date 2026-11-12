@@ -6,6 +6,7 @@ import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
+import { QUEUED_EDIT_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
@@ -246,6 +247,21 @@ export function lastChosenChatSettings(events: readonly CloudCpClientEvent[] | u
 function eventTurnID(event: CloudCpClientEvent): string | undefined {
 	const turnID = eventPayload(event).turnId;
 	return typeof turnID === "string" && turnID !== "" ? turnID : undefined;
+}
+
+/**
+ * The turns of the messages this viewer sent: the ones a queued edit
+ * (editQueuedMessage) may change, which the control plane allows only their
+ * author. A message an orchestrator or automation sent has no author.
+ */
+export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefined, viewerUserId: string | undefined): Set<string> {
+	const turns = new Set<string>();
+	if (!viewerUserId) return turns;
+	for (const event of events ?? []) {
+		const turnID = eventTurnID(event);
+		if (event.type === "chat.user_message" && turnID && eventPayload(event).authorUserId === viewerUserId) turns.add(turnID);
+	}
+	return turns;
 }
 
 export function appendCloudEvents(existing: CloudCpClientEvent[], incoming: CloudCpClientEvent[]): CloudCpClientEvent[] {
@@ -663,6 +679,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const turnPatches = new Map<string, (DiffFile & { patch: string })[]>();
 	const steerableTurns = new Set<string>();
 	const items: ConversationItem[] = [];
+	// A person's message by its turn, for an edit made while it was queued.
+	const humanMessages = new Map<string, ConversationMessage>();
 	let usage: ConversationUsage | undefined;
 	// Live Setup and Cleanup logs. A run with step events replaces the older
 	// one-line workspace.setup summary the worker still sends after it; workers
@@ -685,6 +703,22 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		run.phase === "setup" && firstPrompt !== undefined && firstPrompt < run.firstSequence && run.firstSequence < firstTurnStart
 			? firstPrompt - 0.5 : run.firstSequence;
 	for (const event of events) {
+		if (event.type === "chat.user_message_edited") {
+			// The edit of a message still queued: it reads as edited, in place,
+			// and starts nothing of its own. One whose message is not loaded has
+			// it rewritten already when that page loads.
+			const edited = humanMessages.get(eventTurnID(event) ?? "");
+			const text = eventPayload(event).text;
+			if (edited && typeof text === "string") {
+				const attachments = eventAttachments(event);
+				edited.text = text;
+				delete edited.content;
+				if (attachments.length > 0) edited.cloudAttachments = attachments;
+				else delete edited.cloudAttachments;
+				edited.revision += 1;
+			}
+			continue;
+		}
 		const turnID = eventTurnID(event);
 		if (turnID && !turns.has(turnID)) {
 			// A turn starts with its prompt. One whose first event here is any
@@ -867,7 +901,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			const senderSessionId = automation && typeof payload.senderSessionId === "string" ? payload.senderSessionId : undefined;
 			const senderProjectId = automation && typeof payload.senderProjectId === "string" ? payload.senderProjectId : undefined;
 			const senderDisplayName = automation && typeof payload.senderDisplayName === "string" ? payload.senderDisplayName : undefined;
-			items.push({
+			const message: ConversationMessage = {
 				kind: "message", id: `cloud-event-${event.sequence}`, sequence: event.sequence, revision: 1,
 				turnId: turnID, role: "user", origin: automation ? "automation" : "human",
 				authorName: automation ? undefined : promptAuthorName(payload, viewerUserId),
@@ -880,7 +914,9 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				senderSessionId, senderProjectId, senderDisplayName,
 				...(attachments.length > 0 ? { cloudAttachments: attachments } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
-			});
+			};
+			items.push(message);
+			if (!automation && turnID) humanMessages.set(turnID, message);
 			continue;
 		}
 		if (!text) continue;
@@ -1463,6 +1499,38 @@ export function CloudSessionChatSurface({
 			void invalidate();
 		},
 	});
+	// A queued message is edited in place while the agent has not started on
+	// it. The composer hands over the message with its kept and added files
+	// listed by reference, as it sends one; the files go as attachment ids.
+	const editQueued = useMutation({
+		mutationFn: async ({ turnId, text }: { turnId: string; text: string }) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			const message = cloudMessageAttachments(text, undefined, []);
+			try {
+				return await client.editQueuedMessage(cloud.orgId, session.id, turnId, {
+					text: message.text,
+					...(message.attachmentIds.length ? { attachmentIds: message.attachmentIds } : {}),
+				});
+			} catch (error) {
+				// The agent took the message meanwhile: the queue editor lets go of it
+				// as it does for a local turn that is no longer queued.
+				if (error instanceof CloudCpError && error.code === "TURN_NOT_QUEUED") {
+					throw Object.assign(new Error(error.message), { code: "CHAT_TURN_NOT_QUEUED" });
+				}
+				throw error;
+			}
+		},
+		onSuccess: () => void invalidate(),
+	});
+	const queuedEditOffered = offering.features.includes(QUEUED_EDIT_FEATURE) && !readOnly && session.isTerminated !== true;
+	const ownTurns = useMemo(() => ownMessageTurns(eventsQuery.data, me), [eventsQuery.data, me]);
+	// Only the author's own message, and only one whose text alone is what the
+	// agent receives: quotes and captures are inlined for it and an edit
+	// cannot rebuild them.
+	const canEditQueuedMessage = useCallback(
+		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length),
+		[ownTurns],
+	);
 	// A pick the session no longer allows (its mode dropped while Chat was
 	// open) is neither sent nor shown. One the selected model cannot run shows
 	// as the mode that runs instead, the one the worker would step down to.
@@ -1779,6 +1847,9 @@ export function CloudSessionChatSurface({
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}
+			onEditQueuedTurn={queuedEditOffered ? (turnId, text) => editQueued.mutateAsync({ turnId, text }) : undefined}
+			canEditQueuedMessage={canEditQueuedMessage}
+			editQueuedTurnPendingTurnId={editQueued.isPending ? editQueued.variables?.turnId : undefined}
 			showSteerButton
 			excerptsEnabled
 			fileReferencesEnabled

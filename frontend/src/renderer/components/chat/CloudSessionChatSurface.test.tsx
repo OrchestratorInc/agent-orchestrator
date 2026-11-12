@@ -14,7 +14,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
-import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -387,6 +387,40 @@ describe("CloudSessionChatSurface", () => {
 		expect(toSnapshot(session, [
 			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "", turnId: "turn-1" }, createdAt: session.updatedAt },
 		]).items.filter((item) => item.kind === "message")).toEqual([]);
+	});
+
+	// An edit of a queued message reads in its place: the new text and files,
+	// its quotes gone. It opens no turn of its own, and one whose message is on
+	// an older page, not loaded, changes nothing here.
+	it("shows a queued message as edited", () => {
+		const files = [{ id: "a2", fileName: "spec.pdf", contentType: "application/pdf", size: 13313 }];
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Explain this\n\nquote", displayText: "Explain this", content: [{ type: "excerpt", text: "q" }], turnId: "turn-1", attachments: [{ id: "a1", fileName: "shot.png", contentType: "image/png", size: 1 }] }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message_edited", payload: { turnId: "turn-1", messageSequence: 1, text: "Explain that", attachments: files }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.user_message_edited", payload: { turnId: "turn-0", messageSequence: 0, text: "older" }, createdAt: session.updatedAt },
+		], undefined, { partial: true });
+		const messages = snapshot.items.filter((item) => item.kind === "message");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toMatchObject({ turnId: "turn-1", text: "Explain that", revision: 2, cloudAttachments: files });
+		expect(messages[0]).not.toHaveProperty("content");
+		expect(snapshot.turns.map((turn) => turn.id)).toEqual(["turn-1"]);
+		const withoutFiles = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "first", turnId: "turn-1", attachments: files }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message_edited", payload: { turnId: "turn-1", messageSequence: 1, text: "second" }, createdAt: session.updatedAt },
+		]).items[0];
+		expect(withoutFiles).toMatchObject({ text: "second" });
+		expect(withoutFiles).not.toHaveProperty("cloudAttachments");
+	});
+
+	// The control plane lets only a message's author edit it.
+	it("knows the turns of the viewer's own messages", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "mine", turnId: "turn-1", authorUserId: "me" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text: "theirs", turnId: "turn-2", authorUserId: "teammate" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.user_message", payload: { text: "report", turnId: "turn-3", origin: "automation" }, createdAt: session.updatedAt },
+		];
+		expect([...ownMessageTurns(events, "me")]).toEqual(["turn-1"]);
+		expect(ownMessageTurns(events, undefined).size).toBe(0);
 	});
 
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {

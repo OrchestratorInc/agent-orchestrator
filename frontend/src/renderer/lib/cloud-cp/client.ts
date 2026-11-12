@@ -65,6 +65,8 @@ import type {
 	CloudCpSendMessageRequest,
 	CloudCpSendMessageResponse,
 	CloudCpSteerTurnResponse,
+	CloudCpEditQueuedMessageRequest,
+	CloudCpEditQueuedMessageResponse,
 	CloudCpComposerAnswer,
 	CloudCpSessionChatSettings,
 	CloudCpSharedSessionParticipants,
@@ -482,6 +484,14 @@ export interface CloudCpClient {
 		body: CloudCpSendMessageRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSteerTurnResponse>;
+	/** Replace a queued message's text and files before the agent starts on it; 409 TURN_NOT_QUEUED once it has. */
+	editQueuedMessage(
+		orgId: string,
+		sessionId: string,
+		turnId: string,
+		body: CloudCpEditQueuedMessageRequest,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpEditQueuedMessageResponse>;
 	decideChatApproval(orgId: string, sessionId: string, requestId: string, decisionId: string, options?: CloudCpRequestOptions): Promise<{ ok: boolean }>;
 	/** Takes a shared session's composer lease, or renews it when already held. */
 	acquireComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
@@ -1150,6 +1160,11 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				body,
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		editQueuedMessage: (orgId, sessionId, turnId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/turns/${seg(turnId)}/edit`, {
+				body,
+				signal: o?.signal,
 			}),
 		decideChatApproval: (orgId, sessionId, requestId, decisionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/approvals/${seg(requestId)}/decide`, {

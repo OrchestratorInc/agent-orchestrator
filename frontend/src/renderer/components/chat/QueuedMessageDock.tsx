@@ -85,6 +85,7 @@ function QueuedMessageRowContent({
 	suppressHoverSteer,
 	onPromoteQueuedTurn,
 	onBeginQueuedEdit,
+	canEditMessage,
 	onCancelQueuedTurn,
 	turnId,
 	busy,
@@ -100,6 +101,7 @@ function QueuedMessageRowContent({
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	turnId: string;
 	busy?: boolean;
@@ -122,8 +124,8 @@ function QueuedMessageRowContent({
 		? [annotations.pageTitle, ...annotations.items.map((item) => `${item.number}. ${annotationLabel(item)}`)].join("\n")
 		: text;
 	// Relayed user-authored text is generated, so it can be steered or cancelled
-	// but not edited.
-	const editable = message.origin === "human";
+	// but not edited; the chat may narrow which human messages it can edit.
+	const editable = message.origin === "human" && (canEditMessage?.(message) ?? true);
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
@@ -236,6 +238,7 @@ function SortableQueuedMessageRow({
 	suppressHoverSteer,
 	onPromoteQueuedTurn,
 	onBeginQueuedEdit,
+	canEditMessage,
 	onCancelQueuedTurn,
 	busy,
 	error,
@@ -253,6 +256,7 @@ function SortableQueuedMessageRow({
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	busy?: boolean;
 	error?: string;
@@ -301,6 +305,7 @@ function SortableQueuedMessageRow({
 				dragHandleRef={setActivatorNodeRef}
 				message={message}
 				onBeginQueuedEdit={onBeginQueuedEdit}
+				canEditMessage={canEditMessage}
 				onCancelQueuedTurn={onCancelQueuedTurn}
 				onPromoteQueuedTurn={onPromoteQueuedTurn}
 				onRunAction={onRunAction}
@@ -328,6 +333,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	steerNextRequest,
 	onPromoteQueuedTurn,
 	onBeginQueuedEdit,
+	canEditMessage,
 	onCancelQueuedTurn,
 	onReorderQueuedTurns,
 	promotePendingTurnId,
@@ -342,6 +348,8 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	steerNextRequest?: number;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	/** Which human messages Edit is offered on; every one when absent. */
+	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promotePendingTurnId?: string;
@@ -548,6 +556,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		canSteer,
 		onPromoteQueuedTurn,
 		onBeginQueuedEdit,
+		canEditMessage,
 		onCancelQueuedTurn,
 		onRunAction: runAction,
 		suppressHoverSteer: hoverSteerSuppressed || isReordering,

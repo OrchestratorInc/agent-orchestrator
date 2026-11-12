@@ -1528,6 +1528,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/edit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Replace the text and files of a message whose turn is still queued, before the agent starts on it. Only the message's author may edit it (403 otherwise). The message keeps its model and settings; a display it recorded (displayText, content) is dropped. 409 TURN_NOT_QUEUED once the agent took the turn or it was stopped. Offered when offering.features lists queued-edit. */
+        post: operations["editQueuedMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide": {
         parameters: {
             query?: never;
@@ -3022,7 +3043,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on. Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage). Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -4140,6 +4161,12 @@ export interface components {
              */
             composerEpoch?: number;
         };
+        /** @description A queued message's new text and files. Text may be empty only when attachmentIds names a file. */
+        EditQueuedMessageInput: {
+            text: string;
+            /** @description Every file the edited message carries, attached to the session first (uploadSessionAttachment). A file the message carried and this list leaves out is dropped from it. */
+            attachmentIds?: string[];
+        };
         WorkerWorkspaceListPayload: {
             path: string;
             cursor?: string;
@@ -5219,6 +5246,25 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
+        /** @description A queued message was edited (editQueuedMessage). Its chat.user_message event (payload.messageSequence) now reads as edited; a client holding that event shows payload.text and payload.attachments in its place. */
+        UserMessageEditedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.user_message_edited";
+            payload: {
+                /** Format: uuid */
+                turnId: string;
+                /** Format: int64 */
+                messageSequence: number;
+                text: string;
+                /** @description The files the edited message carries; absent when none. */
+                attachments?: components["schemas"]["MessageAttachment"][];
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
         AssistantDeltaEvent: {
             sessionId: string;
             /** Format: int64 */
@@ -5327,7 +5373,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"];
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["UserMessageEditedEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -8191,6 +8237,37 @@ export interface operations {
                 content: {
                     "application/json": {
                         event: components["schemas"]["TurnSteeredEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    editQueuedMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditQueuedMessageInput"];
+            };
+        };
+        responses: {
+            /** @description The message was edited. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["UserMessageEditedEvent"];
                     };
                 };
             };

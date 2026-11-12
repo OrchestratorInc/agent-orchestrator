@@ -1,3 +1,4 @@
+import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { isMacPlatform } from "../../lib/platform";
 import { clientForSessionHost } from "../../lib/host-clients";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -6438,6 +6439,31 @@ describe("durable queued edits", () => {
 		second.unmount();
 		render(<ChatWorkspace {...props} />);
 		expect(screen.getByLabelText("Message the agent")).toHaveTextContent("independent prompt");
+	});
+
+	// A Cloud message's files are kept by their reference, so the saved edit
+	// lists them as a send lists staged Cloud files.
+	it("keeps a Cloud message's files when its queued edit is saved", async () => {
+		const snapshot = queuedSnapshot();
+		const file = { id: "file-1", fileName: "shot.png", contentType: "image/png", size: 3 };
+		const queued = { ...snapshot, items: snapshot.items.map((item) => ({ ...item, cloudAttachments: [file] })) };
+		const save = vi.fn().mockResolvedValue(undefined);
+		render(<ChatWorkspace snapshot={queued} onSend={vi.fn()} onEditQueuedTurn={save} />);
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), " updated");
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(save).toHaveBeenCalledOnce());
+		const [turnId, text] = save.mock.calls[0]!;
+		expect(turnId).toBe("queued");
+		expect(text).toContain("queued text updated");
+		expect(text).toContain(cloudAttachmentReference(file));
+	});
+
+	// A chat may narrow which queued messages it can edit (a Cloud chat: its
+	// viewer's own, without quotes).
+	it("offers Edit only on the queued messages the chat can edit", () => {
+		render(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} onEditQueuedTurn={vi.fn()} canEditQueuedMessage={() => false} />);
+		expect(screen.queryByRole("button", { name: "Edit queued message" })).toBeNull();
 	});
 
 	it("finishes an ordinary send before allowing a queued editor to replace it", async () => {

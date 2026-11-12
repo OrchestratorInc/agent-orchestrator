@@ -9,6 +9,7 @@ import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
@@ -631,6 +632,8 @@ export interface ChatWorkspaceProps {
 	steerRefusal?: string;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onEditQueuedTurn?: (turnId: string, text: string, options?: QueuedMessageEditOptions) => Promise<unknown>;
+	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
+	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promoteQueuedTurnPendingTurnId?: string;
@@ -865,6 +868,7 @@ function ChatWorkspaceContent({
 	steerRefusal,
 	onPromoteQueuedTurn,
 	onEditQueuedTurn,
+	canEditQueuedMessage,
 	onCancelQueuedTurn,
 	onReorderQueuedTurns,
 	promoteQueuedTurnPendingTurnId,
@@ -1363,6 +1367,12 @@ function ChatWorkspaceContent({
 				attachments.push({ id: `content-${index}`, contentIndex: index, contentType: item.type,
 					name: item.name || (item.type === "image" ? `Image ${index + 1}` : item.uri || "Attachment") });
 			});
+			// A cloud message's files are kept by their reference, as the composer
+			// stages a new one, so saving lists them with any file added.
+			(message.cloudAttachments ?? []).forEach((attachment) => {
+				const path = cloudAttachmentReference(attachment);
+				attachments.push({ id: path, name: attachment.fileName, path });
+			});
 			updateQueueDraft({ turnId, ownerId: crypto.randomUUID(), text: parts.body, expectedRevision: message.revision, attachments, stagedAttachments: [] });
 		},
 		[newWorkDisabled, queuedMessages, updateQueueDraft],
@@ -1774,6 +1784,7 @@ function ChatWorkspaceContent({
 					onBeginQueuedEdit={
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
+					canEditMessage={canEditQueuedMessage}
 					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
@@ -1783,6 +1794,7 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			beginQueuedEdit,
+			canEditQueuedMessage,
 			canSteerQueuedMessage,
 			cancelQueuedTurnPendingTurnId,
 			draftPersistenceAvailable,

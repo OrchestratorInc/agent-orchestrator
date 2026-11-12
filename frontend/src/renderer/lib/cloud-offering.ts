@@ -24,6 +24,8 @@ export const FREESTYLE_PROVIDER = "freestyle";
 export const SHARE_FEATURE = "share";
 /** Offering feature the control plane sends while its session attachment routes are on. */
 export const ATTACHMENTS_FEATURE = "attachments";
+/** Offering feature the control plane sends when a queued chat message can be edited (editQueuedMessage). */
+export const QUEUED_EDIT_FEATURE = "queued-edit";
 /** The largest Cloud attachment when the control plane takes files but names no limit. */
 export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 

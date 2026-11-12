@@ -47,11 +47,13 @@ import type {
   SessionPullRequests,
   SessionReviewState,
   SendMessageInput,
+  EditQueuedMessageInput,
   TerminalKind,
   TerminalTicket,
   TurnSteeredEvent,
   UpdateProjectInput,
   UserMessageEvent,
+  UserMessageEditedEvent,
   WorkerBootstrapInput,
   WorkerBootstrapResponse,
   WorkerCancellationResponse,
@@ -741,6 +743,31 @@ export class CloudClient {
         method: "POST",
         body: typeof message === "string" ? { text: message } : message,
         idempotencyKey: options.idempotencyKey,
+        signal: options.signal,
+      },
+    );
+  }
+
+  /**
+   * Replace a queued message's text and files before the agent starts on it
+   * (offered when offering.features lists queued-edit). 409 TURN_NOT_QUEUED
+   * once the agent took it.
+   */
+  editQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    message: EditQueuedMessageInput,
+    options: RequestOptions = {},
+  ): Promise<{ event: UserMessageEditedEvent }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit`,
+      ),
+      {
+        method: "POST",
+        body: message,
         signal: options.signal,
       },
     );
