@@ -6,7 +6,7 @@ import type { AppShortcutEvent, KeybindingOverrides } from "../../shared/shortcu
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useUiStore } from "../stores/ui-store";
-import type { WorkspaceSummary } from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 
 const shellMocks = vi.hoisted(() => {
 	const state = {
@@ -21,6 +21,8 @@ const shellMocks = vi.hoisted(() => {
 		openFolderPathListener: undefined as ((path: string) => void) | undefined,
 		sessionDeepLinkListener: undefined as ((rawUrl: string) => void) | undefined,
 		remoteLoadedProjectHostIds: [] as string[],
+		remoteLoadedSessionHostIds: [] as string[],
+		cloudSessionStatus: "authenticated" as "loading" | "authenticated" | "unauthenticated",
 		remoteHostsState: null as null | { hosts: Array<{ hostId: string; status: string }>; listed: boolean; refresh: () => Promise<void> },
 		routeParams: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		routeSearch: {} as Record<string, unknown>,
@@ -194,7 +196,7 @@ vi.mock("../lib/bridge", () => ({
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => shellMocks.state.workspaceQuery,
 	useWorkspacePolling: () => undefined,
-	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: shellMocks.state.remoteLoadedProjectHostIds }),
+	useRemoteWorkspaces: () => ({ data: shellMocks.state.remoteWorkspaces, failedHostIds: shellMocks.state.remoteFailedHostIds, loadedProjectHostIds: shellMocks.state.remoteLoadedProjectHostIds, loadedSessionHostIds: shellMocks.state.remoteLoadedSessionHostIds }),
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
@@ -223,7 +225,10 @@ vi.mock("../hooks/useRemoteHosts", async (importOriginal) => {
 });
 
 vi.mock("../lib/cloud-session", () => ({
-	useCloudSession: () => ({ status: "authenticated", session: { user: { id: "test-user" } } }),
+	useCloudSession: () => ({
+		status: shellMocks.state.cloudSessionStatus,
+		session: shellMocks.state.cloudSessionStatus === "authenticated" ? { user: { id: "test-user" } } : null,
+	}),
 }));
 vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
@@ -1643,6 +1648,8 @@ describe("shell session deep links", () => {
 
 	beforeEach(() => {
 		shellMocks.state.remoteLoadedProjectHostIds = [];
+		shellMocks.state.remoteLoadedSessionHostIds = [];
+		shellMocks.state.cloudSessionStatus = "authenticated";
 		shellMocks.state.remoteHostsState = { hosts: [], listed: false, refresh: async () => undefined };
 	});
 
@@ -1745,9 +1752,10 @@ describe("shell session deep links", () => {
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToast).toBeNull();
 
-		// The host connects and its project query lands.
+		// The host connects and its project and session queries land.
 		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, refresh: async () => undefined };
 		shellMocks.state.remoteLoadedProjectHostIds = ["box-a"];
+		shellMocks.state.remoteLoadedSessionHostIds = ["box-a"];
 		shellMocks.state.remoteWorkspaces = [
 			{ id: "proj-remote", hostId: "box-a", sessions: [{ id: "sess-remote", status: "working" }] },
 		] as unknown as WorkspaceSummary[];
@@ -1762,6 +1770,77 @@ describe("shell session deep links", () => {
 		expect(shellMocks.navigate).toHaveBeenCalledWith({
 			to: "/host/$hostId/project/$projectId/session/$sessionId",
 			params: { hostId: "box-a", projectId: "proj-remote", sessionId: "sess-remote" },
+		});
+	});
+
+	it("handles links while signed out, when remote hosts can never be listed", async () => {
+		// The remote-hosts preference defaults to on, but useRemoteHosts only
+		// lists for an authenticated account. Signed out, the remote wait must
+		// not hold local links forever (CodeRabbit round 4).
+		useUiStore.setState({ remoteHosts: true });
+		shellMocks.state.cloudSessionStatus = "unauthenticated";
+		await renderShellWithReadyDaemon();
+		emitSessionDeepLink("ao-app://sessions/proj-1/sess-1");
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "sess-1" },
+		});
+	});
+
+	it("holds a remote link until the host's session query lands, not just its project query", async () => {
+		// A host's project and session queries settle independently; with only
+		// the project loaded its workspaces still have sessions: [], and an
+		// immediate lookup would drop the link with a false not-found
+		// (CodeRabbit round 4).
+		useUiStore.setState({ remoteHosts: true });
+		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, refresh: async () => undefined };
+		shellMocks.state.remoteLoadedProjectHostIds = ["box-a"];
+		shellMocks.state.remoteLoadedSessionHostIds = [];
+		shellMocks.state.remoteWorkspaces = [
+			{ id: "proj-remote", hostId: "box-a", sessions: [] },
+		] as unknown as WorkspaceSummary[];
+		const view = await renderShellWithReadyDaemon();
+		emitSessionDeepLink("ao-app://sessions/proj-remote/sess-remote");
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast).toBeNull();
+
+		// The session query lands and the held link resolves.
+		shellMocks.state.remoteLoadedSessionHostIds = ["box-a"];
+		shellMocks.state.remoteWorkspaces = [
+			{ id: "proj-remote", hostId: "box-a", sessions: [{ id: "sess-remote", status: "working" }] },
+		] as unknown as WorkspaceSummary[];
+		await act(async () => {
+			view.rerender(
+				<Suspense fallback={null}>
+					<ShellRoute />
+				</Suspense>,
+			);
+		});
+
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "box-a", projectId: "proj-remote", sessionId: "sess-remote" },
+		});
+	});
+
+	it("finds a standalone session on a later host sharing the standalone project id", async () => {
+		// Every connected host contributes its own __standalone__ workspace to
+		// one merged list, so the first id match is not necessarily the one
+		// holding the session (CodeRabbit round 4).
+		useUiStore.setState({ remoteHosts: true });
+		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }, { hostId: "box-b", status: "connected" }], listed: true, refresh: async () => undefined };
+		shellMocks.state.remoteLoadedProjectHostIds = ["box-a", "box-b"];
+		shellMocks.state.remoteLoadedSessionHostIds = ["box-a", "box-b"];
+		shellMocks.state.remoteWorkspaces = [
+			{ id: STANDALONE_WORKSPACE_ID, hostId: "box-a", sessions: [{ id: "sess-a", status: "working" }] },
+			{ id: STANDALONE_WORKSPACE_ID, hostId: "box-b", sessions: [{ id: "sess-b", status: "working" }] },
+		] as unknown as WorkspaceSummary[];
+		await renderShellWithReadyDaemon();
+		emitSessionDeepLink(`ao-app://sessions/${STANDALONE_WORKSPACE_ID}/sess-b`);
+		// A standalone session takes the host-scoped scratchpad route.
+		expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/host/$hostId/session/$sessionId",
+			params: { hostId: "box-b", sessionId: "sess-b" },
 		});
 	});
 

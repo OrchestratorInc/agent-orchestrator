@@ -340,7 +340,7 @@ function ShellLayout() {
 	useEffect(() => {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
@@ -1425,12 +1425,16 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	//   enough, since the route loader can cache a stale [] from before the
 	//   daemon port was known (same gate the startup loader uses);
 	// - remote hosts that are on have finished loading (or failed) — a
-	//   cold-start link must not race a host's project query. An offline host
+	//   cold-start link must not race a host's project query, whose workspaces
+	//   carry sessions only after the session query lands too. An offline host
 	//   has concluded its connect attempt, so it counts as settled and never
-	//   holds the gate open.
-	const remoteWorkspaceLoadSettled = !remoteHostsEnabled
+	//   holds the gate open;
+	// - the account is signed out — useRemoteHosts lists only for an
+	//   authenticated account (the preference defaults to on), so waiting on
+	//   its list would hold every link, local ones included.
+	const remoteWorkspaceLoadSettled = !remoteHostsEnabled || accountStatus === "unauthenticated"
 		|| (remoteHostsListed && remoteHostIds.every((hostId) => remoteHosts.some((host) => host.hostId === hostId && host.status === "offline")
-			|| remoteLoadedProjectHostIds.includes(hostId)
+			|| (remoteLoadedProjectHostIds.includes(hostId) && remoteLoadedSessionHostIds.includes(hostId))
 			|| remoteFailedHostIds.includes(hostId)));
 	const sessionDeepLinksReady = workspaceQuery.isSuccess && workspaceStartupState === "ready" && remoteWorkspaceLoadSettled;
 	const pendingSessionDeepLinkRef = useRef<string | null>(null);
@@ -1450,7 +1454,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			const workspace = resolvedLocal
 				? workspaces.find((entry) => entry.id === resolvedLocal.projectId)
 				: resolvedRemote
-					? remoteWorkspaces.find((entry) => entry.id === resolvedRemote.projectId)
+					// Hosts merge into one list and can share an id (standalone), so
+					// the workspace must be the one holding the resolved session.
+					? remoteWorkspaces.find((entry) => entry.id === resolvedRemote.projectId && entry.sessions.some((session) => session.id === resolvedRemote.sessionId))
 					: undefined;
 			if (!resolved || !workspace) {
 				useUiStore.getState().showGlobalToast(t("deepLink.sessionNotFound"));
