@@ -77,6 +77,11 @@ describe("changesOptions", () => {
 		expect(options.map((option) => [option.id, option.title])).toEqual([["commits", "Latest 1 commit"], ["commit:abcdef1234", "Add files"]]);
 	});
 
+	it("leaves out a side of the counts with nothing on it", () => {
+		const options = changesOptions({ selection: { branch: { kind: "checked_out" }, changes: { kind: "all" } }, manifest: manifest({ uncommitted: [file("n.ts", { deletions: 0 })], staged: [file("b.png", { additions: 0, deletions: 0, binary: true })] }), history: undefined });
+		expect(options.map((option) => option.detail)).toEqual(["2 files · +4 −2", "1 file · +2", "1 file"]);
+	});
+
 	it("maps a row back to the pick it names", () => {
 		for (const changes of [{ kind: "all" }, { kind: "staged" }, { kind: "commits" }, { kind: "commits", sha: "abc" }] as const) {
 			expect(changesOfId(changesId(changes))).toEqual(changes);

@@ -14,7 +14,9 @@ function age(iso: string | null | undefined, now: number): string {
 function counts(files: readonly Pick<WorkspaceFileSummary, "additions" | "deletions">[]): string {
 	if (!files.length) return "No changes";
 	const { additions, deletions } = sumFiles(files);
-	return `${plural(files.length, "file")} · +${additions} −${deletions}`;
+	// A side with nothing on it says nothing; binary-only changes count no lines at all.
+	const lines = [additions ? `+${additions}` : "", deletions ? `−${deletions}` : ""].filter(Boolean).join(" ");
+	return lines ? `${plural(files.length, "file")} · ${lines}` : plural(files.length, "file");
 }
 
 /** The branch sheet's rows, in the daemon's order (the checked-out branch first, then newest first), narrowed by `query`. */
