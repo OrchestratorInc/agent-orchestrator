@@ -826,3 +826,31 @@ func TestACPSteerDrainNudgesOneAtATime(t *testing.T) {
 	}
 	unlock()
 }
+
+// Stops can overlap. One that fails gives steering back only once no other
+// Stop of the turn is still under way.
+func TestACPSteerOverlappingStopsKeepSteeringStopped(t *testing.T) {
+	agent := &fakeAgent{promptBlock: true}
+	conv, turn := startDrainConversation(t, agent, testDrain(50*time.Millisecond))
+	conv.WithdrawPendingSteers() // Stop A
+	conv.WithdrawPendingSteers() // Stop B
+	conv.RestoreSteering()       // Stop A fails; B is still stopping the turn
+	if _, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "refused"}); !errors.Is(err, errSteerTurnStopping) {
+		t.Fatalf("Steer while another Stop is under way = %v, want it refused", err)
+	}
+	conv.RestoreSteering() // Stop B fails too
+	_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "parked again"})
+	if err == nil || !strings.Contains(err.Error(), "did not collect") {
+		t.Fatalf("Steer after both Stops failed = %v, want it parked for the agent like any steer", err)
+	}
+	// A later turn starts with no Stop of its own under way.
+	conv.WithdrawPendingSteers()
+	conv.mu.Lock()
+	conv.activeTurn = "next-turn"
+	conv.mu.Unlock()
+	conv.WithdrawPendingSteers()
+	conv.RestoreSteering()
+	if _, err := conv.Steer(context.Background(), "next-turn", ports.ChatUserMessage{Text: "steers"}); err == nil || errors.Is(err, errSteerTurnStopping) {
+		t.Fatalf("Steer on the next turn after its one Stop failed = %v, want it parked, not refused", err)
+	}
+}
