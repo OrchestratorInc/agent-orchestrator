@@ -179,6 +179,15 @@ const SEND_CONCEAL_MS = 3000;
 const MAX_NATIVE_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
 
+/** A message entered while the previous one was still being sent. */
+type HeldSubmit = {
+	/** The draft as entered; it is sent only if the box still holds exactly this. */
+	text: string;
+	steer: boolean;
+	/** The composer held its own draft (not a new one typed during another send). */
+	own: boolean;
+};
+
 /** How long a discarded unsent message can be brought back. */
 const UNSENT_UNDO_MS = 5000;
 
@@ -529,6 +538,25 @@ export const ChatComposer = memo(function ChatComposer({
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
+	/**
+	 * Messages sent in quick succession go out one after another, in order.
+	 *
+	 * A send clears the box before the daemon answers, so the next message is
+	 * often typed and entered while the previous one is still on its way. That
+	 * Enter is held here and the draft is sent the moment the previous send is
+	 * accepted (or the composer is free again), instead of being dropped. Only
+	 * the exact text the user entered is sent; an edit made since waits for its
+	 * own Enter. A held message never overtakes a send that did not go through.
+	 * The daemon then queues each one behind the running turn as usual.
+	 */
+	const [heldSubmit, setHeldSubmit] = useState<HeldSubmit | null>(null);
+	// Held during a submit, and decided when that submit settles.
+	const heldDuringSubmit = useRef<HeldSubmit | null>(null);
+	const submitAccepted = useRef(false);
+	// Counts editor clears, so an Enter during a send can tell a new draft
+	// from a repeat Enter on the message being sent.
+	const editorClears = useRef(0);
+	const editorClearsAtSubmit = useRef(0);
 	// Disabling the active editor can move focus to the document body. Remember
 	// keyboard-origin submissions so focus can return once the editor is enabled.
 	const restoreFocusAfterSubmission = useRef(false);
@@ -949,6 +977,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [autoFocus, focusEditor]);
 
 	const clearEditorView = useCallback(() => {
+		editorClears.current += 1;
 		historyBrowse.current = null;
 		textRef.current = "";
 		hasTextRef.current = false;
@@ -1472,11 +1501,25 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
 		event?.preventDefault();
-		// React cannot publish the next busy prop until after this event returns. A
-		// second Enter in that gap joins the accepted submission instead of opening a
-		// second transport whose local admission rejection would look like a real
-		// provider failure.
-		if (submitInFlight.current) return submitInFlight.current;
+		if (submitInFlight.current) {
+			// React cannot publish the next busy prop until after this event returns. A
+			// repeat Enter on the message being sent joins that submission instead of
+			// opening a second transport whose local admission rejection would look like
+			// a real provider failure. A new draft typed after the box was cleared for
+			// that send is a new message: hold it and send it next.
+			if (
+				!savingQueuedEdit &&
+				editorClears.current !== editorClearsAtSubmit.current &&
+				textRef.current.trim()
+			) {
+				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false };
+			}
+			return submitInFlight.current;
+		}
+		setHeldSubmit(null);
+		heldDuringSubmit.current = null;
+		submitAccepted.current = false;
+		editorClearsAtSubmit.current = editorClears.current;
 		// Sending keeps what was dictated so far and stops listening.
 		dictation.detach();
 		// Sending a recalled message makes it the message, not a history position.
@@ -1490,10 +1533,22 @@ export const ChatComposer = memo(function ChatComposer({
 		const release = () => {
 			if (submitInFlight.current !== pending) return;
 			submitInFlight.current = null;
+			const held = heldDuringSubmit.current;
+			heldDuringSubmit.current = null;
+			// A message entered during a send that did not go through stays in the box:
+			// sending it now would put it ahead of the one being retried.
+			if (held && (held.own || submitAccepted.current)) setHeldSubmit(held);
 			setSubmitting(false);
 		};
 		void pending.then(release, release);
 		return pending;
+	}
+
+	/** Wait for the previous send to settle, then send this draft. */
+	function holdOwnDraft(forceSteer?: boolean) {
+		if (savingQueuedEdit || !textRef.current.trim()) return false;
+		heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: true };
+		return true;
 	}
 
 	async function performSubmit(forceSteer?: boolean) {
@@ -1502,7 +1557,12 @@ export const ChatComposer = memo(function ChatComposer({
 		const mutationToken = draftScope && !savingQueuedEdit
 			? beginChatComposerMutation(draftScope)
 			: undefined;
-		if (draftScope && !savingQueuedEdit && !mutationToken) return;
+		if (draftScope && !savingQueuedEdit && !mutationToken) {
+			// The previous send was accepted but its receipt is applied on the next
+			// commit. Until then the draft cannot be claimed; send it right after.
+			holdOwnDraft(forceSteer);
+			return;
+		}
 		try {
 			await performClaimedSubmit(forceSteer, mutationToken);
 		} finally {
@@ -1513,7 +1573,14 @@ export const ChatComposer = memo(function ChatComposer({
 	async function performClaimedSubmit(forceSteer?: boolean, mutationToken?: ChatDraftMutationToken) {
 		let currentText = textRef.current;
 		let body = currentText.trim();
-		const recoveringDelivery = durableDelivery;
+		// Render state can trail an accepted send by a commit. A delivery the saved
+		// draft no longer holds is finished, so this Enter is a new message and not a
+		// retry that would resend the old id and clear the new text with it.
+		const savedDraft = durableDelivery && draftScope ? loadChatSessionDraft(draftScope) : undefined;
+		const recoveringDelivery = savedDraft?.ok &&
+			savedDraft.draft.composer.delivery?.clientMessageId !== durableDelivery?.clientMessageId
+			? undefined
+			: durableDelivery;
 		const sendNativeImages = recoveringDelivery?.nativeImages ?? Boolean(nativeImages);
 		setSendError(null);
 		setSteerOutcomeNotice(null);
@@ -1539,6 +1606,7 @@ export const ChatComposer = memo(function ChatComposer({
 				await onCompact();
 				clearAcceptedDraft(composerRevision.current, mutationToken);
 				mutationFinished = true;
+				submitAccepted.current = true;
 				setDismissedKey(null);
 				setHighlighted(0);
 			} catch {
@@ -1587,8 +1655,10 @@ export const ChatComposer = memo(function ChatComposer({
 			(Boolean(recoveringDelivery) ||
 				getChatComposerMutation(draftScope ?? "").accepted?.result.ok !== false);
 		if (!canSubmitNow) {
-			if (busy && !disabled && !recoveringDelivery && !savingQueuedEdit) {
-				setSendError("Still sending the previous message. Try again in a moment.");
+			// The previous message is still settling. Send this one right after it
+			// rather than refusing it.
+			if ((busy || draftMutationPending || composerMutation.pending) && !disabled && !recoveringDelivery) {
+				holdOwnDraft(forceSteer);
 			}
 			return;
 		}
@@ -1693,6 +1763,7 @@ export const ChatComposer = memo(function ChatComposer({
 				} else {
 					await onSend(message);
 				}
+				submitAccepted.current = true;
 				if (!clearForLocalEcho) clearEditorView();
 				fileAttachments.clear();
 			} catch (error) {
@@ -1788,6 +1859,7 @@ export const ChatComposer = memo(function ChatComposer({
 		);
 		if (delivery.state === "accepted") {
 			acceptAndClearDurableDelivery(delivery);
+			submitAccepted.current = true;
 			return;
 		}
 
@@ -1837,6 +1909,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			acceptAndClearDurableDelivery(delivery, mutationToken);
 			mutationFinished = true;
+			submitAccepted.current = true;
 		} catch (error) {
 			// Refusal of a retry says nothing about a previous attempt whose response
 			// was lost. Only an initial, definitively unaccepted send can be edited.
@@ -1890,6 +1963,29 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	submitRef.current = () => submit();
+	const submitLatest = useRef(submit);
+	submitLatest.current = submit;
+	const heldSubmitReady = Boolean(
+		heldSubmit &&
+			!submitting &&
+			!busy &&
+			!disabled &&
+			!steerPending &&
+			!savingQueuedEdit &&
+			!savingQueuedEditPending &&
+			!draftMutationPending &&
+			!acceptedClearFailed &&
+			!composerMutation.pending &&
+			!composerMutation.accepted &&
+			!fileAttachments.preparing,
+	);
+	useEffect(() => {
+		if (!heldSubmit || !heldSubmitReady || submitInFlight.current) return;
+		setHeldSubmit(null);
+		// Only the message the user entered; an edit made since waits for its own Enter.
+		if (textRef.current !== heldSubmit.text) return;
+		void submitLatest.current(undefined, heldSubmit.steer && canSteerDraft);
+	}, [canSteerDraft, heldSubmit, heldSubmitReady]);
 
 	function onEditorEnter(
 		snapshot: ComposerEditorSnapshot,

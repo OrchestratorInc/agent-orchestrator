@@ -634,6 +634,16 @@ provider result closes the claimed receipts without automatically replaying
 input that the provider may already have accepted. Terminal sessions retain
 their existing delivery path.
 
+The desktop composer sends one message per session at a time, so the daemon
+receives them in the order they were entered. A send clears the box before the
+daemon answers. If the user enters the next message while the previous send is
+still in flight, the composer holds it and sends it as soon as that send is
+accepted. Each held message then gets its own queued row and keeps its place.
+A held message is sent only if the box still holds exactly the text that was
+entered; an edit made since waits for its own Enter. If the previous send is
+refused or gets no answer, the held message stays in the box instead of
+overtaking it.
+
 ---
 
 ## Persistence and CDC

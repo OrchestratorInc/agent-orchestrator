@@ -3062,20 +3062,40 @@ describe("unavailable states", () => {
 		expect(onInterrupt).not.toHaveBeenCalled();
 	});
 
-	it("explains when a send is blocked by the previous in-flight message", async () => {
-		const onSend = vi.fn().mockImplementation(
-			() => new Promise<void>(() => {
-				/* keep pending */
-			}),
-		);
-		render(<ChatComposer busy onSend={onSend} willQueue />);
+	it("sends a message entered while the previous one is in flight as soon as that one lands", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
 		const field = screen.getByLabelText("Message the agent");
 
 		await typeInComposer(field, "follow up");
 		await userEvent.keyboard("{Enter}");
 
 		expect(onSend).not.toHaveBeenCalled();
-		expect(screen.getByRole("alert")).toHaveTextContent(/still sending the previous message/i);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(field).toHaveTextContent("follow up");
+
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend).toHaveBeenCalledWith("follow up");
+		await waitFor(() => expect(field.textContent).toBe(""));
+	});
+
+	it("does not send a held message that was edited before the previous one landed", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await typeInComposer(field, " and more");
+
+		view.rerender(<ChatComposer onSend={onSend} willQueue />);
+		await act(async () => {});
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("follow up and more");
 	});
 });
 
