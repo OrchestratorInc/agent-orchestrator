@@ -858,6 +858,7 @@
 	"daemon.title.unreachable": "Orchestrator daemon is unreachable",
 	"deepLink.sessionNotFound": "Session not found",
 	"deepLink.sessionHostUnavailable": "Couldn't load this session — its host is unreachable. Try again once it reconnects.",
+	"deepLink.sessionAmbiguous": "This link matches sessions on more than one machine. Open it from the machine you meant.",
 	"deepLink.sessionTerminated": "Session {{sessionId}} is terminated",
 	"editor.open": "Open",
 	"editor.opening": "Opening…",

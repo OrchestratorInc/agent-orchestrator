@@ -26,3 +26,16 @@ export function isSessionDeepLink(raw: string): boolean {
 	if (url.protocol !== "ao-app:" || url.hostname !== "sessions") return false;
 	return url.pathname.split("/").filter((segment) => segment.length > 0).length >= 2;
 }
+
+// Canonical form handed to the shell: lowercase scheme (WHATWG parsing gives
+// this for free), and no query, hash, or trailing slash — the in-app ao://
+// parser rejects all three, while this predicate accepts them. Null for
+// anything isSessionDeepLink rejects.
+export function normalizeSessionDeepLink(raw: string): string | null {
+	if (!isSessionDeepLink(raw)) return null;
+	const url = new URL(raw);
+	url.search = "";
+	url.hash = "";
+	url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+	return url.toString();
+}

@@ -38,6 +38,7 @@ await import("./preload");
 // not the per-call listener onOpenFolderPath registers when invoked.
 const openFolderPathBufferListener = electronMocks.listeners.get("app:openFolderPath");
 const sessionDeepLinkBufferListener = electronMocks.listeners.get(OPEN_SESSION_DEEP_LINK_CHANNEL);
+const openSettingsBufferListener = electronMocks.listeners.get(OPEN_SETTINGS_SHORTCUT_CHANNEL);
 const telemetryPolicyBroadcastListener = electronMocks.listeners.get("telemetry:policyChanged");
 const rendererQueuePurgeRequestListener = electronMocks.listeners.get("telemetry:clearRendererQueues");
 
@@ -349,7 +350,6 @@ describe("preload application shortcut bridges", () => {
 	it.each([
 		[NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNewShellTerminalShortcut(listener)],
 		[CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onCloseShellTerminalShortcut(listener)],
-		[OPEN_SETTINGS_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onOpenSettingsShortcut(listener)],
 		[
 			PREVIOUS_SESSION_SHORTCUT_CHANNEL,
 			(listener: () => void) => exposedBridge().app.onPreviousSessionShortcut(listener),
@@ -369,6 +369,51 @@ describe("preload application shortcut bridges", () => {
 
 		dispose();
 		expect(electronMocks.off).toHaveBeenCalledWith(channel, wrapped);
+	});
+
+	// The settings channel uses the module-load dispatcher-and-buffer instead
+	// of a per-subscription listener: a billing return flushed on the shell's
+	// readiness ping races ShellLayout's subscription (CodeRabbit round 5).
+	it("delivers an open-settings event sent after subscription", () => {
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSettingsShortcut(listener);
+
+		openSettingsBufferListener?.({}, "billing");
+		expect(listener).toHaveBeenCalledWith("billing");
+		dispose();
+	});
+
+	it("buffers an open-settings event that arrives before subscription", () => {
+		openSettingsBufferListener?.({}, "billing");
+
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSettingsShortcut(listener);
+		expect(listener).toHaveBeenCalledTimes(1);
+		expect(listener).toHaveBeenCalledWith("billing");
+
+		// The buffer drains: a later subscription gets nothing replayed.
+		const lateListener = vi.fn();
+		const lateDispose = exposedBridge().app.onOpenSettingsShortcut(lateListener);
+		expect(lateListener).not.toHaveBeenCalled();
+		lateDispose();
+		dispose();
+	});
+
+	it("replays an open-settings event that arrives after disposal, on resubscription", () => {
+		// Disposal is a temporary unsubscribe (effect cleanup/re-subscribe), so
+		// an event in that window waits for the next listener, like the folder
+		// and deep-link channels.
+		const listener = vi.fn();
+		const dispose = exposedBridge().app.onOpenSettingsShortcut(listener);
+		dispose();
+
+		openSettingsBufferListener?.({}, "billing");
+		expect(listener).not.toHaveBeenCalled();
+
+		const reListener = vi.fn();
+		const reDispose = exposedBridge().app.onOpenSettingsShortcut(reListener);
+		expect(reListener).toHaveBeenCalledWith("billing");
+		reDispose();
 	});
 });
 

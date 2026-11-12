@@ -118,7 +118,7 @@ import {
 	type AppShortcutId,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
-import { OPEN_SESSION_DEEP_LINK_CHANNEL, isSessionDeepLink } from "./shared/deep-links";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL, normalizeSessionDeepLink } from "./shared/deep-links";
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
@@ -417,6 +417,9 @@ let pendingFolderPath: string | null = null;
 // mounted (cold-start argv or early open-url). Flushed on the same
 // TRAY_RENDERER_READY_CHANNEL handshake as pendingFolderPath.
 let pendingSessionDeepLink: string | null = null;
+// Billing return (ao-app://billing) that arrived with no shell to take it —
+// flushed on the TRAY_RENDERER_READY handshake like pendingSessionDeepLink.
+let pendingBillingSection: string | null = null;
 let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
@@ -3957,6 +3960,11 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 		event.sender.send(OPEN_SESSION_DEEP_LINK_CHANNEL, pendingSessionDeepLink);
 		pendingSessionDeepLink = null;
 	}
+
+	if (pendingBillingSection && event.sender === getShellWebContents()) {
+		event.sender.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, pendingBillingSection);
+		pendingBillingSection = null;
+	}
 });
 
 // Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
@@ -4077,6 +4085,14 @@ function isShareDeepLink(raw: string): boolean {
 }
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
+	// macOS keeps the app (and tray) alive after the close button —
+	// window-all-closed does not quit — and a link clicked then fires open-url
+	// without activate, so nothing else recreates the shell. Hidden utility
+	// windows can linger, so the window list is not the test: recreate when
+	// there is no shell to deliver to. The queued links below flush once its
+	// fresh shell mounts. Windows/Linux quit on the last window closing, so
+	// this never fires there.
+	if (!getShellWebContents()) void createWindow();
 	focusCloudWindow();
 	// A shared cloud session: the renderer redeems it and opens the session.
 	if (isShareDeepLink(url)) {
@@ -4087,24 +4103,27 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	}
 	// Stripe Checkout and the Customer Portal return here (via the control
 	// plane's /billing/return page): open Settings on Billing, which re-reads
-	// the plan when it mounts.
+	// the plan when it mounts. Queue while the shell is missing or still
+	// loading — flushed on renderer ready like the other pending links.
 	if (isBillingDeepLink(url)) {
-		getShellWebContents()?.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		const contents = getShellWebContents();
+		if (contents && !contents.isDestroyed() && !contents.isLoading()) {
+			contents.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		} else {
+			pendingBillingSection = "billing";
+		}
 		return;
 	}
-	// ao-app://sessions/… from external tools: forward the raw URL to the
+	// ao-app://sessions/… from external tools: forward the canonical URL to the
 	// shell, which re-reads it as its in-app ao:// form and resolves it against
 	// its workspace lists with the same session-links path as ao:// links
-	// (navigate, toast when the session is gone). Queue it while the renderer
-	// is still mounting (cold start) — flushed on renderer ready, same
-	// handshake as pendingFolderPath below.
-	if (isSessionDeepLink(url)) {
-		const contents = getShellWebContents();
-		// WHATWG parsing lowercases the scheme, so AO-APP:// is accepted above
-		// but would defeat the preload buffer's raw "ao-app://" prefix check
-		// and the shell's ao:// prefix rewrite. Forward the normalized
-		// serialization instead of the original spelling.
-		const normalized = new URL(url).toString();
+	// (navigate, toast when the session is gone). The canonical form lowercases
+	// the scheme and strips query/hash/trailing slashes the ao:// parser would
+	// reject. Queue it while the renderer is still mounting (cold start) —
+	// flushed on renderer ready, same handshake as pendingFolderPath below.
+	const normalized = normalizeSessionDeepLink(url);
+	if (normalized) {
+		const contents = getShellWebContents()?.isDestroyed() ? null : getShellWebContents();
 		// The newest link wins: one queued for the readiness handshake is stale
 		// once a newer link arrives, so clear it here either way. Dropping it on
 		// the direct-send path keeps the handshake from navigating the stale

@@ -336,7 +336,7 @@ function ShellLayout() {
 	useWorkspacePolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, listed: remoteHostsListed, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, refresh: refreshRemoteHosts } = useRemoteHosts();
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -1472,11 +1472,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	//   carry sessions only after the session query lands too. An offline host
 	//   has concluded its connect attempt, so it counts as settled and never
 	//   holds the gate open;
-	// - the account is signed out — useRemoteHosts lists only for an
-	//   authenticated account (the preference defaults to on), so waiting on
-	//   its list would hold every link, local ones included.
-	const remoteWorkspaceLoadSettled = !remoteHostsEnabled || accountStatus === "unauthenticated"
-		|| (remoteHostsListed && remoteHostIds.every((hostId) => remoteHosts.some((host) => host.hostId === hostId && host.status === "offline")
+	// - the remote side has concluded — useRemoteHosts' settled flag mirrors
+	//   its own enable rule (disabled or signed out never lists), so the gate
+	//   cannot drift from it; a listed host counts as settled once offline,
+	//   failed, or its project and session queries have both landed.
+	const remoteWorkspaceLoadSettled = remoteHostsSettled
+		&& (!remoteHostsListed || remoteHostIds.every((hostId) => remoteHosts.some((host) => host.hostId === hostId && host.status === "offline")
 			|| (remoteLoadedProjectHostIds.includes(hostId) && remoteLoadedSessionHostIds.includes(hostId))
 			|| remoteFailedHostIds.includes(hostId)));
 	const sessionDeepLinksReady = workspaceQuery.isSuccess && workspaceStartupState === "ready" && remoteWorkspaceLoadSettled;
@@ -1492,7 +1493,15 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			// a local and a remote project can share an id, and the workspace
 			// supplies the hostId for the route and artifact requests.
 			const resolvedLocal = target ? resolveSessionLink(link, workspaces) : undefined;
-			const resolvedRemote = resolvedLocal || !target ? undefined : resolveSessionLink(link, remoteWorkspaces);
+			const resolvedRemote = target ? resolveSessionLink(link, remoteWorkspaces) : undefined;
+			if (resolvedLocal && resolvedRemote) {
+				// Session ids are <project>-<n> per daemon, so a paired machine
+				// running the same repo can host a session with the same id. The
+				// URL carries no host, so honoring either side is a guess that
+				// can open the wrong session — refuse instead.
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionAmbiguous"));
+				return;
+			}
 			const resolved = resolvedLocal ?? resolvedRemote;
 			const workspace = resolvedLocal
 				? workspaces.find((entry) => entry.id === resolvedLocal.projectId)

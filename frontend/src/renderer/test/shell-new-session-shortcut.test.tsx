@@ -23,7 +23,7 @@ const shellMocks = vi.hoisted(() => {
 		remoteLoadedProjectHostIds: [] as string[],
 		remoteLoadedSessionHostIds: [] as string[],
 		cloudSessionStatus: "authenticated" as "loading" | "authenticated" | "unauthenticated",
-		remoteHostsState: null as null | { hosts: Array<{ hostId: string; status: string }>; listed: boolean; refresh: () => Promise<void> },
+		remoteHostsState: null as null | { hosts: Array<{ hostId: string; status: string }>; listed: boolean; settled: boolean; refresh: () => Promise<void> },
 		routeParams: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		routeSearch: {} as Record<string, unknown>,
 		matchRouteTarget: null as string | null,
@@ -219,7 +219,7 @@ vi.mock("../hooks/useRemoteHosts", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useRemoteHosts")>();
 	return {
 		...actual,
-		useRemoteHosts: (): { hosts: Array<{ hostId: string; status: string }>; listed: boolean; refresh: () => Promise<void> } =>
+		useRemoteHosts: (): { hosts: Array<{ hostId: string; status: string }>; listed: boolean; settled: boolean; refresh: () => Promise<void> } =>
 			shellMocks.state.remoteHostsState ?? actual.useRemoteHosts(),
 	};
 });
@@ -1660,7 +1660,7 @@ describe("shell session deep links", () => {
 		shellMocks.state.remoteLoadedProjectHostIds = [];
 		shellMocks.state.remoteLoadedSessionHostIds = [];
 		shellMocks.state.cloudSessionStatus = "authenticated";
-		shellMocks.state.remoteHostsState = { hosts: [], listed: false, refresh: async () => undefined };
+		shellMocks.state.remoteHostsState = { hosts: [], listed: false, settled: true, refresh: async () => undefined };
 	});
 
 	it("navigates to a live session named by an ao-app link", async () => {
@@ -1753,9 +1753,26 @@ describe("shell session deep links", () => {
 		});
 	});
 
+	it("refuses a link whose session id matches local and remote machines", async () => {
+		// Session ids are <project>-<n> per daemon, so a paired machine running
+		// the same repo can host a session with the same id; the URL carries no
+		// host, so honoring either side could open the wrong one (round 5).
+		shellMocks.state.workspaces = [
+			{ id: "proj-1", name: "Local", path: "/local", sessions: [{ id: "sess-1", status: "working" }] },
+		] as unknown as WorkspaceSummary[];
+		shellMocks.state.workspaceQuery = { data: shellMocks.state.workspaces, dataUpdatedAt: 0, isError: false, isSuccess: true };
+		shellMocks.state.remoteWorkspaces = [
+			{ id: "proj-1", hostId: "box-a", sessions: [{ id: "sess-1", status: "working" }] },
+		] as unknown as WorkspaceSummary[];
+		await renderShellWithReadyDaemon();
+		emitSessionDeepLink("ao-app://sessions/proj-1/sess-1");
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast?.title).toContain("more than one machine");
+	});
+
 	it("holds a remote-targeted link until the host's workspace data settles", async () => {
 		useUiStore.setState({ remoteHosts: true });
-		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connecting" }], listed: true, refresh: async () => undefined };
+		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connecting" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteWorkspaces = [];
 		const view = await renderShellWithReadyDaemon();
 		emitSessionDeepLink("ao-app://sessions/proj-remote/sess-remote");
@@ -1763,7 +1780,7 @@ describe("shell session deep links", () => {
 		expect(useUiStore.getState().globalToast).toBeNull();
 
 		// The host connects and its project and session queries land.
-		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, refresh: async () => undefined };
+		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteLoadedProjectHostIds = ["box-a"];
 		shellMocks.state.remoteLoadedSessionHostIds = ["box-a"];
 		shellMocks.state.remoteWorkspaces = [
@@ -1803,7 +1820,7 @@ describe("shell session deep links", () => {
 		// immediate lookup would drop the link with a false not-found
 		// (CodeRabbit round 4).
 		useUiStore.setState({ remoteHosts: true });
-		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, refresh: async () => undefined };
+		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteLoadedProjectHostIds = ["box-a"];
 		shellMocks.state.remoteLoadedSessionHostIds = [];
 		shellMocks.state.remoteWorkspaces = [
@@ -1838,7 +1855,7 @@ describe("shell session deep links", () => {
 		// one merged list, so the first id match is not necessarily the one
 		// holding the session (CodeRabbit round 4).
 		useUiStore.setState({ remoteHosts: true });
-		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }, { hostId: "box-b", status: "connected" }], listed: true, refresh: async () => undefined };
+		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }, { hostId: "box-b", status: "connected" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteLoadedProjectHostIds = ["box-a", "box-b"];
 		shellMocks.state.remoteLoadedSessionHostIds = ["box-a", "box-b"];
 		shellMocks.state.remoteWorkspaces = [
@@ -1874,7 +1891,7 @@ describe("shell session deep links", () => {
 		// lists (CodeRabbit round 4). A miss on such a project is "could not
 		// load", not "does not exist" — the session may still exist there.
 		useUiStore.setState({ remoteHosts: true });
-		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, refresh: async () => undefined };
+		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteFailedHostIds = ["box-a"];
 		shellMocks.state.remoteWorkspaces = [
 			{ id: "proj-remote", hostId: "box-a", sessions: [] },

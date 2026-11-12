@@ -861,6 +861,7 @@
 	"daemon.title.unreachable": "Orchestrator デーモンに接続できません",
 	"deepLink.sessionNotFound": "セッションが見つかりません",
 	"deepLink.sessionHostUnavailable": "このセッションを読み込めませんでした — ホストに接続できません。再接続後にもう一度お試しください。",
+	"deepLink.sessionAmbiguous": "このリンクは複数のマシンのセッションに一致しました。対象のマシンから開いてください。",
 	"deepLink.sessionTerminated": "セッション {{sessionId}} は終了しました",
 	"editor.open": "開く",
 	"editor.opening": "開いています…",

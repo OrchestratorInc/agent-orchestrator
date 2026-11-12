@@ -199,6 +199,25 @@ ipcRenderer.on(OPEN_SESSION_DEEP_LINK_CHANNEL, (_event, target: unknown) => {
 	}
 });
 
+// A billing return (ao-app://billing) flushed on the shell's readiness ping
+// races ShellLayout's settings subscription exactly like the channels above —
+// the ping comes from a child effect, before the parent effect subscribes.
+// Same dispatcher-and-buffer. A keyboard/menu open-settings event can only
+// exist once a shell exists to carry it, so replaying the one buffered event
+// on subscription honors the user's intent rather than dropping it.
+let bufferedOpenSettings: string | undefined = undefined;
+let hasBufferedOpenSettings = false;
+let activeOpenSettingsListener: ((section?: string) => void) | null = null;
+ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, (_event, section?: unknown) => {
+	const payload = typeof section === "string" ? section : undefined;
+	if (activeOpenSettingsListener) {
+		activeOpenSettingsListener(payload);
+	} else {
+		bufferedOpenSettings = payload;
+		hasBufferedOpenSettings = true;
+	}
+});
+
 let currentTelemetryPolicy: TelemetryPolicyView | null = null;
 const telemetryPolicyListeners = new Set<(view: TelemetryPolicyView) => void>();
 const rendererQueuePurgeListeners = new Set<() => void | Promise<void>>();
@@ -357,10 +376,13 @@ const api = {
 			ipcRenderer.send(SET_CHAT_DRAFT_RISK_CHANNEL, risks, copy);
 		},
 		onOpenSettingsShortcut: (listener: (section?: string) => void) => {
-			const wrapped = (_event: unknown, section?: unknown) => listener(typeof section === "string" ? section : undefined);
-			ipcRenderer.on(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
+			activeOpenSettingsListener = listener;
+			if (hasBufferedOpenSettings) {
+				hasBufferedOpenSettings = false;
+				listener(bufferedOpenSettings);
+			}
 			return () => {
-				ipcRenderer.off(OPEN_SETTINGS_SHORTCUT_CHANNEL, wrapped);
+				if (activeOpenSettingsListener === listener) activeOpenSettingsListener = null;
 			};
 		},
 		onPreviousSessionShortcut: (listener: () => void) => {

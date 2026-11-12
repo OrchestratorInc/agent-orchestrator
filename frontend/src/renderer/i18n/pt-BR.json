@@ -867,6 +867,7 @@
 	"daemon.title.unreachable": "O daemon do Orchestrator está inacessível",
 	"deepLink.sessionNotFound": "Sessão não encontrada",
 	"deepLink.sessionHostUnavailable": "Não foi possível carregar esta sessão — o host está inacessível. Tente novamente quando ele reconectar.",
+	"deepLink.sessionAmbiguous": "Este link corresponde a sessões em mais de uma máquina. Abra-o na máquina desejada.",
 	"deepLink.sessionTerminated": "A sessão {{sessionId}} foi encerrada",
 	"editor.open": "Abrir",
 	"editor.opening": "Abrindo…",
