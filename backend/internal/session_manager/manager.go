@@ -7201,6 +7201,10 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	if err != nil {
 		return fmt.Errorf("prompt readiness: %w", err)
 	}
+	lines := hints.Lines
+	if lines <= 0 {
+		lines = 80
+	}
 	callerDeadline, hasCallerDeadline := ctx.Deadline()
 	if hints.InitialDelay > 0 {
 		if hasCallerDeadline && time.Until(callerDeadline)-promptDeliveryDeadlineReserve <= hints.InitialDelay {
@@ -7209,22 +7213,18 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 				"kind", string(cfg.Kind),
 				"configuredTimeout", hints.Timeout.String(),
 			)
-			return nil
+			return m.promptReadinessSkipped(ctx, handle, lines, hints)
 		}
 		if err := sleepContext(ctx, hints.InitialDelay); err != nil {
 			return err
 		}
 	}
 	if len(hints.Patterns) == 0 || hints.Timeout <= 0 {
-		return nil
+		return m.promptReadinessSkipped(ctx, handle, lines, hints)
 	}
 	poll := hints.PollInterval
 	if poll <= 0 {
 		poll = 200 * time.Millisecond
-	}
-	lines := hints.Lines
-	if lines <= 0 {
-		lines = 80
 	}
 
 	waitTimeout, hasReadinessBudget := promptReadinessWaitTimeout(hints.Timeout, callerDeadline, hasCallerDeadline)
@@ -7234,7 +7234,7 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 			"kind", string(cfg.Kind),
 			"configuredTimeout", hints.Timeout.String(),
 		)
-		return nil
+		return m.promptReadinessSkipped(ctx, handle, lines, hints)
 	}
 
 	deadline := time.NewTimer(waitTimeout)
@@ -7297,6 +7297,31 @@ var promptOutputEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\
 // errPromptBlockedByDialog reports that an agent's startup dialog was still on
 // screen when prompt readiness timed out.
 var errPromptBlockedByDialog = errors.New("agent is still showing a startup dialog; prompt not delivered")
+
+// errPromptDialogUnchecked reports that readiness could not confirm an agent's
+// startup dialog was gone, so the prompt was not risked against it.
+var errPromptDialogUnchecked = errors.New("could not confirm the agent's startup dialog closed; prompt not delivered")
+
+// promptReadinessSkipped decides delivery when the full readiness wait cannot
+// run (no caller budget, or no wait configured). Adapters without blocking
+// patterns keep best-effort delivery. With blocking patterns, typing into a
+// dialog can answer it (Grok's trust dialog quits on "n"), so one screen read
+// must show no dialog and, when the adapter has a ready marker, that marker.
+func (m *Manager) promptReadinessSkipped(ctx context.Context, handle ports.RuntimeHandle, lines int, hints ports.PromptReadinessHints) error {
+	if len(hints.BlockingPatterns) == 0 {
+		return nil
+	}
+	output, err := m.promptReadinessOutput(ctx, handle, lines, hints.RenderedScreen)
+	switch {
+	case err != nil:
+		return fmt.Errorf("prompt readiness: %w: %w", errPromptDialogUnchecked, err)
+	case promptOutputContainsWrapped(output, hints.BlockingPatterns):
+		return fmt.Errorf("prompt readiness: %w", errPromptBlockedByDialog)
+	case len(hints.Patterns) > 0 && !promptOutputContains(output, hints.Patterns):
+		return fmt.Errorf("prompt readiness: %w", errPromptDialogUnchecked)
+	}
+	return nil
+}
 
 // promptReadinessOutput reads the terminal text readiness patterns are matched
 // against: the rendered current viewport when the adapter asks for it and the

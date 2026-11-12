@@ -201,3 +201,70 @@ func TestSpawn_WrappedBlockingDialogAtTimeoutStillFails(t *testing.T) {
 		t.Fatalf("delivered prompts = %#v, want none typed into the dialog", msg.msgs)
 	}
 }
+
+// A caller deadline shorter than the delivery reserve skips the readiness
+// wait; blocking patterns must still keep the prompt out of a startup dialog.
+func TestSpawn_ShortDeadlineStillGuardsBlockingDialog(t *testing.T) {
+	dialog := testTrustDialog + "\nNo, quit n\nGrok Build 1.0.77"
+	cases := []struct {
+		name     string
+		hints    ports.PromptReadinessHints
+		screen   string
+		wantErr  error
+		delivers bool
+	}{
+		{
+			name:    "initial delay skip with dialog",
+			hints:   ports.PromptReadinessHints{InitialDelay: time.Second, Patterns: []string{"Grok Build"}, Timeout: 8 * time.Second, RenderedScreen: true, BlockingPatterns: []string{testTrustDialog}},
+			screen:  dialog,
+			wantErr: errPromptBlockedByDialog,
+		},
+		{
+			name:    "initial delay skip before anything renders",
+			hints:   ports.PromptReadinessHints{InitialDelay: time.Second, Patterns: []string{"Grok Build"}, Timeout: 8 * time.Second, RenderedScreen: true, BlockingPatterns: []string{testTrustDialog}},
+			screen:  "",
+			wantErr: errPromptDialogUnchecked,
+		},
+		{
+			name:    "no readiness budget with dialog",
+			hints:   ports.PromptReadinessHints{Patterns: []string{"Grok Build"}, Timeout: 8 * time.Second, RenderedScreen: true, BlockingPatterns: []string{testTrustDialog}},
+			screen:  dialog,
+			wantErr: errPromptBlockedByDialog,
+		},
+		{
+			name:     "initial delay skip with ready composer",
+			hints:    ports.PromptReadinessHints{InitialDelay: time.Second, Patterns: []string{"Grok Build"}, Timeout: 8 * time.Second, RenderedScreen: true, BlockingPatterns: []string{testTrustDialog}},
+			screen:   "> \nGrok Build 1.0.77",
+			delivers: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &renderedReadinessRuntime{fakeRuntime: &fakeRuntime{}, screens: []string{tc.screen}}
+			msg := &fakeMessenger{}
+			m := newRenderedReadinessManager(rt, msg, tc.hints)
+
+			spawnCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, _, _, err := m.Spawn(spawnCtx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "Run ao status"})
+			if tc.delivers {
+				if err != nil {
+					t.Fatalf("Spawn: %v", err)
+				}
+				if len(msg.msgs) != 1 {
+					t.Fatalf("delivered prompts = %#v, want one", msg.msgs)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Spawn err = %v, want %v", err, tc.wantErr)
+			}
+			if len(msg.msgs) != 0 {
+				t.Fatalf("delivered prompts = %#v, want none typed into the dialog", msg.msgs)
+			}
+			if rt.styledCalls == 0 {
+				t.Fatal("skipped readiness never read the screen for the blocking dialog")
+			}
+		})
+	}
+}
