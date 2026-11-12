@@ -210,6 +210,7 @@ export function useNewLocalProject({ onCreated }: {
 
 	/** The browsed folder, or a repository row, becomes the choice. */
 	const choose = (path: string) => {
+		if (busy) return;
 		haptics.select();
 		if (browseTarget === "destination") {
 			setDestinationParent(path);
@@ -229,6 +230,9 @@ export function useNewLocalProject({ onCreated }: {
 
 	/** Back to browsing, starting where the current choice lives. */
 	const changeFolder = (target: BrowseTarget) => {
+		// A create in flight holds its folder and destination: moving the
+		// destination would start removing the clone it is about to register.
+		if (busy) return;
 		haptics.select();
 		setBrowseTarget(target);
 		if (!listing && !listingBusy) void browse();
@@ -398,6 +402,8 @@ export function useNewLocalProject({ onCreated }: {
 				// The checkout needs a remote of its own: the form asks for it, and Create goes on.
 				if (needsRemote(validation.root.requiredActions) && !remote.ready) return;
 				await runSetup(config, validation);
+				// Its removal started meanwhile: the checkout may be going, so it isn't registered.
+				if (retired.current.has(clone)) throw new Error("The clone was removed before it could be added. Try again.");
 				const id = await addFolderProject(config, { path: clone.path, clonePreparationId: clone.preparationId, ...(request.input.name ? { name: request.input.name } : {}) });
 				preparedRef.current = null;
 				if (mounted.current) setPrepared(null);

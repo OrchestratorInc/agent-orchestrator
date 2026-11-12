@@ -491,4 +491,19 @@ describe("useNewLocalProject", () => {
 		expect(project().source).toBe("folder");
 		await act_(async () => { finish(); await pending; });
 	});
+
+	it("holds the destination while a clone is being created", async () => {
+		let finish!: () => void;
+		fixtures.addFolderProject.mockImplementation(() => new Promise((resolve) => { finish = () => resolve("sample"); }));
+		await mount();
+		await act_(() => project().chooseSource("clone"));
+		await act_(() => project().setRemoteUrl("https://x/sample"));
+		let pending!: Promise<void>;
+		await act(async () => { pending = project().create(); });
+		await act_(() => project().changeFolder("destination"));
+		expect(project().browseTarget).toBeNull();
+		await act_(async () => { finish(); await pending; });
+		expect(fixtures.cleanupClone).not.toHaveBeenCalled();
+		expect(onCreated).toHaveBeenCalledWith("studio", "sample");
+	});
 });
