@@ -3419,6 +3419,8 @@
 	"remote.cloneDescription": "Paste a Git URL and choose where Orchestrator should create the checkout on the host.",
 	"remote.passwordRejected": "Access rejected",
 	"remote.retryHost": "Retry {{label}}",
+	"remote.retry": "Retry",
+	"remote.offline": "Offline",
 	"remote.startOn": "Start on {{label}}",
 	"remote.hostLabel": "Remote host: {{hostId}}",
 	"remote.loadingSession": "Loading session",

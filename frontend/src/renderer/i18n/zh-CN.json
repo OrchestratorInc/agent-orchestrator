@@ -3418,6 +3418,8 @@
 	"remote.cloneDescription": "粘贴 Git URL，并选择 Orchestrator 在主机上创建检出的位置。",
 	"remote.passwordRejected": "访问被拒绝",
 	"remote.retryHost": "重试连接 {{label}}",
+	"remote.retry": "重试",
+	"remote.offline": "离线",
 	"remote.startOn": "在 {{label}} 上启动",
 	"remote.hostLabel": "远程主机：{{hostId}}",
 	"remote.loadingSession": "正在加载会话",
