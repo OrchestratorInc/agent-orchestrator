@@ -20,6 +20,7 @@ import { mockWorkspaces } from "../lib/mock-data";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
+import { withQueryData } from "../lib/with-query-data";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
@@ -740,7 +741,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [list.data, fileData]);
-	return { ...list, data };
+	return withQueryData(list, data);
 }
 
 /** Who shared a project and its sessions, how, and through which team. */
@@ -1065,7 +1066,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		if (own.length === 0 && shared.length === 0) return localData;
 		return placeStandaloneWorkspaceLast([...localData, ...own, ...shared]);
 	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready]);
-	return { ...local, data };
+	return withQueryData(local, data);
 }
 
 /**
@@ -1241,7 +1242,7 @@ export function useWorkspaceScope(projectId?: string, sessionId?: string, hostId
 	const data = local.data?.project || local.data?.session || !local.isSuccess
 		? local.data
 		: cloudScope ?? local.data;
-	return hostId ? remote : { ...local, data };
+	return hostId ? remote : withQueryData(local, data);
 }
 
 function selectTraySessions(workspaces: WorkspaceSummary[]): TraySessionEntry[] {
@@ -1283,5 +1284,5 @@ export function useWorkspaceTraySessions() {
 		if (local.data === undefined) return undefined;
 		return cloudEntries.length === 0 ? local.data : [...local.data, ...cloudEntries];
 	}, [cloudEntries, local.data]);
-	return { ...local, data };
+	return withQueryData(local, data);
 }

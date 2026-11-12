@@ -1162,3 +1162,89 @@ describe("toCloudWorkspace", () => {
 		expect(workspace.workspaceRepos).toBeUndefined();
 	});
 });
+
+describe("identical polls", () => {
+	const project = { id: "p1", name: "Project", path: "/tmp/project" };
+	const session = { id: "s1", projectId: "p1", harness: "codex", status: "needs_input", statusReadiness: "ready",
+		activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" }, updatedAt: "2026-01-01T00:00:00Z", prs: [] };
+
+	// React Query hands results to React in a setTimeout batch, so wait for it
+	// before counting renders.
+	async function refetchAndFlush(queryClient: QueryClient, queryKey: readonly unknown[]) {
+		await act(async () => {
+			await queryClient.refetchQueries({ queryKey });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+	}
+
+	function renderCounted<T>(read: () => T) {
+		const queryClient = new QueryClient();
+		const counter = { renders: 0 };
+		const view = renderHook(() => {
+			counter.renders += 1;
+			return read();
+		}, { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+		return { ...view, counter, queryClient };
+	}
+
+	// A poll turns isFetching on and then off. A consumer that reads only `data`
+	// must not re-render for that when the poll returns the same data.
+	it.each<{ hook: string; read: () => unknown }>([
+		{ hook: "useWorkspaceQuery", read: () => useWorkspaceQuery().data },
+		{ hook: "useWorkspaceScope", read: () => useWorkspaceScope("p1", "s1").data },
+		{ hook: "useWorkspaceTraySessions", read: () => useWorkspaceTraySessions().data },
+	])("do not re-render a $hook consumer that reads only data", async ({ read }) => {
+		respondWith({ projects: { data: { projects: [project] } }, sessions: { data: { sessions: [session] } } });
+		const { result, counter, queryClient } = renderCounted(read);
+		await waitFor(() => expect(result.current).toBeDefined());
+		await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+		const settled = counter.renders;
+		const fetches = getMock.mock.calls.length;
+
+		await refetchAndFlush(queryClient, workspaceQueryKey);
+
+		expect(getMock.mock.calls.length).toBeGreaterThan(fetches);
+		expect(counter.renders).toBe(settled);
+	});
+
+	it("do not re-render a signed-in consumer when the cloud session poll returns the same list", async () => {
+		cloudState.ready = true;
+		cloudState.org = { id: "org-1" };
+		listProjectsMock.mockResolvedValue({ items: [] });
+		respondWith({ projects: { data: { projects: [project] } }, sessions: { data: { sessions: [session] } } });
+		const { result, counter, queryClient } = renderCounted(() => useWorkspaceQuery().data);
+		await waitFor(() => expect(listSessionsMock).toHaveBeenCalled());
+		await waitFor(() => expect(result.current).toBeDefined());
+		await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+		const settled = counter.renders;
+		const polls = listSessionsMock.mock.calls.length;
+
+		await refetchAndFlush(queryClient, cloudSessionsQueryKey);
+
+		expect(listSessionsMock.mock.calls.length).toBeGreaterThan(polls);
+		expect(counter.renders).toBe(settled);
+	});
+
+	it("still re-render a consumer when a poll returns changed data", async () => {
+		respondWith({ projects: { data: { projects: [project] } }, sessions: { data: { sessions: [session] } } });
+		const { result, queryClient } = renderCounted(() => useWorkspaceQuery().data);
+		await waitFor(() => expect(result.current?.[0]?.name).toBe("Project"));
+
+		respondWith({ projects: { data: { projects: [{ ...project, name: "Renamed" }] } }, sessions: { data: { sessions: [session] } } });
+		await refetchAndFlush(queryClient, workspaceQueryKey);
+
+		expect(result.current?.[0]?.name).toBe("Renamed");
+	});
+
+	it("still re-render a consumer that reads isFetching when a poll starts and ends", async () => {
+		respondWith({ projects: { data: { projects: [project] } }, sessions: { data: { sessions: [session] } } });
+		const { result, counter, queryClient } = renderCounted(() => useWorkspaceQuery().isFetching);
+		await waitFor(() => expect(result.current).toBe(false));
+		const settled = counter.renders;
+
+		await refetchAndFlush(queryClient, workspaceQueryKey);
+
+		expect(counter.renders).toBeGreaterThan(settled);
+		expect(result.current).toBe(false);
+	});
+});
