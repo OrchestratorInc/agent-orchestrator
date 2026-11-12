@@ -906,7 +906,7 @@ describe("shell workspace startup", () => {
 		shellMocks.queryClient.getQueryState.mockReturnValue({ dataUpdatedAt: 100 });
 		shellMocks.queryClient.fetchQuery.mockRejectedValueOnce(new Error("temporary failure"));
 
-		const view = await renderShell();
+		await renderShell();
 		await waitFor(() => expect(shellMocks.state.shellValue?.workspaceStartupState).toBe("error"));
 
 		// A later poll succeeds. The shell learns of it from the query cache, not
