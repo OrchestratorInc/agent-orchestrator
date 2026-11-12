@@ -205,7 +205,8 @@ export function FileContentPane({
 		enabled: Boolean(path) && !outsideWorkspace && !selectionOrMenuActive,
 	});
 	const query = { ...queryResult, data: useSelectionSnapshot(selectionPane, queryResult.data, selectionIdentity) };
-	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked");
+	const liveScope = scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked";
+	const canReadLiveText = Boolean(path) && !fileMediaKind(path ?? "") && !outsideWorkspace && mode === "file" && !editing && !initialEditing && !selectionOrMenuActive && source.kind === "workspace" && !commitSha && liveScope;
 	const liveTextResult = useQuery({
 		...sessionSourceFileRevisionQueryOptions({ path: path ?? "", scope, sessionId, hostId, side: "after", source }),
 		enabled: canReadLiveText,
@@ -389,7 +390,7 @@ export function FileContentPane({
 
 	const detail = query.data;
 	// A historical/staged view must never show the current worktree's media.
-	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
+	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && liveScope)
 		? fileMediaKind(path) : undefined;
 	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
 	const markdownAvailable = canRenderMarkdown(path, detail);
@@ -483,7 +484,7 @@ export function FileContentPane({
 	// HTML has no Rich preview here: its rendered view is the session's Browser,
 	// which serves the live workspace file, so not for a commit or deleted file.
 	const browserPage = openInBrowser && source.kind === "workspace" && !commitSha && !detail.deleted && /\.html?$/i.test(detail.path);
-	const download = downloadFile && source.kind === "workspace" && !commitSha && !detail.deleted ? () => downloadFile(detail.path) : undefined;
+	const download = downloadFile && source.kind === "workspace" && !commitSha && liveScope && !detail.deleted ? () => downloadFile(detail.path) : undefined;
 	// Mode switches and file actions share one row and one gap.
 	const toolbarActions = (
 		<div className="flex shrink-0 items-center gap-0.5">
