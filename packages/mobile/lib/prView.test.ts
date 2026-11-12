@@ -354,13 +354,35 @@ describe("prRowStatus", () => {
 		expect(prRowStatus(pr({ reviewDecision: "approved" }))).toEqual({ text: "Approved", tone: "success" });
 	});
 
-	// The summary's mergeability is the fresher fact: the board's boolean only
-	// stands in when the summary has no state.
-	it("lets the summary's blocked state outrank the board's mergeable flag", () => {
-		const approved = { decision: "approved" as const, hasUnresolvedHumanComments: false, unresolvedBy: [] };
-		expect(prRowStatus(pr({ mergeability: { mergeable: true } }), rich({ review: approved, mergeability: { state: "blocked", reasons: [] } }))).toEqual({ text: "Approved", tone: "success" });
-		expect(prRowStatus(pr({ reviewDecision: "approved", mergeability: { mergeable: true } }))).toEqual({ text: "Ready to merge", tone: "success" });
-		expect(prRowStatus(pr({ mergeability: { mergeable: true } }), rich({ review: approved, mergeability: { state: "unknown", reasons: [] } }))).toEqual({ text: "Ready to merge", tone: "success" });
+	// The board re-polls every few seconds and places the row in its section;
+	// the summary is fetched once per visit. A stale summary must not contradict
+	// the section the board just moved the row into.
+	it("follows the board when the summary is stale", () => {
+		const staleRunning = rich({ ci: { state: "pending", failingChecks: [] }, review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] }, mergeability: { state: "blocked", reasons: [] } });
+		const boardReady = pr({ ciStatus: "passing", reviewDecision: "approved", mergeability: { state: "mergeable", mergeable: true } });
+		expect(prRowStatus(boardReady, staleRunning)).toEqual({ text: "Ready to merge", tone: "success" });
+
+		const staleFailing = rich({ ci: { state: "failing", failingChecks: [{ name: "android-build" }] } });
+		expect(prRowStatus(pr({ ciStatus: "passing", reviewDecision: "pending", mergeability: { state: "blocked" } }), staleFailing)).toBeNull();
+		expect(prRowStatus(pr({ state: "merged" }), staleFailing)).toBeNull();
+	});
+
+	// The board carries no check names: they come from the summary, and only
+	// while the board still says the checks fail.
+	it("takes the failing check names from the summary only while the board says failing", () => {
+		const failing = rich({ ci: { state: "failing", failingChecks: [{ name: "android-build" }] } });
+		expect(prRowStatus(pr({ ciStatus: "failing" }), failing)).toEqual({ text: "android-build failed", tone: "error" });
+		expect(prRowStatus(pr({ ciStatus: "failing" }), rich())).toEqual({ text: "Checks failed", tone: "error" });
+	});
+
+	it("falls back to a summary fact only where the board has none", () => {
+		const conflicted = rich({ mergeability: { state: "conflicting", reasons: [] } });
+		expect(prRowStatus(pr({ mergeability: { state: "unknown", mergeable: false } }), conflicted)).toEqual({ text: "Merge conflicts", tone: "error" });
+		expect(prRowStatus(pr({ mergeability: { state: "blocked" } }), conflicted)).toBeNull();
+		// Cloud's board rows carry no unresolved-thread count.
+		const commented = rich({ review: { decision: "review_required", hasUnresolvedHumanComments: true, unresolvedBy: [] } });
+		expect(prRowStatus(pr(), commented)).toEqual({ text: "Unresolved comments", tone: "warning" });
+		expect(prRowStatus(pr({ unresolvedThreads: 0 }), commented)).toBeNull();
 	});
 
 	// Their section already says merged or closed.

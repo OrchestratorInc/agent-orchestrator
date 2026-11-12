@@ -158,10 +158,6 @@ export function prFilterLabel(filter: PRListFilter, count: number): string {
 	return `${PR_FILTER_TITLES[filter]} ${count}`;
 }
 
-export function prStateVisual(t: Theme, pr: DashboardPR): { label: PRLifecycle; color: string; tint: string } {
-	return stateVisualOf(t, prLifecycle(pr));
-}
-
 /**
  * Colours for a lifecycle already known. The rich summary reports `draft`
  * directly, so it doesn't need the `isDraft` reconstruction `prLifecycle` does.
@@ -213,21 +209,43 @@ export function prRowTitle(title: string): { title: string; scope?: string } {
 }
 
 /**
+ * A list row's lifecycle, from the board. The summary is fetched once per
+ * visit, so a pull request merged while the page is open would keep its open
+ * glyph and status under the Merged heading; it stands in only for a board row
+ * that carries no state.
+ */
+export function prRowLifecycle(pr: DashboardPR, summary?: SessionPRSummary): PRLifecycle {
+	if (!pr.state && summary?.state) return summary.state;
+	return prLifecycle(pr);
+}
+
+/**
  * The one status a list row shows, or null when there is nothing to say.
  *
  * Only what needs you, or what you can act on, is said. Waiting for review is
  * every open pull request's normal state, and its section already names it;
  * printed on every row it read as an alarm on all of them. Merged and closed
  * rows sit under a heading that says so.
+ *
+ * Every fact comes from the board, the same facts `prListSectionKey` places the
+ * row with. The board re-polls every few seconds while the summary is fetched
+ * once per visit, so a summary fact would leave "Checks running" on a row the
+ * board had just moved under Ready to merge. The summary fills in only what the
+ * board lacks: the failing checks' names, shown while the board still says
+ * failing, and any fact the board row does not carry.
  */
 export function prRowStatus(pr: DashboardPR, summary?: SessionPRSummary): { text: string; tone: Tone } | null {
-	const life = summary?.state ?? prLifecycle(pr);
+	const life = prRowLifecycle(pr, summary);
 	if (life === "merged" || life === "closed") return null;
 
-	const ci = summary?.ci?.state ?? pr.ciStatus;
-	const merge = summary?.mergeability?.state ?? pr.mergeability?.state ?? (pr.mergeability?.noConflicts === false ? "conflicting" : undefined);
-	const review = summary?.review?.decision ?? pr.reviewDecision;
-	const unresolved = summary?.review?.hasUnresolvedHumanComments ?? Boolean(pr.unresolvedThreads);
+	const ci = pr.ciStatus ?? summary?.ci?.state;
+	const boardMerge = pr.mergeability?.state && pr.mergeability.state !== "unknown"
+		? pr.mergeability.state
+		: pr.mergeability?.noConflicts === false ? "conflicting" : undefined;
+	const merge = boardMerge ?? summary?.mergeability?.state;
+	const review = pr.reviewDecision ?? summary?.review?.decision;
+	// Cloud's board rows carry no unresolved-thread count.
+	const unresolved = pr.unresolvedThreads !== undefined ? pr.unresolvedThreads > 0 : Boolean(summary?.review?.hasUnresolvedHumanComments);
 
 	if (merge === "conflicting") return { text: "Merge conflicts", tone: "error" };
 	if (ci === "failing") {
@@ -239,7 +257,6 @@ export function prRowStatus(pr: DashboardPR, summary?: SessionPRSummary): { text
 	if (unresolved) return { text: "Unresolved comments", tone: "warning" };
 	if (ci === "pending") return { text: "Checks running", tone: "neutral" };
 	if (review === "approved") {
-		// A known state decides; the board's boolean only stands in without one.
 		const mergeable = merge && merge !== "unknown" ? merge === "mergeable" : pr.mergeability?.mergeable === true;
 		return mergeable ? { text: "Ready to merge", tone: "success" } : { text: "Approved", tone: "success" };
 	}

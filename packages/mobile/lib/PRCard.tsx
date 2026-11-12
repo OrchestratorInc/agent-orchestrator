@@ -15,7 +15,7 @@ import { openGitHub } from "./openGitHub";
 import { prCardMenuIcons } from "./pr-card-menu-icons";
 import { usePressFeedback } from "./pressFeedback";
 import type { Theme } from "./theme";
-import { prRowStatus, prRowTitle, prStateVisual, prTitle, stateVisualOf, toneColor, type PRLifecycle } from "./prView";
+import { prRowLifecycle, prRowStatus, prRowTitle, prTitle, stateVisualOf, toneColor } from "./prView";
 import { reviewRouteForPR, workerRouteForSession } from "./reviewView";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { useMenuRowWidth } from "./useMenuRowWidth";
@@ -79,7 +79,8 @@ export const PRCard = memo(function PRCard({
 	// Android: where the finger came down, and the menu's anchor placed there.
 	const touch = useRef({ x: 0, y: 0 });
 	const [anchor, setAnchor] = useState({ x: 0, y: 0 });
-	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
+	// From the board, as the row's section is: see prRowLifecycle.
+	const state = stateVisualOf(t, prRowLifecycle(pr, summary));
 	const { title, scope } = prRowTitle(summary?.title?.trim() || prTitle(pr, sessionTitle(session)));
 	// The repository's own name, without its owner.
 	const project = (summary?.repo || session.projectId || "Standalone").split("/").pop() || "Standalone";
