@@ -1,4 +1,4 @@
-import type { PendingSideClose } from "../shared/side-close";
+import type { PendingSideClose, SideCloseOutcome } from "../shared/side-close";
 
 interface RecoveryRecord {
 	side: { id: string; sessionId: string; label?: string; [key: string]: unknown };
@@ -18,16 +18,24 @@ export interface SideLaunchSnapshot {
 // is unavailable. A stale open snapshot must never replace a cleanup record.
 export class SideCloseRecovery {
 	state?: SideLaunchSnapshot;
-	private closing = new Map<string, { original: RecoveryRecord; cleanup: RecoveryRecord; observed: boolean; accepted: boolean }>();
+	private closing = new Map<string, { original: RecoveryRecord; cleanup: RecoveryRecord; observed: boolean; accepted: boolean; conversationClosed: boolean }>();
 	private closed = new Set<string>();
 
 	remember(state: SideLaunchSnapshot): void {
 		const records = state.sides as RecoveryRecord[];
+		// A replacement renderer can discover cleanup without having issued DELETE.
+		for (const record of records) {
+			if (record.cleanupOnly && !record.hostStopped && !this.closing.has(record.side.id) && !this.closed.has(record.side.id)) {
+				this.closing.set(record.side.id, { original: record, cleanup: record, observed: true, accepted: false, conversationClosed: true });
+				this.closed.add(record.side.id);
+			}
+		}
 		for (const [id, intent] of this.closing) {
 			const incoming = records.find((record) => record.side?.id === id);
 			if (incoming?.cleanupOnly) {
 				intent.cleanup = incoming;
 				intent.observed = true;
+				intent.conversationClosed = true;
 			} else if (!incoming && (intent.observed || intent.accepted)) {
 				this.closing.delete(id);
 			}
@@ -48,7 +56,7 @@ export class SideCloseRecovery {
 			providerForkId: original.providerForkId, harness: original.harness,
 			cleanupOnly: true, hostStopped: original.hostStopped,
 		};
-		this.closing.set(id, { original, cleanup, observed: Boolean(original.cleanupOnly), accepted: false });
+		this.closing.set(id, { original, cleanup, observed: Boolean(original.cleanupOnly), accepted: false, conversationClosed: Boolean(original.cleanupOnly) });
 		this.closed.add(id);
 		this.state = { ...this.state!, sides: this.state!.sides.map((record) => (record as RecoveryRecord).side?.id === id ? cleanup : record) };
 	}
@@ -74,16 +82,19 @@ export class SideCloseRecovery {
 
 	// Only call after an already-closed DELETE and a fresh snapshot from the
 	// same daemon: absence then proves its stop-before-delete cleanup finished.
-	reconcileMissing(id: string, snapshot: SideLaunchSnapshot): void {
-		if (!snapshot.sides.some((record) => (record as RecoveryRecord).side?.id === id)) {
+	reconcileMissing(id: string, snapshot: SideLaunchSnapshot): SideCloseOutcome {
+		const record = (snapshot.sides as RecoveryRecord[]).find((record) => record.side?.id === id);
+		if (!record || (record.cleanupOnly && record.hostStopped)) {
 			this.confirm(id);
 			this.remember(snapshot);
+			return "closed";
 		}
+		return record.cleanupOnly ? "cleanup_pending" : "unconfirmed";
 	}
 
 	pending(sessionId?: string): PendingSideClose[] {
 		return [...this.closing.values()]
 			.filter((intent) => !intent.accepted && !intent.cleanup.hostStopped && (!sessionId || intent.original.side.sessionId === sessionId))
-			.map(({ original }) => ({ id: original.side.id, sessionId: original.side.sessionId, label: original.side.label ?? "" }));
+			.map(({ original, conversationClosed }) => ({ id: original.side.id, sessionId: original.side.sessionId, label: original.side.label ?? "", phase: conversationClosed ? "cleanup_pending" : "unconfirmed" }));
 	}
 }

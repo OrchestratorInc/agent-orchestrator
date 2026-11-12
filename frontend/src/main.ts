@@ -1,3 +1,4 @@
+import type { SideCloseOutcome } from "./shared/side-close";
 import { SideCloseRecovery } from "./main/side-close";
 import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { syncMacWindowButtons } from "./main/window-chrome";
@@ -758,6 +759,8 @@ let sideLaunchState: { appRunId: string; sides: unknown[]; numbers?: Record<stri
 const SIDE_STATE_BACKSTOP_MS = 5_000;
 let sideStateTimer: ReturnType<typeof setInterval> | undefined;
 const sideCloseRecovery = new SideCloseRecovery();
+// Fence confirmations to the daemon attachment that owned the DELETE intent.
+const sideCloseAttachments = new Map<string, number>();
 function publishPendingSideCloses(): void {
 	getShellWebContents()?.send("sideChats:pendingClosesChanged");
 }
@@ -2933,7 +2936,8 @@ ipcMain.handle("daemon:restart", async () => {
 		return reportDaemonRestartFailure(error);
 	}
 });
-async function captureSideChatState(closedSideId?: string, cancelClose = false, alreadyClosedId?: string): Promise<void> {
+async function captureSideChatState(closedSideId?: string, cancelClose = false, alreadyClosedId?: string): Promise<SideCloseOutcome | void> {
+	const generation = daemonAttachmentGeneration;
 	// Pin known ownership immediately, even while an older restore is in flight.
 	// A second daemon crash must not lose this close intent while capture waits.
 	if (closedSideId && !cancelClose && sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) {
@@ -2949,16 +2953,18 @@ async function captureSideChatState(closedSideId?: string, cancelClose = false, 
 			// snapshot failures must retain the cleanup record.
 			if (!sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) await captureSideChatState();
 			sideCloseRecovery.begin(closedSideId);
+			sideCloseAttachments.set(closedSideId, generation);
 		}
 		sideLaunchState = sideCloseRecovery.state;
 		publishPendingSideCloses();
 	}
 	const { attachment, state } = await sideLaunchRecovery.capture();
-	if (!sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
+	if (generation !== daemonAttachmentGeneration || !sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
 	if (alreadyClosedId) {
-		sideCloseRecovery.reconcileMissing(alreadyClosedId, state);
+		const outcome = sideCloseRecovery.reconcileMissing(alreadyClosedId, state);
 		sideLaunchState = sideCloseRecovery.state;
 		publishPendingSideCloses();
+		return outcome;
 	}
 }
 
@@ -2972,11 +2978,13 @@ ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelC
 });
 ipcMain.handle("sideChats:confirmClose", async (event, sideId: string, alreadyClosed = false) => {
 	if (event.sender !== getShellWebContents() || typeof sideId !== "string" || !sideId || sideId.length > 255 || typeof alreadyClosed !== "boolean") throw new Error("Invalid side close confirmation.");
-	if (alreadyClosed) { await captureSideChatState(undefined, false, sideId); return; }
+	if (sideCloseAttachments.get(sideId) !== daemonAttachmentGeneration) return "unconfirmed";
+	if (alreadyClosed) return await captureSideChatState(undefined, false, sideId);
 	sideCloseRecovery.confirm(sideId);
 	publishPendingSideCloses();
 	// DELETE already established success. Keep cleanup in RAM while refreshing.
 	sideLaunchRecovery.captureInBackground();
+	return "closed";
 });
 ipcMain.handle("sideChats:pendingCloses", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || sessionId.length > 255) throw new Error("Invalid side close query.");

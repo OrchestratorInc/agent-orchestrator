@@ -4,7 +4,7 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { apiErrorException } from "../../lib/api-error-exception";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
-import type { PendingSideClose } from "../../../shared/side-close";
+import type { PendingSideClose, SideCloseOutcome } from "../../../shared/side-close";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "@/components/app-icons";
 import type { components } from "../../../api/schema";
@@ -377,10 +377,17 @@ export function useIndependentSideChats(
 ) {
 	const { t } = useTranslation();
 	const translateDraft = useChatDraftTranslation();
-	const [sides, setSides] = useState<Side[]>([]);
+	const [sides, setSidesState] = useState<Side[]>([]);
+	const sidesRef = useRef(sides);
+	const setSides = useCallback((update: Side[] | ((current: Side[]) => Side[])) => {
+		const next = typeof update === "function" ? update(sidesRef.current) : update;
+		sidesRef.current = next;
+		setSidesState(next);
+	}, []);
 	const [activeId, setActiveId] = useState<string>();
 	const [visible, setVisible] = useState(false);
-	const [snapshot, setSnapshot] = useState<Snapshot>();
+	const [liveSnapshot, setSnapshot] = useState<Snapshot>();
+	const retainedSnapshots = useRef(new Map<string, { snapshot: Snapshot; olderPages: Snapshot[] }>());
 	const [snapshotRefreshKey, setSnapshotRefreshKey] = useState(0);
 	const [olderPages, setOlderPages] = useState<Snapshot[]>([]);
 	const [drafts, setDrafts] = useState<Record<string, SideChatDraft>>({});
@@ -392,14 +399,34 @@ export function useIndependentSideChats(
 	const [renameId, setRenameId] = useState<string>();
 	const renameCancelled = useRef(false);
 	const [confirmClose, setConfirmClose] = useState<string>();
+	const tabRowRef = useRef<HTMLElement>(null);
+	const hadCloseDialog = useRef(false);
+	useEffect(() => {
+		const wasOpen = hadCloseDialog.current;
+		hadCloseDialog.current = Boolean(confirmClose);
+		if (!wasOpen || confirmClose) return;
+		const timer = window.setTimeout(() => {
+			if (document.activeElement === document.body) {
+				tabRowRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], .browser-panel__tab-new')?.focus();
+			}
+		}, 0);
+		return () => window.clearTimeout(timer);
+	}, [confirmClose]);
 	const [closing, setClosing] = useState(false);
-	const [closeError, setCloseError] = useState<string>();
+	const [closeWarnings, setCloseWarningsState] = useState<Record<string, "open" | "cleanup_pending" | "unconfirmed">>({});
+	const closeWarningsRef = useRef(closeWarnings);
+	const setCloseWarnings = useCallback((update: typeof closeWarnings | ((current: typeof closeWarnings) => typeof closeWarnings)) => {
+		const next = typeof update === "function" ? update(closeWarningsRef.current) : update;
+		closeWarningsRef.current = next;
+		setCloseWarningsState(next);
+	}, []);
 	// The side transcript renders through the main chat's Timeline, which owns
 	// selection, source navigation, and scroll follow. Same-side annotations from
 	// the composer navigate through it.
 	const timelineNavigationRef = useRef<((annotation: ChatAnnotationSummaryItem) => void) | null>(null);
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
+	const [sideError, setSideError] = useState<{ id: string; message: string }>();
 	const [pending, setPending] = useState(false);
 	const [sendingRevision, setSendingRevision] = useState(0);
 	const sendingRef = useRef(new Set<string>());
@@ -416,7 +443,14 @@ export function useIndependentSideChats(
 	const closedSidesRef = useRef(new Set<string>());
 	const [pendingCloses, setPendingCloses] = useState<PendingSideClose[]>([]);
 	const closingSidesRef = useRef(new Set<string>());
+	const snapshot = liveSnapshot?.side.id === activeId ? liveSnapshot : activeId && closingSidesRef.current.has(activeId) ? retainedSnapshots.current.get(activeId)?.snapshot : undefined;
 	const closeRequests = useRef(new Set<string>());
+	const [closeRevision, setCloseRevision] = useState(0);
+	const lifecycleRevision = useRef(0);
+	const listRequests = useRef(0);
+	const localCreates = useRef(new Map<string, Side>());
+	const cleanupConfirmed = useRef(new Set<string>());
+	const sideRevisions = useRef(new Map<string, number>());
 	const loadingOlderRef = useRef(false);
 	const olderGeneration = useRef(0);
 	const olderScope = useRef("");
@@ -428,15 +462,48 @@ export function useIndependentSideChats(
 	}
 	useEffect(() => setLoadingOlder(false), [sessionId, activeId, enabled]);
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const [attachmentRevision, setAttachmentRevision] = useState(0);
 	const sessionRef = useRef(sessionId);
 	sessionRef.current = enabled ? sessionId : "";
-	const creationScope = useMemo(() => ({ active: true, pending: new Set<symbol>() }), [sessionId, enabled]);
+	const creationScope = useMemo(() => ({ active: true, pending: new Set<symbol>() }), [sessionId, enabled, baseUrl, attachmentRevision]);
 	const creationScopeRef = useRef(creationScope);
 	creationScopeRef.current = creationScope;
+	const operationCurrent = useCallback((sideId: string) => {
+		const scope = creationScopeRef.current;
+		const revision = sideRevisions.current.get(sideId);
+		return () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === sideRevisions.current.get(sideId) && !closedSidesRef.current.has(sideId) && !closingSidesRef.current.has(sideId);
+	}, [sessionId]);
 	useEffect(() => {
 		creationScope.active = true;
+		setPending(false);
 		return () => { creationScope.active = false; };
 	}, [creationScope]);
+	useEffect(() => {
+		let identity: string | undefined;
+		let receivedStatus = false;
+		let alive = true;
+		void aoBridge.daemon.getStatus().then(status => {
+			if (alive && !receivedStatus) identity = JSON.stringify([status.state, status.pid, status.port]);
+		}).catch(() => undefined);
+		const unsubscribe = aoBridge.daemon.onStatus(status => {
+			receivedStatus = true;
+			const next = JSON.stringify([status.state, status.pid, status.port]);
+			if (identity !== next) {
+				creationScopeRef.current.active = false;
+				setCloseWarnings(warnings => {
+					const next = { ...warnings };
+					for (const id of closeRequests.current) next[id] = "unconfirmed";
+					return next;
+				});
+				closeRequests.current.clear();
+				setClosing(false);
+				setConfirmClose(undefined);
+				setAttachmentRevision(value => value + 1);
+			}
+			identity = next;
+		});
+		return () => { alive = false; unsubscribe(); };
+	}, []);
 	useEffect(() => {
 		sessionRef.current = enabled ? sessionId : "";
 		return () => { sessionRef.current = ""; };
@@ -444,6 +511,13 @@ export function useIndependentSideChats(
 	useEffect(() => {
 		closedSidesRef.current.clear();
 		closingSidesRef.current.clear();
+		closeRequests.current.clear();
+		retainedSnapshots.current.clear();
+		localCreates.current.clear();
+		sideRevisions.current.clear();
+		cleanupConfirmed.current.clear();
+		setSideError(undefined);
+		lifecycleRevision.current++;
 		setPendingCloses([]);
 		setSides([]);
 		setActiveId(undefined);
@@ -455,34 +529,79 @@ export function useIndependentSideChats(
 		setRenameId(undefined);
 		setRenameText(undefined);
 		setConfirmClose(undefined);
-		setCloseError(undefined);
+		setClosing(false);
+		setCloseWarnings({});
 		setError(undefined);
 		setPending(false);
 	}, [sessionId, enabled]);
 
-	const refreshList = useCallback(async () => {
+	const removeSide = useCallback((sideId: string) => {
+		lifecycleRevision.current++;
+		closedSidesRef.current.add(sideId);
+		closingSidesRef.current.delete(sideId);
+		localCreates.current.delete(sideId);
+		retainedSnapshots.current.delete(sideId);
+		cleanupConfirmed.current.delete(sideId);
+		setSideError(current => current?.id === sideId ? undefined : current);
+		const current = sidesRef.current;
+		const index = current.findIndex(side => side.id === sideId);
+		const remaining = current.filter(side => side.id !== sideId);
+		setSides(remaining);
+		setActiveId(selected => selected === sideId ? remaining[Math.min(Math.max(index, 0), remaining.length - 1)]?.id : selected);
+		setSnapshot(current => current?.side.id === sideId ? undefined : current);
+		setDrafts(current => { const next = { ...current }; delete next[sideId]; return next; });
+		setAttachments(current => { const next = { ...current }; delete next[sideId]; return next; });
+		setCloseWarnings(current => { const next = { ...current }; delete next[sideId]; return next; });
+		setPendingCloses(current => current.filter(side => side.id !== sideId));
+	}, [setSides]);
+
+	const refreshList = useCallback(async (reportErrors = true) => {
 		if (!enabled) return;
-		const { data, error: requestError } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats", {
-			params: { path: { sessionId } },
-		});
-		if (sessionRef.current !== sessionId) return;
-		if (requestError) {
-			setError(apiErrorMessage(requestError));
-			return;
-		}
-		const closes = await aoBridge.sideChats.getPendingCloses(sessionId);
-		if (sessionRef.current !== sessionId) return;
-		setPendingCloses(closes);
-		closingSidesRef.current = new Set([...closes.map((side) => side.id), ...closeRequests.current]);
-		const nextSides = Array.isArray(data?.sides) ? data.sides.filter((side) => !closedSidesRef.current.has(side.id)) : [];
-		for (const side of closes) {
-			if (!nextSides.some((current) => current.id === side.id)) nextSides.push({ ...side, state: "closing", mainConversationId: "", contextMode: "", hasWork: false, createdAt: "", updatedAt: "" });
-		}
-		setSides(nextSides);
-		setActiveId((current) =>
-			current && nextSides.some((side) => side.id === current) ? current : nextSides.at(-1)?.id,
-		);
-	}, [sessionId, enabled]);
+		const scope = creationScopeRef.current;
+		const revision = lifecycleRevision.current;
+		const request = ++listRequests.current;
+		const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === lifecycleRevision.current && request === listRequests.current;
+		try {
+			const { data, error: requestError } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats", {
+				params: { path: { sessionId } },
+			});
+			if (!current()) return;
+			if (requestError) {
+				if (reportErrors) setError(apiErrorMessage(requestError));
+				return;
+			}
+			const closes = await aoBridge.sideChats.getPendingCloses(sessionId);
+			if (!current()) return;
+			for (const pending of closes) if (pending.phase === "cleanup_pending") cleanupConfirmed.current.add(pending.id);
+			// Keep proof of logical closure until host-stop reconciliation finishes.
+			for (const id of cleanupConfirmed.current) {
+				if (!closes.some(side => side.id === id) && !data?.sides?.some(side => side.id === id)) removeSide(id);
+			}
+			setPendingCloses(closes);
+			setCloseWarnings(warnings => {
+				const next = { ...warnings };
+				for (const side of closes) if (!closeRequests.current.has(side.id)) next[side.id] = side.phase;
+				return next;
+			});
+			closingSidesRef.current = new Set([...closes.map((side) => side.id), ...closeRequests.current, ...Object.keys(closeWarningsRef.current).filter(id => closeWarningsRef.current[id] !== "open" && !closedSidesRef.current.has(id))]);
+			const nextSides = Array.isArray(data?.sides) ? data.sides.filter((side) => !closedSidesRef.current.has(side.id)) : [];
+			for (const [id, side] of localCreates.current) {
+				if (nextSides.some(current => current.id === id)) localCreates.current.delete(id);
+				else if (!closedSidesRef.current.has(id)) nextSides.push(side);
+			}
+			for (const side of closes) {
+				if (!closedSidesRef.current.has(side.id) && !nextSides.some((current) => current.id === side.id)) nextSides.push(sidesRef.current.find(current => current.id === side.id) ?? { ...side, state: "closing", mainConversationId: "", contextMode: "", hasWork: false, createdAt: "", updatedAt: "" });
+			}
+			for (const id of closingSidesRef.current) {
+				const retained = sidesRef.current.find(side => side.id === id);
+				if (retained && !closedSidesRef.current.has(id) && !nextSides.some(side => side.id === id)) nextSides.push(retained);
+			}
+			setSides(nextSides);
+			setActiveId((current) =>
+				current && nextSides.some((side) => side.id === current) ? current : nextSides.at(-1)?.id,
+			);
+		} catch (cause) { if (current() && reportErrors) setError(apiErrorMessage(cause)); }
+	}, [sessionId, enabled, removeSide, setSides, creationScope]);
 	useEffect(() => {
 		if (!enabled) return;
 		return aoBridge.sideChats.onPendingClosesChanged(() => { void refreshList().catch((cause) => setError(String(cause))); });
@@ -497,13 +616,22 @@ export function useIndependentSideChats(
 	}, [refreshList, enabled]);
 
 	useEffect(() => {
+		if (liveSnapshot && liveSnapshot.side.id === activeId && !closingSidesRef.current.has(activeId!)) {
+			retainedSnapshots.current.set(liveSnapshot.side.id, { snapshot: liveSnapshot, olderPages });
+		}
+	}, [liveSnapshot, olderPages, activeId]);
+
+	useEffect(() => {
 		setOlderPages([]);
 		loadingOlderRef.current = false;
+		setLoadingOlder(false);
 		if (!enabled || !activeId) {
 			setSnapshot(undefined);
 			return;
 		}
+		if (closingSidesRef.current.has(activeId) || closedSidesRef.current.has(activeId)) return;
 		let alive = true;
+		const available = operationCurrent(activeId);
 		let lastApplied = 0;
 		let issued = 0;
 		const refresh = async () => {
@@ -514,10 +642,10 @@ export function useIndependentSideChats(
 					params: { path: { sessionId, sideId: activeId } },
 				},
 			);
-			if (!alive || requestNumber < lastApplied) return;
+			if (!alive || !available() || requestNumber < lastApplied) return;
 			lastApplied = requestNumber;
 			if (requestError) {
-				setError(apiErrorMessage(requestError));
+				setSideError({ id: activeId, message: apiErrorMessage(requestError) });
 				return;
 			}
 			if (data?.snapshot) {
@@ -544,12 +672,12 @@ export function useIndependentSideChats(
 						],
 					};
 				});
-				setError(undefined);
+				setSideError(current => current?.id === activeId ? undefined : current);
 			}
 		};
 		const refreshSafely = () =>
 			void refresh().catch((error) => {
-				if (alive) setError(String(error));
+				if (alive && available()) setSideError({ id: activeId, message: String(error) });
 			});
 		refreshSafely();
 		let stream: EventSource | undefined;
@@ -566,18 +694,18 @@ export function useIndependentSideChats(
 			window.clearInterval(timer);
 			stream?.close();
 		};
-	}, [sessionId, activeId, baseUrl, snapshotRefreshKey, enabled]);
+	}, [sessionId, activeId, baseUrl, snapshotRefreshKey, enabled, closeRevision, operationCurrent, creationScope]);
 
 	const loadOlder = useCallback(async () => {
-		if (!activeId || !snapshot || loadingOlderRef.current) return;
+		if (!activeId || !snapshot || loadingOlderRef.current || closingSidesRef.current.has(activeId)) return;
 		const oldest = olderPages.at(-1)?.turns?.[0]?.createdAt ?? snapshot.turns?.[0]?.createdAt;
 		if (!oldest) return;
 		loadingOlderRef.current = true;
 		setLoadingOlder(true);
 		const generation = ++olderGeneration.current;
 		const scope = olderScope.current;
-		const current = () =>
-			olderGeneration.current === generation && olderScope.current === scope && !closedSidesRef.current.has(activeId);
+		const available = operationCurrent(activeId);
+		const current = () => available() && olderGeneration.current === generation && olderScope.current === scope;
 		try {
 			const { data, error: requestError } = await apiClient.GET(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}",
@@ -590,25 +718,26 @@ export function useIndependentSideChats(
 			);
 			if (!current()) return;
 			if (requestError) {
-				setError(apiErrorMessage(requestError));
+				setSideError({ id: activeId, message: apiErrorMessage(requestError) });
 				return;
 			}
 			if (data?.snapshot && current()) setOlderPages((pages) => [...pages, data.snapshot]);
 		} catch (cause) {
-			if (current()) setError(apiErrorMessage(cause));
+			if (current()) setSideError({ id: activeId, message: apiErrorMessage(cause) });
 		} finally {
 			if (current()) {
 				loadingOlderRef.current = false;
 				setLoadingOlder(false);
 			}
 		}
-	}, [sessionId, activeId, snapshot, olderPages]);
+	}, [sessionId, activeId, snapshot, olderPages, operationCurrent]);
 
 	useEffect(() => {
-		if (!activeId || drafts[activeId] !== undefined) return;
+		if (!activeId || drafts[activeId] !== undefined || closingSidesRef.current.has(activeId) || closedSidesRef.current.has(activeId)) return;
+		const available = operationCurrent(activeId);
 		void readSideChatDraft(sessionId, activeId)
 			.then(({ data }) => {
-				if (sessionRef.current !== sessionId) return;
+				if (!available()) return;
 				if (data)
 					setDrafts((current) => ({
 						...current,
@@ -616,9 +745,9 @@ export function useIndependentSideChats(
 					}));
 			})
 			.catch((error) => {
-				if (sessionRef.current === sessionId) setError(String(error));
+				if (available()) setSideError({ id: activeId, message: String(error) });
 			});
-	}, [sessionId, activeId, drafts, sendingRevision]);
+	}, [sessionId, activeId, drafts, sendingRevision, closeRevision, operationCurrent]);
 
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID(),
@@ -689,10 +818,12 @@ export function useIndependentSideChats(
 					}));
 					if (!available()) throw new Error("Side chat is no longer active.");
 					if (appendError) throw new Error(appendError);
-					const { error: draftError } = await saveSideChatDraft(sessionId, data.side.id, JSON.stringify(nextDraft));
+					const { error: draftError } = await saveSideChatDraft(sessionId, data.side.id, JSON.stringify(nextDraft), available);
 					if (draftError) throw draftError;
 					if (!available()) throw new Error("Side chat is no longer active.");
 				}
+				lifecycleRevision.current++;
+				localCreates.current.set(data.side.id, data.side);
 				setSides((current) =>
 					current.some((side) => side.id === data.side.id)
 						? current.map((side) => (side.id === data.side.id ? data.side : side))
@@ -716,6 +847,7 @@ export function useIndependentSideChats(
 	);
 
 	const updateDraft = useCallback((sideId: string, text: string) => {
+		if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) return;
 		setDrafts((current) => ({
 			...current,
 			[sideId]: { ...(current[sideId] ?? emptySideChatDraft()), text },
@@ -723,6 +855,8 @@ export function useIndependentSideChats(
 	}, []);
 	const replaceDraft = useCallback(
 		async (sideId: string, draft: SideChatDraft) => {
+			if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) throw new Error("Side chat is closing.");
+			const available = operationCurrent(sideId);
 			const next = {
 				...draft,
 				pendingDelivery: draftsRef.current[sideId]?.pendingDelivery,
@@ -734,30 +868,35 @@ export function useIndependentSideChats(
 			setDrafts((current) => ({ ...current, [sideId]: next }));
 			setAttachments((current) => ({ ...current, [sideId]: [] }));
 			setFocusKey((key) => key + 1);
-			const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next));
+			const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next), available);
 			if (requestError) throw requestError;
-			await aoBridge.sideChats.capture();
+			if (available()) await aoBridge.sideChats.capture();
 		},
 		[sessionId],
 	);
 
 	const addReference = useCallback(async (sideId: string, excerpt: ChatDraftExcerptReference) => {
+		if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) throw new Error("Side chat is closing.");
+		const available = operationCurrent(sideId);
 		const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
 		const result = appendReference(draft, excerpt);
 		if (result.error) throw new Error(result.error);
 		draftsRef.current = { ...draftsRef.current, [sideId]: result.draft };
 		setDrafts(current => ({ ...current, [sideId]: result.draft }));
-		const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(result.draft));
+		const { error: requestError } = await saveSideChatDraft(sessionId, sideId, JSON.stringify(result.draft), available);
+		if (!available()) return;
 		if (requestError) throw requestError;
 		setFocusKey(key => key + 1);
-	}, [sessionId]);
+	}, [sessionId, operationCurrent]);
 
 	const attachFiles = useCallback(
 		async (sideId: string, files: File[]) => {
-			if (files.length === 0) return;
+			if (files.length === 0 || closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) return;
+			const available = operationCurrent(sideId);
 			try {
 				const payloads = await Promise.all(files.map(sideFilePayload));
 				const paths = await stageAttachments(payloads);
+				if (!available()) return;
 				if (paths.length !== files.length) throw new Error("Could not stage every attached file.");
 				setDrafts((current) => ({
 					...current,
@@ -780,26 +919,28 @@ export function useIndependentSideChats(
 					[sideId]: [...(current[sideId] ?? []), ...files.map((file, index) => ({ file, path: paths[index] }))],
 				}));
 			} catch (cause) {
-				setError(apiErrorMessage(cause));
+				if (available()) setError(apiErrorMessage(cause));
 			}
 		},
-		[stageAttachments],
+		[stageAttachments, operationCurrent],
 	);
 
 	useEffect(() => {
-		if (!activeId || drafts[activeId] === undefined) return;
+		if (!activeId || drafts[activeId] === undefined || closingSidesRef.current.has(activeId)) return;
+		const available = operationCurrent(activeId);
 		const draft = drafts[activeId];
 		const save = () => {
-			if (closedSidesRef.current.has(activeId) || (sendingRef.current.has(activeId) && activeIdRef.current === activeId && sessionRef.current === sessionId)) return;
+			if (!available() || (sendingRef.current.has(activeId) && activeIdRef.current === activeId && sessionRef.current === sessionId)) return;
 			const currentDraft = draftsRef.current[activeId] ?? draft;
-			void saveSideChatDraft(sessionId, activeId, JSON.stringify(currentDraft))
+			void saveSideChatDraft(sessionId, activeId, JSON.stringify(currentDraft), available)
 				.then(({ error: requestError }) => {
 					if (requestError) throw requestError;
-					return aoBridge.sideChats.capture();
+					if (available()) return aoBridge.sideChats.capture();
+					return;
 				})
 				.catch((cause) => {
-					if (sessionRef.current === sessionId && !closedSidesRef.current.has(activeId))
-						setError(apiErrorMessage(cause));
+					if (available())
+						setSideError({ id: activeId, message: apiErrorMessage(cause) });
 				});
 		};
 		const timer = window.setTimeout(() => {
@@ -813,7 +954,7 @@ export function useIndependentSideChats(
 			)
 				save();
 		};
-	}, [sessionId, activeId, drafts, sendingRevision]);
+	}, [sessionId, activeId, drafts, sendingRevision, closeRevision, operationCurrent]);
 
 	const cancelHandoff = useCallback(async (sideId: string) => {
 		const pending = draftsRef.current[sideId]?.pendingCommand;
@@ -821,7 +962,7 @@ export function useIndependentSideChats(
 		sendingRef.current.add(sideId);
 		setSendingRevision(version => version + 1);
 		const command = { ...pending, cancelRequested: true };
-		const available = () => sessionRef.current === sessionId && !closedSidesRef.current.has(sideId) && !closingSidesRef.current.has(sideId);
+		const available = operationCurrent(sideId);
 		const apply = (remove: boolean) => {
 			if (!available()) throw new Error("Side chat is no longer active.");
 			const current = draftsRef.current[sideId];
@@ -833,7 +974,7 @@ export function useIndependentSideChats(
 			return next;
 		};
 		const persist = async (draft: SideChatDraft) => {
-			const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(draft));
+			const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(draft), available);
 			if (saved.error) throw saved.error;
 			await aoBridge.sideChats.capture();
 		};
@@ -875,13 +1016,13 @@ export function useIndependentSideChats(
 				sendingRef.current.add(sideId);
 				setSendingRevision((version) => version + 1);
 				let command = draftsRef.current[sideId]?.pendingCommand;
-				const available = () => sessionRef.current === sessionId && !closedSidesRef.current.has(sideId) && !closingSidesRef.current.has(sideId);
+				const available = operationCurrent(sideId);
 				const persist = async () => {
 					if (!available()) throw new Error("Side chat is no longer active.");
 					const next = { ...(draftsRef.current[sideId] ?? emptySideChatDraft()), pendingCommand: command };
 					draftsRef.current = { ...draftsRef.current, [sideId]: next };
 					setDrafts((current) => ({ ...current, [sideId]: next }));
-					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next));
+					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next), available);
 					if (saved.error) throw saved.error;
 					await aoBridge.sideChats.capture();
 				};
@@ -951,7 +1092,7 @@ export function useIndependentSideChats(
 					};
 					draftsRef.current = { ...draftsRef.current, [sideId]: next };
 					setDrafts((current) => ({ ...current, [sideId]: next }));
-					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next));
+					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next), available);
 					if (saved.error) {
 						await persist();
 						throw saved.error;
@@ -981,6 +1122,8 @@ export function useIndependentSideChats(
 				if (propagateError) throw new Error("Side chat delivery is still in progress. Try again after it finishes.");
 				return;
 			}
+			const available = operationCurrent(sideId);
+			if (!available()) return;
 			sendingRef.current.add(sideId);
 			setSendingRevision((version) => version + 1);
 			setError(undefined);
@@ -989,6 +1132,7 @@ export function useIndependentSideChats(
 				if (!Object.hasOwn(draftsRef.current, sideId)) {
 					const { data, error } = await readSideChatDraft(sessionId, sideId);
 					if (error) throw error;
+					if (!available()) return;
 					const loaded = parseSideChatDraft(data?.contentJson ?? "");
 					const current = draftsRef.current[sideId] ?? loaded;
 					draftsRef.current = { ...draftsRef.current, [sideId]: current };
@@ -1038,6 +1182,7 @@ export function useIndependentSideChats(
 						},
 					};
 				}
+				if (!available()) return;
 				const frozen = receipt;
 				const pending = {
 					...(draftsRef.current[sideId] ?? draft),
@@ -1049,10 +1194,10 @@ export function useIndependentSideChats(
 					[sideId]: { ...(current[sideId] ?? draft), pendingDelivery: frozen },
 				}));
 				// Persist the receipt before dispatch so reconnect can retry the exact request.
-				const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(pending));
+				const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(pending), available);
 				if (saved.error) throw saved.error;
 				await aoBridge.sideChats.capture();
-				if (sessionRef.current !== sessionId || closedSidesRef.current.has(sideId) || closingSidesRef.current.has(sideId) || (canDispatch && !canDispatch())) {
+				if (!available() || (canDispatch && !canDispatch())) {
 					if (propagateError) throw new Error("Side chat is no longer active.");
 					return;
 				}
@@ -1063,6 +1208,7 @@ export function useIndependentSideChats(
 						body: frozen.request,
 					},
 				);
+				if (!available()) return;
 				if (requestError) {
 					// Server errors can occur after acceptance; keep their receipt too.
 					if (response && response.status < 500)
@@ -1075,7 +1221,7 @@ export function useIndependentSideChats(
 					throw requestError;
 				}
 				await aoBridge.sideChats.capture().catch(() => undefined);
-				if (sessionRef.current !== sessionId || closedSidesRef.current.has(sideId)) return;
+				if (!available()) return;
 				const d = draftsRef.current[sideId];
 				if (d?.pendingDelivery === frozen) {
 					const { pendingDelivery: _, ...rest } = d;
@@ -1089,7 +1235,7 @@ export function useIndependentSideChats(
 					};
 					draftsRef.current = { ...draftsRef.current, [sideId]: next };
 					setDrafts((current) => ({ ...current, [sideId]: next }));
-					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next));
+					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next), available);
 					if (saved.error) throw saved.error;
 					await aoBridge.sideChats.capture().catch(() => undefined);
 				}
@@ -1097,9 +1243,9 @@ export function useIndependentSideChats(
 				setAttachments((current) => (current[sideId] === files ? { ...current, [sideId]: [] } : current));
 				// The first accepted question may have named this tab. A list refresh
 				// failure must not turn an accepted delivery into a failed send.
-				void refreshList().catch(() => undefined);
+				void refreshList(false).catch(() => undefined);
 			} catch (cause) {
-				if (sessionRef.current === sessionId && !closedSidesRef.current.has(sideId)) setError(apiErrorMessage(cause));
+				if (available()) setError(apiErrorMessage(cause));
 				if (propagateError) throw cause;
 			} finally {
 				sendingRef.current.delete(sideId);
@@ -1111,79 +1257,89 @@ export function useIndependentSideChats(
 
 	const close = useCallback(
 		async (sideId: string) => {
-			if (closeRequests.current.has(sideId)) return;
+			if (closeRequests.current.has(sideId) || closedSidesRef.current.has(sideId)) return;
+			const scope = creationScopeRef.current;
+			const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId;
 			closeRequests.current.add(sideId);
 			closingSidesRef.current.add(sideId);
-			const summary = sides.find((side) => side.id === sideId);
-			if (summary) setPendingCloses((current) => [...current.filter((side) => side.id !== sideId), { id: sideId, sessionId, label: summary.label ?? "" }]);
+			sideRevisions.current.set(sideId, (sideRevisions.current.get(sideId) ?? 0) + 1);
+			lifecycleRevision.current++;
+			setError(undefined);
+			setSideError(error => error?.id === sideId ? undefined : error);
+			setCloseWarnings(warnings => { const next = { ...warnings }; delete next[sideId]; return next; });
+			setCloseRevision(value => value + 1);
+			let outcome: SideCloseOutcome = "unconfirmed";
+			let failure: unknown;
+			let rejected = false;
 			try {
 				await aoBridge.sideChats.capture(sideId);
+				if (!current()) return;
 				const { error: requestError, response } = await apiClient.DELETE(
 					"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}",
 					{ params: { path: { sessionId, sideId } } },
 				);
-				if (requestError) {
-					if (response.status === 404) {
-						await aoBridge.sideChats.confirmClose(sideId, true);
-						await refreshList();
-						return;
-					}
-					// A request timeout is uncertain even when represented as 4xx.
+				if (!current()) return;
+				if (!requestError) {
+					// HTTP success proves shutdown even if the follow-up IPC fails.
+					outcome = "closed";
+					await aoBridge.sideChats.confirmClose(sideId).catch(() => undefined);
+				} else if (response.status === 404) {
+					outcome = await aoBridge.sideChats.confirmClose(sideId, true);
+				} else {
 					if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
 						await aoBridge.sideChats.capture(sideId, true);
+						rejected = true;
 					} else await aoBridge.sideChats.capture().catch(() => undefined);
 					throw apiErrorException(requestError);
 				}
-				await aoBridge.sideChats.confirmClose(sideId);
 			} catch (cause) {
-				await refreshList().catch(() => undefined);
-				throw cause;
+				failure = cause;
 			} finally {
-				closeRequests.current.delete(sideId);
+				if (current()) {
+					closeRequests.current.delete(sideId);
+					lifecycleRevision.current++;
+					setCloseRevision(value => value + 1);
+				}
 			}
-			if (sessionRef.current !== sessionId) return;
-			closedSidesRef.current.add(sideId);
-			setDrafts((current) => {
-				const next = { ...current };
-				delete next[sideId];
-				return next;
-			});
-			setAttachments((current) => {
-				const next = { ...current };
-				delete next[sideId];
-				return next;
-			});
-			const remaining = sides.filter((side) => side.id !== sideId);
-			setSides(remaining);
-			if (activeId === sideId) {
-				setActiveId(
-					remaining[
-						Math.min(
-							sides.findIndex((side) => side.id === sideId),
-							remaining.length - 1,
-						)
-					]?.id,
-				);
-				setSnapshot(undefined);
-			}
+			if (!current()) return;
+			if (outcome === "closed") { removeSide(sideId); return; }
+			// Capture errors and ambiguous transport failures never reopen a writer.
+			let closes: PendingSideClose[] | undefined;
+			try { closes = await aoBridge.sideChats.getPendingCloses(sessionId); } catch { /* keep the local close intent */ }
+			if (!current()) return;
+			const pending = closes?.find(side => side.id === sideId);
+			if (closes) setPendingCloses(closes);
+			if (pending?.phase === "cleanup_pending") outcome = "cleanup_pending";
+			if (outcome === "cleanup_pending") cleanupConfirmed.current.add(sideId);
+			const stillOpen = rejected && closes !== undefined && !pending;
+			if (stillOpen) closingSidesRef.current.delete(sideId);
+			setCloseWarnings(warnings => ({ ...warnings, [sideId]: stillOpen ? "open" : outcome === "cleanup_pending" ? "cleanup_pending" : "unconfirmed" }));
+			setCloseRevision(value => value + 1);
+			void refreshList().catch(() => undefined);
+			throw failure ?? new Error("Side chat shutdown is not confirmed.");
 		},
-		[sessionId, activeId, sides, refreshList],
+		[sessionId, refreshList, removeSide],
 	);
 
 	const interrupt = useCallback(
 		async (sideId: string) => {
+			const available = operationCurrent(sideId);
+			if (!available()) return;
 			const { error: requestError } = await apiClient.POST(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/interrupt",
 				{
 					params: { path: { sessionId, sideId } },
 				},
 			);
-			if (requestError) setError(apiErrorMessage(requestError));
+			if (!available()) return;
+			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
 		},
 		[sessionId],
 	);
 	const compact = useCallback(
 		async (sideId: string) => {
+			const available = operationCurrent(sideId);
+			if (!available()) return;
 			setError(undefined);
 			const { error: requestError } = await apiClient.POST(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/compact",
@@ -1191,8 +1347,9 @@ export function useIndependentSideChats(
 					params: { path: { sessionId, sideId } },
 				},
 			);
+			if (!available()) return;
 			if (requestError) {
-				setError(apiErrorMessage(requestError));
+				setSideError({ id: sideId, message: apiErrorMessage(requestError) });
 				return;
 			}
 			updateDraft(sideId, "");
@@ -1201,6 +1358,8 @@ export function useIndependentSideChats(
 	);
 	const resolveApproval = useCallback(
 		async (sideId: string, requestId: string, decisionId: string) => {
+			const available = operationCurrent(sideId);
+			if (!available()) return;
 			const { error: requestError } = await apiClient.POST(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/approvals/{requestId}/resolve",
 				{
@@ -1208,12 +1367,15 @@ export function useIndependentSideChats(
 					body: { decisionId },
 				},
 			);
-			if (requestError) setError(apiErrorMessage(requestError));
+			if (!available()) return;
+			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
 		},
 		[sessionId],
 	);
 	const resolveInput = useCallback(
 		async (sideId: string, requestId: string, action: "accept" | "decline" | "cancel") => {
+			const available = operationCurrent(sideId);
+			if (!available()) return;
 			const { error: requestError } = await apiClient.POST(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve",
 				{
@@ -1224,12 +1386,15 @@ export function useIndependentSideChats(
 					},
 				},
 			);
-			if (requestError) setError(apiErrorMessage(requestError));
+			if (!available()) return;
+			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
 		},
 		[sessionId, inputAnswers],
 	);
 	const updateSettings = useCallback(
 		async (sideId: string, model: string, effort: string) => {
+			const available = operationCurrent(sideId);
+			if (!available()) return;
 			const { error: requestError } = await apiClient.PATCH(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/settings",
 				{
@@ -1237,24 +1402,30 @@ export function useIndependentSideChats(
 					body: { model, effort },
 				},
 			);
-			if (requestError) setError(apiErrorMessage(requestError));
+			if (!available()) return;
+			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
 		},
 		[sessionId],
 	);
 	const retry = useCallback(
 		async (sideId: string, turnId: string) => {
+			const available = operationCurrent(sideId);
+			if (!available()) return;
 			const { error: requestError } = await apiClient.POST(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry",
 				{
 					params: { path: { sessionId, sideId, turnId } },
 				},
 			);
-			if (requestError) setError(apiErrorMessage(requestError));
+			if (!available()) return;
+			if (requestError) setSideError({ id: sideId, message: apiErrorMessage(requestError) });
 		},
 		[sessionId],
 	);
 	const saveQueuedEdit = useCallback(
 		async (sideId: string) => {
+			const available = operationCurrent(sideId);
+			if (!available()) return;
 			if (!editingTurnId || !editingText.trim()) return;
 			const { error: requestError } = await apiClient.PATCH(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}",
@@ -1263,8 +1434,9 @@ export function useIndependentSideChats(
 					body: { text: editingText, clientMessageId: "" },
 				},
 			);
+			if (!available()) return;
 			if (requestError) {
-				setError(apiErrorMessage(requestError));
+				setSideError({ id: sideId, message: apiErrorMessage(requestError) });
 				return;
 			}
 			setEditingTurnId(undefined);
@@ -1281,9 +1453,12 @@ export function useIndependentSideChats(
 		() => (activeId ? { sessionId: `side:${activeId}`, incarnation: activeId } : undefined),
 		[activeId],
 	);
+	const readOnly = Boolean(activeId && closingSidesRef.current.has(activeId));
+	const warning = activeId ? closeWarnings[activeId] : undefined;
+	const activeError = error || (sideError && sideError.id === activeId ? sideError.message : undefined);
 	const conversation = useMemo(
-		() => (snapshot && snapshot.side.id === activeId ? sideConversationSnapshot(snapshot, olderPages) : undefined),
-		[snapshot, olderPages, activeId],
+		() => (snapshot && snapshot.side.id === activeId ? sideConversationSnapshot(snapshot, readOnly ? retainedSnapshots.current.get(snapshot.side.id)?.olderPages ?? [] : olderPages) : undefined),
+		[snapshot, olderPages, activeId, readOnly],
 	);
 	const navigateAnnotation = useCallback(
 		(annotation: ChatAnnotationSummaryItem) => {
@@ -1322,19 +1497,22 @@ export function useIndependentSideChats(
 		setRenameId(undefined);
 		setRenameText(undefined);
 		if (!label || label === sides.find((side) => side.id === id)?.label) return;
+		const available = operationCurrent(id);
+		if (!available()) return;
 		const { error: requestError } = await apiClient.PATCH(
 			"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
 			{ params: { path: { sessionId, sideId: id } }, body: { label } },
 		);
+		if (!available()) return;
 		if (requestError) {
-			setError(apiErrorMessage(requestError));
+			setSideError({ id, message: apiErrorMessage(requestError) });
 			return;
 		}
 		await refreshList();
 	};
 
 	const tabBar = enabled ? (
-		<header className="browser-panel__tab-row side-chat__tab-row">
+		<header ref={tabRowRef} className="browser-panel__tab-row side-chat__tab-row">
 			<div className="browser-panel__tab-region">
 				<div
 					ref={tabStripRef}
@@ -1376,6 +1554,7 @@ export function useIndependentSideChats(
 									<Pressable
 										role="tab"
 										aria-selected={side.id === currentActiveId}
+										aria-busy={closeRequests.current.has(side.id) || undefined}
 										tabIndex={side.id === currentActiveId ? 0 : -1}
 										className="browser-panel__tab-select"
 										onClick={(event) => {
@@ -1396,16 +1575,16 @@ export function useIndependentSideChats(
 										}}
 										title={side.label}
 									>
-										<MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />
-										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}{pendingCloses.some((pending) => pending.id === side.id) ? ` · ${t("sideChat.closingTab")}` : ""}</span>
+										{closeRequests.current.has(side.id) ? <Loader2 className="browser-panel__tab-icon animate-spin" aria-hidden="true" /> : <MessageSquare className="browser-panel__tab-icon" aria-hidden="true" />}
+										<span className="browser-panel__tab-title">{side.label?.trim() || t("sideChat.defaultLabel")}</span>
+										{closeRequests.current.has(side.id) ? <span role="status" className="sr-only">{t("sideChat.deleting")}</span> : null}
 									</Pressable>
 								)}
 								<Pressable
-									hidden={renameId === side.id || pendingCloses.some((pending) => pending.id === side.id)}
+									hidden={renameId === side.id || closeRequests.current.has(side.id) || pendingCloses.some(pending => pending.id === side.id && pending.phase === "cleanup_pending")}
 									className="browser-panel__tab-close"
 									aria-label={t("sideChat.closeNamed", { name: side.label })}
 									onClick={() => {
-										setCloseError(undefined);
 										setConfirmClose(side.id);
 									}}
 								>
@@ -1447,17 +1626,21 @@ export function useIndependentSideChats(
 			confirmLabel={t("sideChat.delete")}
 			cancelLabel={t("confirm.cancel")}
 			busy={closing}
-			error={closeError}
 			onOpenChange={(open) => {
 				if (!open && !closing) setConfirmClose(undefined);
 			}}
 			onConfirm={() => {
 				if (!confirmClose) return;
+				const scope = creationScopeRef.current;
+				const current = () => scope.active && creationScopeRef.current === scope;
 				setClosing(true);
 				void close(confirmClose)
-					.then(() => setConfirmClose((current) => (current === confirmClose ? undefined : current)))
-					.catch((cause) => setCloseError(apiErrorMessage(cause)))
-					.finally(() => setClosing(false));
+					.catch(() => undefined)
+					.finally(() => {
+						if (!current()) return;
+						setConfirmClose(selected => selected === confirmClose ? undefined : selected);
+						setClosing(false);
+					});
 			}}
 		/>
 	);
@@ -1524,18 +1707,10 @@ export function useIndependentSideChats(
 			>
 				{tabBar}
 				{closeDialog}
-				{pendingCloses.some((side) => side.id === activeId) ? (
-					<div className="p-4" role="status">
-						<p>{t("sideChat.closing")}</p>
-						<Button type="button" variant="secondary" size="sm" disabled={closing} onClick={() => {
-							if (!currentActiveId) return;
-							setClosing(true);
-							void close(currentActiveId).catch((cause) => setError(String(cause))).finally(() => setClosing(false));
-						}}>{t("sideChat.retryClose")}</Button>
-					</div>
-				) : snapshot && snapshot.side.id === activeId ? (
+				{warning ? <div role="alert" className="shrink-0 border-b border-border bg-surface px-4 py-3 text-xs text-warning">{t(warning === "open" ? "sideChat.closeFailedOpen" : warning === "cleanup_pending" ? "sideChat.closeCleanupPending" : "sideChat.closeUnconfirmed")}</div> : null}
+				{snapshot && snapshot.side.id === activeId ? (
 					<>
-						{snapshot.side.state !== "ready" ? (
+						{!readOnly && snapshot.side.state !== "ready" ? (
 							<p className="border-b border-border px-4 py-2 text-xs text-muted-foreground" role="status">
 								{snapshot.side.errorMessage ||
 									(snapshot.side.state === "recovering" ? t("sideChat.reconnecting") : snapshot.side.state)}
@@ -1543,7 +1718,7 @@ export function useIndependentSideChats(
 						) : null}
 						{conversation ? (
 							<div className="relative flex min-h-0 flex-1 flex-col">
-								{conversation.items.length === 0 ? (
+								{!readOnly && conversation.items.length === 0 ? (
 									// The Timeline draws nothing for an empty transcript.
 									<div className="mx-auto flex max-w-sm flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm">
 										<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
@@ -1557,26 +1732,27 @@ export function useIndependentSideChats(
 									annotationNavigationRef={timelineNavigationRef}
 									draftScope={timelineDraftScope!}
 									draftPersistenceAvailable={false}
-									hasOlder={conversation.hasMoreBefore}
+									hasOlder={!readOnly && conversation.hasMoreBefore}
 									loadingOlder={loadingOlder}
 									onLoadOlder={() => void loadOlder()}
-									excerptsEnabled
+									excerptsEnabled={!readOnly}
+									newWorkDisabled={readOnly}
 									onAddToChat={(excerpt) => addReference(activeId, excerpt)}
 									onForeignAnnotation={(annotation) => onNavigate?.(annotation)}
-									onDecide={(requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
-									busy={conversation.controller.state === "busy"}
-									retryControl={{ retry: (turnId) => retry(activeId, turnId) }}
+									onDecide={readOnly ? undefined : (requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
+									busy={!readOnly && conversation.controller.state === "busy"}
+									retryControl={readOnly ? undefined : { retry: (turnId) => retry(activeId, turnId) }}
 								/>
 							</div>
 						) : null}
-						{pendingInteractions.length ? (
+						{!readOnly && pendingInteractions.length ? (
 							<div className="shrink-0 px-4 pb-2">
 								<div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
 									{pendingInteractions.map(renderPendingInteraction)}
 								</div>
 							</div>
 						) : null}
-						{snapshot.side.state === "failed" && snapshot.side.recreateRequired ? (
+						{!readOnly && snapshot.side.state === "failed" && snapshot.side.recreateRequired ? (
 							<Button
 								type="button"
 								variant="secondary"
@@ -1586,7 +1762,7 @@ export function useIndependentSideChats(
 							>
 								{t("sideChat.newSideChat")}
 							</Button>
-						) : snapshot.side.state === "failed" ? (
+						) : !readOnly && snapshot.side.state === "failed" ? (
 							<Button
 								type="button"
 								variant="secondary"
@@ -1604,7 +1780,7 @@ export function useIndependentSideChats(
 								{t("sideChat.retryConnection")}
 							</Button>
 						) : null}
-						{(drafts[activeId]?.pendingDelivery || drafts[activeId]?.pendingCommand) && !sendingRef.current.has(activeId) ? (
+						{!readOnly && (drafts[activeId]?.pendingDelivery || drafts[activeId]?.pendingCommand) && !sendingRef.current.has(activeId) ? (
 							<div className="px-3 text-xs text-muted-foreground">
 								<p>{t("sideChat.deliveryIsUnconfirmedRetryTheOriginalQuestionBeforeSendingAnother")}</p>
 								<Button
@@ -1622,7 +1798,7 @@ export function useIndependentSideChats(
 								</> : null}
 							</div>
 						) : null}
-						<SideComposer
+						{!readOnly ? <SideComposer
 							onNavigate={navigateAnnotation}
 							draft={drafts[activeId] ?? emptySideChatDraft()}
 							onChange={(text) => updateDraft(activeId, text)}
@@ -1735,35 +1911,36 @@ export function useIndependentSideChats(
 									</>
 								) : null
 							}
-						/>
+						/> : null}
 					</>
-				) : (
+				) : readOnly ? <div className="min-h-0 flex-1" /> : (
 					<div
 						className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
 						role="status"
 					>
-						{error ? (
+						{activeError ? (
 							<MessageSquare aria-hidden="true" className="size-5 text-muted-foreground" />
 						) : (
 							<Loader2 aria-hidden="true" className="size-5 animate-spin text-muted-foreground" />
 						)}
 						<p className="text-sm font-medium">
-							{error ? t("sideChat.sideChatIsUnavailable") : t("sideChat.openingSideChat")}
+							{activeError ? t("sideChat.sideChatIsUnavailable") : t("sideChat.openingSideChat")}
 						</p>
 						<p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
-							{error
+							{activeError
 								? t(
 										"sideChat.yourDraftStaysInThisThreadTryLoadingItAgainOrReturnToTheMainChatWhileTheConnectionRetriesAutomatically",
 									)
 								: t("sideChat.preparingThisSeparateThreadYouCanKeepWorkingInTheMainChat")}
 						</p>
-						{error ? (
+						{activeError ? (
 							<Button
 								type="button"
 								variant="secondary"
 								size="sm"
 								onClick={() => {
 									setError(undefined);
+									setSideError(undefined);
 									setSnapshotRefreshKey((key) => key + 1);
 								}}
 							>
@@ -1772,9 +1949,9 @@ export function useIndependentSideChats(
 						) : null}
 					</div>
 				)}
-				{error ? (
+				{activeError ? (
 					<div className="shrink-0 border-t border-border bg-surface px-4 py-3 text-xs" role="alert">
-						<p className="break-words text-destructive">{translateDraft(error)}</p>
+						<p className="break-words text-destructive">{translateDraft(activeError!)}</p>
 					</div>
 				) : null}
 			</aside>
@@ -1795,7 +1972,7 @@ export function useIndependentSideChats(
 		create,
 		panel,
 		pending,
-		error,
+		error: activeError,
 		send,
 		cancelHandoff,
 		setQuestionDraft: updateDraft,

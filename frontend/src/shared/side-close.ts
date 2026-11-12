@@ -3,4 +3,7 @@ export interface PendingSideClose {
 	id: string;
 	sessionId: string;
 	label: string;
+	phase: "unconfirmed" | "cleanup_pending";
 }
+
+export type SideCloseOutcome = "closed" | PendingSideClose["phase"];

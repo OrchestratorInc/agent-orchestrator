@@ -12,8 +12,37 @@ describe("side close recovery ownership", () => {
 		recovery.remember(snapshot([record]));
 		recovery.remember(snapshot([]));
 		expect(recovery.state?.sides).toEqual([{ side: record.side, providerHostId: record.providerHostId, providerForkId: "fork", harness: "codex", cleanupOnly: true, hostStopped: undefined }]);
-		expect(recovery.pending("session")).toEqual([{ id: "side", sessionId: "session", label: "Question" }]);
+		expect(recovery.pending("session")).toEqual([{ id: "side", sessionId: "session", label: "Question", phase: "unconfirmed" }]);
 		expect(recovery.pending("other")).toEqual([]);
+	});
+	it("distinguishes restore ownership from daemon-confirmed logical closure", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side");
+		recovery.markRestoreAttempt();
+		expect(recovery.pending()[0].phase).toBe("unconfirmed");
+		recovery.remember(snapshot([{ ...record, cleanupOnly: true }]));
+		expect(recovery.pending()).toEqual([{ id: "side", sessionId: "session", label: "Question", phase: "cleanup_pending" }]);
+		// Older open records cannot undo observed closure or leak private fields.
+		recovery.remember(snapshot([record]));
+		expect(recovery.pending()[0].phase).toBe("cleanup_pending");
+	});
+	it.each([
+		[[], "closed"],
+		[[{ ...record, cleanupOnly: true, hostStopped: true }], "closed"],
+		[[{ ...record, cleanupOnly: true }], "cleanup_pending"],
+		[[record], "unconfirmed"],
+	] as const)("classifies fresh already-closed evidence %#", (records, outcome) => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side");
+		expect(recovery.reconcileMissing("side", snapshot([...records]))).toBe(outcome);
+	});
+	it("discovers daemon cleanup without a renderer close request and removes it after host stop", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([{ ...record, cleanupOnly: true }]));
+		expect(recovery.pending()[0].phase).toBe("cleanup_pending");
+		recovery.remember(snapshot([{ ...record, cleanupOnly: true, hostStopped: true }]));
+		expect(recovery.pending()).toEqual([]);
+		expect(recovery.state?.sides).toHaveLength(1);
 	});
 	it("restores the original only after a definitive rejection", () => {
 		const recovery = new SideCloseRecovery();

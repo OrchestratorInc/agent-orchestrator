@@ -20,7 +20,7 @@ vi.mock("../../lib/api-client", () => ({
 	subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { sideChats: { capture: async () => {}, confirmClose: async () => {}, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } },
+	aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: { capture: async () => {}, confirmClose: async () => "closed", getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } },
 }));
 
 describe("side delivery draft ownership", () => {
@@ -526,7 +526,7 @@ describe("side panel navigation and recovery", () => {
 	it("keeps the no-open-side-chat state to one message", async () => {
 		get.mockResolvedValue({ data: { sides: [] } });
 		render(<SidePanelHarness />);
-		await screen.findByText("No side chat opened yet");
+		await screen.findByText("No side chat opened.");
 		expect(screen.queryByText("Explore a quick question without interrupting the main chat."))
 			.not.toBeInTheDocument();
 	});
@@ -635,7 +635,7 @@ describe("side panel navigation and recovery", () => {
 	it("shows no conversation tab and creates nothing until + is clicked", async () => {
 		get.mockResolvedValue({ data: { sides: [] } });
 		render(<SidePanelHarness />);
-		await screen.findByText("No side chat opened yet");
+		await screen.findByText("No side chat opened.");
 		expect(screen.queryAllByRole("tab")).toHaveLength(0);
 		expect(post).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: "New side chat" }));
@@ -716,14 +716,16 @@ describe("side panel navigation and recovery", () => {
 		expect(screen.getByRole("tab", { name: "First question" })).toHaveAttribute("aria-selected", "true");
 		expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft");
 	});
-	it("keeps the tab and confirmation open when closing fails", async () => {
-		remove.mockResolvedValue({ error: {} });
+	it("dismisses confirmation and retains a read-only warning tab when shutdown is unconfirmed", async () => {
+		remove.mockRejectedValue(new Error("Lost reply"));
 		render(<SidePanelHarness />);
 		await screen.findByLabelText("Side chat question");
 		await userEvent.click(screen.getByRole("button", { name: "Close First question" }));
 		await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-		await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("Send failed"));
-		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not confirm shutdown");
+		expect(screen.queryByLabelText("Side chat question")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry close" })).not.toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "First question" })).toBeInTheDocument();
 	});
 

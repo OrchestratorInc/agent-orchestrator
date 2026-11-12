@@ -12,8 +12,8 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "Request failed",
 	getApiBaseUrl: () => "", subscribeApiBaseUrl: () => () => {},
 }));
-vi.mock("../../lib/bridge", () => ({ aoBridge: { sideChats: {
-	capture, getPendingCloses: pendingCloses, confirmClose: async () => {}, onPendingClosesChanged: () => () => {},
+vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: {
+	capture, getPendingCloses: pendingCloses, confirmClose: async () => "closed", onPendingClosesChanged: () => () => {},
 } } }));
 
 const excerpt: ChatDraftExcerptReference = {
