@@ -17,8 +17,9 @@ import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequ
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
+import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
@@ -474,25 +475,29 @@ export default function SpawnScreen() {
 			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
 		}));
 	};
-	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string) => {
-		if (pickingAttachments.current) return;
+	/** Adds picks to the task; resolves to how many were added. `notice` says what a paste left out. */
+	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string, notice?: string): Promise<number> => {
+		if (pickingAttachments.current) return 0;
 		if (cloudSelected) {
 			setAttachmentError("Cloud tasks can't take attachments yet. Start the task, then add files in its chat.");
-			return;
+			return 0;
 		}
 		pickingAttachments.current = true;
 		setAttachmentError(undefined);
 		try {
 			const picked = await pick();
-			if (!picked) return;
+			if (!picked) return 0;
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
+			const added = merged.attachments.length - attachmentsRef.current.length;
 			attachmentsRef.current = merged.attachments;
 			setAttachments(merged.attachments);
-			setAttachmentError(next.error ?? merged.error);
+			setAttachmentError(next.error ?? merged.error ?? notice);
+			return added;
 		} catch (cause) {
 			setAttachmentError(userFacingError(cause, fallback));
+			return 0;
 		} finally {
 			pickingAttachments.current = false;
 		}
@@ -530,6 +535,14 @@ export default function SpawnScreen() {
 		if (result.canceled) return null;
 		return result.assets.map((asset, index) => photoPickerAttachment(asset, index, new File(asset.uri)));
 	}, "Couldn't open your photo library.");
+
+	// Pasting is a way to attach too, so it goes through the same gate as the
+	// menu. Native stops a paste at 8 images or 25 MB and says which.
+	const pasteImages = (assets: ComposerImageAsset[], overflow?: PasteOverflow) => {
+		const notice = overflow === "count" ? `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.` : overflow === "size" ? "Pasted images must total under 25 MB." : undefined;
+		void addAttachments(async () => pastedSpawnAttachments(assets, attachmentsRef.current.length), "Couldn't read the pasted image.", notice)
+			.then((added) => { if (added > 0) haptics.tap(); });
+	};
 
 	const onSpawn = async () => {
 		if (!selectedHostId || (!config && !cloudSelected)) {
@@ -663,6 +676,7 @@ export default function SpawnScreen() {
 					onSelectEffort={selectEffort}
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
+					onPasteImages={busy ? null : pasteImages}
 					voice={{ state: voice.state, partial: voice.partial, subscribeLevel: voice.subscribeLevel, onToggleLatched: voice.toggleLatched }}
 					prompt={prompt}
 					onChangePrompt={setPrompt}

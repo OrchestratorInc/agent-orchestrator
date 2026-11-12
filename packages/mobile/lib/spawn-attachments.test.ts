@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { appendSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview } from "./spawn-attachments";
+import { appendSpawnAttachments, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview } from "./spawn-attachments";
 
 describe("appendSpawnAttachments", () => {
 	it("keeps accepted files and reports files that exceed the per-file limit", () => {
@@ -106,5 +106,37 @@ describe("photoPickerAttachment", () => {
 		const result = await readSpawnAttachments([], [png, odd]);
 		expect(result.attachments.map((item) => item.mimeType)).toEqual(["image/png", "image/jxl"]);
 		expect(odd.name).toBe("photo-2.jxl");
+	});
+});
+
+describe("pastedSpawnAttachments", () => {
+	// 1x1 PNG.
+	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+	it("names pasted images after what is attached, typed by their bytes, with a thumbnail", async () => {
+		const [first, second] = pastedSpawnAttachments([
+			{ uri: "paste-1", mimeType: "image/jpeg", fileSize: 70, base64: png },
+			{ uri: "paste-2", mimeType: "image/png", base64: png },
+		], 2);
+		expect(first).toMatchObject({ name: "pasted-image-3.png", mimeType: "image/png", bytes: 70, previewUri: `data:image/png;base64,${png}` });
+		expect(second).toMatchObject({ name: "pasted-image-4.png", bytes: Math.floor(png.length * 0.75) });
+		await expect(first!.readData()).resolves.toBe(png);
+		expect(spawnAttachmentPreview(await readSpawnAttachments([], [first!]).then((result) => result.attachments[0]!))).toBe(`data:image/png;base64,${png}`);
+	});
+
+	it("reports an image native left out for size instead of reading it", async () => {
+		const result = await readSpawnAttachments([], pastedSpawnAttachments([
+			{ uri: "paste-1", mimeType: "image/png", fileSize: 12 * 1024 * 1024 },
+			{ uri: "paste-2", mimeType: "image/png", base64: png },
+		]));
+		expect(result.attachments.map((item) => item.name)).toEqual(["pasted-image-2.png"]);
+		expect(result.error).toBe("pasted-image-1.png must be under 10 MB.");
+	});
+
+	it("goes through the task's attachment limit", async () => {
+		const existing = Array.from({ length: 8 }, (_, index) => ({ name: `f${index}`, mimeType: "text/plain", data: "YQ==", bytes: 1 }));
+		const result = await readSpawnAttachments(existing, pastedSpawnAttachments([{ uri: "paste-1", base64: png }], 8));
+		expect(result.attachments).toHaveLength(8);
+		expect(result.error).toBe("You can attach up to 8 files.");
 	});
 });

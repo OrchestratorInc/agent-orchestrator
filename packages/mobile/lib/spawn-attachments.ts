@@ -1,3 +1,4 @@
+import type { ComposerImageAsset } from "./chat/composerImages";
 import { sniffImageMimeType } from "./imageMime";
 
 export type SpawnAttachment = {
@@ -116,6 +117,31 @@ export function photoPickerAttachment(
 		previewUri: asset.uri,
 		readData: () => file.base64(),
 	};
+}
+
+/**
+ * Images pasted into the task's field (see `useImagePaste`), as picks. The
+ * native side sends the bytes inline and leaves out any image over its 10 MB
+ * limit, so one without data is reported by size rather than read. `start`
+ * numbers the names after what is already attached.
+ */
+export function pastedSpawnAttachments(assets: readonly ComposerImageAsset[], start = 0): PickedSpawnAttachment[] {
+	return assets.map((asset, index) => {
+		const data = asset.base64 ?? "";
+		const mimeType = (data && sniffImageMimeType(data)) || asset.mimeType || "image/png";
+		const name = `pasted-image-${start + index + 1}.${mimeType.split("/")[1] || "png"}`;
+		const bytes = asset.fileSize ?? Math.floor(data.length * 0.75);
+		return {
+			name,
+			mimeType,
+			bytes,
+			...(data ? { previewUri: `data:${mimeType};base64,${data}` } : {}),
+			readData: async () => {
+				if (!data) throw new Error(bytes > 0 ? `${name} must be under 10 MB.` : `Could not read ${name}.`);
+				return data;
+			},
+		};
+	});
 }
 
 /** Images the sheet can draw: a thumbnail in the row, full screen on tap. */

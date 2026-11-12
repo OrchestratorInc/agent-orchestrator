@@ -66,6 +66,7 @@ export function SpawnComposerControls({
 	onSelectEffort,
 	onChoosePhoto,
 	onChooseFile,
+	onPasteImages,
 	voice,
 	prompt,
 	onChangePrompt,
@@ -161,6 +162,7 @@ export function SpawnComposerControls({
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}
 					onChooseFile={onChooseFile}
+					onPasteImages={onPasteImages}
 					voice={voice}
 					onSpawn={onSpawn}
 					busy={busy}
