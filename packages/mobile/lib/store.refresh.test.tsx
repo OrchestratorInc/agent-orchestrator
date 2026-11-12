@@ -39,6 +39,7 @@ import { UnreachableError } from "./connectionError";
 import { IncompatibleHostVersionError } from "./race";
 import { AppProvider, FrozenAppScope, HostScope, useApp } from "./store";
 import { EMPTY_LINK_TRACKER, recordPoll } from "./linkHealth";
+import { noteRequestAnswered, resetAnsweredRequestsForTests } from "./answeredRequests";
 let current!: ReturnType<typeof useApp>;
 let renderer: ReactTestRenderer | undefined;
 function Harness() { current = useApp(); return null; }
@@ -57,7 +58,7 @@ function deferred() {
 async function mount() { await act(async () => { renderer = create(<AppProvider><Harness /></AppProvider>); }); }
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.endpoints = []; state.paired = []; state.others = {};
+	vi.useFakeTimers(); vi.clearAllMocks(); resetAnsweredRequestsForTests(); state.selected = "a"; state.endpoints = []; state.paired = []; state.others = {};
 	state.resolve.mockImplementation(async () => ({ hostId: state.selected, host: `${state.selected}.test`, httpPort: "3011", muxPort: "3011", password: "secret" }));
 	state.sessions.mockResolvedValue(board("Fresh"));
 	state.notifications.mockResolvedValue({ notifications: [], unreadCount: 0 });
@@ -182,6 +183,45 @@ it("blames the phone's network, then races and polls as soon as it returns", asy
 	expect(current.connection).toBe("open");
 	expect(current.linkHealth).toBe("ok");
 	expect(current.sessions[0].displayName).toBe("Back");
+});
+
+// #8282: on a Wi-Fi network Android never validated, the OS reports no network
+// while every request is answered. Those answers win over the OS.
+it("does not call the phone offline while its requests are answered", async () => {
+	// api.ts records answers in the real app; it is mocked here.
+	state.sessions.mockImplementation(async () => { noteRequestAnswered(Date.now()); return board("Live"); });
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	// Nothing sent since the report has answered yet: the OS may be right.
+	expect(current.linkHealth).toBe("phone-offline");
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.phoneOffline).toBe(false);
+	expect(current.phoneNetwork).toEqual({ connected: undefined, internet: undefined });
+	expect(current.linkHealth).toBe("ok");
+	// Android repeats the same report; a repeat is not a change.
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	expect(current.linkHealth).toBe("ok");
+
+	// Then the phone really drops off the network: the report changes and
+	// nothing answers after it.
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	expect(current.phoneOffline).toBe(true);
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	expect(current.linkHealth).toBe("phone-offline");
+	expect(current.unreachable).toBe(false);
+});
+
+it("blames the machine, not the phone, when Cloud still answers on that network", async () => {
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	// Cloud's account sync answers while the machine has stopped.
+	await act(async () => { await vi.advanceTimersByTimeAsync(1_000); noteRequestAnswered(Date.now()); });
+	expect(current.phoneOffline).toBe(false);
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	expect(current.linkHealth).toBe("unreachable");
+	expect(current.unreachable).toBe(true);
 });
 
 // A board request still hanging on the link the phone just left must not hold

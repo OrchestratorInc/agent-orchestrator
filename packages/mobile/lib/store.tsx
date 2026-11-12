@@ -51,12 +51,14 @@ import {
 	networkChangeNeedsRace,
 	recordPoll,
 	SLOW_POLL_MS,
+	trustedPhoneNetwork,
 	UNKNOWN_PHONE_NETWORK,
 	type LinkHealth,
 	type PhoneNetwork,
 	type PollOutcome,
 } from "./linkHealth";
 import { IncompatibleHostVersionError } from "./race";
+import { lastAnsweredRequestAt, onRequestAnswered } from "./answeredRequests";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
 import { rememberLastProject } from "./lastProject";
@@ -433,13 +435,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Refs because the poll and the network listener run outside render; the
 	// classified result is the only part screens see.
 	const linkTrackerRef = useRef(EMPTY_LINK_TRACKER);
+	// phoneNetworkRef is the OS's raw report; phoneNetworkReportedAtRef is when
+	// that report last changed. Everything that decides whether the phone is
+	// offline reads trustedNetwork(), which lets an answered request overrule
+	// an OS that wrongly says there is no network (#8282).
 	const phoneNetworkRef = useRef<PhoneNetwork & { type?: string }>(UNKNOWN_PHONE_NETWORK);
+	const phoneNetworkReportedAtRef = useRef(0);
+	const trustedNetwork = useCallback(
+		() => trustedPhoneNetwork(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt()),
+		[],
+	);
 	const [linkHealth, setLinkHealth] = useState<LinkHealth>("ok");
 	const [phoneNetwork, setPhoneNetwork] = useState<PhoneNetwork>(UNKNOWN_PHONE_NETWORK);
 	const phoneOffline = isPhoneOffline(phoneNetwork);
 	const publishLink = useCallback(() => {
-		setLinkHealth(classifyLink(linkTrackerRef.current, phoneNetworkRef.current, Date.now()));
-	}, []);
+		const trusted = trustedNetwork();
+		setPhoneNetwork((current) => current.connected === trusted.connected && current.internet === trusted.internet ? current : trusted);
+		setLinkHealth(classifyLink(linkTrackerRef.current, trusted, Date.now()));
+	}, [trustedNetwork]);
 	const recordLink = useCallback((outcome: PollOutcome) => {
 		linkTrackerRef.current = recordPoll(linkTrackerRef.current, outcome, Date.now());
 		publishLink();
@@ -725,7 +738,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		// Pointless while the phone has no network: the network listener races
 		// the moment it comes back.
 		const timer = setInterval(() => {
-			if (!isPhoneOffline(phoneNetworkRef.current)) void reloadConfig();
+			if (!isPhoneOffline(trustedNetwork())) void reloadConfig();
 		}, 15_000);
 		return () => clearInterval(timer);
 	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);
@@ -742,7 +755,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// Offline, the race can only fail, and a failed race clears the config
 			// and with it the rows "You're offline" promises to keep. Checked before
 			// the resume flag is consumed so a resume still counts once back online.
-			if (isPhoneOffline(phoneNetworkRef.current)) return;
+			if (isPhoneOffline(trustedNetwork())) return;
 			const resumed = resumedRef.current;
 			resumedRef.current = false;
 			let known: Endpoint[] = [];
@@ -993,7 +1006,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				failStreak.current += 1;
 				const now = Date.now();
 				if (
-					!isPhoneOffline(phoneNetworkRef.current) &&
+					!isPhoneOffline(trustedNetwork()) &&
 					shouldReRace({
 						consecutiveFailures: failStreak.current,
 						lastReRaceAt: lastReRaceAt.current,
@@ -1036,8 +1049,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const next = { connected: state.isConnected, internet: state.isInternetReachable, type: state.type };
 			const previous = phoneNetworkRef.current;
 			phoneNetworkRef.current = next;
-			setPhoneNetwork((current) => current.connected === next.connected && current.internet === next.internet
-				? current : { connected: next.connected, internet: next.internet });
+			// Only a change resets the clock: Android repeats an unchanged report,
+			// and each repeat would otherwise discard the answers that overrule it.
+			if (previous.connected !== next.connected || previous.internet !== next.internet || previous.type !== next.type) {
+				phoneNetworkReportedAtRef.current = Date.now();
+			}
 			publishLink();
 			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) return;
 			// reloadConfig keeps the same config object when the winning endpoint
@@ -1048,9 +1064,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		};
 		void getNetworkStateAsync().then(apply).catch(() => {});
 		const sub = addNetworkStateListener(apply);
+		// An answer from any machine or from Cloud can overrule the OS. Cheap on
+		// the poll's pace: publishLink only re-renders when the result changes.
+		const unsubscribeAnswered = onRequestAnswered(publishLink);
 		return () => {
 			live = false;
 			sub.remove();
+			unsubscribeAnswered();
 		};
 	}, [publishLink, reloadConfig, restartLoad]);
 

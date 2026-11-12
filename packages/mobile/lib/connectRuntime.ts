@@ -12,6 +12,7 @@ import { type ConnectDeps, connectHost, type ConnectResult } from "./connect";
 import { deviceTokenConnectDeps } from "./deviceTokenRuntime";
 import type { ServerConfig } from "./config";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
+import { noteRequestAnswered } from "./answeredRequests";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
 import { IncompatibleHostVersionError, type ProbeAnswer, raceEndpoints } from "./race";
@@ -73,10 +74,12 @@ async function probeOnce(endpoint: Endpoint, signal: AbortSignal): Promise<Probe
 	const onOuterAbort = () => controller.abort();
 	signal.addEventListener("abort", onOuterAbort);
 	try {
+		const startedAt = Date.now();
 		const res = await fetch(`${endpointBaseUrl(endpoint)}/api/v1/identity`, {
 			method: "GET",
 			signal: controller.signal,
 		});
+		noteRequestAnswered(startedAt);
 		if (!res.ok) throw new Error(`identity probe returned ${res.status}`);
 		const hostId = identityHost((await res.json()) as { hostId?: unknown; apiVersion?: unknown });
 		if (!hostId) {
