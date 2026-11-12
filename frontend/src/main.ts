@@ -246,6 +246,8 @@ import type {
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
+import { createDaemonOutputLog } from "./main/daemon-output-log";
+import { createJsonlDiagnostics, LIFECYCLE_DIAGNOSTICS_FILE } from "./main/update-diagnostics";
 import { readProcessStartMs } from "./main/process-start";
 import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
@@ -1394,6 +1396,30 @@ function runFilePath(): string | null {
 	return defaultRunFilePath(process.platform, process.env, os.homedir());
 }
 
+// Local, bounded records of why the app or its daemon stopped, under
+// <state>/logs next to updater.jsonl. Electron main and the daemon can die with
+// no crash dump (a SIGKILL, a Go fatal error), so these are the only trace.
+let lifecycleRecorder: ReturnType<typeof createJsonlDiagnostics> | null | undefined;
+let daemonOutputLog: ReturnType<typeof createDaemonOutputLog> | null | undefined;
+function lifecycleStateDir(): string | null {
+	const runFile = runFilePath();
+	return runFile ? path.dirname(runFile) : null;
+}
+function recordLifecycle(event: string, fields: Record<string, string | number | boolean | null | undefined> = {}, error?: unknown): void {
+	if (lifecycleRecorder === undefined) {
+		const stateDir = lifecycleStateDir();
+		lifecycleRecorder = stateDir ? createJsonlDiagnostics(stateDir, app.getVersion(), LIFECYCLE_DIAGNOSTICS_FILE) : null;
+	}
+	lifecycleRecorder?.(event, fields, error);
+}
+function daemonLog(): ReturnType<typeof createDaemonOutputLog> | null {
+	if (daemonOutputLog === undefined) {
+		const stateDir = lifecycleStateDir();
+		daemonOutputLog = stateDir ? createDaemonOutputLog(stateDir) : null;
+	}
+	return daemonOutputLog;
+}
+
 function editorStateDir(): string {
 	const runFile = runFilePath();
 	if (!runFile) throw new Error("Orchestrator state directory is not available.");
@@ -1739,6 +1765,10 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 		// can still authenticate a kept-alive daemon it adopts.
 		AO_BROWSER_RUNTIME_TOKEN: "",
 		AO_BROWSER_RUNTIME_TOKEN_STDIN: "1",
+		// A Go fatal error (e.g. concurrent map writes) cannot be recovered or
+		// reported; its stack on stderr is the only record of why the daemon
+		// died. Print every goroutine so the persisted daemon.log explains it.
+		...(process.env.GOTRACEBACK ? {} : { GOTRACEBACK: "all" }),
 		// Under AppImage, APPIMAGE is the stable outer .AppImage file path (the
 		// FUSE mount in executablePath is random per launch). The daemon echoes
 		// it as appImagePath in /healthz|/readyz so the identity check can
@@ -2538,6 +2568,8 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 	if (keep) child.unref();
 	daemonProcess = child;
 	daemonAutoRestartStandDown = false;
+	recordLifecycle("daemon-spawned", { daemonPid: child.pid ?? null, keepAlive: keep, autoRestart: autoRestartIntent !== undefined });
+	if (!keep) daemonLog()?.mark(`daemon spawned pid=${child.pid ?? "unknown"}${autoRestartIntent ? " (auto-restart)" : ""}`);
 
 	// Discover the port the daemon ACTUALLY bound rather than trusting AO_PORT:
 	// the daemon may fall back to a different port than the one requested. Two
@@ -2601,6 +2633,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		child.stdout?.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			appendDaemonOutput(text);
+			daemonLog()?.output(text);
 			console.log(text.trimEnd());
 			scanStdout(text);
 		});
@@ -2608,6 +2641,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		child.stderr?.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
 			appendDaemonOutput(text);
+			daemonLog()?.output(text);
 			console.error(text.trimEnd());
 			scanStderr(text);
 		});
@@ -2662,6 +2696,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 
 	child.once("exit", (code, signal) => {
 		stopDiscovery();
+		const requested = daemonStoppingProcess === child;
+		recordLifecycle("daemon-exited", { daemonPid: child.pid ?? null, code, signal, requested, current: daemonProcess === child });
+		if (!keep) daemonLog()?.mark(`daemon pid=${child.pid ?? "unknown"} exited code=${code ?? "null"} signal=${signal ?? "null"}${requested ? " (requested)" : ""}`);
 		if (daemonProcess !== child) return;
 		daemonProcess = null;
 		// An explicit stopDaemon() already set a clean `{ state: "stopped" }`.
@@ -2694,15 +2731,17 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent?: DaemonAu
 		const generation = daemonAutoRestartGeneration;
 		void readRunFileState().then((runFile) => {
 			if (generation !== daemonAutoRestartGeneration || browserQuitRequested || daemonProcess) return;
-			if (
-				daemonExitWasUngraceful({
-					runFilePresent: runFile.present,
-					runFilePid: runFile.pid,
-					childPid: exitedPid,
-					code,
-					signal,
-				})
-			) {
+			const ungraceful = daemonExitWasUngraceful({
+				runFilePresent: runFile.present,
+				runFilePid: runFile.pid,
+				childPid: exitedPid,
+				code,
+				signal,
+			});
+			recordLifecycle("daemon-exit-classified", {
+				daemonPid: exitedPid, code, signal, ungraceful, runFilePresent: runFile.present, runFilePid: runFile.pid,
+			});
+			if (ungraceful) {
 				scheduleDaemonAutoRestart(exitedPid, runFile.present, keep);
 			}
 		});
@@ -2756,6 +2795,9 @@ function scheduleDaemonAutoRestart(crashedPid: number | null, runFilePresent: bo
 	const { plan, recentExits } = planDaemonAutoRestart(daemonAutoRestartExits, Date.now());
 	daemonAutoRestartExits = recentExits;
 	daemonAutoRestartTimer = null;
+	recordLifecycle("daemon-auto-restart", plan.action === "give_up"
+		? { crashedPid, action: "give_up", recentExits: recentExits.length }
+		: { crashedPid, action: "restart", attempt: plan.attempt, delayMs: plan.delayMs });
 	if (plan.action === "give_up") return;
 	const intent = { generation: daemonAutoRestartGeneration, crashedPid, runFilePresent, keepAlive };
 	daemonAutoRestartTimer = setTimeout(() => {
@@ -4567,13 +4609,35 @@ app.on("before-quit", (event) => {
 // AO_KEEP_DAEMON opts out entirely: the daemon is deliberately spawned without a
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
 // must be skipped — otherwise it would defeat the whole point on quit.
-process.on("exit", () => {
+process.on("exit", (code) => {
+	recordLifecycle("app-exit", { code, daemonPid: daemonProcess?.pid ?? null, quitRequested: browserQuitRequested, updateRestart: isUpdateRestartRequested() });
 	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env) && !desktopAgentShutdownAccepted) {
 		killDaemon(daemonProcess);
 	}
 });
 
+// What the lifecycle record can and cannot show: a clean quit writes app-exit;
+// a SIGKILL or native crash writes nothing after app-started, and that gap is
+// itself the evidence. The monitor variant observes uncaught exceptions without
+// changing how Electron handles them.
+recordLifecycle("app-started", {
+	appPid: process.pid, appImage: Boolean(process.env.APPIMAGE), keepDaemon: keepDaemonAlive(process.env),
+});
+process.on("uncaughtExceptionMonitor", (error, origin) => {
+	recordLifecycle("main-uncaught-exception", { origin }, error);
+});
+app.on("child-process-gone", (_event, details) => {
+	recordLifecycle("child-process-gone", {
+		type: details.type, reason: details.reason, exitCode: details.exitCode,
+		name: details.name ?? null, serviceName: details.serviceName ?? null,
+	});
+});
+app.on("render-process-gone", (_event, _webContents, details) => {
+	recordLifecycle("render-process-gone", { reason: details.reason, exitCode: details.exitCode });
+});
+
 app.on("window-all-closed", () => {
+	recordLifecycle("app-window-all-closed");
 	if (process.platform !== "darwin") {
 		app.quit();
 	}

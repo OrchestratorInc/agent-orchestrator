@@ -64,7 +64,10 @@ function setup() {
 	const establishSupervisorLink = vi.fn();
 	const daemonEnv = vi.fn((keep: boolean) => ({ AO_OWNER: keep ? "persistent" : "app" }));
 	const env: Record<string, string | undefined> = {};
+	const recordLifecycle = vi.fn();
+	const daemonOutputLog = { output: vi.fn(), mark: vi.fn() };
 	const context = vm.createContext({
+		recordLifecycle, daemonLog: () => daemonOutputLog,
 		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path,
 		openSync: vi.fn(() => 73), closeSync: vi.fn(),
 		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
@@ -91,6 +94,7 @@ function setup() {
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {
+		recordLifecycle, daemonOutputLog,
 		read, unlink, spawn, children, replace, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
 		setMarker(value: string | Error) { marker = value; },
 		start: () => ipc.get("daemon:start")!(), stop: () => ipc.get("daemon:stop")!(), restart: () => ipc.get("daemon:restart")!(),
@@ -112,6 +116,20 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		h.crash();
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(h.spawn).toHaveBeenCalledTimes(2);
+	});
+
+	it("records why the daemon exited and why it was respawned", async () => {
+		const h = setup();
+		await h.start();
+		h.children[0].stderr.emit("data", Buffer.from("fatal error: concurrent map writes\n"));
+		h.crash(2, null);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.daemonOutputLog.output).toHaveBeenCalledWith("fatal error: concurrent map writes\n");
+		expect(h.daemonOutputLog.mark).toHaveBeenCalledWith(expect.stringMatching(/^daemon pid=42 exited code=2 signal=null$/));
+		expect(h.recordLifecycle).toHaveBeenCalledWith("daemon-exited", expect.objectContaining({ daemonPid: 42, code: 2, signal: null, requested: false }));
+		expect(h.recordLifecycle).toHaveBeenCalledWith("daemon-exit-classified", expect.objectContaining({ daemonPid: 42, ungraceful: true }));
+		expect(h.recordLifecycle).toHaveBeenCalledWith("daemon-auto-restart", expect.objectContaining({ crashedPid: 42, action: "restart", attempt: 1 }));
+		expect(h.recordLifecycle).toHaveBeenCalledWith("daemon-spawned", expect.objectContaining({ daemonPid: 43, autoRestart: true }));
 	});
 
 	it.each(["stop", "restart", "quit"] as const)("invalidates an exit-classification read on %s", async (action) => {

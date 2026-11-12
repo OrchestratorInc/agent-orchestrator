@@ -2,6 +2,8 @@ import { closeSync, constants, fchmodSync, fstatSync, mkdirSync, openSync, renam
 import path from "node:path";
 
 export const UPDATE_DIAGNOSTICS_FILE = "updater.jsonl";
+/** App and daemon lifecycle: launches, exits, crashes and daemon respawns. */
+export const LIFECYCLE_DIAGNOSTICS_FILE = "lifecycle.jsonl";
 export const UPDATE_DIAGNOSTICS_MAX_BYTES = 1024 * 1024;
 type Fields = Record<string, string | number | boolean | null | undefined>;
 
@@ -31,8 +33,13 @@ function errorDetail(error: unknown, depth = 0): unknown {
 // immediately quits. All I/O fails open: diagnostics must never affect updates.
 // Retain one previous file across both rotation and process launches.
 export function createUpdateDiagnostics(stateDir: string, runningVersion: string) {
+  return createJsonlDiagnostics(stateDir, runningVersion, UPDATE_DIAGNOSTICS_FILE);
+}
+
+// The same bounded, synchronous JSONL record under <stateDir>/logs/<fileName>.
+export function createJsonlDiagnostics(stateDir: string, runningVersion: string, fileName: string) {
   const directory = path.join(stateDir, "logs");
-  const file = path.join(directory, UPDATE_DIAGNOSTICS_FILE);
+  const file = path.join(directory, fileName);
   return (event: string, fields: Fields = {}, error?: unknown): void => {
     let fd: number | undefined;
     try {
