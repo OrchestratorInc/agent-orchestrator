@@ -1,7 +1,7 @@
 import { Fragment, useId, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
-import { ArrowUpRightIcon, CheckStateIcon, ChevronIcon } from "./icons";
+import { ArrowUpRightIcon, CheckStateIcon, ChevronIcon, GitBranchIcon } from "./icons";
 import { UserAvatar } from "./UserAvatar";
 import { scmUserAvatarUrl } from "./scm-avatar";
 import type {
@@ -50,6 +50,9 @@ export function PRSummaryMeta({
 	openedViaLabel?: string;
 	pr: PRSummaryMetadata;
 }) {
+	if (inline) {
+		return <PRCompactMeta className={className} countNounLabel={countNounLabel} externalLink={ExternalLink} leading={leading} openedViaLabel={openedViaLabel} pr={pr} />;
+	}
 	const branchRange = prBranchRange(pr);
 	const hasDiff = hasDiffMetadata(pr);
 	const authorHandle = pr.author?.replace(/^@/, "") ?? "";
@@ -120,18 +123,116 @@ export function PRSummaryMeta({
 					))}
 				</div>
 			) : null}
-			{inline ? (author || hasDiff ? (
-				<div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-muted-foreground">
-					{author ? <span className="min-w-0 break-words [overflow-wrap:anywhere]">{author}</span> : null}
-					{author && hasDiff ? <span className="shrink-0 text-passive">·</span> : null}
-					{hasDiff ? <PRDiffMeta countNounLabel={countNounLabel} pr={pr} /> : null}
-				</div>
-			) : null) : (
-				<>
-					{author ? <div className="mt-0.5 min-w-0 break-words [overflow-wrap:anywhere] text-muted-foreground">{author}</div> : null}
-					{hasDiff ? <PRDiffMeta countNounLabel={countNounLabel} pr={pr} /> : null}
-				</>
-			)}
+			{author ? <div className="mt-0.5 min-w-0 break-words [overflow-wrap:anywhere] text-muted-foreground">{author}</div> : null}
+			{hasDiff ? <PRDiffMeta countNounLabel={countNounLabel} pr={pr} /> : null}
+		</div>
+	);
+}
+
+/** A long head branch keeps its first and last segments: `ao/…/document-taskr-edit`. */
+export function compactBranchName(name: string, maxLength = 26): string {
+	if (name.length <= maxLength) return name;
+	const segments = name.split("/");
+	if (segments.length < 3) return name;
+	return `${segments[0]}/…/${segments[segments.length - 1]}`;
+}
+
+const formatCount = (value: number) => value.toLocaleString("en-US");
+
+/**
+ * The PR view card's one metadata line: the head and base branches on the
+ * left; the changed files, the diff and the author's avatar on the right.
+ * The author's name is the avatar's tooltip and accessible name, since it is
+ * almost always the person looking at the card. The head shrinks first: a
+ * long name keeps its first and last segments, then truncates.
+ */
+function PRCompactMeta({
+	className,
+	countNounLabel,
+	externalLink: ExternalLink,
+	leading,
+	openedViaLabel,
+	pr,
+}: {
+	className?: string;
+	countNounLabel: CountNounLabel;
+	externalLink: ExternalLinkComponent;
+	leading?: string;
+	openedViaLabel: string;
+	pr: PRSummaryMetadata;
+}) {
+	const head = pr.sourceBranch?.trim() ?? "";
+	const base = pr.targetBranch?.trim() ?? "";
+	// AO's GitHub App opened this PR, so GitHub lists its bot as the author; name the person instead.
+	const openerLogin = pr.openedBy?.githubLogin?.replace(/^@/, "").trim() ?? "";
+	const openerName = openerLogin || pr.openedBy?.name.trim() || "";
+	const authorLogin = pr.author?.replace(/^@/, "").trim() ?? "";
+	const person = openerName || authorLogin;
+	const login = openerName ? openerLogin : authorLogin;
+	const personLabel = openerName ? `${person} ${openedViaLabel}` : person;
+	const avatarUrl = openerName
+		? pr.openedBy?.avatarUrl || (openerLogin ? scmUserAvatarUrl("github", "https://github.com", openerLogin) : undefined)
+		: pr.authorAvatarUrl || (authorLogin ? scmUserAvatarUrl("github", "https://github.com", authorLogin) : undefined);
+	const hasDiff = hasDiffMetadata(pr);
+	if (!head && !base && !hasDiff && !person && !leading) return null;
+	const avatar = person ? <UserAvatar className="size-4" imageUrl={avatarUrl} name={person} /> : null;
+	const changed = [pr.additions > 0 ? `${formatCount(pr.additions)} added` : "", pr.deletions > 0 ? `${formatCount(pr.deletions)} removed` : ""].filter(Boolean).join(", ");
+	return (
+		<div className={cn("flex min-w-0 items-center gap-2 text-xs leading-4 text-muted-foreground", className)} data-testid="pr-meta">
+			<span className="flex min-w-0 flex-1 items-center gap-1.5">
+				{head || base ? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" /> : null}
+				{leading ? (
+					<>
+						<span className="shrink-0">{leading}</span>
+						<span aria-hidden="true" className="shrink-0 text-passive">·</span>
+					</>
+				) : null}
+				{head ? (
+					<span className="min-w-0 truncate font-mono text-foreground" title={head}>
+						<span aria-hidden="true">{compactBranchName(head)}</span>
+						<span className="sr-only">{head}</span>
+					</span>
+				) : null}
+				{head && base ? (
+					<>
+						<span aria-hidden="true" className="shrink-0">→</span>
+						<span className="sr-only"> into </span>
+					</>
+				) : null}
+				{base ? (
+					<span className={cn("min-w-0 max-w-[45%] shrink-0 truncate font-mono", !head && "text-foreground")} title={base}>
+						{base}
+					</span>
+				) : null}
+			</span>
+			{hasDiff || avatar ? (
+				<span className="flex shrink-0 items-center gap-2 tabular-nums">
+					{pr.changedFiles > 0 ? <span>{countNounLabel(pr.changedFiles, "file")}</span> : null}
+					{changed ? (
+						<span className="inline-flex items-center gap-1">
+							{pr.additions > 0 ? <span aria-hidden="true" className="text-success">+{formatCount(pr.additions)}</span> : null}
+							{pr.deletions > 0 ? <span aria-hidden="true" className="text-error">−{formatCount(pr.deletions)}</span> : null}
+							<span className="sr-only">{changed}</span>
+						</span>
+					) : null}
+					{avatar ? (
+						login && pr.provider === "github" ? (
+							<ExternalLink
+								ariaLabel={personLabel}
+								className="inline-flex shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+								href={`https://github.com/${encodeURIComponent(login)}`}
+								title={personLabel}
+							>
+								{avatar}
+							</ExternalLink>
+						) : (
+							<span aria-label={personLabel} className="inline-flex shrink-0" role="img" title={personLabel}>
+								{avatar}
+							</span>
+						)
+					) : null}
+				</span>
+			) : null}
 		</div>
 	);
 }

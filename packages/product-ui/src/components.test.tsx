@@ -120,6 +120,51 @@ describe("portable leaf components", () => {
 		expect(screen.getByText("feature → main")).toHaveClass("break-words");
 	});
 
+	it("puts the PR view card's branches, size and author on one line", () => {
+		const { rerender } = render(
+			<PRSummaryMeta
+				countNounLabel={(count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`}
+				externalLink={ExternalLink}
+				inline
+				pr={{ provider: "github", author: "Meraj-08", sourceBranch: "edit/cli", targetBranch: "edit/base", changedFiles: 3, additions: 89, deletions: 1 }}
+			/>,
+		);
+		const line = screen.getByTestId("pr-meta");
+		// Head, then base; files, the diff with a real minus sign, then the avatar.
+		expect(line).toHaveTextContent(/^edit\/cli.*→.*edit\/base.*3 files\+89−1/);
+		expect(line).not.toHaveClass("font-mono");
+		// The author's name is the avatar's accessible name, not text on the line.
+		expect(screen.getByRole("link", { name: "Meraj-08" })).toHaveAttribute("href", "https://github.com/Meraj-08");
+		expect(line).not.toHaveTextContent("Meraj-08");
+		expect(screen.getByText("89 added, 1 removed")).toHaveClass("sr-only");
+
+		// A long head keeps its first and last segments; screen readers hear it whole.
+		rerender(
+			<PRSummaryMeta
+				countNounLabel={(count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`}
+				externalLink={ExternalLink}
+				inline
+				openedViaLabel="via Orchestrator"
+				pr={{
+					provider: "github",
+					author: "ao-by-untrivial[bot]",
+					openedBy: { name: "Ada Lovelace", githubLogin: "ada" },
+					sourceBranch: "ao/taskr-edit-docs/document-taskr-edit",
+					targetBranch: "edit/cli",
+					changedFiles: 165,
+					additions: 21018,
+					deletions: 664,
+				}}
+			/>,
+		);
+		expect(screen.getByText("ao/…/document-taskr-edit")).toHaveAttribute("aria-hidden", "true");
+		expect(screen.getByText("ao/taskr-edit-docs/document-taskr-edit")).toHaveClass("sr-only");
+		expect(screen.getByText("+21,018")).toBeInTheDocument();
+		expect(screen.getByText("−664")).toBeInTheDocument();
+		// A PR AO's app opened names the person, and says so.
+		expect(screen.getByRole("link", { name: "ada via Orchestrator" })).toHaveAttribute("href", "https://github.com/ada");
+	});
+
 	it("renders precomputed PR presentation without controller dependencies", () => {
 		const presentation: PRCardPresentation = {
 			primary: {
