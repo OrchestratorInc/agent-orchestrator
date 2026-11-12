@@ -61,7 +61,7 @@ describe("SubagentPanel", () => {
 		]);
 	});
 
-	it("lists the newest ten of a section and folds the rest behind Show more", async () => {
+	it("lists the newest ten of a section and folds the rest behind a counted control", async () => {
 		const user = userEvent.setup();
 		const many: SubagentRef[] = Array.from({ length: 12 }, (_, index) => ({
 			launch: launch(`m${index}`, `Audit: page ${index}`),
@@ -72,16 +72,22 @@ describe("SubagentPanel", () => {
 
 		const finishedGroup = screen.getByRole("group", { name: "Finished" });
 		expect(within(finishedGroup).getByRole("button", { name: "Finished · 12" })).toBeInTheDocument();
-		// Newest first: the two oldest wait behind Show more.
+		// Newest first: the two oldest wait behind the fold.
 		expect(within(finishedGroup).getByRole("button", { name: /Audit: page 11/ })).toBeInTheDocument();
 		expect(within(finishedGroup).queryByRole("button", { name: /Audit: page 1(?!\d)/ })).not.toBeInTheDocument();
 		expect(within(finishedGroup).queryByRole("button", { name: /Audit: page 0/ })).not.toBeInTheDocument();
 
-		const more = within(finishedGroup).getByRole("button", { name: "Show more" });
+		// The last two shown rows fade toward the control, which says how many wait.
+		const items = within(finishedGroup).getAllByRole("listitem");
+		expect(items[8]).toHaveClass("opacity-60");
+		expect(items[9]).toHaveClass("opacity-25");
+		const more = within(finishedGroup).getByRole("button", { name: "Show 2 more agents" });
 		expect(more).toHaveAttribute("aria-expanded", "false");
 		await user.click(more);
 		expect(within(finishedGroup).getByRole("button", { name: /Audit: page 0/ })).toBeInTheDocument();
-		expect(within(finishedGroup).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+		expect(within(finishedGroup).getByRole("button", { name: "Show fewer agents" })).toHaveAttribute("aria-expanded", "true");
+		// Open, nothing fades.
+		for (const item of within(finishedGroup).getAllByRole("listitem")) expect(item).not.toHaveClass("opacity-25", "opacity-60");
 	});
 
 	it("opens a child from the list", async () => {

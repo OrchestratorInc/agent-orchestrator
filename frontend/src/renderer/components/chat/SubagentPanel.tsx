@@ -9,8 +9,9 @@
 
 import { useMemo, useState } from "react";
 import { InspectorSection } from "@aoagents/product-ui";
-import { ArrowLeft, ArrowUp, ChevronRight, Plus } from "@/components/app-icons";
+import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Plus } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
+import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -142,24 +143,31 @@ function SubagentGroup({
 	const { t } = useTranslation();
 	const [expanded, setExpanded] = useState(false);
 	if (agents.length === 0) return null;
+	const folding = agents.length > ROWS_COLLAPSED;
 	const rows = expanded ? agents : agents.slice(0, ROWS_COLLAPSED);
+	// Folded, the last two rows fade toward the control, so the list visibly runs on.
+	const fade = (index: number) =>
+		folding && !expanded ? (index === rows.length - 1 ? "opacity-25" : index === rows.length - 2 ? "opacity-60" : undefined) : undefined;
 	return (
 		<div role="group" aria-label={label}>
 			<InspectorSection surface={false} title={`${label} · ${agents.length}`}>
 				<ul className="flex min-w-0 flex-col">
-					{rows.map((agent) => (
-						<li key={agent.launch.id}>
+					{rows.map((agent, index) => (
+						<li key={agent.launch.id} className={fade(index)}>
 							<SubagentListRow agent={agent} harness={harness} now={now} onClick={() => onOpen(agent.launch.id)} />
 						</li>
 					))}
-					{agents.length > ROWS_COLLAPSED ? (
+					{folding ? (
 						<li>
 							<Pressable
 								aria-expanded={expanded}
-								className="flex min-h-8 w-full min-w-0 items-center rounded-md px-1 text-sm text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover"
+								className="flex min-h-8 w-full min-w-0 items-center justify-center gap-1.5 rounded-md px-1 text-sm text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:bg-interactive-hover"
 								onClick={() => setExpanded((current) => !current)}
 							>
-								{t(expanded ? "inspector.showLess" : "inspector.showMore")}
+								<ChevronDown aria-hidden="true" className={cn("size-3.5 shrink-0", expanded && "rotate-180")} />
+								{expanded
+									? t("shell.showLessAgents")
+									: t("shell.showMoreAgents", { count: agents.length - ROWS_COLLAPSED })}
 							</Pressable>
 						</li>
 					) : null}
