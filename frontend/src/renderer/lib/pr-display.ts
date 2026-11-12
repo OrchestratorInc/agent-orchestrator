@@ -4,6 +4,8 @@ import { appI18n, type PluralMessageKey } from "../i18n";
 import type {
 	PRCardPresentation,
 	PRCardStatus,
+	PRCheckState,
+	PRChecksTally,
 	PRDisplayTone,
 	PRNoun,
 	PRStatusRow,
@@ -345,20 +347,55 @@ function mergeReadinessRows(pr: SessionPRSummary, options: { noChecks?: boolean 
 			? cardStatus("merge", "pr.card.mergeConflict", "error", undefined, mergeLinks(pr))
 			: cardStatus("merge", conflictsKnown ? "pr.merge.noConflicts" : "pr.merge.conflictsUnknown", conflictsKnown ? "success" : "passive"),
 	];
-	const checksUrl = prChecksUrl(pr);
+	// The row opens to the checks, each with its own link, so it carries no
+	// link of its own; it says the counts at each state in place of its label.
+	const checks = prChecksTally(pr);
+	const withChecks = (status: PRCardStatus): PRCardStatus => (checks ? { ...status, checks } : status);
 	if (mergeReasons(pr).includes("github_checks_unavailable")) {
-		rows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning", undefined, [], checksUrl));
+		rows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning"));
 	} else if (pr.ci.state === "passing") {
-		rows.push(cardStatus("ci", "pr.card.checksPassing", "success", undefined, [], checksUrl));
+		rows.push(withChecks(cardStatus("ci", "pr.card.checksPassing", "success")));
 	} else if (pr.ci.state === "failing") {
-		rows.push(cardStatus("ci", "pr.card.checksFailing", "error", undefined, [], checksUrl));
+		rows.push(withChecks(cardStatus("ci", "pr.card.checksFailing", "error")));
 	} else if (pr.ci.state === "pending") {
-		rows.push(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], checksUrl, true));
+		rows.push(withChecks(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], undefined, true)));
 	} else {
-		rows.push(cardStatus("ci", options.noChecks && pr.ci.state === "unknown" ? "pr.tab.noChecks" : "pr.card.checksUnknown", "passive", undefined, [], checksUrl));
+		rows.push(cardStatus("ci", options.noChecks && pr.ci.state === "unknown" ? "pr.tab.noChecks" : "pr.card.checksUnknown", "passive"));
 	}
 	rows.push(reviewReadinessRow(pr));
 	return rows;
+}
+
+type PRCheck = SessionPRSummary["ci"]["checks"][number];
+
+/** Where each provider status stands: a cancelled run counts as failed, a queued or unreported one as pending. */
+export const prCheckState: Record<PRCheck["status"], PRCheckState> = {
+	failed: "failed",
+	cancelled: "failed",
+	in_progress: "running",
+	queued: "pending",
+	unknown: "pending",
+	passed: "passed",
+	skipped: "skipped",
+};
+
+/** Check states from worst to best: the order of the checks row's counts and of its groups. */
+export const prCheckStates: PRCheckState[] = ["failed", "running", "pending", "passed", "skipped"];
+
+/**
+ * How many of a PR's checks stand at each state, worst first, with the counts
+ * in words. Undefined until its checks are listed.
+ */
+export function prChecksTally(pr: SessionPRSummary): PRChecksTally | undefined {
+	const checks = pr.ci.checks ?? [];
+	if (checks.length === 0) return undefined;
+	const counts = prCheckStates
+		.map((state) => {
+			const count = checks.filter((check) => prCheckState[check.status] === state).length;
+			return { state, count, label: appI18n.t(`pr.checks.count.${state}`, { count }) };
+		})
+		.filter((entry) => entry.count > 0);
+	return { title: appI18n.t("pr.tab.checks"), counts };
 }
 
 /**

@@ -1,12 +1,14 @@
 import { Fragment, useId, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
-import { ArrowUpRightIcon, ChevronIcon } from "./icons";
+import { ArrowUpRightIcon, CheckStateIcon, ChevronIcon } from "./icons";
 import { UserAvatar } from "./UserAvatar";
 import { scmUserAvatarUrl } from "./scm-avatar";
 import type {
 	PRCardPresentation,
 	PRCardStatus,
+	PRCheckState,
+	PRChecksTally,
 	PRDisplayTone,
 	PRNoun,
 	PRSummaryLink,
@@ -324,21 +326,26 @@ function StatusRow({
 	const [open, setOpen] = useState(false);
 	const regionId = useId();
 	const reduceMotion = useReducedMotion();
+	// The checks row says its counts instead of a verdict; their glyphs carry the state.
+	const tally = status.checks && status.checks.counts.length > 0 ? status.checks : undefined;
 	return (
 		<div className="min-w-0">
-			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", toneClass[status.tone])}>
-				<span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} />
+			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", tally ? "text-foreground" : toneClass[status.tone])}>
+				{tally ? null : <span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} />}
 				{details ? (
 					<>
 						<button
 							aria-controls={open ? regionId : undefined}
 							aria-expanded={open}
-							className="inline-flex min-w-0 items-center gap-1 rounded-sm underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							className={cn(
+								"inline-flex min-w-0 items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+								tally ? "flex-1 gap-3 text-left" : "underline-offset-2 hover:underline",
+							)}
 							onClick={() => setOpen((value) => !value)}
 							type="button"
 						>
-							<span className="min-w-0 truncate">{status.label}</span>
-							<ChevronIcon aria-hidden="true" className="size-icon-2xs shrink-0" direction={open ? "up" : "down"} />
+							{tally ? <ChecksTally tally={tally} /> : <span className="min-w-0 truncate">{status.label}</span>}
+							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", tally && "ml-auto text-muted-foreground")} direction={open ? "up" : "down"} />
 						</button>
 						{status.href ? (
 							<ExternalLink
@@ -350,6 +357,8 @@ function StatusRow({
 							</ExternalLink>
 						) : null}
 					</>
+				) : tally ? (
+					<ChecksTally tally={tally} />
 				) : (
 					<PRCardStatusLink externalLink={ExternalLink} status={status} />
 				)}
@@ -375,6 +384,46 @@ function StatusRow({
 				) : null}
 			</AnimatePresence>
 		</div>
+	);
+}
+
+const checkStateClass: Record<PRCheckState, string> = {
+	failed: "text-error",
+	running: "text-status-working",
+	pending: "text-muted-foreground",
+	passed: "text-success",
+	skipped: "text-passive",
+};
+
+/** A check state's glyph in its colour; a running check's spins unless motion is reduced. */
+export function CheckStateGlyph({ className, state }: { className?: string; state: PRCheckState }) {
+	return (
+		<CheckStateIcon
+			className={cn("size-icon-xs shrink-0", checkStateClass[state], state === "running" && "motion-safe:animate-spin", className)}
+			state={state}
+		/>
+	);
+}
+
+/**
+ * "Checks", then how many checks stand at each state, worst first. The first
+ * count leads in full weight; the rest are quieter.
+ */
+function ChecksTally({ tally }: { tally: PRChecksTally }) {
+	return (
+		<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-checks-tally">
+			<span>{tally.title}</span>
+			{tally.counts.map((count, index) => (
+				<span
+					className={cn("inline-flex items-center gap-1 tabular-nums", index === 0 ? "text-foreground" : "font-normal text-muted-foreground")}
+					data-state={count.state}
+					key={count.state}
+				>
+					<CheckStateGlyph state={count.state} />
+					{count.label}
+				</span>
+			))}
+		</span>
 	);
 }
 

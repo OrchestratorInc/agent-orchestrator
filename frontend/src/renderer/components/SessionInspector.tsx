@@ -72,7 +72,7 @@ import { SessionAccountSummary } from "./SessionAccountSummary";
 import { PRActionButton } from "./PRActions";
 import { PRDescriptionPreview } from "./PRDescriptionPreview";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
-import { PRChecksList, PRLabelsAndReviewers, prChecksNeedingLook } from "./PRCardDetails";
+import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -1152,7 +1152,7 @@ function PRViewSummaryCard({
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 			details={<PRLabelsAndReviewers pr={pr} />}
-			readinessDetails={prChecksNeedingLook(pr).length > 0 ? { ci: <PRChecksList pr={pr} /> } : undefined}
+			readinessDetails={(pr.ci.checks ?? []).length > 0 ? { ci: <PRChecksGroups pr={pr} /> } : undefined}
 		/>
 	);
 	if (layout === "card") return cardView;

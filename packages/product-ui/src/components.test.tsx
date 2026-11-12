@@ -212,6 +212,49 @@ describe("portable leaf components", () => {
 		expect(screen.queryByRole("button", { name: "No conflicts" })).not.toBeInTheDocument();
 	});
 
+	it("says the checks row as counts worst first, each with its own glyph", () => {
+		render(
+			<PRCardStatusSummary
+				compactReadiness
+				externalLink={ExternalLink}
+				presentation={{
+					primary: { key: "ci", label: "Checks failing", tone: "error", links: [] },
+					supporting: [],
+					readinessRows: [
+						{ key: "merge", label: "No conflicts", tone: "success", links: [] },
+						{
+							key: "ci",
+							label: "Checks failing",
+							tone: "error",
+							links: [],
+							checks: {
+								title: "Checks",
+								counts: [
+									{ state: "failed", count: 2, label: "2 failing" },
+									{ state: "running", count: 1, label: "1 running" },
+									{ state: "passed", count: 9, label: "9 passed" },
+								],
+							},
+						},
+					],
+					readinessExplained: true,
+					readiness: { label: "Can't merge yet", detail: "", tone: "error" },
+				}}
+			/>,
+		);
+		const tally = screen.getByTestId("pr-checks-tally");
+		expect(tally).toHaveTextContent("Checks2 failing1 running9 passed");
+		// The counts stand in for the verdict, so it isn't said twice.
+		expect(screen.queryByText("Checks failing")).not.toBeInTheDocument();
+		expect([...tally.querySelectorAll("[data-state]")].map((count) => count.getAttribute("data-state"))).toEqual(["failed", "running", "passed"]);
+		// Each count has a shape, not only a colour; only the running one spins.
+		expect(tally.querySelector('[data-state="failed"] svg')).toHaveClass("icon-check-failed");
+		expect(tally.querySelector('[data-state="running"] svg')).toHaveClass("motion-safe:animate-spin");
+		expect(tally.querySelector('[data-state="passed"] svg')).not.toHaveClass("motion-safe:animate-spin");
+		// A row without a link of its own has no arrow beside it.
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+	});
+
 	it("still lists the failed checks when a conflict leads", async () => {
 		render(
 			<PRCardStatusSummary

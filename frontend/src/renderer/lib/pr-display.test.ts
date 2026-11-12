@@ -6,6 +6,7 @@ import {
 	prBrowserUrl,
 	prCanMerge,
 	prCardPresentation,
+	prChecksTally,
 	prCheckedOut,
 	prDiffSummary,
 	prHasNoChecks,
@@ -529,7 +530,32 @@ describe("merge readiness rows", () => {
 			review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
 		});
 		expect(labels(pr)).toEqual(["Conflicts unknown", "Checks unknown", "Review required"]);
-		expect(prCardPresentation(pr).readinessRows?.[1]).toMatchObject({ href: "https://github.com/acme/repo/pull/7/checks" });
+		// The row opens to the checks, each with its own link, so it has none of its own.
+		expect(prCardPresentation(pr).readinessRows?.[1]?.href).toBeUndefined();
+	});
+
+	it("counts the checks at each state, worst first, for the checks row", () => {
+		const check = (name: string, status: "passed" | "failed" | "skipped" | "cancelled" | "queued" | "in_progress" | "unknown") => ({ name, status });
+		const running = summary({
+			ci: { autoInjectCI: true, state: "pending", failingChecks: [], checks: [check("test", "passed"), check("lint", "skipped"), check("build", "in_progress"), check("e2e", "queued")] },
+		});
+		expect(prChecksTally(running)).toEqual({
+			title: "Checks",
+			counts: [
+				{ state: "running", count: 1, label: "1 running" },
+				{ state: "pending", count: 1, label: "1 pending" },
+				{ state: "passed", count: 1, label: "1 passed" },
+				{ state: "skipped", count: 1, label: "1 skipped" },
+			],
+		});
+		const row = prCardPresentation(running, {}).readinessRows?.find((status) => status.key === "ci");
+		expect(row?.checks?.counts.map((count) => count.label)).toEqual(["1 running", "1 pending", "1 passed", "1 skipped"]);
+		// A cancelled run counts as failed, and a check GitHub hasn't reported waits with the queued ones.
+		const failing = summary({
+			ci: { autoInjectCI: true, state: "failing", failingChecks: [], checks: [check("test", "passed"), check("format", "failed"), check("e2e", "cancelled"), check("docs", "unknown")] },
+		});
+		expect(prChecksTally(failing)?.counts.map((count) => [count.state, count.count])).toEqual([["failed", 2], ["pending", 1], ["passed", 1]]);
+		expect(prChecksTally(summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [], checks: [] } }))).toBeUndefined();
 	});
 
 	it("names reviewers by their newest verdict", () => {

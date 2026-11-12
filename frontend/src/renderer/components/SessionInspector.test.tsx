@@ -995,7 +995,7 @@ describe("SessionInspector PR section", () => {
   it("offers Reopen on a closed PR and no merge", async () => {
     servePR(prSummary(7, "closed", { url: "https://example.com/pr/7" }));
 
-    await userEvent.click(await screen.findByRole("button", { name: "Reopen PR" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reopen pull request" }));
     await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/state").map(([, request]) => request.body.action)).toEqual(["reopen"]));
     expect(screen.queryByRole("button", { name: /and merge/ })).not.toBeInTheDocument();
   });
@@ -1383,16 +1383,17 @@ describe("SessionInspector PR section", () => {
     expect(pane.getByRole("textbox", { name: "Leave a comment" })).toHaveValue("Half a thought");
   });
 
+  // GitHub's own words for what can happen next, not a list of states.
   it.each([
-    { state: "open" as const, pick: "Draft", action: "draft", options: ["Draft", "Open", "Closed"] },
-    { state: "draft" as const, pick: "Open", action: "ready", options: ["Draft", "Open", "Closed"] },
-    { state: "closed" as const, pick: "Open", action: "reopen", options: ["Open", "Closed"] },
+    { state: "open" as const, pick: "Convert to draft", action: "draft", options: ["Convert to draft", "Close pull request"] },
+    { state: "draft" as const, pick: "Ready for review", action: "ready", options: ["Ready for review", "Close pull request"] },
+    { state: "closed" as const, pick: "Reopen pull request", action: "reopen", options: ["Reopen pull request"] },
   ])("changes a $state PR's state from the pill: $pick sends $action", async ({ action, options, pick, state }) => {
     postMock.mockResolvedValue({ data: { state: action === "draft" ? "draft" : "open", stateChangedAt: "2026-06-16T00:00:00Z" }, error: undefined });
     servePRTab({ ...conversationPR(), state });
     await userEvent.click(await screen.findByTestId("pr-state"));
-    expect((await screen.findAllByRole("menuitemradio")).map((item) => item.textContent)).toEqual(options);
-    await userEvent.click(screen.getByRole("menuitemradio", { name: pick }));
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(options);
+    await userEvent.click(screen.getByRole("menuitem", { name: pick }));
     await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/state", {
       params: { path: { id: "7" } },
       body: { prUrl: "https://example.com/pr/7", action },
@@ -1403,7 +1404,7 @@ describe("SessionInspector PR section", () => {
     postMock.mockResolvedValue({ data: { state: "closed", stateChangedAt: "2026-06-16T00:00:00Z" }, error: undefined });
     servePRTab(conversationPR());
     await userEvent.click(await screen.findByTestId("pr-state"));
-    await userEvent.click(await screen.findByRole("menuitemradio", { name: "Closed" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Close pull request" }));
     expect(postCallsFor("/api/v1/prs/{id}/state")).toHaveLength(0);
     const dialog = within(await screen.findByRole("dialog"));
     await userEvent.click(dialog.getByRole("button", { name: "Close pull request" }));
@@ -6272,7 +6273,7 @@ describe("SessionInspector branch summary", () => {
     expect(details.getByText("Review requested from lin, core-team")).toBeInTheDocument();
   });
 
-  it("lists only the checks that need a look under merge readiness, three at a time, failures first", async () => {
+  it("counts the checks on their row and opens them grouped by where they stand, failing first", async () => {
     const checked = prSummary(7, "open", {
       ci: {
         autoInjectCI: true,
@@ -6282,7 +6283,7 @@ describe("SessionInspector branch summary", () => {
           { name: "build", status: "passed" },
           { name: "e2e", status: "in_progress" },
           { name: "lint", status: "failed", url: "https://github.com/acme/repo/runs/1" },
-          { name: "typecheck", status: "failed" },
+          { name: "typecheck", status: "cancelled" },
           { name: "deploy", status: "queued" },
           { name: "test-a", status: "passed" },
           { name: "docs", status: "skipped" },
@@ -6292,13 +6293,47 @@ describe("SessionInspector branch summary", () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [checked] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [checked]));
 
-    await userEvent.click(await screen.findByRole("button", { name: /Checks failing/ }));
+    // The row says the counts, worst first; a cancelled run counts as failed.
+    expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks2 failing1 running1 pending2 passed1 skipped");
+    await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
+    const checks = await screen.findByTestId("pr-checks");
+    const groups = [...checks.querySelectorAll("section")].map((group) => [group.getAttribute("data-state"), [...group.querySelectorAll("li")].map((item) => item.textContent)]);
+    expect(groups).toEqual([
+      ["failed", ["lint failed", "typecheck skipped"]],
+      ["running", ["e2e running"]],
+      ["pending", ["deploy running"]],
+      ["passed", ["build passed", "test-a passed"]],
+      // Skipped checks fold behind their heading.
+      ["skipped", []],
+    ]);
+    expect(within(checks).getByRole("link", { name: /lint/ })).toHaveAttribute("href", "https://github.com/acme/repo/runs/1");
+    await userEvent.click(within(checks).getByRole("button", { name: /Skipped/ }));
+    expect(within(checks).getByText("docs")).toBeInTheDocument();
+  });
+
+  it("folds many passes and lists the rest of a long group as one link", async () => {
+    const many = prSummary(7, "open", {
+      ci: {
+        autoInjectCI: true,
+        state: "failing",
+        failingChecks: [],
+        checks: [
+          ...Array.from({ length: 10 }, (_, index) => ({ name: `job-${String(index).padStart(2, "0")}`, status: "failed" as const })),
+          ...Array.from({ length: 4 }, (_, index) => ({ name: `ok-${index}`, status: "passed" as const })),
+        ],
+      },
+    });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [many] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [many]));
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Checks/ }));
     const checks = within(await screen.findByTestId("pr-checks"));
-    const names = checks.getAllByRole("listitem").map((item) => item.textContent);
-    // Passing and skipped checks stay out of it; past three, the rest are one link.
-    expect(names).toEqual(["lint failed", "typecheck failed", "e2e running", "+1 more"]);
-    expect(checks.getByRole("link", { name: /lint/ })).toHaveAttribute("href", "https://github.com/acme/repo/runs/1");
-    expect(checks.getByRole("link", { name: /\+1 more/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7/checks");
+    expect(checks.getAllByRole("listitem").map((item) => item.textContent).at(-1)).toBe("+2 more");
+    expect(checks.getByRole("link", { name: /\+2 more/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7/checks");
+    // Four passes are more than three, so they wait behind their heading.
+    expect(checks.queryByText("ok-0")).not.toBeInTheDocument();
+    await userEvent.click(checks.getByRole("button", { name: /Passed/ }));
+    expect(checks.getByText("ok-0")).toBeInTheDocument();
   });
 
   it("says a PR can't merge through what blocks it, without a verdict on top", async () => {
@@ -6308,13 +6343,13 @@ describe("SessionInspector branch summary", () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [failing] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [failing]));
 
-    expect(await screen.findByText("Checks failing")).toBeInTheDocument();
+    expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 failing");
     expect(screen.queryByText("No conflicts")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pr-checks")).not.toBeInTheDocument();
     expect(screen.queryByText("Not mergeable yet")).not.toBeInTheDocument();
     expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /Checks failing/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     expect(within(await screen.findByTestId("pr-checks")).getByText("format")).toBeInTheDocument();
     expect(screen.getByText("No conflicts")).toBeInTheDocument();
   });
@@ -6329,17 +6364,18 @@ describe("SessionInspector branch summary", () => {
     await waitFor(() => expect(screen.queryByText("Open tab")).not.toBeInTheDocument());
   });
 
-  it("lists no checks once they all pass: the Checks row says enough", async () => {
+  it("lists the passed checks once they all pass, with the skipped folded away", async () => {
     const passing = prSummary(7, "open", {
       ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [{ name: "build", status: "passed" }, { name: "docs", status: "skipped" }] },
     });
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [passing] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [passing]));
 
-    expect(await screen.findByText("Checks passing")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Checks passing" }));
+    expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 passed1 skipped");
+    await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     expect(await screen.findByText("No conflicts")).toBeInTheDocument();
-    expect(screen.queryByTestId("pr-checks")).not.toBeInTheDocument();
+    const checks = within(screen.getByTestId("pr-checks"));
+    expect(checks.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["build passed"]);
   });
 
   // The classic summary, shown while the PR view is off, hides Create PR once

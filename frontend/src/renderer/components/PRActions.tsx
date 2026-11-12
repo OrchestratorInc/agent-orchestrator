@@ -338,9 +338,10 @@ const stateLabel = {
 } as const;
 
 /**
- * The state pill at the top of a PR's tab, and the place to change it: Draft,
- * Open or Closed. Closing asks first, as it does on the card. A merged PR is
- * done, so its pill is only a label; a closed one can only be reopened.
+ * The state pill at the top of a PR's tab, and the place to change it, in
+ * GitHub's words: an open PR can convert to a draft or close, a draft can be
+ * marked ready for review or close, and a closed one can reopen. Closing asks
+ * first, as it does on the card. A merged PR is done, so its pill is only a label.
  */
 export function PRStateMenu({ hostId, pr, sessionId }: { hostId?: string; pr: SessionPRSummary; sessionId: string }) {
 	const { t } = useTranslation();
@@ -352,11 +353,17 @@ export function PRStateMenu({ hostId, pr, sessionId }: { hostId?: string; pr: Se
 	if (pr.state === "merged" || !pr.url) {
 		return <span className={pill} data-testid="pr-state"><Icon aria-hidden="true" className="size-icon-sm" />{label}</span>;
 	}
-	const choose = (next: string) => {
-		if (next === pr.state) return;
-		if (next === "closed") setConfirmClose(true);
-		else if (next === "draft") change.mutate("draft");
-		else change.mutate(pr.state === "closed" ? "reopen" : "ready");
+	const actions: { key: PRStateAction; label: string; icon: LucideIcon; destructive?: boolean }[] = pr.state === "closed"
+		? [{ key: "reopen", label: t("pr.state.action.reopen"), icon: GitPullRequest }]
+		: [
+			pr.state === "draft"
+				? { key: "ready", label: t("pr.state.action.ready"), icon: GitPullRequest }
+				: { key: "draft", label: t("pr.state.action.draft"), icon: GitPullRequestDraft },
+			{ key: "close", label: t("pr.actions.close"), icon: GitPullRequestClosed, destructive: true },
+		];
+	const choose = (action: PRStateAction) => {
+		if (action === "close") setConfirmClose(true);
+		else change.mutate(action);
 	};
 	const error = change.error instanceof Error && !confirmClose ? change.error.message : null;
 	return (
@@ -375,12 +382,13 @@ export function PRStateMenu({ hostId, pr, sessionId }: { hostId?: string; pr: Se
 						<ChevronDown aria-hidden="true" className="size-icon-xs" />
 					</button>
 				</DropdownMenuTrigger>
-				<DropdownMenuContent align="start" className="min-w-40">
-					<DropdownMenuRadioGroup onValueChange={choose} value={pr.state}>
-						{(pr.state === "closed" ? (["open", "closed"] as const) : (["draft", "open", "closed"] as const)).map((value) => (
-							<DropdownMenuRadioItem key={value} value={value}>{t(stateLabel[value])}</DropdownMenuRadioItem>
-						))}
-					</DropdownMenuRadioGroup>
+				<DropdownMenuContent align="start" className="min-w-44">
+					{actions.map(({ key, label: actionLabel, icon: ActionIcon, destructive }) => (
+						<DropdownMenuItem className={destructive ? "text-error focus:text-error" : undefined} key={key} onSelect={() => choose(key)}>
+							<ActionIcon aria-hidden="true" />
+							{actionLabel}
+						</DropdownMenuItem>
+					))}
 				</DropdownMenuContent>
 			</DropdownMenu>
 			{error ? <p className="m-0 basis-full text-xs text-error" role="status">{error}</p> : null}
