@@ -81,6 +81,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellagent"
+	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/terminaltitle"
@@ -892,16 +893,20 @@ func Run(buildVersion string) error {
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
+	var shellTrackers []shelltermsvc.TerminalTracker
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
-		shellTermSvc.SetAgentTracker(ctx, shellAgents)
+		shellTrackers = append(shellTrackers, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
 	}
 	// Titles are followed whether or not any terminal UI is open.
 	if rt, ok := runtimeAdapter.(ports.TerminalTitleWatcher); ok {
-		go terminaltitle.NewManager(rt, store, cfg.AppRunID, log).Run(ctx)
+		titles := terminaltitle.NewManager(ctx, rt, store, log)
+		shellTrackers = append(shellTrackers, titles)
+		go titles.Run(ctx, cdcPipe.Broadcaster)
 	}
+	shellTermSvc.SetTerminalTrackers(ctx, shellTrackers...)
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
 	defer agentAuthSvc.Close()

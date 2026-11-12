@@ -1009,7 +1009,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Split panes are a Developer mode preview; off, no split is shown and
 	// turning it off mid-split puts every tab back in the strip.
 	const splitPanes = useSplitPanesEnabled();
-	const developerMode = useUiStore((state) => state.developerMode);
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -1901,9 +1900,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				};
 			}
 			const shell = shellTerminals.find((candidate) => candidate.handleId === key);
-			// Like a strip tab, a local shell shows the agent running in it (a
-			// Developer Mode preview); the group tab looks the agent up.
-			const tracksAgent = developerMode && shell && !shell.optimistic && !shell.cloud && !shell.hostId;
+			// Like a strip tab, a local shell shows the agent running in it; the
+			// group tab looks the agent up.
+			const tracksAgent = shell && !shell.optimistic && !shell.cloud && !shell.hostId;
 			return {
 				key,
 				onSelect,
@@ -1952,7 +1951,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [
 		centerFileRequestsBySession,
 		closePane,
-		developerMode,
 		groups,
 		hostId,
 		isOrchestrator,
