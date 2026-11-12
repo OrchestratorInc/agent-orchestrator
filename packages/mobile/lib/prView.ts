@@ -197,38 +197,52 @@ export function mergeReasonLabel(reason: string): string {
 	}
 }
 
+const CONVENTIONAL_TITLE = /^(?:feat|fix|chore|docs|refactor|perf|test|build|ci|style|revert)(?:\(([^)]+)\))?!?:\s+(\S.*)$/i;
+
 /**
- * The card's single status line: the worst one or two things true of this PR.
- *
- * A card has one line to say why you should care, so this is a severity ladder,
- * not a dump of every attribute. Merged and closed PRs are terminal and say only
- * that — "merged · CI failing" would be noise about a decided PR.
+ * A list row's title: a conventional-commit prefix ("fix(mobile): …") comes
+ * off, so the title starts with what the pull request does, and its scope is
+ * returned for the line under the title.
  */
-export function prSummaryLine(pr: DashboardPR): { text: string; tone: Tone } {
-	const life = prLifecycle(pr);
-	if (life === "merged") return { text: "Merged", tone: "merged" };
-	if (life === "closed") return { text: "Closed without merging", tone: "passive" };
+export function prRowTitle(title: string): { title: string; scope?: string } {
+	const trimmed = title.trim();
+	const match = CONVENTIONAL_TITLE.exec(trimmed);
+	if (!match) return { title: trimmed };
+	const rest = match[2];
+	return { title: rest.charAt(0).toUpperCase() + rest.slice(1), scope: match[1] };
+}
 
-	const atoms: { text: string; tone: Tone }[] = [];
-	if (pr.ciStatus === "failing") atoms.push({ text: "CI failing", tone: "error" });
-	if (pr.reviewDecision === "changes_requested") atoms.push({ text: "Changes requested", tone: "warning" });
-	else if (pr.unresolvedThreads) atoms.push({ text: "Unresolved comments", tone: "warning" });
+/**
+ * The one status a list row shows, or null when there is nothing to say.
+ *
+ * Only what needs you, or what you can act on, is said. Waiting for review is
+ * every open pull request's normal state, and its section already names it;
+ * printed on every row it read as an alarm on all of them. Merged and closed
+ * rows sit under a heading that says so.
+ */
+export function prRowStatus(pr: DashboardPR, summary?: SessionPRSummary): { text: string; tone: Tone } | null {
+	const life = summary?.state ?? prLifecycle(pr);
+	if (life === "merged" || life === "closed") return null;
 
-	if (atoms.length === 0) {
-		if (life === "draft") return { text: "Draft", tone: "passive" };
-		if (pr.mergeability?.mergeable && pr.reviewDecision === "approved") {
-			return { text: "Ready to merge", tone: "success" };
-		}
-		if (pr.ciStatus === "pending") return { text: "CI running", tone: "neutral" };
-		if (pr.reviewDecision === "approved") return { text: "Approved", tone: "success" };
-		if (pr.reviewDecision === "pending") return { text: "Awaiting review", tone: "neutral" };
-		return { text: "Open", tone: "passive" };
+	const ci = summary?.ci?.state ?? pr.ciStatus;
+	const merge = summary?.mergeability?.state ?? pr.mergeability?.state ?? (pr.mergeability?.noConflicts === false ? "conflicting" : undefined);
+	const review = summary?.review?.decision ?? pr.reviewDecision;
+	const unresolved = summary?.review?.hasUnresolvedHumanComments ?? Boolean(pr.unresolvedThreads);
+
+	if (merge === "conflicting") return { text: "Merge conflicts", tone: "error" };
+	if (ci === "failing") {
+		const names = (summary?.ci?.failingChecks ?? []).map((check) => check.name).filter(Boolean);
+		if (names.length === 1) return { text: `${names[0]} failed`, tone: "error" };
+		return { text: names.length > 1 ? `${names.length} checks failed` : "Checks failed", tone: "error" };
 	}
-
-	// Worst tone wins for the line's colour; at most two atoms so it never wraps.
-	const shown = atoms.slice(0, 2);
-	const tone: Tone = shown.some((a) => a.tone === "error") ? "error" : "warning";
-	return { text: shown.map((a) => a.text).join(" · "), tone };
+	if (review === "changes_requested") return { text: "Changes requested", tone: "warning" };
+	if (unresolved) return { text: "Unresolved comments", tone: "warning" };
+	if (ci === "pending") return { text: "Checks running", tone: "neutral" };
+	if (review === "approved") {
+		const mergeable = merge === "mergeable" || pr.mergeability?.mergeable === true;
+		return mergeable ? { text: "Ready to merge", tone: "success" } : { text: "Approved", tone: "success" };
+	}
+	return null;
 }
 
 /** Just the parts of the rich summary the card reads, kept structural so this module stays pure. */
@@ -330,22 +344,6 @@ export function prReviewPromptHeadline(pr: DashboardPR, summary?: SessionPRSumma
 	if (facts.mergeability.state === "unstable") return { text: "Unstable", tone: "warning" };
 	if (facts.state === "draft") return { text: "Draft", tone: "passive" };
 	return { text: "Ready for review", tone: "neutral" };
-}
-
-/**
- * The names of what is actually failing, for the card's blocker line. Capped —
- * a PR can fail a dozen checks and the card has one line — with the remainder
- * reported as a count rather than truncated silently.
- */
-export function prBlockerLine(rich: RichPR, max = 2): string | null {
-	const names = [
-		...(rich.ci?.failingChecks ?? []).map((c) => c.name).filter(Boolean),
-		...(rich.mergeability?.reasons ?? []).map(mergeReasonLabel),
-	];
-	if (names.length === 0) return null;
-	const shown = names.slice(0, max);
-	const extra = names.length - shown.length;
-	return extra > 0 ? `${shown.join(" · ")} +${extra} more` : shown.join(" · ");
 }
 
 // Lifecycle ordering, matching desktop's comparePRDisplaySummaries. Drafts sit

@@ -133,6 +133,23 @@ describe("PRCard", () => {
 		expect(onLinkCopied).toHaveBeenCalledTimes(1);
 	});
 
+	// The row leads with what the pull request does, and says only what needs
+	// you: waiting for review is not printed on every row.
+	it("shows the title without its commit prefix, the failing check, and nothing for a plain review wait", () => {
+		const summary = {
+			title: "fix(mobile): build the menu only when it opens", state: "open", repo: "ao/app",
+			ci: { state: "failing", failingChecks: [{ name: "android-build" }] },
+			review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+			mergeability: { state: "blocked", reasons: ["review_required"] },
+		} as unknown as SessionPRSummary;
+		render({ summary });
+		const text = renderer!.root.findAllByType("Text" as never).map((node) => node.children.join("")).join("|");
+		expect(text).toContain("Build the menu only when it opens");
+		expect(text).toContain("android-build failed");
+		expect(text).not.toMatch(/review required/i);
+		expect(row().props.accessibilityLabel).toBe("Build the menu only when it opens. Pull request 42. android-build failed.");
+	});
+
 	// iOS's context menu takes the long press natively. On Android the row's own
 	// press handler holds the touch, so the row opens the dropdown itself.
 	it("opens the menu from the row's long press on Android only", () => {
