@@ -28,8 +28,9 @@ export function groupAccounts(accounts: readonly AgentAccount[]): ProviderAccoun
 	});
 }
 
-export function remainingPercent(usedPercent: number): number {
-	return Math.max(0, Math.min(100, 100 - usedPercent));
+/** Consumed share of a limit window, clamped to 0-100. Providers report it as used, so it is drawn as-is. */
+export function usedPercent(value: number): number {
+	return Math.max(0, Math.min(100, value));
 }
 
 export function formatCountdown(resetsAt: string | null | undefined, now: Date): string | null {
