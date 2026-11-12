@@ -1,0 +1,431 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { haptics } from "../haptics";
+import { connectedSpawnHosts } from "../hostRoute";
+import { useApp } from "../store";
+import {
+	addFolderProject,
+	cleanupClone,
+	initializeFolder,
+	listDirectories,
+	prepareClone,
+	prepareImportGit,
+	validateImport,
+	type DirectoryEntry,
+	type DirectoryListing,
+	type ImportAction,
+	type ImportValidation,
+} from "./api";
+import { importState, needsRemote, nextAction, preparationFailureMessage, suggestedGitHubName, type ImportState } from "./importRules";
+import {
+	canCreateLocalProject,
+	createUnsupported,
+	DEFAULT_CLONE_PARENT,
+	filterDirectories,
+	folderNameFor,
+	localProjectErrorMessage,
+	localProjectRequest,
+	UNSUPPORTED_NEW_PROJECT,
+	type LocalProjectSource,
+} from "./newLocalProject";
+import { loadProjectPlaces, rememberProjectPlace, type ProjectPlaces } from "./recentFolders";
+import { useGitHubRepositories } from "./useGitHubRepositories";
+import { useRemoteSetup } from "./useRemoteSetup";
+
+/** The steps a new, empty project goes through: the folder is made and committed, then given a remote. */
+const NEW_PROJECT_ACTIONS: readonly ImportAction[] = ["git_init", "git_commit", "create_remote_repository"];
+
+/** A clone made but not registered yet, as the desktop keeps one until the project is added. */
+type PreparedClone = { path: string; preparationId: string; remoteUrl: string; destinationParent: string };
+
+/** What the daemon said about the folder being added, and for which path. */
+type ImportCheck = { path: string; validation: ImportValidation; state: ImportState };
+
+/** What the folder browser is choosing: the project's own folder, or where a clone or new project goes. */
+export type BrowseTarget = "folder" | "destination";
+
+/**
+ * The New project sheet's Local face, shared by its iOS and Android forms. It
+ * adds a project on one of the paired machines with the desktop's own steps
+ * (CreateProjectFlow): an existing folder, browsed on the machine; a
+ * repository cloned into a new folder; or a new, empty folder. Each folder is
+ * validated the way the desktop validates it, the Git setup it needs (git
+ * init, a first commit, a remote, created on GitHub or given as a URL) runs
+ * one step at a time as the desktop runs it, and only then is it added. Each
+ * machine remembers where its last projects went, and the browser starts there.
+ */
+export function useNewLocalProject({ onCreated }: {
+	/** The project made on `hostId`: open it. */
+	onCreated(hostId: string, projectId: string): void;
+}) {
+	const { hostStates, currentHostId, configForHost, refreshHost } = useApp();
+	const machines = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
+	const [chosenHostId, setChosenHostId] = useState<string | null>(null);
+	// The chosen machine while it stays connected; otherwise the default one, or the first.
+	const hostId = machines.find((machine) => machine.id === chosenHostId)?.id
+		?? machines.find((machine) => machine.id === currentHostId)?.id
+		?? machines[0]?.id
+		?? null;
+	const machine = machines.find((item) => item.id === hostId);
+	const config = hostId ? configForHost(hostId) : null;
+
+	const [source, setSource] = useState<LocalProjectSource>("folder");
+	const [folder, setFolder] = useState<string | null>(null);
+	const [remoteUrl, setRemoteUrl] = useState("");
+	const [destinationParent, setDestinationParent] = useState(DEFAULT_CLONE_PARENT);
+	const [name, setName] = useState("");
+
+	// The browser: the folder it shows, the machine user's home (the first
+	// listing), and a filter over a long listing.
+	const [browseTarget, setBrowseTarget] = useState<BrowseTarget | null>("folder");
+	const [listing, setListing] = useState<DirectoryListing | null>(null);
+	const [home, setHome] = useState<string | undefined>(undefined);
+	const [filter, setFilter] = useState("");
+	const [listingBusy, setListingBusy] = useState(false);
+	const [listingError, setListingError] = useState<string | null>(null);
+
+	const [places, setPlaces] = useState<ProjectPlaces>({ recent: [] });
+	const github = useGitHubRepositories(source === "clone");
+
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	// The validation of the folder being added, the step running now, and a
+	// clone or new folder already made on the machine but not added yet.
+	const [check, setCheck] = useState<ImportCheck | null>(null);
+	const [checking, setChecking] = useState(false);
+	const [runningAction, setRunningAction] = useState<ImportAction | null>(null);
+	const [prepared, setPrepared] = useState<PreparedClone | null>(null);
+	const preparedRef = useRef<PreparedClone | null>(null);
+	preparedRef.current = prepared;
+	const [createdNew, setCreatedNew] = useState<string | null>(null);
+
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => { mounted.current = false; };
+	}, []);
+
+	// Only the latest listing answers; another machine starts it over.
+	const listRead = useRef(0);
+	/** `quiet` keeps the folder shown when the one asked for is gone: a remembered folder may have moved. */
+	const browse = useCallback(async (path?: string, { quiet = false }: { quiet?: boolean } = {}) => {
+		if (!config) return;
+		const read = ++listRead.current;
+		const current = () => mounted.current && read === listRead.current;
+		setListingBusy(true);
+		setListingError(null);
+		try {
+			const next = await listDirectories(config, path);
+			if (!current()) return;
+			setListing(next);
+			setFilter("");
+			if (!path) setHome(next.path);
+		} catch (cause) {
+			if (current() && !quiet) setListingError(localProjectErrorMessage(cause));
+		} finally {
+			if (current()) setListingBusy(false);
+		}
+	}, [config]);
+
+	const shownHost = useRef<string | null>(null);
+	useEffect(() => {
+		if (!hostId || shownHost.current === hostId) return;
+		shownHost.current = hostId;
+		setListing(null);
+		setHome(undefined);
+		setFolder(null);
+		setBrowseTarget(source === "folder" ? "folder" : null);
+		setDestinationParent(DEFAULT_CLONE_PARENT);
+		setPlaces({ recent: [] });
+		setError(null);
+		setCheck(null);
+		setCreatedNew(null);
+		const shown = hostId;
+		void (async () => {
+			const remembered = await loadProjectPlaces(shown);
+			if (!mounted.current || shownHost.current !== shown) return;
+			setPlaces(remembered);
+			if (remembered.destination) setDestinationParent(remembered.destination);
+			// Home first, which names `~`; then the folder the last project sat in.
+			await browse();
+			if (remembered.recent[0] && shownHost.current === shown) await browse(remembered.recent[0], { quiet: true });
+		})();
+	}, [browse, hostId, source]);
+
+	const chooseHost = (id: string) => {
+		if (id === hostId) return;
+		haptics.select();
+		setChosenHostId(id);
+	};
+
+	const chooseSource = (next: LocalProjectSource) => {
+		if (next === source) return;
+		haptics.select();
+		setSource(next);
+		setError(null);
+		// The folder browser opens by itself until a folder is chosen; where a
+		// clone or new project goes is only browsed when Change asks for it.
+		setBrowseTarget(next === "folder" && !folder ? "folder" : null);
+	};
+
+	/** Into a subfolder, or up to the parent. */
+	const openDirectory = (path: string) => {
+		haptics.select();
+		void browse(path);
+	};
+
+	/** Validates a folder as the desktop does when one is chosen; only the latest check answers. */
+	const checkRead = useRef(0);
+	const runCheck = useCallback(async (path: string) => {
+		if (!config) return;
+		const read = ++checkRead.current;
+		setChecking(true);
+		setCheck(null);
+		try {
+			const validation = await validateImport(config, path);
+			if (mounted.current && read === checkRead.current) setCheck({ path, validation, state: importState(validation) });
+		} catch (cause) {
+			if (mounted.current && read === checkRead.current) setError(localProjectErrorMessage(cause));
+		} finally {
+			if (mounted.current && read === checkRead.current) setChecking(false);
+		}
+	}, [config]);
+
+	/** The browsed folder, or a repository row, becomes the choice. */
+	const choose = (path: string) => {
+		haptics.select();
+		if (browseTarget === "destination") {
+			setDestinationParent(path);
+			setCreatedNew(null);
+		} else {
+			setFolder(path);
+			void runCheck(path);
+		}
+		setBrowseTarget(null);
+		setError(null);
+	};
+
+	/** A repository row picks itself; any other folder opens. */
+	const pressEntry = (entry: DirectoryEntry) => {
+		if (browseTarget === "folder" && entry.gitRepo) choose(entry.path);
+		else openDirectory(entry.path);
+	};
+
+	/** Back to browsing, starting where the current choice lives. */
+	const changeFolder = (target: BrowseTarget) => {
+		haptics.select();
+		setBrowseTarget(target);
+		if (!listing && !listingBusy) void browse();
+	};
+
+	const cancelBrowse = () => {
+		haptics.select();
+		setBrowseTarget(null);
+	};
+
+	const entries = useMemo(() => filterDirectories(listing?.entries ?? [], filter), [filter, listing]);
+	/** Shortcuts to where recent projects sat, other than the folder shown. */
+	const recentPlaces = useMemo(() => filter.trim() ? [] : places.recent.filter((path) => path !== listing?.path), [filter, listing?.path, places.recent]);
+	const atRoot = !listing || listing.parent === listing.path;
+	// A prepared clone the user moves away from (another URL, another place,
+	// another machine, or the sheet closed) is removed, as the desktop removes it.
+	const abandonPrepared = useCallback((cfg = config) => {
+		const current = preparedRef.current;
+		if (!current) return;
+		setPrepared(null);
+		setCheck(null);
+		if (cfg) void cleanupClone(cfg, { path: current.path, preparationId: current.preparationId }).catch(() => {});
+	}, [config]);
+	useEffect(() => {
+		if (prepared && (prepared.remoteUrl !== remoteUrl.trim() || prepared.destinationParent !== destinationParent.trim())) abandonPrepared();
+	}, [abandonPrepared, destinationParent, prepared, remoteUrl]);
+	const configRef = useRef(config);
+	configRef.current = config;
+	useEffect(() => () => abandonPrepared(configRef.current), [hostId]);
+
+	// The step list and the remote the form shows: a folder's from its check, a
+	// new project's always, a clone's only when its checkout needs one.
+	const checkFor = source === "folder" ? (check && check.path === folder ? check : null)
+		: source === "clone" ? (prepared && check?.path === prepared.path ? check : null)
+		: null;
+	const setupActions: ImportAction[] = source === "new"
+		? [...NEW_PROJECT_ACTIONS]
+		: checkFor?.state.kind === "setup" ? checkFor.state.actions : [];
+	const blocked = checkFor?.state.kind === "blocked" ? checkFor.state.message : null;
+	const remoteNeeded = needsRemote(setupActions);
+	const remote = useRemoteSetup({
+		config,
+		hostId,
+		active: remoteNeeded,
+		suggestedName: source === "new" ? folderNameFor(name) : suggestedGitHubName(checkFor?.path ?? folder ?? ""),
+	});
+
+	const canCreate = Boolean(config) && !busy && !checking && !blocked
+		&& canCreateLocalProject({ source, folder, remoteUrl, destinationParent, name })
+		&& (source !== "folder" || Boolean(checkFor))
+		&& (!remoteNeeded || remote.ready);
+
+	const finish = async (createdOn: string, projectId: string, place: { folder?: string; destination?: string }) => {
+		haptics.success();
+		await rememberProjectPlace(createdOn, place).catch(() => {});
+		await refreshHost(createdOn).catch(() => {});
+		if (mounted.current) onCreated(createdOn, projectId);
+	};
+
+	/**
+	 * The desktop's Git setup: one approved step at a time until the daemon
+	 * says the folder can be added, stopping on a failed step or a folder that
+	 * turns out blocked. Returns the last validation.
+	 */
+	const runSetup = async (cfg: NonNullable<typeof config>, start: ImportValidation): Promise<ImportValidation> => {
+		let current = start;
+		const outgoing = remote.request;
+		while (current.nextStep === "prepare_git") {
+			const action = nextAction(current);
+			if (!action) throw new Error("Orchestrator couldn't finish setting up Git for this folder.");
+			if (mounted.current) setRunningAction(action);
+			const { events, validation } = await prepareImportGit(cfg, {
+				path: current.root.repoPath,
+				approvedActions: current.root.requiredActions,
+				...(needsRemote(current.root.requiredActions) ? outgoing : {}),
+			});
+			const failed = events.find((event) => event.state === "error");
+			if (failed) throw new Error(preparationFailureMessage(failed));
+			const state = importState(validation);
+			if (state.kind === "blocked") throw new Error(state.message);
+			if (nextAction(validation) === action) throw new Error("Orchestrator couldn't finish setting up Git for this folder.");
+			current = validation;
+		}
+		if (mounted.current) setRunningAction(null);
+		return current;
+	};
+
+	/** Validates a folder that was just made or cloned, and reports why it can't be added. */
+	const validated = async (cfg: NonNullable<typeof config>, path: string): Promise<ImportValidation> => {
+		const validation = await validateImport(cfg, path);
+		const state = importState(validation);
+		if (mounted.current) setCheck({ path, validation, state });
+		if (state.kind === "blocked") throw new Error(state.message);
+		return validation;
+	};
+
+	const create = async () => {
+		if (!config || !hostId || !canCreate) return;
+		const request = localProjectRequest({ source, folder, remoteUrl, destinationParent, name });
+		const createdOn = hostId;
+		setBusy(true);
+		setError(null);
+		try {
+			if (request.source === "clone") {
+				let clone = preparedRef.current;
+				if (!clone) {
+					const made = await prepareClone(config, { remoteUrl: request.input.remoteUrl, destinationParent: request.input.destinationParent });
+					clone = { ...made, remoteUrl: request.input.remoteUrl, destinationParent: request.input.destinationParent };
+					if (mounted.current) setPrepared(clone);
+					preparedRef.current = clone;
+				}
+				let validation: ImportValidation;
+				try {
+					validation = await validated(config, clone.path);
+				} catch (cause) {
+					// A checkout that can't become a project isn't kept.
+					abandonPrepared();
+					throw cause;
+				}
+				// The checkout needs a remote of its own: the form asks for it, and Create goes on.
+				if (needsRemote(validation.root.requiredActions) && !remote.ready) return;
+				await runSetup(config, validation);
+				const id = await addFolderProject(config, { path: clone.path, clonePreparationId: clone.preparationId, ...(request.input.name ? { name: request.input.name } : {}) });
+				preparedRef.current = null;
+				if (mounted.current) setPrepared(null);
+				await finish(createdOn, id, { destination: request.input.destinationParent });
+				return;
+			}
+			if (request.source === "new") {
+				// Made once: a retry after a failed setup step carries on in the same folder.
+				if (createdNew !== request.input.path) {
+					try {
+						await initializeFolder(config, request.input.path, { create: true });
+					} catch (cause) {
+						if (createUnsupported(cause)) throw new Error(UNSUPPORTED_NEW_PROJECT);
+						throw cause;
+					}
+					if (mounted.current) setCreatedNew(request.input.path);
+				}
+				await runSetup(config, await validated(config, request.input.path));
+				await finish(createdOn, await addFolderProject(config, request.input), { destination: destinationParent.trim() });
+				return;
+			}
+			const validation = checkFor?.validation ?? await validated(config, request.input.path);
+			const done = await runSetup(config, validation);
+			await finish(createdOn, await addFolderProject(config, { ...request.input, path: done.root.repoPath }), { folder: request.input.path });
+		} catch (cause) {
+			haptics.error();
+			if (mounted.current) {
+				setError(localProjectErrorMessage(cause));
+				// What the daemon thinks now, so the form shows the steps still to run.
+				if (source === "folder" && folder) void runCheck(folder);
+			}
+		} finally {
+			if (mounted.current) {
+				setBusy(false);
+				setRunningAction(null);
+			}
+		}
+	};
+
+	return {
+		machines,
+		hostId,
+		machine,
+		chooseHost,
+		source,
+		chooseSource,
+		folder,
+		remoteUrl,
+		setRemoteUrl,
+		destinationParent,
+		name,
+		setName,
+		browseTarget,
+		listing,
+		home,
+		entries,
+		recentPlaces,
+		atRoot,
+		filter,
+		setFilter,
+		listingBusy,
+		listingError,
+		retryListing: () => void browse(listing?.path),
+		openDirectory,
+		pressEntry,
+		choose,
+		changeFolder,
+		cancelBrowse,
+		/** The folder is being validated. */
+		checking,
+		/** Why the folder can't be added, in the desktop's words. */
+		blocked,
+		/** The Git setup Create will run, in order; empty when there is none. */
+		setupActions,
+		/** The step running now. */
+		runningAction,
+		/** The remote step, when the setup gives the folder an origin. */
+		remote,
+		remoteNeeded,
+		github,
+		/** A GitHub repository's clone URL into the field. */
+		takeRepository: (repo: Parameters<typeof github.take>[0]) => {
+			haptics.select();
+			setRemoteUrl(github.take(repo));
+			setError(null);
+		},
+		busy,
+		error,
+		dismissError: () => setError(null),
+		canCreate,
+		create,
+	};
+}
+
+export type NewLocalProject = ReturnType<typeof useNewLocalProject>;

@@ -413,7 +413,7 @@ export default function SpawnScreen() {
 		if (nextProjectId === NEW_CLOUD_PROJECT) {
 			// A cloud project starts from a repository, on its own sheet over this
 			// page; the project menu offers it once it exists.
-			router.push("/cloud/new-project");
+			router.push({ pathname: "/cloud/new-project", params: { placement: "cloud" } });
 			return;
 		}
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;

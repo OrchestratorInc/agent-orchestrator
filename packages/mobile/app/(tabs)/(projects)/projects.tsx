@@ -8,6 +8,7 @@ import { useCloudPlan } from "../../../lib/cloud/planStore";
 import { boardTitle } from "../../../lib/board-tabs";
 import { useScrollToTopOnReselect } from "../../../lib/boardTabReselect";
 import { hostedProjectKey, hostedProjectSections, type HostedProjectRow } from "../../../lib/hostedRows";
+import { connectedSpawnHosts } from "../../../lib/hostRoute";
 import { TitleActionButton, useInlineLargeTitle } from "../../../lib/inlineLargeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
@@ -53,13 +54,15 @@ export default function ProjectsScreen() {
 	const cloudLoading = Boolean(cloud) && !cloudProjectsLoaded && !cloudProjectsError;
 	const cloudFailed = Boolean(cloud) && !cloudProjectsLoaded && Boolean(cloudProjectsError);
 	useFocusEffect(useCallback(() => watchCloud(), [watchCloud]));
-	// A cloud project starts from a GitHub repository, here or from New task.
-	const newCloudProject = useCallback(() => router.push("/cloud/new-project"), [router]);
-	// On iOS, New cloud project sits at the end of the page's own title line, so
+	// A project goes on a connected machine, from one of its folders or a
+	// clone, or in Orchestrator Cloud; the sheet offers whichever can be made.
+	const canCreateLocalProject = useMemo(() => connectedSpawnHosts(hostStates).length > 0, [hostStates]);
+	const newProject = useCallback(() => router.push("/cloud/new-project"), [router]);
+	// On iOS, New project sits at the end of the page's own title line, so
 	// the bar keeps the board's items as they are. Android's large title is the
 	// bar's own, on the row its actions sit on, so there it is the bar's "+".
 	const largeTitle = useInlineLargeTitle(boardTitle("(projects)"), {
-		action: canCreateCloudProject ? <TitleActionButton icon="add" accessibilityLabel="New cloud project" onPress={newCloudProject} testID="new-cloud-project-title" /> : undefined,
+		action: canCreateCloudProject || canCreateLocalProject ? <TitleActionButton icon="add" accessibilityLabel="New project" onPress={newProject} testID="new-project-title" /> : undefined,
 	});
 	const tabBar = useTabBarFrost();
 	const listRef = useRef<FlatList<HostedProjectRow>>(null);
@@ -168,14 +171,14 @@ export default function ProjectsScreen() {
 							<EmptyState
 								icon="folder"
 								title="No projects"
-								message={canCreateCloudProject ? "Create a cloud project from a GitHub repository, or add one in Orchestrator on your computer." : "Add a project in Orchestrator to get started."}
-								action={canCreateCloudProject ? <Button title="New cloud project" icon="cloud" onPress={newCloudProject} /> : undefined}
+								message={canCreateLocalProject ? (canCreateCloudProject ? "Add a folder from your computer, clone a repository, or start a cloud project." : "Add a folder from your computer or clone a repository.") : canCreateCloudProject ? "Create a cloud project from a GitHub repository, or add one in Orchestrator on your computer." : "Add a project in Orchestrator to get started."}
+								action={canCreateLocalProject || canCreateCloudProject ? <Button title="New project" icon="plus" onPress={newProject} /> : undefined}
 							/>
 						)
 					}
 				/>
 			)}
-			<BoardHeaderItems unread={unreadCount} onAdd={Platform.OS === "android" && canCreateCloudProject ? newCloudProject : undefined} addLabel="New cloud project" />
+			<BoardHeaderItems unread={unreadCount} onAdd={Platform.OS === "android" && (canCreateCloudProject || canCreateLocalProject) ? newProject : undefined} addLabel="New project" />
 			{largeTitle.edge}
 			{tabBar.frost}
 		</View>
