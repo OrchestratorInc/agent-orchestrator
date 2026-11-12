@@ -2608,6 +2608,17 @@ func TestManager_InitializeRepositoryCreatesNewProjectFolder(t *testing.T) {
 		}
 	})
 
+	t.Run("refuses a path in Orchestrator's state and makes no folders", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("GIT_CEILING_DIRECTORIES", home)
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: filepath.Join(home, ".ao", "x", "y"), Create: true})
+		wantCode(t, err, "PROJECT_SETUP_PATH_UNSAFE")
+		if _, statErr := os.Stat(filepath.Join(home, ".ao", "x")); !os.IsNotExist(statErr) {
+			t.Fatalf("parent folder made inside Orchestrator's state: %v", statErr)
+		}
+	})
+
 	t.Run("removes the new folder when setup fails", func(t *testing.T) {
 		dir := newFolder(t)
 		// No git on PATH: git init fails after the folder was made.

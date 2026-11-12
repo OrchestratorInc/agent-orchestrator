@@ -452,6 +452,12 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 		return InitializeRepositoryResult{}, err
 	}
 
+	// Before anything is made: a create the check refuses must leave no folders,
+	// and MkdirAll would otherwise make the path's missing parents first.
+	if err := validateRepositorySetupPathSafety(path); err != nil {
+		return InitializeRepositoryResult{}, err
+	}
+
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
 
@@ -479,9 +485,6 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 		}
 	}
 	if err := ensureDirectoryPath(path); err != nil {
-		return InitializeRepositoryResult{}, err
-	}
-	if err := validateRepositorySetupPathSafety(path); err != nil {
 		return InitializeRepositoryResult{}, err
 	}
 
@@ -1140,9 +1143,22 @@ func normalizeGitReportedPath(base, reported string) string {
 func comparablePath(path string) string {
 	clean := filepath.Clean(path)
 	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		clean = resolved
+		return filepath.Clean(resolved)
 	}
-	return filepath.Clean(clean)
+	// Not there yet (a folder a create is about to make): resolve the nearest
+	// folder that is, so a path under a symlinked home still compares as under it.
+	rest := []string{}
+	for dir := clean; ; {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return clean
+		}
+		rest = append([]string{filepath.Base(dir)}, rest...)
+		dir = parent
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(append([]string{resolved}, rest...)...)
+		}
+	}
 }
 
 func samePath(a, b string) bool {
