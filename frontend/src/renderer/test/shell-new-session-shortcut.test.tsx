@@ -194,6 +194,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 	remoteProjectsQueryKey: (hostId: string) => ["remote-workspaces", hostId, "projects"],
+	remoteSessionsQueryKey: (hostId: string) => ["remote-workspaces", hostId, "sessions"],
 	cloudProjectsQueryKey: ["cloud-projects"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	workspaceQueryOptions: {},

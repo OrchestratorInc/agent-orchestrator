@@ -33,7 +33,7 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useUiStore } from "../stores/ui-store";
 import { applyOptimisticProjectRemovals, clearOptimisticProjectRemoval, isOptimisticallyRemovedProject } from "./optimistic-project-removals";
 import { useRemoveProject } from "./useRemoveProject";
-import { cloudProjectsQueryKey, remoteProjectsQueryKey, remoteWorkspaceQueryKey, sharedCloudWorkspacesQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { cloudProjectsQueryKey, remoteProjectsQueryKey, remoteSessionsQueryKey, remoteWorkspaceQueryKey, sharedCloudWorkspacesQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 const project = (id: string, name: string, extra: Partial<WorkspaceSummary> = {}): WorkspaceSummary => ({
 	id,
@@ -195,6 +195,46 @@ describe("useRemoveProject", () => {
 		await waitFor(() => expect(isOptimisticallyRemovedProject("proj-2")).toBe(false));
 		await waitFor(() => expect(localIds(queryClient)).toEqual(["proj-1", "proj-3"]));
 		expect(toasts()).toEqual([expect.objectContaining({ title: "Removed doomed", tone: "success" })]);
+	});
+
+	it("keeps the tombstone when the read after a successful removal fails", async () => {
+		deleteMock.mockImplementationOnce(async () => {
+			serverReadFails = true;
+			return { data: { projectId: "proj-2", removedStorageDir: false } };
+		});
+		const { queryClient, remove } = setup();
+
+		act(() => remove("proj-2"));
+
+		await waitFor(() => expect(queryClient.getQueryState(workspaceQueryKey)?.status).toBe("error"));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// Nothing confirmed the removal, so a list requested before it cannot bring the row back.
+		expect(isOptimisticallyRemovedProject("proj-2")).toBe(true);
+		expect(localIds(queryClient)).toEqual(["proj-1", "proj-3"]);
+	});
+
+	it("lets a remote host's project list, not its session list, decide a failed removal", async () => {
+		const remote = project("proj-2", "far", { hostId: "box-a" });
+		remoteDeleteMock.mockImplementationOnce(async () => {
+			// The host finished the teardown after the request gave up.
+			hostProjects = [];
+			return { error: { message: "context deadline exceeded" } };
+		});
+		const { queryClient, remove } = setup();
+		let hostProjects = [{ id: "proj-2", name: "far", path: "/far" }];
+		queryClient.setQueryDefaults(remoteWorkspaceQueryKey("box-a"), { queryFn: async () => [] });
+		queryClient.setQueryDefaults(remoteProjectsQueryKey("box-a"), { queryFn: async () => hostProjects });
+		queryClient.setQueryDefaults(remoteSessionsQueryKey("box-a"), { queryFn: async () => { throw new Error("sessions unavailable"); } });
+		queryClient.setQueryData(remoteProjectsQueryKey("box-a"), hostProjects);
+		queryClient.setQueryData(remoteSessionsQueryKey("box-a"), []);
+		queryClient.setQueryData(remoteWorkspaceQueryKey("box-a"), [remote]);
+
+		act(() => remove("proj-2", "box-a"));
+
+		await waitFor(() => expect(queryClient.getQueryData(remoteProjectsQueryKey("box-a"))).toEqual([]));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(toasts()).toEqual([expect.objectContaining({ title: "Removed far", tone: "success" })]);
+		expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toEqual([]);
 	});
 
 	it("removes a remote project from its host's lists the same way", async () => {

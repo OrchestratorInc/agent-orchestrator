@@ -21,6 +21,7 @@ import {
 	cloudProjectsQueryKey,
 	cloudSessionsQueryKey,
 	remoteProjectsQueryKey,
+	remoteSessionsQueryKey,
 	remoteWorkspaceQueryKey,
 	sharedCloudWorkspacesQueryKey,
 	workspaceQueryKey,
@@ -73,18 +74,26 @@ function serverStillLists(queryClient: QueryClient, { workspace, cloud, cacheKey
 	return queryClient.getQueryData<WorkspaceSummary[]>(cacheKey)?.some((item) => item.id === workspace.id) === true;
 }
 
-/** Refetch the project's lists. False when the server could not be read. */
+/**
+ * Refetch the project's lists. Only the project lists decide the result: false
+ * when one of them could not be read. Session lists refresh beside them, and
+ * their failure does not make a removed project look present.
+ */
 async function refetchLists(queryClient: QueryClient, { cloud, workspace, cacheKey }: RemoveTarget): Promise<boolean> {
+	const refresh = (queryKey: readonly unknown[], exact = false) => void queryClient.refetchQueries({ queryKey, exact });
+	const read = (queryKey: readonly unknown[], exact = false) =>
+		queryClient.refetchQueries({ queryKey, exact }, { throwOnError: true });
 	try {
 		if (cloud) {
-			await Promise.all([
-				queryClient.refetchQueries({ queryKey: cloudProjectsQueryKey }, { throwOnError: true }),
-				queryClient.refetchQueries({ queryKey: cloudSessionsQueryKey }, { throwOnError: true }),
-				queryClient.refetchQueries({ queryKey: sharedCloudWorkspacesQueryKey }, { throwOnError: true }),
-			]);
+			refresh(cloudSessionsQueryKey);
+			await Promise.all([read(cloudProjectsQueryKey), read(sharedCloudWorkspacesQueryKey)]);
+		} else if (workspace.hostId) {
+			// The host's combined list and its sessions come after its project list.
+			refresh(remoteSessionsQueryKey(workspace.hostId), true);
+			refresh(cacheKey, true);
+			await read(remoteProjectsQueryKey(workspace.hostId), true);
 		} else {
-			// A host's key is the prefix of its project and session lists; the local list is one exact query.
-			await queryClient.refetchQueries({ queryKey: cacheKey, exact: !workspace.hostId }, { throwOnError: true });
+			await read(cacheKey, true);
 		}
 		return true;
 	} catch {
@@ -222,12 +231,13 @@ export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
 
 		if (!hostId) void captureRendererEvent("ao.projects.removed", { project_id: projectId });
 		unpin();
-		await refetchLists(queryClient, target);
+		const read = await refetchLists(queryClient, target);
 		// A cloud archive finishes after the request returns and its ids are never
-		// reused, so its tombstone stays. A local or remote one ends once the
-		// server's list no longer has the project; until a read confirms that, it
-		// stays hidden. Adding the same folder again clears it.
-		if (!isCloud && !serverStillLists(queryClient, target)) clearOptimisticProjectRemoval(projectId, hostId);
+		// reused, so its tombstone stays. A local or remote one ends once a read
+		// made after the response no longer has the project; without that read, a
+		// list requested before the removal could still bring it back, so it stays
+		// hidden. Adding the same folder again clears it.
+		if (!isCloud && read && !serverStillLists(queryClient, target)) clearOptimisticProjectRemoval(projectId, hostId);
 	};
 
 	return remove;
