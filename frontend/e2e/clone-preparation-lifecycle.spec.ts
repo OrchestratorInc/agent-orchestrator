@@ -17,12 +17,6 @@ for (const destinationMode of ["picker", "typed"] as const) {
 				await route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
 				return;
 			}
-			// With tracker intake on, the setup sheet opens after a clone, so there
-			// is a step to back out of. Without it the project is created right away.
-			if (pathname === "/api/v1/settings") {
-				await route.fulfill({ json: { trackerIntakeEnabled: true } });
-				return;
-			}
 			if (pathname === "/api/v1/projects/clone/check") {
 				await route.fulfill({ json: {
 					remoteUrl: "https://example.com/example.git", path: "/repos/example",

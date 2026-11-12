@@ -474,6 +474,11 @@ function mockAgentReadinessResponse(response: {
 
 /** Projects restore their persisted disclosure state. */
 
+async function chooseOption(trigger: HTMLElement, optionName: string) {
+	await userEvent.click(trigger);
+	await userEvent.click(await screen.findByRole("option", { name: optionName }));
+}
+
 function codedError(message: string, code: "NOT_A_GIT_REPO" | "PROJECT_UNBORN") {
 	const error = new Error(message) as Error & { code: string };
 	error.code = code;
@@ -508,6 +513,8 @@ async function openCreateProjectDialog(
 	await openLocalProjectSources(user);
 	await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 	await screen.findByRole("dialog", { name: "Set up project" });
+	await chooseOption(screen.getByRole("combobox", { name: "Worker agent" }), "Codex");
+	await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 	return user;
 }
 
@@ -1668,7 +1675,36 @@ describe("Sidebar", () => {
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "true");
 	});
 
-	it("starts a new project on the most preferred agent for every role", async () => {
+	it("defaults worker and orchestrator agents when creating a project", async () => {
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
+		renderSidebar({ onCreateProject });
+
+		await openLocalProjectSources(user);
+		expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
+		expect(window.ao!.app.chooseDirectory).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
+
+		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
+		expect(window.ao!.app.chooseDirectory).toHaveBeenCalledWith("Choose a project repository");
+		const dialog = screen.getByRole("dialog", { name: "Set up project" });
+		expect(dialog).toHaveClass("left-1/2", "top-1/2", "-translate-x-1/2", "-translate-y-1/2");
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() =>
+			expect(onCreateProject).toHaveBeenCalledWith(
+				expect.objectContaining({
+					path: "/repo/new-project",
+					workerAgent: "claude-code",
+					orchestratorAgent: "claude-code",
+				}),
+			),
+		);
+	});
+
+	it("in Developer Mode, starts a new project on the most preferred agent for every role", async () => {
+		useUiStore.setState({ developerMode: true });
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
@@ -1824,6 +1860,53 @@ describe("Sidebar", () => {
 		await openLocalProjectSources(user);
 		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
+		expect(screen.getByRole("combobox", { name: "Worker agent" })).toHaveTextContent(/cursor/i);
+		expect(screen.getByRole("combobox", { name: "Orchestrator agent" })).toHaveTextContent(/cursor/i);
+
+		await user.click(screen.getByRole("combobox", { name: "Worker agent" }));
+		expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+			"Cursor",
+			"OpenCode",
+			"Aider",
+			"Devin",
+			"Goose",
+			"Manage agents…",
+		]);
+		await user.keyboard("{Escape}");
+
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() =>
+			expect(onCreateProject).toHaveBeenCalledWith(
+				expect.objectContaining({
+					workerAgent: "cursor",
+					orchestratorAgent: "cursor",
+				}),
+			),
+		);
+	});
+
+	it("in Developer Mode, starts on the preferred agent and the best unattended-safe reviewer", async () => {
+		useUiStore.setState({ developerMode: true });
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
+		mockAgentReadinessResponse({
+			data: {
+				agents: [
+					agentReadiness("goose", "Goose"),
+					agentReadiness("devin", "Devin"),
+					agentReadiness("aider", "Aider"),
+					agentReadiness("opencode", "OpenCode"),
+					agentReadiness("cursor", "Cursor"),
+				],
+			},
+			error: undefined,
+		});
+		renderSidebar({ onCreateProject, seedAgents: false });
+
+		await openLocalProjectSources(user);
+		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
+		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
 		expect(screen.queryByRole("combobox", { name: "Worker agent" })).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Create and start" }));
@@ -1936,15 +2019,15 @@ describe("Sidebar", () => {
 		expect(window.ao!.app.chooseDirectory).toHaveBeenCalledWith("Choose a workspace folder");
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
+		await chooseOption(screen.getByRole("combobox", { name: "Worker agent" }), "Codex");
+		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
-		// The project starts on the most preferred ready agent; no picker in the sheet.
 		await waitFor(() =>
 			expect(onCreateProject).toHaveBeenCalledWith({
 				path: "/repo/workspace",
-				workerAgent: "claude-code",
+				workerAgent: "codex",
 				orchestratorAgent: "claude-code",
-				reviewerAgent: "claude-code",
 				asWorkspace: true,
 			}),
 		);
@@ -1966,6 +2049,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
+		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledTimes(1));
@@ -2025,6 +2109,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
+		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() => expect(useUiStore.getState().globalToast?.body).toBe("workspace not registered"));
@@ -2185,6 +2270,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: /^Open a workspace$/i }));
 		await screen.findByRole("dialog", { name: "Import workspace" });
 		await user.click(screen.getByRole("button", { name: "Continue" }));
+		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
@@ -2227,6 +2313,7 @@ describe("Sidebar", () => {
 				"If this folder needs Git setup, Orchestrator will initialize it and create the first commit before starting.",
 			),
 		).toBeInTheDocument();
+		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
 		await user.click(screen.getByRole("button", { name: "Create workspace and start" }));
 
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledTimes(1));
@@ -2246,7 +2333,44 @@ describe("Sidebar", () => {
 		expect(await screen.findByRole("menuitem", { name: /settings/i })).toBeInTheDocument();
 	});
 
-	it("skips agents that are missing or signed out when picking the project's agent", async () => {
+	it("hides unavailable agents while keeping ready agents selectable", async () => {
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
+		mockAgentReadinessResponse({
+			data: {
+				agents: [
+					agentReadiness("claude-code", "Claude Code"),
+					agentReadiness("cursor", "Cursor", { authentication: "unauthorized" }),
+					agentReadiness("aider", "Aider", { installation: "not_installed", authentication: "unknown" }),
+				],
+			},
+			error: undefined,
+		});
+		renderSidebar({ onCreateProject, seedAgents: false });
+
+		await openLocalProjectSources(user);
+		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
+		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
+
+		await user.click(screen.getByRole("combobox", { name: "Orchestrator agent" }));
+		const options = await screen.findAllByRole("option");
+		expect(options.map((option) => option.textContent)).toEqual([
+			"Claude Code",
+			"Manage agents…",
+		]);
+		expect(options[1]).not.toHaveAttribute("aria-disabled", "true");
+		await user.keyboard("{Escape}");
+
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() =>
+			expect(onCreateProject).toHaveBeenCalledWith(expect.objectContaining({ orchestratorAgent: "claude-code" })),
+		);
+	});
+
+	it("in Developer Mode, skips agents that are missing or signed out when picking the project's agent", async () => {
+		useUiStore.setState({ developerMode: true });
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
@@ -2276,7 +2400,49 @@ describe("Sidebar", () => {
 		);
 	});
 
-	it("waits for the agent catalog before choosing the project's agent", async () => {
+	it("updates project agent options when the catalog loads after the dialog opens", async () => {
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
+		let resolveAgents!: (value: {
+			data: { agents: ReturnType<typeof agentReadiness>[] };
+			error: undefined;
+		}) => void;
+		mockAgentReadinessResponse(
+			new Promise((resolve) => {
+				resolveAgents = resolve;
+			}),
+		);
+		renderSidebar({ onCreateProject, seedAgents: false });
+
+		await openLocalProjectSources(user);
+		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
+		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
+
+		resolveAgents({
+			data: {
+				agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
+			},
+			error: undefined,
+		});
+
+		await chooseOption(screen.getByRole("combobox", { name: "Orchestrator agent" }), "Claude Code");
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() =>
+			expect(onCreateProject).toHaveBeenCalledWith({
+				path: "/repo/new-project",
+				workerAgent: "claude-code",
+				orchestratorAgent: "claude-code",
+				trackerIntake: undefined,
+				asWorkspace: false,
+			}),
+		);
+	});
+
+	it("in Developer Mode, waits for the agent catalog before choosing the project's agent", async () => {
+		useUiStore.setState({ developerMode: true });
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
 		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");

@@ -172,15 +172,14 @@ describe("Settings recovery modal integration", () => {
 		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
 	});
 
-	it("allows pointer interaction above create-project and restores its intake draft on close", async () => {
+	it("allows pointer interaction above create-project and restores its selections and intake draft on close", async () => {
 		const client = renderDialogs("create-project");
-		await userEvent.click(await screen.findByLabelText("Automatically work on assigned issues"));
+		await userEvent.click(screen.getByRole("combobox", { name: "Worker agent" }));
+		await userEvent.click(await screen.findByRole("option", { name: /Codex/i }));
+		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
 		await userEvent.type(screen.getByLabelText("Assignee"), "octocat");
 		requireCodexLogin(client);
-		// The create sheet has no agent fields; Settings opens above it from the
-		// rest of the app, the same way agent management opens it.
-		act(() => useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex", preserveProject: true }));
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await openAgentManagement("Worker agent");
 
 		await userEvent.click(await screen.findByRole("button", { name: "All harnesses" }));
 		const search = await screen.findByRole("textbox", { name: "Search harnesses" });
@@ -188,7 +187,8 @@ describe("Settings recovery modal integration", () => {
 		expect(search).toHaveValue("Claude");
 		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-		expect(await screen.findByLabelText("Assignee")).toHaveValue("octocat");
+		expect(await screen.findByRole("combobox", { name: "Worker agent" })).toHaveTextContent("Codex");
+		expect(screen.getByLabelText("Assignee")).toHaveValue("octocat");
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());

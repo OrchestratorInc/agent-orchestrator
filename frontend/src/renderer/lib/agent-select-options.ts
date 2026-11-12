@@ -1,3 +1,4 @@
+import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { defaultReviewerHarness } from "./reviewer-harnesses";
 
 export type AgentInfo = {
@@ -15,6 +16,12 @@ export type AgentInfo = {
 	lastUsedAt?: string | null;
 	usageCount: number;
 };
+
+export type RoleSession = Pick<WorkspaceSession, "id" | "provider" | "kind" | "createdAt">;
+
+// Only recent habits drive onboarding defaults: a harness used heavily
+// months ago must not outvote what the user reaches for now.
+export const ROLE_HISTORY_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 export const DEFAULT_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "opencode-v2", "aider"] as const;
 export const DEFAULT_AGENT_PRIORITY_RANK = new Map<string, number>(
@@ -59,6 +66,42 @@ export function agentUsageCompare(a: AgentInfo, b: AgentInfo): number {
 	const byRecency = (b.lastUsedAt ?? "").localeCompare(a.lastUsedAt ?? "");
 	if (byRecency !== 0) return byRecency;
 	return 0;
+}
+
+export function defaultAuthorizedAgentForRole(
+	authorizedAgents: AgentInfo[],
+	sessions: RoleSession[],
+	role: "worker" | "orchestrator",
+): string {
+	const eligible = new Set(authorizedAgents.map((agent) => agent.id));
+	const usage = new Map<string, { count: number; latest: number }>();
+	const cutoff = Date.now() - ROLE_HISTORY_WINDOW_MS;
+	for (const session of sessions) {
+		if (!isRoleSession(session, role) || !eligible.has(session.provider)) continue;
+		const at = session.createdAt ? Date.parse(session.createdAt) : Number.NaN;
+		if (Number.isNaN(at) || at < cutoff) continue;
+		const prev = usage.get(session.provider) ?? { count: 0, latest: Number.NEGATIVE_INFINITY };
+		usage.set(session.provider, { count: prev.count + 1, latest: Math.max(prev.latest, at) });
+	}
+	const empty = { count: 0, latest: Number.NEGATIVE_INFINITY };
+	return [...authorizedAgents]
+		.sort((a, b) => {
+			const aUsage = usage.get(a.id) ?? empty;
+			const bUsage = usage.get(b.id) ?? empty;
+			return (
+				bUsage.count - aUsage.count ||
+				bUsage.latest - aUsage.latest ||
+				(DEFAULT_AGENT_PRIORITY_RANK.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+					(DEFAULT_AGENT_PRIORITY_RANK.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
+				agentLabelCompare(a, b)
+			);
+		})[0]?.id ?? "";
+}
+
+// Role matching reuses the board's definition: orchestrators are explicit,
+// everything else counts as worker history.
+function isRoleSession(session: RoleSession, role: "worker" | "orchestrator"): boolean {
+	return role === "orchestrator" ? isOrchestratorSession(session) : !isOrchestratorSession(session);
 }
 
 export type ProjectAgentDefaults = {
