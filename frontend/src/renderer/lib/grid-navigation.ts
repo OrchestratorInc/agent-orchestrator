@@ -58,26 +58,35 @@ export function measureGridColumns(grid: HTMLElement | null): number {
 }
 
 /**
- * Whole rows of `grid` that fit in `viewport`'s height, counted down from the
- * row holding item `fromIndex` by the rows' laid-out positions (rows can differ
+ * Whole rows of `grid` that fit in `viewport`'s height, counted from the row
+ * holding item `fromIndex` (included) downwards (`direction` 1, for PageDown)
+ * or upwards (-1, for PageUp), by the rows' laid-out positions (rows can differ
  * in height). At least 1; 1 when there is no layout to read.
  */
-export function measureVisibleRows(viewport: HTMLElement | null, grid: HTMLElement | null, fromIndex: number, columns: number): number {
+export function measureVisibleRows(viewport: HTMLElement | null, grid: HTMLElement | null, fromIndex: number, columns: number, direction: 1 | -1 = 1): number {
 	const items = grid?.children;
 	if (!viewport || !items || items.length === 0) return 1;
 	const cols = Math.max(1, Math.floor(columns));
 	const height = viewport.clientHeight;
-	const firstRow = Math.floor(Math.min(Math.max(fromIndex, 0), items.length - 1) / cols);
-	const top = items[firstRow * cols]?.getBoundingClientRect().top ?? 0;
-	let rows = 0;
-	for (let start = firstRow * cols; start < items.length; start += cols) {
-		const rowTop = items[start]?.getBoundingClientRect().top ?? 0;
-		let bottom = rowTop;
+	// A row's top is its first item's; its bottom, its tallest item's.
+	const rowBounds = (row: number) => {
+		const start = row * cols;
+		const top = items[start]?.getBoundingClientRect().top ?? 0;
+		let bottom = top;
 		for (let index = start; index < Math.min(start + cols, items.length); index += 1) {
 			bottom = Math.max(bottom, items[index]?.getBoundingClientRect().bottom ?? 0);
 		}
-		if (!(bottom > rowTop)) return Math.max(1, rows);
-		if (bottom - top > height) break;
+		return { bottom, top };
+	};
+	const firstRow = Math.floor(Math.min(Math.max(fromIndex, 0), items.length - 1) / cols);
+	const lastRow = Math.floor((items.length - 1) / cols);
+	const anchor = rowBounds(firstRow);
+	let rows = 0;
+	for (let row = firstRow; row >= 0 && row <= lastRow; row += direction) {
+		const bounds = rowBounds(row);
+		if (!(bounds.bottom > bounds.top)) break;
+		const span = direction > 0 ? bounds.bottom - anchor.top : anchor.bottom - bounds.top;
+		if (span > height) break;
 		rows += 1;
 	}
 	return Math.max(1, rows);

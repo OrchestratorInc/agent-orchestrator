@@ -314,7 +314,7 @@ export function SessionArchiveModal({
 		if (activePosition < 0) return;
 		const grid = gridRef.current;
 		const columns = measureGridColumns(grid);
-		const pageRows = measureVisibleRows(scrollerRef.current, grid, activePosition, columns);
+		const pageRows = measureVisibleRows(scrollerRef.current, grid, activePosition, columns, key === "PageUp" ? -1 : 1);
 		const target = boundedGridTarget(
 			gridNavigationTarget(key, activePosition, results.length, columns, pageRows),
 			shown.length,

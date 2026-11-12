@@ -130,6 +130,25 @@ describe("grid measurement", () => {
 		expect(measureVisibleRows(viewport, grid, 5, 2)).toBe(2);
 	});
 
+	it("counts the rows above for PageUp, from the last row", () => {
+		const viewport = document.createElement("div");
+		Object.defineProperty(viewport, "clientHeight", { value: 100 });
+		// Two columns, four rows of 30 px.
+		const grid = document.createElement("div");
+		for (let index = 0; index < 8; index += 1) {
+			const item = document.createElement("div");
+			const top = Math.floor(index / 2) * 30;
+			vi.spyOn(item, "getBoundingClientRect").mockReturnValue({ top, bottom: top + 30 } as DOMRect);
+			grid.append(item);
+		}
+		// From the last row, three rows (90 px) fit going up; nothing is below it.
+		expect(measureVisibleRows(viewport, grid, 7, 2, -1)).toBe(3);
+		expect(measureVisibleRows(viewport, grid, 7, 2, 1)).toBe(1);
+		// PageUp from the last row then moves those three rows, in the same column.
+		expect(gridNavigationTarget("PageUp", 7, 8, 2, measureVisibleRows(viewport, grid, 7, 2, -1))).toBe(1);
+		expect(measureVisibleRows(viewport, grid, 0, 2, 1)).toBe(3);
+	});
+
 	it("measures one row without a viewport, items or layout", () => {
 		const viewport = document.createElement("div");
 		const grid = document.createElement("div");
