@@ -148,8 +148,8 @@ func TestLiveAntigravityACPConformance(t *testing.T) {
 // TestLiveAgyACPSteersARunningTurn proves steering against the real `agy acp`
 // (agy CLI 1.5.4 or newer). Run explicitly with AO_LIVE_AGY=1. It uses an empty
 // private GEMINI_HOME (the CLI's login lives outside it) and the default
-// approval mode: it approves the one sleep command and read-only looks at the
-// workspace, and rejects anything else. While that command runs it steers, then
+// approval mode: it approves the one sleep command and requests that stay in
+// the test's temporary folders, and rejects anything else. While that command runs it steers, then
 // checks that the turn took the guidance and AO saw one turn, not two.
 func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 	if os.Getenv("AO_LIVE_AGY") != "1" {
@@ -192,6 +192,7 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 	ref := sendTurn(ctx, t, conversation,
 		"In the shell, run exactly this command and wait for it: "+command+"\n"+
 			"After it finishes, reply with one short sentence naming the file you will edit next. "+
+			"prod.yaml and staging.yaml are both in the current folder; do not look for them. "+
 			"The plan is to edit prod.yaml. Do not edit any file.", ports.ChatTurnSettings{})
 
 	steered := make(chan error, 1)
@@ -205,10 +206,10 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 			reply.WriteString(event.Delta)
 		case ports.ChatEventApprovalRequested:
 			decision := decide(ports.ChatDecisionRejectOnce)(event)
-			if strings.Contains(event.Summary+string(event.Detail), "sleep 20") || readsWorkspace(event.Summary, workspace) {
+			if strings.Contains(event.Summary+string(event.Detail), "sleep 20") || staysInTestFolders(event.Summary, workspace) {
 				decision = decide(ports.ChatDecisionAllowOnce)(event)
 			}
-			t.Logf("approval %q -> %s", event.Summary, decision.ID)
+			t.Logf("approval %s %q -> %s", event.ActivityKind, event.Summary, decision.ID)
 			if err := conversation.ResolveRequest(ctx, event.RequestID, decision); err != nil {
 				t.Fatalf("ResolveRequest: %v", err)
 			}
@@ -258,18 +259,49 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 	}
 }
 
-// readsWorkspace reports whether an approval is for a plain read-only look in
-// the test's temporary folders, which the model sometimes takes before editing.
-func readsWorkspace(command, workspace string) bool {
-	fields := strings.Fields(command)
-	if len(fields) == 0 || !strings.Contains(command, filepath.Dir(workspace)) || strings.ContainsAny(command, ";|&<>`$()") {
+// staysInTestFolders reports whether an approval touches only the test's
+// temporary folders: a read-only command run in them, or a file under them,
+// such as agy reading its own log of the backgrounded command. The model
+// sometimes takes such a look after the steer, and rejecting it ends the turn.
+func staysInTestFolders(summary, workspace string) bool {
+	root := filepath.Dir(workspace)
+	roots := []string{root}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		roots = append(roots, resolved)
+	}
+	under := func(path string) bool {
+		if strings.HasPrefix(path, "~") {
+			return false // the shell expands it to the real home
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(workspace, path)
+		}
+		path = filepath.Clean(path)
+		for _, r := range roots {
+			if path == r || strings.HasPrefix(path, r+string(filepath.Separator)) {
+				return true
+			}
+		}
+		return false
+	}
+	if file, ok := strings.CutPrefix(summary, "File "); ok {
+		return under(strings.TrimSpace(file))
+	}
+	fields := strings.Fields(summary)
+	if len(fields) == 0 || strings.ContainsAny(summary, ";|&<>`$()") {
 		return false
 	}
 	switch fields[0] {
-	case "find", "ls", "cat", "head":
-		return true
+	case "ls", "find", "cat", "head", "tail", "pwd", "wc":
+	default:
+		return false
 	}
-	return false
+	for _, arg := range fields[1:] {
+		if !strings.HasPrefix(arg, "-") && !under(arg) {
+			return false
+		}
+	}
+	return true
 }
 
 // TestLiveAntigravityACPAndCLIShareConversationAcrossCopiedDatabases verifies
