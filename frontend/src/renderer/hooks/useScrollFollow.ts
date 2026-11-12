@@ -24,7 +24,8 @@ const FLIGHT_MAX_MS = 1500;
  */
 const CANNOT_ANIMATE = import.meta.env.MODE === "test";
 
-type Flight = { from: number; to: number; aimedAt: number };
+/** `deliberate`: the reader asked for it (glideToEnd: a send, Jump to latest), not automatic follow. */
+type Flight = { from: number; to: number; aimedAt: number; deliberate: boolean };
 
 /**
  * Moves a scroll viewport toward its end without snapping and without stutter.
@@ -59,9 +60,10 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		node.scrollTop = top;
 		lastWritten.current = node.scrollTop;
 	};
-	const smoothTo = (node: HTMLElement, top: number) => {
+	// Re-aiming keeps the flight's origin; only glideToEnd starts a deliberate one.
+	const smoothTo = (node: HTMLElement, top: number, deliberate = flight.current?.deliberate ?? false) => {
 		const now = performance.now();
-		flight.current = { from: flight.current?.from ?? node.scrollTop, to: top, aimedAt: now };
+		flight.current = { from: flight.current?.from ?? node.scrollTop, to: top, aimedAt: now, deliberate };
 		lastAimAt.current = now;
 		lastWritten.current = top;
 		node.scrollTo({ top, behavior: "smooth" });
@@ -103,6 +105,9 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 
 	/** True while a smooth scroll we started is still in flight. */
 	const isFlying = useCallback(() => flying(), []);
+
+	/** True while a glide the reader asked for (send, Jump to latest) is in flight. */
+	const isGliding = useCallback(() => flying() && flight.current!.deliberate, []);
 
 	/** True when a scroll event at `top` was caused by one of our writes or animations. */
 	const isOwnScroll = useCallback((top: number) => {
@@ -154,7 +159,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 			write(node, node.scrollHeight);
 			return;
 		}
-		smoothTo(node, endOf(node));
+		smoothTo(node, endOf(node), true);
 	}, [getNode]);
 
 	/**
@@ -194,5 +199,5 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		flight.current = null;
 	}, []);
 
-	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll, isFlying, reaim, endFlight };
+	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll, isFlying, isGliding, reaim, endFlight };
 }

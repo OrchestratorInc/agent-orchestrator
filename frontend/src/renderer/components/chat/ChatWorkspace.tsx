@@ -3109,6 +3109,7 @@ export function Timeline({
 		markWritten,
 		isOwnScroll,
 		isFlying,
+		isGliding,
 		reaim,
 		endFlight,
 	} = useScrollFollow(getScroller);
@@ -4422,10 +4423,9 @@ export function Timeline({
 		const opening = !initialLayoutDone.current || now - initialLayoutAt.current < INITIAL_SNAP_MS;
 		if (viewportResize.current || opening || now - entranceGate.catchUpAt < INITIAL_SNAP_MS || hidden) {
 			if (!viewportResize.current && !opening && isFlying()) {
-				// Nothing automatic glides in a catch-up (and returning drops a glide queued
-				// while hidden), so a glide in flight is the reader's own send or Jump to
-				// latest: keep it on course to the new end. Hidden, it could not play.
-				if (!hidden) {
+				// The reader's own send or Jump to latest keeps on course to the new end;
+				// an automatic follow glide stops and lands. Hidden, neither could play.
+				if (!hidden && isGliding()) {
 					reaim();
 					return;
 				}
@@ -4437,7 +4437,7 @@ export function Timeline({
 			return;
 		}
 		followEnd();
-	}, [followEnd, markWritten, cancelScrollFollow, isFlying, reaim]);
+	}, [followEnd, markWritten, cancelScrollFollow, isFlying, isGliding, reaim]);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
