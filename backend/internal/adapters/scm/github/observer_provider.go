@@ -65,7 +65,8 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 // ListPRsByRepo lists open pull requests in the repository, optionally only
 // those updated at or after updatedAfter (zero = full listing). The REST pulls
 // endpoint has no server-side update filter, so it pages newest-updated first
-// and stops at the first PR updated before updatedAfter.
+// and stops at the first PR updated before updatedAfter. A PR whose updated_at
+// is missing or unparseable is kept, since it cannot be placed before the cursor.
 func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
 	const perPage = 100
 	out := []ports.SCMPRObservation{}
@@ -86,7 +87,7 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 		}
 		for _, pull := range pulls {
 			pr := restListPullToSCM(pull)
-			if pr.UpdatedAtProvider.Before(updatedAfter) {
+			if !pr.UpdatedAtProvider.IsZero() && pr.UpdatedAtProvider.Before(updatedAfter) {
 				return out, nil
 			}
 			out = append(out, pr)
