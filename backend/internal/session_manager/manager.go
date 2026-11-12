@@ -1176,7 +1176,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.AgentConfigResolved = true
 		}
 	}
-	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
+	// Pi and Prime Agent also resolve an effort inherited from role/project
+	// settings, so a stale level is cleared instead of reaching --thinking.
+	inheritsThinking := (cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent) &&
+		strings.TrimSpace(agentConfig.Effort) != ""
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "" || inheritsThinking) {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		checked(err)
@@ -1752,10 +1756,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
-	// Pi and Prime Agent only began honoring effort in this change, so a project
-	// or role may still carry an inherited effort its model does not advertise, or
-	// point at a model the catalog cannot resolve; the old path ignored the level
-	// entirely. Such an inherited level is cleared instead of failing the launch.
+	// Role or project settings may carry a stale Pi or Prime Agent effort that
+	// the selected model does not advertise, or a model the catalog cannot
+	// resolve. Such an inherited level is cleared instead of failing the launch.
 	// A level the request carries itself (a flagged override, or a nonempty effort
 	// in the spawn request) is explicit and still validated, so an unsupported
 	// choice is rejected rather than silently dropped.
@@ -1800,6 +1803,9 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if m.modelCatalog == nil {
 		if validateClaudeModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
+		}
+		if inheritedPiEffort {
+			resolved.Effort = ""
 		}
 		return resolved, nil
 	}

@@ -624,7 +624,7 @@ func TestResolveAgentConfigValidatesPiEffort(t *testing.T) {
 			t.Fatalf("harness %q effort = %q, want high", harness, resolved.Effort)
 		}
 
-		// No effort needs no catalog and starts unchanged.
+		// A launch without an effort starts unchanged.
 		resolved, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
 			AgentConfig: ports.AgentConfig{Model: "openai/gpt-6.1-sol"},
