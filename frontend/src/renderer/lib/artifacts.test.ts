@@ -6,7 +6,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactChangeError, artifactCount, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject } from "./artifacts";
+import { artifactChangeError, artifactCount, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject, withShareAccess } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -197,6 +197,18 @@ describe("filterArtifactGroups", () => {
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["public"] }))).toEqual(["notes.md", "chart.png"]);
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html"]);
 		expect(names(filterArtifactGroups(shared, { query: "", projectIds: ["ao"], sharings: ["public"] }))).toEqual(["notes.md"]);
+	});
+
+	it("tells a private link apart from a public one, once the link list says who it opens for", () => {
+		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}` } : row) }));
+		const withAccess = withShareAccess(shared, new Map([["https://share.test/notes.md", "restricted" as const]]));
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["shared"] }))).toEqual(["notes.md"]);
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public"] }))).toEqual(["chart.png"]);
+		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public", "shared"] }))).toEqual(["notes.md", "chart.png"]);
+		// Before the list is read, a published file reads as public, as it always has.
+		expect(withShareAccess(shared, new Map())).toEqual(shared);
+		expect(artifactSharing({ shareUrl: "https://share.test/x", shareAccess: "anyone" })).toBe("public");
+		expect(artifactSharing({ shareUrl: "https://share.test/x", shareAccess: "restricted" })).toBe("shared");
 	});
 
 	it("keeps a project's rows of the chosen type when the query names the project", () => {

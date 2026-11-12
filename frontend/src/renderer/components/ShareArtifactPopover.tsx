@@ -146,31 +146,58 @@ export function useShareAvailable(): boolean {
 }
 
 /**
+ * Bumped when a panel publishes, unpublishes or changes who a link opens for,
+ * so useReconciledShareLinks reads the link list again.
+ */
+let shareLinksRevision = 0;
+const shareLinksListeners = new Set<() => void>();
+function shareLinksChanged(): void {
+	shareLinksRevision += 1;
+	for (const listener of shareLinksListeners) listener();
+}
+function subscribeShareLinks(listener: () => void): () => void {
+	shareLinksListeners.add(listener);
+	return () => shareLinksListeners.delete(listener);
+}
+
+/** Who each active link opens for, by the URL a published artifact carries as its shareUrl. */
+export type ShareAccessByUrl = ReadonlyMap<string, CloudShareAccess>;
+
+/**
  * Brings this computer's publish records up to date with the person's link
  * list, then reads the artifact list again. Records from before links were
  * kept with their URL name only the link's ID, and a link unpublished
  * elsewhere keeps its URL until the list says otherwise; the daemon serves
  * each artifact's shareUrl from those records, so until they are reconciled
  * a published file reads as not shared, or an unpublished one as public.
- * Runs once per mount, and again when sign-in or the control plane changes.
+ * Runs once per mount, again when sign-in or the control plane changes, and
+ * again after a panel changes a link. Returns who each link opens for, so a
+ * private link is not marked public; empty until the list is read.
  */
-export function useReconciledShareLinks(): void {
+export function useReconciledShareLinks(): ShareAccessByUrl {
 	const available = useShareAvailable();
 	const { baseUrl, signedIn } = useShareAccess();
 	const queryClient = useQueryClient();
+	const revision = useSyncExternalStore(subscribeShareLinks, () => shareLinksRevision);
+	const [accessByUrl, setAccessByUrl] = useState<ShareAccessByUrl>(() => new Map());
 	useEffect(() => {
 		if (!available || !signedIn) return;
 		let cancelled = false;
 		aoBridge.cloudShare.list(baseUrl)
-			.then(() => {
-				if (!cancelled) void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
+			.then((links) => {
+				if (cancelled) return;
+				setAccessByUrl(new Map(links.shares
+					.filter((share) => !share.revokedAt)
+					.map((share): [string, CloudShareAccess] => [artifactShareUrl(share), isPrivateShare(share) ? "restricted" : "anyone"])));
+				void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
 			})
 			// Offline or signed out: the records stay as they are until the next list.
 			.catch(() => undefined);
 		return () => {
 			cancelled = true;
 		};
-	}, [available, signedIn, baseUrl, queryClient]);
+	}, [available, signedIn, baseUrl, queryClient, revision]);
+	return accessByUrl;
 }
 
 /** The control plane URL and whether the person is signed in to share. */
@@ -461,7 +488,10 @@ function SharePanel({
 	 * Reads the artifact list again after a publish or an unpublish: the daemon
 	 * serves each artifact's shareUrl from the publish records this panel changed.
 	 */
-	const refreshArtifacts = () => void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
+	const refreshArtifacts = () => {
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
+		shareLinksChanged();
+	};
 	const { baseUrl, signedIn } = useShareAccess();
 	const owner = useCloudSession().session?.user;
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
@@ -649,6 +679,7 @@ function SharePanel({
 				? { ...current, share: { ...current.share, ...share }, narrowed: !isPrivateShare(current.share) && access === "restricted", error: undefined }
 				: current);
 			onChanged?.();
+			shareLinksChanged();
 		} catch (error) {
 			setPhase((current) => current.kind === "published" ? { ...current, error: t("artifacts.share.access.changeFailed", { message: errorMessage(error) }) } : current);
 		} finally {

@@ -7,6 +7,7 @@ import {
 	type WorkspaceSession,
 } from "../types/workspace";
 import type { ArtifactBundle } from "../../../../packages/shared/artifacts/deliverables";
+import type { CloudShareAccess } from "../../shared/cloud-share";
 import { CloudCpError } from "./cloud-cp/errors";
 import { fileMediaKind } from "./file-media";
 import { isSvgPath } from "./image-files";
@@ -32,8 +33,13 @@ export type ArtifactRow = {
 	projectId?: string;
 	/** Set on a row that stands for a bundle directory; `path` is a file inside it. */
 	bundle?: ArtifactBundle;
-	/** The file's public link while it is published; unset when it is not shared. */
+	/** The file's link while it is published; unset when it is not shared. */
 	shareUrl?: string;
+	/**
+	 * Who that link opens for, once the link list is read: restricted, only
+	 * the owner and the people invited. Unset reads as a public link.
+	 */
+	shareAccess?: CloudShareAccess;
 };
 
 /**
@@ -157,21 +163,36 @@ export type ArtifactFilters = {
 	sharings?: readonly ArtifactSharing[];
 };
 
-/** Whether an artifact has a public link ("public") or none ("private"). */
-export type ArtifactSharing = "public" | "private";
+/**
+ * Whether an artifact has a public link ("public"), a private one, open only
+ * to its owner and the people invited ("shared"), or none ("private").
+ */
+export type ArtifactSharing = "public" | "shared" | "private";
 
-export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "private"];
+export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "shared", "private"];
 
 /**
- * Whether an artifact is known to be public or known not to be, or undefined
- * when it cannot be told. Only a local session's files carry their public
- * link (the daemon reads it from this computer's publish records); a cloud
- * session's file list says nothing about publishing, so its state is unknown
- * rather than "not shared".
+ * Whether an artifact is known to be public, shared privately or not shared,
+ * or undefined when it cannot be told. Only a local session's files carry
+ * their link (the daemon reads it from this computer's publish records); a
+ * cloud session's file list says nothing about publishing, so its state is
+ * unknown rather than "not shared".
  */
-export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "cloud">): ArtifactSharing | undefined {
-	if (row.shareUrl) return "public";
+export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud">): ArtifactSharing | undefined {
+	if (row.shareUrl) return row.shareAccess === "restricted" ? "shared" : "public";
 	return row.cloud ? undefined : "private";
+}
+
+/** Sets each published row's shareAccess from who its link opens for. */
+export function withShareAccess(groups: readonly ArtifactGroup[], accessByUrl: ReadonlyMap<string, CloudShareAccess>): ArtifactGroup[] {
+	if (accessByUrl.size === 0) return [...groups];
+	return groups.map((group) => ({
+		...group,
+		rows: group.rows.map((row) => {
+			const access = row.shareUrl ? accessByUrl.get(row.shareUrl) : undefined;
+			return access ? { ...row, shareAccess: access } : row;
+		}),
+	}));
 }
 
 /**

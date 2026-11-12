@@ -48,6 +48,13 @@ const mocks = vi.hoisted(() => ({
 	hideShellTopbar: true,
 	/** Overrides whether the control plane keeps artifacts; undefined keeps the real hook's answer. */
 	cloudArtifacts: undefined as boolean | undefined,
+	/** Who each published link opens for, as the link list says. */
+	shareAccess: new Map<string, "restricted" | "anyone">(),
+}));
+
+vi.mock("./ShareArtifactPopover", async (importOriginal) => ({
+	...await importOriginal<typeof import("./ShareArtifactPopover")>(),
+	useReconciledShareLinks: () => mocks.shareAccess,
 }));
 
 // These tests are about the live preview a card falls back to; the cached image path has its own tests.
@@ -195,6 +202,7 @@ function expectMenuItems(names: string[]) {
 describe("ArtifactsView", () => {
 	afterEach(() => vi.unstubAllGlobals());
 	beforeEach(() => {
+		mocks.shareAccess = new Map();
 		window.localStorage.removeItem("ao.artifacts.view");
 		useArtifactsViewStore.setState({ view: "gallery", collapsedSections: [], pinnedArtifactIds: [] });
 		vi.stubGlobal("IntersectionObserver", class {
@@ -274,7 +282,7 @@ describe("ArtifactsView", () => {
 		renderView();
 		await user.click(screen.getByRole("button", { name: "Filter" }));
 		expect(screen.getAllByRole("menuitemcheckbox").map((item) => item.textContent)).toEqual([
-			"All projects", "agent-orchestrator", "All types", "All images", "All videos", "All documents", "Public", "Not shared", "All",
+			"All projects", "agent-orchestrator", "All types", "All images", "All videos", "All documents", "Public", "Shared privately", "Not shared", "All",
 		]);
 		const names = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");
 		// The menu stays open, so several types are picked in one go.
@@ -658,6 +666,46 @@ describe("ArtifactsView", () => {
 		const globe = within(artifactList()).getByRole("img", { name: "Published" });
 		fireEvent.pointerMove(globe, { pointerType: "mouse" });
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Published");
+	});
+
+	it.each(["list", "gallery"] as const)("marks a private link with amber people, not the globe, in %s view", async (view) => {
+		const published = session("ao-2", "Review pricing", [
+			{ name: "pricing.md", updatedAt: "2026-10-10T10:00:00Z" },
+			{ name: "roadmap.md", updatedAt: "2026-10-09T10:00:00Z" },
+		]);
+		published.artifactFiles![0].shareUrl = "https://share.test/pricing";
+		published.artifactFiles![1].shareUrl = "https://share.test/roadmap";
+		mocks.shareAccess = new Map([["https://share.test/pricing", "restricted"], ["https://share.test/roadmap", "anyone"]]);
+		mocks.workspaces = [{ ...withArtifacts[0], sessions: [published] }];
+		useArtifactsViewStore.setState({ view });
+		renderView();
+		const item = (name: string) => within(artifactList()).getByRole("button", { name: new RegExp(`^${name.replace(".", "\\.")}`) }).closest("li")!;
+		const shared = within(item("pricing.md")).getByRole("img", { name: "Shared privately" });
+		expect(shared).toHaveClass("text-status-in-review");
+		expect(within(item("pricing.md")).queryByRole("img", { name: "Published" })).toBeNull();
+		expect(within(item("roadmap.md")).getByRole("img", { name: "Published" })).toHaveClass("text-success");
+		fireEvent.pointerMove(shared, { pointerType: "mouse" });
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Shared privately");
+	});
+
+	it("filters to privately shared artifacts", async () => {
+		const user = userEvent.setup();
+		const published = session("ao-2", "Review pricing", [
+			{ name: "pricing.md", updatedAt: "2026-10-10T10:00:00Z" },
+			{ name: "roadmap.md", updatedAt: "2026-10-09T10:00:00Z" },
+		]);
+		published.artifactFiles![0].shareUrl = "https://share.test/pricing";
+		published.artifactFiles![1].shareUrl = "https://share.test/roadmap";
+		mocks.shareAccess = new Map([["https://share.test/pricing", "restricted"]]);
+		mocks.workspaces = [{ ...withArtifacts[0], sessions: [withArtifacts[0].sessions[0], published] }, withArtifacts[1]];
+		renderView();
+		const rows = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");
+
+		await user.click(screen.getByRole("button", { name: "Filter" }));
+		await user.click(screen.getByRole("menuitemcheckbox", { name: "Shared privately" }));
+		expect(rows()).toEqual([expect.stringContaining("pricing.md")]);
+		await user.click(screen.getByRole("menuitemcheckbox", { name: "Public" }));
+		expect(rows()).toEqual([expect.stringContaining("pricing.md"), expect.stringContaining("roadmap.md")]);
 	});
 
 	it("filters to public artifacts, or ones not shared, and removes the filter from its chip", async () => {

@@ -511,7 +511,7 @@ describe("ShareArtifactButton where links are public only", () => {
 	it("waits for Publish under the warning when the file looks like it holds a credential", async () => {
 		const { publishSpy } = stub({ ...inspection, secretFindings: ["AWS access key"] }, publicOnly, { status: "published", replaced: false, share });
 		await openPopover(cloudFile);
-		expect((await screen.findByRole("alert")).textContent).toContain("Publishing it makes that public.");
+		expect((await screen.findByRole("alert")).textContent).toBe("This file looks like it contains secrets (AWS access key). Publishing it makes them public.");
 		expect(publishSpy).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1" });
@@ -594,6 +594,20 @@ describe("useReconciledShareLinks", () => {
 		const invalidate = renderReconcile();
 		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeyForHost() }));
 		expect(list).toHaveBeenCalledExactlyOnceWith("https://reconcile.test");
+	});
+
+	it("returns who each active link opens for, by the URL a published artifact carries", async () => {
+		mocks.baseUrl = "https://reconcile-access.test";
+		vi.spyOn(aoBridge.cloudShare, "available").mockResolvedValue(true);
+		const publicShare = { ...share, id: "p-1", viewerUrl: undefined, contentUrl: "https://pub.share.test/", access: undefined };
+		const revoked = { ...share, id: "r-1", viewerUrl: "https://viewer.test/artifact/gone", revokedAt: "2026-11-01T00:00:00Z" };
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share, publicShare, revoked] });
+		const client = new QueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useReconciledShareLinks(), { wrapper });
+		await waitFor(() => expect(result.current.size).toBe(2));
+		expect(result.current.get("https://viewer.test/artifact/abc")).toBe("restricted");
+		expect(result.current.get("https://pub.share.test/")).toBe("anyone");
 	});
 
 	it("asks for nothing while signed out", async () => {
