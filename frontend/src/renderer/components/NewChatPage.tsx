@@ -30,6 +30,8 @@ import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 
 /**
  * New task as a chat that has no session yet. The first send creates the
@@ -108,6 +110,12 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		},
 	});
 	const stagePrepared = useStageAttachments(preparedId, hostId);
+	// A Cloud task carries files when its control plane takes them: they ride
+	// the first message of its Chat session, up to the size one upload may be.
+	const cloudOffering = useCloudOffering(task.isCloudProject);
+	const cloudFiles = useMemo(() => task.isCloudProject && cloudOffering.maxAttachmentBytes !== undefined
+		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
+	[cloudOffering.maxAttachmentBytes, task.isCloudProject]);
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
 	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);
@@ -390,8 +398,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				// A Cloud task cannot carry files yet, so its composer offers none.
-				holdAttachments={!task.isCloudProject}
+				// A Cloud task whose control plane takes no files offers none.
+				holdAttachments={!task.isCloudProject || Boolean(cloudFiles)}
+				cloudAttachments={cloudFiles}
 				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}

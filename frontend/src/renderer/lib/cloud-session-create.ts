@@ -56,3 +56,58 @@ export async function createCloudSession(
 export function isUnknownInterfaceFieldRefusal(error: unknown): boolean {
 	return error instanceof CloudCpError && error.status === 400 && error.code === "invalid_request";
 }
+
+/** A file a new Cloud task starts with, as the composer holds it (base64 bytes). */
+export interface CloudTaskFile {
+	mimeType: string;
+	data: string;
+	name?: string;
+}
+
+/** Why a task with files cannot start: they ride a Chat session's first message. */
+export class CloudTaskFilesNeedChatError extends Error {
+	constructor() {
+		super("Files can start a Cloud task in Chat only. Start it in Chat, or remove the files.");
+		this.name = "CloudTaskFilesNeedChatError";
+	}
+}
+
+/**
+ * Creates a Chat session whose brief carries files. Files are uploaded to a
+ * session that exists, and a session created with its prompt queues that
+ * prompt as its first turn at once, without them. So the session is created
+ * without a prompt (no turn), the files are uploaded to it, and the brief is
+ * sent as its first message with them, with the task's model, effort and
+ * permission. A session that did not start in Chat (a control plane that
+ * predates interfaceMode starts it in the terminal), or that the files or the
+ * brief did not reach, is deleted and the error thrown, so the composer keeps
+ * the task to send again. Each attempt creates under its own key, since a
+ * replay of the same create would answer with the deleted session.
+ */
+export async function createCloudChatSessionWithFiles(
+	client: Pick<CloudCpClient, "createSession" | "sendSessionMessage" | "deleteSession">,
+	orgId: string,
+	body: CloudCpCreateSessionRequest & { interfaceMode: "chat" },
+	files: readonly CloudTaskFile[],
+	upload: (sessionId: string, file: CloudTaskFile) => Promise<{ id: string }>,
+	options: { idempotencyKey?: string } = {},
+): Promise<CloudCpSessionResponse> {
+	const key = `${options.idempotencyKey ?? crypto.randomUUID()}:files:${crypto.randomUUID()}`;
+	const created = await createCloudSession(client, orgId, { ...body, prompt: "" }, { idempotencyKey: key });
+	const sessionId = created.session.id;
+	try {
+		if (created.session.interfaceMode !== "chat") throw new CloudTaskFilesNeedChatError();
+		const attachments = await Promise.all(files.map((file) => upload(sessionId, file)));
+		await client.sendSessionMessage(orgId, sessionId, {
+			text: body.prompt,
+			attachmentIds: attachments.map((attachment) => attachment.id),
+			...(body.model ? { model: body.model } : {}),
+			...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
+			...(body.approvalMode ? { approvalMode: body.approvalMode } : {}),
+		}, { idempotencyKey: `${key}:brief` });
+	} catch (error) {
+		await client.deleteSession(orgId, sessionId).catch(() => undefined);
+		throw error;
+	}
+	return created;
+}

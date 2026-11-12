@@ -18,7 +18,7 @@ import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
-import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpCreateSessionRequest, type CloudCpSession } from "../lib/cloud-cp";
 import { seedCloudOpening } from "../lib/cloud-opening";
 import {
 	cacheAgentReadiness,
@@ -37,7 +37,8 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudOrchestratorModel } from "../hooks/useCloudOrchestratorModel";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { createCloudSession } from "../lib/cloud-session-create";
+import { createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
+import { uploadCloudAttachment } from "../lib/cloud-attachments";
 import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
@@ -236,7 +237,15 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
-				if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
+				const files = input.attachments ?? [];
+				// Files ride the first message of a Chat session (createCloudChatSessionWithFiles),
+				// on a control plane that takes them.
+				if (files.length > 0 && cloudOffering.maxAttachmentBytes === undefined) {
+					throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
+				}
+				if (files.length > 0 && input.mode !== "chat") {
+					throw new Error(t("newTask.cloudAttachmentsNeedChat", { defaultValue: "Files can start a Cloud task in Chat only. Start it in Chat, or remove the files." }));
+				}
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// The agent is always the one the picker shows; with none there is nothing to start.
 				if (!input.agent) throw new Error(t("newTask.noReadyAgent"));
@@ -246,7 +255,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				// The task starts in the interface the composer resolved (its choice,
 				// else the default session interface); an older control plane that
 				// predates the field starts it in the terminal (createCloudSession).
-				const { session } = await createCloudSession(cloudClient, cloudOrg.id, {
+				const request = {
 					projectId: input.projectId,
 					kind: "worker",
 					harness: input.agent,
@@ -258,7 +267,13 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// Only a permission the user picked, as for a local task; without
 					// one the worker derives it from the session's mode.
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
-				}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
+				} satisfies CloudCpCreateSessionRequest;
+				const orgId = cloudOrg.id;
+				const { session } = files.length > 0
+					? await createCloudChatSessionWithFiles(cloudClient, orgId, { ...request, interfaceMode: "chat" }, files,
+						(sessionId, file) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }),
+						{ idempotencyKey: input.clientRequestId })
+					: await createCloudSession(cloudClient, orgId, request, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
 				// The session's Chat composer shows, and its turns keep, what the task
 				// was started with, as a local task's chat does.
 				rememberCloudChatSettings(cloudOrg.id, session.id, session.harness, input);
@@ -288,7 +303,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudBaseUrl, cloudClient, cloudOrg, cloudUserId, queryClient, t],
+		[cloudBaseUrl, cloudClient, cloudOffering.maxAttachmentBytes, cloudOrg, cloudUserId, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
