@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -693,6 +694,11 @@ var _ ports.TerminalForegroundWatcher = (*Runtime)(nil)
 
 // WatchTerminalForeground streams the host's foreground program and activity.
 func (r *Runtime) WatchTerminalForeground(ctx context.Context, handle ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
+	// ConPTY has no process groups, so its host would hold the watch open
+	// without ever sending a reading.
+	if goruntime.GOOS == "windows" {
+		return fmt.Errorf("conpty: no foreground process group on windows: %w", ports.ErrTerminalForegroundUnavailable)
+	}
 	sess, err := r.resolveWithEvidence(ctx, handle.ID)
 	if err != nil {
 		return fmt.Errorf("conpty: resolve runtime %q for foreground: %w", handle.ID, err)
