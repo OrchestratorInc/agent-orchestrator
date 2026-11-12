@@ -61,6 +61,7 @@ import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
 import { useChangeSummary } from "../files/useChangeSummary";
 import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
@@ -239,6 +240,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
 		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, currentHostId, previousPath)),
 	}), [currentHostId, router, session.id, sessionName]);
+	// The artifacts a turn made, drawn as cards under its reply.
+	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.
 	const lastTurn = conversation.snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
@@ -737,6 +740,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
+				<TurnArtifactsContext.Provider value={turnArtifacts}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -757,6 +761,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					bottomInset={composerHeight}
 					jumpHidden={composerOpen}
 				/>
+				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
 			{switchCardShown ? (
