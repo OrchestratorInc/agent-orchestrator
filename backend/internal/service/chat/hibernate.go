@@ -7,6 +7,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -714,7 +715,14 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 	}()
 }
 
-var otherWriterPoll = 2 * time.Second
+var otherWriterPoll atomic.Int64
+
+func otherWriterPollInterval() time.Duration {
+	if interval := otherWriterPoll.Load(); interval > 0 {
+		return time.Duration(interval)
+	}
+	return 2 * time.Second
+}
 
 // ErrChatOpenElsewhere reports a send refused because another process writes
 // the chat and its provider could not be stopped yet.
@@ -781,7 +789,7 @@ func (s *Service) waitForOtherWriter(ctx context.Context, id domain.SessionID) {
 		default:
 			s.log.Warn("could not read a chat another process holds; retrying", "session", id, "err", err)
 		}
-		time.Sleep(otherWriterPoll)
+		time.Sleep(otherWriterPollInterval())
 	}
 }
 

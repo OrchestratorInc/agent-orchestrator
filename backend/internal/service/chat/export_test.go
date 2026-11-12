@@ -34,7 +34,6 @@ func SetDeltaFlushInterval(interval time.Duration) (restore func()) {
 const DeltaRunMaxBytes = deltaRunMaxBytes
 
 func SetOtherWriterPoll(interval time.Duration) (restore func()) {
-	previous := otherWriterPoll
-	otherWriterPoll = interval
-	return func() { otherWriterPoll = previous }
+	previous := otherWriterPoll.Swap(int64(interval))
+	return func() { otherWriterPoll.Store(previous) }
 }
