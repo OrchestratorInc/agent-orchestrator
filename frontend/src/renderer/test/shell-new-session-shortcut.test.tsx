@@ -1869,6 +1869,23 @@ describe("shell session deep links", () => {
 		expect(useUiStore.getState().globalToast?.title).toContain("Session not found");
 	});
 
+	it("reports a failed remote host as unavailable, not a missing session", async () => {
+		// A host whose session query failed settles the gate with empty session
+		// lists (CodeRabbit round 4). A miss on such a project is "could not
+		// load", not "does not exist" — the session may still exist there.
+		useUiStore.setState({ remoteHosts: true });
+		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, refresh: async () => undefined };
+		shellMocks.state.remoteFailedHostIds = ["box-a"];
+		shellMocks.state.remoteWorkspaces = [
+			{ id: "proj-remote", hostId: "box-a", sessions: [] },
+		] as unknown as WorkspaceSummary[];
+		await renderShellWithReadyDaemon();
+		emitSessionDeepLink("ao-app://sessions/proj-remote/sess-remote");
+		expect(shellMocks.navigate).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast?.title).toContain("host");
+		expect(useUiStore.getState().globalToast?.title).not.toContain("Session not found");
+	});
+
 	it("falls back to a remote workspace when the session is not local", async () => {
 		shellMocks.state.remoteWorkspaces = [
 			{ id: "proj-remote", hostId: "box-a", sessions: [{ id: "sess-remote", status: "working" }] },

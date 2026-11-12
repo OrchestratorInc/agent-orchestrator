@@ -14,6 +14,10 @@ describe("isSessionDeepLink", () => {
 		expect(isSessionDeepLink("ao-app://sessions/proj-1/sess-9/")).toBe(true);
 	});
 
+	it("accepts an uppercase scheme (URL parsing lowercases it; main forwards the normalized form)", () => {
+		expect(isSessionDeepLink("AO-APP://sessions/proj-1/sess-9")).toBe(true);
+	});
+
 	it("rejects billing links (they keep their own handling)", () => {
 		expect(isSessionDeepLink("ao-app://billing")).toBe(false);
 	});

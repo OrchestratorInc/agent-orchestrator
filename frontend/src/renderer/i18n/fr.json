@@ -866,6 +866,7 @@
 	"daemon.title.notReady": "Le daemon Orchestrator n'est pas encore prêt",
 	"daemon.title.unreachable": "Le daemon Orchestrator est inaccessible",
 	"deepLink.sessionNotFound": "Session introuvable",
+	"deepLink.sessionHostUnavailable": "Impossible de charger cette session — l'hôte est injoignable. Réessayez une fois sa reconnexion effectuée.",
 	"deepLink.sessionTerminated": "La session {{sessionId}} est terminée",
 	"editor.open": "Ouvrir",
 	"editor.opening": "Ouverture…",

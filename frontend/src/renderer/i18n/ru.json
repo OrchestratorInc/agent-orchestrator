@@ -869,6 +869,7 @@
 	"daemon.title.notReady": "Демон Orchestrator ещё не готов",
 	"daemon.title.unreachable": "Демон Orchestrator недоступен",
 	"deepLink.sessionNotFound": "Сессия не найдена",
+	"deepLink.sessionHostUnavailable": "Не удалось загрузить эту сессию — хост недоступен. Повторите попытку после его переподключения.",
 	"deepLink.sessionTerminated": "Сессия {{sessionId}} завершена",
 	"editor.open": "Открыть",
 	"editor.opening": "Открытие…",

@@ -1502,7 +1502,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					? remoteWorkspaces.find((entry) => entry.id === resolvedRemote.projectId && entry.sessions.some((session) => session.id === resolvedRemote.sessionId))
 					: undefined;
 			if (!resolved || !workspace) {
-				useUiStore.getState().showGlobalToast(t("deepLink.sessionNotFound"));
+				// A failed host query settles the gate with that host's projects
+				// holding empty session lists, so a miss on such a project is
+				// "could not load", not "does not exist" (CodeRabbit round 4).
+				const missOnFailedHost = target !== undefined && remoteFailedHostIds.some((hostId) =>
+					remoteWorkspacesRef.current.some((entry) => entry.hostId === hostId && entry.id === target.projectId));
+				useUiStore.getState().showGlobalToast(t(missOnFailedHost ? "deepLink.sessionHostUnavailable" : "deepLink.sessionNotFound"));
 				return;
 			}
 			// Same refusal as in-app ao:// links; a terminated session's
@@ -1514,7 +1519,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (artifact) useUiStore.getState().requestWorkspaceFileOpen(resolved.sessionId, artifact.path, workspace.hostId, "artifact");
 			void navigate(sessionNavigateTarget(resolved.projectId, resolved.sessionId, workspace.hostId));
 		},
-		[navigate, t],
+		[navigate, remoteFailedHostIds, t],
 	);
 	useEffect(() => {
 		return aoBridge.app.onOpenSessionDeepLink((rawUrl) => {

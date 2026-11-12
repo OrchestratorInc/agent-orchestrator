@@ -857,6 +857,7 @@
 	"daemon.title.notReady": "Orchestrator daemon is not ready yet",
 	"daemon.title.unreachable": "Orchestrator daemon is unreachable",
 	"deepLink.sessionNotFound": "Session not found",
+	"deepLink.sessionHostUnavailable": "Couldn't load this session — its host is unreachable. Try again once it reconnects.",
 	"deepLink.sessionTerminated": "Session {{sessionId}} is terminated",
 	"editor.open": "Open",
 	"editor.opening": "Opening…",
