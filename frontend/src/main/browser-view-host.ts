@@ -2751,6 +2751,23 @@ export function createBrowserViewHost(
     }
   }
 
+  // A hidden panel's composer cannot be seen or finished, so its dictation
+  // ends. Re-layouts hide and re-show the view within a frame or two (a slot
+  // handoff, the 280ms settle re-measure), so only a hide that lasts ends it.
+  const ANNOTATION_DICTATION_HIDE_GRACE_MS = 500;
+  const dictationHideTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const stopDictationIfStillHidden = (viewId: string): void => {
+    if (dictationHideTimers.has(viewId)) return;
+    dictationHideTimers.set(viewId, setTimeout(() => {
+      dictationHideTimers.delete(viewId);
+      const session = entries.get(viewId);
+      if (!session || session.visible || !session.tabs.size) return;
+      const entry = activeEntry(session);
+      if (entry.annotationEnabled && entry.annotationDictation)
+        entry.view.webContents.send("browser:annotation:stopDictation");
+    }, ANNOTATION_DICTATION_HIDE_GRACE_MS));
+  };
+
   const setBounds = (
     { viewId, revision, rect, visible }: BrowserBoundsInput,
     zoomFactor = 1,
@@ -2774,8 +2791,11 @@ export function createBrowserViewHost(
       // Hiding the native surface (blank tab, transient measure) must not drop
       // the browser shortcut target — the panel chrome is still the context.
       forgetNativeFocus(viewId);
+      stopDictationIfStillHidden(viewId);
       return { viewId, revision, rect: session.bounds, visible: false };
     }
+    clearTimeout(dictationHideTimers.get(viewId));
+    dictationHideTimers.delete(viewId);
     // The renderer measures the slot in page-zoomed CSS pixels, while
     // WebContentsView bounds are window coordinates. Convert before clamping so
     // Cmd+/Cmd- page zoom does not detach the native view from its React slot.
