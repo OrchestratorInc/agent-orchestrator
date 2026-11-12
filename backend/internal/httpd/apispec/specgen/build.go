@@ -2633,7 +2633,7 @@ func importOperations() []operation {
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/imports/github-availability", id: "checkImportGitHubAvailability", tag: "import",
-			summary: "Check whether a GitHub repository name is free to create for a project import",
+			summary:    "Check whether a GitHub repository name is free to create for a project import",
 			pathParams: []any{importsvc.GitHubAvailabilityQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, importsvc.GitHubAvailabilityResult{}},

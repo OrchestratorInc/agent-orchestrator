@@ -1053,12 +1053,12 @@ func createProjectFolder(path string) error {
 	failed := func(err error) error {
 		return apierr.Invalid("PROJECT_FOLDER_CREATE_FAILED", "Orchestrator could not create the project folder.", map[string]any{"path": path, "error": err.Error()})
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return failed(err)
 	}
 	// Mkdir, not MkdirAll: it fails when the folder exists, even if it appeared
 	// a moment ago, so the cleanup after a failed setup only removes ours.
-	if err := os.Mkdir(path, 0o755); err != nil {
+	if err := os.Mkdir(path, 0o750); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return apierr.Conflict("PATH_EXISTS", "A folder with this name already exists.", map[string]any{"path": path})
 		}
