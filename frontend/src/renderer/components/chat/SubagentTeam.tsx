@@ -290,7 +290,6 @@ export function SubagentRowButton({
 							"min-w-0 truncate text-xs font-medium",
 							folded ? "text-foreground/85 group-hover/agent:text-foreground" : "text-foreground/90",
 						)}
-						title={agent.title}
 					>
 						{agent.title}
 					</span>

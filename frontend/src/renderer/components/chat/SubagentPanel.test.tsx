@@ -69,7 +69,8 @@ describe("SubagentPanel", () => {
 
 	it("shows one child's whole conversation, read-only, under a header that leads back", async () => {
 		const user = userEvent.setup();
-		const { onBack } = panel({ openId: "a" });
+		// The catalog's default is not named: the composer reads "Choose a model".
+		const { onBack } = panel({ openId: "a", models: [{ id: "opus", displayName: "Opus", default: true }] });
 
 		expect(screen.getByRole("heading", { name: "Audit: info pages" })).toBeInTheDocument();
 		// The parent's instructions open the conversation, attributed to the parent.
@@ -82,9 +83,16 @@ describe("SubagentPanel", () => {
 		expect(screen.getByText("Report")).toBeInTheDocument();
 		expect(screen.getByText("The FAQ never mentions shipping.")).toBeInTheDocument();
 		expect(screen.queryByText("SubagentHandback")).not.toBeInTheDocument();
-		// Nothing to type into: the child answers to its parent.
+		// Nothing to type into: the child answers to its parent. The composer says so in
+		// place of its placeholder, over the side chat's tools, every one switched off.
 		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-		expect(screen.getByText(/Read-only: a subagent works on its own/)).toBeInTheDocument();
+		const composer = within(screen.getByTestId("subagent-read-only-composer"));
+		expect(composer.getByText(/Read-only: a subagent works on its own/)).toBeInTheDocument();
+		expect(composer.getByRole("button", { name: "Attach a file" })).toBeDisabled();
+		expect(composer.getByRole("button", { name: "Send message" })).toBeDisabled();
+		expect(composer.getByText("Choose a model")).toBeInTheDocument();
+		expect(composer.queryByText("Opus")).not.toBeInTheDocument();
+		for (const button of composer.getAllByRole("button")) expect(button).toBeDisabled();
 
 		await user.click(screen.getByRole("button", { name: "All subagents" }));
 		expect(onBack).toHaveBeenCalled();

@@ -448,8 +448,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const subagentPanel = useMemo(
 		() => subagentContainer === undefined || !onRevealSubagents
 			? undefined
-			: { container: subagentContainer, reveal: onRevealSubagents, onAvailableChange: reportSubagents },
-		[onRevealSubagents, reportSubagents, subagentContainer],
+			: { container: subagentContainer, reveal: onRevealSubagents, onAvailableChange: reportSubagents, models },
+		[models, onRevealSubagents, reportSubagents, subagentContainer],
 	);
 	// A pending action owns its destination; an unanswered creation owns only its
 	// request identity. Reselecting text must not turn a lost reply into a new fork.

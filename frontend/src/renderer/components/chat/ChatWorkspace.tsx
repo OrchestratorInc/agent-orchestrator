@@ -4940,6 +4940,7 @@ export function Timeline({
 				onOpen={setOpenSubagentId}
 				onBack={closeSubagent}
 				harness={snapshot.harness}
+				models={subagentPanel.models}
 				disclosureOverrides={activityDisclosureOverrides}
 				onDisclosureChange={onActivityDisclosureChange}
 			/>,

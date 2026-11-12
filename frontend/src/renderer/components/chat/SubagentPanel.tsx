@@ -8,7 +8,7 @@
  */
 
 import { useMemo } from "react";
-import { ArrowLeft, Lock } from "@/components/app-icons";
+import { ArrowLeft, ArrowUp, Plus } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -21,7 +21,13 @@ import {
 	useNow,
 } from "./SubagentTeam";
 import { SubagentTranscript } from "./SubagentTranscript";
+import { TurnSettingsBar } from "./TurnSettingsBar";
 import { readSubagent, type Subagent, type SubagentRef } from "./subagent-team";
+import type { ChatModel, TurnSettings } from "../../types/conversation";
+
+const NO_MODELS: ChatModel[] = [];
+const NO_SETTINGS: TurnSettings = {};
+const IGNORE_SETTINGS = () => {};
 
 /**
  * What a chat host gives the timeline so it can show subagents in the inspector.
@@ -32,6 +38,8 @@ export type SubagentPanelHost = {
 	container: HTMLElement | null;
 	reveal: () => void;
 	onAvailableChange: (available: boolean) => void;
+	/** The chat's model catalog, so the read-only composer draws the side chat's model control. */
+	models?: ChatModel[];
 };
 
 export function SubagentPanel({
@@ -40,6 +48,7 @@ export function SubagentPanel({
 	onOpen,
 	onBack,
 	harness,
+	models = NO_MODELS,
 	disclosureOverrides,
 	onDisclosureChange,
 }: {
@@ -49,6 +58,8 @@ export function SubagentPanel({
 	onOpen: (launchId: string) => void;
 	onBack: () => void;
 	harness?: string;
+	/** For the read-only composer's model control, as the side chat draws it. Empty hides it. */
+	models?: ChatModel[];
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
@@ -69,6 +80,7 @@ export function SubagentPanel({
 					key={open.launch.id}
 					agent={open}
 					harness={harness}
+					models={models}
 					now={now}
 					onBack={onBack}
 					disclosureOverrides={disclosureOverrides}
@@ -145,6 +157,7 @@ function SubagentGroup({
 function SubagentConversation({
 	agent,
 	harness,
+	models,
 	now,
 	onBack,
 	disclosureOverrides,
@@ -152,6 +165,7 @@ function SubagentConversation({
 }: {
 	agent: Subagent;
 	harness?: string;
+	models: ChatModel[];
 	now: number;
 	onBack: () => void;
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
@@ -160,6 +174,12 @@ function SubagentConversation({
 	const { t } = useTranslation();
 	const elapsed = elapsedLabel(agent, now);
 	const backLabel = t("chat.subagent.panel.back");
+	// The control reads "Choose a model", never the catalog's default: which model the
+	// child ran is not recorded, and naming the parent's would claim it was that one.
+	const composerModels = useMemo(
+		() => (models.some((model) => model.default) ? models.map((model) => ({ ...model, default: false })) : models),
+		[models],
+	);
 
 	return (
 		<>
@@ -174,7 +194,7 @@ function SubagentConversation({
 				</Tooltip>
 				<SubagentAvatar harness={harness} state={agent.state} />
 				<span className="flex min-w-0 flex-1 items-baseline gap-2">
-					<h3 className="min-w-0 truncate text-xs font-medium text-foreground" title={agent.title}>
+					<h3 className="min-w-0 truncate text-xs font-medium text-foreground">
 						{agent.title}
 					</h3>
 					<SubagentTypeLabel agent={agent} />
@@ -191,10 +211,44 @@ function SubagentConversation({
 					onDisclosureChange={onDisclosureChange}
 				/>
 			</div>
-			<p className="flex shrink-0 items-center gap-1.5 border-t border-border px-4 py-2 text-caption text-muted-foreground">
-				<Lock aria-hidden="true" className="size-3 shrink-0" />
-				{t("chat.subagent.readOnly")}
-			</p>
+			{/* Where a chat has its composer, this one shows the side chat's composer switched
+			    off: why it takes no message, in place of "Message the agent…", over the same
+			    tools, each disabled. */}
+			<div className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
+				<div
+					data-testid="subagent-read-only-composer"
+					className="cursor-chat-composer mx-auto flex w-full max-w-3xl cursor-default flex-col gap-1.5 px-3 pt-3 pb-3"
+				>
+					<p className="min-h-[4.5rem] py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground">
+						{t("chat.subagent.readOnly")}
+					</p>
+					<div className="flex h-7 items-center gap-1.5">
+						<div className="flex min-w-0 flex-1 items-center gap-0.5">
+							<Button
+								type="button"
+								variant="quiet"
+								size="icon-sm"
+								shape="pill"
+								disabled
+								aria-label={t("sideChat.attachAFile")}
+								className="shrink-0"
+							>
+								<Plus aria-hidden="true" className="size-3.5" />
+							</Button>
+							<TurnSettingsBar
+								models={composerModels}
+								settings={NO_SETTINGS}
+								onChange={IGNORE_SETTINGS}
+								showApprovalMode={false}
+								disabled
+							/>
+						</div>
+						<Button type="button" variant="primary" size="icon-sm" shape="pill" disabled aria-label={t("sideChat.sendMessage")}>
+							<ArrowUp aria-hidden="true" className="size-3.5" />
+						</Button>
+					</div>
+				</div>
+			</div>
 		</>
 	);
 }
