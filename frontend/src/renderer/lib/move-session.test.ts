@@ -155,6 +155,17 @@ describe("moveSession", () => {
 		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
 	});
 
+	it("names the computer that cannot be reached and resumes the source", async () => {
+		const { source, input } = hosts(undefined, () => {
+			throw new TypeError("Failed to fetch");
+		});
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+
+		expect(error.message).toBe("MacBook B is not reachable");
+		expect(error.step).toBe("receive");
+		expect(source.calls).toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
 	it("keeps the move when only marking the source fails", async () => {
 		const { source, input } = hosts();
 		const sourceClient = source.client as unknown as { POST: (path: string, options?: unknown) => Promise<unknown> };
