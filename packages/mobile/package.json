@@ -4,6 +4,11 @@
   "private": true,
   "description": "Expo mobile supervisor for Orchestrator",
   "main": "expo-router/entry",
+  "overrides": {
+    "query-string@7.1.3": {
+      "decode-uri-component": "0.5.1"
+    }
+  },
   "scripts": {
     "start": "expo start",
     "start:perf": "expo start --dev-client --no-dev --minify",
