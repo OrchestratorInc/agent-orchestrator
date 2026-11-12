@@ -5853,6 +5853,46 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("keeps Browser on a live page and only badges Artifacts when an artifact is registered", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		worker.previewUrl = "http://localhost:5173/";
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "browser");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "report.md", path: "report.md", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
+			expect(inspectorOpen("sess-1")).toBe(true);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
+			expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
+		} finally {
+			delete worker.artifactFiles;
+			delete worker.previewUrl;
+		}
+	});
+
+	it("opens Artifacts for a registration while Browser has no page", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "browser");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "report.md", path: "report.md", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
 	it("dismisses a session's artifact toast when the user leaves that session", () => {
 		const worker = workerSession("sess-1");
 		worker.artifactFiles = [];
