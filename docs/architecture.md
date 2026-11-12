@@ -624,9 +624,12 @@ sequenceDiagram
 ```
 
 Chat queues every message in SQLite while a provider turn is active. Completion
-claims the waiting messages in enqueue order and sends them as one provider
-input. A steer claims the same waiting queue and appends its guidance to one
-active turn input. Each source message keeps its own transcript row, origin,
+claims from the front of the queue in enqueue order. A message the user typed
+gets a turn of its own, so the agent answers each one before the next is sent.
+Agent and Orchestrator messages waiting next to each other (agent messages,
+review comments, conflict notices) go together as one provider input, stopping
+before the next typed message. A steer claims the whole waiting queue and
+appends its guidance to one active turn input. Each source message keeps its own transcript row, origin,
 sender, and delivery handle. Messages arriving after the claim wait for the next
 turn. AO does not truncate a batch or impose a provider input size limit;
 provider limits and refusals are surfaced as delivery failures. An uncertain
