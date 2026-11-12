@@ -153,12 +153,60 @@ it.each(["cleanup_pending", "unconfirmed"])("does not turn an already-closed %s 
 	expect(post).not.toHaveBeenCalled();
 });
 
+it("retains the transcript read-only when successful deletion returns an unconfirmed shutdown", async () => {
+	const normal = get.getMockImplementation()!;
+	get.mockImplementation((path: string, ...args: unknown[]) => path.endsWith("/{sideId}") ? { data: { snapshot: {
+		side: { id: "side", state: "ready" }, activities: [],
+		turns: [{ id: "turn", state: "completed", createdAt: "2026-01-01T00:00:00Z" }],
+		messages: [{ id: "answer", turnId: "turn", role: "assistant", text: "Retained answer", revision: 1, sequence: 1, createdAt: "2026-01-01T00:00:00Z" }],
+	} } } : normal(path, ...args));
+	remove.mockResolvedValueOnce({}); confirmClose.mockResolvedValueOnce("unconfirmed");
+	render(<Panel />); await screen.findByText("Retained answer"); await deleteFromPanel();
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	expect(screen.getByRole("tab", { name: "Side" })).not.toHaveAttribute("aria-busy");
+	expect(screen.getByRole("alert")).toHaveTextContent("temporarily read-only");
+	expect(screen.getByText("Retained answer")).toBeInTheDocument();
+	expect(screen.queryByLabelText("Side chat question")).not.toBeInTheDocument();
+	expect(screen.queryByText("No side chat opened.")).not.toBeInTheDocument();
+	expect(capture).not.toHaveBeenCalledWith("side", true);
+	expect(pending).toHaveLength(1);
+});
+
+it("preserves another selected tab while an unconfirmed deletion awaits cleanup", async () => {
+	const hook = await setup(); const confirmation = deferred<string>();
+	remove.mockResolvedValueOnce({}); confirmClose.mockReturnValueOnce(confirmation.promise);
+	let closing!: Promise<void>;
+	act(() => { closing = hook.result.current.close("side").catch(() => undefined); });
+	await waitFor(() => expect(confirmClose).toHaveBeenCalledWith("side"));
+	post.mockResolvedValueOnce({ data: { side: { id: "new", sessionId: "session", state: "ready", label: "New" } } });
+	await act(async () => hook.result.current.create(undefined, true));
+	await act(async () => { confirmation.resolve("unconfirmed"); await closing; });
+	expect(hook.result.current.activeId).toBe("new");
+	expect(hook.result.current.sides.map(side => side.id)).toEqual(expect.arrayContaining(["side", "new"]));
+	post.mockClear(); await act(async () => hook.result.current.send("side", "blocked"));
+	expect(post).not.toHaveBeenCalled();
+	const normal = get.getMockImplementation()!;
+	get.mockImplementation((path: string, ...args: unknown[]) => path.endsWith("/side-chats")
+		? { data: { sides: [{ id: "new", sessionId: "session", state: "ready", label: "New" }] } }
+		: normal(path, ...args));
+	pending[0].phase = "cleanup_pending"; await changed();
+	pending.length = 0; await changed();
+	expect(hook.result.current.activeId).toBe("new");
+	expect(hook.result.current.sides.map(side => side.id)).toEqual(["new"]);
+});
+
 it("removes a confirmed shutdown even if confirmation IPC fails", async () => {
 	const hook = await setup(); remove.mockResolvedValueOnce({});
 	confirmClose.mockRejectedValueOnce(new Error("IPC lost"));
 	await act(async () => hook.result.current.close("side"));
 	expect(hook.result.current.sides).toEqual([]);
+	expect(hook.result.current.activeId).toBeUndefined();
 	expect(capture).not.toHaveBeenCalledWith("side", true);
+	// Bookkeeping failure must retain Electron's cleanup ownership without
+	// allowing a subsequent refresh to resurrect a confirmed shutdown.
+	expect(pending).toHaveLength(1);
+	await changed();
+	expect(hook.result.current.sides).toEqual([]);
 });
 
 it("preserves a tab created and selected while an older deletion finishes", async () => {

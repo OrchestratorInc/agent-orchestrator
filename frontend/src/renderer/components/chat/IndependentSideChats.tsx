@@ -1292,9 +1292,11 @@ export function useIndependentSideChats(
 					);
 					if (!current()) return;
 					if (!requestError) {
-						// HTTP success proves shutdown even if the follow-up IPC fails.
+						// Failed bookkeeping cannot undo HTTP shutdown proof, but an explicit
+						// attachment mismatch needs reconciliation with the replacement daemon.
 						outcome = "closed";
-						await aoBridge.sideChats.confirmClose(sideId).catch(() => undefined);
+						const confirmed = await aoBridge.sideChats.confirmClose(sideId).catch(() => undefined);
+						if (confirmed === "unconfirmed") outcome = "unconfirmed";
 					} else if (response.status === 404) {
 						outcome = await aoBridge.sideChats.confirmClose(sideId, true);
 					} else {
