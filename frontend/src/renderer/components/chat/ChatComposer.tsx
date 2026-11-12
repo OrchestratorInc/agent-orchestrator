@@ -2138,7 +2138,7 @@ export const ChatComposer = memo(function ChatComposer({
 	) : null;
 	const queueEnters = useDockEntrance(queuedDock ? "queue" : null);
 	const elicitationEnters = useDockEntrance(elicitation ? String((isValidElement(elicitation) && elicitation.key) || "elicitation") : null);
-	const unsentEnters = useDockEntrance(unsentStrip ? (stripDelivery?.draft ? "unsent" : "discarded") : null);
+	const unsentEnters = useDockEntrance(unsentStrip ? (unsentRows.length > 0 ? "unsent" : "discarded") : null);
 	const withQueueStack = (form: ReactElement) =>
 		(
 			<div className="relative mx-auto flex w-full max-w-3xl flex-col">
