@@ -4,6 +4,11 @@
 	"private": true,
 	"type": "module",
 	"description": "Daytona pod runner used by the private conductor's stable-release e2e gate.",
+	"overrides": {
+		"@opentelemetry/sdk-node@0.219.0": {
+			"@opentelemetry/propagator-jaeger": "2.9.0"
+		}
+	},
 	"dependencies": {
 		"@daytona/sdk": "^0.196.0"
 	}
