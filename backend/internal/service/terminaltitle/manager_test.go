@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+// TestMain shortens the timings once: goroutines from an earlier test can
+// still read them while a later test starts, so tests never write them.
+func TestMain(m *testing.M) {
+	minWriteInterval, readRetryDelay = 200*time.Millisecond, 10*time.Millisecond
+	os.Exit(m.Run())
+}
 
 type fakeStore struct {
 	mu       sync.Mutex
@@ -196,9 +204,6 @@ func updated(id string, payload map[string]any) cdc.Event {
 
 func startManager(t *testing.T, store *fakeStore, unavailable ...string) (*Manager, *fakeRuntime, *fakeEvents) {
 	t.Helper()
-	writeBefore, retryBefore := minWriteInterval, readRetryDelay
-	minWriteInterval, readRetryDelay = 200*time.Millisecond, 10*time.Millisecond
-	t.Cleanup(func() { minWriteInterval, readRetryDelay = writeBefore, retryBefore })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	rt, events := newFakeRuntime(), &fakeEvents{}

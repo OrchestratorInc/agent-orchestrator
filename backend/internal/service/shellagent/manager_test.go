@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +12,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+// TestMain shortens the retry delays once: watch goroutines from an earlier
+// test can still read them while a later test starts, so tests never write them.
+func TestMain(m *testing.M) {
+	initialWatchRetryDelay, watchRetryMax = time.Millisecond, time.Millisecond
+	os.Exit(m.Run())
+}
 
 // fakeRuntime replays readings pushed on readings, the way a terminal host
 // pushes changes, and serves a fixed screen.
@@ -223,10 +231,6 @@ func (u *unreachableRuntime) GetOutput(context.Context, ports.RuntimeHandle, int
 }
 
 func TestManagerStopsRetryingAnUnreachableHost(t *testing.T) {
-	initialBefore, maxBefore := initialWatchRetryDelay, watchRetryMax
-	initialWatchRetryDelay, watchRetryMax = time.Millisecond, time.Millisecond
-	t.Cleanup(func() { initialWatchRetryDelay, watchRetryMax = initialBefore, maxBefore })
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt := &unreachableRuntime{}
@@ -245,10 +249,6 @@ func TestManagerStopsRetryingAnUnreachableHost(t *testing.T) {
 }
 
 func TestManagerRestartsAGivenUpWatchForANewSubscriber(t *testing.T) {
-	initialBefore, maxBefore := initialWatchRetryDelay, watchRetryMax
-	initialWatchRetryDelay, watchRetryMax = time.Millisecond, time.Millisecond
-	t.Cleanup(func() { initialWatchRetryDelay, watchRetryMax = initialBefore, maxBefore })
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt := &unreachableRuntime{}
