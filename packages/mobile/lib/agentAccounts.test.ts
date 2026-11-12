@@ -33,7 +33,7 @@ describe("agent accounts on mobile", () => {
 	});
 
 	it("moves a session, stopping its turn only when asked", async () => {
-		vi.mocked(fetch).mockResolvedValue(json({ transition: { id: "t1" } }, 202));
+		vi.mocked(fetch).mockImplementation(async () => json({ transition: { id: "t1" } }, 202));
 		await moveSessionAgentAccount(cfg, "ao-1", "c2", false);
 		await moveSessionAgentAccount(cfg, "ao-1", "c2", true);
 		const bodies = vi.mocked(fetch).mock.calls.map(([, init]) => [init?.method, JSON.parse(String(init?.body))]);

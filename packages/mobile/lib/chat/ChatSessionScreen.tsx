@@ -557,7 +557,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		compact: () => void conversation.compact().catch(() => {}),
 		account: () => {
 			if (!config) return;
-			const move = (accountId: string, stopTurn: boolean) => void moveSessionAgentAccount(config, session.id, accountId, stopTurn)
+			const move = (accountId: string, stop: boolean) => void moveSessionAgentAccount(config, session.id, accountId, stop)
 				.then(() => interfaceSwitch.refresh())
 				.catch((cause) => Alert.alert("Couldn't switch account", userFacingError(cause)));
 			void presentSheet({
