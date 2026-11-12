@@ -3052,6 +3052,12 @@ html.sidebar-reordering * {
 	left: 0;
 }
 
+/* On a translucent window bg-surface is a 5% tint, so the transcript under the
+   open dock showed through it. The queue box keeps its solid fill there. */
+html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue-dock-body) {
+	background-color: var(--solid-bg-secondary);
+}
+
 /* Clip-height collapse: one row stays visible when folded; up to five when open. */
 .queue-dock-body {
 	--queue-dock-row-height: 2.5rem;
@@ -6318,12 +6324,10 @@ html[data-window-translucent="true"] body {
 
 /* Floating surfaces sit above the material: back to solid theme values.
  * `.z-overlay` covers custom floating menus; update notices also need solid
- * fills so the decorative stack stays behind the front card. The open queue
- * dock floats over the transcript's last rows, which must not show through. */
+ * fills so the decorative stack stays behind the front card. */
 html[data-window-translucent="true"] :is(
 	.z-overlay,
 	.harness-update-notice,
-	.queue-dock,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],
@@ -6382,7 +6386,6 @@ html[data-window-translucent="true"] :is(
 	body,
 	.z-overlay,
 	.harness-update-notice,
-	.queue-dock,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],
