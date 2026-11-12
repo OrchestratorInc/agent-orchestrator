@@ -23,12 +23,7 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// clientName identifies AO to the provider. It shows up in the app-server's
-// reported user agent, which makes a stray process attributable.
 const (
-	clientName    = "agent-orchestrator"
-	clientTitle   = "Agent Orchestrator"
-	clientVersion = "0.1.0"
 	// This is the oldest Codex build whose complete Chat surface AO exercised:
 	// thread start/resume, turn start/interrupt, approvals, and every advertised
 	// extension. initialize plus model/list alone cannot prove those mutating
@@ -693,7 +688,7 @@ func initializeConnection(ctx context.Context, connection *conn) error {
 	initCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	if err := connection.request(initCtx, "initialize", map[string]any{
-		"clientInfo":   map[string]any{"name": clientName, "title": clientTitle, "version": clientVersion},
+		"clientInfo":   map[string]any{"name": "codex_cli_rs", "version": ""},
 		"capabilities": map[string]any{"experimentalApi": true, "optOutNotificationMethods": nil},
 	}, nil); err != nil {
 		return fmt.Errorf("%w: initialize: %w", ports.ErrChatDriverIncompatible, err)
