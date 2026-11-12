@@ -27,11 +27,18 @@ export const CACHE_SCHEMA = 1;
 export const KEEP_ENTRIES = 3;
 
 export function buildCacheRoot(env = process.env) {
-	return env.AO_BUILD_CACHE_DIR || path.join(homedir(), ".ao", "build-cache", "outputs");
+	return overrideDir(env.AO_BUILD_CACHE_DIR) ?? path.join(homedir(), ".ao", "build-cache", "outputs");
 }
 
 export function warmStoreRoot(env = process.env) {
-	return env.AO_WARM_DIR || path.join(homedir(), ".ao", "warm");
+	return overrideDir(env.AO_WARM_DIR) ?? path.join(homedir(), ".ao", "warm");
+}
+
+// An unexpanded "~/..." (for example from `env VAR=~/x`) must not become a
+// directory named "~" inside the checkout.
+export function overrideDir(value, home = homedir()) {
+	if (!value) return null;
+	return path.resolve(value === "~" || value.startsWith("~/") ? path.join(home, value.slice(1)) : value);
 }
 
 export function log(message) {
