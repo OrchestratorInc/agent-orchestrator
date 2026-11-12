@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { backOr } from "../../lib/backNavigation";
 import { CloudSignIn } from "../../lib/cloud/components";
@@ -11,6 +11,7 @@ import { useNewCloudProject } from "../../lib/cloud/useNewCloudProject";
 import { connectedSpawnHosts } from "../../lib/hostRoute";
 import { LocalProjectForm } from "../../lib/localProject/LocalProjectForm";
 import type { PlacementChoice, ProjectPlacement } from "../../lib/localProject/LocalProjectForm.types";
+import { placementFor } from "../../lib/localProject/placement";
 import { useNewLocalProject } from "../../lib/localProject/useNewLocalProject";
 import { Spinner } from "../../lib/Spinner";
 import { useApp } from "../../lib/store";
@@ -38,15 +39,12 @@ export default function NewProjectScreen() {
 	const cloudOffer = useCloudProjectOffer();
 	const cloudOffered = cloudOffer === "yes";
 	const [chosen, setChosen] = useState<ProjectPlacement | null>(params.placement === "cloud" || params.placement === "local" ? params.placement : null);
-	// A create in flight keeps its face: switching would unmount it and let the
-	// other face, or this one again, start a second create.
+	// A create in flight keeps its face, by hand or not (a machine going away):
+	// switching would unmount the form that owns it and let a second create start.
 	const [busy, setBusy] = useState(false);
-	// The face asked for while it can make a project (Cloud also while its plan
-	// is still being read, so New task's Cloud request opens Cloud); Local first
-	// otherwise, and Cloud when no machine is connected, which says what it needs.
-	const placement: ProjectPlacement = chosen === "cloud" && cloudOffer !== "no" ? "cloud"
-		: chosen === "local" && localOffered ? "local"
-		: localOffered ? "local" : "cloud";
+	const shown = useRef<ProjectPlacement | null>(null);
+	const placement = placementFor({ chosen, cloudOffer, localOffered, busy, shown: shown.current });
+	shown.current = placement;
 	const choose = useCallback((next: ProjectPlacement) => { if (!busy) setChosen(next); }, [busy]);
 	const choice: PlacementChoice | undefined = localOffered && cloudOffered ? { value: placement, onChange: choose, disabled: busy } : undefined;
 
