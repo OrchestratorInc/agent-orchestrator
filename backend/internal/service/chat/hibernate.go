@@ -18,10 +18,8 @@ const chatViewLease = 30 * time.Second
 const chatHibernateGrace = 30 * time.Second
 
 // IdleBeforeHibernate is how long a quiet provider stays parked, prompt
-// cache and all, before idle hibernation may stop it. Most follow-ups arrive
-// within a minute or two; stopping the process after 30 s made each of them
-// pay a full cold start for a few hundred megabytes of memory saved.
-const IdleBeforeHibernate = 90 * time.Second
+// cache and all, before idle hibernation may stop it.
+const IdleBeforeHibernate = 10 * time.Minute
 
 type wakeRun struct {
 	done    chan struct{}
@@ -639,6 +637,7 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		if resultErr != nil {
 			s.log.Warn("chat wake failed", "session", id,
 				"took", time.Since(run.started).Round(time.Millisecond), "err", resultErr)
+			captureChatFault(ctx, resultErr, "", "chat_wake", "wake")
 		} else {
 			s.log.Info("chat wake finished", "session", id,
 				"took", time.Since(run.started).Round(time.Millisecond))
@@ -700,6 +699,7 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 		}
 		if err := s.DrainQueued(ctx, id); err != nil {
 			s.log.Warn("chat session woke but could not deliver its queued messages", "session", id, "err", err)
+			captureChatFault(ctx, err, "", "chat_wake", "drain")
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}
 	}()

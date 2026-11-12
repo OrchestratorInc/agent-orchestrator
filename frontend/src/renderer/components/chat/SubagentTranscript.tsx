@@ -33,7 +33,6 @@ export function SubagentTranscript({
 	const { t } = useTranslation();
 	const sections = useMemo(() => stepSections(agent.steps), [agent.steps]);
 	const working = agent.state === "working";
-	const lastRunIndex = sections.findLastIndex((section) => section.kind === "run");
 	const empty = !working && sections.length === 0 && !agent.report && !agent.error;
 	// The live row names the step the child is on, as a turn's does; what it writes is prose, not a step.
 	const currentStep = working
@@ -43,7 +42,7 @@ export function SubagentTranscript({
 	return (
 		<div className="flex min-w-0 flex-col gap-3">
 			{agent.prompt ? <SubagentPrompt prompt={agent.prompt} /> : null}
-			{sections.map((section, index) =>
+			{sections.map((section) =>
 				section.kind === "said" ? (
 					<ChatMarkdown key={section.key} text={section.text} />
 				) : (
@@ -53,7 +52,6 @@ export function SubagentTranscript({
 						disclosureKey={`${disclosureKey}:${section.key}`}
 						disclosureOverrides={disclosureOverrides}
 						onDisclosureChange={onDisclosureChange}
-						live={working && index === lastRunIndex}
 					/>
 				),
 			)}

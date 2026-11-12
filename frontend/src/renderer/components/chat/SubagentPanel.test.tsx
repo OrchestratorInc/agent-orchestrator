@@ -76,7 +76,7 @@ describe("SubagentPanel", () => {
 		expect(screen.getByText("Sent by the parent agent")).toBeInTheDocument();
 		expect(screen.getByTestId("subagent-prompt")).toHaveTextContent("Read-only. Audit: info pages.");
 		// What it ran and said, in order, drawn as the main chat draws them.
-		expect(screen.getByText("Ran command")).toBeInTheDocument();
+		expect(screen.getByText("Checked repository")).toBeInTheDocument();
 		expect(screen.getByText("Looking at the FAQ next.")).toBeInTheDocument();
 		// The hand-back is its report, not another step.
 		expect(screen.getByText("Report")).toBeInTheDocument();

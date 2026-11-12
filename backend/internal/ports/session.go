@@ -41,11 +41,12 @@ type SpawnConfig struct {
 	TrackerProvider domain.TrackerProvider
 	// IssueContext is optional pre-fetched tracker context for the task prompt.
 	// Standing rules stay in SystemPrompt; issue facts belong to the user task.
-	IssueContext string
-	Kind         domain.SessionKind
-	Harness      domain.AgentHarness
-	Branch       string
-	Prompt       string
+	IssueContext     string
+	Kind             domain.SessionKind
+	Harness          domain.AgentHarness
+	Branch           string
+	RequireNewBranch bool
+	Prompt           string
 	// AgentConfig overrides the resolved project/role agent config for this
 	// single spawn. Empty fields keep the project defaults.
 	AgentConfig AgentConfig
@@ -73,6 +74,9 @@ type SpawnConfig struct {
 	// DisplayName is the user-facing sidebar label. Empty falls back to the
 	// session id in the read model (e.g. orchestrator sessions).
 	DisplayName string
+	// DisplayNameExplicit marks DisplayName as chosen rather than derived from
+	// the prompt, so a terminal program's title cannot outrank it.
+	DisplayNameExplicit bool
 	// NameFromPrompt generates task and workspace names before launch.
 	NameFromPrompt bool
 	// KeepDisplayName preserves an explicit CLI/API title while naming its workspace.

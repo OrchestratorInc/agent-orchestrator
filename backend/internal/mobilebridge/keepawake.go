@@ -14,18 +14,16 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// KeepAwakeSupported reports whether this platform can hold the machine awake
-// for Connect Mobile. Only macOS: it is where idle sleep cuts a paired phone
-// off, and caffeinate ships with every install.
+// KeepAwakeSupported reports whether this platform can hold the machine awake.
+// Only macOS is supported; caffeinate ships with every install.
 func KeepAwakeSupported() bool { return runtime.GOOS == "darwin" }
 
-// KeepAwake prevents idle system sleep while Connect Mobile is on, so a phone
-// can keep reaching the daemon after the user walks away from the desk.
+// KeepAwake prevents idle system sleep independently of Connect Mobile.
 //
 // It runs `caffeinate -i -w <daemon pid>`: -i holds only the idle-system-sleep
 // assertion, so the display can still turn off and the screen can still lock,
 // and -w ends caffeinate on its own if the daemon dies without calling Stop.
-// A closed MacBook lid still sleeps; nothing here overrides that.
+// Closed-lid wakefulness requires the separate native lid controller.
 type KeepAwake struct {
 	binary     string
 	ownerPID   int

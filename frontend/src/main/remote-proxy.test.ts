@@ -96,6 +96,20 @@ async function startUpstream(
 }
 
 describe("startRemoteProxy", () => {
+	it.each([
+		[200, "Accept-Encoding, Accept-Language", "Accept-Encoding, Accept-Language, origin"],
+		[304, "Accept-Encoding", "Accept-Encoding, origin"],
+		[304, "Accept-Encoding, OrIgIn", "Accept-Encoding, OrIgIn"],
+		[304, "*", "*"],
+	] as const)("preserves upstream Vary on HTTP/1.1 status %s (%s)", async (status, vary, expected) => {
+		const { port } = await startUpstream(() => ({ status, body: "", headers: { vary } }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const response = await fetch(`${proxy.base}/api/v1/projects`, { headers: { "Accept-Encoding": "identity" } });
+		expect(response.status).toBe(status);
+		expect(response.headers.get("vary")).toBe(expected);
+		expect(response.headers.get("access-control-allow-origin")).toBe("app://renderer");
+	});
+
 	it("allows only no-Origin GET/HEAD render documents through the control proxy", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "<p>render</p>" }));
 		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
@@ -200,12 +214,15 @@ describe("startRemoteProxy", () => {
 		expect(await request(html)).toBe(200);
 		expect(await request(new URL("chart.png", raw).href)).toBe(200);
 		expect(await request(new URL("/assets/chart.png", raw).href)).toBe(200);
+		// A saved version's request must reach the host: dropping it would show the live file.
+		expect(await request(new URL("chart.png?raw=true&artifactVersion=3", raw).href)).toBe(200);
 		expect(await request(raw, "POST")).toBe(404);
 		expect(seen.map((entry) => entry.url)).toEqual([
 			"/ao/api/v1/sessions/ao-1/preview/files/docs/report.md?raw=true&source=artifact",
 			"/ao/api/v1/sessions/ao-1/preview/files/docs/index.html?source=artifact",
 			"/ao/api/v1/sessions/ao-1/preview/files/docs/chart.png?source=artifact",
 			"/ao/api/v1/sessions/ao-1/preview/files/assets/chart.png?source=artifact",
+			"/ao/api/v1/sessions/ao-1/preview/files/docs/chart.png?raw=true&artifactVersion=3&source=artifact",
 		]);
 		expect(seen.every((entry) => entry.auth === "Bearer pw" && !entry.appAuth)).toBe(true);
 		// Clearing Browser's app preview does not invalidate raw artifact reads.
@@ -566,7 +583,7 @@ describe("startRemoteProxy", () => {
 		proxy = await startRemoteProxy({ hostId: "h_workbox", label: "workbox", url: `http://127.0.0.1:${port}`, password: "secret" });
 		const response = await fetch(`${proxy.base}/api/v1/projects`);
 		expect(response.status).toBe(426);
-		expect(await response.json()).toMatchObject({ code: "HOST_API_INCOMPATIBLE", message: expect.stringContaining("Update AO") });
+		expect(await response.json()).toMatchObject({ code: "HOST_API_INCOMPATIBLE", message: expect.stringContaining("Update Orchestrator") });
 		expect(seen.map((request) => request.url)).toEqual(["/api/v1/identity"]);
 		expect(seen[0].auth).toBeUndefined();
 	});
@@ -1274,6 +1291,19 @@ describe("startRemoteProxy when the upstream fails", () => {
 		});
 		return (server.address() as AddressInfo).port;
 	}
+
+	it.each([200, 304])("preserves upstream Vary on HTTP/2 status %s", async (status) => {
+		const port = await startH2Daemon((_req, res) => {
+			res.setHeader("Vary", ["Accept-Encoding", "Accept-Language"]);
+			res.writeHead(status, { etag: 'W/"scratch"' });
+			res.end();
+		});
+		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${port}`));
+		const response = await fetch(`${proxy.base}/api/v1/projects`, { headers: { "Accept-Encoding": "deflate" } });
+		expect(response.status).toBe(status);
+		expect(response.headers.get("vary")).toBe("Accept-Encoding, Accept-Language, origin");
+		expect(response.headers.get("etag")).toBe('W/"scratch"');
+	});
 
 	// An HTTPS daemon carrying HTTP/2 inside a WebSocket at /api/v1/tunnel, as
 	// AO's does behind a Cloudflare tunnel. drop() closes every tunnel; direct

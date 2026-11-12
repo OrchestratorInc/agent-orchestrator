@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
@@ -14,6 +15,7 @@ const writeTextMock = vi.hoisted(() => vi.fn());
 const restoreMock = vi.hoisted(() => vi.fn());
 const workspaceSubscriptionMock = vi.hoisted(() => vi.fn());
 const cloudSearchMock = vi.hoisted(() => vi.fn());
+const cloudChatSearchMock = vi.hoisted(() => vi.fn());
 const createProjectFlowMock = vi.hoisted(() => ({
 	props: null as null | {
 		existingProjectPaths?: readonly string[];
@@ -95,12 +97,34 @@ const ctx = vi.hoisted(() => {
 		params: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		enabled: true,
 		workspaces,
+		// The mocked route and workspace hooks subscribe here, as the real ones
+		// subscribe to the router and the query cache, so the memoized palette
+		// re-reads them when a test changes `params` or `workspaces`.
+		version: 0,
+		listeners: new Set<() => void>(),
 	};
 });
 
+function subscribeCtx(listener: () => void) {
+	ctx.listeners.add(listener);
+	return () => ctx.listeners.delete(listener);
+}
+
+function ctxVersion() {
+	return ctx.version;
+}
+
+function notifyCtxChange() {
+	ctx.version += 1;
+	for (const listener of ctx.listeners) listener();
+}
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
-	useParams: () => ctx.params,
+	useParams: () => {
+		useSyncExternalStore(subscribeCtx, ctxVersion);
+		return ctx.params;
+	},
 }));
 
 vi.mock("../hooks/useCommandPaletteEnabled", () => ({
@@ -110,7 +134,7 @@ vi.mock("../hooks/useCommandPaletteEnabled", () => ({
 
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { searchWorkspaceReview: cloudSearchMock },
+		client: { searchWorkspaceReview: cloudSearchMock, searchChats: cloudChatSearchMock },
 		ready: true,
 		baseUrl: "https://cloud.example.test",
 		userId: "user-1",
@@ -119,6 +143,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: (options: { subscribed?: boolean }) => {
+		useSyncExternalStore(subscribeCtx, ctxVersion);
 		workspaceSubscriptionMock(options);
 		return { data: ctx.workspaces };
 	},
@@ -188,7 +213,13 @@ function renderPalette() {
 		</QueryClientProvider>
 	);
 	const result = render(wrap());
-	return { ...result, rerenderPalette: () => result.rerender(wrap()) };
+	return {
+		...result,
+		rerenderPalette: () => {
+			act(() => notifyCtxChange());
+			result.rerender(wrap());
+		},
+	};
 }
 
 function pressKey(init: KeyboardEventInit): KeyboardEvent {
@@ -243,6 +274,7 @@ beforeEach(() => {
 	restoreMock.mockReset();
 	workspaceSubscriptionMock.mockReset();
 	cloudSearchMock.mockReset();
+	cloudChatSearchMock.mockReset().mockResolvedValue({ results: [] });
 	createProjectFlowMock.props = null;
 	createProjectFlowMock.lastOpenSignal = 0;
 	restoreMock.mockResolvedValue({ status: "success" });
@@ -424,6 +456,20 @@ describe("CommandPalette workspace file search", () => {
 		expect(await screen.findByPlaceholderText("Search files")).toBeInTheDocument();
 	});
 
+	it("opens the current project's archive over the page without navigating", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		useUiStore.setState({ archiveModal: null });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+
+		fireEvent.click(document.querySelector('[cmdk-item][data-value="current-open-archive"]')!);
+
+		await waitFor(() => expect(useUiStore.getState().archiveModal).toMatchObject({ projectId: "proj-1" }));
+		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
 	it("does not call workspace search until two characters settle", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		getMock.mockResolvedValue({ data: { query: "", results: [], truncated: false } });
@@ -463,6 +509,31 @@ describe("CommandPalette workspace file search", () => {
 			expect.objectContaining({ signal: expect.any(AbortSignal) }),
 		);
 		expect(getMock).not.toHaveBeenCalledWith(expect.stringContaining("/workspace/search"), expect.anything());
+	});
+
+	it("goes quiet and stops asking while Cloud chat search is rate limited", async () => {
+		const { CloudCpError } = await import("../lib/cloud-cp/errors");
+		ctx.workspaces[0].kind = "cloud";
+		ctx.workspaces[0].cloudOrgId = "org-limited";
+		ctx.workspaces[0].sessions[1]!.cloud = { orgId: "org-limited" };
+		try {
+			cloudChatSearchMock.mockRejectedValue(new CloudCpError("Too many searches. Try again in a minute.", { status: 429, code: "rate_limited", retryAfterMs: 60_000 }));
+			getMock.mockResolvedValue({ data: { results: [], truncated: false } });
+			renderPalette();
+			act(() => useUiStore.getState().setCommandPaletteOpen(true));
+			const input = await screen.findByPlaceholderText(/search sessions/i);
+			fireEvent.change(input, { target: { value: "rate" } });
+			await waitFor(() => expect(cloudChatSearchMock).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+			for (const value of ["rate l", "rate li", "rate limit"]) {
+				fireEvent.change(input, { target: { value } });
+				await new Promise((resolve) => setTimeout(resolve, 600));
+			}
+			expect(cloudChatSearchMock).toHaveBeenCalledTimes(1);
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+			expect(useUiStore.getState().globalToasts).toEqual([]);
+		} finally {
+			delete ctx.workspaces[0].cloudOrgId;
+		}
 	});
 
 	it("navigates to the selected connected-host worktree before opening its file", async () => {

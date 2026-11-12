@@ -451,7 +451,7 @@ func reviewThreadIDs(threads []domain.PullRequestReviewThread, comments []domain
 
 // GetPRLastNudgeSignature returns the persisted nudge-dedup JSON payload for a
 // PR (empty string when the PR has no row or no signatures yet). The payload is
-// opaque to storage; lifecycle.Manager owns its shape.
+// written by lifecycle.Manager; Kanban queries read its review-delivery entries.
 func (s *Store) GetPRLastNudgeSignature(ctx context.Context, url string) (string, error) {
 	sig, err := s.qr.GetPRLastNudgeSignature(ctx, url)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -472,6 +472,30 @@ func (s *Store) UpdatePRLastNudgeSignature(ctx context.Context, url, payload str
 		return fmt.Errorf("update pr nudge signature %s: %w", url, err)
 	}
 	return nil
+}
+
+// RecordRepositoryRename stores the provider's current name for a renamed or
+// transferred repository.
+func (s *Store) RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.UpsertRepositoryRename(ctx, gen.UpsertRepositoryRenameParams(r)); err != nil {
+		return fmt.Errorf("record repository rename %s/%s: %w", r.Host, r.OldName, err)
+	}
+	return nil
+}
+
+// ListRepositoryRenames returns every known repository rename.
+func (s *Store) ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryRename, error) {
+	rows, err := s.qr.ListRepositoryRenames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list repository renames: %w", err)
+	}
+	out := make([]domain.RepositoryRename, len(rows))
+	for i, row := range rows {
+		out[i] = domain.RepositoryRename(row)
+	}
+	return out, nil
 }
 
 // GetPR returns the PR facts for a URL, or ok=false if absent.

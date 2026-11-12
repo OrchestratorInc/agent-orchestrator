@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { selectionActionClass, selectionRangesEqual, selectionToolbarClass, selectionToolbarPosition, selectionViewport } from "../../lib/selection-toolbar";
+import { selectionRangesEqual, selectionToolbarClass, selectionToolbarPosition, selectionViewport } from "../../lib/selection-toolbar";
 import { isMacPlatform } from "../../lib/platform";
+import { Button } from "../ui/button";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { codeSelectionRange, type CodeSelection, type CodeSelectionSource } from "./useCodeSelection";
 
@@ -148,15 +149,17 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 				top: selection.point.y - 14,
 			}}
 		>
-			<button
-				className={selectionActionClass}
+			<Button
+				className="min-w-0 px-2"
 				onClick={activate}
 				disabled={selection.dragging || accepted === selection}
+				size="sm"
 				title={`${label} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}
 				type="button"
+				variant="quiet"
 			>
 				{label}
-			</button>
+			</Button>
 			{rejected ? <span role="alert" className="max-w-56 px-2 text-xs text-muted-foreground">{t("files.addToChatRejected")}</span> : null}
 		</div>,
 		document.body,

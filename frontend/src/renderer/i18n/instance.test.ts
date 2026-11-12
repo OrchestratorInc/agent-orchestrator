@@ -52,12 +52,13 @@ describe("coerceLocale", () => {
 });
 
 describe("app i18next instance", () => {
-	it("explains side-chat restrictions as behavior while files remain shared", () => {
-		const explanation = createAppI18n("en").t("sideChat.isolationPolicy");
-		expect(explanation).toContain("Files and Git are shared");
-		expect(explanation).toContain("Read-only is behavioral");
-		expect(explanation).toContain("Sub-agent interaction is prohibited by instruction");
-		expect(explanation).not.toContain("disabled");
+	it("provides a brief side-chat description in every locale", () => {
+		for (const locale of APP_LOCALES) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+			expect(catalog["sideChat.emptyDescription"], locale).toBeTruthy();
+		}
+		expect(createAppI18n("en").t("sideChat.emptyDescription"))
+			.toBe("Explore a quick question without interrupting the main chat.");
 	});
 
 	it("provides agent management and readiness labels for every supported locale", () => {
@@ -163,7 +164,7 @@ describe("app i18next instance", () => {
 		expect(chinese.t("inspector.open")).toBe("打开");
 		expect(chinese.t("inspector.openTerminal")).toBe("打开终端");
 		expect(chinese.t("createProject.gitSetupNotice")).toBe(
-			"如果此文件夹需要设置 Git，AO 会先初始化仓库并创建首次提交，然后再启动。",
+			"如果此文件夹需要设置 Git，Orchestrator 会先初始化仓库并创建首次提交，然后再启动。",
 		);
 		expect(chinese.t("settings.updates.currentVersion", { version: "v1.2.3" })).toBe("当前版本 - v1.2.3");
 		expect(chinese.t("settings.updates.updateTo", { version: "v1.2.3" })).toBe("更新至 v1.2.3");

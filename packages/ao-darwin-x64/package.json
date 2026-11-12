@@ -1,7 +1,7 @@
 {
 	"name": "@aoagents/ao-darwin-x64",
 	"version": "0.10.0",
-	"description": "Agent Orchestrator CLI binary for macOS x64.",
+	"description": "Orchestrator CLI binary for macOS x64.",
 	"license": "MIT",
 	"os": [
 		"darwin"

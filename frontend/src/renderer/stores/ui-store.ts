@@ -1,9 +1,11 @@
 import { create } from "zustand";
+import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { aoBridge } from "../lib/bridge";
-import { developerModeStorageKey, windowTranslucencyStorageKey } from "../lib/window-translucency";
+import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
+import type { TerminalClickMode } from "../lib/terminal-mouse";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
@@ -25,10 +27,12 @@ import {
 export type { Theme, ThemePreference, ThemeStyle } from "../lib/theme";
 export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "../lib/theme";
 
+export type ChatSendKeyMode = "enter" | "mod-enter";
+
 export type GlobalSettingsSection =
 	| "general"
 	| "harness"
-	| "agents"
+	| "teams"
 	| "billing"
 	| "remoteHosts"
 	| "coder"
@@ -41,7 +45,7 @@ export type GlobalSettingsSection =
 	| "help";
 
 /** Project settings pages: the project form sections plus the cues manager. */
-export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions";
+export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions" | "sharing";
 
 /** Which failure a "Show diagnostics" shortcut is about: the job it produced,
  * if any, and the error the user saw. */
@@ -121,15 +125,18 @@ export type RememberedFileDisplayMode = { mode: FileDisplayMode; requestKey: num
 export type GlobalToast = {
 	title: string;
 	body?: string;
-	tone?: "info" | "error";
-	placement?: "bottom-right" | "top-center";
+	tone?: "info" | "error" | "success";
+	placement?: "bottom-right" | "top-center" | "bottom-center";
 	dismissible?: boolean;
+	/** Zero keeps the toast visible until explicitly dismissed. */
 	durationMs?: number;
 	dedupeKey?: string;
+	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */
+	action?: { label: string; run: () => void };
 	nonce: number;
 };
 
-export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey">;
+export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action">;
 
 export type WorkspaceFileOpenRequest = {
 	sessionId: string;
@@ -153,6 +160,26 @@ export type ChatMessageFocusRequest = {
 	nonce: number;
 };
 
+/** What the archive modal shows. */
+export type ArchiveModalRequest = {
+	/** The project it starts scoped to; unset shows every project on the host. */
+	projectId?: string;
+	hostId?: string;
+	/** Prefills the search. */
+	query?: string;
+	/**
+	 * Where focus goes once the modal closes: the board's button, the sidebar
+	 * menu's trigger or row, or wherever Cmd+K was opened from. The dialog has
+	 * no trigger of its own to return to.
+	 */
+	returnFocus?: HTMLElement | null;
+	/** New for every request, so a request made while open retargets it. */
+	nonce: number;
+};
+
+// Monotonic across closes, so a request is never mistaken for the last one.
+let archiveModalNonce = 0;
+
 // Selection (which project/session is open) now lives in the URL — the router
 // is the single source of truth, read via route params. This store holds only
 // ephemeral UI: theme, sidebar collapse, command palette, per-session inspector
@@ -164,6 +191,7 @@ export type UiState = {
 	inspectorSessions: Record<string, InspectorSessionState>;
 	isCommandPaletteOpen: boolean;
 	settingsModal: SettingsModal | null;
+	accountLogin: string | null;
 	themePreference: ThemePreference;
 	/** Resolved light/dark for React consumers; may track OS while preference is system. */
 	resolvedTheme: Theme;
@@ -177,13 +205,37 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
+	/** Home offers the session import once: until the user imports or dismisses it. */
+	sessionImportOfferClosed: boolean;
+	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
+	splitPanes: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	/**
+	 * Where plain terminal clicks go when the running program has asked for the
+	 * mouse (DECSET 1000/1002/1003). "app" reports them to the program, like a
+	 * native terminal; Option (macOS) or Shift (elsewhere) still selects text.
+	 * "select" always selects text, the behavior before this setting existed.
+	 */
+	terminalClickMode: TerminalClickMode;
+	/** The one-time "hold Option to select text" hint has been shown. */
+	terminalSelectHintShown: boolean;
+	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
+	chatSendKeyMode: ChatSendKeyMode;
 	navigationGestures: boolean;
 	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
 	renderMath: boolean;
+	/** Show each project's repository owner avatar in the sidebar instead of a folder. Default on. */
+	projectAvatars: boolean;
+	/**
+	 * The new left sidebar design (markers, hover preview, avatars, pink
+	 * Validating, settled board loaders). Default on. The switch lives in
+	 * Developer mode, and turning it off only takes effect there: read it
+	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
+	 */
+	newSidebarDesign: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -203,12 +255,19 @@ export type UiState = {
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	// The archive modal, open over whatever page is showing (the shell hosts
+	// it). Null while closed. Every entry point (the board's Archive button,
+	// a sidebar project's menu, Cmd+K) opens it here; none navigates.
+	archiveModal: ArchiveModalRequest | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	chatMessageFocusRequest: ChatMessageFocusRequest | null;
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
+	/** True while the first-run project prompt is pending, so shell notices wait for it. */
+	firstRunPromptActive: boolean;
+	setFirstRunPromptActive: (active: boolean) => void;
 	// Transient "a folder was dropped onto the app window — open the
 	// create-project flow for this path" signal, mirroring newTaskRequest: the
 	// nonce always bumps so dropping the same folder twice in a row still
@@ -238,15 +297,22 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
+	closeSessionImportOffer: () => void;
+	setSplitPanes: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setTerminalClickMode: (mode: TerminalClickMode) => void;
+	markTerminalSelectHintShown: () => void;
+	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
+	setProjectAvatars: (enabled: boolean) => void;
+	setNewSidebarDesign: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -286,6 +352,8 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
+	openArchive: (request: Omit<ArchiveModalRequest, "nonce">) => void;
+	closeArchive: () => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
@@ -309,9 +377,16 @@ const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
+const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
+const splitPanesStorageKey = "ao.splitPanes";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const terminalClickModeStorageKey = "ao.terminalClickMode";
+const terminalSelectHintShownStorageKey = "ao.terminalSelectHintShown";
+const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
+const projectAvatarsStorageKey = "ao.projectAvatars";
+const newSidebarDesignStorageKey = "ao.newSidebarDesign";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -339,12 +414,28 @@ function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
 }
 
-function initialWindowTranslucency() {
-	return getLocalStorage()?.getItem(windowTranslucencyStorageKey) === "true";
+function initialSessionImportOfferClosed() {
+	try {
+		return getLocalStorage()?.getItem(sessionImportOfferClosedStorageKey) === "true";
+	} catch {
+		return false;
+	}
+}
+
+function initialTerminalClickMode(): TerminalClickMode {
+	return getLocalStorage()?.getItem(terminalClickModeStorageKey) === "select" ? "select" : "app";
 }
 
 function initialTerminalCopyOnSelect() {
 	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
+}
+
+function initialProjectAvatars() {
+	return getLocalStorage()?.getItem(projectAvatarsStorageKey) !== "false";
+}
+
+function initialChatSendKeyMode(): ChatSendKeyMode {
+	return getLocalStorage()?.getItem(chatSendKeyModeStorageKey) === "mod-enter" ? "mod-enter" : "enter";
 }
 
 function syncDeveloperModeToUpdater(enabled: boolean): void {
@@ -396,6 +487,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	inspectorSessions: {},
 	isCommandPaletteOpen: false,
 	settingsModal: null,
+	accountLogin: null,
 	themePreference: initialThemePreference,
 	resolvedTheme: resolveTheme(initialThemePreference),
 	themeStyle: initialThemeStyle,
@@ -403,10 +495,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
-	windowTranslucency: initialWindowTranslucency(),
+	sessionImportOfferClosed: initialSessionImportOfferClosed(),
+	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
+	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
+	terminalClickMode: initialTerminalClickMode(),
+	terminalSelectHintShown: getLocalStorage()?.getItem(terminalSelectHintShownStorageKey) === "true",
+	chatSendKeyMode: initialChatSendKeyMode(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
+	projectAvatars: initialProjectAvatars(),
+	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -417,6 +516,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToast: null,
 	globalToastSequence: 0,
 	newTaskRequest: null,
+	archiveModal: null,
+	firstRunPromptActive: false,
+	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
@@ -427,12 +529,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
 		if (get().themePreference === themePreference) return;
-		runThemeTransition(() => {
-			const resolvedTheme = resolveTheme(themePreference);
-			getLocalStorage()?.setItem(themeStorageKey, themePreference);
-			applyDocumentTheme(resolvedTheme);
-			set({ themePreference, resolvedTheme });
-		});
+		runThemeTransition(
+			() => {
+				const resolvedTheme = resolveTheme(themePreference);
+				getLocalStorage()?.setItem(themeStorageKey, themePreference);
+				applyDocumentTheme(resolvedTheme);
+				set({ themePreference, resolvedTheme });
+			},
+			// The window's vibrancy material follows nativeTheme; flip it as the
+			// new frame is revealed so the tint and the material change together.
+			() => void aoBridge.theme?.set(themePreference)?.catch(() => undefined),
+		);
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;
@@ -467,6 +574,18 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
 	},
+	closeSessionImportOffer: () => {
+		try {
+			getLocalStorage()?.setItem(sessionImportOfferClosedStorageKey, "true");
+		} catch {
+			// The offer comes back next launch; the agent page still has the import.
+		}
+		set({ sessionImportOfferClosed: true });
+	},
+	setSplitPanes: (splitPanes) => {
+		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
+		set({ splitPanes });
+	},
 	setWindowTranslucency: (windowTranslucency) => {
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));
 		set({ windowTranslucency });
@@ -483,10 +602,31 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
 	},
+	setTerminalClickMode: (terminalClickMode) => {
+		getLocalStorage()?.setItem(terminalClickModeStorageKey, terminalClickMode);
+		set({ terminalClickMode });
+	},
+	markTerminalSelectHintShown: () => {
+		getLocalStorage()?.setItem(terminalSelectHintShownStorageKey, "true");
+		set({ terminalSelectHintShown: true });
+	},
+	setProjectAvatars: (projectAvatars) => {
+		getLocalStorage()?.setItem(projectAvatarsStorageKey, String(projectAvatars));
+		set({ projectAvatars });
+	},
+	setNewSidebarDesign: (newSidebarDesign) => {
+		getLocalStorage()?.setItem(newSidebarDesignStorageKey, String(newSidebarDesign));
+		set({ newSidebarDesign });
+	},
+	setChatSendKeyMode: (chatSendKeyMode) => {
+		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
+		set({ chatSendKeyMode });
+	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
 	closeUpdateInstallPrompt: () => set({ updateInstallPromptOpen: false }),
 	openGlobalSettings: (section, options) => set((state) => ({
+		accountLogin: options?.loginAccountId ?? null,
 		settingsModal: {
 			scope: "global",
 			section,
@@ -505,6 +645,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		},
 	})),
 	openProjectSettings: (projectId, options) => set({
+		accountLogin: null,
 		settingsModal: {
 			scope: "project",
 			projectId,
@@ -514,6 +655,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		},
 	}),
 	closeSettings: () => set((state) => ({
+		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
 	})),
 	syncSystemTheme: () => {
@@ -762,8 +904,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
 			const options = typeof style === "object" ? style : undefined;
-			const tone = options?.tone ?? (style === "error" || style === "info" ? style : "info");
-			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" ? style : "bottom-right");
+			const tone = options?.tone ?? (style === "error" || style === "info" || style === "success" ? style : "info");
+			const placement = options?.placement ?? (style === "top-center" || style === "bottom-right" || style === "bottom-center" ? style : "bottom-right");
 			const toast = { title, body, tone, placement, nonce, ...options };
 			const globalToasts = toast.dedupeKey
 				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)
@@ -790,6 +932,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
+	openArchive: (request) =>
+		set(() => {
+			archiveModalNonce += 1;
+			return { archiveModal: { ...request, nonce: archiveModalNonce } };
+		}),
+	closeArchive: () => set((state) => (state.archiveModal ? { archiveModal: null } : state)),
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {
@@ -838,6 +986,15 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return { visibleTerminalKindBySession };
 		}),
 }));
+
+// With the new design off, status tokens fall back to the old palette
+// (yellow Validating). See --color-status-validating in tokens.css.
+function syncLegacyStatusColors(state: UiState) {
+	if (typeof document === "undefined") return;
+	document.documentElement.toggleAttribute("data-legacy-status-colors", !isNewSidebarDesign(state));
+}
+syncLegacyStatusColors(useUiStore.getState());
+useUiStore.subscribe(syncLegacyStatusColors);
 
 // Hydration synchronizes legacy renderer-only Developer Mode state into the
 // main-process updater mirror. Until this completes, the updater is fail-closed.

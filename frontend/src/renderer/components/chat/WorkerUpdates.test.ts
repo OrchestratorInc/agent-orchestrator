@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
 import {
-	asksUser,
 	isWorkerLead,
 	piggybackedUpdates,
-	quietWorkerReply,
+	placeBatchedReports,
 	renamedTitle,
 	spawnedBy,
 	spawnedSessionIds,
+	splitHeadline,
+	terminatedBy,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 
@@ -91,12 +92,9 @@ describe("worker updates", () => {
 		expect(piggybackedUpdates(message({ origin: "human", text: "How is it going?" }))).toEqual([]);
 	});
 
-	it("tells a question from a ? in code, links and chained calls", () => {
-		expect(asksUser("Merged #7054. Should I start a fix?")).toBe(true);
-		expect(asksUser("#7043 の修正を始めますか？")).toBe(true);
-		expect(asksUser("Opened [the run](https://ci.example/run?id=4).")).toBe(false);
-		expect(asksUser("Guarded `config?.retries` and https://x.dev/a?b=1 now.")).toBe(false);
-		expect(asksUser("Used value?.trim() for the name.")).toBe(false);
+	it("takes a short first line as the headline, else the first sentence", () => {
+		expect(splitHeadline("Fixed the menu\nIt now renders in a portal.")).toEqual({ headline: "Fixed the menu", detail: "It now renders in a portal." });
+		expect(splitHeadline("Rebased **#5051**; disk full during validation. Retrying.").headline).toBe("Rebased #5051");
 	});
 
 	it("reads spawned workers from what `ao spawn` prints", () => {
@@ -108,7 +106,7 @@ describe("worker updates", () => {
 		expect(spawnedSessionIds(items)).toEqual(["proj-288", "proj-285"]);
 	});
 
-	it("reads the worker a recorded spawn started, and nothing from a failed or other action", () => {
+	it("reads the worker a recorded spawn started or termination ended, and nothing from a failed or other action", () => {
 		const action: ConversationActivity = {
 			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 3, revision: 0,
 			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt,
@@ -116,17 +114,53 @@ describe("worker updates", () => {
 		};
 		expect(spawnedBy(action)).toBe("proj-288");
 		expect(spawnedBy({ ...action, status: "failed" })).toBeUndefined();
-		expect(spawnedBy({ ...action, detail: { ...action.detail, action: "session.terminated" } })).toBeUndefined();
 		expect(spawnedBy({ ...action, detail: { action: "session.spawned", operationId: "x" } })).toBeUndefined();
 		expect(spawnedBy(command("ao spawn --prompt audit"))).toBeUndefined();
+		const ended = { ...action, detail: { ...action.detail, action: "session.terminated" } };
+		expect(spawnedBy(ended)).toBeUndefined();
+		expect(terminatedBy(ended)).toBe("proj-288");
+		expect(terminatedBy(action)).toBeUndefined();
 		expect(spawnedSessionIds([{ ...command("ao spawn --prompt audit", 'spawned session proj-288 "Audit" (idle)'), status: "failed" }])).toEqual([]);
 	});
+});
 
-	it("finds a worker turn's quiet reply only when it asks nothing", () => {
-		const reply = (text: string) => message({ id: "a1", role: "assistant", origin: "provider", text });
-		expect(quietWorkerReply([message({ text: batch }), reply("Noted.")])?.text).toBe("Noted.");
-		expect(quietWorkerReply([message({ text: batch }), reply("Tunnel or loopback?")])).toBeUndefined();
-		expect(quietWorkerReply([message({ text: batch }), command("gh pr merge 7054")])).toBeUndefined();
-		expect(quietWorkerReply([message({ origin: "human", text: "Hi" }), reply("Noted.")])).toBeUndefined();
+describe("placeBatchedReports", () => {
+	const drained = (turnId: string, deliveredWithTurnId: string) => ({ turnId, deliveredWithTurnId });
+	const human = (id: string, turnId: string, sequence: number) => message({ id, turnId, sequence, origin: "human", text: "hi" });
+	const report = (id: string, turnId: string, sequence: number) => message({ id, turnId, sequence, text: batch });
+	const steer = (id: string): ConversationActivity => ({
+		kind: "activity", id, sequence: 9, revision: 0, activityKind: "system", status: "completed", summary: "go",
+		detail: { event: "steer" }, createdAt, turnId: "running",
+	});
+
+	it("puts a drained report under the batch's last human message and hides its turn", () => {
+		const placed = placeBatchedReports(
+			[drained("t-human", "lead"), drained("t-report", "lead")],
+			[report("r0", "lead", 1), human("h1", "t-human", 2), report("r1", "t-report", 3)],
+		);
+		expect(placed.under.get("h1")?.map((update) => update.key)).toEqual(["r1:0", "r1:1"]);
+		expect([...placed.moved]).toEqual(["t-report"]);
+	});
+
+	it("puts a steered report under the steer that carried it, not the turn's prompt", () => {
+		const placed = placeBatchedReports(
+			[{ turnId: "t-report", deliveredWithTurnId: "running", steerActivityId: "steer-1" }],
+			[human("h0", "running", 1), steer("steer-1"), report("r1", "t-report", 10)],
+		);
+		expect([...placed.under.keys()]).toEqual(["steer-1"]);
+	});
+
+	it("keeps a steered report on its own line when the steer is not loaded", () => {
+		const placed = placeBatchedReports(
+			[{ turnId: "t-report", deliveredWithTurnId: "running", steerActivityId: "steer-1" }],
+			[human("h0", "running", 1), report("r1", "t-report", 10)],
+		);
+		expect(placed.under.size).toBe(0);
+		expect(placed.moved.size).toBe(0);
+	});
+
+	it("leaves a report batched with no human message on its own line", () => {
+		const placed = placeBatchedReports([drained("t-report", "lead")], [report("r0", "lead", 1), report("r1", "t-report", 2)]);
+		expect(placed.moved.size).toBe(0);
 	});
 });

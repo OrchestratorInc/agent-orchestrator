@@ -31,6 +31,9 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 			return
 		}
 		err := publishRemoteHostAddress(ctx, client, controlPlaneURL, bridge.HostID, address, hash, bridge.ConfigPath)
+		if err == nil || errors.Is(err, errAddressRefused) {
+			bridge.NoteAccountListing(hash, err == nil)
+		}
 		switch {
 		case errors.Is(err, errAddressRefused):
 			// No account lists this link yet: a device that just took the
@@ -55,6 +58,11 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			publish()
+		case <-bridge.ListingNudges():
+			// A device just linked the machine: ask again now, even at an
+			// unchanged address still in its refusal backoff.
+			lastSent = ""
 			publish()
 		}
 	}

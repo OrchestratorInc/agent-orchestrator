@@ -238,3 +238,125 @@ func TestConcurrentRecoveryCannotClearNewerAuthenticationFailure(t *testing.T) {
 		t.Fatalf("old success cleared newer concurrent failure: %+v", account)
 	}
 }
+
+func TestConfirmedLoginClearsOnlyAnOlderDemand(t *testing.T) {
+	ctx := context.Background()
+	s, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	seedProject(t, s, "login")
+	record := sampleRecord("login")
+	record.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := s.CreateConversation(ctx, "login-conv", domain.ConversationScopeSession, "login", session.ID, histClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failureAt := histClock.Add(time.Minute)
+	account := domain.ConversationAccount{AuthenticationState: "required", ReauthRequiredAt: &failureAt, ReauthReason: "Not logged in", PlanLabel: "Max"}
+	if err := s.RecordAccount(ctx, conversation.ID, account, failureAt); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := s.ConversationsAwaitingLogin(ctx)
+	if err != nil || len(waiting) != 1 || waiting[0].ConversationID != conversation.ID ||
+		waiting[0].SessionID != session.ID || waiting[0].Harness != domain.HarnessClaudeCode {
+		t.Fatalf("waiting = %+v, %v", waiting, err)
+	}
+	// A check that began before or at the demand cannot answer it.
+	for _, at := range []time.Time{failureAt.Add(-time.Second), failureAt} {
+		if cleared, err := s.ConfirmConversationLogin(ctx, conversation.ID, at, at); err != nil || cleared {
+			t.Fatalf("check at %v cleared=%v, %v", at, cleared, err)
+		}
+	}
+	checkedAt := failureAt.Add(time.Second)
+	if cleared, err := s.ConfirmConversationLogin(ctx, conversation.ID, checkedAt, checkedAt); err != nil || !cleared {
+		t.Fatalf("later check cleared=%v, %v", cleared, err)
+	}
+	persisted, err := s.ConversationAccount(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.AuthenticationState != "authenticated" || persisted.ReauthRequiredAt != nil ||
+		persisted.LastAuthFailureReason != "Not logged in" || persisted.PlanLabel != "Max" {
+		t.Fatalf("persisted account = %+v", persisted)
+	}
+	if waiting, err := s.ConversationsAwaitingLogin(ctx); err != nil || len(waiting) != 0 {
+		t.Fatalf("still waiting = %+v, %v", waiting, err)
+	}
+}
+
+func TestLaunchRefusalRaisesTheChatLoginDemand(t *testing.T) {
+	ctx := context.Background()
+	s, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	seedProject(t, s, "launch")
+	record := sampleRecord("launch")
+	record.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := s.CreateConversation(ctx, "launch-conv", domain.ConversationScopeSession, "launch", session.ID, histClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordAccount(ctx, conversation.ID, domain.ConversationAccount{AuthenticationState: "authenticated", PlanLabel: "Team"}, histClock); err != nil {
+		t.Fatal(err)
+	}
+	refusedAt := histClock.Add(time.Minute)
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAt); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.ConversationAccount(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.AuthenticationState != "required" || first.ReauthRequiredAt == nil || !first.ReauthRequiredAt.Equal(refusedAt) ||
+		first.AuthFailureID == "" || first.PlanLabel != "Team" {
+		t.Fatalf("account after refusal = %+v", first)
+	}
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.ConversationAccount(ctx, conversation.ID); err != nil || again.AuthFailureID != first.AuthFailureID || !again.ReauthRequiredAt.Equal(refusedAt) {
+		t.Fatalf("account after second refusal = %+v, %v", again, err)
+	}
+	release := s.HoldWriterForTest()
+	loaded := make(chan error, 1)
+	go func() {
+		_, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+		loaded <- err
+	}()
+	select {
+	case err := <-loaded:
+		release()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("reading a chat that waits for a sign-in waited for the writer")
+	}
+	if cleared, err := s.ConfirmConversationLogin(ctx, conversation.ID, refusedAt.Add(time.Second), refusedAt.Add(time.Second)); err != nil || !cleared {
+		t.Fatalf("confirmed login cleared=%v, %v", cleared, err)
+	}
+	refusedAgainAt := refusedAt.Add(2 * time.Minute)
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAgainAt); err != nil {
+		t.Fatal(err)
+	}
+	if raised, err := s.ConversationAccount(ctx, conversation.ID); err != nil || raised.AuthFailureID == first.AuthFailureID ||
+		raised.ReauthRequiredAt == nil || !raised.ReauthRequiredAt.Equal(refusedAgainAt) {
+		t.Fatalf("account after a refusal that follows a sign-in = %+v, %v", raised, err)
+	}
+	if err := s.RequireSessionLogin(ctx, "no-such-session", "agent requires authentication", refusedAt); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -7,11 +7,12 @@ const error = document.getElementById("error")!;
 const allow = document.getElementById("allow") as HTMLButtonElement;
 const deny = document.getElementById("deny") as HTMLButtonElement;
 const trusted = document.getElementById("trusted") as HTMLInputElement;
+const allSessions = document.getElementById("all-sessions") as HTMLInputElement;
 
 async function decide(allowed: boolean): Promise<void> {
 	allow.disabled = deny.disabled = true;
 	try {
-		await chrome.runtime.sendMessage({ type: "ao-consent-decision", sessionId, allow: allowed, trusted: allowed && trusted.checked });
+		await chrome.runtime.sendMessage({ type: "ao-consent-decision", sessionId, allow: allowed, trusted: allowed && trusted.checked, allSessions: allowed && allSessions.checked });
 		window.close();
 	} catch (cause) {
 		error.textContent = String(cause);

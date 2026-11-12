@@ -206,7 +206,7 @@ func TestCleanupReportsOnlyStepAndExitStatus(t *testing.T) {
 	if strings.Contains(log.String(), "abcdef") || strings.Contains(log.String(), "[REDACTED]def") || !strings.Contains(log.String(), "inherited-secret") {
 		t.Fatalf("output must stay in the log with longest configured values redacted first: %s", log.String())
 	}
-	if got := cleanupSkipReason(errors.Join(ErrCleanupScript, errors.New("secret output"))); got != "workspace cleanup script failed" {
+	if got := cleanupRefusalFor(errors.Join(ErrCleanupScript, errors.New("secret output"))).reason; got != "workspace cleanup script failed" {
 		t.Fatalf("untyped cleanup errors must not expose their message: %q", got)
 	}
 }

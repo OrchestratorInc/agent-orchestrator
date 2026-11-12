@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PostHog } from "posthog-js/dist/module.full.no-external";
 import {
 	automationPromptLengthBucket,
 	buildPostHogConfig,
+	resumePostHogAfterOptIn,
+	stopPostHogForOptOut,
 	buildTelemetryContext,
 	clearCheckUpdateFailures,
 	clearUpdateFailures,
@@ -36,8 +38,20 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("allows only the first run experiment variants and prompt actions", async () => {
+		for (const variant of ["prompt", "control"]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant, path: "/private/repo" })).toEqual({ variant });
+		}
+		for (const action of ["clone", "local_folder", "standalone", "dismissed"]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action, url: "https://private/repo" })).toEqual({ action });
+		}
+		for (const value of ["unknown", "/private/repo", 0, null, undefined]) {
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant: value })).toEqual({});
+			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action: value })).toEqual({});
+		}
+	});
 	it("keeps the v2 aliases for api errors and the session summary", () => {
-		expect(postHogEventName("ao.renderer.api_error")).toBe("ao.v2.renderer.api_error");
+		expect(postHogEventName("ao.requests.failed")).toBe("ao.requests.failed");
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe("ao.v2.renderer.session_management_summary");
 	});
 
@@ -139,10 +153,13 @@ describe("telemetry sanitizers", () => {
 	// straight to PostHog, so the policy has to be honoured here too or the kill
 	// switch only covers half the producers.
 	it("honours the supervisor deny list, by either internal or exported name", () => {
-		expect(isDeniedEvent("ao.app.active", ["ao.v2.app.active"])).toBe(true);
+		expect(isDeniedEvent("ao.app.active", ["ao.app.active"])).toBe(true);
 		expect(isDeniedEvent("ao.app.active", ["ao.app.active"])).toBe(true);
 		expect(isDeniedEvent("ao.app.active", ["  AO.V2.APP.ACTIVE  "])).toBe(true);
-		expect(isDeniedEvent("ao.renderer.route_viewed", ["ao.renderer.*"])).toBe(true);
+		expect(isDeniedEvent("ao.routes.viewed", ["ao.renderer.*"])).toBe(true);
+		expect(isDeniedEvent("ao.requests.failed", ["ao.v2.renderer.api_error"])).toBe(true);
+		expect(isDeniedEvent("ao.updates.failed", ["ao.renderer.update_failed"])).toBe(true);
+		expect(isDeniedEvent("ao.updates.failed", ["ao.requests.failed"])).toBe(false);
 		expect(isDeniedEvent("$exception", ["$exception"])).toBe(true);
 
 		expect(isDeniedEvent("ao.session.spawned", ["ao.renderer.*"])).toBe(false);
@@ -151,27 +168,14 @@ describe("telemetry sanitizers", () => {
 		expect(isDeniedEvent("ao.app.active", ["", "  ", "*"])).toBe(false);
 	});
 
-	it("allowlists only counts and the fixed agent-id list on agent inventory", async () => {
-		const safe = await sanitizeRendererProperties("ao.renderer.agents_available", {
-			installed_count: 2,
-			authorized_count: 1,
-			supported_count: 23,
-			authorized_agents: "claude-code,codex",
-			// Must be dropped: never part of the contract, and a future caller could
-			// pass a path or a label by mistake.
-			binary_path: "/Users/someone/.local/bin/codex",
-			label: "Codex (someone's machine)",
-		});
-		expect(safe).toEqual({
-			installed_count: 2,
-			authorized_count: 1,
-			supported_count: 23,
-			authorized_agents: "claude-code,codex",
-		});
+	it("keeps setup signals and bounded inventory details", async () => {
+		expect(await sanitizeRendererProperties("ao.agents.missing", { reason: "none_installed", path: "/private/bin" })).toEqual({ reason: "none_installed" });
+		expect(await sanitizeRendererProperties("ao.agents.install_clicked", { agent: "codex", method: "/private/bin" })).toEqual({ agent: "codex" });
+		expect(await sanitizeRendererProperties("ao.renderer.agents_available", { installed_count: 2, supported_count: 4, path: "/private/bin" })).toEqual({ installed_count: 2, supported_count: 4 });
 	});
 
 	it("allowlists only enum-like fields on update events", async () => {
-		const safe = await sanitizeRendererProperties("ao.renderer.update_failed", {
+		const safe = await sanitizeRendererProperties("ao.updates.failed", {
 			to_version: "0.11.2",
 			error_category: "network",
 			phase: "download",
@@ -188,7 +192,7 @@ describe("telemetry sanitizers", () => {
 		});
 
 		// An unrecognized phase is not passed through as-is.
-		const bogus = await sanitizeRendererProperties("ao.renderer.update_failed", { phase: "sideload" });
+		const bogus = await sanitizeRendererProperties("ao.updates.failed", { phase: "sideload" });
 		expect(bogus.phase).toBeUndefined();
 	});
 
@@ -197,8 +201,8 @@ describe("telemetry sanitizers", () => {
 			differential_eligible: true, transfer_mode: "differential", fallback: true,
 			transferred_bytes: 12345, target_bytes: 99999,
 		};
-		expect(await sanitizeRendererProperties("ao.renderer.update_downloaded", observation)).toEqual(observation);
-		expect(await sanitizeRendererProperties("ao.renderer.update_failed", {
+		expect(await sanitizeRendererProperties("ao.updates.downloaded", observation)).toEqual(observation);
+		expect(await sanitizeRendererProperties("ao.updates.failed", {
 			differential_eligible: "true", transfer_mode: "https://secret", fallback: 1,
 			transferred_bytes: -1, target_bytes: Infinity, url: "https://secret",
 		})).toEqual({});
@@ -217,6 +221,45 @@ describe("telemetry sanitizers", () => {
 		expect(safe).toEqual({ destination: "discord", outcome: "succeeded" });
 	});
 
+	it("reports chat import counts and agents without titles, paths or ids", async () => {
+		expect(await sanitizeRendererProperties("ao.session_imports.offer_shown", { surface: "home", project_id: "p1" })).toEqual({ surface: "home" });
+		expect(await sanitizeRendererProperties("ao.session_imports.scan_completed", {
+			outcome: "succeeded",
+			candidate_count: 42,
+			duration_ms: 1234.6,
+			paths: ["/Users/me/work/secret-client"],
+		})).toEqual({ outcome: "succeeded", candidate_count: 42, duration_ms: 1235 });
+		expect(await sanitizeRendererProperties("ao.session_imports.completed", {
+			source: "project_offer",
+			created_count: 3,
+			existing_count: 1,
+			failed_count: 0,
+			folder_count: 2,
+			agents: "claude-code,codex,secret-client,../etc/passwd,My Chat",
+			titles: ["fix the billing bug"],
+			folders: ["/Users/me/work/secret-client"],
+		})).toEqual({ source: "project_offer", created_count: 3, existing_count: 1, failed_count: 0, folder_count: 2, agents: "claude-code,codex" });
+		expect(await sanitizeRendererProperties("ao.session_imports.first_opened", {
+			agent: "codex",
+			outcome: "failed",
+			error_code: "CHAT_RESUME_FAILED",
+			duration_ms: 21_500,
+			error: "resume failed in /Users/me/work/secret-client",
+			session_id: "s-123",
+		})).toEqual({ agent: "codex", outcome: "failed", error_code: "CHAT_RESUME_FAILED", duration_ms: 21_500 });
+	});
+
+	it("drops chat import values outside their vocabularies", async () => {
+		expect(await sanitizeRendererProperties("ao.session_imports.offer_shown", { surface: "sidebar" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.session_imports.scan_completed", { outcome: "partial", candidate_count: -1 })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.session_imports.completed", { source: "cli", agents: "Not An Agent" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.session_imports.first_opened", {
+			agent: "secret-client",
+			outcome: "crashed",
+			error_code: "resume failed: exit 1",
+		})).toEqual({});
+	});
+
 	it("drops an unrecognised support destination rather than forwarding it", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.support_submitted", {
 			destination: "mailto:founder@example.com",
@@ -226,7 +269,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("reports the support open with no properties at all", async () => {
-		const safe = await sanitizeRendererProperties("ao.renderer.support_opened", {
+		const safe = await sanitizeRendererProperties("ao.support.opened", {
 			summary: "everything is broken",
 		});
 		expect(safe).toEqual({});
@@ -243,7 +286,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("reports the mobile connect open with only the bridge state", async () => {
-		const safe = await sanitizeRendererProperties("ao.renderer.mobile_connect_opened", {
+		const safe = await sanitizeRendererProperties("ao.mobile.connect_opened", {
 			bridge_enabled: true,
 			// Everything the QR encodes is in scope for leaking here, so it is all
 			// passed in deliberately and must all be dropped.
@@ -255,7 +298,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("reports the bridge toggle without the pairing payload", async () => {
-		const safe = await sanitizeRendererProperties("ao.renderer.mobile_bridge_toggled", {
+		const safe = await sanitizeRendererProperties("ao.mobile.bridge_toggled", {
 			enabled: true,
 			outcome: "succeeded",
 			password: "hunter2secret",
@@ -265,7 +308,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("drops an unrecognised toggle outcome rather than forwarding it", async () => {
-		const safe = await sanitizeRendererProperties("ao.renderer.mobile_bridge_toggled", {
+		const safe = await sanitizeRendererProperties("ao.mobile.bridge_toggled", {
 			enabled: false,
 			outcome: "kind-of-worked",
 		});
@@ -279,9 +322,9 @@ describe("telemetry sanitizers", () => {
 		// in this module entirely. Disabling it client-side means the project-side
 		// toggle cannot switch it back on for shipped builds.
 		expect(config.disable_session_recording).toBe(true);
-		// AO reads no flags and ships no surveys, and /flags requests are billed
-		// per request, so any request here is cost for data nothing reads.
-		expect(config.advanced_disable_flags).toBe(true);
+		// Feature flags load (experiments); AO ships no surveys.
+		// Left out so an in-session opt-out can turn flags off through set_config.
+		expect(config).not.toHaveProperty("advanced_disable_flags");
 		expect(config.disable_surveys).toBe(true);
 		// Already-disabled capture paths that would otherwise autocapture volume.
 		expect(config.autocapture).toBe(false);
@@ -345,8 +388,8 @@ describe("telemetry sanitizers", () => {
 		});
 
 		// After identify, ordinary events carry the user and never the email.
-		client.capture("ao.renderer.support_opened", withTelemetryContext({}));
-		const after = events.find((e) => e.event === "ao.renderer.support_opened");
+		client.capture("ao.support.opened", withTelemetryContext({}));
+		const after = events.find((e) => e.event === "ao.support.opened");
 		expect(after?.properties).toMatchObject({ distinct_id: "user_01H", $is_identified: true });
 		expect(JSON.stringify(after)).not.toContain("dev@example.com");
 	});
@@ -356,13 +399,13 @@ describe("telemetry sanitizers", () => {
 			app_version: "1.2.3-nightly.20260707",
 			ao_version: "1.2.3-nightly.20260707",
 			platform: "linux",
-			telemetry_schema_version: 2,
+			telemetry_schema_version: 3,
 		});
 		expect(buildTelemetryContext("", "darwin")).toMatchObject({
 			app_version: "unknown",
 			ao_version: "unknown",
 			platform: "darwin",
-			telemetry_schema_version: 2,
+			telemetry_schema_version: 3,
 		});
 	});
 
@@ -373,6 +416,7 @@ describe("telemetry sanitizers", () => {
 			installSource: "brew-cask",
 			installedAt: "2026-10-20",
 			isCi: false,
+			isContainer: false,
 		});
 		expect(context).toMatchObject({
 			arch: "arm64",
@@ -380,13 +424,14 @@ describe("telemetry sanitizers", () => {
 			install_source: "brew-cask",
 			installed_at: "2026-10-20",
 			is_ci: false,
+			is_container: false,
 			release_channel: "stable",
 			client: "desktop",
 		});
 		expect(context).not.toHaveProperty("ci_signal");
-		expect(buildTelemetryContext("1.2.3", "linux", "unknown", { arch: "x64", installSource: "unknown", isCi: true, ciSignal: "container" })).toMatchObject({
+		expect(buildTelemetryContext("1.2.3", "linux", "unknown", { arch: "x64", installSource: "unknown", isCi: true, isContainer: true })).toMatchObject({
 			is_ci: true,
-			ci_signal: "container",
+			is_container: true,
 		});
 		// Without a context (older main process) nothing is invented.
 		expect(buildTelemetryContext("1.2.3", "linux")).not.toHaveProperty("install_source");
@@ -399,9 +444,9 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("uses v2 PostHog event names for streams that have noisy legacy producers", () => {
-		expect(postHogEventName("ao.app.active")).toBe("ao.v2.app.active");
-		expect(postHogEventName("ao.renderer.route_viewed")).toBe("ao.v2.renderer.route_viewed");
-		expect(postHogEventName("ao.renderer.api_error")).toBe("ao.v2.renderer.api_error");
+		expect(postHogEventName("ao.app.active")).toBe("ao.app.active");
+		expect(postHogEventName("ao.routes.viewed")).toBe("ao.routes.viewed");
+		expect(postHogEventName("ao.requests.failed")).toBe("ao.requests.failed");
 		expect(postHogEventName("ao.session.spawned")).toBe("ao.session.spawned");
 	});
 
@@ -444,7 +489,7 @@ describe("telemetry sanitizers", () => {
 				prompt_length_bucket: "4096",
 			}),
 		).toEqual({});
-		expect(await sanitizeRendererProperties("ao.renderer.automation_create_opened", { project_id: "demo-project" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.automations.create_opened", { project_id: "demo-project" })).toEqual({});
 	});
 
 	it("bands prompt length in the bytes the daemon counts", () => {
@@ -460,11 +505,11 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("hashes renderer ids and drops raw route identifiers", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.project_removed", { project_id: "demo-project" });
+		const props = await sanitizeRendererProperties("ao.projects.removed", { project_id: "demo-project" });
 		expect(props).toHaveProperty("project_id_hash");
 		expect(props).not.toHaveProperty("project_id");
 
-		const routeProps = await sanitizeRendererProperties("ao.renderer.route_viewed", {
+		const routeProps = await sanitizeRendererProperties("ao.routes.viewed", {
 			surface: "project_board",
 			pathname: "/projects/demo",
 			search: "?token=secret",
@@ -582,11 +627,11 @@ describe("telemetry sanitizers", () => {
 
 	it("hashes project ids and drops everything else on CTA outcomes", async () => {
 		const outcomes = [
-			"ao.renderer.task_create_succeeded",
-			"ao.renderer.task_create_failed",
-			"ao.renderer.session_kill_succeeded",
-			"ao.renderer.session_kill_failed",
-			"ao.renderer.settings_save_succeeded",
+			"ao.tasks.created",
+			"ao.tasks.create_failed",
+			"ao.sessions.killed",
+			"ao.sessions.kill_failed",
+			"ao.settings.saved",
 			"ao.renderer.settings_save_failed",
 		];
 		for (const event of outcomes) {
@@ -597,7 +642,7 @@ describe("telemetry sanitizers", () => {
 			});
 			expect(Object.keys(props)).toEqual(["project_id_hash"]);
 		}
-		expect(await sanitizeRendererProperties("ao.renderer.task_create_failed", { scope: "standalone", title: "raw" })).toEqual({
+		expect(await sanitizeRendererProperties("ao.tasks.create_failed", { scope: "standalone", title: "raw" })).toEqual({
 			scope: "standalone",
 		});
 	});
@@ -613,24 +658,42 @@ describe("telemetry sanitizers", () => {
 		}
 	});
 
-	it("keeps only the source enum on orchestrator_spawn events", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {
+	it("keeps bounded spawn source and typed failure fields", async () => {
+		const props = await sanitizeRendererProperties("ao.orchestrators.spawned", {
 			project_id: "demo-project",
 			source: "board",
+			provider_kind: "local",
+			spawn_reason: "board",
 		});
 		expect(Object.keys(props).sort()).toEqual(["project_id_hash", "source"]);
 		expect(props.source).toBe("board");
 
-		const badSource = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_failed", {
+		const badSource = await sanitizeRendererProperties("ao.orchestrators.spawn_failed", {
 			project_id: "demo-project",
 			source: "/Users/alice/private",
 		});
 		expect(badSource).not.toHaveProperty("source");
+		const failure = await sanitizeRendererProperties("ao.orchestrators.spawn_failed", {
+			source: "settings", provider_kind: "remote", error_code: "PROJECT_NOT_FOUND", http_status: 404,
+			request_id: "private", message: "private", project_id: "demo-project",
+		});
+		expect(failure).toMatchObject({ source: "settings", error_code: "PROJECT_NOT_FOUND", http_status: 404 });
+		expect(failure).not.toHaveProperty("provider_kind");
+		expect(failure).not.toHaveProperty("spawn_reason");
+		expect(failure).not.toHaveProperty("request_id");
+		expect(failure).not.toHaveProperty("message");
+		const cloud = await sanitizeRendererProperties("ao.renderer.cloud_orchestrator_spawn_succeeded", {
+			project_id: "cloud-project", provider_kind: "cloud", spawn_reason: "sidebar", sandbox_id: "private",
+		});
+		expect(cloud).toHaveProperty("project_id_hash");
+		expect(cloud).not.toHaveProperty("provider_kind");
+		expect(cloud).not.toHaveProperty("spawn_reason");
+		expect(cloud).not.toHaveProperty("sandbox_id");
 	});
 
 	it("keeps every whitelisted spawn source (the shared ORCHESTRATOR_SPAWN_SOURCES list)", async () => {
 		for (const source of ORCHESTRATOR_SPAWN_SOURCES) {
-			const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {
+			const props = await sanitizeRendererProperties("ao.orchestrators.spawned", {
 				project_id: "demo-project",
 				source,
 			});
@@ -640,23 +703,32 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("keeps only enum values on notification events", async () => {
-		expect(await sanitizeRendererProperties("ao.renderer.notification_opened", { target: "pr" })).toEqual({
+		expect(await sanitizeRendererProperties("ao.notifications.opened", { target: "pr" })).toEqual({
 			target: "pr",
 		});
-		expect(await sanitizeRendererProperties("ao.renderer.notification_opened", { target: "http://x" })).toEqual({});
-		expect(await sanitizeRendererProperties("ao.renderer.notification_mark_read_succeeded", { scope: "all" })).toEqual({
+		expect(await sanitizeRendererProperties("ao.notifications.opened", { target: "http://x" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.notifications.read", { scope: "all" })).toEqual({
 			scope: "all",
 		});
 		expect(await sanitizeRendererProperties("ao.renderer.notification_mark_read_failed", { scope: "all" })).toEqual({
 			scope: "all",
 		});
 		expect(
-			await sanitizeRendererProperties("ao.renderer.notification_mark_read_succeeded", { scope: "everything" }),
+			await sanitizeRendererProperties("ao.notifications.read", { scope: "everything" }),
+		).toEqual({});
+	});
+
+	it("keeps only known action and view values on topbar clicks", async () => {
+		expect(
+			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "run_cue", view: "worker" }),
+		).toEqual({ action: "run_cue", view: "worker" });
+		expect(
+			await sanitizeRendererProperties("ao.renderer.topbar_action_clicked", { action: "/Users/me/repo", view: "settings", extra: 1 }),
 		).toEqual({});
 	});
 
 	it("keeps a hashed project id, shared editor id, and target kind on open_in_editor_succeeded", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
+		const props = await sanitizeRendererProperties("ao.editor.opened", {
 			project_id: "demo-project",
 			editor_id: "vscode",
 			target_kind: "editor",
@@ -665,7 +737,7 @@ describe("telemetry sanitizers", () => {
 		expect(props.editor_id).toBe("vscode");
 		expect(props.target_kind).toBe("editor");
 
-		const bogus = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
+		const bogus = await sanitizeRendererProperties("ao.editor.opened", {
 			project_id: "demo-project",
 			// Not a real editor id — must not be forwarded as-is.
 			editor_id: "/Users/alice/bin/notepad",
@@ -676,7 +748,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("keeps the editor id and target kind on open_in_editor_succeeded", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
+		const props = await sanitizeRendererProperties("ao.editor.opened", {
 			project_id: "demo-project",
 			editor_id: "cursor",
 			target_kind: "editor",
@@ -695,8 +767,27 @@ describe("telemetry sanitizers", () => {
 		expect(Object.keys(props)).toEqual(["project_id_hash"]);
 	});
 
+	it("allowlists ao.setup.checked to booleans, bounded counts and registry ids", async () => {
+		expect(await sanitizeRendererProperties("ao.setup.checked", {
+			git: true, tmux: false, gh: true, gh_signed_in: false, agents_installed: 2, agents_signed_in: 1,
+			agents_installed_ids: "claude-code,codex", agents_signed_in_ids: "claude-code",
+			detail: "/Users/someone/bin/git", github_login: "someone",
+		})).toEqual({
+			git: true, tmux: false, gh: true, gh_signed_in: false, agents_installed: 2, agents_signed_in: 1,
+			agents_installed_ids: "claude-code,codex", agents_signed_in_ids: "claude-code",
+		});
+		expect(await sanitizeRendererProperties("ao.setup.checked", { git: "yes", agents_installed: -1, agents_installed_ids: "../../etc,Claude Code" })).toEqual({});
+	});
+
+	it("keeps only a stable error code on request failures", async () => {
+		expect(await sanitizeRendererProperties("ao.requests.failed", { operation: "GET /api/v1/sessions/:id/workspace/files", status: 404, error_category: "http_4xx", error_code: "SESSION_WORKSPACE_NOT_FOUND", message: "Session workspace not found" })).toEqual({
+			operation: "GET /api/v1/sessions/:id/workspace/files", status: 404, error_category: "http_4xx", error_code: "SESSION_WORKSPACE_NOT_FOUND",
+		});
+		expect(await sanitizeRendererProperties("ao.requests.failed", { error_code: "/Users/someone/repo" })).toEqual({});
+	});
+
 	it("whitelists coarse daemon failure fields and drops messages", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.daemon_failure", {
+		const props = await sanitizeRendererProperties("ao.daemon.failed", {
 			daemon_state: "error",
 			code: "spawn_failed",
 			exit_code: 1,
@@ -707,7 +798,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("whitelists normalized api_error fields", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.api_error", {
+		const props = await sanitizeRendererProperties("ao.requests.failed", {
 			operation: "GET /api/v1/projects/:id",
 			error_category: "http_5xx",
 			status: 500,
@@ -717,11 +808,11 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("keeps only the reason enum on terminal_attach_failed", async () => {
-		expect(await sanitizeRendererProperties("ao.renderer.terminal_attach_failed", { reason: "open_timeout" })).toEqual({
+		expect(await sanitizeRendererProperties("ao.terminals.attach_failed", { reason: "open_timeout" })).toEqual({
 			reason: "open_timeout",
 		});
 		expect(
-			await sanitizeRendererProperties("ao.renderer.terminal_attach_failed", { reason: "something else" }),
+			await sanitizeRendererProperties("ao.terminals.attach_failed", { reason: "something else" }),
 		).toEqual({});
 	});
 });
@@ -730,15 +821,15 @@ describe("reserveCapture", () => {
 	it("allows up to 5 captures of a name within a minute", () => {
 		const start = 1_000_000;
 		for (let i = 0; i < 5; i += 1) {
-			expect(reserveCapture("ao.renderer.route_viewed", start + i)).toBe(true);
+			expect(reserveCapture("ao.routes.viewed", start + i)).toBe(true);
 		}
-		expect(reserveCapture("ao.renderer.route_viewed", start + 5)).toBe(false);
+		expect(reserveCapture("ao.routes.viewed", start + 5)).toBe(false);
 	});
 
 	it("tracks each name in its own window", () => {
 		const start = 2_000_000;
 		for (let i = 0; i < 5; i += 1) {
-			reserveCapture("ao.renderer.route_viewed", start + i);
+			reserveCapture("ao.routes.viewed", start + i);
 		}
 		expect(reserveCapture("exception:TypeError", start)).toBe(true);
 	});
@@ -746,9 +837,9 @@ describe("reserveCapture", () => {
 	it("resets the burst window once a minute elapses", () => {
 		const start = 3_000_000;
 		for (let i = 0; i < 5; i += 1) {
-			reserveCapture("ao.renderer.loaded", start + i);
+			reserveCapture("ao.app.loaded", start + i);
 		}
-		expect(reserveCapture("ao.renderer.loaded", start + 60_001)).toBe(true);
+		expect(reserveCapture("ao.app.loaded", start + 60_001)).toBe(true);
 	});
 
 	it("caps the daily total even when calls are paced under the burst limit", () => {
@@ -929,5 +1020,61 @@ describe("route view reservation", () => {
 		expect(reserveRouteViewCapture(storage, "session_detail", new Date("2026-07-12T09:00:00.000Z"))).toBe(false);
 		expect(reserveRouteViewCapture(storage, "project_board", new Date("2026-07-12T09:00:00.000Z"))).toBe(true);
 		expect(reserveRouteViewCapture(storage, "session_detail", new Date("2026-07-13T00:00:00.000Z"))).toBe(true);
+	});
+});
+
+// Uses the real SDK: reset() reloads feature flags, and opt_out_capturing does
+// not stop /flags, so an opt-out has to disable flags through configuration.
+describe("feature flags across an in-session analytics opt-out", () => {
+	it("sends no /flags request after opting out and loads flags again on opt-in", async () => {
+		vi.useFakeTimers();
+		const client = new PostHog();
+		const urls: string[] = [];
+		try {
+			client.init("phc_test", buildPostHogConfig("ins_flags-test"));
+			(client as unknown as { _send_request: (options: { url: string }) => void })._send_request = (options) => {
+				urls.push(options.url);
+			};
+			await vi.advanceTimersByTimeAsync(2_000);
+			urls.length = 0;
+
+			stopPostHogForOptOut(client);
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(urls.filter((url) => url.includes("/flags"))).toEqual([]);
+
+			resumePostHogAfterOptIn(client);
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(urls.some((url) => url.includes("/flags"))).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+// /flags requests bypass before_send, so nothing the SDK stores from the page
+// may ride along: the raw route names projects and sessions.
+describe("feature flag requests carry no page route", () => {
+	it("sends no initial URL or referrer in /flags after a capture and identify", async () => {
+		vi.useFakeTimers();
+		const original = window.location.href;
+		window.history.replaceState(null, "", "/#/projects/private-project/sessions/secret-session?ref=private");
+		const client = new PostHog();
+		const bodies: string[] = [];
+		try {
+			client.init("phc_test", buildPostHogConfig("ins_route-test"));
+			(client as unknown as { _send_request: (options: { url: string; data?: unknown }) => void })._send_request = (options) => {
+				if (options.url.includes("/flags")) bodies.push(JSON.stringify(options.data ?? {}));
+			};
+			client.capture("ao.app.loaded", withTelemetryContext({}));
+			client.identify("user_A", { ao_cloud_user_id: "user_A" });
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(bodies.length).toBeGreaterThan(0);
+			for (const body of bodies) {
+				expect(body).not.toMatch(/private-project|secret-session|\$initial_current_url|\$initial_referrer/);
+			}
+		} finally {
+			window.history.replaceState(null, "", original);
+			vi.useRealTimers();
+		}
 	});
 });

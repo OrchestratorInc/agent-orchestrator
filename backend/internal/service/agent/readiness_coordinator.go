@@ -572,7 +572,11 @@ func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent
 	}
 	var incompatibleVersion *opencode.IncompatibleVersionError
 	if errors.As(err, &incompatibleVersion) {
-		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, item.Manifest.Name+" is not installed."), false
+		message := item.Manifest.Name + " is not installed."
+		if replaced := incompatibleVersion.ReplacedOpenCode1Message(); replaced != "" {
+			message = replaced
+		}
+		return successfulInstallation(attempted, domain.AgentInstallationNotInstalled, domain.AgentReadinessReasonNotInstalled, message), false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return failedInstallation(attempted, domain.AgentReadinessReasonInstallCheckTimeout, "Installation check timed out."), true
@@ -654,7 +658,7 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		// A definite observation — a credential exists — but not a verified
 		// one. It is recorded as a success so the coordinator does not retry
 		// it as a failure, and it derives to unknown readiness, not ready.
-		reason := item.Manifest.Name + " has credentials configured, but AO could not verify them."
+		reason := item.Manifest.Name + " has credentials configured, but Orchestrator could not verify them."
 		if slices.ContainsFunc(diagnostics, func(d domain.AgentAuthDiagnostic) bool { return d.Code == "token_renewal_pending" }) {
 			reason = item.Manifest.Name + " is signed in; its access token renews the next time it runs."
 		}

@@ -80,8 +80,8 @@ func newRemoteHostLinkCommand(ctx *commandContext) *cobra.Command {
 	var noQR bool
 	cmd := &cobra.Command{
 		Use:   "link",
-		Short: "Link this machine to your AO account by signing in from another device",
-		Long: "Link this machine to your AO account by signing in from another device.\n\n" +
+		Short: "Link this machine to your Orchestrator account by signing in from another device",
+		Long: "Link this machine to your Orchestrator account by signing in from another device.\n\n" +
 			"Open the printed link on any device, or scan its QR code with your phone, and sign in.\n" +
 			"This machine then appears on every desktop and phone signed in to that account,\n" +
 			"with no address or password to copy. Remote access is turned on if it is off.",
@@ -106,7 +106,7 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	}
 	cloudBase := strings.TrimRight(settings.CloudControlPlaneURL, "/")
 	if cloudBase == "" {
-		return errors.New("AO Cloud is not configured for this machine's AO")
+		return errors.New("no Orchestrator Cloud connection is configured on this machine")
 	}
 
 	// Nothing on this machine changes until the sign-in succeeds, so a
@@ -137,7 +137,7 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	client := &http.Client{Timeout: 30 * time.Second}
 	var directory accountHostDirectory
 	if err := cloudJSON(ctx, client, http.MethodGet, cloudBase+"/api/cloud/v1/me/hosts", session.AccessToken, nil, &directory); err != nil {
-		return fmt.Errorf("read your AO account's machines: %w", err)
+		return fmt.Errorf("read your Orchestrator account's machines: %w", err)
 	}
 	listedLabel, listedToken := "", ""
 	for _, host := range directory.Hosts {
@@ -179,10 +179,11 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	// which can take more than a minute, and finishes either way.
 	putClient := &http.Client{}
 	err = cloudJSON(ctx, putClient, http.MethodPut, put, session.AccessToken, registration, nil)
-	var limited *cloudError
-	if errors.As(err, &limited) && limited.status == http.StatusConflict && registration["url"] == "" {
-		// Out of fixed addresses: list it at its quick tunnel instead,
-		// which AO Cloud follows when the address changes.
+	var refused *cloudError
+	if errors.As(err, &refused) && noFixedAddressNow(refused.status) && registration["url"] == "" {
+		// AO Cloud could not make the fixed address: list the machine at its
+		// quick tunnel instead, which AO Cloud follows when the address
+		// changes. The machine keeps asking for the fixed address.
 		address, waitErr := c.waitForTunnelAddress(ctx, false)
 		if waitErr != nil {
 			return waitErr
@@ -191,7 +192,7 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 		err = cloudJSON(ctx, putClient, http.MethodPut, put, session.AccessToken, registration, nil)
 	}
 	if err != nil {
-		return fmt.Errorf("add this machine to your AO account: %w; run `ao remote-host link` again", err)
+		return fmt.Errorf("add this machine to your Orchestrator account: %w; run `ao remote-host link` again", err)
 	}
 	message := fmt.Sprintf("Linked %q to %s.\n", label, session.User.Email)
 	if listedToken == issued.Token && listedLabel == label {
@@ -217,6 +218,14 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	_, err = fmt.Fprintf(out, "Address: %s\nYour desktops and phones signed in to %s list this machine within about 30 seconds.\n"+
 		"Cloudflare terminates TLS and can see the connection password and traffic.\n", address, session.User.Email)
 	return err
+}
+
+// noFixedAddressNow reports AO Cloud's answers to a registration without
+// `url` that mean it could not make the fixed address: out of fixed
+// addresses (409), too many fixed-address writes (429), or Cloudflare failed
+// (502). A registration with `url` still lists the machine.
+func noFixedAddressNow(status int) bool {
+	return status == http.StatusConflict || status == http.StatusTooManyRequests || status == http.StatusBadGateway
 }
 
 // waitForTunnelAddress returns the tunnel's https origin once the daemon
@@ -269,7 +278,7 @@ func (c *commandContext) signInWithDeviceCode(ctx context.Context, out io.Writer
 	if link == "" {
 		link = device.VerificationURI
 	}
-	if _, err := fmt.Fprintf(out, "\nTo link this machine to your AO account, open this link on any device and sign in:\n\n  %s\n\n", link); err != nil {
+	if _, err := fmt.Fprintf(out, "\nTo link this machine to your Orchestrator account, open this link on any device and sign in:\n\n  %s\n\n", link); err != nil {
 		return workOSDeviceSession{}, err
 	}
 	if showQR {
@@ -359,9 +368,9 @@ type cloudError struct {
 
 func (e *cloudError) Error() string {
 	if e.code != "" {
-		return fmt.Sprintf("AO Cloud answered %d (%s)", e.status, e.code)
+		return fmt.Sprintf("Orchestrator Cloud answered %d (%s)", e.status, e.code)
 	}
-	return fmt.Sprintf("AO Cloud answered %d", e.status)
+	return fmt.Sprintf("Orchestrator Cloud answered %d", e.status)
 }
 
 func cloudJSON(ctx context.Context, client *http.Client, method, target, bearer string, body, out any) error {
