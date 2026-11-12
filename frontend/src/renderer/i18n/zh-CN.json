@@ -3387,6 +3387,7 @@
 	"settings.models.selectModel": "选择模型",
 	"settings.models.useAgentModel": "使用智能体模型",
 	"settings.models.useAgentMode": "使用智能体模式",
+	"settings.models.agentDefaultMode": "智能体默认",
 	"settings.models.clearEffort": "清除推理强度",
 	"settings.models.currentEffort": "当前推理强度：{{effort}}",
 	"settings.models.savedEffortUnavailable": "{{effort}}（不可用）",
