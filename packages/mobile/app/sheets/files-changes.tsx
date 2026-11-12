@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, StyleSheet, Text } from "react-native";
 import { backOr } from "../../lib/backNavigation";
 import { userFacingError } from "../../lib/connectionError";
@@ -39,26 +39,31 @@ function FilesChangesSheet() {
 	const [history, setHistory] = useState<WorkspaceHistory>();
 	const [error, setError] = useState<string>();
 	const [refreshing, setRefreshing] = useState(false);
+	// Only the newest read lands: a slow first one must not undo a pull to refresh.
+	const latest = useRef(0);
 	useEffect(() => () => releaseSheetResult(resultKey), [resultKey]);
 
 	const viewKey = JSON.stringify(viewOf(selection.branch) ?? null);
-	const load = useCallback(async (signal?: AbortSignal) => {
+	/** `fresh` reads the manifest again, as a pull to refresh asks; opening uses the Files screen's. */
+	const load = useCallback(async (signal?: AbortSignal, fresh = false) => {
 		if (!backend || !git || !sessionId) return;
+		const ticket = ++latest.current;
+		const current = () => !signal?.aborted && ticket === latest.current;
 		const view = JSON.parse(viewKey) as ReturnType<typeof viewOf> | null;
 		const branchGit = git.at(view ?? undefined).git;
 		if (!branchGit) return;
 		// The worktree's scopes count what it holds, apart from the commits, so
 		// neither waits on the other.
-		if (checkedOut && !cachedManifest(backend, sessionId)) {
-			void backend.manifest(sessionId, signal).then((next) => { if (!signal?.aborted) setManifest(next); }, () => {});
+		if (checkedOut && (fresh || !cachedManifest(backend, sessionId))) {
+			void backend.manifest(sessionId, signal).then((next) => { if (current()) setManifest(next); }, () => {});
 		}
 		try {
 			const next = await branchGit.history(sessionId, signal);
-			if (signal?.aborted) return;
+			if (!current()) return;
 			setHistory(next);
 			setError(undefined);
 		} catch (cause) {
-			if (!signal?.aborted) setError(userFacingError(cause, "Couldn't list this branch's commits."));
+			if (current()) setError(userFacingError(cause, "Couldn't list this branch's commits."));
 		}
 	}, [backend, checkedOut, git, sessionId, viewKey]);
 	useEffect(() => {
@@ -68,7 +73,7 @@ function FilesChangesSheet() {
 	}, [load]);
 	const refresh = async () => {
 		setRefreshing(true);
-		try { await load(); } finally { setRefreshing(false); }
+		try { await load(undefined, true); } finally { setRefreshing(false); }
 	};
 
 	const selected = changesId(selection.changes);

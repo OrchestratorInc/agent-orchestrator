@@ -8,11 +8,12 @@ const file = (path: string, extra: Partial<WorkspaceFileSummary> = {}): Workspac
 });
 const row = (extra: Partial<WorkspaceBranch>): WorkspaceBranch => ({ kind: "local", name: "", checkedOut: false, isDefault: false, ...extra });
 
-const manifest = (sections: Partial<WorkspaceManifest["sections"]>): Pick<WorkspaceManifest, "summary" | "sections" | "degraded" | "files"> => ({
-	summary: { files: 0, additions: 0, deletions: 0 },
+const manifest = (sections: Partial<WorkspaceManifest["sections"]>, extra: Partial<WorkspaceManifest> = {}): Pick<WorkspaceManifest, "summary" | "sections" | "degraded" | "files" | "compareMode"> => ({
+	summary: { files: 2, additions: 4, deletions: 2 },
 	files: [file("a.ts"), file("b.ts")],
 	degraded: false,
 	sections: { committed: [], staged: [], unstaged: [], untracked: [], uncommitted: [], ...sections },
+	...extra,
 });
 
 describe("branchOptions", () => {
@@ -80,6 +81,16 @@ describe("changesOptions", () => {
 	it("leaves out a side of the counts with nothing on it", () => {
 		const options = changesOptions({ selection: { branch: { kind: "checked_out" }, changes: { kind: "all" } }, manifest: manifest({ uncommitted: [file("n.ts", { deletions: 0 })], staged: [file("b.png", { additions: 0, deletions: 0, binary: true })] }), history: undefined });
 		expect(options.map((option) => option.detail)).toEqual(["2 files · +4 −2", "1 file · +2", "1 file"]);
+	});
+
+	it("counts all changes from the summary, which a capped file list would undercount", () => {
+		const options = changesOptions({ selection: { branch: { kind: "checked_out" }, changes: { kind: "all" } }, manifest: manifest({}, { summary: { files: 6000, additions: 9, deletions: 0 } }), history: undefined });
+		expect(options[0].detail).toBe("6000 files · +9");
+	});
+
+	it("offers no whole range on the checked-out branch when the daemon compares with HEAD", () => {
+		const options = changesOptions({ selection: { branch: { kind: "checked_out" }, changes: { kind: "all" } }, manifest: manifest({}, { compareMode: "head_fallback" }), history: { ...history, view: { kind: "checked_out", rangeMode: "recent" } } });
+		expect(options.map((option) => option.id)).toEqual(["all", "commit:abcdef1234"]);
 	});
 
 	it("maps a row back to the pick it names", () => {

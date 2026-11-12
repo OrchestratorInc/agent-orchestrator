@@ -164,6 +164,8 @@ function SessionFilesContent() {
 			) : null}
 			{/* About the worktree's manifest, so not about one commit or another branch. */}
 			{tab === "changes" && manifest && fromManifest ? <ManifestNotes manifest={manifest} againstBase={selection.changes.kind === "all" || selection.changes.kind === "commits"} /> : null}
+			{/* A refresh that failed under a list still shown: the list may be out of date. */}
+			{tab === "changes" && list.error && list.groups ? <Note text={`Couldn't refresh: ${list.error}`} /> : null}
 		</View>
 	);
 
@@ -243,6 +245,17 @@ function ManifestNotes({ manifest, againstBase }: { manifest: NonNullable<Return
 					<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.noteText}>{note}</Text>
 				</View>
 			))}
+		</View>
+	);
+}
+
+function Note({ text }: { text: string }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<View style={[styles.notes, styles.note]}>
+			<AppSymbol name="info" size={iconSize.sm} color={t.amber} />
+			<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.noteText}>{text}</Text>
 		</View>
 	);
 }

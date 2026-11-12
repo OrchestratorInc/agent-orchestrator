@@ -12,11 +12,14 @@ function age(iso: string | null | undefined, now: number): string {
 }
 
 function counts(files: readonly Pick<WorkspaceFileSummary, "additions" | "deletions">[]): string {
-	if (!files.length) return "No changes";
-	const { additions, deletions } = sumFiles(files);
+	return totals(sumFiles(files));
+}
+
+function totals({ files, additions, deletions }: { files: number; additions: number; deletions: number }): string {
+	if (!files) return "No changes";
 	// A side with nothing on it says nothing; binary-only changes count no lines at all.
 	const lines = [additions ? `+${additions}` : "", deletions ? `−${deletions}` : ""].filter(Boolean).join(" ");
-	return lines ? `${plural(files.length, "file")} · ${lines}` : plural(files.length, "file");
+	return lines ? `${plural(files, "file")} · ${lines}` : plural(files, "file");
 }
 
 /** The branch sheet's rows, in the daemon's order (the checked-out branch first, then newest first), narrowed by `query`. */
@@ -59,7 +62,7 @@ export function changesOfId(id: string): FilesChanges {
  */
 export function changesOptions({ selection, manifest, history, base, now = Date.now() }: {
 	selection: FilesSelection;
-	manifest: Pick<WorkspaceManifest, "summary" | "sections" | "degraded" | "files"> | null | undefined;
+	manifest: Pick<WorkspaceManifest, "summary" | "sections" | "degraded" | "files" | "compareMode"> | null | undefined;
 	history: Pick<WorkspaceHistory, "commits" | "view"> | undefined;
 	base?: string;
 	now?: number;
@@ -68,7 +71,8 @@ export function changesOptions({ selection, manifest, history, base, now = Date.
 	const options: PickerOption[] = [];
 	if (pick.branch.kind === "checked_out" && manifest) {
 		const section = "Working tree";
-		options.push({ id: "all", title: changesLabel({ kind: "all" }, base), detail: counts(manifest.files.filter((file) => file.status !== "unmodified")), section });
+		// The summary, as the Files screen shows it: the file list can be capped.
+		options.push({ id: "all", title: changesLabel({ kind: "all" }, base), detail: totals(manifest.summary), section });
 		if (scopesAvailable(manifest)) {
 			const { sections } = manifest;
 			const scopes: [FilesChanges["kind"], string, readonly WorkspaceFileSummary[]][] = [
@@ -85,7 +89,10 @@ export function changesOptions({ selection, manifest, history, base, now = Date.
 	const section = "Commits";
 	// A default branch has no base to count from, so the daemon lists its newest commits.
 	const recent = history.view.rangeMode === "recent";
-	if (history.commits.length) {
+	// With no base the daemon compares with HEAD and lists no commits as committed,
+	// so the checked-out branch's whole range has nothing to read; its single commits still do.
+	const noRange = pick.branch.kind === "checked_out" && manifest?.compareMode === "head_fallback";
+	if (history.commits.length && !noRange) {
 		options.push({
 			id: "commits",
 			title: recent ? `Latest ${plural(history.commits.length, "commit")}` : "All commits",

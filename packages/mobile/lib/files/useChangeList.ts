@@ -56,20 +56,27 @@ export function useChangeList(branchBackend: FilesBackend | null, sessionId: str
 	const needsRange = viewing && !sha;
 	const key = `${branchBackend?.key ?? ""}|${sessionId}|${needsHistory ? `history:${sha}` : needsRange ? "range" : "manifest"}`;
 	const [loaded, setLoaded] = useState<{ key: string; history?: WorkspaceHistory; range?: WorkspaceCommitSelection; error?: string }>();
+	// The committed pick's key, set in an effect so a render React discards never
+	// moves it; and a sequence, so only the newest read for that key lands.
 	const current = useRef(key);
-	current.current = key;
+	const latest = useRef(0);
+	useEffect(() => {
+		current.current = key;
+	}, [key]);
 
 	const load = useCallback(async () => {
 		const git = branchBackend?.git;
 		if (!enabled || !git || (!needsHistory && !needsRange)) return;
+		const ticket = ++latest.current;
+		const landed = () => current.current === key && ticket === latest.current;
 		try {
 			const next = needsHistory ? { history: await git.history(sessionId) } : { range: await git.rangeFiles(sessionId) };
-			if (current.current === key) setLoaded({ key, ...next });
+			if (landed()) setLoaded({ key, ...next });
 		} catch (cause) {
-			if (current.current !== key) return;
+			if (!landed()) return;
 			const error = userFacingError(cause, needsHistory ? "Couldn't read this commit." : "Couldn't read this branch's changes.");
-			// A failed refresh keeps what was already shown.
-			setLoaded((previous) => previous?.key === key && (previous.history || previous.range) ? previous : { key, error });
+			// A failed refresh keeps what was already shown, and says it failed.
+			setLoaded((previous) => previous?.key === key && (previous.history || previous.range) ? { ...previous, error } : { key, error });
 		}
 	}, [branchBackend, enabled, key, needsHistory, needsRange, sessionId]);
 
@@ -87,14 +94,17 @@ export function useChangeList(branchBackend: FilesBackend | null, sessionId: str
 	}, [load, viewing, version]));
 
 	const shown = loaded?.key === key ? loaded : undefined;
-	const groups = useMemo(() => selectionGroups(pick, manifest, shown?.history, shown?.range?.files), [manifest, pick, shown]);
+	// The history lists only the newest commits; a pick that has left it is not an empty commit.
+	const missingCommit = Boolean(sha && shown?.history && !shown.history.commits.some((commit) => commit.sha === sha));
+	const groups = useMemo(() => missingCommit ? undefined : selectionGroups(pick, manifest, shown?.history, shown?.range?.files), [manifest, missingCommit, pick, shown]);
 	const summary = useMemo(() => {
 		if (!groups) return undefined;
 		if (pick.branch.kind === "checked_out" && pick.changes.kind === "all") return manifest?.summary;
 		if (shown?.range && !sha) return shown.range.summary;
 		return sumFiles(groups.flatMap((group) => group.files));
 	}, [groups, manifest, pick, sha, shown]);
-	return { groups, summary, error: shown?.error, refresh: load };
+	const error = missingCommit ? "This commit isn't among the branch's listed commits any more. Pick it again from Changes." : shown?.error;
+	return { groups, summary, error, refresh: load };
 }
 
 /**

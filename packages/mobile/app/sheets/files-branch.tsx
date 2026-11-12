@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform, StyleSheet, Text } from "react-native";
 import { backOr } from "../../lib/backNavigation";
 import { ComposerSearchField } from "../../lib/chat/ComposerSearchField";
@@ -37,17 +37,20 @@ function FilesBranchSheet() {
 	const [error, setError] = useState<string>();
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
+	// Only the newest read lands: a slow first one must not undo a pull to refresh.
+	const latest = useRef(0);
 	useEffect(() => () => releaseSheetResult(resultKey), [resultKey]);
 
 	const load = useCallback(async (signal?: AbortSignal) => {
 		if (!git || !sessionId) return;
+		const ticket = ++latest.current;
 		try {
 			const next = await git.branches(sessionId, signal);
-			if (signal?.aborted) return;
+			if (signal?.aborted || ticket !== latest.current) return;
 			setList(next);
 			setError(undefined);
 		} catch (cause) {
-			if (!signal?.aborted) setError(userFacingError(cause, "Couldn't list this session's branches."));
+			if (!signal?.aborted && ticket === latest.current) setError(userFacingError(cause, "Couldn't list this session's branches."));
 		}
 	}, [git, sessionId]);
 	useEffect(() => {

@@ -100,6 +100,8 @@ describe("selectionGroups", () => {
 	it("waits for the history to list one commit, and for the range on another branch", () => {
 		const commit = { branch: { kind: "checked_out" as const }, changes: { kind: "commits" as const, sha: "abcdef1234" } };
 		expect(selectionGroups(commit, worktree)).toBeUndefined();
+		// Outside the listed history it stays unresolved, never an empty commit.
+		expect(selectionGroups(commit, worktree, { commits: [] })).toBeUndefined();
 		expect(paths(selectionGroups(commit, worktree, { commits: [{ sha: "abcdef1234", subject: "x", author: "a", timestamp: "", files: [file("z.ts"), file("y.ts")] }] })))
 			.toEqual([["Changed in abcdef1", ["y.ts", "z.ts"]]]);
 		const other = selectionForBranch({ kind: "branch", name: "main" });

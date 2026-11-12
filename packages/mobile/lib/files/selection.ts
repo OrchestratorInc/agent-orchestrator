@@ -185,9 +185,10 @@ export function selectionGroups(
 ): ChangeGroup[] | undefined {
 	const { branch, changes } = normalizeSelection(selection);
 	if (changes.kind === "commits" && changes.sha) {
-		if (!history) return undefined;
-		const commit = history.commits.find((item) => item.sha === changes.sha);
-		return group("commit", commit ? `Changed in ${shortSha(commit.sha)}` : "Changed in this commit", plainGroup(commit?.files ?? []));
+		const commit = history?.commits.find((item) => item.sha === changes.sha);
+		// Unresolved until the history lists it: a commit outside the newest ones is not an empty one.
+		if (!commit) return undefined;
+		return group("commit", `Changed in ${shortSha(commit.sha)}`, plainGroup(commit.files));
 	}
 	if (branch.kind !== "checked_out") {
 		if (!rangeFiles) return undefined;
