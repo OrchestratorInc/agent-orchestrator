@@ -68,7 +68,11 @@ export function SelectionAskButton({ onAsk, onDismiss, source }: {
 			if (target?.closest('input, textarea, select, [contenteditable], [role="textbox"], .xterm, webview, [data-browser-view]')) return;
 			const toolbarFocused = Boolean(target && button.contains(target));
 			const surface = selection.host?.closest("[data-selection-toolbar-scope], .ao-pierre-surface") ?? selection.host;
-			const onSurface = Boolean(surface && target && (surface.contains(target) || event.composedPath().includes(surface)));
+			// File tabs can retain focus outside both the code and an inner clipping viewport.
+			// Accept the owning region itself, without claiming sibling controls.
+			const keyboardScope = selection.host?.closest("[data-code-selection-keyboard-scope]");
+			const onSurface = Boolean(target && (target === keyboardScope || target === selection.viewport ||
+				(surface && (surface.contains(target) || event.composedPath().includes(surface)))));
 			const liveRange = selection.host && codeSelectionRange(selection.host);
 			const matches = selectionRangesEqual(liveRange ?? undefined, selection.textRange);
 			const documentTarget = !target || target === document.body || target === document.documentElement;

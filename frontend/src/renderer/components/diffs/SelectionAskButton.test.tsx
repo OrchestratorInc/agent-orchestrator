@@ -15,10 +15,17 @@ function source(selection: Partial<CodeSelection> | null) {
 	return { get: () => selection as CodeSelection | null, subscribe: () => () => {} };
 }
 
-function keyboardSelection() {
+function keyboardSelection({ outerViewport = false } = {}) {
 	const scope = document.createElement("div");
 	scope.className = "ao-pierre-surface"; scope.setAttribute("data-test-selection-scope", "");
-	const host = document.createElement("diffs-container"); scope.append(host); document.body.append(scope);
+	const viewport = outerViewport ? document.createElement("div") : scope;
+	if (outerViewport) {
+		viewport.setAttribute("data-test-selection-scope", "");
+		viewport.setAttribute("data-code-selection-keyboard-scope", "");
+		const pane = document.createElement("div"); pane.setAttribute("data-selection-toolbar-scope", "");
+		pane.append(scope); viewport.append(pane);
+	}
+	const host = document.createElement("diffs-container"); scope.append(host); document.body.append(viewport);
 	const root = host.attachShadow({ mode: "open" }); root.textContent = "selected code";
 	const text = root.firstChild!;
 	let live = true, endOffset = 8, top = 80;
@@ -29,13 +36,14 @@ function keyboardSelection() {
 	const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 8);
 	vi.spyOn(range, "getBoundingClientRect").mockImplementation(() => new DOMRect(80, top, 120, 20));
 	vi.spyOn(scope, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 400));
-	let selection: CodeSelection | null = { host, textRange: range, viewport: scope,
+	if (outerViewport) vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 400));
+	let selection: CodeSelection | null = { host, textRange: range, viewport,
 		rows: [], range: { start: 1, end: 1 }, point: { x: 200, y: 90 }, dragging: false,
 		snapshot: { anchor: { column: host, row: host, rowIndex: 0, offset: 0, text: "", rowCount: 0 }, focus: { column: host, row: host, rowIndex: 0, offset: 0, text: "", rowCount: 0 }, rows: [] } };
 	const listeners = new Set<() => void>();
 	const store: CodeSelectionSource = { get: () => selection, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); } };
 	const dismiss = vi.fn(() => { selection = null; for (const listener of listeners) listener(); });
-	return { scope, host, store, dismiss, offscreen() { top = -100; }, changed() { endOffset = 4; }, clearNative() { live = false; } };
+	return { scope, viewport, host, store, dismiss, offscreen() { top = -100; }, changed() { endOffset = 4; }, clearNative() { live = false; } };
 }
 
 describe("SelectionAskButton", () => {
@@ -84,6 +92,45 @@ describe("SelectionAskButton", () => {
 		expect(fireEvent.keyDown(selected.scope, { key, ctrlKey: key === "l" })).toBe(false);
 		if (key === "Escape") expect(selected.dismiss).toHaveBeenCalledOnce();
 		else expect(onAsk).toHaveBeenCalledOnce();
+	});
+
+	it.each(["Win32", "Linux x86_64", "MacIntel"])("adds selected code when the outer file viewport holds focus on %s", platform => {
+		vi.mocked(isMacPlatform).mockReturnValue(platform === "MacIntel");
+		const selected = keyboardSelection({ outerViewport: true }), onAsk = vi.fn();
+		render(<SelectionAskButton onAsk={onAsk} source={selected.store} />);
+		selected.viewport.tabIndex = -1; act(() => selected.viewport.focus());
+		const chord = { key: "l", ctrlKey: platform !== "MacIntel", metaKey: platform === "MacIntel" };
+		expect(fireEvent.keyDown(selected.viewport, { ...chord, repeat: true })).toBe(false);
+		expect(onAsk).not.toHaveBeenCalled();
+		expect(fireEvent.keyDown(selected.viewport, chord)).toBe(false);
+		expect(fireEvent.keyDown(selected.viewport, chord)).toBe(true);
+		expect(onAsk).toHaveBeenCalledOnce();
+	});
+
+	it("adds a live file preview when an inner wrapper clips the selection but the outer file region holds focus", () => {
+		const selected = keyboardSelection({ outerViewport: true }), onAsk = vi.fn();
+		const clippingViewport = selected.scope.parentElement!;
+		clippingViewport.style.overflow = "auto";
+		vi.spyOn(clippingViewport, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 400));
+		selected.store.get()!.viewport = clippingViewport;
+		render(<SelectionAskButton onAsk={onAsk} source={selected.store} />);
+		selected.viewport.tabIndex = -1; act(() => selected.viewport.focus());
+		expect(fireEvent.keyDown(selected.viewport, { key: "l", ctrlKey: true })).toBe(false);
+		expect(onAsk).toHaveBeenCalledOnce();
+	});
+
+	it("does not claim other controls in the outer file viewport or a changed selection", () => {
+		const selected = keyboardSelection({ outerViewport: true }), onAsk = vi.fn();
+		render(<SelectionAskButton onAsk={onAsk} source={selected.store} />);
+		for (const tag of ["button", "textarea"]) {
+			const control = document.createElement(tag); selected.viewport.append(control);
+			act(() => control.focus());
+			expect(fireEvent.keyDown(control, { key: "l", ctrlKey: true })).toBe(true);
+		}
+		selected.viewport.tabIndex = -1; act(() => selected.viewport.focus());
+		selected.changed();
+		expect(fireEvent.keyDown(selected.viewport, { key: "l", ctrlKey: true })).toBe(true);
+		expect(onAsk).not.toHaveBeenCalled();
 	});
 
 	it("does not use a retained selection while its toolbar is offscreen or its live range changed", () => {
