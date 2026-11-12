@@ -449,4 +449,46 @@ describe("useNewLocalProject", () => {
 		expect(project().hostId).toBe("studio");
 		await act_(async () => { finish(); await pending; });
 	});
+
+	it("never registers a clone whose removal started, even back on its URL", async () => {
+		let removed!: () => void;
+		fixtures.cleanupClone.mockImplementationOnce(() => new Promise<void>((resolve) => { removed = resolve; }));
+		let n = 0;
+		fixtures.prepareClone.mockImplementation(async (_cfg: unknown, input: { destinationParent: string }) => {
+			const path = `${input.destinationParent}/sample-${++n}`;
+			fixtures.repos.set(path, { isRepo: true, hasCommit: true, hasOrigin: false });
+			return { path, preparationId: `prep-${n}` };
+		});
+		fixtures.remote.ready = false;
+		await mount();
+		await act_(() => project().chooseSource("clone"));
+		await act_(() => project().setRemoteUrl("https://x/sample"));
+		await act_(() => project().create());
+		// Away and back while the first clone is still being removed.
+		await act_(() => project().setRemoteUrl("https://x/other"));
+		await act_(() => project().setRemoteUrl("https://x/sample"));
+		expect(project().setupActions).toEqual([]);
+		fixtures.remote.ready = true;
+		await act_(() => renderer?.update(<Probe />));
+		let pending!: Promise<void>;
+		await act(async () => { pending = project().create(); });
+		// Create waits for the removal; it doesn't reuse the clone being removed.
+		expect(fixtures.prepareClone).toHaveBeenCalledTimes(1);
+		await act_(async () => { removed(); await pending; });
+		expect(fixtures.cleanupClone).toHaveBeenCalledTimes(1);
+		expect(fixtures.prepareClone).toHaveBeenCalledTimes(2);
+		expect(fixtures.addFolderProject).toHaveBeenCalledWith(expect.anything(), { path: "~/ao/projects/sample-2", clonePreparationId: "prep-2" });
+	});
+
+	it("keeps the source and the URL a create was asked for while it runs", async () => {
+		let finish!: () => void;
+		fixtures.addFolderProject.mockImplementation(() => new Promise((resolve) => { finish = () => resolve("app"); }));
+		await mount();
+		await act_(() => project().choose(`${HOME}/app`));
+		let pending!: Promise<void>;
+		await act(async () => { pending = project().create(); });
+		await act_(() => project().chooseSource("clone"));
+		expect(project().source).toBe("folder");
+		await act_(async () => { finish(); await pending; });
+	});
 });

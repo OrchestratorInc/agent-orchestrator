@@ -1,5 +1,5 @@
 import * as Crypto from "expo-crypto";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ServerConfig } from "../config";
 import { haptics } from "../haptics";
 import { connectedSpawnHosts } from "../hostRoute";
@@ -72,8 +72,10 @@ export function useNewLocalProject({ onCreated }: {
 		?? null;
 	const machine = machines.find((item) => item.id === hostId);
 	const config = hostId ? configForHost(hostId) : null;
+	// The machine as committed, not as a render that React may still discard:
+	// a clone finishing for the machine still shown must not look stale.
 	const hostRef = useRef(hostId);
-	hostRef.current = hostId;
+	useLayoutEffect(() => { hostRef.current = hostId; }, [hostId]);
 
 	const [source, setSource] = useState<LocalProjectSource>("folder");
 	const [folder, setFolder] = useState<string | null>(null);
@@ -173,7 +175,8 @@ export function useNewLocalProject({ onCreated }: {
 	};
 
 	const chooseSource = (next: LocalProjectSource) => {
-		if (next === source) return;
+		// The create in flight was asked for from this source; the form keeps showing it.
+		if (next === source || busy) return;
 		haptics.select();
 		setSource(next);
 		setError(null);
@@ -243,29 +246,43 @@ export function useNewLocalProject({ onCreated }: {
 	/**
 	 * Removes a prepared clone the user moved away from (another URL, another
 	 * place, another machine), on the machine that made it, as the desktop
-	 * removes it. The clone stays known until removal succeeds, so a failure is
-	 * said and the next Create tries again first.
+	 * removes it. From the moment removal starts the clone is retired: it is
+	 * never registered, even if the user goes back to its URL, since its
+	 * checkout may be half gone. It stays known until removal succeeds, so a
+	 * failure is said and the next Create tries again first. Calls while a
+	 * removal runs share it.
 	 */
-	const cleanupPrepared = useCallback(async (clone: PreparedClone): Promise<boolean> => {
-		try {
-			await cleanupClone(clone.config, { path: clone.path, preparationId: clone.preparationId });
-		} catch {
-			if (mounted.current) setError(`Orchestrator couldn't remove the unused clone at ${clone.path}. Create tries again.`);
-			return false;
-		}
-		if (preparedRef.current === clone) {
-			preparedRef.current = null;
-			if (mounted.current) {
-				setPrepared(null);
-				setCheck((current) => current?.path === clone.path ? null : current);
+	const retired = useRef(new WeakSet<PreparedClone>());
+	const removing = useRef(new WeakMap<PreparedClone, Promise<boolean>>());
+	const cleanupPrepared = useCallback((clone: PreparedClone): Promise<boolean> => {
+		retired.current.add(clone);
+		const running = removing.current.get(clone);
+		if (running) return running;
+		const removal = (async () => {
+			try {
+				await cleanupClone(clone.config, { path: clone.path, preparationId: clone.preparationId });
+			} catch {
+				if (mounted.current) setError(`Orchestrator couldn't remove the unused clone at ${clone.path}. Create tries again.`);
+				return false;
+			} finally {
+				removing.current.delete(clone);
 			}
-		}
-		return true;
+			if (preparedRef.current === clone) {
+				preparedRef.current = null;
+				if (mounted.current) {
+					setPrepared(null);
+					setCheck((current) => current?.path === clone.path ? null : current);
+				}
+			}
+			return true;
+		})();
+		removing.current.set(clone, removal);
+		return removal;
 	}, []);
-	const preparedMatches = (clone: PreparedClone) => clone.hostId === hostId
+	const preparedMatches = (clone: PreparedClone) => !retired.current.has(clone) && clone.hostId === hostId
 		&& clone.remoteUrl === remoteUrl.trim() && clone.destinationParent === destinationParent.trim();
 	useEffect(() => {
-		if (prepared && !(prepared.hostId === hostId && prepared.remoteUrl === remoteUrl.trim() && prepared.destinationParent === destinationParent.trim())) {
+		if (prepared && !retired.current.has(prepared) && !(prepared.hostId === hostId && prepared.remoteUrl === remoteUrl.trim() && prepared.destinationParent === destinationParent.trim())) {
 			void cleanupPrepared(prepared);
 		}
 	}, [cleanupPrepared, destinationParent, hostId, prepared, remoteUrl]);
@@ -352,7 +369,8 @@ export function useNewLocalProject({ onCreated }: {
 		try {
 			if (request.source === "clone") {
 				let clone = preparedRef.current;
-				// A clone left from another URL, place or machine goes first.
+				// A clone left from another URL, place or machine, or one already being
+				// removed, goes first (waiting for a removal that is running); then a fresh one.
 				if (clone && !preparedMatches(clone)) {
 					if (!(await cleanupPrepared(clone))) return;
 					clone = null;
@@ -462,6 +480,7 @@ export function useNewLocalProject({ onCreated }: {
 		github,
 		/** A GitHub repository's clone URL into the field. */
 		takeRepository: (repo: Parameters<typeof github.take>[0]) => {
+			if (busy) return;
 			haptics.select();
 			setRemoteUrl(github.take(repo));
 			setError(null);

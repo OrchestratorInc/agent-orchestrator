@@ -90,7 +90,7 @@ export function LocalProjectForm({ project, placement }: LocalProjectFormProps) 
 								const option = LOCAL_SOURCE_OPTIONS.find((item) => item.key === next);
 								if (option) project.chooseSource(option.key);
 							}}
-							modifiers={[pickerStyle("segmented"), listRowBackground("transparent"), listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }), accessibilityIdentifier("new-local-project-source")]}
+							modifiers={[pickerStyle("segmented"), listRowBackground("transparent"), listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }), disabledModifier(project.busy), accessibilityIdentifier("new-local-project-source")]}
 						>
 							{LOCAL_SOURCE_OPTIONS.map((option) => <Text key={option.key} modifiers={[tag(option.key)]}>{option.label}</Text>)}
 						</Picker>
@@ -113,6 +113,7 @@ export function LocalProjectForm({ project, placement }: LocalProjectFormProps) 
 									autoCapitalize="none"
 									autoCorrect={false}
 									returnKeyType="done"
+									editable={!project.busy}
 									testID="new-local-project-url"
 								/>
 							</SettingsSection>

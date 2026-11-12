@@ -109,14 +109,16 @@ export function LocalProjectForm({ project, placement }: LocalProjectFormProps) 
 				keyboardShouldPersistTaps="handled"
 			>
 				{placement ? <PlacementPicker placement={placement} /> : null}
-				<SegmentedChoice
-					value={project.source}
-					options={LOCAL_SOURCE_OPTIONS}
-					onChange={project.chooseSource}
-					accessibilityLabel="Project source"
-					style={placement ? styles.block : undefined}
-					testID="new-local-project-source"
-				/>
+				{/* Held still while a create runs: no touches, dimmed as Material dims a disabled control. */}
+				<View pointerEvents={project.busy ? "none" : "auto"} style={[placement ? styles.block : undefined, project.busy ? styles.held : undefined]}>
+					<SegmentedChoice
+						value={project.source}
+						options={LOCAL_SOURCE_OPTIONS}
+						onChange={project.chooseSource}
+						accessibilityLabel="Project source"
+						testID="new-local-project-source"
+					/>
+				</View>
 				{project.machines.length > 1 ? (
 					<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.block}>
 						<MachineSection project={project} />
@@ -149,6 +151,7 @@ export function LocalProjectForm({ project, placement }: LocalProjectFormProps) 
 									autoCapitalize="none"
 									autoCorrect={false}
 									returnKeyType="done"
+									editable={!project.busy}
 									testID="new-local-project-url"
 								/>
 								<Footnote>{cloneTargetNote(clonePathPreview(project.remoteUrl, displayPath(project.destinationParent, project.home)))}</Footnote>
@@ -532,4 +535,5 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	content: { paddingHorizontal: gutter, paddingTop: space.sm },
 	block: { alignSelf: "stretch", marginTop: space.xl },
 	blockTight: { alignSelf: "stretch", marginTop: space.md },
+	held: { opacity: 0.38 },
 });
