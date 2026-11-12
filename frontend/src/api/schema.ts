@@ -4707,6 +4707,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/sessions/disk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the cached disk size of each live session's worktree */
+        get: operations["listSessionDisk"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions/memory": {
         parameters: {
             query?: never;
@@ -6784,6 +6801,16 @@ export interface components {
             reviews: components["schemas"]["PRReviewState"][];
             runs: components["schemas"]["ReviewRun"][];
         };
+        ListSessionDiskResponse: {
+            /** @description Worktrees with no size yet, or one old enough to be measured again. The figures can change while this is above zero. */
+            measuring: number;
+            sessions: components["schemas"]["SessionDiskResponse"][];
+            /**
+             * Format: int64
+             * @description Sum of the measured worktrees. One that several sessions share is counted once.
+             */
+            totalBytes: number;
+        };
         ListSessionMemoryResponse: {
             app?: components["schemas"]["AppMemoryResponse"];
             sessions: components["schemas"]["SessionMemoryResponse"][];
@@ -7435,6 +7462,16 @@ export interface components {
             remoteBranch?: string;
             remoteHead?: string;
             unpushed: number;
+        };
+        SessionDiskResponse: {
+            /** Format: date-time */
+            measuredAt: string;
+            sessionId: string;
+            /**
+             * Format: int64
+             * @description Disk space allocated under the session's worktree, as du counts it.
+             */
+            sizeBytes: number;
         };
         SessionHistoryResponse: {
             offset: number;
@@ -26004,6 +26041,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListCompactSessionUsageResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionDisk: {
+        parameters: {
+            query?: {
+                /** @description Optional project id filter for dashboard cards. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListSessionDiskResponse"];
                 };
             };
             /** @description Internal Server Error */
