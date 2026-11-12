@@ -1939,7 +1939,7 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
 			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
 	case errors.Is(err, sessionmanager.ErrSessionMoved):
-		return apierr.Conflict("SESSION_MOVED", "This session moved to AO Cloud. Open it there.", nil)
+		return apierr.Conflict("SESSION_MOVED", "This session moved to Orchestrator Cloud. Open it there.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):

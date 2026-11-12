@@ -111,7 +111,7 @@ export async function moveSession(
 		const { session } = await deps.cloud.createSession(target.orgId, request, { idempotencyKey: moveId });
 		cloudSessionId = session.id;
 	} catch (error) {
-		return rollback("import", error, "Could not start the session in AO Cloud", { branch: m.branch, tip: m.tip, wip: m.wip });
+		return rollback("import", error, "Could not start the session in Orchestrator Cloud", { branch: m.branch, tip: m.tip, wip: m.wip });
 	}
 
 	deps.onStep?.("complete");
