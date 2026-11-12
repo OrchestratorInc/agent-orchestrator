@@ -1478,6 +1478,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports/github-availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Check whether a GitHub repository name is free to create for a project import */
+        get: operations["checkImportGitHubAvailability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/github-owners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the GitHub accounts gh on this machine can create a project's repository under */
+        get: operations["listImportGitHubOwners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/prepare-git": {
         parameters: {
             query?: never;
@@ -6620,7 +6654,20 @@ export interface components {
             root: components["schemas"]["RepoGitStatus"];
             warning?: string;
         };
+        ImporterGitHubAvailabilityResult: {
+            available: boolean;
+            message?: string;
+        };
+        ImporterGitHubOwner: {
+            avatarUrl: string;
+            login: string;
+        };
+        ImporterGitHubOwnersResult: {
+            owners: components["schemas"]["ImporterGitHubOwner"][];
+        };
         InitializeRepositoryInput: {
+            create?: boolean;
+            createId?: string;
             path: string;
         };
         InitializeRepositoryResult: {
@@ -13744,6 +13791,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkImportGitHubAvailability: {
+        parameters: {
+            query?: {
+                /** @description GitHub user or organization the repository would be created under. */
+                owner?: string;
+                /** @description Repository name to check. */
+                name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImporterGitHubAvailabilityResult"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listImportGitHubOwners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImporterGitHubOwnersResult"];
                 };
             };
             /** @description Not Implemented */

@@ -20,6 +20,14 @@ type ImportService interface {
 	PrepareGit(ctx context.Context, in importsvc.GitPreparationInput) (importsvc.GitPreparationResult, error)
 }
 
+// ImportGitHubService answers the GitHub questions a project import's remote
+// step asks: which owners gh can create a repository under, and whether a
+// name is free. The desktop app asks gh itself; clients without gh ask here.
+type ImportGitHubService interface {
+	GitHubOwners(ctx context.Context) (importsvc.GitHubOwnersResult, error)
+	GitHubRepositoryAvailability(ctx context.Context, in importsvc.GitHubAvailabilityQuery) (importsvc.GitHubAvailabilityResult, error)
+}
+
 // ImportController owns the /import routes.
 type ImportController struct {
 	Svc ImportService
@@ -31,6 +39,43 @@ func (c *ImportController) Register(r chi.Router) {
 	r.Post("/import", c.run)
 	r.Post("/imports/validate", c.validate)
 	r.Post("/imports/prepare-git", c.prepareGit)
+	r.Get("/imports/github-owners", c.githubOwners)
+	r.Get("/imports/github-availability", c.githubAvailability)
+}
+
+func (c *ImportController) github(w http.ResponseWriter, r *http.Request, method, path string) (ImportGitHubService, bool) {
+	svc, ok := c.Svc.(ImportGitHubService)
+	if !ok {
+		apispec.NotImplemented(w, r, method, path)
+	}
+	return svc, ok
+}
+
+func (c *ImportController) githubOwners(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.github(w, r, http.MethodGet, "/api/v1/imports/github-owners")
+	if !ok {
+		return
+	}
+	result, err := svc.GitHubOwners(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+func (c *ImportController) githubAvailability(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.github(w, r, http.MethodGet, "/api/v1/imports/github-availability")
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	result, err := svc.GitHubRepositoryAvailability(r.Context(), importsvc.GitHubAvailabilityQuery{Owner: query.Get("owner"), Name: query.Get("name")})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, result)
 }
 
 func (c *ImportController) status(w http.ResponseWriter, r *http.Request) {

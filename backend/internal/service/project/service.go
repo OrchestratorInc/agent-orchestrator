@@ -451,15 +451,42 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 	if err != nil {
 		return InitializeRepositoryResult{}, err
 	}
-	if err := ensureDirectoryPath(path); err != nil {
-		return InitializeRepositoryResult{}, err
-	}
+
+	// Before anything is made: a create the check refuses must leave no folders,
+	// and MkdirAll would otherwise make the path's missing parents first.
 	if err := validateRepositorySetupPathSafety(path); err != nil {
 		return InitializeRepositoryResult{}, err
 	}
 
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
+
+	recordCreateID := false
+	if in.Create {
+		if in.CreateID != "" && !projectCreateIDPattern.MatchString(in.CreateID) {
+			return InitializeRepositoryResult{}, apierr.Invalid("INVALID_CREATE_ID", "createId must be 1-64 letters, digits, or hyphens, starting with a letter or digit.", nil)
+		}
+		if in.CreateID != "" && createdByRequest(ctx, path, in.CreateID) {
+			// A retry of a create whose response was lost: the folder is this
+			// request's own. Done if it got its first commit; otherwise go on.
+			if repoHasCommit(ctx, path) {
+				return InitializeRepositoryResult{Path: path}, nil
+			}
+		} else {
+			if err := createProjectFolder(path); err != nil {
+				return InitializeRepositoryResult{}, err
+			}
+			defer func() {
+				if retErr != nil {
+					_ = os.RemoveAll(path)
+				}
+			}()
+			recordCreateID = in.CreateID != ""
+		}
+	}
+	if err := ensureDirectoryPath(path); err != nil {
+		return InitializeRepositoryResult{}, err
+	}
 
 	target, err := classifyRepositorySetupTarget(ctx, path)
 	if err != nil {
@@ -479,6 +506,11 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 		}()
 		if _, err := gitOutput(ctx, path, "init", "-b", domain.DefaultBranchName); err != nil {
 			return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not initialize a Git repository in this folder.", map[string]any{"error": err.Error()})
+		}
+	}
+	if recordCreateID {
+		if _, err := gitOutput(ctx, path, "config", "--local", projectCreateIDConfigKey, in.CreateID); err != nil {
+			return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not record the new project in its repository.", map[string]any{"error": err.Error()})
 		}
 	}
 	if err := gitdefault.New("git", nil).RecordInitialBranch(ctx, path); err != nil {
@@ -1035,6 +1067,43 @@ func folderExists(path string) (bool, error) {
 	return true, nil
 }
 
+// projectCreateIDConfigKey records, in a new project's repository, the create
+// request that made it, so a retry of that request can resume it.
+const projectCreateIDConfigKey = "ao.createId"
+
+var projectCreateIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`)
+
+// createdByRequest reports whether path is a repository a create request with
+// id made: it exists and its local Git config carries the same id.
+func createdByRequest(ctx context.Context, path, id string) bool {
+	if info, err := os.Stat(path); err != nil || !info.IsDir() || !hasGitMetadata(path) {
+		return false
+	}
+	out, err := gitOutput(ctx, path, "config", "--local", "--get", projectCreateIDConfigKey)
+	return err == nil && strings.TrimSpace(out) == id
+}
+
+// createProjectFolder makes the folder for a new, empty project. It refuses a
+// path that already exists, so a new project never takes over an existing
+// folder; adding an existing folder is POST /projects.
+func createProjectFolder(path string) error {
+	failed := func(err error) error {
+		return apierr.Invalid("PROJECT_FOLDER_CREATE_FAILED", "Orchestrator could not create the project folder.", map[string]any{"path": path, "error": err.Error()})
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return failed(err)
+	}
+	// Mkdir, not MkdirAll: it fails when the folder exists, even if it appeared
+	// a moment ago, so the cleanup after a failed setup only removes ours.
+	if err := os.Mkdir(path, 0o750); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return apierr.Conflict("PATH_EXISTS", "A folder with this name already exists.", map[string]any{"path": path})
+		}
+		return failed(err)
+	}
+	return nil
+}
+
 func ensureDirectoryPath(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -1074,9 +1143,22 @@ func normalizeGitReportedPath(base, reported string) string {
 func comparablePath(path string) string {
 	clean := filepath.Clean(path)
 	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		clean = resolved
+		return filepath.Clean(resolved)
 	}
-	return filepath.Clean(clean)
+	// Not there yet (a folder a create is about to make): resolve the nearest
+	// folder that is, so a path under a symlinked home still compares as under it.
+	rest := []string{}
+	for dir := clean; ; {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return clean
+		}
+		rest = append([]string{filepath.Base(dir)}, rest...)
+		dir = parent
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(append([]string{resolved}, rest...)...)
+		}
+	}
 }
 
 func samePath(a, b string) bool {

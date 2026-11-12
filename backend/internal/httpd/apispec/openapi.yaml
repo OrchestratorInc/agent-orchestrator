@@ -3776,6 +3776,60 @@ paths:
       summary: Run the legacy AO project import through the daemon store
       tags:
       - import
+  /api/v1/imports/github-availability:
+    get:
+      operationId: checkImportGitHubAvailability
+      parameters:
+      - description: GitHub user or organization the repository would be created under.
+        in: query
+        name: owner
+        schema:
+          description: GitHub user or organization the repository would be created
+            under.
+          type: string
+      - description: Repository name to check.
+        in: query
+        name: name
+        schema:
+          description: Repository name to check.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImporterGitHubAvailabilityResult'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Check whether a GitHub repository name is free to create for a project
+        import
+      tags:
+      - import
+  /api/v1/imports/github-owners:
+    get:
+      operationId: listImportGitHubOwners
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImporterGitHubOwnersResult'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the GitHub accounts gh on this machine can create a project's
+        repository under
+      tags:
+      - import
   /api/v1/imports/prepare-git:
     post:
       operationId: prepareImportGit
@@ -19077,8 +19131,41 @@ components:
       - root
       - nextStep
       type: object
+    ImporterGitHubAvailabilityResult:
+      properties:
+        available:
+          type: boolean
+        message:
+          type: string
+      required:
+      - available
+      type: object
+    ImporterGitHubOwner:
+      properties:
+        avatarUrl:
+          type: string
+        login:
+          type: string
+      required:
+      - login
+      - avatarUrl
+      type: object
+    ImporterGitHubOwnersResult:
+      properties:
+        owners:
+          items:
+            $ref: '#/components/schemas/ImporterGitHubOwner'
+          type: array
+      required:
+      - owners
+      type: object
     InitializeRepositoryInput:
       properties:
+        create:
+          type: boolean
+        createId:
+          maxLength: 64
+          type: string
         path:
           type: string
       required:

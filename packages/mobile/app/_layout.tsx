@@ -324,11 +324,11 @@ function Shell() {
 				<Stack.Screen
 					name="cloud/new-project"
 					options={Platform.OS === "android" ? {
-						title: "New cloud project",
+						title: "New project",
 						contentStyle: { backgroundColor: t.bgBase },
 					} : {
 						...NAME_SHEET_OPTIONS,
-						title: "New cloud project",
+						title: "New project",
 						headerStyle: { backgroundColor: t.bgBase },
 						contentStyle: { backgroundColor: t.bgBase },
 					}}
