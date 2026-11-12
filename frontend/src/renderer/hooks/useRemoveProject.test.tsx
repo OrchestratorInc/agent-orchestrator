@@ -276,7 +276,7 @@ describe("useRemoveProject", () => {
 		// The control plane archives after answering, so it still lists the
 		// project; the fetch filters pending removals, as useCloudProjectsQuery does.
 		queryClient.setQueryDefaults(cloudProjectsQueryKey, {
-			queryFn: async () => [{ id: "cloud-1", name: "cloudy" }].filter((item) => !isOptimisticallyRemovedProject(item.id)),
+			queryFn: async () => [{ id: "cloud-1", name: "cloudy" }].filter((item) => !isOptimisticallyRemovedProject(item.id, undefined, true)),
 		});
 		queryClient.setQueryData(rawKey, [{ id: "cloud-1", name: "cloudy" }]);
 
