@@ -53,6 +53,21 @@ const motionMocks = vi.hoisted(() => ({
 
 vi.mock("motion", () => ({ animate: motionMocks.animate }));
 
+// jsdom cannot produce trusted events, so tests opt in to treating clicks as the user's.
+const gestureMocks = vi.hoisted(() => ({ trustClicks: false }));
+vi.mock("./shared/trusted-event", () => ({
+	isTrustedUserEvent: (event: Event) => gestureMocks.trustClicks || event.isTrusted,
+}));
+
+// The overlay's shadow root is closed to the page; keep a handle for the tests.
+const overlayShadowRoots = new WeakMap<Element, ShadowRoot>();
+const attachShadow = Element.prototype.attachShadow;
+Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
+	const root = attachShadow.call(this, init);
+	overlayShadowRoots.set(this, root);
+	return root;
+};
+
 const fontMocks = vi.hoisted(() => ({ add: vi.fn() }));
 class MockFontFace {
 	constructor(_family: string) {}
@@ -106,8 +121,9 @@ function stubPanelContentHeight(height: number): void {
 
 function overlayRoot(): ShadowRoot {
 	const host = document.querySelector<HTMLDivElement>("[data-ao-annotation-root]");
-	if (!host?.shadowRoot) throw new Error("annotation overlay was not rendered");
-	return host.shadowRoot;
+	const root = host && overlayShadowRoots.get(host);
+	if (!root) throw new Error("annotation overlay was not rendered");
+	return root;
 }
 
 function openAdjust(element: Element): ShadowRoot {
@@ -720,9 +736,11 @@ describe("annotation composer dictation", () => {
 		electronMocks.invoke.mockResolvedValue(undefined);
 		vi.stubGlobal("requestAnimationFrame", () => 0);
 		vi.stubGlobal("cancelAnimationFrame", () => undefined);
+		gestureMocks.trustClicks = true;
 	});
 
 	afterEach(() => {
+		gestureMocks.trustClicks = false;
 		setMode(false);
 		document.body.innerHTML = "";
 		vi.unstubAllGlobals();
@@ -740,6 +758,21 @@ describe("annotation composer dictation", () => {
 		expect(mic?.getAttribute("aria-label")).toBe("Dictate");
 		// The add control stays the trailing one.
 		expect(mic?.nextElementSibling).toBe(row?.querySelector('[data-action="add"]'));
+	});
+
+	it("does not let the page's scripts start the microphone or read the comment", () => {
+		gestureMocks.trustClicks = false;
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-untrusted");
+		const mic = root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!;
+
+		// What a page script can do: a synthetic click on the control.
+		mic.click();
+		mic.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+		expect(electronMocks.invoke).not.toHaveBeenCalledWith("dictation:start");
+		expect(mic.getAttribute("aria-pressed")).toBe("false");
+		expect(document.querySelector("[data-ao-annotation-root]")?.shadowRoot).toBeNull();
 	});
 
 	it("streams the transcript into the comment at the caret and keeps it when done", () => {

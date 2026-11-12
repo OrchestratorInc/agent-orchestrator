@@ -19,6 +19,7 @@ import {
 import { promptPositionForRect, type AnnotationRectLike } from "./shared/browser-annotation-overlay";
 import type { DictationEvent } from "./shared/dictation";
 import { DICTATION_METER_BARS, dictationMeterSteps, runDictationMeter } from "./shared/dictation-meter";
+import { isTrustedUserEvent } from "./shared/trusted-event";
 
 let enabled = false;
 let session = createBrowserAnnotationSession(window.location.href, document.title || undefined);
@@ -666,7 +667,10 @@ function renderComposer(): void {
 	const dictateButton = form.querySelector<HTMLButtonElement>('[data-action="dictate"]');
 	// Keep focus in the note, where the words appear.
 	dictateButton?.addEventListener("mousedown", (event) => event.preventDefault());
-	dictateButton?.addEventListener("click", () => {
+	dictateButton?.addEventListener("click", (event) => {
+		// The page can click this control from script; only the user may turn on
+		// the microphone.
+		if (!isTrustedUserEvent(event)) return;
 		textarea.focus();
 		toggleDictation();
 	});
@@ -1609,7 +1613,9 @@ function ensureOverlay(): ShadowRoot {
 	host.setAttribute("data-ao-annotation-root", "");
 	host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none";
 	(document.documentElement ?? document.body).appendChild(host);
-	shadow = host.attachShadow({ mode: "open" });
+	// Closed, so the page's scripts cannot reach the composer and read what the
+	// user types or dictates into it.
+	shadow = host.attachShadow({ mode: "closed" });
 	registerFonts(shadow);
 	shadow.innerHTML = `<style>${overlayStyles()}</style><div class="hover" hidden></div><div class="markers"></div><div class="composer-mount"></div><div class="notice chrome" role="status" hidden></div>`;
 	return shadow;
