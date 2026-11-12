@@ -74,6 +74,12 @@ type SessionTeardowner interface {
 	TeardownProject(ctx context.Context, project domain.ProjectID) error
 }
 
+// autoSpawnPauser is the session service's view of paused automatic starts.
+// Optional, so focused fakes need not implement it.
+type autoSpawnPauser interface {
+	AutoSpawnPauses(ctx context.Context, project domain.ProjectRecord) []domain.AutoSpawnPause
+}
+
 // Service implements project registration and lookup use-cases for controllers.
 type Service struct {
 	store          Store
@@ -169,6 +175,9 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			OrchestratorAgent: row.Config.Orchestrator.Harness,
 			FolderMissing:     folderMissing,
 		})
+		if pauser, ok := m.sessions.(autoSpawnPauser); ok {
+			out[len(out)-1].AutoSpawnPauses = pauser.AutoSpawnPauses(ctx, row)
+		}
 	}
 	return out, nil
 }
@@ -692,7 +701,7 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 		return
 	}
 	m.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.onboarding.first_project_added",
+		Name:       "ao.projects.first_added",
 		Source:     "project_service",
 		OccurredAt: at,
 		Level:      ports.TelemetryLevelInfo,

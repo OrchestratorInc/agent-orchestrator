@@ -2,9 +2,9 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { shouldPoll } from "../appStatePoll";
-import type { ServerConfig } from "../config";
 import { userFacingError } from "../connectionError";
-import { getWorkspaceManifest, type WorkspaceManifest } from "./api";
+import type { WorkspaceManifest } from "./api";
+import type { FilesBackend } from "./backend";
 
 /** How often an open Files screen asks whether the agent changed anything. */
 export const WORKSPACE_POLL_MS = 5_000;
@@ -22,27 +22,27 @@ export type ManifestState = {
  * and the app is in front. A poll whose `workspaceVersion` matches what is
  * already shown keeps the old object, so an idle session re-renders nothing.
  */
-export function useWorkspaceManifest(config: ServerConfig | null, sessionId: string, enabled = true): ManifestState {
+export function useWorkspaceManifest(backend: FilesBackend | null, sessionId: string, enabled = true): ManifestState {
 	const [manifest, setManifest] = useState<WorkspaceManifest | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [refreshing, setRefreshing] = useState(false);
 	const [error, setError] = useState<string>();
-	const current = useRef({ config, sessionId });
-	current.current = { config, sessionId };
+	const current = useRef({ backend, sessionId });
+	current.current = { backend, sessionId };
 
 	const load = useCallback(async () => {
-		if (!config || !enabled) return;
+		if (!backend || !enabled) return;
 		try {
-			const next = await getWorkspaceManifest(config, sessionId);
-			if (current.current.config !== config || current.current.sessionId !== sessionId) return;
+			const next = await backend.manifest(sessionId);
+			if (current.current.backend !== backend || current.current.sessionId !== sessionId) return;
 			setManifest((previous) => previous && previous.workspaceVersion && previous.workspaceVersion === next.workspaceVersion ? previous : next);
 			setError(undefined);
 		} catch (cause) {
-			if (current.current.config === config && current.current.sessionId === sessionId) setError(userFacingError(cause, "Couldn't load this session's files."));
+			if (current.current.backend === backend && current.current.sessionId === sessionId) setError(userFacingError(cause, "Couldn't load this session's files."));
 		} finally {
-			if (current.current.config === config && current.current.sessionId === sessionId) setLoading(false);
+			if (current.current.backend === backend && current.current.sessionId === sessionId) setLoading(false);
 		}
-	}, [config, enabled, sessionId]);
+	}, [backend, enabled, sessionId]);
 
 	useFocusEffect(useCallback(() => {
 		void load();

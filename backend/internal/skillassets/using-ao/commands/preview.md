@@ -37,11 +37,17 @@ the repository's existing dev command and explicitly adopt its known URL.
 Do not create `.ao/launch.json` unless the user asks for reusable launch
 configuration.
 
-## Artifact files
+## Artifacts open in the Artifacts tab, not here
 
-Deliverables in this session's artifact directory live outside the workspace.
-Open one by its absolute path; Orchestrator serves it from the artifact directory's own
-confined preview origin:
+Do not run `ao preview` on a deliverable in this session's artifact directory,
+whatever its file type: Markdown, HTML, PDF, SVG, images, CSV, code, or
+anything else. Register it with `ao artifact add <path>` and Orchestrator
+renders it in the session's Artifacts tab. Registering is the whole handoff; do
+not also open it in the Browser panel.
+
+Only when the user explicitly asks to see an artifact in the Browser panel,
+open it by its absolute path; Orchestrator serves it from the artifact
+directory's own confined preview origin:
 
 ```bash
 ao preview /path/to/artifacts/<session-id>/report.html
@@ -50,28 +56,9 @@ ao preview /path/to/artifacts/<session-id>/report.html
 Any other path outside the workspace and the artifact directory is rejected
 with `PREVIEW_FILE_OUTSIDE_WORKSPACE`.
 
-## Automatic artifact handoff
-
-When a browser-displayable file is itself the artifact the user requested,
-open it immediately after creating or materially updating it:
-
-```bash
-ao preview docs/plan.md
-ao preview report.html
-ao preview output.pdf
-ao preview diagram.svg
-ao preview mockup.png
-```
-
-Do this without waiting for a separate "open it" request. Browser-displayable
-artifacts include Markdown, HTML, PDF, SVG, and common image formats such as
-PNG, JPEG, GIF, WebP, and AVIF. If the task produces several files, open the
-primary requested artifact rather than cycling through every output.
-
 Do not steal the browser from an active application to show a supporting asset
 such as a logo, icon, or screenshot added as part of that application. Verify
-the application itself instead. Also honor an explicit request not to open or
-preview the artifact.
+the application itself instead.
 
 ## Syntax
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -82,11 +83,16 @@ func TestReviewCommandLaunchesReadOnlyOffBypass(t *testing.T) {
 		t.Fatalf("ReviewCommand: %v", err)
 	}
 
-	// The allowlist is what enforces read-only, so it must launch in an
-	// explicit non-bypass mode: bypassPermissions ignores allow/deny rules
-	// entirely, and an empty mode would defer to a user's defaultMode.
-	if agent.got.Permissions != ports.PermissionModeAuto {
-		t.Fatalf("reviewer must launch in auto permission mode; got %q", agent.got.Permissions)
+	// The allowlist and the PermissionRequest hook enforce read-only, so the
+	// pane must start in Claude's default mode whatever the user's defaultMode
+	// is: bypassPermissions ignores the rules, and auto approves shell writes
+	// without prompting the hook.
+	if agent.got.Permissions != ports.PermissionModeDefault {
+		t.Fatalf("reviewer must request AO's default mode; got %q", agent.got.Permissions)
+	}
+	if !containsPair(spec.Argv, "--permission-mode", "default") ||
+		!containsPair(spec.Argv, "--settings", `{"permissions":{"defaultMode":"default"}}`) {
+		t.Fatalf("reviewer argv does not pin Claude's default mode: %#v", spec.Argv)
 	}
 	if agent.got.SessionID == "" {
 		t.Fatal("reviewer must pass its stable AO session id")
@@ -97,8 +103,15 @@ func TestReviewCommandLaunchesReadOnlyOffBypass(t *testing.T) {
 	if agent.got.SessionID != "review-w1" {
 		t.Fatalf("AO session id = %q, want review-w1", agent.got.SessionID)
 	}
-	if !contains(agent.got.AllowedTools, "Read") || !contains(agent.got.AllowedTools, "Bash(ao review submit:*)") {
+	if !contains(agent.got.AllowedTools, "Read") {
 		t.Fatalf("allowlist missing read-only review tools: %#v", agent.got.AllowedTools)
+	}
+	// A prefix rule would skip the matcher: git diff/log/show write files with
+	// --output=<file>, and `ao review submit` would accept any --session.
+	for _, denied := range []string{"Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(ao review submit:*)"} {
+		if contains(agent.got.AllowedTools, denied) {
+			t.Fatalf("allowlist admits %q without the matcher: %#v", denied, agent.got.AllowedTools)
+		}
 	}
 	// A blanket Bash(gh:*) rule would admit merges and arbitrary API
 	// mutations without a prompt; only the read subcommands are allowed and the
@@ -171,7 +184,7 @@ func TestPreLaunchInstallsSelectedReviewerHooksAndTrustsWorkspace(t *testing.T) 
 	}
 }
 
-func TestAllowlistCoversPromptRequiredPipedCommands(t *testing.T) {
+func TestAllowlistLeavesSubmitCommandsToTheMatcher(t *testing.T) {
 	agent := &captureAgent{}
 	r := &Reviewer{agent: agent}
 
@@ -188,15 +201,13 @@ func TestAllowlistCoversPromptRequiredPipedCommands(t *testing.T) {
 		t.Fatalf("allowlist missing printf for piped review commands: %#v", agent.got.AllowedTools)
 	}
 
-	submit := "printf '%s' '{ \"reviews\": [] }' | ao review submit --session sess-1 --reviews -"
-	if !compoundCommandCovered(agent.got.AllowedTools, submit) {
-		t.Fatalf("allowlist does not cover prompt-required command %q with tools %#v", submit, agent.got.AllowedTools)
-	}
-
-	// The review POST is deliberately not allowlisted: `gh api` can mutate
-	// anything, so the exact POST shape is admitted only by the PermissionRequest
-	// hook (cli.reviewerPermissionDecision, #4810).
+	// Neither submit command is allowlisted, so both reach the PermissionRequest
+	// hook, which admits only the exact shapes (claudecode.ReviewerSubmitCommandAllowed).
+	// `gh api` can mutate anything (#4810), and an `ao review submit` prefix rule
+	// would accept any --session or --reviews file, skipping the worker pin.
 	for _, cmd := range []string{
+		"printf '%s' '{ \"reviews\": [] }' | ao review submit --session sess-1 --reviews -",
+		"ao review submit --session other-worker --reviews /tmp/reviews.json",
 		"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"x\" }' | gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id'",
 		"gh api --method PUT repos/o/r/pulls/1/merge",
 		"gh api -XDELETE repos/o/r",
@@ -245,14 +256,14 @@ func TestReviewRestoreCommandUsesNativeSessionIDAndReadOnlyPolicy(t *testing.T) 
 	if !got.NativeResumed {
 		t.Fatal("ReviewRestoreCommand did not report native resume")
 	}
-	if strings.Join(got.Argv, " ") != "claude --resume claude-native-1" {
+	if strings.Join(got.Argv, " ") != "claude --resume claude-native-1"+pinnedModeArgs {
 		t.Fatalf("argv = %#v", got.Argv)
 	}
 	if agent.gotRestore.Session.Metadata[ports.MetadataKeyAgentSessionID] != "claude-native-1" {
 		t.Fatalf("restore metadata = %#v", agent.gotRestore.Session.Metadata)
 	}
-	if agent.gotRestore.Permissions != ports.PermissionModeAuto {
-		t.Fatalf("restore permissions = %q, want auto", agent.gotRestore.Permissions)
+	if agent.gotRestore.Permissions != ports.PermissionModeDefault {
+		t.Fatalf("restore permissions = %q, want default", agent.gotRestore.Permissions)
 	}
 	if agent.gotRestore.Prompt != "read the new review task" || agent.gotRestore.SystemPromptFile != "/ao/prompts/reviewer/system.md" {
 		t.Fatalf("restore prompt configuration = %+v", agent.gotRestore)
@@ -323,9 +334,10 @@ func TestReviewRestoreCommandEmitsResumeWithPolicySystemPromptAndTask(t *testing
 		t.Fatalf("ReviewRestoreCommand = (ok=%v, err=%v), want command", ok, err)
 	}
 	for _, want := range [][]string{
-		{"--permission-mode", "auto"},
-		{"--allowedTools", strings.Join(reviewerAllowedTools, ",")},
-		{"--disallowedTools", strings.Join(reviewerDisallowedTools, ",")},
+		{"--permission-mode", "default"},
+		{"--settings", `{"permissions":{"defaultMode":"default"}}`},
+		{"--allowedTools", strings.Join(workeragent.ReviewerAllowedTools, ",")},
+		{"--disallowedTools", strings.Join(workeragent.ReviewerDisallowedTools, ",")},
 		{"--append-system-prompt-file", systemPromptFile},
 		{"--resume", persistedID},
 		{"--", "read the new task file"},
@@ -371,7 +383,7 @@ func TestReviewRestoreCommandAllowsAdapterFallbackWithoutNativeSessionID(t *test
 	if !ok {
 		t.Fatal("ReviewRestoreCommand ok = false, want true")
 	}
-	if strings.Join(got.Argv, " ") != "claude --resume review-w1" {
+	if strings.Join(got.Argv, " ") != "claude --resume review-w1"+pinnedModeArgs {
 		t.Fatalf("argv = %#v", got.Argv)
 	}
 	if agent.gotRestore.Session.ID != "review-w1" {
@@ -395,7 +407,7 @@ func TestReviewRestoreCommandMigratesLegacyDoubleHashedSession(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ReviewRestoreCommand = (ok=%v, err=%v), want legacy restore", ok, err)
 	}
-	if strings.Join(got.Argv, " ") != "claude --resume "+legacyID {
+	if strings.Join(got.Argv, " ") != "claude --resume "+legacyID+pinnedModeArgs {
 		t.Fatalf("argv = %#v, want legacy session %q", got.Argv, legacyID)
 	}
 	if got.AgentSessionID != legacyID {
@@ -440,7 +452,7 @@ func TestReviewRestoreCommandProbesFallbackWhenNoNativeSessionIDWasEverCaptured(
 	if err != nil || !ok {
 		t.Fatalf("ReviewRestoreCommand = (ok=%v, err=%v), want fallback restore", ok, err)
 	}
-	if strings.Join(got.Argv, " ") != "claude --resume "+fallbackID {
+	if strings.Join(got.Argv, " ") != "claude --resume "+fallbackID+pinnedModeArgs {
 		t.Fatalf("argv = %#v, want fallback session %q", got.Argv, fallbackID)
 	}
 	if strings.Join(agent.probed, ",") != fallbackID {
@@ -552,4 +564,29 @@ func flagValue(argv []string, flag string) string {
 		}
 	}
 	return ""
+}
+
+// pinnedModeArgs is what pinDefaultMode appends to an argv with no prompt and
+// no launch settings.
+const pinnedModeArgs = ` --permission-mode default --settings {"permissions":{"defaultMode":"default"}}`
+
+func TestPinDefaultModeMergesLaunchSettingsBeforeThePrompt(t *testing.T) {
+	got, err := pinDefaultMode([]string{"claude", "--settings", `{"ultracode":true}`, "--", "--settings is prompt text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"claude", "--settings", `{"permissions":{"defaultMode":"default"},"ultracode":true}`,
+		"--permission-mode", "default", "--", "--settings is prompt text"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("argv = %#v, want %#v", got, want)
+	}
+}
+
+func containsPair(argv []string, flag, value string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == flag && argv[i+1] == value {
+			return true
+		}
+	}
+	return false
 }

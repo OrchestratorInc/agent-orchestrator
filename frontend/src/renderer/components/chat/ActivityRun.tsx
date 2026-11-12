@@ -10,20 +10,21 @@
  * the agent did by category, so a reader can tell "it looked around" from "it
  * changed something" without opening anything.
  *
- * While the turn is still running the run stays open, so a reader watching the
- * agent sees each call as it happens and can steer before it goes off track; it
- * folds back to its summary once the turn settles.
+ * It stays folded while the turn runs too: the live row names the step in progress.
+ * Only a call that failed shows without being asked for, under the line that folds it.
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import { ActivityRow, ActivityTransition } from "./ChatTimelineItems";
+import { useChatEntrance } from "./chat-entrance";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandCategory,
+	isFailedCall,
 	isNonzeroCommandExit,
 } from "./activity-command";
 import { aoActionName, summarizeAOActions } from "./activity-action";
@@ -35,28 +36,25 @@ export function ActivityRun({
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
-	live = false,
 }: {
 	activities: ConversationActivity[];
 	disclosureKey?: string;
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
-	/** The run belongs to a turn that is still running. */
-	live?: boolean;
 }) {
-	// null until someone decides, so a run holding a command that is printing right
-	// now can open itself and close again once everything settles. A click pins the
-	// choice either way.
-	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
-	const override = disclosureKey && disclosureOverrides
-		? disclosureOverrides[disclosureKey] ?? null
-		: localOverride;
-	const updateOverride = (key: string, open: boolean) => {
-		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, open);
-		else setLocalOverride(open);
+	const [localOpen, setLocalOpen] = useState(false);
+	const open = disclosureKey && disclosureOverrides
+		? disclosureOverrides[disclosureKey] ?? false
+		: localOpen;
+	const updateOverride = (key: string, next: boolean) => {
+		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, next);
+		else setLocalOpen(next);
 	};
 	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
+	// The group fades in when it forms while the chat is on screen, never when the
+	// chat opens onto it or it scrolls back into view.
+	const entering = useChatEntrance(`run:${activities[0]?.id ?? ""}`, newestSequence(activities));
 	const running = activities.some((a) => a.status === "running");
 	const nonzeroExits = activities.filter(isNonzeroCommandExit).length;
 	const failed = activities.filter(
@@ -86,14 +84,9 @@ export function ActivityRun({
 		return <ActivityRow activity={activities[0]!} />;
 	}
 
-	// Otherwise the calls of a running turn, and a command streaming output, stay
-	// hidden behind this summary line, and the live work is live to nobody.
-	const streamingOutput = activities.some((a) => a.status === "running" && Boolean(a.detail?.output));
-	const open = override ?? (live || streamingOutput);
-
 	return (
 		<motion.div
-			initial={reducedMotion ? false : { opacity: 0 }}
+			initial={reducedMotion || !entering ? false : { opacity: 0 }}
 			animate={{ opacity: 1 }}
 			transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 			className="flex flex-col"
@@ -104,7 +97,7 @@ export function ActivityRun({
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
 				<span className="activity-summary-label text-xs text-muted-foreground">
-					<ActivityTransition value={summary} inline>{summary}</ActivityTransition>
+					<ActivityTransition value={summary} inline enter={entering}>{summary}</ActivityTransition>
 				</span>
 				{nonzeroExits > 0 ? (
 					<span className="text-caption text-muted-foreground/70">
@@ -157,14 +150,7 @@ export function ActivityRun({
 					>
 						<div className="flex flex-col gap-1 pt-1">
 							{subgroups.length === 1
-								? subgroups[0]!.activities.map((activity) => {
-										const node = nodesByActivityID.get(activity.id);
-										return node ? (
-											<ActivityTree key={activity.id} node={node} live={live} />
-										) : (
-											<ActivityRow key={activity.id} activity={activity} />
-										);
-								  })
+								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
 										<ActivitySubgroup
 											key={group.activities.map((activity) => activity.id).join(":")}
@@ -173,15 +159,85 @@ export function ActivityRun({
 											onDisclosureChange={updateOverride}
 											activities={group.activities}
 											nodesByActivityID={nodesByActivityID}
-											live={live}
 										/>
 								  ))}
 						</div>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+			<FailedCalls activities={activities} folded={!open} />
 		</motion.div>
 	);
+}
+
+/** The calls that failed, kept on screen while the disclosure holding them is folded. */
+function FailedCalls({ activities, folded }: { activities: ConversationActivity[]; folded: boolean }) {
+	const reducedMotion = useReducedMotion();
+	const failed = activities.filter(isFailedCall);
+	return (
+		<AnimatePresence initial={false}>
+			{folded && failed.length > 0 ? (
+				<motion.div
+					initial={{ height: 0, opacity: 0 }}
+					animate={{ height: "auto", opacity: 1 }}
+					exit={{ height: 0, opacity: 0 }}
+					transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
+					className="overflow-hidden"
+				>
+					<div className="flex flex-col gap-1 pt-1">
+						{failed.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}
+					</div>
+				</motion.div>
+			) : null}
+		</AnimatePresence>
+	);
+}
+
+function newestSequence(activities: readonly ConversationActivity[]): number {
+	return activities.reduce((newest, activity) => Math.max(newest, activity.sequence), 0);
+}
+
+/**
+ * The rows of a run. Back-to-back commands that finished and read the same
+ * ("Checked the browser console" twice) show as one row; opening it still
+ * shows every call.
+ */
+function renderActivityRows(
+	activities: readonly ConversationActivity[],
+	nodesByActivityID: ReadonlyMap<string, ActivityNode>,
+): ReactNode[] {
+	const rows: ReactNode[] = [];
+	let index = 0;
+	while (index < activities.length) {
+		const activity = activities[index]!;
+		const node = nodesByActivityID.get(activity.id);
+		if (node && node.children.length > 0) {
+			rows.push(<ActivityTree key={activity.id} node={node} />);
+			index += 1;
+			continue;
+		}
+		const label = repeatableLabel(activity);
+		let end = index + 1;
+		while (
+			label &&
+			end < activities.length &&
+			!nodesByActivityID.get(activities[end]!.id)?.children.length &&
+			repeatableLabel(activities[end]!) === label
+		) {
+			end += 1;
+		}
+		const last = activities[end - 1]!;
+		rows.push(<ActivityRow key={activity.id} activity={last} repeats={activities.slice(index, end - 1)} />);
+		index = end;
+	}
+	return rows;
+}
+
+/** The label two finished commands must share to fold into one row, or undefined. */
+function repeatableLabel(activity: ConversationActivity): string | undefined {
+	if (activity.activityKind !== "command" || activity.status !== "completed") return undefined;
+	const step = activityCommandStep(activity);
+	return [step.done, step.target].filter(Boolean).join(" ");
 }
 
 type ActivitySubgroupData = { key: string; activities: ConversationActivity[] };
@@ -217,26 +273,20 @@ function ActivitySubgroup({
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
-	live,
 }: {
 	activities: ConversationActivity[];
 	nodesByActivityID: ReadonlyMap<string, ActivityNode>;
 	disclosureKey?: string;
 	disclosureOverrides: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
-	live: boolean;
 }) {
-	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
+	const [localOpen, setLocalOpen] = useState(false);
 	const reducedMotion = useReducedMotion();
-	const streamingOutput = activities.some((activity) =>
-		activity.status === "running" && Boolean(activity.detail?.output),
-	);
-	const open = disclosureKey
-		? disclosureOverrides[disclosureKey] ?? (live || streamingOutput)
-		: localOverride ?? (live || streamingOutput);
+	const entering = useChatEntrance(`sub:${activities[0]?.id ?? ""}`, newestSequence(activities));
+	const open = disclosureKey ? disclosureOverrides[disclosureKey] ?? false : localOpen;
 	const updateOverride = (next: boolean) => {
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
-		else setLocalOverride(next);
+		else setLocalOpen(next);
 	};
 	const hasNestedAgent = activities.some((activity) =>
 		nodesByActivityID.get(activity.id)?.children.length,
@@ -245,14 +295,7 @@ function ActivitySubgroup({
 	if (activities.length === 1 || hasNestedAgent || isStructural) {
 		return (
 			<>
-				{activities.map((activity) => {
-					const node = nodesByActivityID.get(activity.id);
-					return node ? (
-						<ActivityTree key={activity.id} node={node} live={live} />
-					) : (
-						<ActivityRow key={activity.id} activity={activity} />
-					);
-				})}
+				{renderActivityRows(activities, nodesByActivityID)}
 			</>
 		);
 	}
@@ -266,7 +309,7 @@ function ActivitySubgroup({
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
 				<span className="activity-summary-label text-xs text-muted-foreground">
-					<ActivityTransition value={summary} inline>
+					<ActivityTransition value={summary} inline enter={entering}>
 						{summary}
 					</ActivityTransition>
 				</span>
@@ -282,18 +325,12 @@ function ActivitySubgroup({
 						className="overflow-hidden"
 					>
 						<div className="flex flex-col gap-1">
-							{activities.map((activity) => {
-								const node = nodesByActivityID.get(activity.id);
-								return node ? (
-									<ActivityTree key={activity.id} node={node} live={live} />
-								) : (
-									<ActivityRow key={activity.id} activity={activity} />
-								);
-							})}
+							{renderActivityRows(activities, nodesByActivityID)}
 						</div>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+			<FailedCalls activities={activities} folded={!open} />
 		</div>
 	);
 }
@@ -383,27 +420,24 @@ function summarizeExploration(activities: ConversationActivity[]): string | unde
 
 type ActivityNode = { activity: ConversationActivity; children: ActivityNode[] };
 
-function ActivityTree({ node, live }: { node: ActivityNode; live: boolean }) {
+function ActivityTree({ node }: { node: ActivityNode }) {
 	return (
 		<div className="flex flex-col">
 			<ActivityRow activity={node.activity} />
-			{node.children.length > 0 ? <NestedAgentRun nodes={node.children} live={live} /> : null}
+			{node.children.length > 0 ? <NestedAgentRun nodes={node.children} /> : null}
 		</div>
 	);
 }
 
-function NestedAgentRun({ nodes, live }: { nodes: ActivityNode[]; live: boolean }) {
-	// null until someone clicks, so a subagent still working in a running turn
-	// shows its steps and folds away once it finishes.
-	const [override, setOverride] = useState<boolean | null>(null);
+function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
+	const [open, setOpen] = useState(false);
 	const reducedMotion = useReducedMotion();
 	const count = countNodes(nodes);
 	const running = nodes.some(nodeRunning);
-	const open = override ?? (live && running);
 	return (
 		<div className="mb-2 overflow-hidden bg-background/40">
 			<Pressable
-				onClick={() => setOverride(!open)}
+				onClick={() => setOpen(!open)}
 				aria-label={`Subagent ${count} ${count === 1 ? "step" : "steps"}`}
 				aria-expanded={open}
 				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
@@ -422,10 +456,11 @@ function NestedAgentRun({ nodes, live }: { nodes: ActivityNode[]; live: boolean 
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="border-t border-border/70"
 					>
-					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} live={live} />)}
+					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} />)}
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+			<FailedCalls activities={nodes.flatMap(nodeActivities)} folded={!open} />
 		</div>
 	);
 }
@@ -465,6 +500,10 @@ function wouldCreateCycle(
 
 function countNodes(nodes: ActivityNode[]): number {
 	return nodes.reduce((count, node) => count + 1 + countNodes(node.children), 0);
+}
+
+function nodeActivities(node: ActivityNode): ConversationActivity[] {
+	return [node.activity, ...node.children.flatMap(nodeActivities)];
 }
 
 function nodeRunning(node: ActivityNode): boolean {

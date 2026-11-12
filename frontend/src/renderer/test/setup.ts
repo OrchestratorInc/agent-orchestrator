@@ -83,6 +83,14 @@ if (typeof window !== "undefined") {
 		});
 	}
 
+	// jsdom does not implement Element.scrollTo. Chat find repaints from a
+	// timer, so a test that finishes first would otherwise see an unhandled
+	// "scrollTo is not a function" after it has passed.
+	// On Element, where tests that need a spy install it, so theirs replaces this one.
+	if (typeof Element.prototype.scrollTo !== "function") {
+		Object.defineProperty(Element.prototype, "scrollTo", { configurable: true, writable: true, value: () => {} });
+	}
+
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
 		writable: true,
@@ -231,6 +239,9 @@ if (typeof window !== "undefined") {
 			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
+		artifactSnapshot: {
+			request: async () => false,
+		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
 			start: async () => ({ state: "starting" }),
@@ -271,6 +282,8 @@ if (typeof window !== "undefined") {
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
+			getLifetimeSessions: async () => null,
+			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
@@ -474,9 +487,8 @@ if (typeof window !== "undefined") {
 		},
 		remotes: {
 			list: async () => [],
-			importAccountHost: async () => undefined,
-			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => ({ token: "" }),
+			syncAccountHosts: async () => undefined,
+			linkAccountHost: async () => undefined,
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
@@ -504,6 +516,8 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "not available in tests" }),
+			previewFolderUpload: async () => ({ status: "ok", source: "import", leftOut: [] }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {

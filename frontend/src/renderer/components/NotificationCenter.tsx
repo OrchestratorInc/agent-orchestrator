@@ -74,7 +74,7 @@ function useNotificationTargetNavigation() {
 			const sessionId = notification.target.sessionId || notification.sessionId;
 			if (!sessionId) return;
 			recordManualWorkerOpen(sessionId);
-			void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+			void captureRendererEvent("ao.notifications.opened", { target: "session" });
 			navigateToSession(notification.projectId, sessionId, hostId);
 		},
 		[navigateToSession],
@@ -83,7 +83,7 @@ function useNotificationTargetNavigation() {
 	const openPrimary = useCallback(
 		(notification: NotificationDTO, hostId: HostId = LOCAL_HOST) => {
 			if (notification.target.kind === "pr" && notification.target.prUrl) {
-				void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+				void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 				window.open(notification.target.prUrl, "_blank", "noopener,noreferrer");
 				return;
 			}
@@ -411,7 +411,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 		setMarkReadError(null);
 		void markAllMutate(newly)
-			.then(() => captureRendererEvent("ao.renderer.notification_mark_read_succeeded", { scope: "all" }))
+			.then(() => captureRendererEvent("ao.notifications.read", { scope: "all" }))
 			.catch((error: unknown) => {
 				void captureRendererEvent("ao.renderer.notification_mark_read_failed", { scope: "all" });
 				for (const id of newly) acknowledgedIdsRef.current.delete(id);
@@ -551,7 +551,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// their cloud project, so they open through the same session route.
 	const openCloudSession = useCallback((projectId: string, sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
-		void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+		void captureRendererEvent("ao.notifications.opened", { target: "session" });
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);
 
@@ -1040,7 +1040,7 @@ const NotificationItem = memo(function NotificationItem({
 										href={titleLink.url}
 										onClick={(event) => {
 											event.stopPropagation();
-											void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+											void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 										}}
 										rel="noopener noreferrer"
 										target="_blank"

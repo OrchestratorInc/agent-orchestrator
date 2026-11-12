@@ -66,6 +66,8 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
+	// importBinary replaces the OpenCode 1 lookup in import tests.
+	importBinary string
 }
 
 // New returns a ready-to-register opencode adapter.

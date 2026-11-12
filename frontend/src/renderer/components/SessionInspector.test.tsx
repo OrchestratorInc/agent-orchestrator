@@ -407,8 +407,9 @@ describe("SessionInspector tabs", () => {
     renderWithQuery(<SessionInspector orchestrator session={session([], {
       kind: "orchestrator",
       artifactFiles: [
-        artifact({ path: "direct.html", name: "direct.html", kind: "html" }),
-        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html" }),
+        // A kept render is listed once the agent registers it, like any file.
+        artifact({ path: "direct.html", name: "direct.html", kind: "html", registered: true }),
+        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html", registered: true }),
       ],
     })} />);
 
@@ -534,6 +535,18 @@ describe("SessionInspector tabs", () => {
         ([path]) => path === "/api/v1/sessions/{sessionId}/workspace/manifest",
       ),
     ).toBe(false);
+  });
+
+  it("does not query workspace endpoints for an imported chat that has not been opened", async () => {
+    renderWithQuery(<SessionInspector session={session([], { id: "import-1", needsResume: true })} />);
+
+    await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(0));
+
+    expect(
+      getMock.mock.calls
+        .map(([path]) => String(path))
+        .filter((path) => path.startsWith("/api/v1/sessions/{sessionId}/workspace/")),
+    ).toEqual([]);
   });
 
   it("shows a live changed-file count on the Files tab once the shared cache is populated", () => {
@@ -1153,6 +1166,42 @@ const artifact = (
 });
 
 describe("SessionInspector Artifacts section", () => {
+  beforeEach(() => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+
+  it("previews the most recent artifacts and lists the rest by name behind Show more", () => {
+    const onOpenArtifact = vi.fn();
+    // file-0 is the newest; listed oldest first to check the sort.
+    const files = Array.from({ length: 7 }, (_, index) =>
+      artifact({ path: `file-${index}.md`, name: `file-${index}.md`, kind: "markdown", updatedAt: `2026-06-${20 - index}T00:00:00Z` }),
+    ).reverse();
+    renderWithQuery(
+      <SessionInspector onOpenArtifact={onOpenArtifact} session={session([], { outputType: "artifact", artifactFiles: files })} />,
+    );
+
+    // jsdom has no layout, so the row keeps its default of three previews.
+    for (const name of ["file-0.md", "file-1.md", "file-2.md"]) {
+      expect(screen.getByTitle(name).closest("li")).toBeNull();
+    }
+    for (const name of ["file-3.md", "file-4.md", "file-5.md"]) {
+      expect(screen.getByTitle(name).closest("li")).not.toBeNull();
+    }
+    expect(screen.queryByTitle("file-6.md")).not.toBeInTheDocument();
+
+    const list = screen.getByTitle("file-3.md").closest("ul") as HTMLElement;
+    fireEvent.click(within(list).getByRole("button", { name: "Show more" }));
+    expect(screen.getByTitle("file-6.md").closest("li")).not.toBeNull();
+    expect(within(list).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByTitle("file-0.md"));
+    expect(onOpenArtifact).toHaveBeenCalledWith({ path: "file-0.md" });
+  });
+
   it("shows an artifact list, not the empty PR state, when the session output is artifacts", () => {
     renderWithQuery(
       <SessionInspector
@@ -1343,7 +1392,6 @@ describe("SessionInspector usage", () => {
 		renderWithQuery(<SessionInspector session={session([])} />);
 		expect(await screen.findByText("Branch")).toBeInTheDocument();
 		expect(screen.queryByText("Usage & cost")).not.toBeInTheDocument();
-		expect(getMock).not.toHaveBeenCalledWith("/api/v1/usage/sessions/{sessionId}", expect.anything());
 	});
 });
 

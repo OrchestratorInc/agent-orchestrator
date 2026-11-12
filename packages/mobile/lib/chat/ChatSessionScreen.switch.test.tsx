@@ -67,7 +67,7 @@ vi.mock("react-native", async () => ({
 }));
 vi.mock("expo-router", async () => {
 	const Toolbar = Object.assign(await host("StackToolbar"), { Button: await host("StackToolbarButton") });
-	return { Stack: { Toolbar }, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
+	return { Stack: { Toolbar }, useIsFocused: () => true, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
 vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView") }));
@@ -107,6 +107,7 @@ vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer"
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));
 vi.mock("./ChatMarkdown", async () => ({ ChatLinkProvider: await host("ChatLinkProvider") }));
 vi.mock("./ChatTimeline", async () => ({ ChatTimeline: await host("ChatTimeline") }));
+vi.mock("./McpServerNotice", async () => ({ McpServerNotice: await host("McpServerNotice") }));
 vi.mock("./useChatKeyboard", () => ({
 	useChatKeyboard: () => ({ keyboardVisible: false, rootStyle: {}, behavior: "padding", keyboardVerticalOffset: 0, composerLift: 0, restingInset: 0, dockRiseOverride: undefined }),
 }));
@@ -118,7 +119,7 @@ vi.mock("./autoResume", () => ({ shouldAutoResume: () => false }));
 vi.mock("./conversationBanners", () => ({
 	controllerStoppedBanner: () => ({ key: "stopped", title: "The agent stopped" }),
 	errorBanner: () => undefined,
-	mcpBanner: () => undefined,
+	mcpNoticeKey: () => "notice",
 	quotaBanner: () => undefined,
 	reauthBanner: () => undefined,
 	rolledBackBanner: () => undefined,

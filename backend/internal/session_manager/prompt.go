@@ -39,7 +39,9 @@ type systemPromptConfig struct {
 	OrchestratorSessionID string
 	ProjectRules          string
 	OrchestratorRules     string
-	AdditionalSections    []string
+	// TimeZone is the user's IANA zone name; empty omits the section.
+	TimeZone           string
+	AdditionalSections []string
 }
 
 // projectRulesConfig loads standing rules text plus an optional repo-relative
@@ -106,7 +108,11 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	default:
 		return ""
 	}
-	sections = append(sections, userOrientationPrompt(), publishingScopePrompt(), systemPromptGuard())
+	sections = append(sections, userOrientationPrompt(), publishingScopePrompt())
+	if zone := timeZonePrompt(cfg.TimeZone); zone != "" {
+		sections = append(sections, zone)
+	}
+	sections = append(sections, systemPromptGuard())
 	for _, section := range cfg.AdditionalSections {
 		if section := strings.TrimSpace(section); section != "" {
 			sections = append(sections, section)
@@ -119,11 +125,17 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 // itself, Claude's narration varies widely from run to run in both the terminal
 // and chat (measured: anywhere from none to one per call on the same task), and
 // a run of bare "Ran command" rows leaves the user unable to tell what is
-// happening or what a later question refers to.
+// happening or what a later question refers to. The narration itself is
+// welcome; what reads as noise is Orchestrator's own plumbing (reading the ao
+// command guides, --help, report and artifact commands, ao output quirks). So
+// agents keep narrating, but describe Orchestrator steps in plain technical
+// terms and never mention the ao CLI or its internals.
 func userOrientationPrompt() string {
 	return `## Keeping the User Oriented
 
-The user follows your work as it happens, and tool calls show only as short rows. Before each tool call, or each batch of related calls, write one short sentence saying what you are about to do or what you just found. Name the specific things involved, such as files, branches or worktrees. Skip this only for a single trivial step.`
+The user follows your work as it happens, and tool calls show only as short rows. Before each tool call, or each batch of related calls, write a short, friendly sentence saying what you are about to do or what you just found. Name the specific things involved, such as files, functions, tests, branches or errors. Skip this only for a single trivial step.
+
+When a step uses Orchestrator's ` + "`ao`" + ` commands, describe what it does in plain technical terms, not the command: "Opening the page in the Browser panel", "Checking the page's console for errors", "Saving the page as a deliverable", "Letting the orchestrator know this is done". Do not mention the ` + "`ao`" + ` CLI, its command names, flags or output, the guides you read to use it, or how Orchestrator works internally, unless the user asks. Reading those guides and running ` + "`--help`" + ` need no narration at all. When you name the app, call it Orchestrator, not AO.`
 }
 
 // publishingScopePrompt clarifies authority without replacing the established
@@ -340,7 +352,7 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 - When a decision or missing input blocks progress, run `+"`ao report --needs-input --note <text>`"+`.
 - When work cannot proceed for another reason, run `+"`ao report --stuck --note <text>`"+`.
 - When the assigned work is complete, run `+"`ao report --done --note <text>`"+`. Attach deliverables with `+"`--artifact`"+` and PRs with `+"`--pr-created`"+` or `+"`--pr-reviewed`"+`; summarize validation and mention anything else, such as issues you filed, in the note.
-- Attach each deliverable with `+"`--artifact <absolute-path>`"+` as soon as it exists, on the report for that milestone; do not wait for `+"`--done`"+`. `+"`--artifact`"+` takes only a path to a file in the session artifact directory, one flag per deliverable, not its supporting files.
+- Attach each deliverable with `+"`--artifact <absolute-path>`"+` as soon as it exists, on the report for that milestone; do not wait for `+"`--done`"+`. `+"`--artifact`"+` takes only a path to a file in the session artifact directory, one flag per deliverable, not its supporting files. `+"`--artifact`"+` tells the orchestrator about a file but does not register it, so run `+"`ao artifact add <path>`"+` first.
 - Do not file a report for routine commands. Report meaningful transitions, decisions, blockers, outputs, and completion. Outputs do not imply completion, and `+"`--done`"+` does not terminate the session. This limit applies to `+"`ao report`"+` only, not to what you tell the user in the conversation.
 
 ## In-App Session Links
