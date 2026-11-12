@@ -174,8 +174,11 @@ func (m *Manager) watch(ctx context.Context, handleID string, self *shellWatch) 
 				m.mu.Lock()
 				if m.tracked[handleID] == self {
 					m.tracked[handleID] = nil
+					m.setLocked(handleID, nil)
 				}
 				m.mu.Unlock()
+				// Release the context from the daemon's; nothing else will.
+				self.cancel()
 				return
 			}
 		}
