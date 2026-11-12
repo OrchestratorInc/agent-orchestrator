@@ -9,10 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-type fakeCodex struct{ *fakeClaude }
-
-func (fakeCodex) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderCodex }
-
 func newDuplicateFixture(t *testing.T, device string) (*Service, *fakeClaude, *memStore, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -125,7 +121,7 @@ func TestListDoesNotFoldAcrossProviders(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	claude := &fakeClaude{signedInAs: map[string]string{}}
-	codex := fakeCodex{&fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}}
+	codex := &fakeCodex{fakeClaude: fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude, codex}, root, fakeTerminals{}, nil)
 	saved := addSaved(t, svc, claude, root, "a@example.com")
