@@ -3081,6 +3081,37 @@ describe("unavailable states", () => {
 		await waitFor(() => expect(field.textContent).toBe(""));
 	});
 
+	it("keeps a held message in the box when the previous send is parked as unsent", async () => {
+		const sessionId = "composer-held-behind-parked-send";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const view = render(<ChatComposer busy onSend={onSend} willQueue draftSessionId={sessionId} />);
+		const field = screen.getByLabelText("Message the agent");
+
+		await typeInComposer(field, "follow up");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(onSend).not.toHaveBeenCalled();
+
+		// Another surface's send gets no answer and moves to the unsent strip.
+		await act(async () => {
+			const lost = prepareChatComposerDelivery(sessionId, {
+				kind: "send",
+				optimistic: true,
+				composerText: "follow up",
+				attachments: [],
+				requestText: "the message that got no answer",
+				clientMessageId: "lost-before-held",
+			});
+			if (!lost.ok) throw new Error("Failed to prepare test delivery");
+			expect(parkChatComposerDelivery(sessionId, "lost-before-held").ok).toBe(true);
+		});
+		view.rerender(<ChatComposer onSend={onSend} willQueue draftSessionId={sessionId} />);
+		await act(async () => {});
+
+		expect(onSend).not.toHaveBeenCalled();
+		expect(field).toHaveTextContent("follow up");
+	});
+
 	it("does not send a held message that was edited before the previous one landed", async () => {
 		const onSend = vi.fn().mockResolvedValue(undefined);
 		const view = render(<ChatComposer busy onSend={onSend} willQueue />);

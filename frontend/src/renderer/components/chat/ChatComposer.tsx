@@ -186,6 +186,8 @@ type HeldSubmit = {
 	steer: boolean;
 	/** The composer held its own draft (not a new one typed during another send). */
 	own: boolean;
+	/** The message in the unsent strip when this was held, if any. */
+	unsentId?: string;
 };
 
 /** How long a discarded unsent message can be brought back. */
@@ -1512,7 +1514,7 @@ export const ChatComposer = memo(function ChatComposer({
 				editorClears.current !== editorClearsAtSubmit.current &&
 				textRef.current.trim()
 			) {
-				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false };
+				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId() };
 			}
 			return submitInFlight.current;
 		}
@@ -1547,8 +1549,12 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Wait for the previous send to settle, then send this draft. */
 	function holdOwnDraft(forceSteer?: boolean) {
 		if (savingQueuedEdit || !textRef.current.trim()) return false;
-		heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: true };
+		heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: true, unsentId: parkedUnsentId() };
 		return true;
+	}
+
+	function parkedUnsentId() {
+		return draftScope ? readChatSessionDraft(draftScope).unsent?.clientMessageId : undefined;
 	}
 
 	async function performSubmit(forceSteer?: boolean) {
@@ -1985,6 +1991,10 @@ export const ChatComposer = memo(function ChatComposer({
 		setHeldSubmit(null);
 		// Only the message the user entered; an edit made since waits for its own Enter.
 		if (textRef.current !== heldSubmit.text) return;
+		// A send that got no answer since this was held is parked in the unsent strip,
+		// whichever surface made it. Sending now would put this message ahead of it.
+		const parked = parkedUnsentId();
+		if (parked && parked !== heldSubmit.unsentId) return;
 		void submitLatest.current(undefined, heldSubmit.steer && canSteerDraft);
 	}, [canSteerDraft, heldSubmit, heldSubmitReady]);
 
