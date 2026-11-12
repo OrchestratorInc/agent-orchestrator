@@ -6612,6 +6612,37 @@ body.is-pane-dragging webview {
 	transition: none;
 }
 
+/* What releasing a dragged tab here does, named inside the preview. */
+.pane-drop-preview[data-label]::after {
+	content: attr(data-label);
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	max-width: calc(100% - 16px);
+	padding: 4px 10px;
+	overflow: hidden;
+	transform: translate(-50%, -50%);
+	border-radius: var(--radius-md);
+	background: color-mix(in oklch, var(--background) 90%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--primary) 32%, transparent);
+	color: var(--foreground);
+	font-size: 12px;
+	line-height: 16px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* The title bar of one pane in a split: the pane's handle, name and exits. */
+.pane-split-header {
+	z-index: 5;
+	cursor: grab;
+	touch-action: none;
+}
+
+.pane-split-header:active {
+	cursor: grabbing;
+}
+
 /* Unfocused panes of a split rest under a light veil of the background, so
  * the focused one stands out in either theme. */
 .pane-split-dim {

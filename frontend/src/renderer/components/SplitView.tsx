@@ -4,13 +4,14 @@ import {
 	useEffect,
 	useRef,
 	useState,
+	type CSSProperties,
 	type KeyboardEvent as ReactKeyboardEvent,
 	type PointerEvent as ReactPointerEvent,
 	type ReactNode,
 	type RefObject,
 } from "react";
 import { agentLabel } from "@aoagents/product-ui";
-import { X } from "@/components/app-icons";
+import { GripVertical, Ungroup, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { MIN_PANE_PX, ratioVar, type CssDivider } from "../lib/pane-split";
@@ -191,6 +192,111 @@ export type SplitGroupMember = {
 };
 
 /**
+ * A shell in a split has no strip tab of its own, so wherever its name shows
+ * (the group tab, its pane header) the agent running in it shows as on that tab.
+ */
+function withMemberAgent(member: SplitGroupMember, agents: ReturnType<typeof useShellAgentStore.getState>["agents"]) {
+	const agent = member.agentHandleId ? agents[member.agentHandleId] : undefined;
+	if (!agent) return { ...member, agent };
+	// A default-named shell ("Terminal 3") reads as its agent.
+	const label = /^Terminal \d+$/.test(member.label) ? agentLabel(agent.harness) : member.label;
+	return { ...member, agent, label, icon: <ShellAgentIcon agent={agent} done={false} /> };
+}
+
+/** Height of a pane's title bar; the pane's content sits below it. */
+export const PANE_HEADER_PX = 28;
+
+/**
+ * The title bar of one pane in a split. It is what makes a pane read as a tab:
+ * it carries the tab's icon and name, is the handle to drag the pane (onto a
+ * pane's edge to rearrange, onto the strip to unsplit), and has plain buttons
+ * to unsplit or close it. Pressing anywhere on it focuses the pane at once.
+ */
+export function SplitPaneHeader({
+	member,
+	focused,
+	closable,
+	style,
+	menu,
+	onUnsplit,
+}: {
+	member: SplitGroupMember;
+	focused: boolean;
+	closable: boolean;
+	style: CSSProperties;
+	menu: TabMenuSpec & { kind: "group" };
+	onUnsplit: () => void;
+}) {
+	const { t } = useTranslation();
+	useShellAgentStream(Boolean(member.agentHandleId));
+	const agents = useShellAgentStore((state) => state.agents);
+	const shown = withMemberAgent(member, agents);
+	const header = (
+		<div
+			className={cn(
+				"pane-split-header absolute flex items-center gap-1 overflow-hidden border-b border-border pr-2 pl-1",
+				focused ? "bg-overlay text-foreground" : "bg-background text-passive hover:text-foreground",
+			)}
+			data-focused={focused || undefined}
+			data-split-pane-header={member.key}
+			onPointerDown={(event) => {
+				if (event.button !== 0) return;
+				member.onSelect();
+				// The title chip is the tab being carried, so the ghost looks like a tab.
+				beginPaneTabDrag(event, member.key, event.currentTarget, undefined, { immediate: true });
+			}}
+			style={style}
+			title={t("splitPane.dragHint", { name: shown.label })}
+		>
+			<span
+				className="pointer-events-none inline-flex min-w-0 items-center gap-1.5 rounded-md px-1 text-control leading-none"
+				data-terminal-tab-frame
+			>
+				<GripVertical aria-hidden="true" className="size-icon-sm shrink-0 opacity-50" />
+				<span className="grid size-icon-base shrink-0 place-items-center">{shown.icon}</span>
+				<span className="truncate">{shown.label}</span>
+			</span>
+			<span className="min-w-1 flex-1" />
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Pressable
+						className="inline-flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-control leading-none text-muted-foreground hover:bg-raised hover:text-foreground"
+						onClick={(event) => {
+							event.stopPropagation();
+							onUnsplit();
+						}}
+						onPointerDown={(event) => {
+							event.stopPropagation();
+							member.onSelect();
+						}}
+						type="button"
+					>
+						<Ungroup aria-hidden="true" className="size-icon-sm" />
+						{t("splitPane.unsplit")}
+					</Pressable>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{t("splitPane.unsplitHint", { name: shown.label })}</TooltipContent>
+			</Tooltip>
+			{closable ? (
+				<Pressable
+					aria-label={t("splitPane.closePane", { name: shown.label })}
+					className="inline-grid size-5 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-raised hover:text-foreground"
+					onClick={(event) => {
+						event.stopPropagation();
+						member.onClose();
+					}}
+					onPointerDown={(event) => event.stopPropagation()}
+					type="button"
+				>
+					<X aria-hidden="true" className="size-icon-sm" />
+				</Pressable>
+			) : null}
+		</div>
+	);
+	return <TabContextMenu spec={menu}>{header}</TabContextMenu>;
+}
+
+/**
  * One strip tab for tabs shown together. The focused member shows its name;
  * the others show only their icon, named by a tooltip. Each member is its own
  * target: clicking it shows the group with that pane focused, and dragging it
@@ -214,13 +320,7 @@ export function SplitGroupTab({
 	// the agent watch open and shows the agent as that tab would.
 	useShellAgentStream(members.some((member) => member.agentHandleId));
 	const agents = useShellAgentStore((state) => state.agents);
-	const shown = members.map((member) => {
-		const agent = member.agentHandleId ? agents[member.agentHandleId] : undefined;
-		if (!agent) return { ...member, agent };
-		// A default-named shell ("Terminal 3") reads as its agent.
-		const label = /^Terminal \d+$/.test(member.label) ? agentLabel(agent.harness) : member.label;
-		return { ...member, agent, label, icon: <ShellAgentIcon agent={agent} done={false} /> };
-	});
+	const shown = members.map((member) => withMemberAgent(member, agents));
 	const frame = (
 		<span
 			aria-label={t("splitPane.group", { names: shown.map((member) => member.label).join(", ") })}
@@ -244,7 +344,7 @@ export function SplitGroupTab({
 						aria-selected={active && focused}
 						className={cn(
 							"inline-flex h-full min-w-0 cursor-pointer items-center gap-2 leading-none",
-							focused ? "max-w-shell-tab-max px-2 text-control" : "px-1.5",
+							focused ? "max-w-shell-tab-max px-2 text-control" : "max-w-40 px-2 text-control",
 							active && focused ? "text-foreground" : active ? "text-muted-foreground hover:text-foreground" : "hover:text-foreground",
 						)}
 						data-split-member={member.key}
@@ -276,7 +376,7 @@ export function SplitGroupTab({
 						>
 							{member.icon}
 						</span>
-						{focused ? <span className="truncate">{member.label}</span> : null}
+						<span className="truncate">{member.label}</span>
 					</Pressable>
 				);
 				return (
