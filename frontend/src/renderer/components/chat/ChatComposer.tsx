@@ -484,7 +484,6 @@ export const ChatComposer = memo(function ChatComposer({
 	const transportRetriesRef = useRef(transportRetries);
 	transportRetriesRef.current = transportRetries;
 	const heldUnsentRef = useRef<readonly string[]>([]);
-	const [retryErrorText, setRetryErrorText] = useState<string>();
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
 		() =>
 			draftScope !== undefined &&
@@ -1911,7 +1910,6 @@ export const ChatComposer = memo(function ChatComposer({
 			console.warn("[chat] send got no answer", { sessionId: draftScope.sessionId, code: apiErrorCode(error) ?? (error instanceof Error ? error.name : "unknown"), retry: prepared.recovered });
 			const code = apiErrorCode(error);
 			const unanswered = delivery.kind === "send" && (code === undefined || HOST_UNREACHABLE_CODES.has(code));
-			if (unanswered) setRetryErrorText(apiErrorMessage(error));
 			const stopped = unanswered || !parks ? [] : (readChatSessionDraft(draftScope).unsentQueue ?? [])
 				.filter((unsent) => compareSendOrder(unsent, delivery) > 0).map((unsent) => unsent.clientMessageId);
 			if (parks && !unanswered && prepared.recovered) heldUnsentRef.current = [delivery.clientMessageId, ...stopped];
@@ -2112,7 +2110,6 @@ export const ChatComposer = memo(function ChatComposer({
 		};
 	}, []);
 
-	const retryingBySelf = [...unsentQueue, durableDelivery].some((delivery) => delivery && transportRetries[delivery.clientMessageId] !== undefined);
 	const attachmentError =
 		fileAttachments.error ??
 		draftPersistenceError ??
@@ -2120,7 +2117,7 @@ export const ChatComposer = memo(function ChatComposer({
 		sendError ??
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
-		(retryingBySelf && commandError === retryErrorText ? undefined : commandError);
+		commandError;
 	// The strip lists the unsent messages in send order, with the one whose retry runs in its place, and a short undo after a discard.
 	const retryingDelivery = durableDelivery?.draft && (retryingUnsent === durableDelivery.clientMessageId ||
 		(parkUnsentSends && isParkableChatComposerDelivery(durableDelivery) && transportRetries[durableDelivery.clientMessageId] !== undefined))

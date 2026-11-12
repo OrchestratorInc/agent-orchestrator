@@ -272,6 +272,47 @@ it("resolves an approval and interrupts Box B despite equal IDs on Box A and loc
 	expect(localPost).not.toHaveBeenCalled();
 });
 
+it("shows a failed Stop while a send waits for the connection", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	let sends = 0;
+	let hostBack = false;
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: "busy", turns: [{ id: "turn-1", state: "running", requestedAt: "2026-09-28T00:00:00Z" }] }));
+		if (path.endsWith("/conversation/messages")) {
+			sends++;
+			if (hostBack) return Response.json({ state: "accepted", turnId: "turn-2" }, { status: 202 });
+			return Response.json({ error: "unavailable", code: "UPSTREAM_UNAVAILABLE", message: "The host could not be reached" }, { status: 502 });
+		}
+		if (path.endsWith("/conversation/interrupt")) return Response.json({ error: "conflict", code: "CHAT_INTERRUPT_FAILED", message: "Could not stop the turn" }, { status: 409 });
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	const field = await screen.findByRole("combobox", { name: "Message the agent" });
+	await typeInLexicalEditor(field, "next step");
+	fireEvent.keyDown(field, { key: "Enter" });
+	expect(await screen.findByText("Waiting for connection…")).toBeInTheDocument();
+	await waitFor(() => expect(sends).toBeGreaterThan(1), { timeout: 4_000 });
+	expect(screen.queryByText("The host could not be reached")).not.toBeInTheDocument();
+
+	await userEvent.click(screen.getByRole("button", { name: "Stop turn" }));
+	expect(await screen.findByText("Could not stop the turn")).toBeInTheDocument();
+	const attempts = sends;
+	await waitFor(() => expect(sends).toBeGreaterThan(attempts), { timeout: 6_000 });
+	await new Promise((resolve) => setTimeout(resolve, 200));
+	expect(screen.getByText("Could not stop the turn")).toBeInTheDocument();
+	expect(screen.queryByText("The host could not be reached")).not.toBeInTheDocument();
+
+	hostBack = true;
+	await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 8_000 });
+}, 25_000);
+
 it("shows a normal inspector and reads its changed files from the remote host only", async () => {
 	HTMLElement.prototype.scrollTo = vi.fn();
 	const requests: string[] = [];

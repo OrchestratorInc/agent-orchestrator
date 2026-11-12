@@ -277,20 +277,6 @@ describe("optimistic message delivery", () => {
 		expect(readChatSessionDraft(sessionId).unsentQueue?.[0]?.state).toBe("dispatching");
 	});
 
-	const raw = "Host h_1 is not connected";
-	it.each([
-		["hides", "a send retrying by itself", { code: "UPSTREAM_UNAVAILABLE", message: raw }, false],
-		["keeps", "a coded failure", { code: "CHAT_SEND_FAILED", message: raw }, true],
-		["keeps", "another command's error while a send retries", new TypeError("Failed to fetch"), true],
-	])("%s the raw error after %s", async (_verb, reason, error, shown) => {
-		const onSend = vi.fn().mockRejectedValue(error);
-		renderComposer(`optimistic-raw-error-${reason}`, onSend, false, raw);
-		expect(screen.getByRole("alert")).toHaveTextContent(raw);
-		await startSend(onSend, "status here");
-		await screen.findByTestId("unsent-message-strip");
-		await waitFor(() => expect(Boolean(screen.queryByText(raw))).toBe(shown));
-	});
-
 	it("delivers the sends of an outage in the order they were sent", async () => {
 		const sessionId = "optimistic-two-unanswered";
 		let online = false;
