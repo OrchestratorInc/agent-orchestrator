@@ -2714,7 +2714,7 @@
 	"chat.login.status.waiting": "Wartet auf Anmeldung",
 	"chat.login.status.sending": "Wird gesendet…",
 	"chat.login.status.resend": "Angehalten · sende sie nach der Anmeldung erneut",
-	"chat.login.status.stopped": "Nicht gesendet",
+	"chat.login.status.stopped": "Angehalten",
 	"chat.reauth.composerPlaceholder": "Melde dich an, um fortzufahren",
 	"chat.versionSwitch.failedTitle": "Wechsel zu {{version}} fehlgeschlagen",
 	"chat.versionSwitch.failedBody": "Der Agent ist mit der neuen Version nicht gestartet. Deine wartenden Nachrichten bleiben erhalten; setze den Agent fort, um es erneut zu versuchen.",

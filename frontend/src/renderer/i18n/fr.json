@@ -2754,7 +2754,7 @@
 	"chat.login.status.waiting": "En attente de connexion",
 	"chat.login.status.sending": "Envoi…",
 	"chat.login.status.resend": "Arrêté · renvoyez-le une fois connecté",
-	"chat.login.status.stopped": "Non envoyé",
+	"chat.login.status.stopped": "Arrêté",
 	"chat.reauth.composerPlaceholder": "Connectez-vous pour continuer",
 	"chat.versionSwitch.failedTitle": "Impossible de passer à {{version}}",
 	"chat.versionSwitch.failedBody": "L’agent n’a pas démarré avec la nouvelle version. Vos messages en attente sont conservés ; reprenez l’agent pour réessayer.",

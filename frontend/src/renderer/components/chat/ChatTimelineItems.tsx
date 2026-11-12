@@ -676,9 +676,22 @@ export function TurnOutcome({
 	// write. The turn keeps one quiet line saying what happens to its message;
 	// the provider's own advice ("run /login") is for its CLI and never shows.
 	if (state === "failed" && failureCode === "auth_required" && login) {
+		// A turn that did work still closes on the shared row, so its copy and undo
+		// stay where they always are; the band sends it again, so there is no Retry.
+		// One that did nothing else has its line under the message, whose row has them.
+		const closesTurn = login.align === "start";
 		return (
-			<div data-turn-outcome={state} className="flex min-w-0">
+			<div data-turn-outcome={state} className={cn("flex min-w-0", closesTurn && "group/message flex-col gap-1.5")}>
 				<LoginStatusNote status={login.status} />
+				{closesTurn ? (
+					<TurnActions
+						className="-mt-1"
+						copyText={copyText}
+						onRollback={onRollback}
+						rollbackDisabled={rollbackDisabled}
+						timestamp={timestamp}
+					/>
+				) : null}
 			</div>
 		);
 	}

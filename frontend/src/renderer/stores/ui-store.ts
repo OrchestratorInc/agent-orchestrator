@@ -174,10 +174,20 @@ export type LoginReturn = {
 	 * count. Unknown for a remote host, whose accounts this app cannot read.
 	 */
 	accountId?: string;
+	/**
+	 * The account is still being read. Until it is known no login counts, since
+	 * only that account's login fixes the session.
+	 */
+	accountPending?: boolean;
 	/** When the login took. */
 	loggedInAt?: number;
 	/** The chat has seen the login and sent nothing again: it says the user is in. */
 	settled?: boolean;
+	/**
+	 * The refused message the chat saw the login for. A refusal of another one
+	 * (the message sent again, refused once more) means the login did not fix it.
+	 */
+	turnId?: string;
 };
 
 /** What the archive modal shows. */
@@ -338,13 +348,16 @@ export type UiState = {
 	closeSettings: () => void;
 	loginReturn: LoginReturn | null;
 	/** Remember a chat whose agent refused its login while that login is fixed. */
-	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled">) => void;
+	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled" | "turnId">) => void;
 	/** A login took: return to the waiting chat, if it is that chat's agent, host and account. */
 	completeLoginReturn: (agentId: string, hostId?: string, accountId?: string) => void;
-	/** The account the waiting chat's session runs on, once read; only its login counts. */
-	setLoginReturnAccount: (sessionId: string, accountId: string) => void;
-	/** The waiting chat saw the login and sent nothing again. */
-	settleLoginReturn: (sessionId: string) => void;
+	/**
+	 * The account the waiting chat's session runs on, once read; only its login
+	 * counts. None (no account of its own, or the read failed) lets any login count.
+	 */
+	setLoginReturnAccount: (sessionId: string, accountId: string | undefined) => void;
+	/** The waiting chat saw the login for this refused message and sent nothing again. */
+	settleLoginReturn: (sessionId: string, turnId?: string) => void;
 	/** Drop the waiting chat, or only when it is this session's. */
 	clearLoginReturn: (sessionId?: string) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
@@ -694,7 +707,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 		const waiting = state.loginReturn;
 		if (!waiting || waiting.loggedInAt !== undefined || waiting.agentId !== agentId) return {};
 		if ((waiting.hostId ?? "local") !== (hostId ?? "local")) return {};
-		if (waiting.accountId !== undefined && waiting.accountId !== accountId) return {};
+		if (waiting.accountPending || (waiting.accountId !== undefined && waiting.accountId !== accountId)) return {};
 		const modal = state.settingsModal;
 		// A login only finishes while the Agents page shows it, so closing global
 		// settings here returns the user to the chat they came from.
@@ -705,11 +718,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 	}),
 	setLoginReturnAccount: (sessionId, accountId) => set((state) =>
 		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt === undefined
-			? { loginReturn: { ...state.loginReturn, accountId } }
+			? { loginReturn: { ...state.loginReturn, accountPending: false, ...(accountId ? { accountId } : {}) } }
 			: {}),
-	settleLoginReturn: (sessionId) => set((state) =>
+	settleLoginReturn: (sessionId, turnId) => set((state) =>
 		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt !== undefined && !state.loginReturn.settled
-			? { loginReturn: { ...state.loginReturn, settled: true } }
+			? { loginReturn: { ...state.loginReturn, settled: true, ...(turnId ? { turnId } : {}) } }
 			: {}),
 	clearLoginReturn: (sessionId) => set((state) =>
 		!state.loginReturn || (sessionId !== undefined && state.loginReturn.sessionId !== sessionId) ? {} : { loginReturn: null }),

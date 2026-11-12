@@ -18,6 +18,7 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { renderChat as render } from "../../test/render-chat";
 import { useUiStore } from "../../stores/ui-store";
 import { apiClient } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 
 const CLI_ADVICE = "Not logged in · Please run /login";
 
@@ -242,7 +243,7 @@ describe("ChatWorkspace refused login", () => {
 
 		expect(screen.queryByTestId("login-band")).toBeNull();
 		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
-		expect(screen.getByTestId("login-status")).toHaveTextContent("Not sent");
+		expect(screen.getByTestId("login-status")).toHaveTextContent(/^Stopped$/);
 	});
 
 	it("says when sending the message again failed and offers it once more", async () => {
@@ -254,7 +255,7 @@ describe("ChatWorkspace refused login", () => {
 
 		rerender(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry, error: "The daemon is not reachable", turnId: "turn-1" }} />);
 		expect(band()).toHaveTextContent("Couldn’t send your message · The daemon is not reachable");
-		expect(screen.getByTestId("login-status")).toHaveTextContent("Not sent");
+		expect(screen.getByTestId("login-status")).toHaveTextContent(/^Stopped$/);
 		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
 		expect(retry).toHaveBeenCalledTimes(2);
 		expect(retry).toHaveBeenLastCalledWith("turn-1");
@@ -301,6 +302,127 @@ describe("ChatWorkspace refused login", () => {
 		} finally {
 			get.mockRestore();
 			act(() => useUiStore.setState({ accountLogin: null }));
+		}
+	});
+
+	it("counts no login until it knows the account the session runs on", async () => {
+		let answer: (accounts: Record<string, string>) => void = () => {};
+		const get = vi.spyOn(apiClient, "GET").mockImplementation(((path: string) =>
+			path === "/api/v1/agents/accounts/sessions/{sessionId}"
+				? new Promise((resolve) => {
+					answer = (data) => resolve({ data });
+				})
+				: Promise.resolve({ data: undefined })) as never);
+		try {
+			const retry = vi.fn();
+			render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+			await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+			expect(useUiStore.getState().loginReturn?.accountPending).toBe(true);
+
+			// A login that takes before the account is known could be another account's.
+			act(() => useUiStore.getState().completeLoginReturn("claude-code", undefined, "device"));
+			expect(useUiStore.getState().loginReturn?.loggedInAt).toBeUndefined();
+			expect(useUiStore.getState().settingsModal).not.toBeNull();
+			expect(retry).not.toHaveBeenCalled();
+
+			await act(async () => answer({ claude: "acct-a" }));
+			expect(useUiStore.getState().loginReturn).toMatchObject({ accountPending: false, accountId: "acct-a" });
+			act(() => useUiStore.getState().completeLoginReturn("claude-code", undefined, "acct-a"));
+			expect(retry).toHaveBeenCalledWith("turn-1");
+		} finally {
+			get.mockRestore();
+		}
+	});
+
+	it("takes any login for the agent when the session's account cannot be read", async () => {
+		const get = vi.spyOn(apiClient, "GET").mockImplementation((async (path: string) => {
+			if (path === "/api/v1/agents/accounts/sessions/{sessionId}") throw new Error("daemon unreachable");
+			return { data: undefined };
+		}) as never);
+		try {
+			const retry = vi.fn();
+			render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+			await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+			await waitFor(() => expect(useUiStore.getState().loginReturn?.accountPending).toBe(false));
+			expect(useUiStore.getState().loginReturn?.accountId).toBeUndefined();
+
+			act(() => useUiStore.getState().completeLoginReturn("claude-code", undefined, "device"));
+			expect(retry).toHaveBeenCalledWith("turn-1");
+		} finally {
+			get.mockRestore();
+		}
+	});
+
+	it("starts signed out again when the agent refuses the message sent again", async () => {
+		const retry = vi.fn();
+		const { rerender } = render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+		await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+		act(() => useUiStore.getState().completeLoginReturn("claude-code"));
+		expect(retry).toHaveBeenCalledWith("turn-1");
+		await act(async () => {});
+
+		// The chat looked away while the copy ran, and comes back to it refused too.
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const first = snapshot.turns[0]!;
+		const prompt = snapshot.items[0]!;
+		snapshot.turns = [first, { ...first, id: "turn-2", providerTurnId: "provider-turn-2", retryOfTurnId: "turn-1" }];
+		snapshot.items = [prompt, { ...prompt, id: "user-retry", turnId: "turn-2", sequence: prompt.sequence + 1 } as typeof prompt];
+		rerender(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+
+		// That login did not fix it, so the band offers it again rather than "Logged in".
+		expect(band()).toHaveAttribute("data-login-state", "signedOut");
+		expect(within(band()).getByRole("button", { name: "Log in" })).toBeInTheDocument();
+		expect(useUiStore.getState().loginReturn).toBeNull();
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-readonly", "true");
+	});
+
+	it("offers a refused message again when history paging left its prompt out", async () => {
+		const snapshot = signedOutSnapshot({ didWork: true });
+		// Only the turn's later work is loaded; the daemon says it has a prompt.
+		snapshot.turns = [{ ...snapshot.turns[0]!, hasHumanPrompt: true }];
+		snapshot.items = snapshot.items.filter((item) => !(item.kind === "message" && item.role === "user"));
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		expect(retry).toHaveBeenCalledWith("turn-1");
+	});
+
+	it("stops dictation when the chat box locks, and offers none while it is locked", async () => {
+		const platform = Object.getOwnPropertyDescriptor(window.navigator, "platform");
+		Object.defineProperty(window.navigator, "platform", { configurable: true, get: () => "MacIntel" });
+		let emit: ((event: { type: "text"; text: string }) => void) | undefined;
+		const onEvent = vi.spyOn(aoBridge.dictation, "onEvent").mockImplementation((listener) => {
+			emit = listener as typeof emit;
+			return () => {
+				emit = undefined;
+			};
+		});
+		const cancel = vi.spyOn(aoBridge.dictation, "cancel");
+		act(() => useUiStore.setState({ developerMode: true }));
+		try {
+			const signedOut = signedOutSnapshot({ didWork: false });
+			// The same chat a moment before, its message still answered.
+			const answered: ConversationSnapshot = {
+				...signedOut,
+				turns: [{ ...signedOut.turns[0]!, state: "completed", failureCode: undefined, errorMessage: undefined }],
+				account: undefined,
+			};
+			const { rerender } = render(<ChatWorkspace snapshot={answered} retryControl={{ retry: vi.fn() }} />);
+			await userEvent.click(screen.getByRole("button", { name: "Dictate" }));
+			expect(emit).toBeDefined();
+
+			rerender(<ChatWorkspace snapshot={signedOut} retryControl={{ retry: vi.fn() }} />);
+			// Locked while the user spoke: it stops listening, so no later words reach the box.
+			expect(cancel).toHaveBeenCalled();
+			expect(emit).toBeUndefined();
+			expect(screen.getByRole("button", { name: "Dictate" })).toBeDisabled();
+		} finally {
+			onEvent.mockRestore();
+			cancel.mockRestore();
+			act(() => useUiStore.setState({ developerMode: false }));
+			if (platform) Object.defineProperty(window.navigator, "platform", platform);
+			else Reflect.deleteProperty(window.navigator, "platform");
 		}
 	});
 
@@ -415,7 +537,7 @@ describe("ChatWorkspace refused login", () => {
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn() }} />);
 
 		const [earlier, latest] = statusLines();
-		expect(earlier).toHaveTextContent("Not sent");
+		expect(earlier).toHaveTextContent(/^Stopped$/);
 		expect(latest).toHaveTextContent("Queued");
 		expect(screen.getAllByTestId("login-band")).toHaveLength(1);
 	});

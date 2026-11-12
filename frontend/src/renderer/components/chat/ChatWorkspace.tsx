@@ -6194,6 +6194,9 @@ function settledTurnDuration(turn: ConversationTurn): number | undefined {
 function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: ReadonlySet<string>): Map<string, ConversationTurn> {
 	// A steer can split one logical turn into several visual groups. Its prompt
 	// still makes the final failed group retryable, even when it is in an earlier one.
+	// A usage limit and a refused login are offered on their own (the limit's notice,
+	// the login band), so the daemon's word that the turn has a prompt is enough
+	// for them, even when history paging left that prompt out.
 	const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
 		item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
 			? [item.turnId]
@@ -6206,7 +6209,8 @@ function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: Readonly
 					turn.state === "failed" &&
 					Boolean(turn.providerTurnId) &&
 					!consumed.has(turn.id) &&
-					(humanPromptTurnIds.has(turn.id) || Boolean(turn.usageLimit && turn.hasHumanPrompt)),
+					(humanPromptTurnIds.has(turn.id) ||
+						Boolean((turn.usageLimit || turn.failureCode === "auth_required") && turn.hasHumanPrompt)),
 			)
 			.map((turn) => [turn.id, turn]),
 	);
@@ -6262,7 +6266,12 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 	// Only a login for the account this session runs on fixes it.
 	const provider = agentAccountProviderFor(snapshot.harness);
 	const stored = useUiStore((state) => state.loginReturn);
-	const loginReturn = stored?.sessionId === snapshot.sessionId ? stored : undefined;
+	const own = stored?.sessionId === snapshot.sessionId ? stored : undefined;
+	// A login seen for one refused message does not cover another: the agent refused
+	// the message sent again (a chat that never saw it running sees only that), so
+	// the user is signed out once more.
+	const loginSpent = Boolean(refusedId && own?.settled && own.turnId !== refusedId);
+	const loginReturn = loginSpent ? undefined : own;
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const forRefused = (turnId?: string) => !turnId || turnId === refusedId;
 	// Sending it again was refused (the daemon or the network), also from the
@@ -6306,15 +6315,25 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 	const logIn = useStableCallback(() => {
 		const ui = useUiStore.getState();
 		const sessionId = snapshot.sessionId;
-		const accountId = sessionAccount?.sessionId === sessionId ? sessionAccount.accountId : undefined;
-		ui.startLoginReturn({ sessionId, agentId: snapshot.harness, ...(hostId ? { hostId } : {}), ...(accountId ? { accountId } : {}) });
-		// Not read yet: read it while the Harness page opens, so only that account's
-		// login brings the user back. On a remote host any login for the agent counts.
-		if (!accountId && readsAccount && provider) {
-			void fetchSessionAgentAccounts(sessionId).then((accounts) => {
-				const found = accounts[provider];
-				if (found) useUiStore.getState().setLoginReturnAccount(sessionId, found);
-			}).catch(() => undefined);
+		const known = sessionAccount?.sessionId === sessionId ? sessionAccount : undefined;
+		const accountId = known?.accountId;
+		// Not read yet: read it while the Harness page opens, and count no login until
+		// it is known, so only that account's login brings the user back. A session
+		// with no account of its own, a read that fails, and a remote host take any
+		// login for the agent.
+		const reading = !known && readsAccount ? provider : undefined;
+		ui.startLoginReturn({
+			sessionId,
+			agentId: snapshot.harness,
+			...(hostId ? { hostId } : {}),
+			...(accountId ? { accountId } : {}),
+			...(reading ? { accountPending: true } : {}),
+		});
+		if (reading) {
+			void fetchSessionAgentAccounts(sessionId).then(
+				(accounts) => useUiStore.getState().setLoginReturnAccount(sessionId, accounts[reading]),
+				() => useUiStore.getState().setLoginReturnAccount(sessionId, undefined),
+			);
 		}
 		ui.openGlobalSettings("harness", {
 			focusAgentId: snapshot.harness,
@@ -6325,8 +6344,12 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 		});
 	});
 	useEffect(() => {
-		if (!loginReturn) return;
 		const ui = useUiStore.getState();
+		if (loginSpent) {
+			ui.clearLoginReturn(snapshot.sessionId);
+			return;
+		}
+		if (!loginReturn) return;
 		// No refused message to send (it was sent again, the chat moved past it, or the
 		// login was started from the banner): the login still brings the user back,
 		// and then nothing more waits on it. Settings closed without a login drops it
@@ -6339,17 +6362,17 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 		// A login that took long ago, or a chat busy with something else, leaves the
 		// message for the user to send again.
 		if (!queued || Date.now() - loginReturn.loggedInAt > LOGIN_RETRY_WINDOW_MS || activeTurn(snapshot) || retryControl?.pending || newWorkDisabled) {
-			ui.settleLoginReturn(snapshot.sessionId);
+			ui.settleLoginReturn(snapshot.sessionId, refusedId);
 			return;
 		}
 		// Settled, not cleared, so a send that fails still knows the user is in. The
 		// band says it is sending from now on, not only once the retry reports pending.
-		ui.settleLoginReturn(snapshot.sessionId);
+		ui.settleLoginReturn(snapshot.sessionId, refusedId);
 		setAutoSending(refusedId);
 		void Promise.resolve(retryTurn(refusedId)).catch(() => undefined).finally(() => {
 			setAutoSending((current) => current === refusedId ? undefined : current);
 		});
-	}, [loginReturn, newWorkDisabled, queued, refusedId, retryControl?.pending, retryTurn, settingsOpen, snapshot]);
+	}, [loginReturn, loginSpent, newWorkDisabled, queued, refusedId, retryControl?.pending, retryTurn, settingsOpen, snapshot]);
 	const lines = useMemo(() => {
 		const map = new Map<string, TurnOutcomeLogin>();
 		for (const turn of snapshot.turns) {

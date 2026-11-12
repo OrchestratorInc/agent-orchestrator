@@ -1729,7 +1729,7 @@
 	"chat.login.status.waiting": "Waiting for login",
 	"chat.login.status.sending": "Sending…",
 	"chat.login.status.resend": "Stopped · send it again once you’re in",
-	"chat.login.status.stopped": "Not sent",
+	"chat.login.status.stopped": "Stopped",
 	"chat.reauth.composerPlaceholder": "Log in to continue",
 	"chat.versionSwitch.failedTitle": "Couldn't switch to {{version}}",
 	"chat.versionSwitch.failedBody": "The agent didn't start on the new version. Your queued messages are kept; resume the agent to try again.",

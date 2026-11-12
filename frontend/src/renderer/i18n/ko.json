@@ -2714,7 +2714,7 @@
 	"chat.login.status.waiting": "로그인 대기 중",
 	"chat.login.status.sending": "보내는 중…",
 	"chat.login.status.resend": "중지됨 · 로그인 후 다시 보내세요",
-	"chat.login.status.stopped": "보내지 않음",
+	"chat.login.status.stopped": "중지됨",
 	"chat.reauth.composerPlaceholder": "계속하려면 로그인하세요",
 	"chat.versionSwitch.failedTitle": "{{version}}(으)로 전환하지 못했습니다",
 	"chat.versionSwitch.failedBody": "에이전트가 새 버전으로 시작되지 않았습니다. 대기 중인 메시지는 유지되며, 에이전트를 다시 시작해 재시도하세요.",

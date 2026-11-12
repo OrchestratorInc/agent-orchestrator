@@ -2784,7 +2784,7 @@
 	"chat.login.status.waiting": "等待登录",
 	"chat.login.status.sending": "正在发送…",
 	"chat.login.status.resend": "已停止 · 登录后请重新发送",
-	"chat.login.status.stopped": "未发送",
+	"chat.login.status.stopped": "已停止",
 	"chat.reauth.composerPlaceholder": "登录以继续",
 	"chat.versionSwitch.failedTitle": "无法切换到 {{version}}",
 	"chat.versionSwitch.failedBody": "代理未能在新版本上启动。排队的消息已保留，请恢复代理后重试。",

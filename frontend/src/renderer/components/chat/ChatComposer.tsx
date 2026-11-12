@@ -560,6 +560,12 @@ export const ChatComposer = memo(function ChatComposer({
 		onEnd: (keep) => editor.current?.endDictation(keep),
 	});
 	const dictating = dictation.phase !== "idle";
+	// A locked box takes no dictating either: a lock that comes while the user
+	// speaks stops listening, keeping the words so far.
+	const detachDictation = dictation.detach;
+	useEffect(() => {
+		if (typingLocked) detachDictation();
+	}, [detachDictation, typingLocked]);
 	// Dictation is in preview: macOS only, behind Developer mode.
 	const canDictate = useUiStore((state) => state.developerMode) && isMacPlatform();
 	const filePicker = useRef<HTMLInputElement>(null);
@@ -2511,7 +2517,7 @@ export const ChatComposer = memo(function ChatComposer({
 											variant={dictating ? "primary" : "quiet"}
 											size="none"
 											shape="pill"
-											disabled={!dictating && controlsDisabled}
+											disabled={!dictating && (controlsDisabled || typingLocked)}
 											// Keep focus in the editor, where the words appear.
 											onMouseDown={(event) => event.preventDefault()}
 											onClick={() => {

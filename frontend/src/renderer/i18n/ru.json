@@ -1786,7 +1786,7 @@
 	"chat.login.status.waiting": "Ждём входа",
 	"chat.login.status.sending": "Отправка…",
 	"chat.login.status.resend": "Остановлено · отправьте ещё раз после входа",
-	"chat.login.status.stopped": "Не отправлено",
+	"chat.login.status.stopped": "Остановлено",
 	"chat.reauth.composerPlaceholder": "Войдите, чтобы продолжить",
 	"chat.versionSwitch.failedTitle": "Не удалось перейти на {{version}}",
 	"chat.versionSwitch.failedBody": "Агент не запустился на новой версии. Сообщения в очереди сохранены; возобновите агента, чтобы повторить попытку.",

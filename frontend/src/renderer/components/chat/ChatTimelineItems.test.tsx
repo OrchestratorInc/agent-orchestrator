@@ -123,10 +123,18 @@ describe("TurnOutcome", () => {
 		expect(document.querySelector("[data-turn-actions]")).toBeNull();
 	});
 
-	it("ends a refused turn that did work on its own last line", () => {
-		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" login={{ status: "resend", align: "start" }} />);
+	it("ends a refused turn that did work on its own last line, keeping copy and undo", () => {
+		const onRollback = vi.fn();
+		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" login={{ status: "resend", align: "start" }}
+			retry={{ onRetry: vi.fn() }} copyText="Edited the file" onRollback={onRollback} />);
 		expect(screen.getByTestId("login-status").closest("[data-turn-outcome]")).toBeInTheDocument();
 		expect(screen.getByText("Stopped · send it again once you’re in")).toBeInTheDocument();
+		// Its answer hands copy and undo down to this row, as any stopped turn's does.
+		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Roll back to here" }));
+		expect(onRollback).toHaveBeenCalledOnce();
+		// Sending it again is the band's, so the row has no Retry.
+		expect(screen.queryByTestId("retry-turn")).toBeNull();
 	});
 
 	it("shows a refused login with no way to log in as the plain failure", () => {
