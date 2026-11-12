@@ -1,7 +1,7 @@
 import { TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow } from "../../hooks/useAgentAccounts";
 import { agentTone } from "../../lib/agent-tone";
 import { formatCountdown, groupAccounts, limitWindowPace, PROVIDER_HARNESS, remainingPercent } from "../../lib/usage-limits";
 import { formatRelativeTime } from "../../lib/usage-format";
@@ -46,7 +46,7 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 					</div>
 					<div className="grid grid-cols-[minmax(7rem,auto)_5.5rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3">
 						{entry.accounts.map((account, index) => (
-							<AccountLimitRows key={account.id} account={account} harness={PROVIDER_HARNESS[entry.provider]} first={index === 0} now={now} />
+							<AccountLimitRows key={account.id} account={account} peers={entry.accounts} harness={PROVIDER_HARNESS[entry.provider]} first={index === 0} now={now} />
 						))}
 					</div>
 				</section>
@@ -55,7 +55,7 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 	);
 }
 
-function AccountLimitRows({ account, harness, first, now }: { account: AgentAccount; harness: string; first: boolean; now: Date }) {
+function AccountLimitRows({ account, peers, harness, first, now }: { account: AgentAccount; peers: readonly AgentAccount[]; harness: string; first: boolean; now: Date }) {
 	const { t, i18n } = useTranslation();
 	const windows = account.limits?.windows ?? [];
 	const plan = formatPlanName(account.plan);
@@ -72,7 +72,7 @@ function AccountLimitRows({ account, harness, first, now }: { account: AgentAcco
 	return (
 		<>
 			<div className={cn("col-span-full flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5", !first && "mt-4")} data-usage-account={account.id}>
-				<span className="truncate text-control font-medium text-foreground">{agentAccountName(account, t)}</span>
+				<span className="truncate text-control font-medium text-foreground">{agentAccountLabel(account, peers, t)}</span>
 				{meta ? <span className="text-xs text-muted-foreground">{meta}</span> : null}
 				{issue ? (
 					<span className="inline-flex items-center gap-1 text-xs text-muted-foreground">

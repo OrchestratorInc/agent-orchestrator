@@ -62,7 +62,7 @@ export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLogin
 	return accounts.filter((account) => account.id === keepId || !twinOf(account));
 }
 
-export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName">, peers: Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
+export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName">, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
 	const name = agentAccountName(account, t);
 	const email = account.email?.toLowerCase();
 	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
