@@ -342,6 +342,8 @@ describe("TaskComposer", () => {
 		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(h.post).not.toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "local" }));
 	});
 
 	it("offers the agent default after a stale saved model is rejected without retrying the spawn", async () => {
