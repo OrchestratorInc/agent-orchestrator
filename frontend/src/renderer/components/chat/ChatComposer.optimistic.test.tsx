@@ -277,11 +277,12 @@ describe("optimistic message delivery", () => {
 		expect(readChatSessionDraft(sessionId).unsentQueue?.[0]?.state).toBe("dispatching");
 	});
 
+	const raw = "Host h_1 is not connected";
 	it.each([
-		["hides", "a send retrying by itself", new TypeError("Failed to fetch"), false],
-		["keeps", "a coded failure", { code: "CHAT_SEND_FAILED", message: "The agent refused" }, true],
-	])("%s the raw send error after %s", async (_verb, reason, error, shown) => {
-		const raw = "Host h_1 is not connected";
+		["hides", "a send retrying by itself", { code: "UPSTREAM_UNAVAILABLE", message: raw }, false],
+		["keeps", "a coded failure", { code: "CHAT_SEND_FAILED", message: raw }, true],
+		["keeps", "another command's error while a send retries", new TypeError("Failed to fetch"), true],
+	])("%s the raw error after %s", async (_verb, reason, error, shown) => {
 		const onSend = vi.fn().mockRejectedValue(error);
 		renderComposer(`optimistic-raw-error-${reason}`, onSend, false, raw);
 		expect(screen.getByRole("alert")).toHaveTextContent(raw);
@@ -317,7 +318,7 @@ describe("optimistic message delivery", () => {
 		expect(readChatSessionDraft(sessionId).unsentQueue).toBeUndefined();
 	}, 20_000);
 
-	it("holds the messages after a refused one, and Retry sends them all in order", async () => {
+	it("holds the messages after a refused one and the ones sent after it, and Retry sends them all in order", async () => {
 		const sessionId = "optimistic-refused-line";
 		let mode: "offline" | "refuse" | "online" = "offline";
 		const delivered: string[] = [];
@@ -343,9 +344,17 @@ describe("optimistic message delivery", () => {
 		expect(onSend).toHaveBeenCalledTimes(attempts);
 		expect(delivered).toEqual([]);
 
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await typeInLexicalEditor(field, "third");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(screen.getAllByText("Not sent")).toHaveLength(3));
+		await new Promise((resolve) => setTimeout(resolve, 1_000));
+		expect(onSend).toHaveBeenCalledTimes(attempts);
+		expect(delivered).toEqual([]);
+
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 6_000 });
-		expect(delivered).toEqual(["first", "second"]);
+		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 8_000 });
+		expect(delivered).toEqual(["first", "second", "third"]);
 	}, 20_000);
 
 	it.each([

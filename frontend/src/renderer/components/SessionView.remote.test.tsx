@@ -139,6 +139,7 @@ it("keeps a remote chat open while its host is away and delivers what was sent o
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(queryClient.getQueryData(conversationQueryKey("session-1", "box-a"))).toBeDefined();
 	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(screen.getByRole("combobox", { name: "Message the agent" }).getAttribute("aria-placeholder")).toMatch(/\S/);
 	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "sent while away");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 	expect(await screen.findByText("Waiting for connection…")).toBeInTheDocument();

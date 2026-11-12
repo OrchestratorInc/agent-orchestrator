@@ -483,6 +483,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const [transportRetries, setTransportRetries] = useState<Readonly<Record<string, number>>>({});
 	const transportRetriesRef = useRef(transportRetries);
 	transportRetriesRef.current = transportRetries;
+	const heldUnsentRef = useRef<readonly string[]>([]);
+	const [retryErrorText, setRetryErrorText] = useState<string>();
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
 		() =>
 			draftScope !== undefined &&
@@ -1272,6 +1274,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 		if (resume) {
+			heldUnsentRef.current = [];
 			const later = (result.draft.unsentQueue ?? []).filter((other) => other.revision > unsent.revision);
 			setTransportRetries((retries) => ({ ...Object.fromEntries(later.map((other) => [other.clientMessageId, -1])), ...retries }));
 		}
@@ -1763,8 +1766,10 @@ export const ChatComposer = memo(function ChatComposer({
 				}
 			}
 		}
+		const waiting = readChatSessionDraft(draftScope).unsentQueue ?? [];
+		const lineRuns = waiting.some((unsent) => transportRetriesRef.current[unsent.clientMessageId] !== undefined);
 		const queueBehind = parkUnsentSends && !recoveringDelivery && !shouldSteer && contextReferences.length === 0 && heldPayloads.length === 0 &&
-			(readChatSessionDraft(draftScope).unsentQueue ?? []).some((unsent) => transportRetriesRef.current[unsent.clientMessageId] !== undefined);
+			(lineRuns || waiting.some((unsent) => heldUnsentRef.current.includes(unsent.clientMessageId)));
 		const prepared = prepareChatComposerDelivery(draftScope, {
 			queue: queueBehind,
 			kind: recoveringDelivery?.kind ?? (shouldSteer ? "steer" : "send"),
@@ -1800,7 +1805,8 @@ export const ChatComposer = memo(function ChatComposer({
 			unsavedText.current = undefined;
 			fileAttachments.clear();
 			setTextDraftPersistenceError(null);
-			setTransportRetries((retries) => ({ ...retries, [delivery.clientMessageId]: -1 }));
+			if (lineRuns) setTransportRetries((retries) => ({ ...retries, [delivery.clientMessageId]: -1 }));
+			else heldUnsentRef.current = [...heldUnsentRef.current, delivery.clientMessageId];
 			setUnsentQueue(prepared.draft.unsentQueue ?? NO_UNSENT);
 			return;
 		}
@@ -1905,8 +1911,10 @@ export const ChatComposer = memo(function ChatComposer({
 			console.warn("[chat] send got no answer", { sessionId: draftScope.sessionId, code: apiErrorCode(error) ?? (error instanceof Error ? error.name : "unknown"), retry: prepared.recovered });
 			const code = apiErrorCode(error);
 			const unanswered = delivery.kind === "send" && (code === undefined || HOST_UNREACHABLE_CODES.has(code));
+			if (unanswered) setRetryErrorText(apiErrorMessage(error));
 			const stopped = unanswered || !parks ? [] : (readChatSessionDraft(draftScope).unsentQueue ?? [])
 				.filter((unsent) => unsent.revision > delivery.revision).map((unsent) => unsent.clientMessageId);
+			if (parks && !unanswered && prepared.recovered) heldUnsentRef.current = [delivery.clientMessageId, ...stopped];
 			setTransportRetries(({ [delivery.clientMessageId]: attempt, ...others }) => unanswered
 				? { ...others, [delivery.clientMessageId]: (attempt ?? -1) + 1 }
 				: Object.fromEntries(Object.entries(others).filter(([id]) => !stopped.includes(id))));
@@ -2112,7 +2120,7 @@ export const ChatComposer = memo(function ChatComposer({
 		sendError ??
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
-		(retryingBySelf ? undefined : commandError);
+		(retryingBySelf && commandError === retryErrorText ? undefined : commandError);
 	// The strip lists the unsent messages in send order, with the one whose retry runs in its place, and a short undo after a discard.
 	const retryingDelivery = durableDelivery?.draft && (retryingUnsent === durableDelivery.clientMessageId ||
 		(parkUnsentSends && isParkableChatComposerDelivery(durableDelivery) && transportRetries[durableDelivery.clientMessageId] !== undefined))

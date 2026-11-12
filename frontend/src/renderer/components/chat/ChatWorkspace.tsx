@@ -2277,7 +2277,7 @@ function ChatWorkspaceContent({
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: orchestratorBlocksComposer
 												? setupPlaceholder
-												: controllerTransitioning || newWorkDisabled
+												: controllerTransitioning || (newWorkDisabled && !sendsWhileAway)
 												? ""
 												: terminated && snapshot.controller.state === "stopped"
 												? t(resumingAgent ? "shell.restoringSession" : "chat.archived.placeholder")

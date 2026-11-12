@@ -36,6 +36,7 @@ export function UnsentMessageStrip({ messages, retryDisabled, onRetry, onDiscard
 				const oneShot = sending && !retrying;
 				const open = expanded === id && !oneShot;
 				const preview = text.replace(/\s+/g, " ").trim() || t("chat.unsent.attachmentsOnly");
+				const row = messages.length > 1 ? ` ${index + 1}` : "";
 				return (
 					<div key={id}>
 						<div className="flex h-10 w-full min-w-0 items-center gap-2.5 overflow-hidden pl-3 pr-1.5">
@@ -45,7 +46,7 @@ export function UnsentMessageStrip({ messages, retryDisabled, onRetry, onDiscard
 							) : (
 								<CircleAlert aria-hidden="true" className="size-3.5 shrink-0 text-status-needs-you" />
 							)}
-							<span className={cn("shrink-0 text-xs font-medium", sending || retrying ? "text-muted-foreground" : "text-status-needs-you")}>
+							<span aria-live="polite" className={cn("shrink-0 text-xs font-medium", sending || retrying ? "text-muted-foreground" : "text-status-needs-you")}>
 								{t(retrying ? "chat.unsent.retrying" : sending ? "chat.unsent.sending" : "chat.unsent.label")}
 							</span>
 							<p className={cn("min-w-0 flex-1 truncate text-xs leading-relaxed", oneShot ? "text-muted-foreground" : "text-foreground")} title={open ? undefined : text}>
@@ -59,7 +60,7 @@ export function UnsentMessageStrip({ messages, retryDisabled, onRetry, onDiscard
 										size="icon-sm"
 										onClick={() => setExpanded(open ? undefined : id)}
 										aria-expanded={open}
-										aria-label={t(open ? "chat.unsent.collapse" : "chat.unsent.expand")}
+										aria-label={t(open ? "chat.unsent.collapse" : "chat.unsent.expand") + row}
 										title={t(open ? "chat.unsent.collapse" : "chat.unsent.expand")}
 									>
 										<ChevronDown aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform duration-150 motion-reduce:transition-none", open && "rotate-180")} />
@@ -76,7 +77,7 @@ export function UnsentMessageStrip({ messages, retryDisabled, onRetry, onDiscard
 										size="icon-sm"
 										disabled={sending}
 										onClick={() => onDiscard(id)}
-										aria-label={t("chat.unsent.discard")}
+										aria-label={t("chat.unsent.discard") + row}
 										title={t("chat.unsent.discard")}
 									>
 										<Trash2 aria-hidden="true" className="size-3.5 shrink-0" />

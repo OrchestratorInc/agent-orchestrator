@@ -3585,6 +3585,9 @@ describe("unsent message strip", () => {
 		const field = screen.getByLabelText("Message the agent");
 		await waitFor(() => expect(unsentIds("unsent-two-restored")).toEqual(["unsent-two-restored-a", "unsent-two-restored-b"]));
 		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent(/first message.*second message/);
+		expect(screen.getByRole("button", { name: "Discard unsent message 2" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show the full message 1" })).toBeInTheDocument();
+		for (const label of screen.getAllByText("Not sent")) expect(label).toHaveAttribute("aria-live", "polite");
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		expect(field.textContent).toBe("");
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
