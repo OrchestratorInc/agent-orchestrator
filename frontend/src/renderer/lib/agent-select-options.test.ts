@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "../../api/schema";
-import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, isLaunchableAgent, type RoleSession } from "./agent-select-options";
+import { buildRankedAgentOptions, defaultProjectAgents, isLaunchableAgent, preferredAgentList } from "./agent-select-options";
 
 type Agent = components["schemas"]["AgentReadinessSnapshot"];
 
@@ -173,90 +173,62 @@ describe("configured but unverified credentials", () => {
 	});
 });
 
-describe("defaultAuthorizedAgentForRole", () => {
-	const agents = [agent("claude-code"), agent("codex")];
-
-	function hoursAgo(hours: number): string {
-		return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-	}
-
-	function session(
-		provider: RoleSession["provider"],
-		kind: "worker" | "orchestrator" | undefined,
-		createdAt: string,
-		id = `${provider}-${kind ?? "unknown"}-${createdAt}`,
-	): RoleSession {
-		return { id, provider, kind, createdAt };
-	}
-
-	it("infers each role from its own history", () => {
-		const sessions = [
-			session("codex", "worker", hoursAgo(5)),
-			session("codex", "worker", hoursAgo(4)),
-			session("claude-code", "worker", hoursAgo(3)),
-			session("claude-code", "orchestrator", hoursAgo(2)),
-		];
-
-		expect(defaultAuthorizedAgentForRole(agents, sessions, "worker")).toBe("codex");
-		expect(defaultAuthorizedAgentForRole(agents, sessions, "orchestrator")).toBe("claude-code");
-	});
-
-	it("breaks equal counts by the newest session", () => {
-		const sessions = [session("claude-code", "worker", hoursAgo(2)), session("codex", "worker", hoursAgo(1))];
-
-		expect(defaultAuthorizedAgentForRole(agents, sessions, "worker")).toBe("codex");
-	});
-
-	it("ignores sessions older than 48 hours", () => {
-		const sessions = [
-			session("codex", "worker", hoursAgo(72)),
-			session("codex", "worker", hoursAgo(100)),
-			session("codex", "worker", hoursAgo(200)),
-			session("claude-code", "worker", hoursAgo(1)),
-		];
-
-		expect(defaultAuthorizedAgentForRole(agents, sessions, "worker")).toBe("claude-code");
-		expect(defaultAuthorizedAgentForRole(agents, [session("codex", "worker", hoursAgo(72))], "worker")).toBe(
+describe("preferredAgentList", () => {
+	it("orders ready agents by how well AO integrates them", () => {
+		expect(preferredAgentList([agent("aider"), agent("codex"), agent("claude-code")])).toEqual([
 			"claude-code",
-		);
+			"codex",
+			"aider",
+		]);
 	});
 
-	it("ignores sessions without timestamps", () => {
+	it("puts installed, signed-in agents ahead of ones AO has not checked yet", () => {
+		expect(preferredAgentList([agent("claude-code", "unknown", "unknown"), agent("codex")])).toEqual([
+			"codex",
+			"claude-code",
+		]);
+	});
+
+	it("counts a configured credential as signed in", () => {
+		expect(preferredAgentList([agent("claude-code", "installed", "unknown"), agent("codex", "installed", "configured")])).toEqual([
+			"codex",
+			"claude-code",
+		]);
+	});
+
+	it("leaves out agents that are missing or signed out", () => {
 		expect(
-			defaultAuthorizedAgentForRole(agents, [{ id: "w1", provider: "codex", kind: "worker" }], "worker"),
-		).toBe("claude-code");
+			preferredAgentList([agent("claude-code", "not_installed"), agent("codex", "installed", "unauthorized"), agent("cursor")]),
+		).toEqual(["cursor"]);
 	});
 
-	it("counts legacy orchestrator ids and kind-less sessions like the board does", () => {
-		expect(
-			defaultAuthorizedAgentForRole(
-				agents,
-				[{ id: "abc-orchestrator", provider: "codex", createdAt: hoursAgo(2) }],
-				"orchestrator",
-			),
-		).toBe("codex");
-		expect(
-			defaultAuthorizedAgentForRole(
-				agents,
-				[session("codex", undefined, hoursAgo(2)), session("codex", undefined, hoursAgo(1))],
-				"worker",
-			),
-		).toBe("codex");
+	it("ranks agents outside AO's priority list after the ones in it", () => {
+		expect(preferredAgentList([agent("goose"), agent("aider")])).toEqual(["aider", "goose"]);
+	});
+});
+
+describe("defaultProjectAgents", () => {
+	it("starts every role on the most preferred agent", () => {
+		expect(defaultProjectAgents([agent("claude-code", "not_installed"), agent("codex")])).toEqual({
+			workerAgent: "codex",
+			orchestratorAgent: "codex",
+			reviewerAgent: "codex",
+		});
 	});
 
-	it("skips unavailable historical winners and falls back to Claude Code", () => {
-		const sessions = [
-			session("goose", "worker", hoursAgo(3)),
-			session("goose", "worker", hoursAgo(2)),
-			session("codex", "worker", hoursAgo(1)),
-		];
-
-		expect(defaultAuthorizedAgentForRole(agents, sessions, "worker")).toBe("codex");
-		expect(defaultAuthorizedAgentForRole(agents, [], "worker")).toBe("claude-code");
+	it("gives the reviewer the best agent that can review", () => {
+		expect(defaultProjectAgents([agent("goose"), agent("codex", "unknown", "unknown")])).toEqual({
+			workerAgent: "goose",
+			orchestratorAgent: "goose",
+			reviewerAgent: "codex",
+		});
 	});
 
-	it("stays usable when Claude Code is unavailable", () => {
-		expect(defaultAuthorizedAgentForRole([agent("codex")], [], "worker")).toBe("codex");
-		expect(defaultAuthorizedAgentForRole([], [], "worker")).toBe("");
+	it("falls back to Claude Code when no agent is usable", () => {
+		expect(defaultProjectAgents([])).toEqual({
+			workerAgent: "claude-code",
+			orchestratorAgent: "claude-code",
+			reviewerAgent: "claude-code",
+		});
 	});
 });

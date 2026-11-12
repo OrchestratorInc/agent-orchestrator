@@ -1,4 +1,4 @@
-import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+import { KNOWN_REVIEWER_HARNESS_IDS } from "./reviewer-harnesses";
 
 export type AgentInfo = {
 	authentication: {
@@ -15,12 +15,6 @@ export type AgentInfo = {
 	lastUsedAt?: string | null;
 	usageCount: number;
 };
-
-export type RoleSession = Pick<WorkspaceSession, "id" | "provider" | "kind" | "createdAt">;
-
-// Only recent habits drive onboarding defaults: a harness used heavily
-// months ago must not outvote what the user reaches for now.
-export const ROLE_HISTORY_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 export const DEFAULT_AGENT_PRIORITY = ["claude-code", "codex", "cursor", "opencode", "opencode-v2", "aider"] as const;
 export const DEFAULT_AGENT_PRIORITY_RANK = new Map<string, number>(
@@ -67,40 +61,50 @@ export function agentUsageCompare(a: AgentInfo, b: AgentInfo): number {
 	return 0;
 }
 
-export function defaultAuthorizedAgentForRole(
-	authorizedAgents: AgentInfo[],
-	sessions: RoleSession[],
-	role: "worker" | "orchestrator",
-): string {
-	const eligible = new Set(authorizedAgents.map((agent) => agent.id));
-	const usage = new Map<string, { count: number; latest: number }>();
-	const cutoff = Date.now() - ROLE_HISTORY_WINDOW_MS;
-	for (const session of sessions) {
-		if (!isRoleSession(session, role) || !eligible.has(session.provider)) continue;
-		const at = session.createdAt ? Date.parse(session.createdAt) : Number.NaN;
-		if (Number.isNaN(at) || at < cutoff) continue;
-		const prev = usage.get(session.provider) ?? { count: 0, latest: Number.NEGATIVE_INFINITY };
-		usage.set(session.provider, { count: prev.count + 1, latest: Math.max(prev.latest, at) });
-	}
-	const empty = { count: 0, latest: Number.NEGATIVE_INFINITY };
-	return [...authorizedAgents]
-		.sort((a, b) => {
-			const aUsage = usage.get(a.id) ?? empty;
-			const bUsage = usage.get(b.id) ?? empty;
-			return (
-				bUsage.count - aUsage.count ||
-				bUsage.latest - aUsage.latest ||
-				(DEFAULT_AGENT_PRIORITY_RANK.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
-					(DEFAULT_AGENT_PRIORITY_RANK.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
-				agentLabelCompare(a, b)
-			);
-		})[0]?.id ?? "";
+export type ProjectAgentDefaults = {
+	workerAgent: string;
+	orchestratorAgent: string;
+	reviewerAgent: string;
+};
+
+// The daemon's own default agent, used when no agent could be checked at all.
+const FALLBACK_PROJECT_AGENT = DEFAULT_AGENT_PRIORITY[0];
+
+function isConfirmedAgent(agent: AgentInfo): boolean {
+	return agent.installation.state === "installed" &&
+		["authorized", "not_applicable", "configured"].includes(agent.authentication.state);
 }
 
-// Role matching reuses the board's definition: orchestrators are explicit,
-// everything else counts as worker history.
-function isRoleSession(session: RoleSession, role: "worker" | "orchestrator"): boolean {
-	return role === "orchestrator" ? isOrchestratorSession(session) : !isOrchestratorSession(session);
+/**
+ * The agents a new project can start on, most preferred first. Agents AO found
+ * installed and signed in come before agents it has not confirmed yet; within
+ * each group, AO's integration priority decides. Missing or signed-out agents
+ * are left out. "configured" counts as signed in: AO cannot verify most
+ * credentials, and that is not a reason to pass over an agent.
+ */
+export function preferredAgentList(agents: readonly AgentInfo[]): string[] {
+	const priority = (agent: AgentInfo) => DEFAULT_AGENT_PRIORITY_RANK.get(agent.id) ?? Number.MAX_SAFE_INTEGER;
+	return agents
+		.filter(isLaunchableAgent)
+		.sort(
+			(a, b) =>
+				Number(isConfirmedAgent(b)) - Number(isConfirmedAgent(a)) ||
+				priority(a) - priority(b) ||
+				agentLabelCompare(a, b),
+		)
+		.map((agent) => agent.id);
+}
+
+/** A new project starts every role on the most preferred agent; project settings can change each one. */
+export function defaultProjectAgents(agents: readonly AgentInfo[]): ProjectAgentDefaults {
+	const preferred = preferredAgentList(agents);
+	const top = preferred[0] ?? FALLBACK_PROJECT_AGENT;
+	return {
+		workerAgent: top,
+		orchestratorAgent: top,
+		// Reviewers are a narrower set than agents; take the best one that can review.
+		reviewerAgent: preferred.find((id) => KNOWN_REVIEWER_HARNESS_IDS.has(id)) ?? FALLBACK_PROJECT_AGENT,
+	};
 }
 
 function agentStatus(agent: AgentInfo): Pick<RankedAgentOption, "status" | "statusTone"> {

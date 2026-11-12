@@ -3,55 +3,33 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
-import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { CreateProjectAgentSheet, RequiredAgentField } from "./CreateProjectAgentSheet";
 import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 
-const remote = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
-vi.mock("../lib/host-clients", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../lib/host-clients")>()),
-	clientForHost: () => ({ GET: remote.get, POST: remote.post }),
-}));
-
-const { trackerIntakeGate } = vi.hoisted(() => ({ trackerIntakeGate: { enabled: true } }));
-
-vi.mock("../hooks/useSettings", () => ({
-	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
-}));
-
 beforeEach(() => {
-	trackerIntakeGate.enabled = true;
 	useUiStore.setState({ settingsModal: null });
 });
 
 function renderSheet(
 	onSubmit = vi.fn().mockResolvedValue(undefined),
-	queryClient?: QueryClient,
-	options: { shake?: boolean; hostId?: string } = {},
+	options: { shake?: boolean; intakeVisible?: boolean; error?: string; repositorySetupNeeded?: boolean } = {},
 ) {
-	queryClient ??= new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	if (queryClient.getQueryData(agentReadinessQueryKey) === undefined) {
-		queryClient.setQueryData(agentReadinessQueryKey, {
-			agents: [agentReadiness("claude-code"), agentReadiness("codex")],
-		});
-	}
-	if (queryClient.getQueryData(workspaceQueryKey) === undefined) {
-		queryClient.setQueryData(workspaceQueryKey, []);
-	}
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<CreateProjectAgentSheet
-					hostId={options.hostId}
+					error={options.error}
+					intakeVisible={options.intakeVisible ?? true}
 					isCreating={false}
 					kind="single_repo"
 					onOpenChange={() => undefined}
 					onSubmit={onSubmit}
 					open={true}
 					path="/repo/new-project"
+					repositorySetupNeeded={options.repositorySetupNeeded}
 					shake={options.shake}
 				/>
 			</TooltipProvider>
@@ -62,8 +40,6 @@ function renderSheet(
 
 it("unmounts the modal on submit and does not bring it back when creation succeeds", async () => {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	queryClient.setQueryData(agentReadinessQueryKey, { agents: [agentReadiness("codex")] });
-	queryClient.setQueryData(workspaceQueryKey, []);
 	let finish!: () => void;
 	const pending = new Promise<void>((resolve) => { finish = resolve; });
 	function Harness() {
@@ -85,70 +61,32 @@ it("unmounts the modal on submit and does not bring it back when creation succee
 	expect(screen.queryByRole("dialog", { hidden: true })).not.toBeInTheDocument();
 });
 
-async function chooseOption(trigger: HTMLElement, optionName: string) {
-	await userEvent.click(trigger);
-	const escaped = optionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	await userEvent.click(await screen.findByRole("option", { name: new RegExp(escaped, "i") }));
-}
-
-function hoursAgo(hours: number): string {
-	return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-}
-
 describe("CreateProjectAgentSheet", () => {
-	it("checks only the selected agent for launch readiness on a remote host", async () => {
-		remote.get.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
-		remote.post.mockResolvedValue({ data: { agents: [agentReadiness("codex")] } });
-		renderSheet(undefined, undefined, { hostId: "box-a" });
+	it("asks for no agents", () => {
+		renderSheet();
 
-		await waitFor(() => expect(remote.post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", {
-			body: { agentIds: [], purpose: "display" },
-		}));
-	});
-
-	it("can create a remote project with an installed agent whose auth is unknown", async () => {
-		const agents = [agentReadiness("opencode", "OpenCode", { authentication: "unknown" })];
-		remote.get.mockResolvedValue({ data: { agents } });
-		remote.post.mockResolvedValue({ data: { agents } });
-		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), undefined, { hostId: "box-a" });
-
-		await chooseOption(await screen.findByLabelText("Worker agent"), "OpenCode");
-		await chooseOption(screen.getByLabelText("Orchestrator agent"), "OpenCode");
-		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
-		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
-			workerAgent: "opencode",
-			orchestratorAgent: "opencode",
-		})));
+		expect(screen.queryByLabelText("Worker agent")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Orchestrator agent")).not.toBeInTheDocument();
 	});
 
 	it("shakes the active sheet when creation fails", () => {
-		renderSheet(undefined, undefined, { shake: true });
+		renderSheet(undefined, { shake: true });
 
 		expect(screen.getByRole("dialog")).toHaveClass("modal-shake");
 	});
 
-	// Under the auth ladder an agent whose credentials AO cannot validate
-	// reports "configured", never "authorized". If that dropped out of the
-	// preselection pool, a working Claude Code install would silently stop
-	// being the default agent on this sheet.
-	it("still preselects an agent whose credentials are configured but unverified", async () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		queryClient.setQueryData(agentReadinessQueryKey, {
-			agents: [agentReadiness("claude-code", "Claude Code", { authentication: "configured" })],
-		});
-		renderSheet(undefined, queryClient);
-		await waitFor(() => expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0));
+	it("shows a failed create and retries with the primary button", async () => {
+		const onSubmit = renderSheet(undefined, { intakeVisible: false, error: "Setup failed: disk full" });
+
+		expect(screen.getByRole("alert")).toHaveTextContent("disk full");
+		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
+		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ trackerIntake: undefined }));
 	});
 
-	// I2: only a definite rejection removes an agent from the pool.
-	it("does not preselect an agent the provider definitely rejected", async () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		queryClient.setQueryData(agentReadinessQueryKey, {
-			agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })],
-		});
-		renderSheet(undefined, queryClient);
-		await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-		expect(screen.queryAllByText("Claude Code")).toHaveLength(0);
+	it("shows the repository setup notice", () => {
+		renderSheet(undefined, { intakeVisible: false, repositorySetupNeeded: true });
+
+		expect(screen.getByRole("dialog")).toHaveTextContent(/git/i);
 	});
 
 	it("uses the compact trigger size for agent fields", () => {
@@ -277,37 +215,6 @@ describe("CreateProjectAgentSheet", () => {
 		expect(screen.queryByText("No agents ready")).not.toBeInTheDocument();
 	});
 
-	it("opens management for a selected create-project agent without losing the selection", async () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		queryClient.setQueryData(agentReadinessQueryKey, {
-			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
-		});
-		renderSheet(vi.fn().mockResolvedValue(undefined), queryClient);
-		const worker = screen.getByRole("combobox", { name: "Worker agent" });
-		expect(worker).toHaveTextContent("Claude Code");
-		await chooseOption(worker, "Codex");
-
-		act(() => {
-			queryClient.setQueryData(agentReadinessQueryKey, {
-				agents: [
-					agentReadiness("claude-code", "Claude Code"),
-					agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
-				],
-			});
-		});
-		await userEvent.click(worker);
-		await userEvent.click(screen.getByRole("option", { name: "Manage agents…" }));
-		await waitFor(() => expect(useUiStore.getState().settingsModal).not.toBeNull());
-		expect(useUiStore.getState().settingsModal).toEqual({
-			scope: "global",
-			section: "harness",
-			focusAgentId: "codex",
-		});
-
-		act(() => useUiStore.getState().closeSettings());
-		expect(worker).toHaveTextContent("Codex");
-	});
-
 	it("creates without intake when the toggle is left off", async () => {
 		const onSubmit = renderSheet();
 
@@ -317,73 +224,14 @@ describe("CreateProjectAgentSheet", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
 
 		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-		expect(onSubmit).toHaveBeenCalledWith({
-			workerAgent: "claude-code",
-			orchestratorAgent: "claude-code",
-			trackerIntake: undefined,
-		});
-	});
-
-	it("defaults each role from its own session history", async () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		queryClient.setQueryData(workspaceQueryKey, [
-			{
-				sessions: [
-					{ id: "w1", kind: "worker", provider: "codex", createdAt: hoursAgo(5) },
-					{ id: "w2", kind: "worker", provider: "codex", createdAt: hoursAgo(4) },
-					{ id: "o1", kind: "orchestrator", provider: "claude-code", createdAt: hoursAgo(3) },
-				],
-			},
-		]);
-		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), queryClient);
-
-		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
-
-		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-		expect(onSubmit).toHaveBeenCalledWith({
-			workerAgent: "codex",
-			orchestratorAgent: "claude-code",
-			trackerIntake: undefined,
-		});
-	});
-
-	it("does not replace a manually selected role when history refreshes", async () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		queryClient.setQueryData(workspaceQueryKey, [
-			{
-				sessions: [{ id: "w1", kind: "worker", provider: "claude-code", createdAt: hoursAgo(3) }],
-			},
-		]);
-		const onSubmit = renderSheet(vi.fn().mockResolvedValue(undefined), queryClient);
-		await chooseOption(screen.getByLabelText("Worker agent"), "codex");
-
-		queryClient.setQueryData(workspaceQueryKey, [
-			{
-				sessions: [
-					{ id: "w2", kind: "worker", provider: "claude-code", createdAt: hoursAgo(2) },
-					{ id: "w3", kind: "worker", provider: "claude-code", createdAt: hoursAgo(1) },
-				],
-			},
-		]);
-		await userEvent.click(screen.getByRole("button", { name: "Create and start" }));
-
-		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-		expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ workerAgent: "codex" }));
-	});
-
-	it("does not show a manual agent catalog refresh action", () => {
-		renderSheet();
-
-		expect(screen.queryByRole("button", { name: "Refresh agents" })).not.toBeInTheDocument();
+		expect(onSubmit).toHaveBeenCalledWith({ trackerIntake: undefined });
 	});
 
 	it("blocks submit when intake is enabled with no assignee, then passes the intake payload once one is set", async () => {
 		const onSubmit = renderSheet();
-		await chooseOption(screen.getByLabelText("Worker agent"), "claude-code");
-		await chooseOption(screen.getByLabelText("Orchestrator agent"), "codex");
 
 		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
-		// Enabled with no eligibility rule → submit stays disabled (compact sheet
+		// Enabled with no eligibility rule: submit stays disabled (compact sheet
 		// carries no inline guard prose; gating is the disabled button).
 		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
 
@@ -392,16 +240,12 @@ describe("CreateProjectAgentSheet", () => {
 
 		await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
 		expect(onSubmit).toHaveBeenCalledWith({
-			workerAgent: "claude-code",
-			orchestratorAgent: "codex",
 			trackerIntake: { enabled: true, assignee: "octocat" },
 		});
 	});
 
 	it("omits the intake control, and submits no intake, when the daemon gate is off", async () => {
-		trackerIntakeGate.enabled = false;
-		const onSubmit = vi.fn().mockResolvedValue(undefined);
-		renderSheet(onSubmit);
+		const onSubmit = renderSheet(undefined, { intakeVisible: false });
 
 		expect(screen.queryByLabelText("Automatically work on assigned issues")).not.toBeInTheDocument();
 

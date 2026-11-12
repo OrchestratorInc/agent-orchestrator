@@ -254,6 +254,7 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	// which keeps these shortcut tests free of telemetry side effects.
 	useAgentReadinessQuery: () => ({ data: undefined }),
 	useEnsureAgentReadiness: vi.fn(),
+	useProjectAgentDefaults: () => async () => ({ workerAgent: "claude-code", orchestratorAgent: "claude-code", reviewerAgent: "claude-code" }),
 }));
 
 // ao.setup.checked reads the startup checks' react-query cache; these

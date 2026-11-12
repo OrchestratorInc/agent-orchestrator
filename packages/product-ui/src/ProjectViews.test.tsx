@@ -114,15 +114,10 @@ describe("project models", () => {
 		).toBe("name_too_long");
 	});
 
-	it("gates project setup on agents and intake eligibility", () => {
-		expect(canSubmitProjectSetup({ workerAgent: "codex", orchestratorAgent: "claude-code" })).toBe(true);
-		expect(
-			canSubmitProjectSetup({
-				workerAgent: "codex",
-				orchestratorAgent: "claude-code",
-				intakeEnabled: true,
-			}),
-		).toBe(false);
+	it("gates project setup on intake eligibility only", () => {
+		expect(canSubmitProjectSetup({})).toBe(true);
+		expect(canSubmitProjectSetup({ intakeEnabled: true })).toBe(false);
+		expect(canSubmitProjectSetup({ intakeEnabled: true, intakeAssignee: "octocat" })).toBe(true);
 	});
 
 });
@@ -143,12 +138,6 @@ describe("project presentation", () => {
 		const onSubmit = vi.fn();
 		render(
 			<ProjectSetupFormView
-				agentControls={{ worker: <span>Worker control</span>, orchestrator: <span>Orchestrator control</span> }}
-				agents={{
-					cacheMessage: "Cached",
-					loading: false,
-					loadingMessage: "Loading",
-				}}
 				canSubmit
 				intakeControl={<span>Intake control</span>}
 				onSubmit={onSubmit}
@@ -161,35 +150,6 @@ describe("project presentation", () => {
 		expect(onSubmit).toHaveBeenCalledOnce();
 		expect(screen.getByText("Nested repository")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
-	});
-
-	it("can hide the normal refresh action while keeping an error retry", () => {
-		const onRetry = vi.fn();
-		const onSubmit = vi.fn();
-		render(
-			<ProjectSetupFormView
-				agentControls={{ worker: <span>Worker control</span>, orchestrator: <span>Orchestrator control</span> }}
-				agents={{
-					cacheMessage: "Cached",
-					error: "Could not load agents",
-					loading: false,
-					loadingMessage: "Loading",
-					onRetry,
-					retrying: false,
-					retryLabel: "Retry",
-				}}
-				canSubmit={false}
-				intakeControl={<span>Intake control</span>}
-				onSubmit={onSubmit}
-				actions={<button type="submit">Create and start</button>}
-			/>,
-		);
-
-		expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-		expect(onRetry).toHaveBeenCalledOnce();
-		fireEvent.click(screen.getByRole("button", { name: "Create and start" }));
-		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
 	it("renders project identity and workspace repository summaries", () => {
