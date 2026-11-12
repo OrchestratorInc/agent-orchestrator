@@ -1,7 +1,7 @@
 import { apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
 import { formatFileAnnotationMessages, type FileAnnotationComment } from "../../../shared/files/file-annotations";
-import { sumFiles } from "./model";
+import { scopedFileDetail, sumFiles, type ScopedDiffs, type ScopedRevision } from "./model";
 
 const API = "/api/v1";
 
@@ -164,13 +164,33 @@ export async function getWorkspaceFile(
 	view?: WorkspaceView,
 	init?: Pick<RequestInit, "signal">,
 ): Promise<WorkspaceFileDetail> {
+	// A worktree scope reads its own patch and after side, as desktop's review
+	// does: the file route's `section` scopes only its diff, and keeps the
+	// combined status and the live worktree's content.
+	if (read.section && !read.commitSha && !view) return getScopedWorkspaceFile(cfg, sessionId, path, read.section, init);
 	const query = new URLSearchParams({ path });
 	setView(query, view);
 	if (read.commitSha) query.set("commitSha", read.commitSha);
-	// A view or a commit is one diff; a section only splits the worktree's.
-	else if (read.section && !view) query.set("section", read.section);
 	const res = await apiRequest(cfg, `${sessionPath(sessionId, "workspace/file")}?${query}`, init);
 	return (await res.json()) as WorkspaceFileDetail;
+}
+
+/**
+ * One file in a worktree scope: `workspace/diffs` for the scope's patch (Staged
+ * is `--cached`, the branch's commits `<base> HEAD`), and `workspace/file/revision`
+ * for its after side (the index, HEAD, or the worktree).
+ */
+export async function getScopedWorkspaceFile(cfg: ServerConfig, sessionId: string, path: string, scope: FileSection, init?: Pick<RequestInit, "signal">): Promise<WorkspaceFileDetail> {
+	const [diffs, revision] = await Promise.all([
+		apiRequest(cfg, sessionPath(sessionId, "workspace/diffs"), {
+			...init,
+			method: "POST",
+			body: JSON.stringify({ paths: [path], scope, contextLines: 3, ignoreWhitespace: false }),
+		}).then((res) => res.json() as Promise<ScopedDiffs>),
+		apiRequest(cfg, `${sessionPath(sessionId, "workspace/file/revision")}?${new URLSearchParams({ path, scope, side: "after" })}`, init)
+			.then((res) => res.json() as Promise<ScopedRevision>),
+	]);
+	return scopedFileDetail(path, diffs ?? {}, revision ?? {});
 }
 
 /** One folder, of the worktree or of a view's tip. */

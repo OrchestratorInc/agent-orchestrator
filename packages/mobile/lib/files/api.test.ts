@@ -67,18 +67,32 @@ describe("image sources", () => {
 describe("reading another branch or a commit", () => {
 	const view = { branch: "refs/remotes/origin/main" };
 
-	it("reads a worktree section, one commit, or a view's snapshot of a file", async () => {
-		await getWorkspaceFile(cfg, "s", "a.ts", { section: "staged" });
+	it("reads one commit, or a view's snapshot of a file, from the file route", async () => {
+		await getWorkspaceFile(cfg, "s", "a.ts");
 		await getWorkspaceFile(cfg, "s", "a.ts", { commitSha: "abc" });
 		// A view is one diff, so a section would mean nothing to it.
 		await getWorkspaceFile(cfg, "s", "a.ts", { section: "staged" }, view);
 		await getWorkspaceFile(cfg, "s", "a.ts", { commitSha: "abc" }, { prNumber: 4, sourceUrl: "https://x/pull/4" });
 		expect(sent.bodies.map((entry) => entry.url)).toEqual([
-			"/api/v1/sessions/s/workspace/file?path=a.ts&section=staged",
+			"/api/v1/sessions/s/workspace/file?path=a.ts",
 			"/api/v1/sessions/s/workspace/file?path=a.ts&commitSha=abc",
 			"/api/v1/sessions/s/workspace/file?path=a.ts&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain",
 			"/api/v1/sessions/s/workspace/file?path=a.ts&snapshot=true&prNumber=4&sourceUrl=https%3A%2F%2Fx%2Fpull%2F4&commitSha=abc",
 		]);
+	});
+
+	// The file route's `section` scopes only its diff; status and content stay
+	// the combined view's. A worktree scope reads its own patch and after side.
+	it("reads a worktree scope from its scoped patch and after side", async () => {
+		for (const section of ["staged", "unstaged", "uncommitted", "untracked", "committed"] as const) {
+			sent.bodies = [];
+			await getWorkspaceFile(cfg, "s", "src/a b.ts", { section });
+			expect(sent.bodies.map((entry) => entry.url).sort()).toEqual([
+				"/api/v1/sessions/s/workspace/diffs",
+				`/api/v1/sessions/s/workspace/file/revision?path=src%2Fa+b.ts&scope=${section}&side=after`,
+			]);
+			expect(sent.bodies.find((entry) => entry.url.endsWith("/diffs"))?.body).toEqual({ paths: ["src/a b.ts"], scope: section, contextLines: 3, ignoreWhitespace: false });
+		}
 	});
 
 	it("browses and searches a view's tip through its tree", async () => {
