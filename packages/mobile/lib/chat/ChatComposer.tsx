@@ -40,7 +40,7 @@ import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
 import { HardwareReturn } from "./HardwareReturn";
 import { useKeyboardSendRefocus } from "./useKeyboardSendRefocus";
-import { contextMeterModel } from "./contextMeter";
+import { contextMeterModel, quotaChipModel } from "./contextMeter";
 import { RequestCard } from "./RequestCard";
 import type { RequestDockModel } from "./requestDockModel";
 import { createRequestGate } from "./requestGate";
@@ -125,7 +125,7 @@ export function ChatComposer({
 	onConfigOption,
 	restingInset,
 	dockRiseOverride,
-	quotaActive,
+	onOpenUsage,
 	request,
 	requestDismissed,
 	onRequestDecide,
@@ -187,8 +187,8 @@ export function ChatComposer({
 	 * unset to ride the progress. See `chatDockRiseOverride`.
 	 */
 	dockRiseOverride?: number;
-	/** The account-quota banner is up, so the context meter stands down. */
-	quotaActive?: boolean;
+	/** Opens the context & usage sheet, from the quota chip. */
+	onOpenUsage?(): void;
 	/** A pending request, which takes the composer's place until it is answered. */
 	request?: RequestDockModel | null;
 	/** The user pushed the request aside to type instead. */
@@ -255,7 +255,9 @@ export function ChatComposer({
 	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const visibleQueuedMessages = useMemo(() => queuedMessages.filter((entry) => !hiddenQueuedTurnIds.has(entry.turnId)), [hiddenQueuedTurnIds, queuedMessages]);
 	// Absent below 70%: a permanent token gauge is chrome nobody reads.
-	const contextMeter = contextMeterModel(snapshot.usage, Boolean(quotaActive));
+	const contextMeter = contextMeterModel(snapshot.usage);
+	// Absent below 75% of the account's usage limit, for the same reason.
+	const quotaChip = quotaChipModel(snapshot.rateLimits);
 	// A blocking question is the next thing to do, so it takes the input's place
 	// rather than pointing at a card somewhere up the timeline.
 	const requestCard = request && !requestDismissed ? (
@@ -589,8 +591,9 @@ export function ChatComposer({
 		transform: [{ translateY: interpolate(openness.value, [0, 1], [space.sm, 0], "clamp") }],
 	}));
 	// The session's state as chips over the composer, open or not: its PR, what
-	// it changed, and how full the context is once that matters.
-	const chips = activeReviewPR || changes || contextMeter ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
+	// it changed, and how full the context and the account's quota are once that
+	// matters.
+	const chips = activeReviewPR || changes || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
 		<ScrollView key={fieldSize.fontScale} horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
 			{activeReviewPR ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(activeReviewPR, reviewPRSummary)} accessibilityHint="Opens the pull request review" onPress={onOpenReview}>
 				<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />
@@ -608,6 +611,10 @@ export function ChatComposer({
 				</View>
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, { color: contextMeter.severity === "critical" ? t.red : t.amber }]}>{contextMeter.label}</Text>
 			</View> : null}
+			{quotaChip ? <ComposerChip accessibilityLabel={quotaChip.accessibilityLabel} accessibilityHint="Opens context and usage" onPress={onOpenUsage}>
+				<AppSymbol name="warning" size={iconSize.xs} color={quotaChip.severity === "critical" ? t.red : t.amber} />
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, styles.tabular, { color: quotaChip.severity === "critical" ? t.red : t.amber }]}>{quotaChip.label}</Text>
+			</ComposerChip> : null}
 		</ScrollView>
 	</Animated.View> : null;
 	return (
@@ -870,6 +877,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	contextTrack: { width: 34, height: 4, borderRadius: radius.pill, overflow: "hidden", backgroundColor: t.bgSubtle },
 	contextFill: { height: 4, borderRadius: radius.pill },
 	contextText: { fontFamily: "DMSans_600SemiBold", fontSize: type.footnote.fontSize, fontWeight: "600" },
+	tabular: { fontVariant: ["tabular-nums"] },
 	// As tall as the row; it yields before the controls do.
 	steerAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	dictation: { minHeight: COMPOSER_FIELD_HEIGHT },

@@ -181,12 +181,13 @@ describe("collapsed and expanded composer", () => {
 });
 
 describe("composer chips", () => {
-	// The session's PR, what it changed and the context meter sit over the
-	// composer, open or not.
+	// The session's PR, what it changed, the context meter and the account's
+	// quota sit over the composer, open or not.
 	it("shows the session's state as chips that say where they lead", () => {
-		expect(composer).toContain("const chips = activeReviewPR || changes || contextMeter ?");
+		expect(composer).toContain("const chips = activeReviewPR || changes || contextMeter || quotaChip ?");
 		expect(composer).toContain('accessibilityHint="Opens the pull request review" onPress={onOpenReview}');
 		expect(composer).toContain('accessibilityHint="Opens the changed files" onPress={changes.onOpen}');
+		expect(composer).toContain('accessibilityHint="Opens context and usage" onPress={onOpenUsage}');
 	});
 
 	// Steering stays reachable from the open card. While a turn runs the field's

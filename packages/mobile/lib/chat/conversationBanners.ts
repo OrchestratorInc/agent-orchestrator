@@ -8,9 +8,9 @@ import type { McpServer } from "./types";
  * it was a paragraph that pushed the conversation off screen.
  *
  * Every banner carries a `key` built from what it is reporting. Closing a banner
- * hides that key for the visit; when the underlying state changes — the quota
- * crosses into critical, another turn is rolled back — the key changes and the banner
- * comes back, because that is news.
+ * hides that key for the visit; when the underlying state changes — another
+ * turn is rolled back — the key changes and the banner comes back, because that
+ * is news. Account quota has no banner: the composer's quota chip carries it.
  */
 export type BannerTone = "warning" | "danger" | "muted";
 
@@ -62,17 +62,6 @@ export function controllerStoppedBanner(terminated: boolean, error?: string): Ba
 	return terminated
 		? { key: "stopped:terminated", title: "This session is terminated", body: "Its conversation and worktree are preserved." }
 		: { key: `stopped:${error ?? ""}`, title: "The agent is stopped", body: error };
-}
-
-export function quotaBanner(quota: { percent: number; severity: "warn" | "critical"; resetsInSeconds?: number }): BannerCopy {
-	const resets = resetLabel(quota.resetsInSeconds);
-	return {
-		// Keyed on severity, not the exact percent: creeping from 81% to 82% is not
-		// news, crossing into critical is.
-		key: `quota:${quota.severity}`,
-		title: `${quota.percent}% of quota used`,
-		body: resets ? `Resets in ${resets}.` : undefined,
-	};
 }
 
 export function rolledBackBanner(count: number): BannerCopy | undefined {

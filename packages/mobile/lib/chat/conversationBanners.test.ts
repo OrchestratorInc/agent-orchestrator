@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { controllerStoppedBanner, errorBanner, mcpNoticeKey, mcpNoticeText, quotaBanner, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
+import { controllerStoppedBanner, errorBanner, mcpNoticeKey, mcpNoticeText, reauthBanner, rolledBackBanner, threadBanner } from "./conversationBanners";
 
 describe("conversation banners", () => {
 	it("says which tool servers did not start in the desktop's words", () => {
@@ -22,8 +22,6 @@ describe("conversation banners", () => {
 	it("brings a closed banner back only when what it reports changes", () => {
 		expect(rolledBackBanner(1)?.key).toBe(rolledBackBanner(1)?.key);
 		expect(rolledBackBanner(1)?.key).not.toBe(rolledBackBanner(2)?.key);
-		expect(quotaBanner({ percent: 80, severity: "warn" }).key).toBe(quotaBanner({ percent: 84, severity: "warn" }).key);
-		expect(quotaBanner({ percent: 80, severity: "warn" }).key).not.toBe(quotaBanner({ percent: 92, severity: "critical" }).key);
 	});
 
 	it("uses the desktop's short headlines", () => {
@@ -32,7 +30,6 @@ describe("conversation banners", () => {
 		expect(threadBanner("closed")?.title).toBe("The agent closed this thread");
 		expect(threadBanner("active")).toBeUndefined();
 		expect(controllerStoppedBanner(true).title).toBe("This session is terminated");
-		expect(quotaBanner({ percent: 91, severity: "critical", resetsInSeconds: 7200 })).toMatchObject({ title: "91% of quota used", body: "Resets in 2h." });
 		expect(rolledBackBanner(2)?.title).toBe("2 turns were rolled back");
 		expect(rolledBackBanner(0)).toBeUndefined();
 		expect(errorBanner("action", "boom")).toMatchObject({ title: "That didn't work", body: "boom" });
