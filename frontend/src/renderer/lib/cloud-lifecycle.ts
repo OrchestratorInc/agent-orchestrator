@@ -89,6 +89,9 @@ export type CloudStartupProblem =
 // Only "terminated" means AO stopped trying; "failed" is retried with backoff.
 const FINAL_RUNTIME_STATES = new Set(["terminated"]);
 
+/** Runtime states in which no workspace ready check runs: the workspace is stopped or still being woken. */
+const READY_CHECK_IDLE_RUNTIME_STATES = new Set(["stopped", "restoring"]);
+
 /**
  * Startup errors the worker reports after it checked in, because it could not
  * prepare the workspace (repository checkout, the Coder connection's working
@@ -123,7 +126,10 @@ export function cloudStartupProblem(session?: WorkspaceSession): CloudStartupPro
 	const message = lifecycle.startupError?.message?.trim();
 	if (message) {
 		if (!final) {
-			const readyCheck = lifecycle.startupError?.readyCheck;
+			// The ready check runs only while the workspace starts: a stopped or
+			// restoring one is not being checked, so a wait it still carries
+			// (from before a pause) is not shown as progress.
+			const readyCheck = runtimeState !== undefined && READY_CHECK_IDLE_RUNTIME_STATES.has(runtimeState) ? undefined : lifecycle.startupError?.readyCheck;
 			return readyCheck ? { phase: "retrying", message, readyCheck } : { phase: "retrying", message };
 		}
 		const detail = lifecycle.startupError?.detail?.trim() || undefined;

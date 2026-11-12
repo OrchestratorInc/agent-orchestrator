@@ -2680,6 +2680,20 @@ describe("SessionView", () => {
 				expect(screen.getByText("Creating the workspace")).toBeInTheDocument();
 			});
 
+			it.each(["stopped", "restoring"])("shows no ready check while the workspace is %s", (state) => {
+				// A wait recorded before the session was paused, still on the session as it resumes.
+				const session = workerSession("sess-2");
+				session.runtimeConnected = false;
+				session.cloud = {
+					orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: state, runtimeState: state,
+					startupError: { ...waiting, readyCheck: { ...readyCheck, since: "2026-11-09T17:38:40Z", attempts: 45 } },
+				};
+				render(<SessionView sessionId="sess-2" />);
+				const loader = screen.getByTestId("cloud-session-loader-screen");
+				expect(within(loader).queryByTestId("cloud-session-ready-check")).not.toBeInTheDocument();
+				expect(within(loader).queryByText("Waiting for your workspace's own setup")).not.toBeInTheDocument();
+			});
+
 			it("keeps a wait that comes without check progress as a note", () => {
 				failedCloudSession({ runtimeState: "provisioning", observedState: "provisioning", startupError: waiting });
 				render(<SessionView sessionId="sess-2" />);

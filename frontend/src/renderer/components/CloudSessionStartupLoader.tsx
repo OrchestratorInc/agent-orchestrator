@@ -31,7 +31,9 @@ function ReadyCheckWait({ check }: { check: CloudCpSessionReadyCheck }) {
 	const outputId = useId();
 	const now = useSecondTicks();
 	const since = Date.parse(check.since);
-	const elapsed = formatScriptDuration(Number.isFinite(since) ? now - desktopClockLeadMs() - since : 0);
+	const elapsedMs = Number.isFinite(since) ? now - desktopClockLeadMs() - since : 0;
+	// AO stops checking at the limit, so the time shown never runs past it.
+	const elapsed = formatScriptDuration(check.timeoutSeconds ? Math.min(elapsedMs, check.timeoutSeconds * 1_000) : elapsedMs);
 	const progress = check.timeoutSeconds
 		? t("terminal.sessionLoader.readyCheck.progressWithLimit", { elapsed, limit: formatScriptDuration(check.timeoutSeconds * 1_000), count: check.attempts })
 		: t("terminal.sessionLoader.readyCheck.progress", { elapsed, count: check.attempts });

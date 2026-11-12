@@ -167,6 +167,13 @@ describe("cloudStartupProblem", () => {
 		expect(cloudStartupProblem(withRuntime("terminated", { startupError: waiting }))).not.toHaveProperty("readyCheck");
 	});
 
+	it.each(["stopped", "restoring"])("keeps a ready check out of a workspace that is %s, where no check runs", (runtimeState) => {
+		// A wait left from before a pause: the note stays, its progress does not.
+		const readyCheck = { since: "2026-11-09T17:38:40Z", timeoutSeconds: 3600, attempts: 45, exitCode: 1, checkedAt: "2026-11-09T18:38:40Z" };
+		const waiting = { code: "workspace_setup_pending", message: "Waiting for your workspace's own setup to finish: its ready check hasn't passed yet.", at: "2026-11-09T17:38:45Z", readyCheck };
+		expect(cloudStartupProblem(withRuntime(runtimeState, { startupError: waiting }))).toEqual({ phase: "retrying", message: waiting.message });
+	});
+
 	it("falls back to the runtime error when the runtime was parked without a startup reason", () => {
 		expect(cloudStartupProblem(withRuntime("terminated", { runtimeError: "sandbox deleted" }))).toEqual({ phase: "unavailable", message: "sandbox deleted" });
 		expect(cloudStartupProblem(withRuntime("failed"))).toBeUndefined();

@@ -119,6 +119,14 @@ describe("CloudSessionStartupLoader", () => {
 			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("20:12 of 1:00:00 since Coder reported the workspace ready, 1 check so far");
 		});
 
+		it("never shows more time than the limit", () => {
+			// Coder reported the workspace ready 2 hours ago; AO stops checking at 1 hour.
+			mount({ activeIndex: 0, readyCheck: check({ since: "2026-11-09T17:38:42Z", attempts: 45 }) });
+			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("1:00:00 of 1:00:00 since Coder reported the workspace ready, 45 checks so far");
+			act(() => { vi.advanceTimersByTime(1_000); });
+			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("1:00:00 of 1:00:00");
+		});
+
 		it("leaves the limit out when the control plane sends none", () => {
 			mount({ activeIndex: 0, readyCheck: check({ timeoutSeconds: undefined }) });
 			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("20:12 since Coder reported the workspace ready, 31 checks so far");
