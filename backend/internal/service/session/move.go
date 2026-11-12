@@ -174,7 +174,7 @@ func (s *Service) moveSource(ctx context.Context, id domain.SessionID, stopped b
 	}
 	switch {
 	case rec.MovedTo != nil:
-		return rec, domain.ProjectRecord{}, "", apierr.Conflict("SESSION_MOVED", "This session already moved to AO Cloud.", nil)
+		return rec, domain.ProjectRecord{}, "", apierr.Conflict("SESSION_MOVED", "This session already moved to Orchestrator Cloud.", nil)
 	case rec.IsTerminated:
 		return rec, domain.ProjectRecord{}, "", apierr.Conflict("SESSION_TERMINATED", "Restore the session before moving it.", nil)
 	case rec.Kind != domain.KindWorker:
@@ -193,7 +193,7 @@ func (s *Service) moveSource(ctx context.Context, id domain.SessionID, stopped b
 	}
 	repoKey := domain.RepositoryKey(project.RepoOriginURL)
 	if repoKey == "" {
-		return rec, project, "", apierr.Conflict("MOVE_NO_ORIGIN", "The project has no origin repository AO Cloud can fetch from.", nil)
+		return rec, project, "", apierr.Conflict("MOVE_NO_ORIGIN", "The project has no origin repository Orchestrator Cloud can fetch from.", nil)
 	}
 	return rec, project, repoKey, nil
 }
@@ -231,7 +231,7 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 
 	prompt := in.HandoffNote
 	if prompt == "" {
-		prompt = "This AO session moved here from " + m.SourceLabel + ". Check the branch's files and git log, then wait for the user."
+		prompt = "This Orchestrator-managed session moved here from " + m.SourceLabel + ". Check the branch's files and git log, then wait for the user."
 	}
 	sess, _, _, err := s.Spawn(ctx, ports.SpawnConfig{
 		ProjectID: in.ProjectID, IssueID: m.IssueID, ClientRequestID: in.MoveID, ClientRequestHash: hash,
@@ -286,7 +286,7 @@ func (s *Service) CompleteMove(ctx context.Context, id domain.SessionID, in Move
 		return domain.Session{}, apierr.NotFound("SESSION_NOT_FOUND", "Session not found")
 	}
 	if rec.MovedTo != nil && rec.MovedTo.MoveID != d.MoveID {
-		return domain.Session{}, apierr.Conflict("SESSION_MOVED", "This session already moved to AO Cloud.", nil)
+		return domain.Session{}, apierr.Conflict("SESSION_MOVED", "This session already moved to Orchestrator Cloud.", nil)
 	}
 	if rec.MovedTo == nil {
 		d.At = s.clock().UTC()
@@ -311,7 +311,7 @@ func (s *Service) tellOrchestrator(ctx context.Context, rec domain.SessionRecord
 	if err != nil {
 		return
 	}
-	msg := fmt.Sprintf("Worker %s moved to AO Cloud as session %s and continues there. Do not respawn it.", rec.ID, d.SessionID)
+	msg := fmt.Sprintf("Worker %s moved to Orchestrator Cloud as session %s and continues there. Do not respawn it.", rec.ID, d.SessionID)
 	for _, o := range orchestrators {
 		if err := s.manager.Send(ctx, o.ID, msg, nil); err != nil {
 			s.logger.WarnContext(ctx, "tell orchestrator about a session move", "orchestrator", o.ID, "err", err)
@@ -354,7 +354,7 @@ func moveAPIError(err error) error {
 		{sessionmove.ErrLFSObjects, "MOVE_LFS", "The move includes Git LFS files, which cannot move yet."},
 		{sessionmove.ErrDiverged, "MOVE_BRANCH_DIVERGED", "The branch here has commits the moved branch does not."},
 		{sessionmove.ErrBranchCheckedOut, "MOVE_BRANCH_CHECKED_OUT", "The branch is checked out in a worktree here."},
-		{sessionmove.ErrMissingCommit, "MOVE_MISSING_COMMIT", "Origin does not have the commit AO Cloud pushed."},
+		{sessionmove.ErrMissingCommit, "MOVE_MISSING_COMMIT", "Origin does not have the commit Orchestrator Cloud pushed."},
 	} {
 		if errors.Is(err, c.err) {
 			return apierr.Conflict(c.code, c.msg, map[string]any{"detail": err.Error()})

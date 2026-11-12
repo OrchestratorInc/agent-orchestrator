@@ -75,11 +75,11 @@ it("shows what moves, then opens the Cloud session and closes on success", async
 	expect(screen.getByText("login.go")).toBeTruthy();
 	expect(screen.getByText("2")).toBeTruthy();
 	expect(screen.getByText(/pushed to GitHub as one commit on feat\/x\. .* its worktree is removed, ignored files included\./)).toBeTruthy();
-	await user.click(screen.getByRole("button", { name: "Move to AO Cloud" }));
+	await user.click(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }));
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
 	expect(cloud.createSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ projectId: "cloud-proj", branch: "feat/x" }), expect.anything());
 	expect(useUiStore.getState().moveSessionTarget).toBeNull();
-	expect(useUiStore.getState().globalToast?.title).toBe("Moved to AO Cloud");
+	expect(useUiStore.getState().globalToast?.title).toBe("Moved to Orchestrator Cloud");
 });
 
 it("keeps the session here and offers a retry when the push fails", async () => {
@@ -90,7 +90,7 @@ it("keeps the session here and offers a retry when the push fails", async () => 
 	};
 	renderDialog();
 	const user = userEvent.setup();
-	await user.click(await screen.findByRole("button", { name: "Move to AO Cloud" }));
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
 	expect(await screen.findByText("Origin's branch has commits this machine does not.")).toBeTruthy();
 	expect(screen.getByText("The session continues here, unchanged.")).toBeTruthy();
 	expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
@@ -102,7 +102,7 @@ it("tries again with the same move id and Cloud request after a lost response", 
 	cloud.createSession.mockRejectedValueOnce(new Error("network error")).mockResolvedValueOnce({ session: { id: "cloud-9" } });
 	renderDialog();
 	const user = userEvent.setup();
-	await user.click(await screen.findByRole("button", { name: "Move to AO Cloud" }));
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
 	// The push already happened, so the session is not as it was.
 	expect(await screen.findByText("The uncommitted files are now commit abc1234 on feat/x, here and on GitHub.")).toBeTruthy();
 	expect(screen.getByText("The agent here is running again.")).toBeTruthy();
@@ -116,12 +116,12 @@ it("tries again with the same move id and Cloud request after a lost response", 
 
 it.each([
 	["the worktree cannot move", () => { daemon.preview = { error: { code: "MOVE_LFS", message: "The move includes Git LFS files, which cannot move yet." } }; }, "The move includes Git LFS files, which cannot move yet."],
-	["AO Cloud cannot start a session on a branch", () => { cloud.features = []; }, "Needs a newer AO Cloud"],
-	["no Cloud project has the repository", () => { daemon.repo = "https://github.com/acme/other"; }, "AO Cloud has no project for this repository."],
-	["signed out of AO Cloud", () => { cloud.signedIn = false; }, "Sign in to AO Cloud to move this session."],
+	["AO Cloud cannot start a session on a branch", () => { cloud.features = []; }, "Needs a newer Orchestrator Cloud"],
+	["no Cloud project has the repository", () => { daemon.repo = "https://github.com/acme/other"; }, "Orchestrator Cloud has no project for this repository."],
+	["signed out of AO Cloud", () => { cloud.signedIn = false; }, "Sign in to Orchestrator Cloud to move this session."],
 ])("explains and disables Move when %s", async (_, setup, message) => {
 	setup();
 	renderDialog();
 	expect(await screen.findByText(message)).toBeTruthy();
-	await waitFor(() => expect(screen.getByRole("button", { name: "Move to AO Cloud" }).hasAttribute("disabled")).toBe(true));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }).hasAttribute("disabled")).toBe(true));
 });

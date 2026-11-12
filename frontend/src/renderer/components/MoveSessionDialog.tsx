@@ -241,15 +241,15 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 				</div>
 				<div className={cn(settingsDialogFooterClass, "py-4")}>
 					{result ? (
-						<Button type="button" variant="footer-primary" onClick={openMoved}>
+						<Button type="button" variant="primary" onClick={openMoved}>
 							{t("move.open")}
 						</Button>
 					) : (
 						<>
-							<Button type="button" variant="footer" onClick={onClose} disabled={moving}>
+							<Button type="button" variant="secondary" onClick={onClose} disabled={moving}>
 								{t("confirm.cancel")}
 							</Button>
-							<Button type="button" variant="footer-primary" onClick={() => void start()} disabled={!target || moving}>
+							<Button type="button" variant="primary" onClick={() => void start()} disabled={!target || moving}>
 								{moving ? t("move.moving") : error ? t("move.retry") : t("move.submit")}
 							</Button>
 						</>
