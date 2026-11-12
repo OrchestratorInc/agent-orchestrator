@@ -759,10 +759,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			// otherwise the board shows through for a beat between the two.
 			const current = routeParamsRef.current;
 			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				// A failed navigation is not a failed start: the session exists.
 				await navigate({
 					to: "/projects/$projectId/sessions/$sessionId",
 					params: { projectId: workspace.id, sessionId },
-				});
+				}).catch(() => undefined);
 			}
 			// The session now exists, so the sidebar button can open it even if
 			// the user left while it spawned.

@@ -2,7 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
-import { defaultProjectAgents, type ProjectAgentDefaults } from "../lib/agent-select-options";
+import { defaultProjectAgents, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -62,8 +62,10 @@ export const agentReadinessQueryOptions = {
 
 /**
  * The agents a new project starts on, ranked from the readiness snapshot the
- * renderer already holds (one fetch when it holds none). A failed fetch ranks
- * nothing, so the project falls back to the daemon's default agent.
+ * renderer already holds (one fetch when it holds none). When that snapshot
+ * has not confirmed the preferred agent yet, it waits for the daemon's checks
+ * (joining any already running) before ranking. A failed fetch ranks nothing,
+ * so the project falls back to the daemon's default agent.
  */
 export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?: string): Promise<ProjectAgentDefaults> {
 	let agents: AgentReadinessSnapshot[] = [];
@@ -75,6 +77,15 @@ export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?
 		})).agents;
 	} catch {
 		// Keep the fallback below.
+	}
+	if (preferredAgentNeedsChecks(agents)) {
+		try {
+			const checked = await ensureAgentReadiness([], "display", hostId);
+			cacheAgentReadiness(queryClient, checked, hostId);
+			agents = mergeAgentReadiness({ agents }, checked).agents;
+		} catch {
+			// Rank what we have.
+		}
 	}
 	return defaultProjectAgents(agents);
 }

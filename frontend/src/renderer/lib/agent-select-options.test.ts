@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "../../api/schema";
-import { buildRankedAgentOptions, defaultProjectAgents, isLaunchableAgent, preferredAgentList } from "./agent-select-options";
+import { buildRankedAgentOptions, defaultProjectAgents, isLaunchableAgent, preferredAgentList, preferredAgentNeedsChecks } from "./agent-select-options";
 
 type Agent = components["schemas"]["AgentReadinessSnapshot"];
 
@@ -204,6 +204,22 @@ describe("preferredAgentList", () => {
 
 	it("ranks agents outside AO's priority list after the ones in it", () => {
 		expect(preferredAgentList([agent("goose"), agent("aider")])).toEqual(["aider", "goose"]);
+	});
+});
+
+describe("preferredAgentNeedsChecks", () => {
+	it("waits for checks when nothing has been checked yet", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code", "unknown", "unknown"), agent("codex", "unknown", "unknown")])).toBe(true);
+	});
+
+	it("waits for checks when a more preferred agent could still outrank the confirmed one", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code", "unknown", "unknown"), agent("codex")])).toBe(true);
+	});
+
+	it("ranks right away once the most preferred usable agent is confirmed", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code"), agent("codex", "unknown", "unknown")])).toBe(false);
+		expect(preferredAgentNeedsChecks([agent("claude-code", "not_installed"), agent("codex", "installed", "configured")])).toBe(false);
+		expect(preferredAgentNeedsChecks([])).toBe(false);
 	});
 });
 

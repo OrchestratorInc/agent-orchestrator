@@ -2193,8 +2193,9 @@ function ChatWorkspaceContent({
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
-									// While an orchestrator starts the prompts stay put (picks wait for it), so
-									// they don't pop in at the handoff. Other fenced chats keep them hidden.
+									// While an orchestrator starts the prompts stay put so they don't pop in at
+									// the handoff; picks are ignored until it is up. Other fenced chats keep
+									// them hidden.
 									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
 									artifact={artifactSession}
 									onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}

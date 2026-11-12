@@ -96,6 +96,21 @@ export function preferredAgentList(agents: readonly AgentInfo[]): string[] {
 }
 
 /**
+ * Whether checks AO has not finished could still change the pick: the agent AO
+ * prefers most among the usable ones is not confirmed yet. A snapshot taken
+ * before the daemon's first checks reads "not checked" for every agent, and
+ * ranking it would start the project on Claude Code even when only Codex is
+ * installed.
+ */
+export function preferredAgentNeedsChecks(agents: readonly AgentInfo[]): boolean {
+	const priority = (agent: AgentInfo) => DEFAULT_AGENT_PRIORITY_RANK.get(agent.id) ?? Number.MAX_SAFE_INTEGER;
+	const first = agents
+		.filter(isLaunchableAgent)
+		.sort((a, b) => priority(a) - priority(b) || agentLabelCompare(a, b))[0];
+	return first !== undefined && !isConfirmedAgent(first);
+}
+
+/**
  * A new project starts every role on the most preferred agent; project settings
  * can change each one. The reviewer follows the daemon's own rule: the agent
  * reviews only when it is one of the unattended-safe reviewers, otherwise
