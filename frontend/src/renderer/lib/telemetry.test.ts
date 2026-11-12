@@ -222,14 +222,14 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("reports chat import counts and agents without titles, paths or ids", async () => {
-		expect(await sanitizeRendererProperties("ao.renderer.session_import_offer_shown", { surface: "home", project_id: "p1" })).toEqual({ surface: "home" });
-		expect(await sanitizeRendererProperties("ao.renderer.session_import_scan_completed", {
+		expect(await sanitizeRendererProperties("ao.session_imports.offer_shown", { surface: "home", project_id: "p1" })).toEqual({ surface: "home" });
+		expect(await sanitizeRendererProperties("ao.session_imports.scan_completed", {
 			outcome: "succeeded",
 			candidate_count: 42,
 			duration_ms: 1234.6,
 			paths: ["/Users/me/work/secret-client"],
 		})).toEqual({ outcome: "succeeded", candidate_count: 42, duration_ms: 1235 });
-		expect(await sanitizeRendererProperties("ao.renderer.session_import_completed", {
+		expect(await sanitizeRendererProperties("ao.session_imports.completed", {
 			source: "project_offer",
 			created_count: 3,
 			existing_count: 1,
@@ -239,7 +239,7 @@ describe("telemetry sanitizers", () => {
 			titles: ["fix the billing bug"],
 			folders: ["/Users/me/work/secret-client"],
 		})).toEqual({ source: "project_offer", created_count: 3, existing_count: 1, failed_count: 0, folder_count: 2, agents: "claude-code,codex" });
-		expect(await sanitizeRendererProperties("ao.renderer.session_import_first_open", {
+		expect(await sanitizeRendererProperties("ao.session_imports.first_opened", {
 			agent: "codex",
 			outcome: "failed",
 			error_code: "CHAT_RESUME_FAILED",
@@ -250,10 +250,10 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("drops chat import values outside their vocabularies", async () => {
-		expect(await sanitizeRendererProperties("ao.renderer.session_import_offer_shown", { surface: "sidebar" })).toEqual({});
-		expect(await sanitizeRendererProperties("ao.renderer.session_import_scan_completed", { outcome: "partial", candidate_count: -1 })).toEqual({});
-		expect(await sanitizeRendererProperties("ao.renderer.session_import_completed", { source: "cli", agents: "Not An Agent" })).toEqual({});
-		expect(await sanitizeRendererProperties("ao.renderer.session_import_first_open", {
+		expect(await sanitizeRendererProperties("ao.session_imports.offer_shown", { surface: "sidebar" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.session_imports.scan_completed", { outcome: "partial", candidate_count: -1 })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.session_imports.completed", { source: "cli", agents: "Not An Agent" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.session_imports.first_opened", {
 			agent: "secret-client",
 			outcome: "crashed",
 			error_code: "resume failed: exit 1",

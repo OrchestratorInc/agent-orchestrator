@@ -547,12 +547,21 @@ type SessionView struct {
 
 // SessionArtifactView is one inferred file artifact for a session.
 type SessionArtifactView struct {
-	Path       string                     `json:"path"`
-	Name       string                     `json:"name"`
-	Kind       domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
-	Size       int64                      `json:"size"`
-	UpdatedAt  time.Time                  `json:"updatedAt"`
-	PreviewURL string                     `json:"previewUrl,omitempty"`
+	// ID is the artifact's identity. It stays the same when the file is
+	// renamed or moved; empty for a file AO has not tracked yet.
+	ID        string                     `json:"id,omitempty"`
+	Path      string                     `json:"path"`
+	Name      string                     `json:"name"`
+	Kind      domain.SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
+	Size      int64                      `json:"size"`
+	UpdatedAt time.Time                  `json:"updatedAt"`
+	// Registered is set on a file the agent registered with ao artifact add. A
+	// session with no registered file falls back to showing its root files.
+	Registered bool `json:"registered,omitempty"`
+	// PreviousPaths are the paths the artifact had before a rename, most
+	// recent last, so a link that names one still opens it.
+	PreviousPaths []string `json:"previousPaths,omitempty"`
+	PreviewURL    string   `json:"previewUrl,omitempty"`
 	// RawURL fetches this artifact's raw bytes on the artifact preview
 	// origin — a distinct host from the workspace preview origin, so a
 	// workspace-relative path can never collide with an artifact-relative
@@ -564,6 +573,20 @@ type SessionArtifactView struct {
 	// unlike PreviewURL the page cannot call the daemon. HTML only.
 	InlineURL string `json:"inlineUrl,omitempty"`
 	ShareURL  string `json:"shareUrl,omitempty"`
+}
+
+// RegisterArtifactsRequest is the body of POST
+// /api/v1/sessions/{sessionId}/artifact-registrations.
+type RegisterArtifactsRequest struct {
+	Paths []string `json:"paths" description:"Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it."`
+}
+
+// RegisterArtifactsResponse reports what a registration did, so the agent can
+// see what stays unlisted.
+type RegisterArtifactsResponse struct {
+	Registered     []string `json:"registered" description:"The requested paths, relative to the artifact directory."`
+	OtherFiles     int      `json:"otherFiles" description:"How many of the session's files are not registered."`
+	OtherRootFiles []string `json:"otherRootFiles" description:"The unregistered files at the root of the artifact directory."`
 }
 
 // ListSessionsResponse is the body of GET /api/v1/sessions.
@@ -2040,6 +2063,104 @@ type ListUsageSessionsQuery struct {
 	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Optional project id filter for dashboard cards."`
 }
 
+// UsageReportQuery selects the usage page's window.
+type UsageReportQuery struct {
+	Days      int              `query:"days,omitempty" minimum:"1" maximum:"90" description:"Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7."`
+	Offset    int              `query:"offset,omitempty" minimum:"0" description:"Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0."`
+	TimeZone  string           `query:"tz,omitempty" description:"IANA time zone that days and hours are bucketed in. Defaults to UTC."`
+	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Read one project only."`
+}
+
+// UsagePriceOverride is the user's own price for one stored model ID: rates in USD per million tokens, or a catalog model to price as.
+type UsagePriceOverride struct {
+	ModelID    string `json:"modelId" required:"true" maxLength:"256" description:"Model ID as usage rows store it."`
+	Input      string `json:"inputUsdPerMillion,omitempty" description:"Decimal USD per million uncached input tokens. Set with output."`
+	Output     string `json:"outputUsdPerMillion,omitempty" description:"Decimal USD per million output tokens. Set with input."`
+	CacheRead  string `json:"cacheReadUsdPerMillion,omitempty" description:"Decimal USD per million cache-read tokens. Defaults to the input price."`
+	CacheWrite string `json:"cacheWriteUsdPerMillion,omitempty" description:"Decimal USD per million cache-write tokens. Defaults to the input price."`
+	PriceAs    string `json:"priceAs,omitempty" maxLength:"256" description:"Catalog model to price as, provider/model, in place of rates."`
+}
+
+// UsagePricesResponse is the saved model prices and the catalog models a model can price as.
+type UsagePricesResponse struct {
+	Overrides []UsagePriceOverride `json:"overrides" required:"true"`
+	Models    []string             `json:"models" required:"true" description:"Catalog models a model can price as, provider/model."`
+}
+
+// UsagePricesRequest replaces the whole set of model prices.
+type UsagePricesRequest struct {
+	Overrides []UsagePriceOverride `json:"overrides" required:"true"`
+}
+
+// UsageLimitHistoryRequest turns keeping limit readings on or off.
+type UsageLimitHistoryRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UsageLimitHistoryResponse is whether limit readings are now kept.
+type UsageLimitHistoryResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// UsageLimitWindowsQuery is the period of limit readings to read.
+type UsageLimitWindowsQuery struct {
+	Days int `query:"days,omitempty" minimum:"1" maximum:"14" description:"Days of readings to read; they are kept for 14. Defaults to 7."`
+}
+
+// UsageLimitWindowsResponse is each login's five-hour and weekly windows over a period, built only from the limit readings AO took itself.
+type UsageLimitWindowsResponse struct {
+	Since          time.Time                `json:"since"`
+	Until          time.Time                `json:"until"`
+	FirstReadingAt *time.Time               `json:"firstReadingAt,omitempty"`
+	Logins         []domain.UsageLimitLogin `json:"logins"`
+}
+
+// UsageReportResponse is token and estimated-cost usage over a window, by day or by hour in the requested time zone.
+type UsageReportResponse struct {
+	Days       int                          `json:"days"`
+	TimeZone   string                       `json:"timeZone"`
+	Resolution string                       `json:"resolution" enum:"day,hour"`
+	Since      time.Time                    `json:"since"`
+	Until      time.Time                    `json:"until"`
+	Periods    []string                     `json:"periods" description:"Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour."`
+	Rows       []UsageReportRowResponse     `json:"rows"`
+	Sessions   []UsageReportSessionResponse `json:"sessions"`
+}
+
+// UsageReportRowResponse is one period's usage for one harness, model and speed tier.
+type UsageReportRowResponse struct {
+	Period              string `json:"period"`
+	Harness             string `json:"harness"`
+	Model               string `json:"model"`
+	Speed               string `json:"speed" description:"standard, priority, fast, flex, ultrafast, or unknown."`
+	Events              int64  `json:"events"`
+	PricedEvents        int64  `json:"pricedEvents"`
+	InputTokens         int64  `json:"inputTokens" description:"Uncached input that was not written to the cache."`
+	CacheReadTokens     int64  `json:"cacheReadTokens"`
+	CacheWriteTokens    int64  `json:"cacheWriteTokens"`
+	OutputTokens        int64  `json:"outputTokens"`
+	InputCostNanos      int64  `json:"inputCostNanos"`
+	CacheReadCostNanos  int64  `json:"cacheReadCostNanos"`
+	CacheWriteCostNanos int64  `json:"cacheWriteCostNanos"`
+	OutputCostNanos     int64  `json:"outputCostNanos"`
+	CostNanos           int64  `json:"costNanos"`
+	PremiumNanos        int64  `json:"premiumNanos" description:"Part of costNanos above standard rates, from priority, fast or ultrafast processing."`
+	CacheSavingsNanos   int64  `json:"cacheSavingsNanos" description:"What cache reads saved against paying input rates for those tokens."`
+}
+
+// UsageReportSessionResponse is one session's usage over the report window.
+type UsageReportSessionResponse struct {
+	SessionID    string    `json:"sessionId"`
+	ProjectID    string    `json:"projectId,omitempty"`
+	Harness      string    `json:"harness"`
+	Title        string    `json:"title"`
+	Events       int64     `json:"events"`
+	PricedEvents int64     `json:"pricedEvents"`
+	Tokens       int64     `json:"tokens"`
+	CostNanos    int64     `json:"costNanos"`
+	LastUsedAt   time.Time `json:"lastUsedAt"`
+}
+
 // EstimatedCostResponse is a nano-USD estimate reused at every usage summary
 // scope. Coverage stays an API fact for aggregation, catalog backfills, and
 // contextual disclosure; it is never a pricing label or a mathematical
@@ -2179,45 +2300,6 @@ type SystemMemoryResponse struct {
 type MemoryPressureResponse struct {
 	PressureRaw    float64 `json:"pressureRaw" minimum:"0"`
 	PressureSource string  `json:"pressureSource" enum:"psi,available_pct,memorystatus"`
-}
-
-// UsageTotalsResponse is the canonical telemetry aggregate for one scope.
-//
-// Provider-specific counters are no longer projected here: they live verbatim
-// in each event's bounded provider usage object, where a field the provider
-// adds later survives without a schema change on this boundary.
-type UsageTotalsResponse struct {
-	InputTokens         *int64                 `json:"inputTokens" minimum:"0" description:"Total input, including cached and uncached input."`
-	CachedInputTokens   *int64                 `json:"cachedInputTokens" minimum:"0" description:"Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens."`
-	UncachedInputTokens *int64                 `json:"uncachedInputTokens" minimum:"0" description:"Input not read from an existing provider cache. Includes cache writes."`
-	OutputTokens        *int64                 `json:"outputTokens" minimum:"0" description:"Total output, including provider-specific subsets such as reasoning output."`
-	ProcessedTokens     *int64                 `json:"processedTokens" minimum:"0" description:"Canonical input plus output. Null when either component is unknown."`
-	CacheReadTokens     *int64                 `json:"cacheReadTokens" minimum:"0" description:"Deprecated compatibility alias for cachedInputTokens."`
-	EstimatedCost       *EstimatedCostResponse `json:"estimatedCost"`
-}
-
-// UsageModelResponse is telemetry grouped by model. The billing provider is a
-// pricing input rather than a product distinction: each event was costed
-// against its own provider's rates before reaching this aggregate, so one model
-// stays one row even when more than one provider served it.
-type UsageModelResponse struct {
-	ModelID string              `json:"modelId"`
-	Totals  UsageTotalsResponse `json:"totals"`
-}
-
-// UsageHarnessResponse groups model telemetry under one AO harness.
-type UsageHarnessResponse struct {
-	Harness string               `json:"harness"`
-	Totals  UsageTotalsResponse  `json:"totals"`
-	Models  []UsageModelResponse `json:"models"`
-}
-
-// SessionUsageResponse is detailed telemetry for the session inspector.
-type SessionUsageResponse struct {
-	SessionID  domain.SessionID       `json:"sessionId"`
-	Incomplete bool                   `json:"incomplete"`
-	Totals     UsageTotalsResponse    `json:"totals"`
-	Harnesses  []UsageHarnessResponse `json:"harnesses"`
 }
 
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
@@ -2763,12 +2845,40 @@ type MobileStatusResponse struct {
 	// TailscaleHost is this machine's 100.64.0.0/10 Tailscale address, or "" when
 	// Tailscale is not up. The renderer encodes it into the pairing QR when the
 	// user selects the Tailscale tab, and shows a hint instead when it is empty.
-	TailscaleHost string              `json:"tailscaleHost"`
-	Port          int                 `json:"port"`
-	Password      string              `json:"password"`
-	Warning       string              `json:"warning"`
-	SecurePairing SecurePairingStatus `json:"securePairing"`
-	KeepAwake     KeepAwakeStatus     `json:"keepAwake"`
+	TailscaleHost            string              `json:"tailscaleHost"`
+	Port                     int                 `json:"port"`
+	Password                 string              `json:"password"`
+	Warning                  string              `json:"warning"`
+	SecurePairing            SecurePairingStatus `json:"securePairing"`
+	KeepAwake                KeepAwakeStatus     `json:"keepAwake"`
+	RequireDeviceCredentials bool                `json:"requireDeviceCredentials"`
+	PasswordLastUsedAt       *time.Time          `json:"passwordLastUsedAt,omitempty"`
+}
+
+// PairingCodeResponse is a one-time pairing code.
+type PairingCodeResponse struct {
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// PairDeviceRequest names the device being paired. Both fields are optional.
+type PairDeviceRequest struct {
+	Name     string `json:"name,omitempty" description:"Name shown in the host's device list."`
+	Platform string `json:"platform,omitempty" description:"The device's platform, such as ios, android, darwin, win32 or linux."`
+}
+
+// PairDeviceResponse carries the device's own token, which is shown once.
+type PairDeviceResponse struct {
+	HostID   string `json:"hostId"`
+	DeviceID string `json:"deviceId"`
+	Token    string `json:"token"`
+	// Credential is what the device presented. Only the password stays usable as a fallback.
+	Credential string `json:"credential" enum:"pairing-code,password"`
+}
+
+// SetRequireDeviceCredentialsRequest turns the pairing password off or on.
+type SetRequireDeviceCredentialsRequest struct {
+	Enabled bool `json:"enabled"`
 }
 
 // KeepAwakeStatus describes the macOS-only option that stops the machine from
@@ -2927,15 +3037,16 @@ type ResolveFileReferenceResponse sessionsvc.FileReferenceResolution
 // ConversationFileReferenceRequest carries bounded, user-supplied captured code.
 type ConversationFileReferenceRequest ports.ChatFileReference
 
-// ConversationExcerptReferenceRequest attaches verified selected transcript
-// text to the next message.
+// ConversationExcerptReferenceRequest attaches a captured snapshot, or a legacy
+// verified transcript reference, to the next message.
 type ConversationExcerptReferenceRequest struct {
-	ID             string `json:"id,omitempty"`
-	Order          int64  `json:"order,omitempty"`
-	ConversationID string `json:"conversationId"`
-	MessageID      string `json:"messageId"`
-	Revision       int64  `json:"revision"`
-	Text           string `json:"text"`
+	Snapshot       *domain.ChatExcerptSnapshot `json:"snapshot,omitempty"`
+	ID             string                      `json:"id,omitempty"`
+	Order          int64                       `json:"order,omitempty"`
+	ConversationID string                      `json:"conversationId"`
+	MessageID      string                      `json:"messageId"`
+	Revision       int64                       `json:"revision"`
+	Text           string                      `json:"text"`
 }
 
 // ProviderSwitchRequest switches an idle session to another provider. See
@@ -3066,8 +3177,10 @@ type EditConversationMessageRequest struct {
 }
 
 // ConversationContentSummaryResponse is a lightweight attachment/resource chip.
-// Image bytes and embedded resource text never leave the durable server record.
+// Image bytes and ordinary embedded resource text stay in the server record;
+// captured excerpts expose the context the user attached.
 type ConversationContentSummaryResponse struct {
+	Snapshot        *domain.ChatExcerptSnapshot       `json:"snapshot,omitempty"`
 	FileReference   *ConversationFileReferenceRequest `json:"fileReference,omitempty"`
 	AnnotationID    string                            `json:"annotationId,omitempty"`
 	AnnotationOrder int64                             `json:"annotationOrder,omitempty"`
@@ -3075,14 +3188,13 @@ type ConversationContentSummaryResponse struct {
 	MIMEType        string                            `json:"mimeType,omitempty"`
 	URI             string                            `json:"uri,omitempty"`
 	Name            string                            `json:"name,omitempty"`
-	// Text is exposed only for verified chat excerpts, so the timeline can show
-	// what the user referred to without exposing internal resource URIs.
+	// Text is the readable chat excerpt, separate from captured raw source.
 	Text string `json:"text,omitempty"`
 	// SourceMessageID and SourceRevision let the renderer navigate back to the
-	// verified transcript message without exposing the internal excerpt URI.
+	// original transcript message without exposing the internal excerpt URI.
 	SourceConversationID string `json:"sourceConversationId,omitempty"`
 	SourceMessageID      string `json:"sourceMessageId,omitempty"`
-	SourceRevision       int64  `json:"sourceRevision,omitempty"`
+	SourceRevision       *int64 `json:"sourceRevision,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its
@@ -3272,6 +3384,12 @@ type ConversationTurnResponse struct {
 	// list is right here. It also keeps the changed-file view and the timeline from
 	// disagreeing, which two independently-timed fetches would eventually do.
 	Diff *ConversationTurnDiffResponse `json:"diff,omitempty"`
+	// Artifacts are the session artifact files this turn created or edited, as
+	// the daemon saw them in the artifact directory when the turn ended. Unlike
+	// Diff it does not depend on the provider, so it lists files an agent wrote
+	// through a shell command. Absent for a turn the daemon did not watch from its
+	// start, or one that changed no artifact.
+	Artifacts *ConversationTurnArtifactsResponse `json:"artifacts,omitempty"`
 	// Plan is the agent's plan for this turn, or absent when it made none. The
 	// provider re-sends the whole plan on every change, so this is the current answer
 	// rather than a history of one: the earlier versions are the same plan with fewer
@@ -3307,6 +3425,19 @@ type ConversationPlanResponse struct {
 type ConversationPlanStepResponse struct {
 	Text   string `json:"text"`
 	Status string `json:"status" enum:"pending,in_progress,completed"`
+}
+
+// ConversationTurnArtifactsResponse lists the session artifacts a turn changed.
+type ConversationTurnArtifactsResponse struct {
+	Files []ConversationTurnArtifactResponse `json:"files"`
+}
+
+// ConversationTurnArtifactResponse is one session artifact file a turn changed.
+type ConversationTurnArtifactResponse struct {
+	// Path is relative to the session's artifact directory, slash-separated, as
+	// the session's artifactFiles list it.
+	Path   string `json:"path"`
+	Status string `json:"status" enum:"added,modified"`
 }
 
 // ConversationTurnDiffResponse is a turn's changed-file summary.
@@ -3429,9 +3560,12 @@ type ConversationSnapshotResponse struct {
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`
-	SessionID                  string `json:"sessionId"`
-	Harness                    string `json:"harness,omitempty"`
-	Mode                       string `json:"mode" enum:"chat,tui"`
+	// BatchedDeliveries links each queued turn AO batched into another turn's
+	// provider input. The turns list leaves those turns out.
+	BatchedDeliveries []domain.ConversationBatchedDelivery `json:"batchedDeliveries,omitempty"`
+	SessionID         string                               `json:"sessionId"`
+	Harness           string                               `json:"harness,omitempty"`
+	Mode              string                               `json:"mode" enum:"chat,tui"`
 	// Controller is reported separately from history so a client can tell "no
 	// messages yet" apart from "the agent is not running".
 	Controller     string `json:"controller" enum:"connecting,ready,busy,recovering,hibernated,stopped"`
@@ -3861,14 +3995,16 @@ type RequestRereviewResponse struct {
 	OK bool `json:"ok"`
 }
 
-// MobileDeviceResponse is one row of the desktop's mobile-device roster: the
-// stored registration plus whether that phone is running the app right now.
+// MobileDeviceResponse is one row of the device list: a device with its own token,
+// a phone on the pairing password, or the account's devices.
 type MobileDeviceResponse struct {
-	InstallID            string    `json:"installId"`
+	ID                   string    `json:"id" description:"What DELETE /api/v1/mobile/devices/{id} takes."`
+	Kind                 string    `json:"kind" enum:"device,password,account" description:"device: holds its own token. password: a phone that still uses the pairing password, so removing it only stops its notifications. account: every device signed in to the linked account; they share one token."`
+	InstallID            string    `json:"installId" description:"The phone's install id, or empty for a device that never registered for notifications."`
 	Token                string    `json:"token,omitempty"`
-	Platform             string    `json:"platform,omitempty" enum:"ios,android"`
+	Platform             string    `json:"platform,omitempty"`
 	DeviceName           string    `json:"deviceName,omitempty"`
-	Live                 bool      `json:"live" description:"True when the phone's app is open and polling."`
+	Live                 bool      `json:"live" description:"True when the device is connected, or the phone's app is open and polling."`
 	NotificationsEnabled bool      `json:"notificationsEnabled" description:"True when this device has a push token registered."`
 	CreatedAt            time.Time `json:"createdAt"`
 	LastSeenAt           time.Time `json:"lastSeenAt"`
@@ -3879,10 +4015,9 @@ type MobileDevicesResponse struct {
 	Devices []MobileDeviceResponse `json:"devices"`
 }
 
-// InstallIDParam is the {installId} path parameter for mobile-device roster
-// routes.
-type InstallIDParam struct {
-	InstallID string `path:"installId" description:"The device's stable install id."`
+// MobileDeviceIDParam is the {id} path parameter for the device list routes.
+type MobileDeviceIDParam struct {
+	ID string `path:"id" description:"The row's id from the device list."`
 }
 
 // CreateConversationSideChatRequest opens an independent launch-scoped side chat.

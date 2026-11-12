@@ -2,17 +2,17 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
-import { TooltipProvider } from "../ui/tooltip";
 import { useUiStore } from "../../stores/ui-store";
+import { TooltipProvider } from "../ui/tooltip";
 import { AgentAccountsPanel, type CliLoginControls } from "./AgentAccountsSection";
 
-const { getMock, postMock, terminalState } = vi.hoisted(() => ({
-	getMock: vi.fn(), postMock: vi.fn(),
+const { deleteMock, getMock, postMock, terminalState } = vi.hoisted(() => ({
+	deleteMock: vi.fn(), getMock: vi.fn(), postMock: vi.fn(),
 	terminalState: { value: undefined as ((state: "attached" | "exited" | "error") => void) | undefined },
 }));
 
 vi.mock("../../lib/api-client", () => ({
-	apiClient: { DELETE: vi.fn(), GET: getMock, POST: postMock },
+	apiClient: { DELETE: deleteMock, GET: getMock, POST: postMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
 }));
 
@@ -39,6 +39,7 @@ const findCliLoginRow = () => waitFor(() => {
 });
 
 beforeEach(() => {
+	useUiStore.setState({ accountLogin: null });
 	getMock.mockReset().mockImplementation((path: string) => Promise.resolve({
 		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, saved] },
 	}));
@@ -64,6 +65,35 @@ it("signs a signed-out saved account in again in its own folder", async () => {
 	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This account is b@example.com. Sign in again with that login."));
 });
 
+it("starts the sign-in a chat asked for, once", async () => {
+	useUiStore.setState({ accountLogin: "acct-b" });
+	const user = userEvent.setup();
+	renderPanel();
+
+	expect(await screen.findByTestId("agent-account-login-terminal")).toBeInTheDocument();
+	expect(postMock.mock.calls.filter(([path]) => path === "/api/v1/agents/accounts/{accountId}/login")).toEqual([
+		["/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } } }],
+	]);
+	expect(useUiStore.getState().accountLogin).toBeNull();
+	await user.click(screen.getByRole("button", { name: "Close sign-in" }));
+});
+
+it("signs this computer's login in through the CLI once it can, when a chat asks", async () => {
+	useUiStore.setState({ accountLogin: "device-claude" });
+	const onSignIn = vi.fn();
+	const cliLogin = { disabled: true, canLogout: true, onSignIn, onLogout: vi.fn() };
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const panel = (controls: CliLoginControls) => <QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="claude" cliLogin={controls} /></TooltipProvider></QueryClientProvider>;
+	const { rerender } = render(panel(cliLogin));
+	await findCliLoginRow();
+	expect(onSignIn).not.toHaveBeenCalled();
+
+	rerender(panel({ ...cliLogin, disabled: false }));
+	await waitFor(() => expect(onSignIn).toHaveBeenCalledTimes(1));
+	expect(useUiStore.getState().accountLogin).toBeNull();
+	expect(postMock).not.toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/login", expect.anything());
+});
+
 it("does not check a closed sign-in, and the remove dialog starts without an old error", async () => {
 	const user = userEvent.setup();
 	renderPanel();
@@ -76,6 +106,20 @@ it("does not check a closed sign-in, and the remove dialog starts without an old
 
 	expect(postMock).not.toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/verify", expect.anything());
 	expect(await screen.findByRole("dialog")).not.toHaveTextContent("sign-in");
+});
+
+it("shows a removal in progress until it finishes", async () => {
+	const user = userEvent.setup();
+	let finish: (value: unknown) => void = () => undefined;
+	deleteMock.mockReset().mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+	renderPanel();
+	await user.click((await screen.findAllByRole("button", { name: "Remove account" }))[0]);
+	const dialog = await screen.findByRole("dialog");
+	await user.click(within(dialog).getByRole("button", { name: "Remove account" }));
+
+	expect(within(dialog).getByRole("button", { name: "Removing…" })).toBeDisabled();
+	finish({ data: { accounts: [device] } });
+	await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });
 
 it("checks a sign-in once when the CLI exits during a check", async () => {

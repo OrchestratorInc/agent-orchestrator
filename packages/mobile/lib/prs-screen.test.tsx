@@ -68,6 +68,9 @@ vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries
 	return { summaryFor: (_config: unknown, id: string) => fixture.summaries.get(id), reload: fixture.reload };
 } }));
 vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
+const cloudLookup = vi.hoisted(() => ({ summaryFor: () => undefined, reload: () => {} }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ sessionsLoaded: true }) }));
+vi.mock("./cloud/useCloudPRSummaries", () => ({ useCloudPRSummaries: () => cloudLookup }));
 
 import PRsScreen from "../app/prs/index";
 let renderer: ReactTestRenderer | undefined;
@@ -211,4 +214,23 @@ it("leaves by the back button instead of carrying the board's items", () => {
 	expect(buttons.map((button) => button.props.label)).toEqual(["Back"]);
 	act(() => buttons[0].props.onPress());
 	expect(fixture.router.back).toHaveBeenCalledTimes(1);
+});
+
+// Seen on the Pixel: with Cloud answering and its only pull request merged,
+// the Open filter showed the paired Mac's "rejected the password" full-screen.
+it("keeps the plain empty state when a machine fails but Orchestrator Cloud answers", () => {
+	const withCloud = fixture as typeof fixture & { cloud?: object };
+	fixture.allSessions = [];
+	fixture.hostStates = fixture.hostStates.slice(0, 1).map((host) => ({ ...host, sessions: [], connection: "closed", error: "Your machine rejected the password", errorStatus: 401 }));
+	const emptyTitle = () => renderer!.root.findByType("SectionList" as never).props.ListEmptyComponent.props.title;
+	try {
+		act(() => { renderer = create(<PRsScreen />); });
+		expect(emptyTitle()).not.toBe("No pull requests");
+		act(() => renderer!.unmount());
+		withCloud.cloud = { orgId: "org" };
+		act(() => { renderer = create(<PRsScreen />); });
+		expect(emptyTitle()).toBe("No pull requests");
+	} finally {
+		delete withCloud.cloud;
+	}
 });

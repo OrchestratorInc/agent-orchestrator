@@ -1,9 +1,9 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
 import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
-import { artifactImageSource } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
+import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { artifactVisual } from "../../lib/artifactVisual";
 import { artifactExtensionLabel, artifactViewKind, formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
 import { haptics } from "../../lib/haptics";
@@ -11,7 +11,8 @@ import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
 import { relativeTime } from "../../lib/notificationView";
 import { imageSourceForPlatform } from "../../lib/imageSource";
-import type { ServerConfig } from "../../lib/config";
+import type { ArtifactsBackend } from "../../lib/artifactsBackend";
+import { useArtifactsBackend } from "../../lib/useArtifactsBackend";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -33,17 +34,21 @@ function SessionArtifactsContent() {
 	const sessionId = String(rawId ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
-	const { config, currentHostId, connection } = useApp();
+	const { currentHostId, connection } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
+	const { backend, cloud, unavailable } = useArtifactsBackend(hostMatches ? sessionId : "");
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { width } = useWindowDimensions();
 	const columns = width >= WIDE_LAYOUT ? 3 : 2;
-	const { artifacts, loading, error, reload, markDeleted } = useSessionArtifacts(hostMatches ? sessionId : "");
+	const { artifacts, loading, error, reload, markDeleted } = useSessionArtifacts(hostMatches ? sessionId : "", backend);
 	// A listed file's modified time, so a markdown card's regenerated image is not served from cache.
+	// The list shows deliverables only; `artifacts` stays whole for link lookups.
+	const listedArtifacts = useMemo(() => (artifacts ? deliverableArtifacts(artifacts) : []), [artifacts]);
 	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
 	const onDeleted = useCallback((artifact: SessionArtifact) => markDeleted(artifact.path), [markDeleted]);
-	const { openMenu, menu } = useArtifactActions(sessionId, onDeleted);
+	const { openMenu, menu } = useArtifactActions(sessionId, backend, onDeleted);
 	const [refreshing, setRefreshing] = useState(false);
 	// Each pull to refresh lets a card whose preview failed try it again.
 	const [refreshes, setRefreshes] = useState(0);
@@ -85,8 +90,9 @@ function SessionArtifactsContent() {
 	}, [reload]);
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon={{ ios: "doc.text", android: "description" }} title="These artifacts belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon={{ ios: "square.grid.2x2", android: "dashboard" }} onPress={() => router.navigate("/")} />} /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Artifacts load once the app reconnects." /></View>;
-	if (!artifacts && (loading || !config)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	if (unavailable) return <View style={styles.center}><EmptyState icon="cloud" title="Artifacts unavailable" message={unavailable} /></View>;
+	if (!backend && !cloud && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Artifacts load once the app reconnects." /></View>;
+	if (!artifacts && (loading || !backend)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifacts) return <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't load artifacts" message={error} action={<Button title="Try again" icon="refresh-cw" onPress={() => void onRefresh()} />} /></View>;
 
 	return (
@@ -95,10 +101,10 @@ function SessionArtifactsContent() {
 				key={columns}
 				style={styles.screen}
 				contentInsetAdjustmentBehavior="automatic"
-				contentContainerStyle={[styles.content, artifacts.length === 0 && styles.emptyContent]}
-				data={artifacts}
+				contentContainerStyle={[styles.content, listedArtifacts.length === 0 && styles.emptyContent]}
+				data={listedArtifacts}
 				numColumns={columns}
-				columnWrapperStyle={artifacts.length ? styles.row : undefined}
+				columnWrapperStyle={listedArtifacts.length ? styles.row : undefined}
 				keyExtractor={(artifact) => artifact.path}
 				onViewableItemsChanged={onViewableItemsChanged}
 				viewabilityConfig={viewabilityConfig}
@@ -107,7 +113,7 @@ function SessionArtifactsContent() {
 				ListEmptyComponent={<EmptyState icon={{ ios: "doc.text", android: "description" }} title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} versionOf={versionOf} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
+						<ArtifactCard artifact={item} backend={backend} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} versionOf={versionOf} thumbnail={backend && artifactViewKind(item) === "image" ? backend.imageSource(sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={item.bundle ? undefined : () => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
 					</View>
 				)}
 			/>
@@ -116,9 +122,9 @@ function SessionArtifactsContent() {
 	);
 }
 
-function ArtifactCard({ artifact, config, sessionId, visible, refreshes, versionOf, thumbnail, onOpen, onMenu }: {
+function ArtifactCard({ artifact, backend, sessionId, visible, refreshes, versionOf, thumbnail, onOpen, onMenu }: {
 	artifact: SessionArtifact;
-	config: ServerConfig | null;
+	backend: ArtifactsBackend | null;
 	sessionId: string;
 	/** On screen: the card's preview of its contents may load. */
 	visible: boolean;
@@ -126,9 +132,9 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 	refreshes: number;
 	versionOf(path: string): string | undefined;
 	/** An image artifact's own picture, drawn over its icon tile. */
-	thumbnail?: { uri: string; headers: Record<string, string> };
+	thumbnail?: { uri: string; headers?: Record<string, string> };
 	onOpen(): void;
-	onMenu(): void;
+	onMenu?(): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -140,7 +146,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 	// changes or the gallery is refreshed.
 	const attempt = `${artifact.updatedAt}#${refreshes}`;
 	const [previewFailedAt, setPreviewFailedAt] = useState<string>();
-	const preview = Boolean(config && hasContentThumbnail(artifact)) && previewFailedAt !== attempt;
+	const preview = Boolean(backend && hasContentThumbnail(artifact)) && previewFailedAt !== attempt;
 	const onPreviewFailed = useCallback(() => setPreviewFailedAt(attempt), [attempt]);
 	const visual = artifactVisual(artifact, t);
 	const age = relativeTime(artifact.updatedAt);
@@ -151,7 +157,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 			accessibilityLabel={`${artifact.name}, ${meta}`}
 			accessibilityHint="Opens the artifact. Long-press for more actions."
 			accessibilityActions={[{ name: "longpress", label: "More actions" }]}
-			onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "longpress") onMenu(); }}
+			onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "longpress") onMenu?.(); }}
 			onPress={onOpen}
 			onLongPress={onMenu}
 			delayLongPress={350}
@@ -163,7 +169,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, version
 						<Feather name={visual.icon} size={28} color={visual.color} />
 						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.extension, { color: visual.color }]}>{artifactExtensionLabel(artifact.path)}</Text>
 					</>}
-					{preview && config ? <ArtifactThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} versionOf={versionOf} onFailed={onPreviewFailed} /> : null}
+					{preview && backend ? <ArtifactThumbnail backend={backend} sessionId={sessionId} artifact={artifact} visible={visible} versionOf={versionOf} onFailed={onPreviewFailed} /> : null}
 					{picture ? (
 						<Image
 							accessibilityIgnoresInvertColors

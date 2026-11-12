@@ -284,6 +284,26 @@ describe("ChatWorkspace refused login", () => {
 		}
 	});
 
+	it("signs in the account the session runs on, not this computer's login", async () => {
+		const get = vi.spyOn(apiClient, "GET").mockImplementation(async (path: string) =>
+			(path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { data: { claude: "acct-a" } } : { data: undefined }) as never);
+		try {
+			render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry: vi.fn() }} />);
+			// Read as soon as the band offers the login, so the click knows it.
+			await waitFor(() => expect(get).toHaveBeenCalledWith("/api/v1/agents/accounts/sessions/{sessionId}", expect.anything()));
+			await act(async () => undefined);
+			await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+
+			expect(useUiStore.getState().settingsModal).toMatchObject({ section: "harness", focusAgentId: "claude-code" });
+			expect(useUiStore.getState().settingsModal).not.toHaveProperty("startLogin", true);
+			expect(useUiStore.getState().accountLogin).toBe("acct-a");
+			expect(useUiStore.getState().loginReturn?.accountId).toBe("acct-a");
+		} finally {
+			get.mockRestore();
+			act(() => useUiStore.setState({ accountLogin: null }));
+		}
+	});
+
 	it("drops the wait, and sends nothing, once the conversation has moved on", () => {
 		const snapshot = signedOutSnapshot({ didWork: false });
 		const first = snapshot.turns[0]!;

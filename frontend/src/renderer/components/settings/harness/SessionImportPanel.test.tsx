@@ -46,6 +46,14 @@ beforeEach(() => {
 	});
 	api.POST.mockResolvedValue({ data: { results: [{ id: "older", status: "created", sessionId: "standalone-1" }] } });
 });
+it("shows only the reading status until the first scan returns", async () => {
+	api.GET.mockReturnValue(new Promise(() => {}));
+	renderPanel();
+	expect(await screen.findByText("Reading local histories…")).toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: /^Import \d+/ })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Scan again" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("checkbox", { name: "Select all shown conversations" })).not.toBeInTheDocument();
+});
 it("lists OMP chats for import", async () => {
 	api.GET.mockResolvedValue({
 		data: { candidates: [{ ...chat, id: "omp-1", title: "OMP chat", projectId: "project", harness: "omp" }] },
@@ -69,7 +77,7 @@ it("lists only this agent's chats, preselects the ones not imported and imports 
 	fireEvent.click(screen.getByRole("button", { name: "Import 1 conversation" }));
 	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["older"] } });
-	expect(screen.getByText("Already in AO")).toBeInTheDocument();
+	expect(screen.getByText("Already in Orchestrator")).toBeInTheDocument();
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
 	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
 });
@@ -147,7 +155,7 @@ it("reports new, existing and failed imports separately", async () => {
 	});
 	renderPanel();
 	fireEvent.click(await screen.findByRole("button", { name: "Import 2 conversations" }));
-	expect(await screen.findByText("1 already in AO. 1 could not be imported.")).toBeInTheDocument();
+	expect(await screen.findByText("1 already in Orchestrator. 1 could not be imported.")).toBeInTheDocument();
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBeNull();
 	expect(useUiStore.getState().sessionImportOfferClosed).toBe(false);
 });

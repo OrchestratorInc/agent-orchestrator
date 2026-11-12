@@ -1,5 +1,5 @@
 import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderFor, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
@@ -95,6 +95,14 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		setLogin(undefined);
 		void actions.cancelLogin(current.operationId).catch(() => undefined);
 	};
+	const requestedLogin = useUiStore((state) => state.accountLogin);
+	useEffect(() => {
+		const account = rows.find((row) => row.id === requestedLogin);
+		if (!account || (account.device && (!cliLogin || cliLogin.disabled))) return;
+		useUiStore.setState({ accountLogin: null });
+		if (account.device) cliLogin?.onSignIn();
+		else void startLogin(account.id);
+	}, [requestedLogin, accounts.data, cliLogin?.disabled]);
 
 	return <>
 		<HarnessDetailGroup
@@ -128,7 +136,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
 			description={t("settings.agentAccounts.removeDescription", { email: agentAccountName(removing, t) })}
-			confirmLabel={t("settings.agentAccounts.remove")}
+			confirmLabel={t(busy === `remove:${removing.id}` ? "settings.agentAccounts.removing" : "settings.agentAccounts.remove")}
 			busy={busy === `remove:${removing.id}`}
 			error={error || undefined}
 			onConfirm={() => void run(`remove:${removing.id}`, async () => { await actions.remove(removing.id); setRemoving(null); })}
@@ -203,7 +211,7 @@ export function AccountLimits({ account }: { account: AgentAccount }) {
 	</div>;
 }
 
-function formatPlanName(plan: string | null | undefined): string | null {
+export function formatPlanName(plan: string | null | undefined): string | null {
 	const value = plan?.trim();
 	if (!value) return null;
 	const known: Record<string, string> = { free: "Free", plus: "Plus", pro: "Pro", max: "Max", team: "Team", business: "Business", enterprise: "Enterprise" };

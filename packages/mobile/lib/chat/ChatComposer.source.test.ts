@@ -19,6 +19,17 @@ function styleRule(name: string): string {
 }
 
 describe("chat composer pill", () => {
+	// Picked photos and files ride inside the pill over the field, as part of
+	// the message, rather than as a strip of chips stacked on top of it.
+	it("draws attachments inside the pill, over the field", () => {
+		const pill = composer.slice(composer.indexOf("{requestCard ?? <View style={[styles.composer"));
+		const tray = pill.indexOf("<ComposerAttachmentTray items={trayItems}");
+		expect(tray).toBeGreaterThan(0);
+		expect(tray).toBeLessThan(pill.indexOf("<TextInput"));
+		expect(composer.indexOf("<ComposerAttachmentTray")).toBe(composer.indexOf("<ComposerAttachmentTray items={trayItems}"));
+		expect(composer).toContain("useMemo(() => composerTrayItems(attachments), [attachments])");
+	});
+
 	// The row is one capsule: attach, field, dictation and the one filled control
 	// that commits. A border plus a fill made it read as a box with buttons in it.
 	it("draws a single borderless capsule", () => {
@@ -86,7 +97,7 @@ describe("chat composer pill", () => {
 	});
 
 	it("gives every small control in and around the pill a full touch target", () => {
-		for (const rule of ["removeQuote", "queueSteer", "queueDelete", "steerAction", "attachmentRemove", "roundTarget"]) {
+		for (const rule of ["removeQuote", "queueSteer", "queueDelete", "steerAction", "roundTarget"]) {
 			expect(styleRule(rule), rule).toContain("width: touchTarget, height: touchTarget");
 		}
 		expect(composer).toContain("hitSlop={{ top: CHIP_SLOP, bottom: CHIP_SLOP }}");
