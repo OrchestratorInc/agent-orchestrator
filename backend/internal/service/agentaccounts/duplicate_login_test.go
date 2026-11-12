@@ -439,3 +439,36 @@ func TestSavedAccountKeepsItsOrganization(t *testing.T) {
 		}
 	})
 }
+
+func TestSignInAgainIsNotRefusedOverTheCLIHoldingTheSameLogin(t *testing.T) {
+	ctx := context.Background()
+	svc, claude, _, root := newDuplicateFixture(t, "")
+	claude.orgOf = map[string]string{}
+	_, acme := startAdd(t, svc, claude, root, "a@example.com", "org-1")
+	home := acme.Account.Home
+	delete(claude.signedInAs, home)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	claude.signedInAs[""], claude.orgOf[""] = "a@example.com", "org-1"
+
+	start, err := svc.StartSignInAgain(ctx, acme.Account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude.signedInAs[home], claude.orgOf[home] = "a@example.com", "org-1"
+	status, view, err := svc.VerifyLogin(ctx, start.OperationID)
+	if err != nil || status != LoginComplete || view == nil || view.Account.ID != acme.Account.ID || !view.SignedIn {
+		t.Fatalf("sign in again while the CLI holds the login = %q %+v %v", status, view, err)
+	}
+	if _, signedIn := claude.signedInAs[home]; !signedIn {
+		t.Fatal("the account's fresh sign-in was logged out")
+	}
+	views, err := svc.List(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device := viewByID(t, views, domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)); device.SameLoginAs != acme.Account.ID {
+		t.Fatalf("the CLI login should fold into the restored account: %+v", device)
+	}
+}

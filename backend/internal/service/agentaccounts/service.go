@@ -723,7 +723,7 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return "", nil, ports.ErrAgentAccountLoginUnknown
 	}
 	for _, view := range views {
-		if op.account != nil && view.Account.ID == op.account.ID {
+		if op.account != nil && (view.Account.ID == op.account.ID || view.Account.Device()) {
 			continue
 		}
 		heldBy := view.SignedIn || (op.account == nil && !view.Account.Device() && view.Account.Email != "")
