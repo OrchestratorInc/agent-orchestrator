@@ -893,14 +893,17 @@ func (c *conversation) finishPrompt(
 	var failureCode domain.ConversationFailureCode
 	sessionLost := false
 	if err != nil {
-		if interruptedLocally || errors.Is(err, context.Canceled) {
-			state = domain.TurnStateInterrupted
-		} else if isACPSessionMissing(err) {
+		if isACPSessionMissing(err) {
 			// The prompt never reached a session. Fail this turn with the cause,
-			// then stop the provider below instead of announcing readiness.
+			// then stop the provider below instead of announcing readiness. This
+			// is checked before interruption: an accepted session/cancel does not
+			// bring the session back, and reading the turn as interrupted would
+			// leave the dead provider attached.
 			state = domain.TurnStateFailed
 			turnErr = c.markSessionLost(fmt.Errorf("ACP session/prompt: %w", err))
 			sessionLost = true
+		} else if interruptedLocally || errors.Is(err, context.Canceled) {
+			state = domain.TurnStateInterrupted
 		} else {
 			state = domain.TurnStateFailed
 			turnErr = normalizeACPError("ACP session/prompt", err)

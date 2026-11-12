@@ -170,6 +170,29 @@ func TestPromptFailsTurnAndStopsProviderThatLostSession(t *testing.T) {
 	}
 }
 
+func TestInterruptedPromptIntoLostSessionStillStopsProvider(t *testing.T) {
+	h := newLostSessionHost(t)
+	h.conv.activeTurn = "durable-turn"
+	// session/cancel was accepted before the prompt answered "Session not found".
+	done := make(chan struct{})
+	close(done)
+	h.conv.interrupt = &interruptAttempt{turnID: "durable-turn", done: done}
+	go h.conv.runTurn(context.Background(), h.conv.sessionID, preparedTurn{id: "durable-turn"})
+	if method := <-h.requests; method != "session/prompt" {
+		t.Fatalf("first request = %q", method)
+	}
+	events := h.assertStoppedForResume(t)
+	for _, event := range events {
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if event.TurnState != domain.TurnStateFailed || !errors.Is(event.Err, ports.ErrChatProviderSessionLost) {
+				t.Fatalf("interrupted lost-session turn: %+v", event)
+			}
+			return
+		}
+	}
+	t.Fatalf("no turn completion: %+v", events)
+}
+
 func TestSteerIntoLostSessionIsARefusalAndStopsProvider(t *testing.T) {
 	h := newLostSessionHost(t)
 	h.conv.activeTurn = "durable-turn"
