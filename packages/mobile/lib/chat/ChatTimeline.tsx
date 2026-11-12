@@ -105,7 +105,7 @@ import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
 import { TurnRollbackButton } from "./TurnRollbackButton";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
-import { splitTurnArtifacts } from "../../../shared/artifacts/turn-artifacts";
+import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
 import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -1097,23 +1097,19 @@ function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?
 	const styles = useThemedStyles(makeStyles);
 	const settled = turn.state !== "running" && turn.state !== "queued";
 	const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
-	// The deliverables the turn made show as cards; every other changed file
-	// stays in the changed-files card, so nothing shows twice (the desktop's TurnResults).
+	// The deliverables a completed turn made show as tiles; every other changed
+	// file stays in the changed-files card, so nothing shows twice or goes
+	// missing (the desktop's TurnResults).
 	const source = useTurnArtifactSource();
-	const split = useMemo(
-		() => splitTurnArtifacts(turn.diff?.files, source?.sessionId, source?.artifacts, undefined, turn.artifacts),
-		[source?.artifacts, source?.sessionId, turn.artifacts, turn.diff?.files],
-	);
-	// Cards are a settled result, as on desktop: a completed turn's.
-	const cards = source && turn.state === "completed" ? split.artifacts : [];
+	const results = useMemo(() => turnResults(turn, source), [source, turn]);
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
-	if (!plan && !cards.length && !split.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
+	if (!plan && !results.artifacts.length && !results.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
-			{cards.length && source ? <TurnArtifacts artifacts={cards} source={source} /> : null}
-			{split.files.length ? <ChangedFiles turn={turn} changed={split.files} /> : null}
+			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
+			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
 			{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>

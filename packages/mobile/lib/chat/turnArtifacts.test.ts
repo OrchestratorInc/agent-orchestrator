@@ -8,7 +8,7 @@ import { splitTurnArtifacts } from "../../../shared/artifacts/turn-artifacts";
 import type { SessionArtifact } from "../artifacts";
 import type { ServerConfig } from "../config";
 import { getConversationPage } from "./api";
-import { turnsTouchArtifacts } from "./turnArtifactsModel";
+import { turnResults, turnsTouchArtifacts } from "./turnArtifactsModel";
 import type { ConversationTurn, DiffFile } from "./types";
 
 const SESSION = "ao-12";
@@ -57,5 +57,27 @@ describe("splitTurnArtifacts on the phone", () => {
 	it("shows every changed file while the artifact list is unread", () => {
 		const diff = [file(`${ROOT}/report.md`)];
 		expect(splitTurnArtifacts(diff, SESSION, undefined, undefined, [{ path: "report.md", status: "added" }])).toEqual({ artifacts: [], files: diff });
+	});
+});
+
+describe("turnResults", () => {
+	const diff = { files: [file("src/app.ts", "modified"), file(`${ROOT}/report.md`)] };
+	const source = { sessionId: SESSION, artifacts: [artifact("report.md")] };
+
+	it("moves a listed artifact from the changed files to a tile on a completed turn", () => {
+		const results = turnResults(turn({ diff }), source);
+		expect(results.artifacts.map(({ artifact: entry }) => entry.path)).toEqual(["report.md"]);
+		expect(results.files.map((entry) => entry.path)).toEqual(["src/app.ts"]);
+	});
+
+	it.each(["running", "queued", "failed", "interrupted", "cancelled", "recovered"] as const)("keeps a %s turn's artifact among its changed files", (state) => {
+		const results = turnResults(turn({ state, diff, artifacts: [{ path: "report.md", status: "added" }] }), source);
+		expect(results.artifacts).toEqual([]);
+		expect(results.files.map((entry) => entry.path)).toEqual(["src/app.ts", `${ROOT}/report.md`]);
+	});
+
+	it("lists every changed file while the artifact list is unread", () => {
+		expect(turnResults(turn({ diff }), null)).toEqual({ artifacts: [], files: diff.files });
+		expect(turnResults(turn({ diff }), { sessionId: SESSION })).toEqual({ artifacts: [], files: diff.files });
 	});
 });
