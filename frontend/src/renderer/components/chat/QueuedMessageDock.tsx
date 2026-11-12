@@ -80,6 +80,7 @@ function sortableRowStyle({
 function QueuedMessageRowContent({
 	message,
 	showPersistentSteer,
+	enterSteers = false,
 	showHoverSteer = false,
 	canSteer,
 	suppressHoverSteer,
@@ -95,6 +96,8 @@ function QueuedMessageRowContent({
 }: {
 	message: ConversationMessage;
 	showPersistentSteer?: boolean;
+	/** Enter in the empty composer steers this row; the button shows the key. */
+	enterSteers?: boolean;
 	showHoverSteer?: boolean;
 	canSteer?: boolean;
 	suppressHoverSteer?: boolean;
@@ -176,7 +179,14 @@ function QueuedMessageRowContent({
 						aria-label="Steer this queued message into the running turn"
 						title="Steer into running turn"
 					>
-						<span className="inline-flex shrink-0 items-center gap-1 text-muted-foreground">
+						{/* The key hint fades in place, so typing never resizes the row's actions. */}
+						<span
+							className={cn(
+								"inline-flex shrink-0 items-center gap-1 text-muted-foreground transition-opacity duration-150 motion-reduce:transition-none",
+								!enterSteers && "opacity-0",
+							)}
+							data-enter-steers={enterSteers ? "true" : undefined}
+						>
 							<CornerDownLeft aria-hidden="true" className="size-3.5 shrink-0" />
 						</span>
 						Steer
@@ -232,6 +242,7 @@ function SortableQueuedMessageRow({
 	message,
 	hiddenFromView,
 	showPersistentSteer,
+	enterSteers,
 	canSteer,
 	suppressHoverSteer,
 	onPromoteQueuedTurn,
@@ -249,6 +260,7 @@ function SortableQueuedMessageRow({
 	message: ConversationMessage;
 	hiddenFromView?: boolean;
 	showPersistentSteer?: boolean;
+	enterSteers?: boolean;
 	canSteer?: boolean;
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
@@ -299,6 +311,7 @@ function SortableQueuedMessageRow({
 				canSteer={canSteer}
 				dragHandleProps={{ ...attributes, ...listeners }}
 				dragHandleRef={setActivatorNodeRef}
+				enterSteers={enterSteers}
 				message={message}
 				onBeginQueuedEdit={onBeginQueuedEdit}
 				onCancelQueuedTurn={onCancelQueuedTurn}
@@ -507,9 +520,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	const onDragStart = useCallback(
 		({ active }: DragStartEvent) => {
 			const turnId = String(active.id);
-			const showPersistentSteer = Boolean(
-				canSteer && canSteerNext && turnId === nextQueuedTurnId,
-			);
+			const showPersistentSteer = Boolean(canSteer && turnId === nextQueuedTurnId);
 			setIsReordering(true);
 			setDragSnapshot({
 				showPersistentSteer,
@@ -519,7 +530,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			});
 			suppressHoverSteer();
 		},
-		[canSteer, canSteerNext, hoveredTurnId, nextQueuedTurnId, suppressHoverSteer],
+		[canSteer, hoveredTurnId, nextQueuedTurnId, suppressHoverSteer],
 	);
 
 	const onDragEnd = useCallback(
@@ -576,13 +587,13 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 				<span
 					aria-hidden="true"
 					className={cn(
-						"grid h-3.5 shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none",
+						"grid h-3.5 shrink-0 overflow-hidden transition-[width] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
 						hasMore ? "w-3.5" : "w-0",
 					)}
 				>
 					<ChevronDown
 						className={cn(
-							"size-3.5 shrink-0 text-muted-foreground transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none",
+							"size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
 							expanded ? "rotate-0" : "-rotate-90",
 						)}
 					/>
@@ -636,7 +647,10 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											turnId={turnId}
 											message={message}
 											hiddenFromView={!isOpen && index !== displayMessages.length - 1}
-											showPersistentSteer={Boolean(canSteer && canSteerNext && isNextQueuedTurn)}
+											// The next row's Steer stays put while a turn can be steered; typing
+											// or sending only toggles its Enter hint.
+											showPersistentSteer={Boolean(canSteer && isNextQueuedTurn)}
+											enterSteers={Boolean(canSteer && canSteerNext && isNextQueuedTurn)}
 											busy={busy}
 											dragSnapshot={dragSnapshot}
 											error={errors[turnId] ?? steerErrors?.[turnId]}

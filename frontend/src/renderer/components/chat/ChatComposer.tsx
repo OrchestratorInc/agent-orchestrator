@@ -190,6 +190,14 @@ type HeldSubmit = {
 	unsentId?: string;
 };
 
+/**
+ * How long after a send a bare Enter in the empty box is ignored instead of
+ * steering the next queued message. A send clears the box at once and lands in
+ * milliseconds, so a double-tapped Enter would otherwise steer the message it
+ * just queued.
+ */
+const STEER_NEXT_AFTER_SEND_MS = 1000;
+
 /** How long a discarded unsent message can be brought back. */
 const UNSENT_UNDO_MS = 5000;
 
@@ -559,6 +567,8 @@ export const ChatComposer = memo(function ChatComposer({
 	// from a repeat Enter on the message being sent.
 	const editorClears = useRef(0);
 	const editorClearsAtSubmit = useRef(0);
+	// When the last submit started or settled, for the empty-Enter steer guard.
+	const lastSubmitAt = useRef(0);
 	// Disabling the active editor can move focus to the document body. Remember
 	// keyboard-origin submissions so focus can return once the editor is enabled.
 	const restoreFocusAfterSubmission = useRef(false);
@@ -1522,6 +1532,7 @@ export const ChatComposer = memo(function ChatComposer({
 		heldDuringSubmit.current = null;
 		submitAccepted.current = false;
 		editorClearsAtSubmit.current = editorClears.current;
+		lastSubmitAt.current = Date.now();
 		// Sending keeps what was dictated so far and stops listening.
 		dictation.detach();
 		// Sending a recalled message makes it the message, not a history position.
@@ -1535,6 +1546,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const release = () => {
 			if (submitInFlight.current !== pending) return;
 			submitInFlight.current = null;
+			lastSubmitAt.current = Date.now();
 			const held = heldDuringSubmit.current;
 			heldDuringSubmit.current = null;
 			// A message entered during a send that did not go through stays in the box:
@@ -2024,7 +2036,11 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 
 			if (enterSends && canSteerNext && !textRef.current.trim() && !fileAttachments.hasPendingReads()) {
-				setSteerNextRequest((request) => request + 1);
+				// Only a deliberate Enter steers: not a held key, and not a second tap
+				// right after a send, which would steer the message just queued.
+				if (!event.repeat && Date.now() - lastSubmitAt.current >= STEER_NEXT_AFTER_SEND_MS) {
+					setSteerNextRequest((request) => request + 1);
+				}
 				return true;
 			}
 			const wantsSteer = enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft;

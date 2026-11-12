@@ -93,6 +93,90 @@ describe("ChatComposer steering", () => {
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
 	});
 
+	it("does not steer the message just queued when Enter is tapped again right after sending", async () => {
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatComposer
+				onSend={onSend}
+				willQueue
+				onSteer={vi.fn()}
+				canSteer
+				queuedDock={
+					<QueuedMessageDock
+						messages={[queuedMessage("queued-1", "just queued")]}
+						canSteer
+						onPromoteQueuedTurn={onPromoteQueuedTurn}
+					/>
+				}
+			/>,
+		);
+		const field = screen.getByRole("combobox");
+
+		await typeInLexicalEditor(field, "just queued");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("just queued"));
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await userEvent.keyboard("{Enter}");
+		await act(async () => {});
+
+		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
+	});
+
+	it("does not steer the next queued message from a held Enter key", async () => {
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatComposer
+				onSend={vi.fn()}
+				willQueue
+				onSteer={vi.fn()}
+				canSteer
+				queuedDock={
+					<QueuedMessageDock
+						messages={[queuedMessage("queued-1", "first")]}
+						canSteer
+						onPromoteQueuedTurn={onPromoteQueuedTurn}
+					/>
+				}
+			/>,
+		);
+
+		fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", repeat: true });
+		await act(async () => {});
+
+		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
+	});
+
+	it("keeps the next row's Steer button while typing and only hides its Enter hint", async () => {
+		render(
+			<ChatComposer
+				onSend={vi.fn()}
+				willQueue
+				onSteer={vi.fn()}
+				canSteer
+				queuedDock={
+					<QueuedMessageDock
+						messages={[queuedMessage("queued-1", "first"), queuedMessage("queued-2", "next")]}
+						canSteer
+						onPromoteQueuedTurn={vi.fn().mockResolvedValue(undefined)}
+					/>
+				}
+			/>,
+		);
+		const nextRow = screen.getByTestId("queued-message-queued-1");
+		const steerButtons = () =>
+			within(nextRow).getAllByRole("button", { name: "Steer this queued message into the running turn" });
+		expect(steerButtons()).toHaveLength(1);
+		expect(nextRow.querySelector("[data-enter-steers]")).not.toBeNull();
+
+		await typeInLexicalEditor(screen.getByRole("combobox"), "a draft");
+
+		expect(steerButtons()).toHaveLength(1);
+		// Still the visible button, not the hover-only one that is transparent at rest.
+		expect(steerButtons()[0]).not.toHaveClass("opacity-0");
+		expect(nextRow.querySelector("[data-enter-steers]")).toBeNull();
+	});
+
 	it("drains every queued steer request that arrives while a promotion is pending", async () => {
 		let resolveFirstPromotion: (() => void) | undefined;
 		const firstPromotion = new Promise<void>((resolve) => {
