@@ -838,7 +838,15 @@ const EditorBridge = forwardRef<
 			if (!plainKey(event)) return false;
 			const caret = $caretLine();
 			const action = caret && listEnter(caret.line, caret.column, caret.previous);
-			if (!caret || !action) return false;
+			if (!caret || !action) {
+				// Shift+Enter inserts a plain newline (PlainTextPlugin has no default handler).
+				if (!event.shiftKey) return false;
+				const selection = $getSelection();
+				if (!$isRangeSelection(selection)) return false;
+				$addUpdateTag(HISTORY_PUSH_TAG);
+				selection.insertRawText("\n");
+				return handled(event);
+			}
 			if (action.kind === "exit") return $applyLinePrefixEdit(caret.node, caret.column, action.edit) && handled(event);
 			$addUpdateTag(HISTORY_PUSH_TAG);
 			caret.selection.insertRawText(action.text);
