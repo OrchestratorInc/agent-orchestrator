@@ -626,6 +626,70 @@ func TestSessionRestore_ExitedOrchestratorResumesAgentInPlace(t *testing.T) {
 	}
 }
 
+// A session that never started shows why in `session get` and `session ls`.
+// `session restore` retries it through resume-agent and waits for the retried
+// start, so a second failure is reported instead of "agent resumed".
+func TestSessionRestore_FailedStartRetries(t *testing.T) {
+	spawnStartPollInterval = time.Millisecond
+	t.Cleanup(func() { spawnStartPollInterval = 500 * time.Millisecond })
+	failed := `{"session":{"id":"demo-1","projectId":"demo","kind":"worker","activity":{"state":"idle"},"isTerminated":false,"status":"idle","provisionState":"failed","provisionError":"default branch is unresolved"}}`
+	for _, tc := range []struct {
+		name, settled, wantOut, wantErr string
+	}{
+		{name: "retry starts", settled: `{"session":{"id":"demo-1","projectId":"demo","status":"working","provisionState":"ready"}}`, wantOut: "agent resumed for session demo-1"},
+		{name: "retry fails again", settled: failed, wantErr: "session demo-1 failed to start: default branch is unresolved"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			log := &sessionRequestLog{}
+			resumed := false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				log.append(r)
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1" && resumed:
+					_, _ = io.WriteString(w, tc.settled)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions/demo-1":
+					_, _ = io.WriteString(w, failed)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/resume-agent":
+					resumed = true
+					_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","resumeMode":"saved_prompt","session":{"id":"demo-1","projectId":"demo","kind":"worker","activity":{"state":"idle"},"isTerminated":false,"status":"spawning","provisionState":"provisioning"}}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+			deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+			out, errOut, err := executeCLI(t, deps, "session", "get", "demo-1")
+			if err != nil || !strings.Contains(out, "start failed: default branch is unresolved") {
+				t.Fatalf("session get: err=%v stderr=%s out:\n%s", err, errOut, out)
+			}
+			if got := sessionActivityLabel(sessionDTO{ProvisionState: "failed", Activity: sessionActivity{State: "idle"}}); got != "start failed" {
+				t.Fatalf("list activity for a failed start = %q, want start failed", got)
+			}
+			out, _, err = executeCLI(t, deps, "session", "restore", "demo-1")
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || strings.Contains(out, "agent resumed") {
+					t.Fatalf("session restore: err=%v out=%q, want %q and no success line", err, out, tc.wantErr)
+				}
+			} else if err != nil || !strings.Contains(out, tc.wantOut) {
+				t.Fatalf("session restore: err=%v out=%q, want %q", err, out, tc.wantOut)
+			}
+			want := []string{
+				"GET /api/v1/sessions/demo-1",
+				"GET /api/v1/sessions/demo-1",
+				"POST /api/v1/sessions/demo-1/resume-agent",
+				"GET /api/v1/sessions/demo-1",
+			}
+			if got := log.all(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("requests = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestSessionExitAndResumeAgentUseProcessOnlyRoutes(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, log := sessionCommandServer(t)
