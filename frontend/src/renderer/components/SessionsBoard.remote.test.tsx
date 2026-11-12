@@ -228,7 +228,7 @@ it("sends a refused device to the host settings instead of retrying", () => {
 	const openGlobalSettings = vi.fn();
 	useUiStore.setState({ openGlobalSettings } as never);
 	renderBoard("box-a");
-	expect(screen.getByRole("alert")).toHaveTextContent("Pair again");
+	expect(screen.getByTestId("board-host-offline-empty")).toHaveTextContent("Pair again");
 	expect(screen.queryByText(/Updated/)).toBeNull();
 	fireEvent.click(screen.getByRole("button", { name: "Edit Azure box" }));
 	expect(openGlobalSettings).toHaveBeenCalledWith("remoteHosts", { preserveProject: true });
