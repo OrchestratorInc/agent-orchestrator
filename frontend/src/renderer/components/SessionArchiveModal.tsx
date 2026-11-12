@@ -19,7 +19,15 @@ import { useTranslation } from "react-i18next";
 import { Search } from "@/components/app-icons";
 import type { WorkspaceSession } from "../types/workspace";
 import { agentLabel } from "../lib/agent-options";
-import { boundedGridTarget, gridNavigationTarget, isGridNavigationKey, measureGridColumns, measureVisibleRows, type GridNavigationKey } from "../lib/grid-navigation";
+import {
+	boundedGridTarget,
+	gridNavigationTarget,
+	isGridNavigationKey,
+	measureGridColumns,
+	measureVisibleRows,
+	mountLimitForTarget,
+	type GridNavigationKey,
+} from "../lib/grid-navigation";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { isMacPlatform } from "../lib/platform";
@@ -307,8 +315,12 @@ export function SessionArchiveModal({
 		);
 		if (target < 0) return;
 		// Onto or near the last mounted row: mount up to the target and a page
-		// past it in this same render, so the selection never waits for a card.
-		if (target >= shown.length - columns) setLimit((current) => Math.max(current, target + 1 + PAGE_SIZE));
+		// past it in this same render, so the selection never waits for a card;
+		// the page past it fits the same per-press budget.
+		if (target >= shown.length - columns) {
+			const mountLimit = mountLimitForTarget(target, shown.length, PAGE_SIZE, MAX_MOUNT_PER_MOVE);
+			setLimit((current) => Math.max(current, mountLimit));
+		}
 		scrollToActiveRef.current = true;
 		setActive({ id: results[target]?.id, index: target });
 	};

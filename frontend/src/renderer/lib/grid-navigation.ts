@@ -93,3 +93,13 @@ export function boundedGridTarget(target: number, mountedCount: number, maxMount
 	if (target < 0) return target;
 	return Math.min(target, Math.max(0, mountedCount) + Math.max(1, Math.floor(maxMount)) - 1);
 }
+
+/**
+ * How many items to mount for a move onto `target`: the target, then a
+ * `prefetch` of items past it, all within the same `maxMount` budget past the
+ * `mountedCount` already mounted (the target itself always counts).
+ */
+export function mountLimitForTarget(target: number, mountedCount: number, prefetch: number, maxMount: number): number {
+	const reach = target + 1;
+	return Math.max(reach, Math.min(reach + Math.max(0, prefetch), Math.max(0, mountedCount) + Math.max(1, maxMount)));
+}

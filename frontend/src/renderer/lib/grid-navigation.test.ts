@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { boundedGridTarget, gridNavigationTarget, isGridNavigationKey, measureGridColumns, measureVisibleRows } from "./grid-navigation";
+import { boundedGridTarget, gridNavigationTarget, isGridNavigationKey, measureGridColumns, measureVisibleRows, mountLimitForTarget } from "./grid-navigation";
 
 describe("gridNavigationTarget", () => {
 	// 10 items, 4 columns:
@@ -66,6 +66,21 @@ describe("boundedGridTarget", () => {
 		expect(boundedGridTarget(30, 24, 96)).toBe(30);
 		expect(boundedGridTarget(5, 24, 96)).toBe(5);
 		expect(boundedGridTarget(-1, 24, 96)).toBe(-1);
+	});
+});
+
+describe("mountLimitForTarget", () => {
+	it("keeps the page past the target inside the per-press budget", () => {
+		// End from 24 mounted: target 119 fills the 96-card budget exactly; no page past it.
+		const end = mountLimitForTarget(boundedGridTarget(4999, 24, 96), 24, 24, 96);
+		expect(end).toBe(120);
+		expect(end - 24).toBeLessThanOrEqual(96);
+		// Room left in the budget: the target and a page past it.
+		expect(mountLimitForTarget(30, 24, 24, 96)).toBe(55);
+		// Part of a page fits.
+		expect(mountLimitForTarget(100, 24, 24, 96)).toBe(120);
+		// The target itself is always mounted.
+		expect(mountLimitForTarget(200, 24, 24, 96)).toBe(201);
 	});
 });
 
