@@ -218,6 +218,20 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.spawn).not.toHaveBeenCalled();
 	});
 
+	it("does not respawn when a successor writes the marker during isolation planning", async () => {
+		const h = setup();
+		await h.start();
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(2);
+		h.setMarker(JSON.stringify({ pid: 99, port: 3001 }));
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+	});
+
 	it("records a graceful exit as no restart", async () => {
 		const h = setup();
 		await h.start();
