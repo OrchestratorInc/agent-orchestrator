@@ -929,13 +929,22 @@ function formatDecisionDuration(ms: number): string {
 }
 
 /**
+ * The step rows' icon column (ACTIVITY_SUMMARY_BUTTON_CLASS: a 12px icon at the
+ * turn's edge, then a 6px gap). The live row, its setup checklist and their marks
+ * use the same box, so a mark sits on the step icons' left edge and the label
+ * starts where the step labels do. The lattice is 13px across, a pixel wider than
+ * the slot: it starts at the slot's left edge and overhangs into the gap. Centred,
+ * it would sit half a pixel outside the column, where the live row clips it.
+ */
+export const STEP_MARK_SLOT_CLASS = "flex size-3 shrink-0 items-center justify-start";
+
+/**
  * A running setup step's mark: the live row's lattice, so setup and work share one
- * "working" signal. It sits in the step icons' 12px slot and overhangs it by half a
- * pixel each side, so the step labels stay aligned with the done and pending marks.
+ * "working" signal, in the step icons' slot (STEP_MARK_SLOT_CLASS).
  */
 export function ResponseSpinner() {
 	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="flex size-3 shrink-0 items-center justify-center text-muted-foreground">
+		<span aria-hidden="true" data-testid="response-spinner" className={cn(STEP_MARK_SLOT_CLASS, "text-muted-foreground")}>
 			<LatticeLoader />
 		</span>
 	);
@@ -943,15 +952,11 @@ export function ResponseSpinner() {
 
 /**
  * The live turn's working mark: a lattice of dots with a trail running round it
- * (see LatticeLoader). Decorative here, since the label and timer beside it carry
- * the meaning.
+ * (see LatticeLoader), in the step icons' slot (STEP_MARK_SLOT_CLASS). Decorative
+ * here, since the label and timer beside it carry the meaning.
  */
 export function LiveWorkingMark() {
-	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-			<LatticeLoader />
-		</span>
-	);
+	return <ResponseSpinner />;
 }
 
 export function formatTime(iso: string): string {
@@ -1464,10 +1469,13 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	const quietLabelKind = useRef<string | null | undefined>(labelEnters ? null : labelKind);
 	if (quietLabelKind.current !== null && quietLabelKind.current !== labelKind) quietLabelKind.current = null;
 	const labelEntrance = quietLabelKind.current === null;
-	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
+	// The mark takes the step rows' icon slot and gap (STEP_MARK_SLOT_CLASS), so the
+	// dots sit on the step icons' left edge and the label starts where theirs do: a
+	// step that moves up from here into its own row keeps both edges.
+	const rowClass = "-mx-1 flex h-7 select-none items-center gap-1.5 px-1 py-0";
 	const row = (
 		<>
-			<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center">
+			<span aria-hidden="true" className={STEP_MARK_SLOT_CLASS}>
 				{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
 			</span>
 			<span
@@ -1552,7 +1560,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 			</AnimatePresence>
 			{reconnect?.detail && !startupLabel ? (
 				<p
-					className="truncate pl-7 text-xs leading-5 text-muted-foreground"
+					className="truncate pl-4.5 text-xs leading-5 text-muted-foreground"
 					title={reconnect.detail}
 					data-testid="live-turn-status"
 				>
