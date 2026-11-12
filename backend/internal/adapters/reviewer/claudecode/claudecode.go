@@ -132,7 +132,8 @@ func (r *Reviewer) freshSessionID(ctx context.Context, inv ports.ReviewInvocatio
 	derived := workeragent.SessionUUID(inv.ReviewerID)
 	probe, canProbe := r.agent.(ports.AgentInterfaceHandoffHistoryProbe)
 	minter, canMint := r.agent.(ports.AgentFreshNativeSessionIDProvider)
-	if !canProbe || !canMint {
+	// Preflight builds a command with no reviewer, so there is nothing to probe.
+	if !canProbe || !canMint || inv.ReviewerID == "" {
 		return derived, nil
 	}
 	session := ports.SessionRef{ID: inv.ReviewerID, WorkspacePath: inv.WorkspacePath}
