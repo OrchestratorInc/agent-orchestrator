@@ -6667,6 +6667,7 @@ export interface components {
         };
         InitializeRepositoryInput: {
             create?: boolean;
+            createId?: string;
             path: string;
         };
         InitializeRepositoryResult: {

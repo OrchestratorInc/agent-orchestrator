@@ -113,3 +113,16 @@ func TestGitHubRepositoryAvailabilityAcceptsNamesStartingWithAPeriod(t *testing.
 		t.Fatalf("gh calls = %v, want one lookup of repos/acme/.github", *calls)
 	}
 }
+
+func TestGitHubRepositoryAvailabilityIsNotFreeWithoutGh(t *testing.T) {
+	stubGh(t, func(args []string) (string, error) {
+		return "", errors.New(`gh api repos/octo/app: exec: "gh": executable file not found in $PATH`)
+	})
+	got, err := (&Manager{}).GitHubRepositoryAvailability(context.Background(), GitHubAvailabilityQuery{Owner: "octo", Name: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Available || !strings.Contains(got.Message, "Could not check") {
+		t.Fatalf("got %+v, want the sign-in message", got)
+	}
+}

@@ -19163,6 +19163,9 @@ components:
       properties:
         create:
           type: boolean
+        createId:
+          maxLength: 64
+          type: string
         path:
           type: string
       required:

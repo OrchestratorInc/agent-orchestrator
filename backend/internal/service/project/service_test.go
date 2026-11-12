@@ -2621,3 +2621,54 @@ func TestManager_InitializeRepositoryCreatesNewProjectFolder(t *testing.T) {
 		}
 	})
 }
+
+func TestManager_InitializeRepositoryCreateResumesItsOwnFolder(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	newFolder := func(t *testing.T) string {
+		t.Helper()
+		base := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", base)
+		return filepath.Join(base, "fresh")
+	}
+
+	t.Run("a retry with the same id succeeds on the folder it made", func(t *testing.T) {
+		dir := newFolder(t)
+		in := project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-1"}
+		if _, err := m.InitializeRepository(ctx, in); err != nil {
+			t.Fatalf("first create: %v", err)
+		}
+		// The response was lost; the phone asks again.
+		result, err := m.InitializeRepository(ctx, in)
+		if err != nil {
+			t.Fatalf("retry: %v", err)
+		}
+		if result.Path != dir {
+			t.Fatalf("Path = %q, want %q", result.Path, dir)
+		}
+		out, err := exec.Command("git", "-C", dir, "rev-list", "--count", "HEAD").CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != "1" {
+			t.Fatalf("commits = %q (%v), want 1", out, err)
+		}
+	})
+
+	t.Run("another request's folder is not taken over", func(t *testing.T) {
+		dir := newFolder(t)
+		if _, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-a"}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-b"})
+		wantCode(t, err, "PATH_EXISTS")
+	})
+
+	t.Run("an existing folder with no id is not taken over", func(t *testing.T) {
+		dir := gitRepo(t)
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-c"})
+		wantCode(t, err, "PATH_EXISTS")
+	})
+
+	t.Run("refuses an id that could reach git as anything but a value", func(t *testing.T) {
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: newFolder(t), Create: true, CreateID: "--global"})
+		wantCode(t, err, "INVALID_CREATE_ID")
+	})
+}

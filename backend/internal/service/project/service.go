@@ -455,15 +455,28 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 	m.addMu.Lock()
 	defer m.addMu.Unlock()
 
+	recordCreateID := false
 	if in.Create {
-		if err := createProjectFolder(path); err != nil {
-			return InitializeRepositoryResult{}, err
+		if in.CreateID != "" && !projectCreateIDPattern.MatchString(in.CreateID) {
+			return InitializeRepositoryResult{}, apierr.Invalid("INVALID_CREATE_ID", "createId must be 1-64 letters, digits, or hyphens, starting with a letter or digit.", nil)
 		}
-		defer func() {
-			if retErr != nil {
-				_ = os.RemoveAll(path)
+		if in.CreateID != "" && createdByRequest(ctx, path, in.CreateID) {
+			// A retry of a create whose response was lost: the folder is this
+			// request's own. Done if it got its first commit; otherwise go on.
+			if repoHasCommit(ctx, path) {
+				return InitializeRepositoryResult{Path: path}, nil
 			}
-		}()
+		} else {
+			if err := createProjectFolder(path); err != nil {
+				return InitializeRepositoryResult{}, err
+			}
+			defer func() {
+				if retErr != nil {
+					_ = os.RemoveAll(path)
+				}
+			}()
+			recordCreateID = in.CreateID != ""
+		}
 	}
 	if err := ensureDirectoryPath(path); err != nil {
 		return InitializeRepositoryResult{}, err
@@ -490,6 +503,11 @@ func (m *Service) InitializeRepository(ctx context.Context, in InitializeReposit
 		}()
 		if _, err := gitOutput(ctx, path, "init", "-b", domain.DefaultBranchName); err != nil {
 			return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not initialize a Git repository in this folder.", map[string]any{"error": err.Error()})
+		}
+	}
+	if recordCreateID {
+		if _, err := gitOutput(ctx, path, "config", "--local", projectCreateIDConfigKey, in.CreateID); err != nil {
+			return InitializeRepositoryResult{}, apierr.Invalid("GIT_INIT_FAILED", "Could not record the new project in its repository.", map[string]any{"error": err.Error()})
 		}
 	}
 	if err := gitdefault.New("git", nil).RecordInitialBranch(ctx, path); err != nil {
@@ -1044,6 +1062,22 @@ func folderExists(path string) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// projectCreateIDConfigKey records, in a new project's repository, the create
+// request that made it, so a retry of that request can resume it.
+const projectCreateIDConfigKey = "ao.createId"
+
+var projectCreateIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`)
+
+// createdByRequest reports whether path is a repository a create request with
+// id made: it exists and its local Git config carries the same id.
+func createdByRequest(ctx context.Context, path, id string) bool {
+	if info, err := os.Stat(path); err != nil || !info.IsDir() || !hasGitMetadata(path) {
+		return false
+	}
+	out, err := gitOutput(ctx, path, "config", "--local", "--get", projectCreateIDConfigKey)
+	return err == nil && strings.TrimSpace(out) == id
 }
 
 // createProjectFolder makes the folder for a new, empty project. It refuses a

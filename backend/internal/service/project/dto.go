@@ -87,6 +87,11 @@ type InitializeRepositoryInput struct {
 	// new, empty project. Missing parent folders are created too. The folder is
 	// removed again when initialization fails.
 	Create bool `json:"create,omitempty"`
+	// CreateID names one create request, so a retry after a lost response
+	// resumes the folder that request made instead of failing on PATH_EXISTS.
+	// It is recorded in the new repository's local Git config; a folder that
+	// does not carry it is never taken over.
+	CreateID string `json:"createId,omitempty" maxLength:"64"`
 }
 
 // InitializeRepositoryResult reports the repository path initialized for onboarding.

@@ -91,7 +91,9 @@ func (m *Manager) GitHubRepositoryAvailability(ctx context.Context, in GitHubAva
 	if err == nil {
 		return GitHubAvailabilityResult{Message: "Repository name is already in use for this owner."}, nil
 	}
-	if strings.Contains(out+err.Error(), "404") || strings.Contains(strings.ToLower(out+err.Error()), "not found") {
+	// Only gh's own output names GitHub's answer: the process error also holds
+	// the command line, and a missing gh reads "executable file not found".
+	if strings.Contains(out, "HTTP 404") {
 		return GitHubAvailabilityResult{Available: true}, nil
 	}
 	return GitHubAvailabilityResult{Message: "Could not check this repository name. Confirm GitHub CLI is signed in."}, nil
