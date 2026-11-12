@@ -1314,20 +1314,18 @@ func (c *conversation) Hibernate() error {
 // session reads as exited, and resuming reloads the saved transcript in a fresh
 // process. Any other error is returned unchanged.
 func (c *conversation) providerSessionLost(err error) error {
-	lost := c.markSessionLost(err)
-	if lost != err {
-		c.stopLostProvider()
+	if !isACPSessionMissing(err) {
+		return err
 	}
+	lost := c.markSessionLost(err)
+	c.stopLostProvider()
 	return lost
 }
 
 // markSessionLost records a lost session and wraps err without stopping the
 // provider yet, so a caller can still emit the turn's outcome on the stream
-// that stopping would close.
+// that stopping would close. Callers check isACPSessionMissing first.
 func (c *conversation) markSessionLost(err error) error {
-	if !isACPSessionMissing(err) {
-		return err
-	}
 	c.mu.Lock()
 	sessionID := c.sessionID
 	c.sessionLost = true
