@@ -1560,7 +1560,8 @@ export const ChatComposer = memo(function ChatComposer({
 		if (draftScope && !savingQueuedEdit && !mutationToken) {
 			// The previous send was accepted but its receipt is applied on the next
 			// commit. Until then the draft cannot be claimed; send it right after.
-			holdOwnDraft(forceSteer);
+			// A send still pending from a replaced surface keeps this draft unsent.
+			if (!getChatComposerMutation(draftScope).pending) holdOwnDraft(forceSteer);
 			return;
 		}
 		try {
@@ -1657,7 +1658,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!canSubmitNow) {
 			// The previous message is still settling. Send this one right after it
 			// rather than refusing it.
-			if ((busy || draftMutationPending || composerMutation.pending) && !disabled && !recoveringDelivery) {
+			if ((busy || draftMutationPending) && !composerMutation.pending && !disabled && !recoveringDelivery) {
 				holdOwnDraft(forceSteer);
 			}
 			return;
