@@ -735,3 +735,28 @@ func TestSend_SteerReportsRestartedExitedAgent(t *testing.T) {
 		t.Errorf("output = %q, want the restart reported with the turn still queued, not delivered", out)
 	}
 }
+
+func TestSend_SteerReportsRestartStillRunning(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "worker-67")
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"outcome":"sent","turnId":"turn-1","state":"queued","duplicate":false,"agentWake":"resuming"}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "orch-48", "--steer", "--message", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Orchestrator is restarting it") || !strings.Contains(out, "in queued state") {
+		t.Errorf("output = %q, want the restart reported as still running with the turn queued", out)
+	}
+}

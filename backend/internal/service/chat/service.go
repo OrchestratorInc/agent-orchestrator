@@ -389,10 +389,19 @@ func cloneStartConfig(cfg StartConfig) StartConfig {
 // Best-effort by design: a failure here must not stop a session from coming back,
 // because a session the user cannot reopen is worse than a stale row. Both
 // failures are logged rather than swallowed.
-func (s *Service) settleOrphanedWork(ctx context.Context, session domain.SessionID, conversationID string) {
+//
+// keepQueued is for a wake that kept the messages queued while the agent was
+// down (an exited agent restarted for a message, a resume, a failed version
+// switch). An agent that died mid-turn leaves that turn running; it settles as
+// failed, but the queued messages the wake exists to deliver are not orphans.
+func (s *Service) settleOrphanedWork(ctx context.Context, session domain.SessionID, conversationID string, keepQueued bool) {
 	now := s.now()
-	if err := s.store.SettleOrphanedTurns(ctx, session, now); err != nil {
-		s.log.Error("chat start: settle orphaned turns", "session", session, "error", err)
+	settleTurns := s.store.SettleOrphanedTurns
+	if keepQueued {
+		settleTurns = s.store.SettleOrphanedRunningTurns
+	}
+	if err := settleTurns(ctx, session, now); err != nil {
+		s.log.Error("chat start: settle orphaned turns", "session", session, "keepQueued", keepQueued, "error", err)
 	}
 	// An approval left pending can never be answered: the provider call it was
 	// blocking died with the process that was holding it.
@@ -721,6 +730,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// survive a failed first drain.
 	queuedBeforeFirstController := false
 	preserveUndispatchedQueue := false
+	// keepQueueSettleRunning: a wake whose previous controller died mid-turn
+	// settles that orphaned turn but keeps the messages queued for the wake.
+	keepQueueSettleRunning := false
 	waking := s.isWaking(cfg.SessionID)
 	// A session whose move to a new harness release failed kept its queued
 	// messages for this start, the way a wake does (see versionSwitchFailed).
@@ -739,6 +751,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		}
 		queuedBeforeFirstController = firstController && len(running) == 0
 		preserveUndispatchedQueue = len(running) == 0 && (sessionRecord.ProvisionState.IsProvisioning() || waking)
+		keepQueueSettleRunning = len(running) > 0 && waking
 	}
 	providerBoundaryID := ""
 	if cfg.ProviderSwitch != nil {
@@ -1054,7 +1067,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if !liveReconnect && cfg.ProviderHandoff == nil &&
 		owner.Kind != domain.ConversationOwnerReview &&
 		!queuedBeforeFirstController && !preserveUndispatchedQueue {
-		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
+		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID, keepQueueSettleRunning)
 	}
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.

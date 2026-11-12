@@ -44,7 +44,9 @@ const (
 	AgentWakeNone AgentWake = ""
 	// AgentWakeResumed means the agent had exited and AO restarted it and handed it the message.
 	AgentWakeResumed AgentWake = "resumed"
-	// AgentWakeResuming means the message is queued and the restart is still running.
+	// AgentWakeResuming means the message is queued and the agent has not taken
+	// it yet: the restart is still running, or the agent restarted and the
+	// hand-off of its queue is outstanding.
 	AgentWakeResuming AgentWake = "resuming"
 )
 
@@ -162,13 +164,26 @@ func (m *Manager) afterExitedDelivery(ctx context.Context, id domain.SessionID, 
 }
 
 // chatWakeOutcome answers a sender whose wait for a Chat restart ended
-// without one. The message is queued either way: a caller that stopped
-// waiting is told the restart continues, and a failed restart is reported.
+// without the agent taking the message. The message is queued either way. A
+// caller that stopped waiting, or an agent that restarted but has not taken
+// the queue yet, gets "resuming"; a failed restart is reported.
 func chatWakeOutcome(ctx context.Context, id domain.SessionID, waitErr error) (SendResult, error) {
-	if ctx.Err() != nil {
+	if errors.Is(waitErr, ports.ErrAgentWakeDeliveryPending) || callerStoppedWaiting(ctx) {
 		return SendResult{AgentWake: AgentWakeResuming}, nil
 	}
 	return SendResult{}, fmt.Errorf("send %s: %w", id, &ports.AgentWakeError{Reason: waitErr, Queued: true})
+}
+
+// callerStoppedWaiting reports whether the sender's own request ended, apart
+// from any error the restart returned: a restart that timed out on its own is
+// a failure even while the sender still waits.
+func callerStoppedWaiting(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 // wakeExitedTerminal restarts a terminal session's exited agent once, however

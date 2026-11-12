@@ -83,6 +83,10 @@ type SteerOrSendResult struct {
 	// Woke reports that the agent had exited and was restarted to take this
 	// message, which was queued and handed to it once it was ready.
 	Woke bool
+	// WakePending reports that the agent had exited and the message is queued
+	// for it, but the restart or the hand-off had not finished when the
+	// request returned.
+	WakePending bool
 }
 
 // resolveSteerSender enriches CLI-originated steering with the source session's
@@ -185,9 +189,9 @@ func (s *Service) SteerOrSend(
 	if !recoverOnly {
 		if record, err := s.requireChatSession(ctx, id); err == nil &&
 			exitedAwaitingWake(record) && !s.HasLiveChatController(id) {
-			turn, queueErr := s.queueForExitedWake(ctx, record, msg)
+			turn, pending, queueErr := s.queueForExitedWake(ctx, record, msg)
 			if queueErr == nil {
-				return SteerOrSendResult{Turn: turn, Duplicate: turn.ID == "", Woke: true}, nil
+				return SteerOrSendResult{Turn: turn, Duplicate: turn.ID == "", Woke: !pending, WakePending: pending}, nil
 			}
 			if !errors.Is(queueErr, ErrNotProvisioning) {
 				return SteerOrSendResult{Turn: turn, Duplicate: turn.ID == ""}, queueErr

@@ -5219,6 +5219,14 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 // restarted to take them (exited_delivery.go).
 func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
 	options := ports.MessageDeliveryOptions{WakeExitedAgent: true}
+	// A terminal agent may have accepted this report and exited before the
+	// acceptance was read. The receipt is tied to that launch, so check it
+	// before a restart replaces the launch and the report goes out twice.
+	if prior, found, readErr := m.store.GetSession(ctx, id); readErr == nil && found &&
+		domain.NormalizeSessionMode(prior.Mode) != domain.SessionModeChat &&
+		semanticMessageAccepted(prior, clientMessageID) {
+		return nil
+	}
 	delivery, err := m.beforeExitedDelivery(ctx, id, options)
 	if err != nil {
 		return err

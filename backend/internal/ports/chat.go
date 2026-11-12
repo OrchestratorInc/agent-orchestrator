@@ -513,6 +513,10 @@ type MessageDeliveryOptions struct {
 // exited and AO could not restart it.
 var ErrAgentWakeFailed = errors.New("agent exited and could not be restarted")
 
+// ErrAgentWakeDeliveryPending reports that an exited agent was restarted but
+// the queued message could not be handed to it yet. The message stays queued.
+var ErrAgentWakeDeliveryPending = errors.New("agent restarted but the queued message was not handed to it yet")
+
 // AgentWakeError carries why an automatic restart failed and whether the
 // message stayed queued for the next start. A Chat session keeps it queued; a
 // terminal session has no durable queue, so the sender still holds it.

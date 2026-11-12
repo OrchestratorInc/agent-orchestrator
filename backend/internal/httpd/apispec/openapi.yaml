@@ -23047,6 +23047,7 @@ components:
         agentWake:
           enum:
           - resumed
+          - resuming
           type: string
         duplicate:
           type: boolean

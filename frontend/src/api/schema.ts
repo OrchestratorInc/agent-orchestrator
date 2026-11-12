@@ -8182,7 +8182,7 @@ export interface components {
         SteerOrSendConversationResponse: {
             activityId?: string;
             /** @enum {string} */
-            agentWake?: "resumed";
+            agentWake?: "resumed" | "resuming";
             duplicate: boolean;
             /** @enum {string} */
             outcome: "steered" | "sent";

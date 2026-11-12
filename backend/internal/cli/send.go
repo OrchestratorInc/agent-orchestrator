@@ -153,15 +153,18 @@ func (c *commandContext) steerMessage(
 	if result.AgentWake != "" {
 		// The steer answer carries the turn as it was queued, before the
 		// restarted agent took it, so report its state rather than delivery.
-		session := strings.TrimPrefix(sessionPath, "sessions/")
+		restarted := "restarted it"
+		if result.AgentWake == "resuming" {
+			restarted = "is restarting it"
+		}
+		restart := fmt.Sprintf("%s's agent had exited and Orchestrator %s.", strings.TrimPrefix(sessionPath, "sessions/"), restarted)
 		if result.Duplicate {
-			_, _ = fmt.Fprintf(c.deps.Out,
-				"%s's agent had exited and Orchestrator restarted it. Message was already accepted; delivery state is unchanged.\n", session)
+			_, _ = fmt.Fprintf(c.deps.Out, "%s Message was already accepted; delivery state is unchanged.\n", restart)
 			return nil
 		}
 		_, _ = fmt.Fprintf(c.deps.Out,
-			"%s's agent had exited and Orchestrator restarted it. Message accepted as a normal Chat turn in %s state with delivery handle %s; provider delivery is not confirmed.\n",
-			session, result.State, clientMessageID)
+			"%s Message accepted as a normal Chat turn in %s state with delivery handle %s; provider delivery is not confirmed.\n",
+			restart, result.State, clientMessageID)
 		return nil
 	}
 	if result.Duplicate {

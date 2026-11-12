@@ -69,8 +69,11 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 		recordUserMessage(r.Context(), c.UserMessages, domain.SessionID(chi.URLParam(r, "sessionId")), req.SenderSessionID, true)
 	}
 	response := SteerOrSendConversationResponse{Duplicate: result.Duplicate}
-	if result.Woke {
+	switch {
+	case result.Woke:
 		response.AgentWake = string(sessionmanager.AgentWakeResumed)
+	case result.WakePending:
+		response.AgentWake = string(sessionmanager.AgentWakeResuming)
 	}
 	if result.Steered {
 		response.Outcome = "steered"

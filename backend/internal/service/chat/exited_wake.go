@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -57,7 +59,10 @@ func (s *Service) ensureExitedWake(ctx context.Context, id domain.SessionID) *ex
 		return w
 	}
 	s.wakeMu.Unlock()
-	rec, err := s.requireChatSession(ctx, id)
+	// The message is already queued; a sender that gives up now must not keep
+	// the restart from starting.
+	detached := context.WithoutCancel(ctx)
+	rec, err := s.requireChatSession(detached, id)
 	if err != nil {
 		return finishedExitedWake(err)
 	}
@@ -82,34 +87,62 @@ func (s *Service) ensureExitedWake(ctx context.Context, id domain.SessionID) *ex
 	s.wakeMu.Unlock()
 	// The restart outlives the sender that started it: others wait on it, and
 	// the queued turns need it whether or not this caller stays.
-	go s.runExitedWake(context.WithoutCancel(ctx), id, w)
+	go s.runExitedWake(detached, id, w)
 	return w
 }
 
+// exitedWakeDrainAttempts and exitedWakeDrainRetry bound how hard a restart
+// tries to hand the queue to the new controller before reporting it pending.
+const (
+	exitedWakeDrainAttempts = 3
+	exitedWakeDrainRetry    = time.Second
+)
+
 func (s *Service) runExitedWake(ctx context.Context, id domain.SessionID, w *exitedWake) {
-	err := s.wakeSession(ctx, id, true)
-	if err == nil {
-		if drainErr := s.DrainQueued(ctx, id); drainErr != nil {
-			// The agent runs; the queued turn stays queued and the controller's
-			// next drain delivers it.
+	restartErr := s.wakeSession(ctx, id, true)
+	result := restartErr
+	if restartErr == nil {
+		if drainErr := s.drainAfterExitedWake(ctx, id); drainErr != nil {
+			// The agent runs but has not taken the queue. The message stays
+			// queued, and the sender is told it is still pending, not delivered.
 			s.log.Warn("chat agent restarted but its queued messages were not dispatched yet", "session", id, "err", drainErr)
 			captureChatFault(ctx, drainErr, "", "chat_wake", "drain_exited")
+			result = fmt.Errorf("%w: %w", ports.ErrAgentWakeDeliveryPending, drainErr)
 		}
 	} else {
-		s.log.Warn("could not restart an exited chat agent; its queued messages are kept for the next start", "session", id, "err", err)
-		captureChatFault(ctx, err, "", "chat_wake", "wake_exited")
+		s.log.Warn("could not restart an exited chat agent; its queued messages are kept for the next start", "session", id, "err", restartErr)
+		captureChatFault(ctx, restartErr, "", "chat_wake", "wake_exited")
 	}
 	s.wakeMu.Lock()
-	s.wakeBudgetLocked().Record(id, err)
-	w.err = err
+	// The budget counts the restart itself; a pending drain is not a failed start.
+	s.wakeBudgetLocked().Record(id, restartErr)
+	w.err = result
 	delete(s.exitedWakes, id)
 	close(w.done)
 	s.wakeMu.Unlock()
 }
 
+// drainAfterExitedWake hands the kept queue to the restarted controller,
+// retrying briefly so one transient failure does not leave it waiting for
+// some later drain.
+func (s *Service) drainAfterExitedWake(ctx context.Context, id domain.SessionID) error {
+	var err error
+	for attempt := 1; attempt <= exitedWakeDrainAttempts; attempt++ {
+		if err = s.DrainQueued(ctx, id); err == nil {
+			return nil
+		}
+		if attempt < exitedWakeDrainAttempts {
+			time.Sleep(exitedWakeDrainRetry)
+		}
+	}
+	return err
+}
+
 // AwaitChatWake restarts an exited Chat session's agent if it needs it, or
 // joins the restart already running, and waits for the result. It returns nil
-// when nothing needed restarting.
+// when nothing needed restarting or the agent restarted and took the queue,
+// and an error wrapping ports.ErrAgentWakeDeliveryPending when the agent
+// restarted but the queue is still waiting.
 func (s *Service) AwaitChatWake(ctx context.Context, id domain.SessionID) error {
 	w := s.ensureExitedWake(ctx, id)
 	if w == nil {
@@ -148,21 +181,37 @@ func (s *Service) HoldChatWake(id domain.SessionID) (release func()) {
 	}
 }
 
+// callerStoppedWaiting reports whether the sender's own request ended. It is
+// checked apart from the restart's error: a restart that timed out on its own
+// is a failure even while the sender still waits.
+func callerStoppedWaiting(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
 // queueForExitedWake accepts msg for an exited session and waits for its
-// agent to restart. On a failed restart the message stays queued and the
-// error says so. A refused append (the session came back meanwhile) returns
-// ErrNotProvisioning so the caller sends through the live controller.
-func (s *Service) queueForExitedWake(ctx context.Context, record domain.SessionRecord, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
-	turn, err := s.queueWithoutController(ctx, record, msg, false)
+// agent to restart. pending reports that the message is queued but the agent
+// has not taken it yet: the sender stopped waiting, or the agent restarted and
+// the queue hand-off is still outstanding. On a failed restart the message
+// stays queued and the error says so. A refused append (the session came back
+// meanwhile) returns ErrNotProvisioning so the caller sends through the live
+// controller.
+func (s *Service) queueForExitedWake(ctx context.Context, record domain.SessionRecord, msg ports.ChatUserMessage) (turn domain.ConversationTurn, pending bool, err error) {
+	turn, err = s.queueWithoutController(ctx, record, msg, false)
 	if err != nil {
-		return domain.ConversationTurn{}, err
+		return domain.ConversationTurn{}, false, err
 	}
-	if wakeErr := s.AwaitChatWake(ctx, record.ID); wakeErr != nil {
-		if errors.Is(wakeErr, context.Canceled) || errors.Is(wakeErr, context.DeadlineExceeded) {
-			// The restart continues in the background; only this caller stopped waiting.
-			return turn, nil
-		}
-		return turn, &ports.AgentWakeError{Reason: wakeErr, Queued: true}
+	wakeErr := s.AwaitChatWake(ctx, record.ID)
+	switch {
+	case wakeErr == nil:
+		return turn, false, nil
+	case errors.Is(wakeErr, ports.ErrAgentWakeDeliveryPending), callerStoppedWaiting(ctx):
+		return turn, true, nil
+	default:
+		return turn, false, &ports.AgentWakeError{Reason: wakeErr, Queued: true}
 	}
-	return turn, nil
 }

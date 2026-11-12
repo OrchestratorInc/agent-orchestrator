@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -157,5 +158,49 @@ func TestTerminalWakeFailureIsTypedAndCoolsDown(t *testing.T) {
 	_, err = m.SendWithResult(ctx, "s1", "status?", nil, ports.MessageDeliveryOptions{WakeExitedAgent: true})
 	if !errors.As(err, &wakeErr) || !errors.Is(wakeErr.Reason, wakeguard.ErrRecentFailure) {
 		t.Fatalf("second send = %v, want the cooldown refusal", err)
+	}
+}
+
+// The agent restarted but the queue hand-off is still outstanding: the message
+// is queued, not delivered, so the sender hears "resuming", not "resumed".
+func TestSendWithResultReportsPendingHandOffAsResuming(t *testing.T) {
+	launcher := &wakingLauncher{recordingLauncher: &recordingLauncher{},
+		awaitErr: fmt.Errorf("%w: drain failed", ports.ErrAgentWakeDeliveryPending)}
+	mgr, _, id := exitedChatSession(t, launcher)
+
+	result, err := mgr.SendWithResult(context.Background(), id, "hello", nil, ports.MessageDeliveryOptions{WakeExitedAgent: true})
+	if err != nil {
+		t.Fatalf("SendWithResult = %v, want the queued message accepted", err)
+	}
+	if result.AgentWake != AgentWakeResuming {
+		t.Fatalf("AgentWake = %q, want %q", result.AgentWake, AgentWakeResuming)
+	}
+}
+
+// A terminal agent accepted a report and exited before the acceptance was
+// read. The coordinator's retry must find the receipt for that launch, not
+// restart the agent into a new launch and send the report again.
+func TestSendSemanticDoesNotRestartForReportAcceptedBeforeExit(t *testing.T) {
+	const deliveryID = "report-batch:accepted-before-exit"
+	st := newFakeStore()
+	rec := pastStartupGate(domain.SessionRecord{ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI})
+	rec.Activity = domain.Activity{State: domain.ActivityExited}
+	rec.ProvisionState = domain.SessionProvisionReady
+	rec.Metadata.RuntimeLaunchID = "launch-1"
+	rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointCoordination
+	rec.Metadata.ConversationCheckpointGeneration = "launch-1"
+	rec.Metadata.ConversationCheckpointTurnID = deliveryID
+	st.sessions["s1"] = rec
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, semanticSignalingAgent{}, msg, st)
+
+	if err := m.SendSemantic(context.Background(), "s1", "report", deliveryID); err != nil {
+		t.Fatalf("SendSemantic = %v, want the earlier acceptance honored", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("pane writes = %d, want none for an accepted report", len(msg.msgs))
+	}
+	if got := st.sessions["s1"].Metadata.RuntimeLaunchID; got != "launch-1" {
+		t.Fatalf("runtime launch = %q, want the agent left exited on launch-1", got)
 	}
 }

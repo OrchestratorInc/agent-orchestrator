@@ -282,3 +282,43 @@ func TestRelayToTerminatedSessionIsRefused(t *testing.T) {
 		t.Fatalf("restarts = %d, want none for a terminated session", wakes.Load())
 	}
 }
+
+// A restart that times out on its own is a failure even though the sender is
+// still waiting; only the sender's own request ending reads as "pending".
+func TestSteerOrSendTellsRestartTimeoutFromCallerLeaving(t *testing.T) {
+	t.Run("restart timed out", func(t *testing.T) {
+		h := exitedChatHarness(t)
+		svc := exitedWakeService(t, h, newFakeConversation(), func(context.Context, func() error) error {
+			return context.DeadlineExceeded
+		})
+		result, err := svc.SteerOrSend(context.Background(), testSession, ports.ChatUserMessage{
+			Text: "status?", ClientMessageID: "steer-timeout",
+		}, false)
+		var wakeErr *ports.AgentWakeError
+		if !errors.As(err, &wakeErr) || !wakeErr.Queued || result.Woke || result.WakePending {
+			t.Fatalf("SteerOrSend = %+v, %v; want AgentWakeError{Queued: true}", result, err)
+		}
+	})
+	t.Run("caller stopped waiting", func(t *testing.T) {
+		h := exitedChatHarness(t)
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		// The restart outlives this test, so it ends in a failure rather than
+		// starting a controller after the test's temp dirs are gone.
+		svc := exitedWakeService(t, h, newFakeConversation(), func(context.Context, func() error) error {
+			<-release
+			return errors.New("test finished")
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		result, err := svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{
+			Text: "status?", ClientMessageID: "steer-left",
+		}, false)
+		if err != nil {
+			t.Fatalf("SteerOrSend = %v, want the queued message accepted", err)
+		}
+		if result.Woke || !result.WakePending || result.Turn.ID == "" {
+			t.Fatalf("result = %+v, want a pending restart, not a completed one", result)
+		}
+	})
+}

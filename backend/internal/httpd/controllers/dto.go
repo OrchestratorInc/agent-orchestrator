@@ -3170,9 +3170,11 @@ type SteerOrSendConversationResponse struct {
 	ActivityID     string           `json:"activityId,omitempty"`
 	State          domain.TurnState `json:"state,omitempty" enum:"queued,running,completed,recovered,interrupted,failed"`
 	Duplicate      bool             `json:"duplicate"`
-	// AgentWake is "resumed" when the agent had exited and AO restarted it to
-	// take this message, which it queued first.
-	AgentWake string `json:"agentWake,omitempty" enum:"resumed"`
+	// AgentWake is set when the agent had exited and AO queued this message
+	// for it: "resumed" means AO restarted it and handed it the queue;
+	// "resuming" means the message is still queued while the restart or the
+	// hand-off finishes.
+	AgentWake string `json:"agentWake,omitempty" enum:"resumed,resuming"`
 }
 
 // EditConversationMessageRequest changes the readable text of one durable human
