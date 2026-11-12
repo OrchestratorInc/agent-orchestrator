@@ -3555,6 +3555,23 @@ describe("unsent message strip", () => {
 		expect(strip.textContent!.indexOf("the long paste that never arrived")).toBeLessThan(strip.textContent!.indexOf("sent during undo"));
 	});
 
+	it("puts a discarded message back ahead of a send made after the discard emptied the draft", async () => {
+		const sessionId = "unsent-undo-after-reset";
+		for (let length = 1; length <= 20; length++) writeChatComposerText(sessionId, "x".repeat(length));
+		const { onSend, field } = restoreUnsent(sessionId);
+		await screen.findByTestId("unsent-message-strip");
+		await userEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
+		expect(await screen.findByText("Unsent message discarded")).toBeInTheDocument();
+		expect(readChatSessionDraft(sessionId).composer.revision).toBe(0);
+
+		onSend.mockRejectedValue(new Error("tunnel still down"));
+		await typeInComposer(field, "yo");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(unsentIds(sessionId)).toHaveLength(1));
+		await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+		await waitFor(() => expect(unsentIds(sessionId)).toEqual([`${sessionId}-old`, expect.any(String)]), { timeout: 4_000 });
+	});
+
 	it("queues a new send behind messages waiting for the connection, and sends nothing else first", async () => {
 		const onSend = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
 		const { field } = renderComposer({ onSend, draftSessionId: "unsent-queue-behind" });

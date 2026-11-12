@@ -94,6 +94,7 @@ export interface ChatComposerDelivery {
 	state: ChatDraftDeliveryState;
 	/** Exact composer revision this delivery was created from. */
 	revision: number;
+	sentAt?: number;
 	/** Stable daemon idempotency key. Reused for every recovery attempt. */
 	clientMessageId: string;
 	/** Exact API text, including durable attachment path references. */
@@ -784,6 +785,7 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		typeof delivery.revision === "number" &&
 		Number.isInteger(delivery.revision) &&
 		delivery.revision >= 0 &&
+		(delivery.sentAt === undefined || Number.isFinite(delivery.sentAt)) &&
 		typeof delivery.clientMessageId === "string" &&
 		delivery.clientMessageId.length > 0 &&
 		typeof delivery.requestText === "string" &&
@@ -1070,6 +1072,7 @@ export function prepareChatComposerDelivery(
 		kind: input.kind,
 		state: "dispatching",
 		revision,
+		sentAt: Date.now(),
 		clientMessageId: input.clientMessageId,
 		requestText: input.requestText,
 		...(optimistic ? { draft: { text: input.composerText, attachments: input.attachments } } : {}),
@@ -1210,9 +1213,13 @@ export function isParkableChatComposerDelivery(delivery: ChatComposerDelivery | 
 		!delivery.excerpts?.length && !delivery.fileReferences?.length;
 }
 
+export function compareSendOrder(a: ChatComposerDelivery, b: ChatComposerDelivery): number {
+	return (a.sentAt ?? 0) - (b.sentAt ?? 0) || a.revision - b.revision;
+}
+
 function withUnsent(queue: ChatComposerDelivery[] | undefined, delivery: ChatComposerDelivery): ChatComposerDelivery[] {
 	return [...(queue ?? []).filter((unsent) => unsent.clientMessageId !== delivery.clientMessageId), delivery]
-		.sort((a, b) => a.revision - b.revision);
+		.sort(compareSendOrder);
 }
 
 function withoutUnsent(draft: ChatSessionDraft, clientMessageId: string): ChatSessionDraft {

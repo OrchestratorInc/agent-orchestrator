@@ -63,7 +63,7 @@ import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { formatCapturedFileReferences, type ChatFileReference } from "../../../shared/chat-file-reference";
-import { chatDraftAnnotations, writeChatFileReferences } from "../../lib/chat-drafts";
+import { chatDraftAnnotations, compareSendOrder, writeChatFileReferences } from "../../lib/chat-drafts";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import { UnsentMessageStrip } from "./UnsentMessageStrip";
 import { cn } from "../../lib/utils";
@@ -1275,7 +1275,7 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		if (resume) {
 			heldUnsentRef.current = [];
-			const later = (result.draft.unsentQueue ?? []).filter((other) => other.revision > unsent.revision);
+			const later = (result.draft.unsentQueue ?? []).filter((other) => compareSendOrder(other, unsent) > 0);
 			setTransportRetries((retries) => ({ ...Object.fromEntries(later.map((other) => [other.clientMessageId, -1])), ...retries }));
 		}
 		setSendError(null);
@@ -1913,7 +1913,7 @@ export const ChatComposer = memo(function ChatComposer({
 			const unanswered = delivery.kind === "send" && (code === undefined || HOST_UNREACHABLE_CODES.has(code));
 			if (unanswered) setRetryErrorText(apiErrorMessage(error));
 			const stopped = unanswered || !parks ? [] : (readChatSessionDraft(draftScope).unsentQueue ?? [])
-				.filter((unsent) => unsent.revision > delivery.revision).map((unsent) => unsent.clientMessageId);
+				.filter((unsent) => compareSendOrder(unsent, delivery) > 0).map((unsent) => unsent.clientMessageId);
 			if (parks && !unanswered && prepared.recovered) heldUnsentRef.current = [delivery.clientMessageId, ...stopped];
 			setTransportRetries(({ [delivery.clientMessageId]: attempt, ...others }) => unanswered
 				? { ...others, [delivery.clientMessageId]: (attempt ?? -1) + 1 }
@@ -2125,7 +2125,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const retryingDelivery = durableDelivery?.draft && (retryingUnsent === durableDelivery.clientMessageId ||
 		(parkUnsentSends && isParkableChatComposerDelivery(durableDelivery) && transportRetries[durableDelivery.clientMessageId] !== undefined))
 		? durableDelivery : undefined;
-	const unsentRows = (retryingDelivery ? [...unsentQueue, retryingDelivery].sort((a, b) => a.revision - b.revision) : unsentQueue)
+	const unsentRows = (retryingDelivery ? [...unsentQueue, retryingDelivery].sort(compareSendOrder) : unsentQueue)
 		.flatMap((delivery) => delivery.draft ? [{
 			id: delivery.clientMessageId,
 			text: delivery.draft.text,
