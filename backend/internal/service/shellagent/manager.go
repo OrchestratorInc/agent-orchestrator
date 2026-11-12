@@ -160,9 +160,12 @@ func (m *Manager) watch(ctx context.Context, handleID string) {
 		}
 		if connected.Load() {
 			failures, backoff = 0, initialWatchRetryDelay
-		} else if failures++; failures >= maxWatchFailures {
-			m.log.Debug("shell agent watch gave up on an unreachable host", "handleId", handleID, "err", err)
-			return
+		} else {
+			failures++
+			if failures >= maxWatchFailures {
+				m.log.Debug("shell agent watch gave up on an unreachable host", "handleId", handleID, "err", err)
+				return
+			}
 		}
 		// The host went away; forget the agent until a new reading arrives.
 		m.apply(ctx, handleID, nil)
