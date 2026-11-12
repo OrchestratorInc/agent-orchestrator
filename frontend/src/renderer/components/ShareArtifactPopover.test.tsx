@@ -319,6 +319,20 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		frame.remove();
 	});
 
+	it("stays open from the artifact menu when the closing menu takes focus back, and closes on a click outside", async () => {
+		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		const onOpenChange = vi.fn();
+		await openMenuPanel(cloudFile, "publish", onOpenChange);
+		await screen.findByText("Published");
+		// The menu hands focus back to its trigger a frame after the panel opened.
+		const trigger = screen.getByRole("button", { name: "menu" });
+		trigger.focus();
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(onOpenChange).not.toHaveBeenCalledWith(false);
+		await userEvent.click(document.body);
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+	});
+
 	it("opens a published file from the artifact menu without publishing again", async () => {
 		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		const popover = await openMenuPanel();

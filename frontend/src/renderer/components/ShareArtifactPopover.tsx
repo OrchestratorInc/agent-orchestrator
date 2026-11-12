@@ -244,7 +244,15 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, inten
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
 			<PopoverAnchor asChild>{children}</PopoverAnchor>
-			<PopoverContent align="end" className={POPOVER_CLASS} data-browser-native-overlay="true">
+			<PopoverContent
+				align="end"
+				className={POPOVER_CLASS}
+				data-browser-native-overlay="true"
+				// The menu that opened this panel hands focus back as it finishes
+				// closing, a frame after the panel took it; that is not the person
+				// leaving. Escape, a click outside and a click in a preview still close it.
+				onFocusOutside={(event) => event.preventDefault()}
+			>
 				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} unpublishOnOpen={intent === "unpublish"} /> : null}
 			</PopoverContent>
 		</Popover>
