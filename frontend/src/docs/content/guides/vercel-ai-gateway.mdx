@@ -1,0 +1,98 @@
+---
+title: Use Vercel AI Gateway
+description: Route Claude Code and Codex sessions through Vercel AI Gateway with a project's environment variables.
+---
+
+[Vercel AI Gateway](https://vercel.com/docs/ai-gateway) gives you one API key, spend tracking and request traces across model providers. Orchestrator doesn't proxy model calls: each agent talks to its provider directly. To send an agent's requests through the gateway, give that agent the gateway's address and key in the project's environment variables.
+
+## Before you start
+
+- Orchestrator installed, with the project added. See [Installation](/installation).
+- An AI Gateway API key: in the Vercel dashboard, open **AI Gateway**, then **API keys**, and create a key.
+- Claude Code or Codex set up as the project's worker or orchestrator agent. See [Per-role agents](/guides/per-role-agents).
+
+## Claude Code
+
+<Steps>
+<Step>
+
+### Add the variables to the project
+
+Open the project's settings and go to **Environment**. Add these three variables:
+
+```bash
+ANTHROPIC_BASE_URL=https://ai-gateway.vercel.sh/coding-agent
+ANTHROPIC_AUTH_TOKEN=<your AI Gateway API key>
+ANTHROPIC_API_KEY=
+```
+
+Keep `ANTHROPIC_API_KEY` in the list with an empty value. If it holds an Anthropic key, Claude Code sends that key to the gateway as well, in an `x-api-key` header. The `/coding-agent` address has no `/v1`, because Claude Code adds `/v1/messages` itself.
+
+From the CLI, `ao project set-config <id> --env KEY=VALUE` sets the same variables. `--env` replaces the whole list, so repeat any variables the project already has.
+
+</Step>
+<Step>
+
+### Start a new session
+
+The variables reach every new session in the project: worker and orchestrator sessions, Chat and Terminal interfaces, reviewers, terminals and setup commands. Sessions that are already running keep their old environment, so start a new one or restart the agent.
+
+</Step>
+</Steps>
+
+## Codex
+
+<Steps>
+<Step>
+
+### Add a gateway provider to Codex
+
+Codex reads its provider from `~/.codex/config.toml`. Add:
+
+```toml
+model_provider = "vercel"
+model = "openai/gpt-6-astra"
+
+[model_providers.vercel]
+name = "Vercel AI Gateway"
+base_url = "https://ai-gateway.vercel.sh/codex/v1"
+env_key = "AI_GATEWAY_API_KEY"
+wire_api = "responses"
+```
+
+</Step>
+<Step>
+
+### Add the key to the project
+
+In the project's **Environment**, add:
+
+```bash
+AI_GATEWAY_API_KEY=<your AI Gateway API key>
+```
+
+Then start a new Codex session.
+
+</Step>
+</Steps>
+
+For other agents, set the variables from Vercel's page for that agent in the same **Environment** list. Vercel lists them under [coding agents](https://vercel.com/docs/ai-gateway/coding-agents).
+
+## Check that it works
+
+Start a session and send it a prompt. The requests appear in the Vercel dashboard under **AI Gateway**, with traces under **Observability**. If you get an authentication error instead, check the key and that the session started after you saved the variables.
+
+## Split spend between projects
+
+Each project has its own environment, so give each project its own AI Gateway key. The gateway then reports spend and usage per key, which is per project in Orchestrator, even when many agents run at once.
+
+## Things to know
+
+- **Values are stored unencrypted** in the local project settings. Anyone who can use the project's sessions, and the agents themselves, can read them. Use a gateway key you can rotate.
+- **Variables set in your shell also work.** The desktop app reads your login shell's environment when it starts, so `export` lines in `~/.zshrc` reach the agents after you restart the app. The project's **Environment** is easier to change and applies to one project only.
+- **Separate agent accounts.** A session that runs on a separate Claude Code account, rather than your computer's own login, clears `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` when they come from your shell. Set them in the project's **Environment** instead. A session on a separate Codex account uses that account's own Codex settings, not `~/.codex/config.toml`.
+
+## Related
+
+- [Projects](/configuration/projects#configuration-fields): the `env` field and other project settings
+- [Claude Code with AI Gateway](https://vercel.com/docs/ai-gateway/coding-agents/claude-code) and [Codex with AI Gateway](https://vercel.com/docs/ai-gateway/coding-agents/openai-codex) on Vercel's site
