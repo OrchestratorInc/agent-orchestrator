@@ -54,7 +54,7 @@ import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
 import { SegmentedChoice, type SegmentedChoiceOption } from "../../../lib/files/SegmentedChoice";
-import { annotationContext, branchLabel, changesLabel, fileRead, inPick, selectionParams, type SelectionParams } from "../../../lib/files/selection";
+import { annotationContext, branchLabel, changesLabel, fileRead, imageComparable, inPick, selectionParams, type SelectionParams } from "../../../lib/files/selection";
 import { useBranchBackend, useChangeList, useRouteSelection } from "../../../lib/files/useChangeList";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
@@ -428,6 +428,9 @@ function SessionFileContent() {
 		body = <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (loadError && !detail) {
 		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" onPress={() => void load(false)} />} /></View>;
+	} else if (detail && image && !imageComparable(read)) {
+		// The machine can't read a worktree scope's image sides yet; showing the base and the worktree would contradict the diff.
+		body = <View style={styles.center}><EmptyState icon="image" title={`No image preview for ${changesLabel(pick.changes)}`} message="Images are compared in All changes, a single commit, or another branch." /></View>;
 	} else if (detail && image && !imageSources.unavailable) {
 		body = imageSources.resolved
 			? <ImageCompare detail={detail} name={name} sources={imageSources} />

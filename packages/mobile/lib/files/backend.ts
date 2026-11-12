@@ -20,6 +20,7 @@ import {
 	type WorkspaceTree,
 	type WorkspaceView,
 } from "./api";
+import { imageComparable } from "./selection";
 
 export type WorkspaceImageSource = { uri: string; headers?: Record<string, string> };
 
@@ -67,7 +68,8 @@ export function daemonFilesBackend(config: ServerConfig, view?: WorkspaceView): 
 		file: (sessionId, path, read) => getWorkspaceFile(config, sessionId, path, read, view),
 		tree: (sessionId, dir) => getWorkspaceTree(config, sessionId, dir, view),
 		search: (sessionId, query) => searchWorkspaceFiles(config, sessionId, query, view),
-		imageSource: async (sessionId, path, side, version, read) => workspaceImageSource(config, sessionId, path, side, version, read, view),
+		// A worktree scope's images would be the base and the worktree, not the scope's sides.
+		imageSource: async (sessionId, path, side, version, read) => imageComparable(read ?? {}) ? workspaceImageSource(config, sessionId, path, side, version, read, view) : undefined,
 		sendFeedback: (sessionId, comments, onSent) => sendFileFeedback(config, sessionId, comments, onSent),
 		git: {
 			branches: (sessionId, signal) => getWorkspaceBranches(config, sessionId, { signal }),

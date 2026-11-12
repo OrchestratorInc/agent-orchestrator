@@ -19,6 +19,7 @@ vi.mock("../config", () => ({
 }));
 
 import { getWorkspaceFile, getWorkspaceHistory, getWorkspaceRangeFiles, getWorkspaceTree, searchWorkspaceFiles, sendFileFeedback, workspaceImageSource } from "./api";
+import { daemonFilesBackend } from "./backend";
 import { changedPathCount } from "./navigation";
 
 const cfg = { host: "mac.local", httpPort: 3001, password: "pw", hostId: "h1" } as never;
@@ -106,6 +107,24 @@ describe("reading another branch or a commit", () => {
 	it("points a view's or a commit's image at its snapshot", () => {
 		expect(workspaceImageSource(cfg, "s", "a.png", "after", "v1", { commitSha: "abc" }, view).uri)
 			.toBe("http://mac.local:3001/api/v1/sessions/s/workspace/file/blob?path=a.png&side=after&v=v1&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain&commitSha=abc");
+	});
+});
+
+describe("the machine's image sides", () => {
+	const backend = daemonFilesBackend(cfg);
+
+	it("offers no image for a worktree scope, rather than the base and the worktree", async () => {
+		for (const section of ["staged", "unstaged", "uncommitted", "committed"] as const) {
+			await expect(backend.imageSource("s", "a.png", "before", "v", { section })).resolves.toBeUndefined();
+			await expect(backend.imageSource("s", "a.png", "after", "v", { section })).resolves.toBeUndefined();
+		}
+	});
+
+	it("reads all changes, an untracked file, a commit and a view from the blob route", async () => {
+		expect((await backend.imageSource("s", "a.png", "after", "v"))?.uri).toContain("/workspace/file/blob?path=a.png&side=after&v=v");
+		expect((await backend.imageSource("s", "a.png", "after", "v", { section: "untracked" }))?.uri).toContain("/workspace/file/blob?");
+		expect((await backend.imageSource("s", "a.png", "before", "v", { commitSha: "abc" }))?.uri).toContain("commitSha=abc");
+		expect((await backend.git!.at({ branch: "main" }).imageSource("s", "a.png", "before", "v"))?.uri).toContain("snapshot=true&branch=main");
 	});
 });
 

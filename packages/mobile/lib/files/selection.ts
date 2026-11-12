@@ -126,6 +126,19 @@ export function fileRead(selection: FilesSelection, entry?: Pick<ChangeEntry, "s
 	}
 }
 
+/**
+ * Whether the machine can show both sides of an image for this read. The blob
+ * route compares the base with the live worktree, or reads a commit's or a
+ * view's snapshot; it has no worktree scopes. So Staged (HEAD → index),
+ * Unstaged (index → worktree), Uncommitted (HEAD → worktree) and the branch's
+ * commits (base → HEAD) would show other bytes than their diff, and are not
+ * offered until the daemon can read them. An untracked file has no before,
+ * and its after is the worktree, which the route reads right.
+ */
+export function imageComparable(read: FileRead): boolean {
+	return !read.section || read.section === "untracked";
+}
+
 /** The worktree splits into Uncommitted, Staged and Unstaged only where the daemon lists Uncommitted (it is missing from older ones). */
 export function scopesAvailable(manifest: Pick<WorkspaceManifest, "sections" | "degraded"> | null | undefined): boolean {
 	return Boolean(manifest && manifest.sections.uncommitted !== undefined && !manifest.degraded);

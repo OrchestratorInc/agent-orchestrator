@@ -9,6 +9,7 @@ import {
 	compareBase,
 	DEFAULT_SELECTION,
 	fileRead,
+	imageComparable,
 	inPick,
 	scopesAvailable,
 	selectionForBranch,
@@ -170,5 +171,30 @@ describe("comments", () => {
 		expect(inPick(staged, all)).toBe(false);
 		expect(inPick({}, all)).toBe(true);
 		expect(inPick({}, staged)).toBe(false);
+	});
+});
+
+describe("image previews", () => {
+	const checkedOut = (changes: FilesSelection["changes"]): FilesSelection => ({ branch: { kind: "checked_out" }, changes });
+	const tracked = { sections: ["staged", "unstaged"] as const };
+
+	// The blob route reads base → worktree, a commit or a view; never HEAD,
+	// the index, or a scope's sides. Offer an image only where it matches the diff.
+	it("compare both sides for all changes, a commit and another branch", () => {
+		expect(imageComparable(fileRead(DEFAULT_SELECTION, { sections: [...tracked.sections] }))).toBe(true);
+		expect(imageComparable(fileRead(checkedOut({ kind: "commits", sha: "abc" })))).toBe(true);
+		expect(imageComparable(fileRead({ branch: { kind: "branch", name: "main" }, changes: { kind: "commits" } }))).toBe(true);
+		expect(imageComparable(fileRead({ branch: { kind: "pull_request", number: 3, url: "", branch: "x" }, changes: { kind: "commits", sha: "abc" } }))).toBe(true);
+	});
+
+	it("are not offered for a worktree scope, whose sides the route cannot read", () => {
+		for (const kind of ["staged", "unstaged", "uncommitted"] as const) {
+			expect(imageComparable(fileRead(checkedOut({ kind }), { sections: [...tracked.sections] }))).toBe(false);
+		}
+		expect(imageComparable(fileRead(checkedOut({ kind: "commits" })))).toBe(false);
+	});
+
+	it("show an untracked file in Unstaged, which has no before and the worktree after", () => {
+		expect(imageComparable(fileRead(checkedOut({ kind: "unstaged" }), { sections: ["untracked"] }))).toBe(true);
 	});
 });
