@@ -45,7 +45,7 @@ export function ConversationUsageSheet({ sessionTitle, snapshot }: { sessionTitl
 						/>
 					);
 				})}
-				{!usage && !limits ? <Text style={styles.detail}>The agent hasn't reported usage for this conversation yet.</Text> : null}
+				{!usage && windows.length === 0 ? <Text style={styles.detail}>The agent hasn't reported usage for this conversation yet.</Text> : null}
 			</View>
 		</SheetScreen>
 	);

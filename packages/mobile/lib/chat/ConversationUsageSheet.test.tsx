@@ -71,4 +71,10 @@ describe("ConversationUsageSheet", () => {
 		const text = render({}).findAllByType("Text" as never).map((node) => node.props.children);
 		expect(text).toEqual(["The agent hasn't reported usage for this conversation yet."]);
 	});
+
+	// Limits with no window reported draw no rows, so the sheet must not go blank.
+	it("says so when the limits carry no reported window", () => {
+		const text = render({ rateLimits: { primaryUsedPercent: -1, secondaryUsedPercent: -1 } }).findAllByType("Text" as never).map((node) => node.props.children);
+		expect(text).toEqual(["The agent hasn't reported usage for this conversation yet."]);
+	});
 });
