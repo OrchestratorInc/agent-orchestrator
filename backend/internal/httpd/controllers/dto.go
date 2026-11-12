@@ -3460,6 +3460,10 @@ type ConversationDiffFileResponse struct {
 	Status    string `json:"status" enum:"added,modified,deleted,renamed"`
 	// OldPath is set only for a rename.
 	OldPath string `json:"oldPath,omitempty"`
+	// OutsideWorkspace marks a path in neither the session worktree nor its
+	// artifact directory, such as an agent's own memory file. The Files panel
+	// cannot open it, so a client lists it without offering to.
+	OutsideWorkspace bool `json:"outsideWorkspace,omitempty"`
 	// RolledBack marks a turn an undo discarded. Its messages and activities are
 	// absent from this snapshot because the agent no longer remembers them; the turn
 	// is still reported so a client can say what was taken back rather than letting

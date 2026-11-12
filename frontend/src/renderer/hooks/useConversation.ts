@@ -2022,6 +2022,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 							deletions: file.deletions,
 							status: file.status as DiffStatus,
 							oldPath: file.oldPath || undefined,
+							outsideWorkspace: file.outsideWorkspace || undefined,
 						})),
 						truncated: turn.diff.truncated,
 					}

@@ -281,6 +281,10 @@ type Controller struct {
 	// artifactDir is the session's artifact directory, empty for a review or a
 	// session without one. Set once, before the controller is published.
 	artifactDir string
+	// workspaceDir is the session worktree, empty for a review. A turn-diff
+	// path outside it and artifactDir is marked so clients do not offer it as
+	// a workspace file. Set once, before the controller is published.
+	workspaceDir string
 	// artifactBaseline is the artifact directory as the turn in flight started,
 	// compared when it ends to record which artifacts it created or edited. Nil
 	// when no turn is being watched.
@@ -3482,6 +3486,8 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				Deletions: file.Deletions,
 				Status:    file.Status,
 				OldPath:   file.OldPath,
+
+				OutsideWorkspace: pathOutsideSession(c.workspaceDir, c.artifactDir, file.Path),
 			})
 		}
 		found, err := c.store.SetTurnDiff(ctx, c.conversation.ID, event.ProviderTurnID, diff, now)

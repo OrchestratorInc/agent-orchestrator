@@ -3143,6 +3143,8 @@ type harness struct {
 	accountRechecks atomic.Int32
 	renders         *attachmentstore.Store
 	rendersDir      string
+	// workspace is the worktree the controller was started in.
+	workspace string
 	// reconciled lists the sessions whose output type a save asked to update;
 	// reconcileErr is what that update returns.
 	reconciled   []domain.SessionID
@@ -3267,11 +3269,12 @@ func newHarnessWithConversationAndStoreForHarness(
 		},
 	})
 
+	h.workspace = t.TempDir()
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
 		SessionID:     testSession,
 		ProjectID:     testProject,
 		Harness:       agentHarness,
-		WorkspacePath: t.TempDir(),
+		WorkspacePath: h.workspace,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)

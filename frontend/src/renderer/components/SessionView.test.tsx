@@ -5763,7 +5763,10 @@ describe("SessionView", () => {
 		workerSession("sess-orch").mode = "chat";
 		render(<SessionView sessionId="sess-orch" />);
 		fireEvent.click(screen.getByRole("button", { name: "open chat absolute path" }));
-		expect(await screen.findByTestId("session-file-workspace")).toHaveTextContent("/Users/me/worktrees/s/src/App.tsx");
+		// A tab could only say it cannot open the file, so the toast says it instead.
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe("This file is outside the session's workspace, so it can't be opened here."));
+		expect(useUiStore.getState().globalToast?.body).toBe("/Users/me/worktrees/s/src/App.tsx");
+		expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
 	});
 
 	it("does not guess from the file list when the daemon cannot resolve an absolute chat path", async () => {
