@@ -2535,6 +2535,11 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		if (!daemonAutoRestartMarkerMatches(autoRestartIntent, runFile)) return daemonStatus;
 	}
 	if (startCancelled()) return daemonStatus;
+	// Plan before any descriptor is opened below: this awaits, and a stop or a
+	// newer start during the wait must not leave anything to clean up.
+	const isolation = await planDaemonSpawnIsolation(launch);
+	if (startCancelled()) return daemonStatus;
+	const spawnLaunch = isolation.kind === "scope" ? isolation.launch : launch;
 
 	// Capture the spawned handle locally so the async lifecycle listeners act only
 	// on THIS process. Without this, a stale exit from an already-stopped daemon
@@ -2572,9 +2577,6 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			stdio = ["pipe", "ignore", "ignore"];
 		}
 	}
-	const isolation = await planDaemonSpawnIsolation(launch);
-	if (startCancelled()) return daemonStatus;
-	const spawnLaunch = isolation.kind === "scope" ? isolation.launch : launch;
 	lifecycleLog("daemon_spawn", {
 		trigger,
 		keepAlive: keep,

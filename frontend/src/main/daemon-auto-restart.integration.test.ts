@@ -67,10 +67,11 @@ function setup() {
 	const lifecycleLog = vi.fn();
 	const planDaemonSpawnIsolation = vi.fn(async (): Promise<unknown> => ({ kind: "unchanged", reason: "disabled" }));
 	const applyDaemonOomScoreAdj = vi.fn(() => 300);
+	const openSync = vi.fn(() => 73);
 	const context = vm.createContext({
 		lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj,
 		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path,
-		openSync: vi.fn(() => 73), closeSync: vi.fn(),
+		openSync, closeSync: vi.fn(),
 		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
 		os: { homedir: () => "/owned/home" }, app, ipcMain: { handle: (name: string, handler: () => unknown) => ipc.set(name, handler) },
 		browserQuitRequested: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
@@ -95,7 +96,7 @@ function setup() {
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {
-		read, unlink, spawn, children, replace, lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		read, unlink, spawn, children, replace, lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj, openSync, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
 		setMarker(value: string | Error) { marker = value; },
 		start: () => ipc.get("daemon:start")!(), stop: () => ipc.get("daemon:stop")!(), restart: () => ipc.get("daemon:restart")!(),
 		status: () => vm.runInContext("daemonStatus", context),
@@ -200,6 +201,21 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.spawn.mock.calls[1][0]).toBe("/owned/ao");
 		expect(h.applyDaemonOomScoreAdj).toHaveBeenCalledWith(43, 300);
 		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawned", expect.objectContaining({ daemonPid: 43, oomScoreAdj: 300 }));
+	});
+
+	it("opens no keep-alive log descriptor when a stop lands during isolation planning", async () => {
+		const h = setup();
+		h.env.AO_KEEP_DAEMON = "1";
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(1);
+		h.stop();
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await starting;
+		expect(h.openSync).not.toHaveBeenCalled();
+		expect(h.spawn).not.toHaveBeenCalled();
 	});
 
 	it("records a graceful exit as no restart", async () => {
