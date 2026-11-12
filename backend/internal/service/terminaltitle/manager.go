@@ -35,6 +35,9 @@ var (
 	// maxWatchFailures ends a watch whose host refuses that many connections in
 	// a row. The watch restarts when its session gets a new terminal.
 	maxWatchFailures = 6
+	// readRetryDelay is how soon a failed session read is tried again. Nothing
+	// rescans, so a read that failed must not be dropped.
+	readRetryDelay = 5 * time.Second
 )
 
 const flushTimeout = 5 * time.Second
@@ -86,6 +89,10 @@ type Manager struct {
 	log   *slog.Logger
 	base  context.Context
 
+	// writeMu orders title writes, so a replaced run's late write cannot land
+	// after its successor's. Taken before mu, never while holding it.
+	writeMu sync.Mutex
+
 	mu      sync.Mutex
 	watches map[terminalKey]*watch
 	// pending holds sessions named by change events, read by Run.
@@ -132,23 +139,38 @@ func (m *Manager) Run(ctx context.Context, events Events) {
 		unsubscribe := events.Subscribe(m.observeEvent)
 		defer unsubscribe()
 	}
-	m.loadSessions(ctx)
+	for !m.loadSessions(ctx) {
+		select {
+		case <-ctx.Done():
+			m.stopAll()
+			return
+		case <-time.After(readRetryDelay):
+		}
+	}
+	failed := map[domain.SessionID]struct{}{}
+	var retry <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			m.stopAll()
 			return
 		case <-m.poke:
+		case <-retry:
+			retry = nil
 		}
 		m.mu.Lock()
-		ids := make([]domain.SessionID, 0, len(m.pending))
 		for id := range m.pending {
-			ids = append(ids, id)
+			failed[id] = struct{}{}
 		}
 		clear(m.pending)
 		m.mu.Unlock()
-		for _, id := range ids {
-			m.refreshSession(ctx, id)
+		for id := range failed {
+			if m.refreshSession(ctx, id) {
+				delete(failed, id)
+			}
+		}
+		if len(failed) > 0 && retry == nil {
+			retry = time.After(readRetryDelay)
 		}
 	}
 }
@@ -185,24 +207,26 @@ func (m *Manager) observeEvent(e cdc.Event) {
 	}
 }
 
-func (m *Manager) loadSessions(ctx context.Context) {
+func (m *Manager) loadSessions(ctx context.Context) bool {
 	sessions, err := m.store.ListAllSessions(ctx)
 	if err != nil {
-		m.log.Warn("terminal titles: list sessions failed", "err", err)
-		return
+		m.log.Warn("terminal titles: list sessions failed; retrying", "err", err)
+		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, rec := range sessions {
 		m.setLocked(terminalKey{session: rec.ID}, sessionTerminal(rec))
 	}
+	return true
 }
 
-func (m *Manager) refreshSession(ctx context.Context, id domain.SessionID) {
+// refreshSession reports false when the read failed and must be retried.
+func (m *Manager) refreshSession(ctx context.Context, id domain.SessionID) bool {
 	rec, found, err := m.store.GetSession(ctx, id)
 	if err != nil {
-		m.log.Debug("terminal titles: read session failed", "session", id, "err", err)
-		return
+		m.log.Debug("terminal titles: read session failed; retrying", "session", id, "err", err)
+		return false
 	}
 	var term terminal
 	if found {
@@ -211,6 +235,7 @@ func (m *Manager) refreshSession(ctx context.Context, id domain.SessionID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.setLocked(terminalKey{session: id}, term)
+	return true
 }
 
 // sessionTerminal is the terminal to follow for a session, or none. Chat
@@ -321,7 +346,7 @@ func (m *Manager) flush(w *watch) {
 	w.hasSaved, w.saved, w.lastWrite = true, title, time.Now()
 	m.mu.Unlock()
 
-	err := m.save(m.base, w.key, title)
+	err := m.save(m.base, w, title)
 	if err == nil {
 		return
 	}
@@ -336,11 +361,22 @@ func (m *Manager) flush(w *watch) {
 	}
 }
 
-func (m *Manager) save(ctx context.Context, key terminalKey, title string) error {
-	if key.shell != "" {
-		return m.store.UpdateShellTerminalAppTitle(ctx, key.shell, title)
+// save stores w's title unless a newer run of the same terminal replaced w;
+// the newer run owns the title from then on. A watch that only stopped (its
+// session ended or its shell closed) still stores its last title.
+func (m *Manager) save(ctx context.Context, w *watch, title string) error {
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+	m.mu.Lock()
+	current, ok := m.watches[w.key]
+	m.mu.Unlock()
+	if ok && current != w {
+		return nil
 	}
-	return m.store.UpsertSessionTerminalTitle(ctx, key.session, title, time.Now().UTC())
+	if w.key.shell != "" {
+		return m.store.UpdateShellTerminalAppTitle(ctx, w.key.shell, title)
+	}
+	return m.store.UpsertSessionTerminalTitle(ctx, w.key.session, title, time.Now().UTC())
 }
 
 // stopLocked ends a watch and stores a title still waiting on the write limit.
@@ -358,13 +394,13 @@ func (m *Manager) stopLocked(w *watch) {
 	if !w.seen || (w.hasSaved && w.saved == w.latest) {
 		return
 	}
-	key, title := w.key, w.latest
+	title := w.latest
 	w.hasSaved, w.saved = true, title
 	go func() {
 		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(m.base), flushTimeout)
 		defer cancel()
-		if err := m.save(flushCtx, key, title); err != nil {
-			m.log.Debug("terminal titles: final save failed", "session", key.session, "shell", key.shell, "err", err)
+		if err := m.save(flushCtx, w, title); err != nil {
+			m.log.Debug("terminal titles: final save failed", "session", w.key.session, "shell", w.key.shell, "err", err)
 		}
 	}()
 }

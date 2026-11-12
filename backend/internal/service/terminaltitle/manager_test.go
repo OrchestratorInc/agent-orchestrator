@@ -3,6 +3,7 @@ package terminaltitle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +18,8 @@ type fakeStore struct {
 	sessions map[domain.SessionID]domain.SessionRecord
 	gets     int
 	titles   map[string][]string // key: session id or shell handle
+	// listFails and getFails fail that many reads before succeeding.
+	listFails, getFails int
 }
 
 func newFakeStore(recs ...domain.SessionRecord) *fakeStore {
@@ -30,6 +33,10 @@ func newFakeStore(recs ...domain.SessionRecord) *fakeStore {
 func (s *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.listFails > 0 {
+		s.listFails--
+		return nil, errors.New("database is locked")
+	}
 	out := make([]domain.SessionRecord, 0, len(s.sessions))
 	for _, rec := range s.sessions {
 		out = append(out, rec)
@@ -41,6 +48,10 @@ func (s *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gets++
+	if s.getFails > 0 {
+		s.getFails--
+		return domain.SessionRecord{}, false, errors.New("database is locked")
+	}
 	rec, ok := s.sessions[id]
 	return rec, ok, nil
 }
@@ -87,12 +98,16 @@ func (s *fakeStore) getCount() int {
 type fakeRuntime struct {
 	mu          sync.Mutex
 	dials       map[string]int
-	live        map[string]func(string)
+	live        map[string]*liveWatch
 	unavailable map[string]bool
 }
 
+// liveWatch is one open watch; a pointer so a replaced watch on the same
+// handle cannot remove its successor.
+type liveWatch struct{ fn func(string) }
+
 func newFakeRuntime() *fakeRuntime {
-	return &fakeRuntime{dials: map[string]int{}, live: map[string]func(string){}, unavailable: map[string]bool{}}
+	return &fakeRuntime{dials: map[string]int{}, live: map[string]*liveWatch{}, unavailable: map[string]bool{}}
 }
 
 func (f *fakeRuntime) WatchTerminalTitle(ctx context.Context, handle ports.RuntimeHandle, fn func(string)) error {
@@ -102,11 +117,14 @@ func (f *fakeRuntime) WatchTerminalTitle(ctx context.Context, handle ports.Runti
 		f.mu.Unlock()
 		return ports.ErrTerminalTitleUnavailable
 	}
-	f.live[handle.ID] = fn
+	mine := &liveWatch{fn: fn}
+	f.live[handle.ID] = mine
 	f.mu.Unlock()
 	<-ctx.Done()
 	f.mu.Lock()
-	delete(f.live, handle.ID)
+	if f.live[handle.ID] == mine {
+		delete(f.live, handle.ID)
+	}
 	f.mu.Unlock()
 	return ctx.Err()
 }
@@ -127,9 +145,9 @@ func (f *fakeRuntime) emit(t *testing.T, handle, title string) {
 	t.Helper()
 	waitFor(t, "a watch on "+handle, func() bool { return f.watching(handle) })
 	f.mu.Lock()
-	fn := f.live[handle]
+	w := f.live[handle]
 	f.mu.Unlock()
-	fn(title)
+	w.fn(title)
 }
 
 type fakeEvents struct {
@@ -178,9 +196,9 @@ func updated(id string, payload map[string]any) cdc.Event {
 
 func startManager(t *testing.T, store *fakeStore, unavailable ...string) (*Manager, *fakeRuntime, *fakeEvents) {
 	t.Helper()
-	writeBefore := minWriteInterval
-	minWriteInterval = 200 * time.Millisecond
-	t.Cleanup(func() { minWriteInterval = writeBefore })
+	writeBefore, retryBefore := minWriteInterval, readRetryDelay
+	minWriteInterval, readRetryDelay = 200*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { minWriteInterval, readRetryDelay = writeBefore, retryBefore })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	rt, events := newFakeRuntime(), &fakeEvents{}
@@ -308,4 +326,47 @@ func TestManagerRestartsAnEndedWatchWhenTheSessionIsRestored(t *testing.T) {
 	store.put(restored)
 	events.send(t, updated("s1", map[string]any{"id": "s1"}))
 	waitFor(t, "a watch on the restored host", func() bool { return rt.watching("s1") })
+}
+
+func TestManagerRetriesAFailedStartupRead(t *testing.T) {
+	store := newFakeStore(tuiSession("s1", "h1"))
+	store.listFails = 2
+	_, rt, _ := startManager(t, store)
+	waitFor(t, "the watch after the read succeeds", func() bool { return rt.watching("h1") })
+}
+
+func TestManagerRetriesAFailedSessionRead(t *testing.T) {
+	store := newFakeStore()
+	_, rt, events := startManager(t, store)
+	store.put(tuiSession("s1", "h1"))
+	store.mu.Lock()
+	store.getFails = 2
+	store.mu.Unlock()
+	events.send(t, updated("s1", map[string]any{"id": "s1"}))
+	waitFor(t, "the watch after the read succeeds", func() bool { return rt.watching("h1") })
+}
+
+// A restored session's new run owns its title; the old run's pending title
+// must not be written after it.
+func TestManagerDropsAReplacedRunsPendingTitle(t *testing.T) {
+	store := newFakeStore(tuiSession("s1", "s1"))
+	_, rt, events := startManager(t, store)
+	rt.emit(t, "s1", "old task")
+	waitFor(t, "the first write", func() bool { return len(store.written("s1")) == 1 })
+	rt.emit(t, "s1", "old task, renamed") // held by the write limit
+
+	restored := tuiSession("s1", "s1")
+	restored.Metadata.RuntimeLaunchID = "launch-2"
+	store.put(restored)
+	events.send(t, updated("s1", map[string]any{"id": "s1"}))
+	waitFor(t, "the new run's watch", func() bool { return rt.dialCount("s1") == 2 && rt.watching("s1") })
+	rt.emit(t, "s1", "new task")
+	waitFor(t, "the new run's write", func() bool {
+		got := store.written("s1")
+		return len(got) > 0 && got[len(got)-1] == "new task"
+	})
+	time.Sleep(3 * minWriteInterval)
+	if got := store.written("s1"); len(got) != 2 || got[0] != "old task" || got[1] != "new task" {
+		t.Fatalf("writes = %q, want the old run's first title then only the new run's", got)
+	}
 }
