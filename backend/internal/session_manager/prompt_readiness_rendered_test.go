@@ -159,3 +159,45 @@ func TestSpawn_RenderedScreenReadinessFallsBackToRawOutput(t *testing.T) {
 		t.Fatalf("delivered prompts = %#v, want one", msg.msgs)
 	}
 }
+
+func TestPromptOutputContainsWrappedMatchesWrappedDialogHeading(t *testing.T) {
+	cases := map[string]string{
+		"single line":       "│ " + testTrustDialog + " │",
+		"wrapped in border": "╭──────────────────────────────╮\r\n│ Do you trust the contents of │\r\n│ \x1b[1mthis directory?\x1b[0m              │\r\n╰──────────────────────────────╯",
+		"wrapped plain":     "Do you trust the\n  contents of this\n  directory?",
+	}
+	for name, screen := range cases {
+		if !promptOutputContainsWrapped(screen, []string{testTrustDialog}) {
+			t.Errorf("%s: blocking heading not detected in %q", name, screen)
+		}
+	}
+	if promptOutputContainsWrapped("Do you trust the\ncontents of that directory?", []string{testTrustDialog}) {
+		t.Error("different heading matched")
+	}
+	if promptOutputContainsWrapped("Grok Build 1.0.77", []string{"", "  "}) {
+		t.Error("blank blocking pattern matched")
+	}
+}
+
+func TestSpawn_WrappedBlockingDialogAtTimeoutStillFails(t *testing.T) {
+	rt := &renderedReadinessRuntime{
+		fakeRuntime: &fakeRuntime{},
+		screens:     []string{"│ Do you trust the contents of │\n│ this directory?              │\n│ No, quit n                   │\nGrok Build 1.0.77"},
+	}
+	msg := &fakeMessenger{}
+	m := newRenderedReadinessManager(rt, msg, ports.PromptReadinessHints{
+		Patterns:         []string{"Grok Build"},
+		PollInterval:     time.Millisecond,
+		Timeout:          20 * time.Millisecond,
+		RenderedScreen:   true,
+		BlockingPatterns: []string{testTrustDialog},
+	})
+
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "Run ao status"})
+	if !errors.Is(err, errPromptBlockedByDialog) {
+		t.Fatalf("Spawn err = %v, want errPromptBlockedByDialog for a wrapped dialog heading", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("delivered prompts = %#v, want none typed into the dialog", msg.msgs)
+	}
+}

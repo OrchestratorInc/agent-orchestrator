@@ -7246,7 +7246,7 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	for {
 		output, err := m.promptReadinessOutput(ctx, handle, lines, hints.RenderedScreen)
 		if err == nil {
-			blocked = promptOutputContains(output, hints.BlockingPatterns)
+			blocked = promptOutputContainsWrapped(output, hints.BlockingPatterns)
 			if !blocked && promptOutputContains(output, hints.Patterns) {
 				return nil
 			}
@@ -7311,6 +7311,30 @@ func (m *Manager) promptReadinessOutput(ctx context.Context, handle ports.Runtim
 		}
 	}
 	return m.runtime.GetOutput(ctx, handle, lines)
+}
+
+// promptOutputContainsWrapped matches blocking patterns even when a narrow
+// pane wraps a dialog heading across lines, possibly between box-drawing
+// borders: escapes are stripped, borders become spaces, and every whitespace
+// run (including line breaks) collapses to one space on both sides.
+func promptOutputContainsWrapped(output string, patterns []string) bool {
+	screen := foldPromptText(promptOutputEscape.ReplaceAllString(output, ""))
+	for _, pattern := range patterns {
+		if folded := foldPromptText(pattern); folded != "" && strings.Contains(screen, folded) {
+			return true
+		}
+	}
+	return false
+}
+
+func foldPromptText(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r >= 0x2500 && r <= 0x257f { // Box Drawing block: dialog borders.
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func promptOutputContains(output string, patterns []string) bool {
