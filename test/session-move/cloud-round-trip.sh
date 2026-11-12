@@ -136,7 +136,11 @@ services:
     command: ["git init -q --bare -b main /git/acme/app.git && git -C /git/acme/app.git config http.receivepack true && exec /srv/bin/gitserver /git"]
     ports: ["127.0.0.1:$GIT_PORT:8080"]
 YAML
-compose up -d --no-build --quiet-pull postgres minio minio-init migrate control-plane gitserver
+# On first boot Postgres runs its init on a unix socket and passes its health
+# check before it accepts TCP, so migrate waits for TCP.
+compose up -d --no-build --quiet-pull postgres minio minio-init gitserver
+for _ in $(seq 1 120); do compose exec -T postgres pg_isready -h 127.0.0.1 -U ao_cloud_owner -d ao_cloud >/dev/null 2>&1 && break; sleep 1; done
+compose up -d --no-build --quiet-pull migrate control-plane
 for _ in $(seq 1 90); do curl -fsS "http://127.0.0.1:$AO_CLOUD_PORT/readyz" >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS "http://127.0.0.1:$AO_CLOUD_PORT/readyz" >/dev/null || fail "AO Cloud did not become ready"
 for _ in $(seq 1 30); do curl -fsS "http://127.0.0.1:$GIT_PORT/acme/app.git/info/refs?service=git-upload-pack" >/dev/null 2>&1 && break; sleep 1; done
