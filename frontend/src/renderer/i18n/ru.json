@@ -3543,6 +3543,8 @@
 	"remote.cloneDescription": "Вставьте URL Git-репозитория и выберите, где Orchestrator создаст рабочую копию на хосте.",
 	"remote.passwordRejected": "Доступ отклонён",
 	"remote.retryHost": "Повторить подключение к {{label}}",
+	"remote.retry": "Повторить",
+	"remote.offline": "Не в сети",
 	"remote.startOn": "Запустить на {{label}}",
 	"remote.hostLabel": "Удалённый хост: {{hostId}}",
 	"remote.loadingSession": "Загрузка сессии",

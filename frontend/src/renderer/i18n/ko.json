@@ -3426,6 +3426,8 @@
 	"remote.cloneDescription": "Git URL을 붙여넣고 Orchestrator가 호스트에서 체크아웃을 만들 위치를 선택하세요.",
 	"remote.passwordRejected": "액세스 거부됨",
 	"remote.retryHost": "{{label}} 다시 연결",
+	"remote.retry": "다시 시도",
+	"remote.offline": "오프라인",
 	"remote.startOn": "{{label}}에서 시작",
 	"remote.hostLabel": "원격 호스트: {{hostId}}",
 	"remote.loadingSession": "세션 불러오는 중",
