@@ -1,7 +1,7 @@
 ---
 name: using-ao
-description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers importing existing agent sessions."
-trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
+description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers first-time setup and importing existing agent sessions."
+trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
 ---
 
 # Orchestrator CLI Catalog
@@ -40,6 +40,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 
 ## Conventions
 
+- When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
 - `-p / --project` scopes session subcommand lookups to one project.
