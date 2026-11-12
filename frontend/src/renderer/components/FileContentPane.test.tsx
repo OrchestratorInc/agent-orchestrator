@@ -10,6 +10,9 @@ import type { FileAnnotationModel } from "./WorkspaceDiffView";
 import { TooltipProvider } from "./ui/tooltip";
 
 const { getMock, putMock, subscribeMock, highlightReadyMock } = vi.hoisted(() => ({ getMock: vi.fn(), putMock: vi.fn(), subscribeMock: vi.fn((_sessionId: string, _client: QueryClient, _hostId?: string) => vi.fn()), highlightReadyMock: vi.fn(() => true) }));
+const { downloadHookMock } = vi.hoisted(() => ({ downloadHookMock: vi.fn((): ((path: string) => void) | undefined => undefined) }));
+
+vi.mock("../hooks/useWorkspaceFileDownload", () => ({ useWorkspaceFileDownload: downloadHookMock }));
 
 vi.mock("../lib/workspace-file-events", () => ({ subscribeWorkspaceFileChanges: subscribeMock }));
 
@@ -54,7 +57,35 @@ describe("FileContentPane", () => {
 		putMock.mockReset();
 		subscribeMock.mockClear();
 		highlightReadyMock.mockReturnValue(true);
+		downloadHookMock.mockReturnValue(undefined);
 		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("downloads a live remote file and offers no download for a historical one", async () => {
+		const download = vi.fn();
+		downloadHookMock.mockReturnValue(download);
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "out/report.pdf",
+				status: "unmodified",
+				content: "report body",
+				size: 11,
+				binary: false,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+				editable: false,
+			},
+		});
+		const { unmount } = renderWithQuery(<FileContentPane annotation={noopAnnotation()} hostId="h1" initialMode="file" path="out/report.pdf" sessionId="sess-1" split={false} />);
+		await userEvent.click(await screen.findByRole("button", { name: "Download" }));
+		expect(download).toHaveBeenCalledExactlyOnceWith("out/report.pdf");
+		unmount();
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} commitSha="abc123" hostId="h1" initialMode="file" path="out/report.pdf" sessionId="sess-1" split={false} />);
+		await screen.findByText("report body");
+		expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
 	});
 
 	it("keeps inactive editor drafts without letting them handle the active tab's save shortcut", async () => {
