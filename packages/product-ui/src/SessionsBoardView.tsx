@@ -404,6 +404,8 @@ export function SessionCardView({
 						? "bg-[color-mix(in_srgb,var(--color-status-needs-you)_10%,var(--popover))]"
 						: "animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]"),
 				selected && "border-border-strong bg-interactive-hover",
+				// A grid of compact cards lines each row up: every card fills it.
+				compact && "h-full",
 			)}
 			data-selected={selected || undefined}
 			data-testid="board-session-card"
@@ -438,19 +440,19 @@ export function SessionCardView({
 					) : null}
 				</div>
 				{compact ? (
-					// Branch and PRs wrap only when they do not fit; the time stays on
-					// the first line's end.
-					<div className="mt-1 flex min-w-0 items-start gap-2 text-2xs text-muted-foreground" data-testid="session-card-meta">
-						<div className="flex min-h-5 min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-0.5">
-							{branchRow ? (
-								<span className="flex min-w-0 max-w-full items-center gap-1.5 font-sans">{branchRow}</span>
-							) : null}
-							{prGroups}
+					// Every compact card has the same shape: branch and time on one
+					// line, then the PRs on their own.
+					<div className="mt-1 flex min-w-0 flex-col gap-1 text-2xs text-muted-foreground" data-testid="session-card-meta">
+						<div className="flex min-h-5 min-w-0 items-center gap-2">
+							<div className="flex min-w-0 flex-1 items-center gap-1.5 font-sans">{branchRow}</div>
+							<div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+								{statusLabel}
+								{metrics}
+							</div>
 						</div>
-						<div className="flex h-5 shrink-0 items-center gap-2 whitespace-nowrap">
-							{statusLabel}
-							{metrics}
-						</div>
+						{prGroups.length > 0 ? (
+							<div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-0.5">{prGroups}</div>
+						) : null}
 					</div>
 				) : showBranch ? (
 					<div className={cn("flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground", still ? "mt-1" : "mt-1.5")}>

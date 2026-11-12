@@ -489,11 +489,11 @@ export function SessionArchiveModal({
 							</div>
 						) : null}
 						{/* Always full height, however few cards there are, so the modal
-						    keeps one size while searching. Cards are as tall as their own
-						    content; a row is as tall as its tallest card. */}
+						    keeps one size while searching. A row is as tall as its tallest
+						    card, and every card in it fills that height. */}
 						<div
 							aria-label={t("shell.archivedSessions")}
-							className="grid grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] items-start gap-2"
+							className="grid grid-cols-[repeat(auto-fill,minmax(min(17rem,calc((100%-1rem)/3)),1fr))] gap-2"
 							id={listboxId}
 							onMouseDown={onGridMouseDown}
 							onPointerMove={onGridPointerMove}
@@ -593,7 +593,8 @@ const ArchiveCardCell = memo(function ArchiveCardCell({
 			<div
 				aria-label={session.title}
 				aria-selected={active}
-				className="rounded-lg"
+				// The card, inside its context-menu trigger, fills the row's height.
+				className="h-full rounded-lg [&>div]:h-full"
 				data-archive-session={session.id}
 				data-testid="session-archive-card"
 				id={id}

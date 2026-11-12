@@ -222,7 +222,7 @@ describe("SessionsBoardView", () => {
 		},
 	);
 
-	it("lays a compact card's branch, PRs and time on one line with no status strip", () => {
+	it("gives a compact card branch and time on one line, PRs below, and no status strip", () => {
 		const onOpen = vi.fn();
 		render(
 			<SessionCardView
