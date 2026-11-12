@@ -77,7 +77,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 				destination: { hostId: target.hostId, label: target.label, sessionId: "" },
 				...(input.stopTurn ? { stopTurn: true } : {}),
 			},
-		});
+		}).catch(unreachable(source.label));
 		code = apiErrorCode(prepared.error);
 		if (prepared.error || !prepared.data) throw apiErrorException(prepared.error, "Could not prepare the move");
 		const transfer: Transfer = prepared.data.transfer;
@@ -86,11 +86,11 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		if (transfer.native) {
 			step = "copy";
 			input.onStep?.("copy");
-			await copyArchive(source, target.client, transferId, input.onProgress);
+			await copyArchive(source, target, transferId, input.onProgress);
 		}
 		step = "receive";
 		input.onStep?.("receive");
-		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer));
+		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer).catch(unreachable(target.label)));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new MoveError(message, step, await cancelMove(source, transferId), code);
@@ -120,21 +120,28 @@ async function cancelMove(source: MoveInput["source"], transferId: string): Prom
 	);
 }
 
-async function copyArchive(source: MoveInput["source"], target: Client, transferId: string, onProgress?: MoveInput["onProgress"]): Promise<void> {
+/** fetch rejects with a TypeError when the other computer cannot be reached. */
+function unreachable(label: string) {
+	return (error: unknown): never => {
+		throw error instanceof TypeError ? new Error(`${label} is not reachable`) : error;
+	};
+}
+
+async function copyArchive(source: MoveInput["source"], target: MoveInput["target"], transferId: string, onProgress?: MoveInput["onProgress"]): Promise<void> {
 	const archive = await source.client.GET("/api/v1/sessions/{sessionId}/transfer/{transferId}/native", {
 		params: { path: { sessionId: source.sessionId, transferId } },
 		parseAs: "arrayBuffer",
-	});
+	}).catch(unreachable(source.label));
 	if (archive.error || !archive.data) throw apiErrorException(archive.error, "Could not read the conversation");
 	const bytes = new Uint8Array(archive.data as ArrayBuffer);
 	for (let offset = 0, part = 0; offset < bytes.length; offset += MOVE_PART_BYTES, part++) {
-		const res = await target.PUT("/api/v1/sessions/transfer/{transferId}/native/{part}", {
+		const res = await target.client.PUT("/api/v1/sessions/transfer/{transferId}/native/{part}", {
 			params: { path: { transferId, part } },
 			// A Blob reaches Electron's request hooks by reference; a byte array is copied into the main process.
 			body: new Blob([bytes.subarray(offset, offset + MOVE_PART_BYTES)]) as never,
 			bodySerializer: (body: unknown) => body as BodyInit,
 			headers: { "Content-Type": "application/octet-stream" },
-		});
+		}).catch(unreachable(target.label));
 		if (res.error) throw apiErrorException(res.error, "Could not copy the conversation");
 		onProgress?.(Math.min(offset + MOVE_PART_BYTES, bytes.length), bytes.length);
 	}

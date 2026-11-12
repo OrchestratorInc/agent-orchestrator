@@ -30,6 +30,9 @@ const STEPS: MoveStep[] = ["prepare", "copy", "receive", "commit"];
 const MB = 1024 * 1024;
 
 /** Mounted once in the shell; the session menu opens it through the UI store. */
+/** Refusals that the same move cannot get past by retrying. */
+const FINAL_REFUSALS = new Set(["TRANSFER_DEFAULT_BRANCH", "TRANSFER_UNSUPPORTED", "SESSION_MOVED"]);
+
 export function MoveSessionDialog() {
 	const request = useUiStore((state) => state.moveSessionRequest);
 	const clear = useUiStore((state) => state.clearMoveSessionRequest);
@@ -236,6 +239,8 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 							</>
 						) : view === "waiting" ? (
 							<Button variant="secondary" onClick={() => cancelWaitingMove(key)}>{t("moveSession.cancelMove")}</Button>
+						) : view === "failed" && move?.error?.code && FINAL_REFUSALS.has(move.error.code) ? (
+							<Button variant="secondary" onClick={close}>{t("common.close")}</Button>
 						) : view === "failed" ? (
 							<>
 								<Button variant="secondary" onClick={close}>{t("moveSession.cancel")}</Button>
