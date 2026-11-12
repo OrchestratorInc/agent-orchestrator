@@ -2163,7 +2163,8 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	return daemonStatus;
 }
 
-async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent; trigger?: DaemonStartTrigger } = {}): Promise<DaemonStatus> {
+// keepAlive carries a failed launch's captured keep-alive choice into its retry.
+async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestartIntent?: DaemonAutoRestartIntent; trigger?: DaemonStartTrigger; keepAlive?: boolean } = {}): Promise<DaemonStatus> {
 	if (!options.autoRestartIntent && daemonStartAutoRestartIntent) {
 		daemonStartEpoch += 1;
 		daemonStartPromise = null;
@@ -2182,7 +2183,7 @@ async function startDaemon(options: { forceReplaceAdopted?: boolean; autoRestart
 	const startEpoch = daemonStartEpoch;
 	daemonStartAutoRestartIntent = options.autoRestartIntent;
 	const trigger = options.trigger ?? (options.autoRestartIntent ? "auto_restart" : "startup");
-	const promise = startDaemonInner(startEpoch, options.autoRestartIntent, trigger).finally(() => {
+	const promise = startDaemonInner(startEpoch, options.autoRestartIntent, trigger, options.keepAlive).finally(() => {
 		if (daemonStartPromise === promise) {
 			daemonStartPromise = null;
 			daemonStartAutoRestartIntent = undefined;
@@ -2260,7 +2261,7 @@ async function repairDevAcpRuntime(): Promise<void> {
 	});
 }
 
-async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAutoRestartIntent | undefined, trigger: DaemonStartTrigger): Promise<DaemonStatus> {
+async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAutoRestartIntent | undefined, trigger: DaemonStartTrigger, keepAliveOverride?: boolean): Promise<DaemonStatus> {
 	// Once quit is past its point of no return, no start of any kind may spawn.
 	const startCancelled = () => startEpoch !== daemonStartEpoch || browserQuitRequested ||
 		(autoRestartIntent !== undefined && autoRestartIntent.generation !== daemonAutoRestartGeneration);
@@ -2559,7 +2560,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
 	// child so the parent does not wait on it. Port discovery then relies on the
 	// running.json handshake (the log pipe scan is skipped).
-	const keep = autoRestartIntent?.keepAlive ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
+	const keep = autoRestartIntent?.keepAlive ?? keepAliveOverride ?? replacementKeepAlive ?? keepDaemonAlive(process.env);
 	// We are about to own the daemon and hand it this launch's runtime token, so
 	// any forced replacement has been honored and must not leak into a later
 	// startup in this process.
@@ -2807,7 +2808,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 				cause: "scope_launch_failed",
 				fallback: "oom_score_adj",
 			});
-			void startDaemonForRestart(undefined, "scope_fallback");
+			// Keep the originating automatic-restart intent (its marker check and
+			// safeguards) and this launch's keep-alive choice.
+			void startDaemonForRestart(autoRestartIntent, "scope_fallback", keep);
 			return;
 		}
 		supervisorLink?.dispose();
@@ -3037,9 +3040,9 @@ function reportDaemonRestartFailure(error: unknown): DaemonStatus {
 	return daemonStatus;
 }
 
-async function startDaemonForRestart(autoRestartIntent?: DaemonAutoRestartIntent, trigger?: DaemonStartTrigger): Promise<DaemonStatus> {
+async function startDaemonForRestart(autoRestartIntent?: DaemonAutoRestartIntent, trigger?: DaemonStartTrigger, keepAlive?: boolean): Promise<DaemonStatus> {
 	try {
-		return await startDaemon({ autoRestartIntent, trigger: trigger ?? (autoRestartIntent ? "auto_restart" : "manual_restart") });
+		return await startDaemon({ autoRestartIntent, trigger: trigger ?? (autoRestartIntent ? "auto_restart" : "manual_restart"), keepAlive });
 	} catch (error) {
 		if (autoRestartIntent && (autoRestartIntent.generation !== daemonAutoRestartGeneration || browserQuitRequested)) return daemonStatus;
 		return reportDaemonRestartFailure(error);

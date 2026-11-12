@@ -268,6 +268,44 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.spawn).toHaveBeenCalledTimes(2);
 	});
 
+	it("keeps an automatic restart's intent when its scoped launch falls back", async () => {
+		const h = setup();
+		const scopePlan = {
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		};
+		await h.start();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce(scopePlan);
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.spawn.mock.calls[1][0]).toBe("/usr/bin/systemd-run");
+		// A successor daemon now owns running.json, so automatic recovery must decline.
+		h.setMarker(JSON.stringify({ pid: 99, port: 3001 }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ cause: "scope_launch_failed" }));
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps the failed launch's keep-alive choice in the scope fallback", async () => {
+		const h = setup();
+		h.env.AO_KEEP_DAEMON = "1";
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		expect(h.daemonEnv).toHaveBeenLastCalledWith(true);
+		delete h.env.AO_KEEP_DAEMON;
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.daemonEnv).toHaveBeenLastCalledWith(true);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ trigger: "scope_fallback", keepAlive: true }));
+	});
+
 	it("treats a signal death of a scoped daemon as an ordinary crash", async () => {
 		const h = setup();
 		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
