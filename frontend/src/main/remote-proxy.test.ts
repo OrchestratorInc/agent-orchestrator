@@ -1056,6 +1056,10 @@ describe("startRemoteProxy over HTTP/2", () => {
 	let h2upstream: Http2Server | undefined;
 
 	afterEach(async () => {
+		// This nested hook runs before the outer proxy cleanup. Stop the proxy's
+		// persistent upstream session before waiting for the HTTP/2 server to close.
+		await proxy?.close();
+		proxy = undefined;
 		await new Promise<void>((resolve) => (h2upstream ? h2upstream.close(() => resolve()) : resolve()));
 		h2upstream = undefined;
 	});
