@@ -5711,6 +5711,20 @@ describe("ChatWorkspace message actions", () => {
 			for (const node of entering()) expect(node).toHaveTextContent("Arrived on return");
 			expect(entering().length).toBeGreaterThan(0);
 		});
+
+		it("does not enter a local echo that appears while the window is hidden", () => {
+			const base = idleSnapshot();
+			const view = render(<ChatWorkspace snapshot={base} />);
+			setVisibility("hidden");
+			// A send that resolved after the reader left: no new snapshot, only the echo.
+			const localEchos = [{ clientMessageId: "sent-before-leaving", text: "Echo while hidden", createdAt: new Date().toISOString() }];
+			view.rerender(<ChatWorkspace snapshot={base} localEchos={localEchos} />);
+			expect(screen.getAllByText("Echo while hidden").length).toBeGreaterThan(0);
+			expect(entering()).toHaveLength(0);
+			setVisibility("visible");
+			view.rerender(<ChatWorkspace snapshot={base} localEchos={localEchos} />);
+			expect(entering()).toHaveLength(0);
+		});
 	});
 
 	it("hides editing while another turn is active", () => {

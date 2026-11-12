@@ -3992,6 +3992,10 @@ export function Timeline({
 						// A prompt the reader did not watch arrive (sent from another device
 						// while they were away, or while the window was hidden) is history.
 						item.sequence > (entranceGate.floor ?? -Infinity) &&
+						// A local echo can appear while hidden with no new snapshot to raise
+						// the floor (a send that resolved after the reader left); it is seen
+						// here, so it never enters on their return.
+						!pageHidden() &&
 						// The brief that started the chat made its entrance on the new chat page.
 						!(openingTurnId && item.turnId === openingTurnId),
 				)
