@@ -313,6 +313,8 @@ func TestActionServiceMerge_NoChecksMergesOnlyWhenAskedAndSettled(t *testing.T) 
 		{name: "asked and settled", allow: true, checks: settledNoChecks(), setup: noChecks, merges: true},
 		{name: "not asked, as the CLI", allow: false, checks: settledNoChecks(), setup: noChecks},
 		{name: "pushed seconds ago", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: mergeNow.Add(-10 * time.Second)}}, setup: noChecks},
+		// An agent pushes and runs `ao pr merge` at once, before Actions registers its runs.
+		{name: "ao pr merge right after a push", allow: false, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 1, Since: mergeNow.Add(-3 * time.Second)}}, setup: noChecks},
 		{name: "a suite has started", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 4, Started: 1, Since: mergeNow.Add(-time.Hour)}}, setup: noChecks},
 		{name: "a status was posted", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Statuses: 1, Since: mergeNow.Add(-time.Hour)}}, setup: noChecks},
 		{name: "unknown since when", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3}}, setup: noChecks},
