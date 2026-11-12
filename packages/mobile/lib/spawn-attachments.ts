@@ -148,6 +148,20 @@ export function pastedSpawnAttachments(assets: readonly ComposerImageAsset[], st
 	return { picks, error: errors.length ? errors.join(" ") : undefined };
 }
 
+/**
+ * Joins what an attach left out into one message, skipping any part the
+ * message already says: a paste native cut at 8 images and a task that filled
+ * up at 8 both say "You can attach up to 8 files."
+ */
+export function joinAttachmentErrors(...parts: readonly (string | undefined)[]): string | undefined {
+	let message = "";
+	for (const part of parts) {
+		if (!part || message.includes(part)) continue;
+		message = message ? `${message} ${part}` : part;
+	}
+	return message || undefined;
+}
+
 /** Images the sheet can draw: a thumbnail in the row, full screen on tap. */
 export function spawnAttachmentPreview(item: SpawnAttachment): string | undefined {
 	return item.previewUri && item.mimeType.trim().toLowerCase().startsWith("image/") ? item.previewUri : undefined;

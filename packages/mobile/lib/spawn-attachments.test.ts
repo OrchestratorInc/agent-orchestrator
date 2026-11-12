@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { appendSpawnAttachments, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview } from "./spawn-attachments";
+import { appendSpawnAttachments, joinAttachmentErrors, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview } from "./spawn-attachments";
 
 describe("appendSpawnAttachments", () => {
 	it("keeps accepted files and reports files that exceed the per-file limit", () => {
@@ -147,5 +147,25 @@ describe("pastedSpawnAttachments", () => {
 		const result = await readSpawnAttachments(existing, pastedSpawnAttachments([{ uri: "paste-1", base64: png }], 8).picks);
 		expect(result.attachments).toHaveLength(8);
 		expect(result.error).toBe("You can attach up to 8 files.");
+	});
+});
+
+describe("joinAttachmentErrors", () => {
+	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+	// One attached, 9+ images on the clipboard: native sends 8 with
+	// overflow "count", and the task fills up at 8 with the same sentence.
+	it("says the attachment limit once when a cut paste also fills the task", async () => {
+		const existing = [{ name: "brief.txt", mimeType: "text/plain", data: "YQ==", bytes: 1 }];
+		const pasted = pastedSpawnAttachments(Array.from({ length: 8 }, (_, index) => ({ uri: `paste-${index}`, base64: png })), 1);
+		const result = await readSpawnAttachments(existing, pasted.picks);
+		expect(result.attachments).toHaveLength(8);
+		const skipped = "You can attach up to 8 files.";
+		expect(joinAttachmentErrors(result.error, joinAttachmentErrors(pasted.error, skipped))).toBe("You can attach up to 8 files.");
+	});
+
+	it("keeps distinct parts in order and drops empty ones", () => {
+		expect(joinAttachmentErrors(undefined, "Could not read pasted-image-1.png.", "", "Pasted images must total under 25 MB.")).toBe("Could not read pasted-image-1.png. Pasted images must total under 25 MB.");
+		expect(joinAttachmentErrors(undefined, "")).toBeUndefined();
 	});
 });

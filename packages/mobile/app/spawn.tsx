@@ -17,7 +17,7 @@ import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequ
 import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { appendSpawnAttachments, joinAttachmentErrors, MAX_SPAWN_ATTACHMENTS, pastedSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import type { ComposerImageAsset, PasteOverflow } from "../lib/chat/composerImages";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
@@ -493,7 +493,7 @@ export default function SpawnScreen() {
 			const added = merged.attachments.length - attachmentsRef.current.length;
 			attachmentsRef.current = merged.attachments;
 			setAttachments(merged.attachments);
-			setAttachmentError([next.error ?? merged.error, notice].filter(Boolean).join(" ") || undefined);
+			setAttachmentError(joinAttachmentErrors(next.error ?? merged.error, notice));
 			return added;
 		} catch (cause) {
 			setAttachmentError(userFacingError(cause, fallback));
@@ -541,7 +541,7 @@ export default function SpawnScreen() {
 	const pasteImages = (assets: ComposerImageAsset[], overflow?: PasteOverflow) => {
 		const { picks, error } = pastedSpawnAttachments(assets, attachmentsRef.current.length);
 		const skipped = overflow === "count" ? `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.` : overflow === "size" ? "Pasted images must total under 25 MB." : undefined;
-		void addAttachments(async () => picks, "Couldn't read the pasted image.", [error, skipped].filter(Boolean).join(" ") || undefined)
+		void addAttachments(async () => picks, "Couldn't read the pasted image.", joinAttachmentErrors(error, skipped))
 			.then((added) => { if (added > 0) haptics.tap(); });
 	};
 
