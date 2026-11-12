@@ -267,6 +267,9 @@ describe("optimistic orchestrator topbar", () => {
 		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Board" })).toBeDisabled();
 		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+		// The editor and cue controls hold their place so nothing slides in when the session lands.
+		expect(screen.getByRole("button", { name: "Choose editor", hidden: true })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Run a cue" })).toBeDisabled();
 	});
 });
 
