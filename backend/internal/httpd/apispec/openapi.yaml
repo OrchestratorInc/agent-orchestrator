@@ -13433,7 +13433,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/ReopenShellTerminalRequest'
-        required: true
       responses:
         "200":
           content:

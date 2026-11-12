@@ -1927,7 +1927,7 @@ func shellTerminalOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/shell-terminals/{handleId}/reopen", id: "reopenShellTerminal", tag: "shellTerminals",
 			summary:    "Replace an ended shell terminal with a fresh shell in the same tab",
 			pathParams: []any{controllers.ShellTerminalHandleIDParam{}},
-			reqBody:    controllers.ReopenShellTerminalRequest{},
+			reqBody:    controllers.ReopenShellTerminalRequest{}, optionalReqBody: true,
 			resps: []respUnit{
 				{http.StatusOK, controllers.ShellTerminalEnvelope{}},
 				{http.StatusBadRequest, envelope.APIError{}},
