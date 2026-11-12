@@ -271,8 +271,9 @@ func (s *Service) publishProviderKeys(ctx context.Context, names []string, value
 	}
 	// fresh holds only names AO actually published here for the first time,
 	// so undo never unsets a value AO did not put in the environment;
-	// usersHere the new names whose value the user already had.
-	var fresh, usersHere []string
+	// usersHere the new names whose value the user already had; reclaimed the
+	// names that were the user's until AO published its own value here.
+	var fresh, usersHere, reclaimed []string
 	replaced := map[string]string{}
 	undo = func() {
 		// The save may have failed because ctx ended; cleanup still runs.
@@ -281,6 +282,12 @@ func (s *Service) publishProviderKeys(ctx context.Context, names []string, value
 		s.rollbackPublished(cleanupCtx, fresh, values)
 		for _, n := range usersHere {
 			_ = providerkeys.SetDevice(cleanupCtx, s.dataDir, n, false)
+		}
+		// The user's value had gone, so only AO's copy is there: take it back
+		// out and leave the name as it was before this save.
+		for _, n := range reclaimed {
+			_ = unpublishProviderKey(cleanupCtx, n, values[n])
+			_ = providerkeys.SetUserValue(cleanupCtx, s.dataDir, n, true)
 		}
 		for n, earlier := range replaced {
 			_ = publishProviderKey(cleanupCtx, n, earlier, values[n])
@@ -326,6 +333,15 @@ func (s *Service) publishProviderKeys(ctx context.Context, names []string, value
 				return nil, apierr.Invalid("AGENT_AUTH_DEVICE_ENV_TAKEN", "Your user environment already sets "+n+" to a different value. AO left it unchanged; remove it there first, or save the key without sharing it.", map[string]any{"name": n})
 			}
 			return nil, apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The key could not be added to this device's user environment.")
+		}
+		if users[n] {
+			// The value was the user's, but Publish found it gone and AO's
+			// copy is now there: it is AO's to withdraw from here on.
+			reclaimed = append(reclaimed, n)
+			if err := providerkeys.SetUserValue(ctx, s.dataDir, n, false); err != nil {
+				undo()
+				return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The device setting could not be saved.")
+			}
 		}
 		if !before[n] {
 			fresh = append(fresh, n)

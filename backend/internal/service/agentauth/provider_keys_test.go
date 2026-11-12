@@ -385,3 +385,84 @@ func TestSuccessfulWithdrawalReportsNoFailure(t *testing.T) {
 		}
 	}
 }
+
+// A value that was the user's stops being theirs once they clear it and AO
+// publishes a replacement, so turning sharing off or removing the key takes
+// AO's copy back out.
+func TestPublishingAReplacementTakesOverTheUsersName(t *testing.T) {
+	stubDeviceEnvironment(t)
+	calls := 0
+	publishProviderKey = func(context.Context, string, string, string) error {
+		calls++
+		if calls == 1 {
+			return providerkeys.ErrAlreadySet // the user already had this exact value
+		}
+		return nil // they cleared it since; AO's replacement goes in
+	}
+	var unpublished []string
+	unpublishProviderKey = func(_ context.Context, _, value string) error {
+		unpublished = append(unpublished, value)
+		return nil
+	}
+	t.Setenv("GROQ_API_KEY", "")
+	dir := t.TempDir()
+	svc := NewWithAgentResolver(nil, nil, nil, dir)
+	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-users-own", true); err != nil {
+		t.Fatal(err)
+	}
+	if users, _ := providerkeys.UserValueNames(dir); !users["GROQ_API_KEY"] {
+		t.Fatal("the user's identical value was not recorded as theirs")
+	}
+	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-replacement", true); err != nil {
+		t.Fatal(err)
+	}
+	if users, _ := providerkeys.UserValueNames(dir); users["GROQ_API_KEY"] {
+		t.Fatal("AO's published replacement is still marked as the user's")
+	}
+	if _, err := svc.RemoveProviderKey(t.Context(), "GROQ_API_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if len(unpublished) != 1 || unpublished[0] != "groq-replacement" {
+		t.Fatalf("withdrew %q, want AO's replacement", unpublished)
+	}
+}
+
+// A replacement save that fails after AO published leaves the name as it was:
+// AO's copy is taken back out and the name is the user's again.
+func TestFailedReplacementSaveGivesTheNameBackToTheUser(t *testing.T) {
+	stubDeviceEnvironment(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	publishProviderKey = func(context.Context, string, string, string) error {
+		calls++
+		if calls == 1 {
+			return providerkeys.ErrAlreadySet
+		}
+		cancel() // the request ends right after publishing, so the save fails
+		return nil
+	}
+	var unpublished []string
+	unpublishProviderKey = func(_ context.Context, _, value string) error {
+		unpublished = append(unpublished, value)
+		return nil
+	}
+	t.Setenv("GROQ_API_KEY", "")
+	dir := t.TempDir()
+	svc := NewWithAgentResolver(nil, nil, nil, dir)
+	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-users-own", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveProviderKey(ctx, "GROQ_API_KEY", "groq-replacement", true); err == nil {
+		t.Fatal("saved after the request ended")
+	}
+	if users, _ := providerkeys.UserValueNames(dir); !users["GROQ_API_KEY"] {
+		t.Fatal("the failed save did not give the name back to the user")
+	}
+	if len(unpublished) == 0 || unpublished[len(unpublished)-1] != "groq-replacement" {
+		t.Fatalf("withdrew %q, want AO's replacement taken back out", unpublished)
+	}
+	if keys, _ := providerkeys.Load(dir); keys["GROQ_API_KEY"] != "groq-users-own" {
+		t.Fatalf("stored key = %q, want the earlier one", keys["GROQ_API_KEY"])
+	}
+}
