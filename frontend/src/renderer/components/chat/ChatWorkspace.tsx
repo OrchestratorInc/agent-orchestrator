@@ -2923,6 +2923,20 @@ const CHAT_VIRTUALIZE_THRESHOLD = 20;
 const WELCOME_FADE_MS = 150;
 /** Opening a chat snaps to the end for this long while rows measure and history arrives. */
 const INITIAL_SNAP_MS = 1000;
+/** Where a reader left a chat they scrolled away from the end of, by session; absent while following the end. */
+type ReadingPosition = { key: string | number | bigint; offset: number };
+const MAX_READING_POSITIONS = 64;
+const readingPositions = new Map<string, ReadingPosition>();
+function rememberReadingPosition(sessionId: string, position: ReadingPosition | undefined) {
+	readingPositions.delete(sessionId);
+	if (!position) return;
+	readingPositions.set(sessionId, position);
+	if (readingPositions.size > MAX_READING_POSITIONS) readingPositions.delete(readingPositions.keys().next().value!);
+}
+/** Test hook: tests share session ids, so a position saved by one must not reopen the next. */
+export function forgetReadingPositions() {
+	readingPositions.clear();
+}
 /** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
 const READER_INTENT_HOLD_MS = 250;
 /** A settled turn holds the reader's view still this long while its rows re-measure. */
@@ -3099,8 +3113,10 @@ export function Timeline({
 		startY: number;
 		startScrollTop: number;
 	} | null>(null);
-	const pinnedRef = useRef(true);
-	const [pinned, setPinned] = useState(true);
+	// Coming back to a chat the reader left mid-history reopens there, not at the end.
+	const pendingReading = useRef<ReadingPosition | undefined>(readingPositions.get(uiSessionId));
+	const pinnedRef = useRef(!pendingReading.current);
+	const [pinned, setPinned] = useState(!pendingReading.current);
 	const getScroller = useCallback(() => scroller.current, []);
 	const {
 		glideToEnd,
@@ -4447,6 +4463,20 @@ export function Timeline({
 		const node = scroller.current;
 		const relatched = skipRelatchFollow.current;
 		skipRelatchFollow.current = false;
+		const reading = pendingReading.current;
+		if (reading && node && groupCountRef.current > 0 && !initialLayoutDone.current) {
+			pendingReading.current = undefined;
+			const row = virtualizer.measurementsCache.find((candidate) => candidate.key === reading.key);
+			if (row) {
+				// Disclosures reopen collapsed, so the turn may be shorter than when the reader
+				// left it; never land past its end, in a later turn.
+				node.scrollTop = Math.min(row.start - reading.offset, Math.max(row.start, row.end - node.clientHeight));
+				markWritten(node.scrollTop);
+				lastScrollTop.current = node.scrollTop;
+			} else {
+				setPinnedNow(true);
+			}
+		}
 		if (node && pinnedRef.current && !(relatched && !glideRequested.current)) {
 			if (glideRequested.current) {
 				glideRequested.current = false;
@@ -4460,7 +4490,7 @@ export function Timeline({
 			initialLayoutAt.current = performance.now();
 		}
 		updateScrollbar();
-	}, [syncPromptSpacer, updateScrollbar, glideToEnd, followOrSnapToEnd]);
+	}, [syncPromptSpacer, updateScrollbar, glideToEnd, followOrSnapToEnd, virtualizer, markWritten, setPinnedNow]);
 
 	const restoreViewportResize = useCallback(() => {
 		const resize = viewportResize.current;
@@ -4810,6 +4840,10 @@ export function Timeline({
 		// before they reach it. The button above the first turn stays as the
 		// loading state and for histories too short to scroll.
 		if (movedUp && !isOwnScroll(top) && top < node.clientHeight && hasOlder && !loadingOlder) onLoadOlder?.();
+		if (initialLayoutDone.current && !pendingReading.current) {
+			const row = pinnedRef.current ? undefined : virtualizer.getVirtualItemForOffset(top);
+			rememberReadingPosition(uiSessionId, row ? { key: row.key, offset: row.start - top } : undefined);
+		}
 		updateScrollbar();
 	}
 
