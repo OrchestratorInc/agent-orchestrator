@@ -49,6 +49,8 @@ type CreateProjectAgentSheetProps = {
 	action?: "create" | "clone";
 	connected?: boolean;
 	intakeVisible?: boolean;
+	// Whether intake applies is still unknown; hold Create until it is.
+	settingsLoading?: boolean;
 	isCreating: boolean;
 	isInitializing?: boolean;
 	kind: ProjectKind;
@@ -113,6 +115,7 @@ export function CreateProjectAgentSheet({
 	connected = true,
 	error,
 	intakeVisible = false,
+	settingsLoading = false,
 	isCreating,
 	isInitializing = false,
 	kind,
@@ -146,6 +149,7 @@ export function CreateProjectAgentSheet({
 		}) &&
 		!intakeIncomplete &&
 		!isBusy &&
+		!settingsLoading &&
 		connected;
 	const sheetError = displayedError.current
 		? projectSheetError(displayedError.current, displayedAction.current)

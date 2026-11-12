@@ -265,9 +265,10 @@ export function CreateProjectFlow({
 	const intakeVisible = !!flowSettings?.trackerIntakeEnabled;
 	// The sheet only asks for tracker intake, shows a repository setup notice, or
 	// reports a failed create. With none of those there is nothing to decide, so
-	// the project is created as soon as its folder is chosen.
+	// the project is created as soon as its folder is chosen. While settings
+	// still load the sheet stays up, so the wait is visible and can be cancelled.
 	const sheetNeeded = intakeVisible || repositorySetup !== null || error !== null;
-	const sheetOpen = selectedPath !== null && sheetNeeded;
+	const sheetOpen = selectedPath !== null && (sheetNeeded || settingsLoading);
 	const autoCreatedPath = useRef<string | null>(null);
 	const setModePickerOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "source" } : { type: "close", view: "source" });
 	const setCloneDialogOpen = (open: boolean) => dispatchView(open ? { type: "open", view: "clone" } : { type: "close", view: "clone" });
@@ -1032,6 +1033,7 @@ export function CreateProjectFlow({
 				connected={connected}
 				error={error}
 				intakeVisible={intakeVisible}
+				settingsLoading={settingsLoading}
 				isCreating={isCreating}
 				isInitializing={isInitializing}
 				kind={selectedKind}

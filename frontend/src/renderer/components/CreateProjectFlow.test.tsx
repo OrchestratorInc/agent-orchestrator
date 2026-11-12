@@ -220,11 +220,15 @@ vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => ({
 	useProjectAgentDefaults: () => async () => PROJECT_AGENTS,
 }));
 
-const settingsMocks = vi.hoisted(() => ({ trackerIntakeEnabled: true }));
+const settingsMocks = vi.hoisted(() => ({ trackerIntakeEnabled: true, isLoading: false }));
 // Intake is on by default so the sheet opens and these tests keep exercising
 // the sheet path; the no-intake tests below turn it off to see the skipped dialog.
 vi.mock("../hooks/useSettings", () => ({
-	useSettings: () => ({ settings: { trackerIntakeEnabled: settingsMocks.trackerIntakeEnabled }, isLoading: false, error: undefined }),
+	useSettings: () => ({
+		settings: settingsMocks.isLoading ? undefined : { trackerIntakeEnabled: settingsMocks.trackerIntakeEnabled },
+		isLoading: settingsMocks.isLoading,
+		error: undefined,
+	}),
 }));
 
 // Probe stand-in: the real sheet needs a QueryClientProvider + agent catalog to
@@ -402,6 +406,7 @@ function projectValidation(
 
 beforeEach(() => {
 	settingsMocks.trackerIntakeEnabled = true;
+	settingsMocks.isLoading = false;
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	bridgeMocks.checkAncestorRepo.mockReset().mockResolvedValue(undefined);
 	bridgeMocks.checkGitRepository.mockReset().mockResolvedValue(true);
@@ -1816,6 +1821,32 @@ describe("CreateProjectFlow project import validation", () => {
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({ path: "/repo/project", asWorkspace: false, ...PROJECT_AGENTS }));
 		expect(onCreateProject).toHaveBeenCalledTimes(1);
 		expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
+	});
+
+	it("keeps the sheet up while settings load, then creates once they show nothing to ask", async () => {
+		settingsMocks.trackerIntakeEnabled = false;
+		settingsMocks.isLoading = true;
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn(async () => undefined);
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+		apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/project") });
+
+		const view = renderChooseFlow({ onCreateProject });
+		await openSource(user, "Open a local folder");
+
+		// The wait is a visible sheet the user can back out of, not a bare backdrop.
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/project");
+		expect(onCreateProject).not.toHaveBeenCalled();
+
+		settingsMocks.isLoading = false;
+		view.rerender(
+			<CreateProjectFlow mode="choose" {...noop} onCreateProject={onCreateProject}>
+				{({ choosePath }) => <button onClick={choosePath}>New project</button>}
+			</CreateProjectFlow>,
+		);
+
+		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({ path: "/repo/project", asWorkspace: false, ...PROJECT_AGENTS }));
+		expect(onCreateProject).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows the sheet with the error after an automatic create fails, without retrying on its own", async () => {

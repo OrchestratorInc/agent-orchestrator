@@ -14,7 +14,7 @@ beforeEach(() => {
 
 function renderSheet(
 	onSubmit = vi.fn().mockResolvedValue(undefined),
-	options: { shake?: boolean; intakeVisible?: boolean; error?: string; repositorySetupNeeded?: boolean } = {},
+	options: { shake?: boolean; intakeVisible?: boolean; error?: string; repositorySetupNeeded?: boolean; settingsLoading?: boolean } = {},
 ) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
@@ -30,6 +30,7 @@ function renderSheet(
 					open={true}
 					path="/repo/new-project"
 					repositorySetupNeeded={options.repositorySetupNeeded}
+					settingsLoading={options.settingsLoading}
 					shake={options.shake}
 				/>
 			</TooltipProvider>
@@ -67,6 +68,12 @@ describe("CreateProjectAgentSheet", () => {
 
 		expect(screen.queryByLabelText("Worker agent")).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Orchestrator agent")).not.toBeInTheDocument();
+	});
+
+	it("holds Create until settings say whether intake applies", () => {
+		renderSheet(undefined, { intakeVisible: false, settingsLoading: true });
+
+		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
 	});
 
 	it("shakes the active sheet when creation fails", () => {
