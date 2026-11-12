@@ -150,6 +150,21 @@ describe("PRCard", () => {
 		expect(row().props.accessibilityLabel).toBe("Build the menu only when it opens. Pull request 42. android-build failed.");
 	});
 
+	// A screen reader hears what the row shows: the scope that fills the line
+	// when there is no status, and how long ago the pull request changed.
+	it("speaks the row's scope and age", () => {
+		const summary = {
+			title: "fix(mobile): build the menu only when it opens", state: "open", repo: "ao/app", updatedAt: "2026-11-12T10:00:00Z",
+			ci: { state: "passing", failingChecks: [] },
+			review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+			mergeability: { state: "blocked", reasons: ["review_required"] },
+		} as unknown as SessionPRSummary;
+		act(() => {
+			renderer = create(<PRCard pr={pr} session={session} hostId="mac" summary={summary} now={Date.parse("2026-11-12T15:00:00Z")} />);
+		});
+		expect(row().props.accessibilityLabel).toBe("Build the menu only when it opens. mobile. Pull request 42. open. Updated 5h ago.");
+	});
+
 	// iOS's context menu takes the long press natively. On Android the row's own
 	// press handler holds the touch, so the row opens the dropdown itself.
 	it("opens the menu from the row's long press on Android only", () => {

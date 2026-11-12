@@ -107,7 +107,13 @@ export const PRCard = memo(function PRCard({
 	const row = (
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={[title, place, `Pull request ${pr.number}`, status?.text ?? state.label].filter(Boolean).join(". ") + "."}
+			accessibilityLabel={[
+				title,
+				context,
+				`Pull request ${pr.number}`,
+				status?.text ?? state.label,
+				age ? (age === "now" ? "Updated just now" : `Updated ${age} ago`) : "",
+			].filter(Boolean).join(". ") + "."}
 			accessibilityActions={actions.map((name) => ({ name, label: ACTION_TITLES[name] }))}
 			onAccessibilityAction={(event: AccessibilityActionEvent) => run(event.nativeEvent.actionName)}
 			android_ripple={feedback.android_ripple}
