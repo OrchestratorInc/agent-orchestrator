@@ -257,7 +257,6 @@ describe("optimistic message delivery", () => {
 		expect(strip).toHaveTextContent("status here");
 		await typeInLexicalEditor(field, "typed during the outage");
 
-		// Sample every commit across the attempts: the box never locks and the strip never leaves.
 		const flickers: string[] = [];
 		const observer = new MutationObserver(() => {
 			if (field.getAttribute("contenteditable") !== "true") flickers.push("box locked");
@@ -275,7 +274,7 @@ describe("optimistic message delivery", () => {
 		expect(field).toHaveTextContent("typed during the outage");
 		await new Promise((resolve) => setTimeout(resolve, 2_500));
 		expect(onSend).toHaveBeenCalledTimes(3);
-		expect(readChatSessionDraft(sessionId).unsent?.state).toBe("dispatching");
+		expect(readChatSessionDraft(sessionId).unsentQueue?.[0]?.state).toBe("dispatching");
 	});
 
 	it.each([
@@ -291,7 +290,7 @@ describe("optimistic message delivery", () => {
 		await waitFor(() => expect(Boolean(screen.queryByText(raw))).toBe(shown));
 	});
 
-	it("delivers both a retrying strip send and a second unanswered send held in the box", async () => {
+	it("delivers the sends of an outage in the order they were sent", async () => {
 		const sessionId = "optimistic-two-unanswered";
 		let online = false;
 		const delivered: string[] = [];
@@ -304,16 +303,49 @@ describe("optimistic message delivery", () => {
 		await screen.findByTestId("unsent-message-strip");
 		await typeInLexicalEditor(field, "second");
 		fireEvent.keyDown(field, { key: "Enter" });
-		// The strip has one slot, so the second send stays in the box and retries from there.
-		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery?.requestText).toBe("second"));
-		await waitFor(() => expect(screen.getAllByText("Waiting for connection…")).toHaveLength(2));
+		await waitFor(() => expect(readChatSessionDraft(sessionId).unsentQueue?.map((unsent) => unsent.requestText)).toEqual(["first", "second"]));
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(field.textContent).toBe("");
+		expect(screen.getAllByText("Waiting for connection…")).toHaveLength(2);
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
 		online = true;
 		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 12_000 });
-		expect(delivered.sort()).toEqual(["first", "second"]);
+		expect(delivered).toEqual(["first", "second"]);
+		expect(onSend.mock.calls.filter(([text]) => text === "second")).toHaveLength(1);
 		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
-		expect(readChatSessionDraft(sessionId).unsent).toBeUndefined();
+		expect(readChatSessionDraft(sessionId).unsentQueue).toBeUndefined();
+	}, 20_000);
+
+	it("holds the messages after a refused one, and Retry sends them all in order", async () => {
+		const sessionId = "optimistic-refused-line";
+		let mode: "offline" | "refuse" | "online" = "offline";
+		const delivered: string[] = [];
+		const onSend = vi.fn(async (text: string) => {
+			if (mode === "offline") throw new TypeError("Failed to fetch");
+			if (mode === "refuse") {
+				mode = "online";
+				throw { code: "CHAT_RESUME_FAILED", message: "Could not resume" };
+			}
+			delivered.push(text);
+		});
+		renderComposer(sessionId, onSend);
+		const field = await startSend(onSend, "first");
+		await screen.findByTestId("unsent-message-strip");
+		await typeInLexicalEditor(field, "second");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(screen.getAllByText("Waiting for connection…")).toHaveLength(2));
+
+		mode = "refuse";
+		await waitFor(() => expect(screen.getAllByText("Not sent")).toHaveLength(2), { timeout: 6_000 });
+		const attempts = onSend.mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 2_500));
+		expect(onSend).toHaveBeenCalledTimes(attempts);
+		expect(delivered).toEqual([]);
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument(), { timeout: 6_000 });
+		expect(delivered).toEqual(["first", "second"]);
 	}, 20_000);
 
 	it.each([

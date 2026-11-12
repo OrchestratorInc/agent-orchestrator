@@ -484,7 +484,6 @@ export interface ChatWorkspaceProps {
 	composerLockedPlaceholder?: string;
 	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
 	savedCopy?: boolean;
-	/** The host is away, but the box still takes messages and retries them until it is back. */
 	sendsWhileAway?: boolean;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;

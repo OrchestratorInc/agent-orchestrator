@@ -3403,7 +3403,7 @@ describe("unsent message strip", () => {
 		expect(onSend.mock.calls[0]?.[2]).toBe("unsent-retry-old");
 		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
 		expect(composerWireText(field)).toBe("half typed");
-		expect(readChatSessionDraft("unsent-retry").unsent).toBeUndefined();
+		expect(readChatSessionDraft("unsent-retry").unsentQueue).toBeUndefined();
 	});
 
 	it("discards with an undo", async () => {
@@ -3411,10 +3411,10 @@ describe("unsent message strip", () => {
 		await screen.findByTestId("unsent-message-strip");
 		await userEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
 		expect(await screen.findByText("Unsent message discarded")).toBeInTheDocument();
-		expect(readChatSessionDraft("unsent-discard").unsent).toBeUndefined();
+		expect(readChatSessionDraft("unsent-discard").unsentQueue).toBeUndefined();
 		await userEvent.click(screen.getByRole("button", { name: "Undo" }));
 		expect(await screen.findByText("Not sent")).toBeInTheDocument();
-		expect(readChatSessionDraft("unsent-discard").unsent?.clientMessageId).toBe("unsent-discard-old");
+		expect(readChatSessionDraft("unsent-discard").unsentQueue?.[0]?.clientMessageId).toBe("unsent-discard-old");
 	});
 
 	it("parks a send whose answer is lost in this session", async () => {
@@ -3428,21 +3428,27 @@ describe("unsent message strip", () => {
 		expect(onSend).toHaveBeenCalledOnce();
 	});
 
-	it("keeps a second lost send in the box with its notice while one is parked", async () => {
+	const unsentIds = (sessionId: string) => readChatSessionDraft(sessionId).unsentQueue?.map((unsent) => unsent.clientMessageId);
+
+	it("parks a second lost send behind a restored one and retries only the new one by itself", async () => {
 		const { onSend, field } = restoreUnsent("unsent-second-loss");
 		await screen.findByTestId("unsent-message-strip");
 		onSend.mockRejectedValue(new Error("tunnel still down"));
 		await typeInComposer(field, "second message");
 		fireEvent.keyDown(field, { key: "Enter" });
-		expect(await screen.findByText("Waiting for connection…")).toBeInTheDocument();
-		await waitFor(() => expect(field.textContent).toBe("second message"));
-		expect(screen.getByRole("button", { name: "Retry message safely" })).toBeEnabled();
+		await waitFor(() => expect(unsentIds("unsent-second-loss")).toEqual(["unsent-second-loss-old", expect.any(String)]));
+		const strip = screen.getByTestId("unsent-message-strip");
+		expect(strip.textContent!.indexOf("the long paste that never arrived")).toBeLessThan(strip.textContent!.indexOf("second message"));
+		expect(strip).toHaveTextContent("Not sent");
+		expect(strip).toHaveTextContent("Waiting for connection…");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		expect(field.textContent).toBe("");
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("the long paste that never arrived");
-		expect(readChatSessionDraft("unsent-second-loss").unsent?.clientMessageId).toBe("unsent-second-loss-old");
+		await waitFor(() => expect(onSend.mock.calls.length).toBeGreaterThan(1), { timeout: 4_000 });
+		expect(onSend.mock.calls.every(([text]) => text === "second message")).toBe(true);
 	});
 
-	it("keeps a send that fails during a discard's undo window in the box with its notice", async () => {
+	it("parks a send that fails during a discard's undo window, and Undo puts the discarded one back ahead of it", async () => {
 		const { onSend, field } = restoreUnsent("unsent-undo-window-loss");
 		await screen.findByTestId("unsent-message-strip");
 		const pending = deferred<void>();
@@ -3454,29 +3460,33 @@ describe("unsent message strip", () => {
 		expect(await screen.findByText("Unsent message discarded")).toBeInTheDocument();
 		onSend.mockRejectedValue(new Error("tunnel still down"));
 		await act(async () => pending.resolve());
-		expect(await screen.findByText("Waiting for connection…")).toBeInTheDocument();
-		await waitFor(() => expect(field.textContent).toBe("sent during undo"));
-
-		await userEvent.click(screen.getByRole("button", { name: "Undo" }));
-		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("the long paste that never arrived");
-		expect(field.textContent).toBe("sent during undo");
-		expect(screen.getByText("Waiting for connection…")).toBeInTheDocument();
-		expect(readChatSessionDraft("unsent-undo-window-loss").unsent?.clientMessageId).toBe("unsent-undo-window-loss-old");
-	});
-
-	it("parks a send that failed during the undo window once the window ends", async () => {
-		const { onSend, field } = restoreUnsent("unsent-undo-window-ends");
-		await screen.findByTestId("unsent-message-strip");
-		onSend.mockRejectedValue(new Error("tunnel still down"));
-		await userEvent.click(screen.getByRole("button", { name: "Discard unsent message" }));
-		await typeInComposer(field, "sent during undo");
-		fireEvent.keyDown(field, { key: "Enter" });
-		expect(await screen.findByText("Waiting for connection…")).toBeInTheDocument();
-		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("sent during undo"), { timeout: 8000 });
+		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("sent during undo"));
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		expect(field.textContent).toBe("");
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-	}, 15000);
+
+		await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+		await waitFor(() => expect(unsentIds("unsent-undo-window-loss")?.[0]).toBe("unsent-undo-window-loss-old"));
+		expect(unsentIds("unsent-undo-window-loss")).toHaveLength(2);
+		const strip = screen.getByTestId("unsent-message-strip");
+		expect(strip.textContent!.indexOf("the long paste that never arrived")).toBeLessThan(strip.textContent!.indexOf("sent during undo"));
+	});
+
+	it("queues a new send behind messages waiting for the connection, and sends nothing else first", async () => {
+		const onSend = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+		const { field } = renderComposer({ onSend, draftSessionId: "unsent-queue-behind" });
+		await typeInComposer(field, "first");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("Waiting for connection…");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		await typeInComposer(field, "second");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(screen.getAllByText("Waiting for connection…")).toHaveLength(2));
+		expect(field.textContent).toBe("");
+		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent(/1.*first.*2.*second/);
+		expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+		await waitFor(() => expect(onSend.mock.calls.length).toBeGreaterThan(2), { timeout: 6_000 });
+		expect(onSend.mock.calls.every(([text]) => text === "first")).toBe(true);
+	}, 10_000);
 
 	function restoreTwoUnsent(sessionId: string) {
 		const first = { kind: "send" as const, composerText: "first message", attachments: [], requestText: "first message", clientMessageId: `${sessionId}-a` };
@@ -3485,28 +3495,27 @@ describe("unsent message strip", () => {
 		if (!prepareChatComposerDelivery(sessionId, { ...first, composerText: "second message", requestText: "second message", clientMessageId: `${sessionId}-b` }).ok) throw new Error("Failed to prepare B");
 	}
 
-	it("restores a second unsent send into the box with its notice while one is parked", async () => {
+	it("parks a restored send from the box behind the one already waiting", async () => {
 		restoreTwoUnsent("unsent-two-restored");
 		render(<ChatComposer draftSessionId="unsent-two-restored" onSend={vi.fn()} />);
 		const field = screen.getByLabelText("Message the agent");
-		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("first message");
-		expect(await screen.findByRole("alert")).toHaveTextContent(/wasn.t confirmed/);
-		await waitFor(() => expect(field.textContent).toBe("second message"));
-		expect(readChatSessionDraft("unsent-two-restored").composer.delivery?.clientMessageId).toBe("unsent-two-restored-b");
-	});
-
-	it("moves the second send to the strip once the first clears", async () => {
-		restoreTwoUnsent("unsent-two-clears");
-		const onSend = vi.fn();
-		const view = render(<ChatComposer draftSessionId="unsent-two-clears" onSend={onSend} />);
-		const field = screen.getByLabelText("Message the agent");
-		await screen.findByTestId("unsent-message-strip");
-		view.rerender(<ChatComposer draftSessionId="unsent-two-clears" onSend={onSend} acceptedClientMessageIds={new Set(["unsent-two-clears-a"])} />);
-		await waitFor(() => expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("second message"));
+		await waitFor(() => expect(unsentIds("unsent-two-restored")).toEqual(["unsent-two-restored-a", "unsent-two-restored-b"]));
+		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent(/first message.*second message/);
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		expect(field.textContent).toBe("");
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(readChatSessionDraft("unsent-two-clears").unsent?.clientMessageId).toBe("unsent-two-clears-b");
+		expect(readChatSessionDraft("unsent-two-restored").composer.delivery).toBeUndefined();
+	});
+
+	it("drops only the message the chat already shows", async () => {
+		restoreTwoUnsent("unsent-two-clears");
+		const onSend = vi.fn();
+		const view = render(<ChatComposer draftSessionId="unsent-two-clears" onSend={onSend} />);
+		await waitFor(() => expect(unsentIds("unsent-two-clears")).toHaveLength(2));
+		view.rerender(<ChatComposer draftSessionId="unsent-two-clears" onSend={onSend} acceptedClientMessageIds={new Set(["unsent-two-clears-a"])} />);
+		await waitFor(() => expect(unsentIds("unsent-two-clears")).toEqual(["unsent-two-clears-b"]));
+		expect(screen.getByTestId("unsent-message-strip")).not.toHaveTextContent("first message");
+		expect(screen.getByTestId("unsent-message-strip")).toHaveTextContent("second message");
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
@@ -3529,7 +3538,7 @@ describe("unsent message strip", () => {
 		await screen.findByTestId("unsent-message-strip");
 		view.rerender(<ChatComposer draftSessionId="unsent-observed" onSend={onSend} acceptedClientMessageIds={new Set(["unsent-observed-old"])} />);
 		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
-		expect(readChatSessionDraft("unsent-observed").unsent).toBeUndefined();
+		expect(readChatSessionDraft("unsent-observed").unsentQueue).toBeUndefined();
 		expect(onSend).not.toHaveBeenCalled();
 	});
 });

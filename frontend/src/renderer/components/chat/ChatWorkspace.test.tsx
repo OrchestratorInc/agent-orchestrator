@@ -4726,7 +4726,7 @@ describe("ChatWorkspace message actions", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
 		expect(onSend.mock.calls[1]?.[2]).toBe(firstClientMessageId);
-		await waitFor(() => expect(readChatSessionDraft(snapshot.sessionId).unsent).toBeUndefined());
+		await waitFor(() => expect(readChatSessionDraft(snapshot.sessionId).unsentQueue).toBeUndefined());
 		await waitFor(() => expect(screen.queryByTestId("unsent-message-strip")).not.toBeInTheDocument());
 		expect(readChatSessionDraft(snapshot.sessionId).composer.delivery).toBeUndefined();
 		retryView.unmount();

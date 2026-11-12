@@ -178,14 +178,11 @@ const MAX_NATIVE_IMAGES_BYTES = 25 * 1024 * 1024;
 /** How long a discarded unsent message can be brought back. */
 const UNSENT_UNDO_MS = 5000;
 
-/** Whether the unsent strip can take this send: the same rule parkChatComposerDelivery applies. */
-function fitsUnsentSlot(delivery: ChatComposerDelivery | undefined, scope: ChatDraftScope): delivery is ChatComposerDelivery {
-	return isParkableChatComposerDelivery(delivery) && !readChatSessionDraft(scope).unsent;
-}
+const NO_UNSENT: readonly ChatComposerDelivery[] = [];
 
 /** A send nobody is sending, which the composer moves out of the box into the unsent strip. */
 function parksDelivery(delivery: ChatComposerDelivery | undefined, scope: ChatDraftScope | undefined): delivery is ChatComposerDelivery {
-	return Boolean(scope && fitsUnsentSlot(delivery, scope) && !getChatComposerMutation(scope).pending);
+	return Boolean(scope && isParkableChatComposerDelivery(delivery) && !getChatComposerMutation(scope).pending);
 }
 
 function restoredDeliveryNotice(delivery: ChatComposerDelivery | undefined, parks = false): string | null {
@@ -462,6 +459,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
 	const [transportRetries, setTransportRetries] = useState<Readonly<Record<string, number>>>({});
+	const transportRetriesRef = useRef(transportRetries);
+	transportRetriesRef.current = transportRetries;
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
 		() =>
 			draftScope !== undefined &&
@@ -477,14 +476,11 @@ export const ChatComposer = memo(function ChatComposer({
 			? readChatSessionDraft(draftScope).composer.delivery
 			: undefined,
 	);
-	const [unsent, setUnsent] = useState<ChatComposerDelivery | undefined>(() =>
-		draftScope ? readChatSessionDraft(draftScope).unsent : undefined);
+	const [unsentQueue, setUnsentQueue] = useState<readonly ChatComposerDelivery[]>(() =>
+		(draftScope ? readChatSessionDraft(draftScope).unsentQueue : undefined) ?? NO_UNSENT);
 	// The id being retried from the strip, and a just-discarded message that Undo can restore.
 	const [retryingUnsent, setRetryingUnsent] = useState<string>();
 	const [discardedUnsent, setDiscardedUnsent] = useState<ChatComposerDelivery>();
-	// A send can fail long after submit captured its state, so it reads the undo window here.
-	const discardedUnsentRef = useRef(discardedUnsent);
-	discardedUnsentRef.current = discardedUnsent;
 	const [steerNextRequest, setSteerNextRequest] = useState(0);
 	// Cmd/Ctrl held anywhere in the window turns a send-button click into a steer.
 	const [modifierHeld, setModifierHeld] = useState(false);
@@ -640,7 +636,7 @@ export const ChatComposer = memo(function ChatComposer({
 		composerRevision.current = currentDraft?.composer.revision ?? 0;
 		unsavedText.current = undefined;
 		setDurableDelivery(currentDraft?.composer.delivery);
-		setUnsent(currentDraft?.unsent);
+		setUnsentQueue(currentDraft?.unsentQueue ?? NO_UNSENT);
 		setRetryingUnsent(undefined);
 		setDiscardedUnsent(undefined);
 		setAppliedAcceptanceSequence(0);
@@ -1084,7 +1080,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (loadedDraft?.ok === false) return;
 		const committedDraft = loadedDraft?.draft;
 		// A send about to move into the unsent strip takes its text and files with it.
-		const parking = parkUnsentSends && !discardedUnsentRef.current && parksDelivery(committedDraft?.composer.delivery, draftScope);
+		const parking = parkUnsentSends && parksDelivery(committedDraft?.composer.delivery, draftScope);
 		const sentDraft = parking ? undefined : committedDraft?.composer.delivery?.draft;
 		// Keep this surface's native bytes for retry; only a new surface needs descriptors.
 		if (committedDraft && (!sentDraft || restoredSeedKey.current === undefined)) {
@@ -1183,8 +1179,6 @@ export const ChatComposer = memo(function ChatComposer({
 		// submitInFlight is a ref still set on the failed send's last render; the
 		// pending runtime mutation in parksDelivery already guards a live send.
 		if (submitting || composerMutation.accepted) return;
-		// The slot frees for this send only once a discarded one can no longer be undone.
-		if (unsent || discardedUnsent) return;
 		// The daemon took it; only the local record failed, so it isn't unsent.
 		if (textDraftPersistenceError === "chat.draft.recordMessageFailed") return;
 		// The effect above clears a send the chat already holds.
@@ -1192,7 +1186,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const result = parkChatComposerDelivery(draftScope, durableDelivery.clientMessageId);
 		if (!result.ok) return;
 		setDurableDelivery(undefined);
-		setUnsent(result.draft.unsent);
+		setUnsentQueue(result.draft.unsentQueue ?? NO_UNSENT);
 		setDeliveryUncertain(false);
 		setDeliveryRecoveryNotice(null);
 		if (unsavedText.current) return;
@@ -1215,7 +1209,6 @@ export const ChatComposer = memo(function ChatComposer({
 		acceptedClientMessageIds,
 		composerMutation.accepted,
 		composerMutation.pending,
-		discardedUnsent,
 		draftScope,
 		durableDelivery,
 		fileAttachments.reconcilePersistedAttachments,
@@ -1223,25 +1216,34 @@ export const ChatComposer = memo(function ChatComposer({
 		retryingUnsent,
 		submitting,
 		textDraftPersistenceError,
-		unsent,
 	]);
 
-	// The chat holds the unsent message after all: its answer was lost, not the message.
+	// The chat holds an unsent message after all: its answer was lost, not the message.
 	useEffect(() => {
-		if (!draftScope || !unsent || !acceptedClientMessageIds?.has(unsent.clientMessageId)) return;
-		if (discardUnsentChatComposerDelivery(draftScope, unsent.clientMessageId).ok) setUnsent(undefined);
-	}, [acceptedClientMessageIds, draftScope, unsent]);
+		if (!draftScope) return;
+		let left: readonly ChatComposerDelivery[] | undefined;
+		for (const unsent of unsentQueue) {
+			if (!acceptedClientMessageIds?.has(unsent.clientMessageId)) continue;
+			const result = discardUnsentChatComposerDelivery(draftScope, unsent.clientMessageId);
+			if (result.ok) left = result.draft.unsentQueue ?? NO_UNSENT;
+		}
+		if (left) setUnsentQueue(left);
+	}, [acceptedClientMessageIds, draftScope, unsentQueue]);
 
-	const retryUnsent = () => {
+	const retryUnsent = (unsent: ChatComposerDelivery | undefined, resume = false) => {
 		if (!draftScope || !unsent || durableDelivery) return;
 		const result = reviveUnsentChatComposerDelivery(draftScope, unsent.clientMessageId);
 		if (!result.ok) {
 			setTextDraftPersistenceError("chat.draft.unsentSaveFailed");
 			return;
 		}
+		if (resume) {
+			const later = (result.draft.unsentQueue ?? []).filter((other) => other.revision > unsent.revision);
+			setTransportRetries((retries) => ({ ...Object.fromEntries(later.map((other) => [other.clientMessageId, -1])), ...retries }));
+		}
 		setSendError(null);
 		setTextDraftPersistenceError(null);
-		setUnsent(undefined);
+		setUnsentQueue(result.draft.unsentQueue ?? NO_UNSENT);
 		setRetryingUnsent(unsent.clientMessageId);
 		setDurableDelivery(result.draft.composer.delivery);
 	};
@@ -1260,26 +1262,29 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const unsentRetryBlocked = Boolean(busy || disabled || durableDelivery || submitting || composerMutation.pending);
 	const heldRetry = canRecoverDelivery && durableDelivery && !retryingUnsent ? transportRetries[durableDelivery.clientMessageId] : undefined;
-	const nextRetry = heldRetry ?? (unsent && !unsentRetryBlocked ? transportRetries[unsent.clientMessageId] : undefined);
+	const nextUnsent = unsentQueue.find((unsent) => transportRetries[unsent.clientMessageId] !== undefined);
+	const nextRetry = heldRetry ?? (nextUnsent && !unsentRetryBlocked ? transportRetries[nextUnsent.clientMessageId] : undefined);
 	useEffect(() => {
 		if (nextRetry === undefined) return;
-		const timer = window.setTimeout(() => void (durableDelivery ? submitRef.current() : retryUnsent()), Math.min(1_000 * 2 ** nextRetry, 5_000));
+		const timer = window.setTimeout(() => void (durableDelivery ? submitRef.current() : retryUnsent(nextUnsent)), Math.min(1_000 * 2 ** nextRetry, 5_000));
 		return () => window.clearTimeout(timer);
-	}, [nextRetry, durableDelivery?.clientMessageId, unsent?.clientMessageId]);
+	}, [nextRetry, durableDelivery?.clientMessageId, nextUnsent?.clientMessageId]);
 
-	const discardUnsent = () => {
+	const discardUnsent = (clientMessageId: string) => {
+		const unsent = unsentQueue.find((item) => item.clientMessageId === clientMessageId);
 		if (!draftScope || !unsent) return;
-		if (!discardUnsentChatComposerDelivery(draftScope, unsent.clientMessageId).ok) {
+		const result = discardUnsentChatComposerDelivery(draftScope, clientMessageId);
+		if (!result.ok) {
 			setTextDraftPersistenceError("chat.draft.unsentSaveFailed");
 			return;
 		}
-		setUnsent(undefined);
+		setUnsentQueue(result.draft.unsentQueue ?? NO_UNSENT);
 		setDiscardedUnsent(unsent);
 	};
 	const undoDiscardUnsent = () => {
 		if (!draftScope || !discardedUnsent) return;
 		const result = restoreUnsentChatComposerDelivery(draftScope, discardedUnsent);
-		if (result.ok) setUnsent(result.draft.unsent);
+		if (result.ok) setUnsentQueue(result.draft.unsentQueue ?? NO_UNSENT);
 		setDiscardedUnsent(undefined);
 	};
 	useEffect(() => {
@@ -1688,7 +1693,10 @@ export const ChatComposer = memo(function ChatComposer({
   const requestText = recoveringDelivery
 			? recoveringDelivery.requestText
 			: message;
+		const queueBehind = parkUnsentSends && !recoveringDelivery && !shouldSteer && contextReferences.length === 0 && heldPayloads.length === 0 &&
+			(readChatSessionDraft(draftScope).unsentQueue ?? []).some((unsent) => transportRetriesRef.current[unsent.clientMessageId] !== undefined);
 		const prepared = prepareChatComposerDelivery(draftScope, {
+			queue: queueBehind,
 			kind: recoveringDelivery?.kind ?? (shouldSteer ? "steer" : "send"),
 			optimistic: !shouldSteer,
 			nativeImages: sendNativeImages,
@@ -1717,6 +1725,15 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		const delivery = prepared.mutation;
 		if (!prepared.recovered && delivery.draft) clearEditorView();
+		if (queueBehind) {
+			composerRevision.current = prepared.draft.composer.revision;
+			unsavedText.current = undefined;
+			fileAttachments.clear();
+			setTextDraftPersistenceError(null);
+			setTransportRetries((retries) => ({ ...retries, [delivery.clientMessageId]: -1 }));
+			setUnsentQueue(prepared.draft.unsentQueue ?? NO_UNSENT);
+			return;
+		}
 		synchronouslyClearedDeliveryRevision.current = undefined;
 		setDeliveryUncertain(false);
 		if (!prepared.recovered) {
@@ -1788,9 +1805,8 @@ export const ChatComposer = memo(function ChatComposer({
 				DEFINITIVE_SEND_REJECTIONS.has(apiErrorCode(error) ?? "");
 			// An unanswered send moves to the unsent strip instead of back into the box,
 			// by the same rule the park uses; anything it would refuse (excerpts, file
-			// references, a taken slot) keeps the restore and notice below.
-			// An open undo window still holds the slot for the discarded message.
-			const parks = parkUnsentSends && !refused && !discardedUnsentRef.current && fitsUnsentSlot(delivery, draftScope);
+			// references) keeps the restore and notice below.
+			const parks = parkUnsentSends && !refused && isParkableChatComposerDelivery(delivery);
 			if (delivery.kind === "send" && !parks && !textRef.current) {
 				textRef.current = delivery.draft?.text ?? currentText;
 				hasTextRef.current = textRef.current.trim().length > 0;
@@ -1819,8 +1835,11 @@ export const ChatComposer = memo(function ChatComposer({
 			console.warn("[chat] send got no answer", { sessionId: draftScope.sessionId, code: apiErrorCode(error) ?? (error instanceof Error ? error.name : "unknown"), retry: prepared.recovered });
 			const code = apiErrorCode(error);
 			const unanswered = delivery.kind === "send" && (code === undefined || HOST_UNREACHABLE_CODES.has(code));
-			setTransportRetries(({ [delivery.clientMessageId]: attempt, ...others }) =>
-				unanswered ? { ...others, [delivery.clientMessageId]: (attempt ?? -1) + 1 } : others);
+			const stopped = unanswered || !parks ? [] : (readChatSessionDraft(draftScope).unsentQueue ?? [])
+				.filter((unsent) => unsent.revision > delivery.revision).map((unsent) => unsent.clientMessageId);
+			setTransportRetries(({ [delivery.clientMessageId]: attempt, ...others }) => unanswered
+				? { ...others, [delivery.clientMessageId]: (attempt ?? -1) + 1 }
+				: Object.fromEntries(Object.entries(others).filter(([id]) => !stopped.includes(id))));
 			if (parks) {
 				if (prepared.recovered && !unanswered) setSendError("chat.draft.unsentRetryFailed");
 				return;
@@ -2015,7 +2034,7 @@ export const ChatComposer = memo(function ChatComposer({
 		};
 	}, []);
 
-	const retryingBySelf = [unsent, durableDelivery].some((delivery) => delivery && transportRetries[delivery.clientMessageId] !== undefined);
+	const retryingBySelf = [...unsentQueue, durableDelivery].some((delivery) => delivery && transportRetries[delivery.clientMessageId] !== undefined);
 	const attachmentError =
 		fileAttachments.error ??
 		draftPersistenceError ??
@@ -2024,25 +2043,28 @@ export const ChatComposer = memo(function ChatComposer({
 		(fileAttachments.attachments.some((file) => !file.data && !file.stagedPath)
 			? "chat.draft.filesUnavailable" : null) ??
 		(retryingBySelf ? undefined : commandError);
-	// The strip shows the unsent message, the same message while its retry runs, or a short undo after a discard.
-	const retryingDelivery = retryingUnsent && durableDelivery?.clientMessageId === retryingUnsent ? durableDelivery : undefined;
-	const automaticRetry = parkUnsentSends && !unsent && !discardedUnsent && isParkableChatComposerDelivery(durableDelivery) &&
-		transportRetries[durableDelivery.clientMessageId] !== undefined ? durableDelivery : undefined;
-	const stripDelivery = unsent ?? retryingDelivery ?? automaticRetry;
-	const heldWaiting = durableDelivery && durableDelivery.clientMessageId !== stripDelivery?.clientMessageId &&
-		transportRetries[durableDelivery.clientMessageId] !== undefined;
-	const unsentStrip = stripDelivery?.draft ? (
+	// The strip lists the unsent messages in send order, with the one whose retry runs in its place, and a short undo after a discard.
+	const retryingDelivery = durableDelivery?.draft && (retryingUnsent === durableDelivery.clientMessageId ||
+		(parkUnsentSends && isParkableChatComposerDelivery(durableDelivery) && transportRetries[durableDelivery.clientMessageId] !== undefined))
+		? durableDelivery : undefined;
+	const unsentRows = (retryingDelivery ? [...unsentQueue, retryingDelivery].sort((a, b) => a.revision - b.revision) : unsentQueue)
+		.flatMap((delivery) => delivery.draft ? [{
+			id: delivery.clientMessageId,
+			text: delivery.draft.text,
+			attachmentCount: delivery.draft.attachments.length,
+			sending: delivery === retryingDelivery,
+			retrying: transportRetries[delivery.clientMessageId] !== undefined,
+		}] : []);
+	const heldWaiting = durableDelivery && !retryingDelivery && transportRetries[durableDelivery.clientMessageId] !== undefined;
+	const unsentStrip = unsentRows.length > 0 || discardedUnsent ? (
 		<UnsentMessageStrip
-			text={stripDelivery.draft.text}
-			attachmentCount={stripDelivery.draft.attachments.length}
-			sending={!unsent}
-			retrying={transportRetries[stripDelivery.clientMessageId] !== undefined}
+			messages={unsentRows}
 			retryDisabled={unsentRetryBlocked}
-			onRetry={retryUnsent}
+			onRetry={() => retryUnsent(unsentQueue[0], true)}
 			onDiscard={discardUnsent}
+			discarded={Boolean(discardedUnsent)}
+			onUndo={undoDiscardUnsent}
 		/>
-	) : discardedUnsent ? (
-		<UnsentMessageStrip discarded onUndo={undoDiscardUnsent} />
 	) : null;
 	const withQueueStack = (form: ReactElement) =>
 		(
@@ -2269,7 +2291,7 @@ export const ChatComposer = memo(function ChatComposer({
 					dictating={dictating}
 					images={composerImages}
 					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
-					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && !automaticRetry && (submitting || draftMutationPending)))}
+					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && !retryingDelivery && (submitting || draftMutationPending)))}
 					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
 					label="Message the agent"
