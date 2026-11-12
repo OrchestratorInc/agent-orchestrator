@@ -33,7 +33,7 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useUiStore } from "../stores/ui-store";
 import { applyOptimisticProjectRemovals, clearOptimisticProjectRemoval, isOptimisticallyRemovedProject } from "./optimistic-project-removals";
 import { useRemoveProject } from "./useRemoveProject";
-import { cloudProjectsQueryKey, remoteProjectsQueryKey, remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { cloudProjectsQueryKey, remoteProjectsQueryKey, remoteWorkspaceQueryKey, sharedCloudWorkspacesQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 const project = (id: string, name: string, extra: Partial<WorkspaceSummary> = {}): WorkspaceSummary => ({
 	id,
@@ -262,6 +262,26 @@ describe("useRemoveProject", () => {
 		await waitFor(() => expect(toasts()[0]).toMatchObject({ title: "Could not remove cloudy", body: "control plane said no", tone: "error" }));
 		expect(queryClient.getQueryData(rawKey)).toEqual([{ id: "other", name: "other" }, { id: "cloud-1", name: "cloudy" }]);
 		expect(isOptimisticallyRemovedProject("cloud-1")).toBe(false);
+	});
+
+	it("puts a shared cloud project back when the control plane refuses to remove it", async () => {
+		// Shared with the user, so it is not in their own cloud project list.
+		const shared = project("cloud-1", "theirs", { kind: "cloud", shared: { sources: [] } as unknown as WorkspaceSummary["shared"] });
+		serverLocal = [first, shared];
+		const deleteProject = vi.fn().mockRejectedValue(new Error("Not the project owner"));
+		const { queryClient, remove } = setup({ cloud: { client: { deleteProject } as unknown as CloudCpClient, orgId: "org-1" } });
+		const ownKey = [...cloudProjectsQueryKey, "https://cp.example", "org-1"];
+		const sharedKey = [...sharedCloudWorkspacesQueryKey, "https://cp.example"];
+		queryClient.setQueryDefaults(cloudProjectsQueryKey, { queryFn: async () => [] });
+		queryClient.setQueryDefaults(sharedCloudWorkspacesQueryKey, { queryFn: async () => [shared] });
+		queryClient.setQueryData(ownKey, []);
+		queryClient.setQueryData(sharedKey, [shared]);
+
+		act(() => remove("cloud-1"));
+
+		await waitFor(() => expect(toasts()[0]).toMatchObject({ title: "Could not remove theirs", body: "Not the project owner", tone: "error" }));
+		expect(isOptimisticallyRemovedProject("cloud-1")).toBe(false);
+		expect(toasts()[0]?.action?.label).toBe("Retry");
 	});
 
 	it("does not remove a cloud project while the control plane is not ready", async () => {

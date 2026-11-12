@@ -22,6 +22,7 @@ import {
 	cloudSessionsQueryKey,
 	remoteProjectsQueryKey,
 	remoteWorkspaceQueryKey,
+	sharedCloudWorkspacesQueryKey,
 	workspaceQueryKey,
 } from "./useWorkspaceQuery";
 
@@ -59,9 +60,11 @@ function reinsert<T extends { id: string }>(current: T[] | undefined, item: T, i
 /** Whether the lists the server last returned still have the project. */
 function serverStillLists(queryClient: QueryClient, { workspace, cloud, cacheKey }: RemoveTarget): boolean {
 	if (cloud) {
-		return queryClient
-			.getQueriesData<CloudCpProject[]>({ queryKey: cloudProjectsQueryKey })
-			.some(([, projects]) => projects?.some((project) => project.id === workspace.id) === true);
+		// A project shared with the user is listed apart from the ones they own.
+		const listed = (lists: Array<[unknown, Array<{ id: string }> | undefined]>) =>
+			lists.some(([, projects]) => projects?.some((project) => project.id === workspace.id) === true);
+		return listed(queryClient.getQueriesData<CloudCpProject[]>({ queryKey: cloudProjectsQueryKey })) ||
+			listed(queryClient.getQueriesData<WorkspaceSummary[]>({ queryKey: sharedCloudWorkspacesQueryKey }));
 	}
 	if (workspace.hostId) {
 		const raw = queryClient.getQueryData<Array<{ id: string }>>(remoteProjectsQueryKey(workspace.hostId));
@@ -77,6 +80,7 @@ async function refetchLists(queryClient: QueryClient, { cloud, workspace, cacheK
 			await Promise.all([
 				queryClient.refetchQueries({ queryKey: cloudProjectsQueryKey }, { throwOnError: true }),
 				queryClient.refetchQueries({ queryKey: cloudSessionsQueryKey }, { throwOnError: true }),
+				queryClient.refetchQueries({ queryKey: sharedCloudWorkspacesQueryKey }, { throwOnError: true }),
 			]);
 		} else {
 			// A host's key is the prefix of its project and session lists; the local list is one exact query.
