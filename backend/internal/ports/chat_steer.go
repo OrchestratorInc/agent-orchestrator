@@ -44,6 +44,14 @@ type ChatSteerWithdrawer interface {
 	WithdrawPendingSteers()
 }
 
+// ChatSteerRestorer is implemented by drivers whose WithdrawPendingSteers also
+// refuses later steers for the running turn. Stop calls RestoreSteering when it
+// did not stop the turn after all, so the turn that keeps running can be
+// steered again.
+type ChatSteerRestorer interface {
+	RestoreSteering()
+}
+
 // Errors a ChatSteerer returns. Both are ordinary outcomes rather than failures,
 // and they are distinct because the advice a client should give differs: one means
 // "send this as a new message instead", the other means "wait, then try again".

@@ -320,12 +320,14 @@ func (c *conversation) steerByDrain(
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
-	if drain.Nudge != "" {
-		// Off Steer's path: a write can stall before the call sees its context,
-		// and Steer must still return within its wait. The guidance is already
-		// parked, so the nudge only hurries the agent along.
+	// Off Steer's path: a write can stall before the call sees its context,
+	// and Steer must still return within its wait. The guidance is already
+	// parked, so the nudge only hurries the agent along. One nudge at a time,
+	// so steers that time out behind a stalled write do not pile up more.
+	if drain.Nudge != "" && c.nudging.CompareAndSwap(false, true) {
 		nudgeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), min(steerNudgeTimeout, wait))
 		go func() {
+			defer c.nudging.Store(false)
 			defer cancel()
 			if err := c.legacyWire.call(nudgeCtx, drain.Nudge, map[string]string{"sessionId": sessionID}); err != nil {
 				c.log.Debug("ACP steer nudge failed; guidance waits for the next boundary",
@@ -427,6 +429,14 @@ func (c *conversation) WithdrawPendingSteers() {
 		pending.withdrawn = true
 	}
 	c.releasePendingSteersLocked()
+}
+
+// RestoreSteering lets the running turn take steers again after a Stop that
+// did not stop it. See WithdrawPendingSteers.
+func (c *conversation) RestoreSteering() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stoppingTurn = ""
 }
 
 // releasePendingSteersLocked settles every waiting steer as not collected. It
