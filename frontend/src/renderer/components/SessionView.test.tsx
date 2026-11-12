@@ -1188,6 +1188,32 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("lets go of a selected shell when a PR's tab opens, so the shell changing doesn't take the view back", () => {
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		const shell = { handleId: "sh-a", sessionId: "sess-1", title: "build", workingDir: "/p", createdAt: "2026-07-24T00:00:00Z" };
+		shellTerminalsState.data = [shell];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => useUiStore.getState().setActiveShellTerminal("sh-a"));
+			act(() => openPRTab("sess-1", url));
+			const pane = screen.getByTestId("pr-tab-pane");
+			expect(pane.parentElement).not.toHaveClass("invisible");
+			expect(useUiStore.getState().activeShellTerminalHandleId).toBeNull();
+
+			// The shell's title changes, as a running command renames it.
+			shellTerminalsState.data = [{ ...shell, title: "build (watching)" }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(screen.getByTestId("pr-tab-pane").parentElement).not.toHaveClass("invisible");
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+			shellTerminalsState.data = [];
+		}
+	});
+
 	it("opens the Artifacts view for an artifact and consumes its feedback request once", async () => {
 		render(<SessionView sessionId="sess-1" />);
 

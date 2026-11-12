@@ -26,10 +26,19 @@ export function usePRDetailsLoad(pr: SessionPRSummary | undefined, sessionId: st
 				body: { prUrl: pr!.url },
 			});
 			if (error) throw apiErrorException(error);
-			// The details are stored apart from the PR's row, so no change event follows.
-			await queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(sessionId, hostId) });
+			// The details are stored apart from the PR's row, so no change event
+			// follows: refresh every session on this host that shows the PR.
+			const [scope, host] = sessionScmSummaryQueryKey(sessionId, hostId);
+			await queryClient.invalidateQueries({
+				predicate: ({ queryKey, state }) => queryKey[0] === scope && queryKey[1] === host && (queryKey[2] === sessionId || showsPR(state.data, pr!.url)),
+			});
 			return true;
 		},
 	});
 	return query.isError && !pr?.detailsObservedAt;
+}
+
+function showsPR(summary: unknown, url: string): boolean {
+	const { prs = [], linkedPrs = [] } = (summary ?? {}) as { prs?: { url?: string }[]; linkedPrs?: { url?: string }[] };
+	return [...prs, ...linkedPrs].some((pr) => pr.url === url);
 }

@@ -32,4 +32,10 @@ describe("PRMarkdown", () => {
 		// Code keeps its angle brackets.
 		expect(screen.getByText("<a>")).toBeInTheDocument();
 	});
+
+	it("keeps tags written inside double-backtick code", () => {
+		render(<PRMarkdown body={"Use ``<Widget>`` here, and `` a`b `` too."} />);
+		expect(screen.getByText("<Widget>")).toBeInTheDocument();
+		expect(screen.getByText("a`b")).toBeInTheDocument();
+	});
 });

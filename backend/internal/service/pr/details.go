@@ -42,7 +42,18 @@ func (s *ActionService) LoadDetails(ctx context.Context, prID, prURL string) err
 		}
 		return fmt.Errorf("read pull request details: %w", err)
 	}
-	if len(observations) != 1 || !observations[0].Fetched || observations[0].PR.Number != tracked.Number {
+	if len(observations) != 1 {
+		return ErrPRNotFound
+	}
+	// A miss says why: a transient failure (a timeout, a rate limit) is not the
+	// PR being gone, and a retry can still read it.
+	if err := observations[0].Error; err != nil {
+		if errors.Is(err, ports.ErrSCMNotFound) {
+			return fmt.Errorf("%w: %w", ErrPRNotFound, err)
+		}
+		return fmt.Errorf("read pull request details: %w", err)
+	}
+	if !observations[0].Fetched || observations[0].PR.Number != tracked.Number {
 		return ErrPRNotFound
 	}
 	fresh := observations[0].PR

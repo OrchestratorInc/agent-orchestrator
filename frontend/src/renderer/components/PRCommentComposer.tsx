@@ -1,6 +1,7 @@
 import { Loader2, Paperclip } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { markdownCodeRanges } from "../lib/markdown-code";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 
@@ -40,14 +41,12 @@ export function readAsBase64(file: File): Promise<string> {
 
 /** A comment body's link to one of its files: "](attachment:0)". */
 const ATTACHMENT_LINK = /\]\(attachment:(\d+)\)/g;
-/** Fenced and inline code, where an attachment link is an example, not a file. */
-const MARKDOWN_CODE = /```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`/g;
 /** Most files one comment takes, as the daemon counts them. */
 export const PR_ATTACHMENTS_MAX_FILES = 10;
 
-/** The text's attachment links outside code, as the daemon reads them. */
+/** The text's attachment links outside code (an example there is not a file), as the daemon reads them. */
 function attachmentLinks(text: string): { start: number; end: number; index: number }[] {
-	const code = [...text.matchAll(MARKDOWN_CODE)].map((match) => [match.index, match.index + match[0].length] as const);
+	const code = markdownCodeRanges(text);
 	return [...text.matchAll(ATTACHMENT_LINK)]
 		.map((match) => ({ start: match.index, end: match.index + match[0].length, index: Number(match[1]) }))
 		.filter((link) => !code.some(([start, end]) => link.start >= start && link.end <= end));
@@ -85,7 +84,7 @@ const linkLabel = (name: string) => name.replace(/[[\]()]/g, "_");
  * posts: it goes with the comment then, so a cancelled draft uploads nothing.
  * ⌘B, ⌘I, ⌘K and ⌘E format the selection; ⌘↵ posts and Escape cancels.
  */
-export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error, initial = "", onCancel, onSubmit, placeholder, roomy, submitLabel }: {
+export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error, initial = "", onCancel, onEdit, onSubmit, placeholder, roomy, submitLabel }: {
 	/**
 	 * Files can be attached. Without it there is no Attach; with blockedReason,
 	 * Attach is off and that says why (no write access to the repository).
@@ -99,6 +98,8 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 	error?: string | null;
 	initial?: string;
 	onCancel?: () => void;
+	/** The draft changed (typed, formatted or given a file), so an error about the last post no longer applies. */
+	onEdit?: () => void;
 	/** Posts the text with the files it links, in the order it links them. */
 	onSubmit: (body: string, files: File[]) => Promise<unknown>;
 	placeholder: string;
@@ -129,6 +130,7 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 		if (!element) return;
 		const next = edit(element.value, element.selectionStart, element.selectionEnd);
 		setValue(next.text);
+		onEdit?.();
 		requestAnimationFrame(() => {
 			element.focus();
 			element.setSelectionRange(next.selectionStart, next.selectionEnd);
@@ -179,6 +181,7 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 		setFiles((current) => new Map([...current, ...numbered]));
 		const links = numbered.map(([index, file]) => `${file.type.startsWith("image/") ? "!" : ""}[${linkLabel(file.name)}](attachment:${index})`);
 		const caret = textareaRef.current?.selectionEnd;
+		onEdit?.();
 		setValue((current) => {
 			const at = caret === undefined ? current.length : Math.min(caret, current.length);
 			const before = current.slice(0, at);
@@ -269,7 +272,7 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 						// Grows with what is written, up to a cap, then scrolls.
 						className="max-h-64 min-h-6 min-w-0 resize-none border-0 bg-transparent p-0 leading-6 text-foreground [field-sizing:content] placeholder:text-muted-foreground focus-visible:outline-none"
 						disabled={posting}
-						onChange={(event) => setValue(event.target.value)}
+						onChange={(event) => { setValue(event.target.value); onEdit?.(); }}
 						onKeyDown={onKeyDown}
 						onPaste={onPaste}
 						placeholder={placeholder}

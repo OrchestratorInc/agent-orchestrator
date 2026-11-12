@@ -2,6 +2,7 @@ package pr
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -103,5 +104,30 @@ func TestLoadDetails_RefusesAnUntrackedPR(t *testing.T) {
 	svc, _, _, _ := detailsFixture(true)
 	if err := svc.LoadDetails(context.Background(), "8", "https://github.com/acme/widgets/pull/7"); err == nil {
 		t.Fatal("want an error for a number that is not the tracked PR's")
+	}
+}
+
+// A miss keeps the provider's reason: only a PR that is gone is "not found".
+func TestLoadDetails_KeepsTheProvidersReasonForAMiss(t *testing.T) {
+	limited := errors.New("github: rate limited")
+	for _, tc := range []struct {
+		name     string
+		err      error
+		notFound bool
+	}{
+		{"transient", limited, false},
+		{"gone", ports.ErrSCMNotFound, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, store, reader, tracked := detailsFixture(true)
+			reader.observation = ports.SCMObservation{Error: tc.err}
+			err := svc.LoadDetails(context.Background(), "7", tracked.URL)
+			if !errors.Is(err, tc.err) || errors.Is(err, ErrPRNotFound) != tc.notFound {
+				t.Fatalf("err = %v, want %v with not-found = %v", err, tc.err, tc.notFound)
+			}
+			if len(store.saved) != 0 {
+				t.Fatalf("saved = %#v", store.saved)
+			}
+		})
 	}
 }

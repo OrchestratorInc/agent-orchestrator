@@ -288,14 +288,14 @@ func TestPostComment_LeavesAttachmentLinksInCodeAlone(t *testing.T) {
 	files := allowedStore()
 	files.stored.URLs = files.stored.URLs[:1]
 	svc = NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
-	body := "![shot](attachment:0)\n\n```md\n![example](attachment:3)\n```\nand `[x](attachment:0)`"
+	body := "![shot](attachment:0)\n\n```md\n![example](attachment:3)\n```\nand `[x](attachment:0)` and ``[y](attachment:2)``"
 	if _, err := svc.PostComment(context.Background(), CommentRequest{
 		PRID: "42", PRURL: pr.URL, Body: body,
 		Attachments: []CommentAttachment{{Name: "shot.png", ContentType: "image/png", Data: pngBytes}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := "![shot](" + files.stored.URLs[0] + ")\n\n```md\n![example](attachment:3)\n```\nand `[x](attachment:0)`"
+	want := "![shot](" + files.stored.URLs[0] + ")\n\n```md\n![example](attachment:3)\n```\nand `[x](attachment:0)` and ``[y](attachment:2)``"
 	if scm.commentRequests[0].Body != want {
 		t.Fatalf("posted body = %q", scm.commentRequests[0].Body)
 	}

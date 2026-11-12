@@ -373,7 +373,8 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	]);
 
 	const post = useMutation({
-		mutationFn: async ({ body, threadId, files = [] }: { body: string; threadId?: string; files?: File[] }) => {
+		// from: the reply box that posted, by its card's key; a new comment has none.
+		mutationFn: async ({ body, threadId, files = [] }: { body: string; threadId?: string; files?: File[]; from?: string }) => {
 			// The files travel with the comment: the daemon stores them only now.
 			const attachments = await Promise.all(files.map(async (file) => ({
 				name: file.name,
@@ -387,8 +388,9 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 			});
 			if (error) throw apiErrorException(error, t("pr.comments.postFailed"));
 		},
-		onSuccess: async () => {
-			setReplying(null);
+		onSuccess: async (_data, { from }) => {
+			// Only the reply that posted closes: another open reply keeps its draft.
+			if (from) setReplying((current) => (current === from ? null : current));
 			await refresh();
 		},
 	});
@@ -414,7 +416,7 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	const attachments = canWrite ? { blockedReason: attachBlocked } : undefined;
 	const consent = useAttachmentConsent(repository);
 	// Files are stored in the repository: asked once per repository, before the first.
-	const postWithFiles = async (input: { body: string; threadId?: string; files: File[] }) => {
+	const postWithFiles = async (input: { body: string; threadId?: string; files: File[]; from?: string }) => {
 		if (input.files.length > 0 && !(await consent.confirm())) throw new AttachmentConsentDeclined();
 		return post.mutateAsync(input);
 	};
@@ -514,17 +516,23 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	const main = items.filter((item) => !nested.has(item.key) && !(item.kind === "thread" && item.thread.resolved));
 
 	const myAvatar = login ? <PRAvatar name={login} size="lg" /> : undefined;
-	const closeReply = () => { setReplying(null); post.reset(); };
-	const openReply = (key: string) => { post.reset(); setReplying(key); };
+	// Each box shows its own post's state: the open reply's, or the new comment's.
+	const postedFrom = (from?: string) => post.variables?.from === from;
+	const postError = (from?: string) => (postedFrom(from) && post.error instanceof Error ? post.error.message : null);
+	// An edit answers its own box's error; another box's stays.
+	const clearPostError = (from?: string) => { if (post.error && postedFrom(from)) post.reset(); };
+	const closeReply = () => { setReplying(null); if (post.variables?.from) post.reset(); };
+	const openReply = (key: string) => { if (post.variables?.from) post.reset(); setReplying(key); };
 	// The same simple box as a new comment, opened in place under the card it answers.
 	const replyFor = (item: Item, threadId?: string, initial?: string) => canWrite && replying === item.key ? (
 		<PRCommentComposer
 			autoFocus
-			busy={post.isPending}
-			error={post.error instanceof Error ? post.error.message : null}
+			busy={post.isPending && postedFrom(item.key)}
+			error={postError(item.key)}
 			initial={initial}
 			onCancel={closeReply}
-			onSubmit={(body, files) => postWithFiles({ body, threadId, files })}
+			onEdit={() => clearPostError(item.key)}
+			onSubmit={(body, files) => postWithFiles({ body, threadId, files, from: item.key })}
 			placeholder={t("pr.comments.replyPlaceholder")}
 			roomy
 			submitLabel={t("pr.comments.reply")}
@@ -657,8 +665,9 @@ export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }:
 	const newComment = (
 		<PRCommentComposer
 			avatar={myAvatar}
-			busy={post.isPending && replying === null}
-			error={replying === null && post.error instanceof Error ? post.error.message : null}
+			busy={post.isPending && postedFrom(undefined)}
+			error={postError(undefined)}
+			onEdit={() => clearPostError(undefined)}
 			onSubmit={(body, files) => postWithFiles({ body, files })}
 			placeholder={t("pr.comments.leaveComment")}
 			roomy

@@ -1448,6 +1448,44 @@ describe("SessionInspector PR section", () => {
     }));
   });
 
+  it("keeps an open reply and its draft when a new comment posts", async () => {
+    servePRTab(conversationPR());
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const thread = () => comments.getByRole("article", { name: "src/search.ts:12" });
+    await userEvent.click(within(thread()).getByRole("button", { name: "Reply" }));
+    await userEvent.type(within(thread()).getByRole("textbox", { name: "Write a reply…" }), "Half a reply");
+
+    const box = comments.getByRole("textbox", { name: "Leave a comment" });
+    await userEvent.type(box, "A new comment{Meta>}{Enter}{/Meta}");
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/comments", {
+      params: { path: { id: "7" } },
+      body: { prUrl: "https://example.com/pr/7", body: "A new comment" },
+    }));
+    await waitFor(() => expect(box).toHaveValue(""));
+    expect(within(thread()).getByRole("textbox", { name: "Write a reply…" })).toHaveValue("Half a reply");
+  });
+
+  it("shows a failed post's error in the box that posted, until its draft changes", async () => {
+    servePRTab(conversationPR());
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/comments"
+      ? { data: undefined, error: { message: "GitHub refused the comment" } }
+      : { data: {}, error: undefined });
+    const comments = within(await screen.findByTestId("pr-comments"));
+    const thread = () => comments.getByRole("article", { name: "src/search.ts:12" });
+    await userEvent.click(within(thread()).getByRole("button", { name: "Reply" }));
+
+    const box = comments.getByRole("textbox", { name: "Leave a comment" });
+    await userEvent.type(box, "Try this{Meta>}{Enter}{/Meta}");
+    await waitFor(() => expect(postCallsFor("/api/v1/prs/{id}/comments")).toHaveLength(1));
+    const composer = () => box.closest<HTMLElement>("[data-testid='pr-comment-composer']")!;
+    expect(await within(composer()).findByText("GitHub refused the comment")).toBeInTheDocument();
+    // The open reply is not where it failed.
+    expect(within(thread()).queryByText("GitHub refused the comment")).not.toBeInTheDocument();
+    // Fixing the draft clears the stale error.
+    await userEvent.type(box, " again");
+    await waitFor(() => expect(within(composer()).queryByText("GitHub refused the comment")).not.toBeInTheDocument());
+  });
+
   const servePRTabWithAccess = (access: { allowed: boolean; location?: string; reason?: string }) => {
     const summary = conversationPR();
     const respond = commonGetsResponder();

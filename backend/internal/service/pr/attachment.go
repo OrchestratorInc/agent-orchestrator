@@ -261,14 +261,10 @@ const MaxCommentAttachmentsBytes = 25 << 20
 // "![shot.png](attachment:0)" or "[log.txt](attachment:1)".
 var attachmentLink = regexp.MustCompile(`\]\(attachment:(\d+)\)`)
 
-// markdownCode is fenced code and inline code, where an attachment link is an
-// example to show, not a file to store.
-var markdownCode = regexp.MustCompile("(?s)```.*?```|~~~.*?~~~|`[^`\n]*`")
-
-// attachmentLinks finds the body's attachment links outside code, as
-// [start, end, indexStart, indexEnd] offsets.
+// attachmentLinks finds the body's attachment links outside code (see
+// markdownCodeRanges), as [start, end, indexStart, indexEnd] offsets.
 func attachmentLinks(body string) [][]int {
-	code := markdownCode.FindAllStringIndex(body, -1)
+	code := markdownCodeRanges(body)
 	var links [][]int
 	for _, link := range attachmentLink.FindAllStringSubmatchIndex(body, -1) {
 		inCode := false

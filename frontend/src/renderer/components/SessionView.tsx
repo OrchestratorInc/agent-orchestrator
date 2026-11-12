@@ -1170,6 +1170,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const prUrl = prTabUrl(key);
 			if (prUrl) {
 				setReviewerChatId(null);
+				// As for a file tab: a shell left selected would take the view back when it changes.
+				setActiveShellTerminal(null);
+				setTerminalTarget({ kind: "worker" });
 				setFileTabsBySession((current) => ({
 					...current,
 					[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
@@ -1682,15 +1685,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		],
 		[activateAuxiliaryTab, activePRUrl, centerFileTabs, closeCenterPR, hostId, prTabs.open, session],
 	);
-	// Opening a PR's tab from the card puts the file tab in front away.
+	// Opening a PR's tab from the card puts the file tab in front away, and
+	// lets go of a selected shell, which would take the view back when it changes.
 	useEffect(() => {
 		if (!activePRUrl) return;
 		setReviewerChatId(null);
+		setActiveShellTerminal(null);
+		setTerminalTarget((current) => (current.kind === "worker" ? current : { kind: "worker" }));
 		setFileTabsBySession((current) => {
 			const tabs = current[uiSessionId];
 			return tabs?.activePath ? { ...current, [uiSessionId]: activateSessionFile(tabs, null) } : current;
 		});
-	}, [activePRUrl, uiSessionId]);
+	}, [activePRUrl, setActiveShellTerminal, uiSessionId]);
 	// A group without the session's tab is selected like a workspace tab. With
 	// it, the session surface is on screen and stays the selected tab there. A
 	// PR's tab is never in a group.

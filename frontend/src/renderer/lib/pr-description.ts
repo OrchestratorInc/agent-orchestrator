@@ -1,6 +1,7 @@
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
+import { mapOutsideMarkdownCode } from "./markdown-code";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { isWebImageUrl } from "../components/PRDescriptionImage";
 import type { DescriptionImage } from "../components/PRImageGallery";
@@ -13,15 +14,12 @@ import type { DescriptionImage } from "../components/PRImageGallery";
  * text. Code spans and fenced blocks are left exactly as written.
  */
 export function withoutRawHtml(markdown: string): string {
-	return markdown
-		.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/)
-		.map((part, index) => index % 2 === 1 ? part : part
-			.replace(/<!--[\s\S]*?-->/g, "")
-			.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, "")
-			.replace(/<kbd>([^<`]*)<\/kbd>/gi, "`$1`")
-			.replace(/<img\b[^>]*>/gi, imageAsMarkdown)
-			.replace(/<\/?[a-z][a-z0-9-]*(\s[^>]*)?\/?>/gi, ""))
-		.join("");
+	return mapOutsideMarkdownCode(markdown, (prose) => prose
+		.replace(/<!--[\s\S]*?-->/g, "")
+		.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, "")
+		.replace(/<kbd>([^<`]*)<\/kbd>/gi, "`$1`")
+		.replace(/<img\b[^>]*>/gi, imageAsMarkdown)
+		.replace(/<\/?[a-z][a-z0-9-]*(\s[^>]*)?\/?>/gi, ""));
 }
 
 function htmlAttribute(tag: string, name: string): string | undefined {

@@ -1064,6 +1064,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		project.Config.DefaultBranch = base
 		// A prepared worktree was cut from the project's own default.
 		cfg.TaskPreparation = ""
+		// A branch that already exists keeps its own history, so the session
+		// would not start from the base its prompt names: a named branch must be new.
+		if strings.TrimSpace(cfg.Branch) != "" {
+			cfg.RequireNewBranch = true
+		}
 	}
 	if cfg.ParentSessionID != "" && cfg.AgentConfig.Permissions == "" {
 		permissions, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)

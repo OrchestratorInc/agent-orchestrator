@@ -31,6 +31,11 @@ describe("linkedAttachments", () => {
 		});
 	});
 
+	it("leaves a link inside double-backtick code alone", () => {
+		const a = new File(["a"], "a.png");
+		expect(linkedAttachments("``![a](attachment:0)``", new Map([[0, a]]))).toEqual({ body: "``![a](attachment:0)``", files: [] });
+	});
+
 	it("keeps the linked files in link order, renumbered, and leaves unknown links alone", () => {
 		const a = new File(["a"], "a.png"), b = new File(["b"], "b.png");
 		const files = new Map([[3, a], [7, b]]);
