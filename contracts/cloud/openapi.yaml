@@ -5339,6 +5339,8 @@ components:
           $ref: "#/components/schemas/ProjectRules"
         workersRequestReview:
           $ref: "#/components/schemas/ProjectWorkersRequestReview"
+        coAuthorCommits:
+          $ref: "#/components/schemas/ProjectCoAuthorCommits"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
         source:
@@ -5780,6 +5782,8 @@ components:
           $ref: "#/components/schemas/ProjectRules"
         workersRequestReview:
           $ref: "#/components/schemas/ProjectWorkersRequestReview"
+        coAuthorCommits:
+          $ref: "#/components/schemas/ProjectCoAuthorCommits"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
     ProjectWorkersRequestReview:
@@ -5787,6 +5791,12 @@ components:
       description: >-
         Workers request AO's review of their own pull request once it is pushed
         and ready, instead of waiting to be asked. Defaults to off.
+    ProjectCoAuthorCommits:
+      type: boolean
+      description: >-
+        Commits a session's agent makes carry a Co-authored-by trailer naming
+        the AO GitHub App's bot account, so GitHub shows the App as a
+        co-author beside the person the commit is authored as. Defaults to on.
     ProjectTrackerIntake:
       type: object
       additionalProperties: false
