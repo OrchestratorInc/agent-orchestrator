@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
 import { useHostConnection } from "./useHostConnection";
+import { readBoundedResponseBytes } from "./useSessionWorkspaceFiles";
 
 export const MAX_FILE_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 
@@ -14,8 +15,8 @@ export async function downloadWorkspaceFile(baseUrl: string, sessionId: string, 
 	const response = await fetch(`${baseUrl.replace(/\/+$/, "")}${route}`);
 	if (!response.ok) throw new Error(`Download failed (${response.status})`);
 	if (Number(response.headers.get("content-length")) > MAX_FILE_DOWNLOAD_BYTES) throw new FileTooLargeError();
-	const bytes = new Uint8Array(await response.arrayBuffer());
-	if (bytes.byteLength > MAX_FILE_DOWNLOAD_BYTES) throw new FileTooLargeError();
+	const { bytes, truncated } = await readBoundedResponseBytes(response, MAX_FILE_DOWNLOAD_BYTES);
+	if (truncated) throw new FileTooLargeError();
 	return aoBridge.chatImage.save({ name: path.slice(path.lastIndexOf("/") + 1), bytes });
 }
 
