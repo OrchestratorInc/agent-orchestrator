@@ -105,6 +105,8 @@ export default function SpawnScreen() {
 	const [attachments, setAttachments] = useState<SpawnAttachment[]>([]);
 	const attachmentsRef = useRef<SpawnAttachment[]>([]);
 	const pickingAttachments = useRef(false);
+	// A paste that came in while a pick was loading, said again when it ends.
+	const missedPaste = useRef(false);
 	const [attachmentError, setAttachmentError] = useState<string>();
 	// Keyed by place and name: picked files carry no id of their own, and the
 	// same file can be picked twice.
@@ -484,19 +486,26 @@ export default function SpawnScreen() {
 		}
 		pickingAttachments.current = true;
 		setAttachmentError(undefined);
+		// The pick's own result would replace the paste-again notice, so it is
+		// added back to whatever the pick ends with.
+		const missed = () => {
+			const was = missedPaste.current;
+			missedPaste.current = false;
+			return was ? "Paste the images again: they came in while attachments were loading." : undefined;
+		};
 		try {
 			const picked = await pick();
-			if (!picked) return 0;
+			if (!picked) { setAttachmentError(missed()); return 0; }
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
 			const added = merged.attachments.length - attachmentsRef.current.length;
 			attachmentsRef.current = merged.attachments;
 			setAttachments(merged.attachments);
-			setAttachmentError(joinAttachmentErrors(next.error ?? merged.error, notice));
+			setAttachmentError(joinAttachmentErrors(next.error ?? merged.error, notice, missed()));
 			return added;
 		} catch (cause) {
-			setAttachmentError(userFacingError(cause, fallback));
+			setAttachmentError(joinAttachmentErrors(userFacingError(cause, fallback), missed()));
 			return 0;
 		} finally {
 			pickingAttachments.current = false;
@@ -542,6 +551,7 @@ export default function SpawnScreen() {
 		// A paste can't wait for a pick still loading, and dropping it silently
 		// would look like paste doing nothing.
 		if (pickingAttachments.current) {
+			missedPaste.current = true;
 			setAttachmentError("Wait for attachments to finish loading, then paste again.");
 			return;
 		}
