@@ -51,6 +51,7 @@ export function SubagentTeam({
 	steps,
 	live,
 	harness,
+	folded = false,
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
@@ -61,6 +62,8 @@ export function SubagentTeam({
 	live: ReadonlySet<string>;
 	/** Whose agents these are, for the avatar. */
 	harness?: string;
+	/** A finished team under "Worked for": plain rows on the chat's canvas instead of a box. */
+	folded?: boolean;
 	disclosureKey?: string;
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
@@ -103,14 +106,21 @@ export function SubagentTeam({
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle min-h-7")}
 			>
+				{/* Overlapping marks, each cut back short of the one over it, so two agents read
+				    as two marks rather than one shape. A mask, not a halo: the chat's canvas is
+				    clear over the window material, so no fill colour would match it. */}
 				<span aria-hidden="true" className="flex shrink-0 items-center -space-x-1.5">
-					{agents.slice(0, STACKED_AVATARS).map((agent) => (
-						<span
+					{agents.slice(0, STACKED_AVATARS).map((agent, index, stacked) => (
+						<AgentAvatar
 							key={agent.launch.id}
-							className="flex rounded-full bg-background ring-2 ring-background"
-						>
-							<AgentAvatar decorative provider={harness ?? "claude-code"} className="size-4" />
-						</span>
+							decorative
+							provider={harness ?? "claude-code"}
+							className={cn(
+								"size-4",
+								// The next mark covers the last 6px (-space-x-1.5); 2px more is the gap.
+								index < stacked.length - 1 && "[mask-image:linear-gradient(to_right,#000_calc(100%-8px),transparent_calc(100%-8px))]",
+							)}
+						/>
 					))}
 				</span>
 				<span className="activity-summary-label shrink-0 text-xs font-medium text-foreground/85">
@@ -136,7 +146,12 @@ export function SubagentTeam({
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: EASE_OUT }}
 						className="overflow-hidden"
 					>
-						<ul className="cursor-chat-explore-box mt-1 flex min-w-0 flex-col overflow-hidden rounded-lg border">
+						<ul
+							className={cn(
+								"mt-1 flex min-w-0 flex-col",
+								folded ? "gap-0.5" : "cursor-chat-explore-box overflow-hidden rounded-lg border",
+							)}
+						>
 							<AnimatePresence initial={false}>
 								{agents.map((agent) => {
 									const agentKey = `${teamKey}:agent:${agent.launch.id}`;
@@ -147,13 +162,14 @@ export function SubagentTeam({
 											animate={{ opacity: 1, y: 0 }}
 											exit={{ opacity: 0 }}
 											transition={{ duration: reducedMotion ? 0 : 0.2, ease: EASE_OUT }}
-											className="min-w-0 border-t border-border/60 first:border-t-0"
+											className={cn("min-w-0", !folded && "border-t border-border/60 first:border-t-0")}
 										>
 											{openSubagent ? (
 												<SubagentRowButton
 													agent={agent}
 													harness={harness}
 													now={now}
+													folded={folded}
 													onClick={() => openSubagent(agent.launch.id)}
 												/>
 											) : (
@@ -161,6 +177,7 @@ export function SubagentTeam({
 													agent={agent}
 													harness={harness}
 													now={now}
+													folded={folded}
 													open={isOpen(agentKey, false)}
 													onOpenChange={(next) => setOpen(agentKey, next)}
 													disclosureKey={agentKey}
@@ -231,12 +248,18 @@ export function SubagentRowButton({
 	now,
 	onClick,
 	expanded,
+	folded = false,
 }: {
 	agent: Subagent;
 	harness?: string;
 	now: number;
 	onClick: () => void;
 	expanded?: boolean;
+	/**
+	 * Under "Worked for": no box around it, the mark centred on the row's two lines,
+	 * and the time and chevron on the second line, beside the report.
+	 */
+	folded?: boolean;
 }) {
 	const elapsed = elapsedLabel(agent, now);
 	return (
@@ -246,9 +269,12 @@ export function SubagentRowButton({
 			aria-expanded={expanded}
 			// A list row, not a raised button: `activity-summary-button` keeps the chat's
 			// press-scale off it, the same as the other timeline disclosures.
-			className="activity-summary-button group/agent flex w-full min-w-0 select-none items-start gap-2.5 px-3 py-2 text-left outline-none hover:bg-interactive-hover focus-visible:bg-interactive-hover"
+			className={cn(
+				"activity-summary-button group/agent flex w-full min-w-0 select-none gap-2.5 py-2 text-left outline-none hover:bg-interactive-hover focus-visible:bg-interactive-hover",
+				folded ? "items-center rounded-md px-2" : "items-start px-3",
+			)}
 		>
-			<SubagentAvatar harness={harness} state={agent.state} />
+			<SubagentAvatar harness={harness} state={agent.state} centered={folded} />
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className="flex min-w-0 items-baseline gap-2">
 					<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={agent.title}>
@@ -258,7 +284,8 @@ export function SubagentRowButton({
 				</span>
 				<SubagentLineText agent={agent} />
 			</span>
-			<span className="flex shrink-0 items-center gap-2 pt-px">
+			{/* Folded, one caption line tall and at the row's foot: level with the report line. */}
+			<span className={cn("flex shrink-0 items-center gap-2", folded ? "self-end text-caption" : "pt-px")}>
 				<StateGlyph state={agent.state} />
 				{elapsed ? <span className="text-caption tabular-nums text-muted-foreground/70">{elapsed}</span> : null}
 				<ChevronRight
@@ -278,6 +305,7 @@ function InlineSubagentRow({
 	agent,
 	harness,
 	now,
+	folded,
 	open,
 	onOpenChange,
 	disclosureKey,
@@ -287,6 +315,7 @@ function InlineSubagentRow({
 	agent: Subagent;
 	harness?: string;
 	now: number;
+	folded: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	disclosureKey: string;
@@ -296,7 +325,7 @@ function InlineSubagentRow({
 	const reducedMotion = useReducedMotion();
 	return (
 		<div className="flex min-w-0 flex-col">
-			<SubagentRowButton agent={agent} harness={harness} now={now} onClick={() => onOpenChange(!open)} expanded={open} />
+			<SubagentRowButton agent={agent} harness={harness} now={now} folded={folded} onClick={() => onOpenChange(!open)} expanded={open} />
 			<AnimatePresence initial={false}>
 				{open ? (
 					<motion.div
@@ -307,7 +336,8 @@ function InlineSubagentRow({
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: EASE_OUT }}
 						className="overflow-hidden"
 					>
-						<div className="pb-2.5 pl-[38px] pr-3">
+						{/* Indented to the row's text: its padding, the mark, and the gap after it. */}
+						<div className={folded ? "pb-2.5 pl-[34px] pr-2" : "pb-2.5 pl-[38px] pr-3"}>
 							<SubagentTranscript
 								agent={agent}
 								disclosureKey={disclosureKey}
@@ -338,10 +368,10 @@ export function elapsedLabel(agent: Subagent, now: number): string | undefined {
  * The provider mark, with a dot while the child works or after it failed. The dot
  * holds still: the spinner in the status slot already says the child is live.
  */
-export function SubagentAvatar({ harness, state }: { harness?: string; state: SubagentState }) {
+export function SubagentAvatar({ harness, state, centered = false }: { harness?: string; state: SubagentState; centered?: boolean }) {
 	const reducedMotion = useReducedMotion();
 	return (
-		<span aria-hidden="true" className="relative mt-px flex shrink-0">
+		<span aria-hidden="true" className={cn("relative flex shrink-0", !centered && "mt-px")}>
 			<AgentAvatar decorative provider={harness ?? "claude-code"} className="size-4" />
 			<AnimatePresence initial={false}>
 				{state === "working" || state === "failed" ? (

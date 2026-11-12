@@ -144,12 +144,17 @@ describe("ChatWorkspace subagents", () => {
 		expect(await screen.findByRole("button", { name: /Searched for 1 pattern · Read 1 file/ })).toHaveAttribute("aria-expanded", "false");
 	});
 
-	it("keeps a finished team and its outcomes in view instead of folding it into the work", () => {
+	it("folds a finished team into Worked for, where it opens onto its outcomes", async () => {
+		const user = userEvent.setup();
 		render(<ChatWorkspace snapshot={snapshot("completed")} />);
 
 		expect(screen.getByText("Both audits are summarized above.")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /Worked for/ })).toHaveAttribute("aria-expanded", "false");
-		const header = screen.getByRole("button", { name: /2 subagents/ });
+		const worked = screen.getByRole("button", { name: /Worked for/ });
+		expect(worked).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("button", { name: /2 subagents/ })).not.toBeInTheDocument();
+
+		await user.click(worked);
+		const header = await screen.findByRole("button", { name: /2 subagents/ });
 		// The background child never handed back, so its outcome is unknown, not done,
 		// and the header's counts still add up to the team.
 		expect(within(header).getByText("1 done")).toBeInTheDocument();
@@ -157,7 +162,7 @@ describe("ChatWorkspace subagents", () => {
 		expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("No report")).toBeInTheDocument();
 	});
 
-	it("keeps the team in view, and a report the reader opened still open, when the turn settles", async () => {
+	it("keeps a report the reader opened still open when the settled team folds into Worked for", async () => {
 		const user = userEvent.setup();
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running")} />);
 
@@ -168,9 +173,9 @@ describe("ChatWorkspace subagents", () => {
 
 		rerender(<ChatWorkspace snapshot={snapshot("completed")} />);
 
-		// The turn's work folds away under "Worked for"; the team stays in view outside
-		// it, and the reader's disclosure choice comes along.
-		expect(await screen.findByRole("button", { name: /Worked for/ })).toBeInTheDocument();
+		// Every child is done, so the team folds away under "Worked for" with the rest of
+		// the turn's work, and the reader's disclosure choice comes along.
+		await user.click(await screen.findByRole("button", { name: /Worked for/ }));
 		await waitFor(() => expect(screen.getAllByTestId("subagent-team")).toHaveLength(1));
 		expect(screen.getByRole("button", { name: /Audit: testing gaps/ })).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("Report")).toBeInTheDocument();
@@ -213,7 +218,9 @@ describe("ChatWorkspace subagents", () => {
 
 		rerender(<ChatWorkspace snapshot={steered([firstCommand, handback("p2", 5, "tool-pages", "The FAQ never mentions shipping.")])} />);
 
-		// Done, and still in view: the report reaches the launch before the steer.
+		// Done: the report reaches the launch before the steer, and the finished team
+		// folds into that part's "Worked for".
+		fireEvent.click(screen.getByRole("button", { name: /Worked for/ }));
 		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 done")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
 		expect(screen.queryByText("SubagentHandback")).not.toBeInTheDocument();
@@ -255,6 +262,8 @@ describe("ChatWorkspace subagents", () => {
 		rerender(<ChatWorkspace snapshot={pickedUp("completed", [command, report])} />);
 
 		// Done, with the report that arrived outside any turn, and nothing loose left behind.
+		// The finished team folds into its launch's turn's "Worked for".
+		fireEvent.click(screen.getAllByRole("button", { name: /Worked for/ })[0]!);
 		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 done")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
 		expect(screen.queryByText("No report")).not.toBeInTheDocument();

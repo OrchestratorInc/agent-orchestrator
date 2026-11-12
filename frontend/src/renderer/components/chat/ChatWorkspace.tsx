@@ -190,7 +190,7 @@ import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
-import { isSubagentLaunch, partitionSubagentSteps, type SubagentRef } from "./subagent-team";
+import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
 import { isOrdinaryActivity } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
@@ -5482,11 +5482,13 @@ const TurnGroup = memo(function TurnGroup({
 	// Questions, errors, and system warnings stay readable after the turn settles, and
 	// so does anything the user said mid-turn: folding a steer away would leave the
 	// reply under the Worked row answering a message the reader can no longer see.
-	// So does a subagent team, working or settled: its outcomes are the turn's result,
-	// and staying in this flat list keeps the card, and any report the reader has
-	// open, mounted through the handoff instead of vanishing into "Worked for".
+	// So does a subagent team while a child still works past the turn; once every
+	// child is done, the team folds into "Worked for" with the rest of the work.
+	const teamWorking = (run: TimelineRun) =>
+		run.kind === "subagents" &&
+		run.items.some((launch) => readSubagent(launch, subagentSteps.get(launch.id) ?? [], subagentsLive.has(launch.id)).state === "working");
 	const noticeRuns = group.outcome
-		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run) || run.kind === "subagents")
+		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run) || teamWorking(run))
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
@@ -5523,6 +5525,7 @@ const TurnGroup = memo(function TurnGroup({
 					steps={subagentSteps}
 					live={subagentsLive}
 					harness={harness}
+					folded={Boolean(group.outcome) && !noticeRuns.includes(run)}
 					disclosureKey={`${group.key}:${run.key}`}
 					disclosureOverrides={activityDisclosureOverrides}
 					onDisclosureChange={onActivityDisclosureChange}
