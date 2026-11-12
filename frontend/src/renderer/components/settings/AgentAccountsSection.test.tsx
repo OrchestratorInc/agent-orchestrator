@@ -202,7 +202,7 @@ it("lists a login the CLI and a saved account share once", async () => {
 	expect(document.querySelector('[data-agent-account="device-claude"]')).not.toBeInTheDocument();
 	expect(screen.getAllByText("a@example.com")).toHaveLength(1);
 	expect(screen.queryByText("Claude Code CLI login")).not.toBeInTheDocument();
-	await waitFor(() => expect(within(row).getByText(/3K tokens in AO/)).toBeInTheDocument());
+	await waitFor(() => expect(within(row).getByText(/3K tokens in Orchestrator/)).toBeInTheDocument());
 	expect(within(row).getByRole("button", { name: "Remove account" })).toBeInTheDocument();
 	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
 });
