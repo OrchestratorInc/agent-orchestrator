@@ -110,3 +110,39 @@ func TestTransferPushFetchAlign(t *testing.T) {
 		t.Fatalf("detached push err = %v, want ErrDetachedHead", err)
 	}
 }
+
+func TestUnstageTransferRestoresUntrackedAndUnstaged(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ctx := context.Background()
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/unstage"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Path, "draft.md"), []byte("draft\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Path, "README.md"), []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := ws.StashUncommitted(ctx, info)
+	if err != nil || ref == "" {
+		t.Fatalf("stash = %q, %v", ref, err)
+	}
+	runGit(t, git, info.Path, "checkout", "--", ".")
+	runGit(t, git, info.Path, "clean", "-fdq")
+	if err := ws.ApplyPreserved(ctx, info, ref); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if err := ws.UnstageTransfer(ctx, info); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if got, want := gitOutput(t, git, info.Path, "status", "--porcelain"), "M README.md\n?? draft.md"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+}

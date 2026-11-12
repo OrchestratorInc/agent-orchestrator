@@ -121,6 +121,19 @@ func (w *Workspace) ReleaseTransferBranch(ctx context.Context, info ports.Worksp
 	return nil
 }
 
+// UnstageTransfer unstages moved uncommitted work, which ApplyPreserved leaves
+// staged: new files become untracked and edits unstaged again.
+func (w *Workspace) UnstageTransfer(ctx context.Context, info ports.WorkspaceInfo) error {
+	path, err := w.validateManagedPath(info.Path)
+	if err != nil {
+		return err
+	}
+	if out, err := w.run(ctx, w.binary, "-C", path, "reset", "-q"); err != nil {
+		return fmt.Errorf("gitworktree: unstage moved work: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // DeleteTransferRef deletes a preserved ref from origin. A ref that is already
 // gone is not an error.
 func (w *Workspace) DeleteTransferRef(ctx context.Context, repoPath, remotePreservedRef string) error {
