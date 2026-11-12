@@ -47,6 +47,14 @@ var (
 	ErrChatRecoveryInconclusive = errors.New("chat conversation recovery is inconclusive")
 	// ErrChatHostNotRunning is a definitive observation that no provider host exists.
 	ErrChatHostNotRunning = errors.New("chat provider host is not running")
+	// ErrChatProviderSessionLost means the provider process is still running
+	// but answers for this conversation's session as if it does not exist.
+	// claude-agent-acp drops a session from memory when the Claude Code process
+	// under it dies, while the adapter (and AO's persistent host) live on. That
+	// provider can never serve the conversation again, so the driver stops it;
+	// the session then reads as exited and resuming reloads the provider's
+	// saved transcript in a fresh process.
+	ErrChatProviderSessionLost = errors.New("chat provider no longer holds the conversation's session")
 	// ErrChatNoActiveTurn means an interrupt found nothing to cancel — either AO
 	// has no turn in flight, or the provider no longer considers the named turn
 	// active. A driver must translate its provider's refusal into this rather than

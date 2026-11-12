@@ -121,8 +121,11 @@ type conversation struct {
 	skills            []ports.ChatSkill
 	skillsKnown       bool
 	closed            bool
-	modeFor           func(ports.PermissionMode) string
-	optionsFor        func(ports.ChatTurnSettings) []SessionOption
+	// sessionLost records that the agent stopped holding this conversation's
+	// session and the provider was stopped for it. See providerSessionLost.
+	sessionLost bool
+	modeFor     func(ports.PermissionMode) string
+	optionsFor  func(ports.ChatTurnSettings) []SessionOption
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
@@ -504,10 +507,10 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		return ports.ChatTurnRef{}, errors.New("ACP conversation already has a turn in flight")
 	}
 	if err := c.checkModelSwitch(ctx, msg.Settings.Model); err != nil {
-		return ports.ChatTurnRef{}, err
+		return ports.ChatTurnRef{}, c.providerSessionLost(err)
 	}
 	if err := c.applyTurnSettings(ctx, msg.Settings); err != nil {
-		return ports.ChatTurnRef{}, err
+		return ports.ChatTurnRef{}, c.providerSessionLost(err)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -888,9 +891,16 @@ func (c *conversation) finishPrompt(
 	var state domain.TurnState
 	var turnErr error
 	var failureCode domain.ConversationFailureCode
+	sessionLost := false
 	if err != nil {
 		if interruptedLocally || errors.Is(err, context.Canceled) {
 			state = domain.TurnStateInterrupted
+		} else if isACPSessionMissing(err) {
+			// The prompt never reached a session. Fail this turn with the cause,
+			// then stop the provider below instead of announcing readiness.
+			state = domain.TurnStateFailed
+			turnErr = c.markSessionLost(fmt.Errorf("ACP session/prompt: %w", err))
+			sessionLost = true
 		} else {
 			state = domain.TurnStateFailed
 			turnErr = normalizeACPError("ACP session/prompt", err)
@@ -1015,6 +1025,13 @@ func (c *conversation) finishPrompt(
 		}
 	}
 	c.mu.Unlock()
+	if sessionLost {
+		// Ready would let the queue drain into a provider that cannot serve it.
+		// Stopping ends the stream after the failed turn above, so the controller
+		// settles it and reports the session exited.
+		c.stopLostProvider()
+		return
+	}
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
 }
 
@@ -1288,6 +1305,42 @@ func (c *conversation) Hibernate() error {
 	return c.closeProvider(true, false)
 }
 
+// providerSessionLost classifies err from a session-scoped request. When the
+// agent reports that it no longer holds this conversation's session, the
+// provider can never serve it again, and a persistent host would otherwise keep
+// it reattachable across daemon restarts: every send fails while resume-agent
+// refuses because the host is still alive. Stop the provider without
+// session/close, as hibernation does, so the controller's stream ends, the
+// session reads as exited, and resuming reloads the saved transcript in a fresh
+// process. Any other error is returned unchanged.
+func (c *conversation) providerSessionLost(err error) error {
+	lost := c.markSessionLost(err)
+	if lost != err {
+		c.stopLostProvider()
+	}
+	return lost
+}
+
+// markSessionLost records a lost session and wraps err without stopping the
+// provider yet, so a caller can still emit the turn's outcome on the stream
+// that stopping would close.
+func (c *conversation) markSessionLost(err error) error {
+	if !isACPSessionMissing(err) {
+		return err
+	}
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.sessionLost = true
+	c.mu.Unlock()
+	c.log.Warn("chat: ACP provider no longer holds the session; stopping it so the session can be resumed",
+		"providerSession", sessionID, "reconnected", c.proc.reconnected, "error", err)
+	return fmt.Errorf("%w: %w", ports.ErrChatProviderSessionLost, err)
+}
+
+// stopLostProvider stops the provider without session/close: the agent has no
+// session to close, and the saved transcript must survive for resume.
+func (c *conversation) stopLostProvider() { _ = c.closeProvider(true, false) }
+
 func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	var closeErr error
 	c.closeOnce.Do(func() {
@@ -1335,8 +1388,12 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 func (c *conversation) AcknowledgeProviderEvent(ctx context.Context, providerEventID string) error {
 	c.mu.Lock()
 	terminal := c.terminalEventID
+	lost := c.sessionLost
 	c.mu.Unlock()
-	if providerEventID == "" || providerEventID != terminal || c.proc.terminate == nil {
+	// A provider stopped for a lost session took its host and prompt journal
+	// with it, so there is nothing left to release. Failing this ACK would make
+	// the controller preserve a provider that is already gone.
+	if lost || providerEventID == "" || providerEventID != terminal || c.proc.terminate == nil {
 		return nil
 	}
 	return c.conn.NotifyExtension(ctx, persistenthost.ACPPromptAckMethod, map[string]string{

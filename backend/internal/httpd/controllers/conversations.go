@@ -1387,6 +1387,11 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_AUTH_REQUIRED", "the agent is installed but not authenticated", nil)
 
+	case errors.Is(err, ports.ErrChatProviderSessionLost):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_PROVIDER_SESSION_LOST",
+			"the agent's process lost this conversation and was stopped; resume the agent to continue", nil)
+
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		// Deliberately not a silent recovery: the client must offer the user a
 		// choice rather than have AO invent a fresh conversation.
