@@ -811,6 +811,7 @@ describe("SessionInspector PR section", () => {
           prUrl: "https://example.com/pr/7",
           expectedHeadSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           method: "squash",
+          allowNoChecks: true,
         },
       }),
     );
@@ -964,7 +965,7 @@ describe("SessionInspector PR section", () => {
 
     await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/merge", {
       params: { path: { id: "7" } },
-      body: { prUrl: "https://example.com/pr/7", expectedHeadSha: "head-7", method: "rebase" },
+      body: { prUrl: "https://example.com/pr/7", expectedHeadSha: "head-7", method: "rebase", allowNoChecks: true },
     }));
   });
 
@@ -1236,7 +1237,7 @@ describe("SessionInspector PR section", () => {
       await userEvent.click(screen.getByRole("button", { name: "Merge stack" }));
       await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/prs/{id}/stack/merge", {
         params: { path: { id: "2" } },
-        body: { expectedHeads: [{ headSha: "head-1", number: 1 }, { headSha: "head-2", number: 2 }], method: "squash", prUrl: ready.url },
+        body: { allowNoChecks: true, expectedHeads: [{ headSha: "head-1", number: 1 }, { headSha: "head-2", number: 2 }], method: "squash", prUrl: ready.url },
       }));
       expect(postCallsFor("/api/v1/prs/{id}/merge")).toHaveLength(0);
     });

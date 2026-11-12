@@ -143,6 +143,14 @@ func TestPRsRoutes_Merge_200(t *testing.T) {
 	if svc.mergeRequest.PRID != "42" || svc.mergeRequest.PRURL != "https://github.com/acme/widgets/pull/42" || svc.mergeRequest.ExpectedHeadSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("merge request = %#v", svc.mergeRequest)
 	}
+	// The CLI's merge doesn't ask to treat no checks as passing; the PR view's does.
+	if svc.mergeRequest.AllowNoChecks {
+		t.Fatal("a merge that doesn't ask must not allow no checks")
+	}
+	withNoChecks := strings.Replace(validMergeBody, "{", `{"allowNoChecks":true,`, 1)
+	if _, status, _ := doRequest(t, srv, "POST", "/api/v1/prs/42/merge", withNoChecks); status != http.StatusOK || !svc.mergeRequest.AllowNoChecks {
+		t.Fatalf("status = %d, request = %#v", status, svc.mergeRequest)
+	}
 }
 
 // ---- Merge: 404 ----
@@ -339,8 +347,11 @@ func TestPRStackMerge_PassesHeadsAndValidates(t *testing.T) {
 	if got := post(`{"prUrl":"https://github.com/a/b/pull/2","expectedHeads":[{"number":1,"headSha":"a"},{"number":2,"headSha":"b"}]}`); got != http.StatusOK {
 		t.Fatalf("status = %d", got)
 	}
-	if len(svc.stackMergeReq.ExpectedHeads) != 2 || svc.stackMergeReq.ExpectedHeads[1].HeadSHA != "b" {
+	if len(svc.stackMergeReq.ExpectedHeads) != 2 || svc.stackMergeReq.ExpectedHeads[1].HeadSHA != "b" || svc.stackMergeReq.AllowNoChecks {
 		t.Fatalf("request = %#v", svc.stackMergeReq)
+	}
+	if got := post(`{"prUrl":"https://github.com/a/b/pull/2","expectedHeads":[{"number":1,"headSha":"a"}],"allowNoChecks":true}`); got != http.StatusOK || !svc.stackMergeReq.AllowNoChecks {
+		t.Fatalf("status = %d, request = %#v", got, svc.stackMergeReq)
 	}
 	if got := post(`{"prUrl":"https://github.com/a/b/pull/2","expectedHeads":[]}`); got != http.StatusBadRequest {
 		t.Fatalf("no heads status = %d", got)

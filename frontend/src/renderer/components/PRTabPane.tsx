@@ -2,6 +2,7 @@ import { ArrowRight, ArrowUpRight, Circle, CircleAlert, CircleCheck, CircleDashe
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
+import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { usePRStack } from "../hooks/usePRStack";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { formatTimeCompact } from "../lib/format-time";
@@ -256,6 +257,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	const { t } = useTranslation();
 	const pr = useSessionPR(session, url, hostId);
 	const detailsFailed = usePRDetailsLoad(pr, session.id, hostId, !session.cloud);
+	usePRNoChecksClock([pr]);
 	const [section, setSection] = useState<PRTabSection>(request?.section ?? "summary");
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const stripRef = useRef<HTMLDivElement>(null);

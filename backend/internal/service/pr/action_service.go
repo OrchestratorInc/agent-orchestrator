@@ -103,6 +103,9 @@ type ActionDeps struct {
 	Stacker ports.SCMStacker
 	// Details stores details read on demand; when nil, Store is used if it can.
 	Details detailsStore
+	// HeadChecks confirms that nothing checks a PR's head, for a merge that
+	// asks to treat no checks as passing. Nil means it's never confirmed.
+	HeadChecks ports.SCMHeadChecksReader
 }
 
 // ActionService validates current pull request state before applying mutations.
@@ -127,6 +130,7 @@ type ActionService struct {
 	attachments   ports.SCMAttachmentStore
 	stacker       ports.SCMStacker
 	details       detailsStore
+	headChecks    ports.SCMHeadChecksReader
 }
 
 var _ ActionManager = (*ActionService)(nil)
@@ -173,6 +177,7 @@ func NewActionService(deps ActionDeps) *ActionService {
 		refresher:     deps.Refresher,
 		attachments:   deps.Attachments,
 		stacker:       deps.Stacker,
+		headChecks:    deps.HeadChecks,
 		details:       details,
 	}
 }
@@ -232,7 +237,7 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 	if !strings.EqualFold(fresh.PR.HeadSHA, expectedHead) {
 		return MergeResult{}, ErrPRHeadChanged
 	}
-	if !readyToMerge(fresh, review) {
+	if !readyToMerge(fresh, review, request.AllowNoChecks && s.noChecksSettled(ctx, repo, fresh)) {
 		return MergeResult{}, ErrPRPreconditions
 	}
 
@@ -319,14 +324,16 @@ func (s *ActionService) fetchMergeReadiness(ctx context.Context, ref ports.SCMPR
 	return observations[0], review, nil
 }
 
-func readyToMerge(o ports.SCMObservation, review ports.SCMReviewObservation) bool {
+// readyToMerge is the merge guard on a fresh observation. noChecks says the
+// head is confirmed to have nothing checking it (see noChecksSettled), so its
+// unknown CI has nothing to wait for; the provider's mergeability still
+// enforces any checks a branch requires.
+func readyToMerge(o ports.SCMObservation, review ports.SCMReviewObservation, noChecks bool) bool {
 	if o.PR.HeadSHA == "" || o.CI.HeadSHA != o.PR.HeadSHA || review.Partial {
 		return false
 	}
 	ci := domain.CIState(o.CI.Summary)
-	if hasNoChecks(o.CI) {
-		// Nothing checks this head, so there is nothing to wait for. The
-		// provider's mergeability still enforces any checks a branch requires.
+	if noChecks && hasNoChecks(o.CI) {
 		ci = domain.CIPassing
 	}
 	return domain.MergeReadiness{
@@ -340,12 +347,33 @@ func readyToMerge(o ports.SCMObservation, review ports.SCMReviewObservation) boo
 	}.ReadyToMerge()
 }
 
-// hasNoChecks says CI reads as unknown because nothing checks the head, not
-// because its checks weren't read: GitHub reports no status rollup for such a
-// commit, and the summary can't tell the two apart. A cancelled run still lists
-// its checks, so it never counts.
+// hasNoChecks says the head's status rollup is empty: CI reads as unknown with
+// no checks listed. A cancelled run still lists its checks, so it never counts.
+// An empty rollup is also what a commit pushed seconds ago looks like before
+// its checks register, so it alone never lets a PR merge: see noChecksSettled.
 func hasNoChecks(ci ports.SCMCIObservation) bool {
 	return ci.Summary == string(domain.CIUnknown) && len(ci.Checks) == 0 && len(ci.FailedChecks) == 0
+}
+
+// noChecksSettle is how long a head's checks get to start before an empty
+// rollup is taken to mean nothing checks it. Actions and other check apps
+// register within seconds of a push.
+const noChecksSettle = 2 * time.Minute
+
+// noChecksSettled confirms with the provider that nothing checks o's head: its
+// rollup is empty, no check suite has started and no status was posted, for at
+// least noChecksSettle since checks could first have started. Without that, a
+// merge right after a push would land a commit whose CI hadn't begun.
+func (s *ActionService) noChecksSettled(ctx context.Context, repo ports.SCMRepo, o ports.SCMObservation) bool {
+	if s.headChecks == nil || !hasNoChecks(o.CI) || o.PR.HeadSHA == "" {
+		return false
+	}
+	facts, err := s.headChecks.HeadChecks(ctx, repo, o.PR.HeadSHA)
+	if err != nil {
+		s.logger.Debug("pr: read head checks", "pr", o.PR.Number, "error", err)
+		return false
+	}
+	return facts.Started == 0 && facts.Statuses == 0 && !facts.Since.IsZero() && !s.clock().Before(facts.Since.Add(noChecksSettle))
 }
 
 func hasUnresolvedHumanComments(threads []ports.SCMReviewThreadObservation) bool {

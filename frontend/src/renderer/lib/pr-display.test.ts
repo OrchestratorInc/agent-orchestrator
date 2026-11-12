@@ -9,6 +9,8 @@ import {
 	prCheckedOut,
 	prDiffSummary,
 	prHasNoChecks,
+	noChecksSettlesAt,
+	PR_NO_CHECKS_SETTLE_MS,
 	prSummaryBlockReason,
 	prThreadDiffUrl,
 	prStatusRows,
@@ -1158,6 +1160,15 @@ describe("a PR nothing checks", () => {
 		expect(prHasNoChecks(unchecked({ detailsObservedAt: undefined }))).toBe(false);
 		expect(prHasNoChecks(unchecked({ ci: { ...unknownCI, failingChecks: [{ name: "test", status: "cancelled", conclusion: "cancelled" }] } }))).toBe(false);
 		expect(prHasNoChecks(summary({ detailsObservedAt: "2026-06-15T00:00:00Z" }))).toBe(false);
+	});
+
+	it("waits for checks that may still be starting, right after the PR changed", () => {
+		const changed = Date.parse("2026-11-12T10:00:00Z");
+		const fresh = unchecked({ updatedAt: "2026-11-12T10:00:00Z" });
+		expect(prHasNoChecks(fresh, changed + 10_000)).toBe(false);
+		expect(prHasNoChecks(fresh, changed + PR_NO_CHECKS_SETTLE_MS)).toBe(true);
+		expect(noChecksSettlesAt(fresh)).toBe(changed + PR_NO_CHECKS_SETTLE_MS);
+		expect(noChecksSettlesAt(summary({ detailsObservedAt: "2026-06-15T00:00:00Z" }))).toBeUndefined();
 	});
 
 	it("can merge from the PR view, while the classic card still waits for checks", () => {

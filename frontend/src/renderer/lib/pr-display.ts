@@ -494,13 +494,30 @@ export const prSummaryBlockReason = (pr: SessionPRSummary) => prBlockReason({
 });
 
 /**
- * Whether a PR's loaded details show no checks at all. GitHub reports no
- * status rollup for a commit nothing checks, which reaches here as CI
- * "unknown", the same as checks not read yet. Only details that have loaded
- * and list no checks tell the two apart.
+ * How long after a PR last changed its checks get to start before "no checks
+ * reported" means nothing checks it. The daemon waits as long from the push
+ * (its noChecksSettle) before it lets such a PR merge; the PR changes as the
+ * daemon sees the push, so waiting from that never shows a Merge it refuses.
  */
-export function prHasNoChecks(pr: SessionPRSummary): boolean {
-	return pr.ci.state === "unknown" && Boolean(pr.detailsObservedAt) && (pr.ci.checks ?? []).length === 0 && pr.ci.failingChecks.length === 0;
+export const PR_NO_CHECKS_SETTLE_MS = 2 * 60_000;
+
+/**
+ * Whether a PR's loaded details show no checks at all, settled. GitHub reports
+ * no status rollup for a commit nothing checks, which reaches here as CI
+ * "unknown", the same as checks not read yet. Only details that have loaded
+ * and list no checks tell the two apart, and only once the PR has been still
+ * for PR_NO_CHECKS_SETTLE_MS: a commit pushed seconds ago has no rollup either.
+ */
+export function prHasNoChecks(pr: SessionPRSummary, now = Date.now()): boolean {
+	const settlesAt = noChecksSettlesAt(pr);
+	return settlesAt !== undefined && now >= settlesAt;
+}
+
+/** When a PR with an empty rollup counts as having no checks, if it has one. See usePRNoChecksClock. */
+export function noChecksSettlesAt(pr: SessionPRSummary): number | undefined {
+	if (pr.ci.state !== "unknown" || !pr.detailsObservedAt || (pr.ci.checks ?? []).length > 0 || pr.ci.failingChecks.length > 0) return undefined;
+	const changedAt = Date.parse(pr.updatedAt);
+	return Number.isNaN(changedAt) ? undefined : changedAt + PR_NO_CHECKS_SETTLE_MS;
 }
 
 // A run cancelled with no replacement: the backend reports unknown and lists the

@@ -23,7 +23,8 @@ type StackLayer struct {
 	ReviewDecision string
 	Mergeability   string
 	// NoChecks says the layer's CI is unknown because nothing checks its
-	// head (see hasNoChecks), not because its checks weren't read.
+	// head, as the provider confirms (see noChecksSettled), not because its
+	// checks weren't read or haven't started yet.
 	NoChecks bool
 	// SessionID is the AO session tracking this layer, when one does.
 	SessionID domain.SessionID
@@ -65,6 +66,8 @@ type StackMergeRequest struct {
 	PRURL         string
 	Method        string
 	ExpectedHeads []StackHead
+	// AllowNoChecks lets layers that nothing checks land, as MergeRequest's does.
+	AllowNoChecks bool
 }
 
 // StackMergeResult reports the layers a stack merge covered. Status says
@@ -164,7 +167,7 @@ func (s *ActionService) stackView(ctx context.Context, repo ports.SCMRepo, stack
 			out.Title = observation.PR.Title
 			out.URL = observation.PR.URL
 			out.CI = observation.CI.Summary
-			out.NoChecks = hasNoChecks(observation.CI)
+			out.NoChecks = s.noChecksSettled(ctx, repo, observation)
 			out.ReviewDecision = observation.Review.Decision
 			out.Mergeability = observation.Mergeability.State
 		}
@@ -265,7 +268,7 @@ func (s *ActionService) MergeStack(ctx context.Context, request StackMergeReques
 		if !strings.EqualFold(fresh.PR.HeadSHA, layer.HeadSHA) {
 			return StackMergeResult{}, ErrPRHeadChanged
 		}
-		if !readyToMerge(fresh, review) {
+		if !readyToMerge(fresh, review, request.AllowNoChecks && s.noChecksSettled(ctx, repo, fresh)) {
 			return StackMergeResult{}, fmt.Errorf("%w: #%d", ErrPRPreconditions, layer.Number)
 		}
 		landing = append(landing, fresh)

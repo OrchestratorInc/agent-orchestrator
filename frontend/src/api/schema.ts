@@ -6983,6 +6983,7 @@ export interface components {
             pressureSource: "psi" | "available_pct" | "memorystatus";
         };
         MergePRRequest: {
+            allowNoChecks?: boolean;
             expectedHeadSha: string;
             /** @enum {string} */
             method?: "squash" | "merge" | "rebase";
@@ -6998,6 +6999,7 @@ export interface components {
             stateChangedAt: string;
         };
         MergePRStackRequest: {
+            allowNoChecks?: boolean;
             expectedHeads: components["schemas"]["PRStackHead"][];
             /** @enum {string} */
             method?: "squash" | "merge" | "rebase";

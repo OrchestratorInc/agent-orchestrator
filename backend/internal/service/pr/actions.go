@@ -29,6 +29,10 @@ type MergeRequest struct {
 	// Method is the provider merge strategy: squash (the default when empty),
 	// merge, or rebase.
 	Method string
+	// AllowNoChecks lets a PR that nothing checks merge, once the provider
+	// confirms nothing has started checking its head for a while. The PR view
+	// asks for it; the CLI doesn't, so `ao pr merge` still waits for checks.
+	AllowNoChecks bool
 }
 
 // MergeResult is the successful outcome of a PR merge.

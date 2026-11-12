@@ -2,6 +2,7 @@ import { ChevronDown, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed,
 import { useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { prCanMerge, prHasNoChecks } from "../lib/pr-display";
+import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
@@ -54,6 +55,7 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 	showRepository?: boolean;
 }) {
 	const { t } = useTranslation();
+	usePRNoChecksClock(prs);
 	if (prs.length < 2) return null;
 	const sorted = sortSessionPRs(prs);
 	const active = sorted.filter((pr) => pr.state === "open" || pr.state === "draft");

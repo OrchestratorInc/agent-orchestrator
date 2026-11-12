@@ -115,6 +115,8 @@ func newStackFixture(number int) stackFixture {
 		Stacker:     stacker,
 		MergeWriter: writer,
 		Clock:       func() time.Time { return time.Unix(100, 0) },
+		// Settled: queued app suites only, since well before noChecksSettle.
+		HeadChecks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: time.Unix(100, 0).Add(-3 * time.Minute)}},
 	})
 	return stackFixture{svc: svc, stacker: stacker, reader: reader, writer: writer}
 }
@@ -150,8 +152,9 @@ func TestStack_DescribesEveryLayer(t *testing.T) {
 }
 
 // GitHub reports no status rollup for a head nothing checks, so its CI reads
-// as unknown. Only a layer read with no checks at all says so; one whose
-// checks weren't read, or whose run was cancelled, is still unknown.
+// as unknown. Only a layer read with no checks at all, settled as the provider
+// confirms, says so; one whose checks weren't read, or whose run was
+// cancelled, is still unknown.
 func TestStack_SaysWhichLayersHaveNoChecks(t *testing.T) {
 	f := newStackFixture(2)
 	unchecked := readyLayer(1, headA)
@@ -236,9 +239,31 @@ func TestMergeStack_LandsLayersNothingChecks(t *testing.T) {
 		layer.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: head}
 		f.reader.byNumber[number] = layer
 	}
-	got, err := f.svc.MergeStack(context.Background(), StackMergeRequest{PRID: "2", PRURL: "https://github.com/acme/widgets/pull/2", ExpectedHeads: headsThrough(1, 2)})
+	// Not asked, as the CLI: the layers wait for checks.
+	if _, err := f.svc.MergeStack(context.Background(), StackMergeRequest{PRID: "2", PRURL: "https://github.com/acme/widgets/pull/2", ExpectedHeads: headsThrough(1, 2)}); !errors.Is(err, ErrPRPreconditions) || len(f.stacker.merge) != 0 {
+		t.Fatalf("unasked err = %v, merge = %#v", err, f.stacker.merge)
+	}
+	got, err := f.svc.MergeStack(context.Background(), StackMergeRequest{PRID: "2", PRURL: "https://github.com/acme/widgets/pull/2", ExpectedHeads: headsThrough(1, 2), AllowNoChecks: true})
 	if err != nil || len(got.Numbers) != 2 || len(f.stacker.merge) != 1 {
 		t.Fatalf("got = %#v, err = %v, merge = %#v", got, err, f.stacker.merge)
+	}
+}
+
+// A layer pushed seconds ago reads the same as one nothing checks, so it waits.
+func TestStack_ALayerJustPushedIsNotNoChecks(t *testing.T) {
+	f := newStackFixture(2)
+	f.svc.headChecks = &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: time.Unix(100, 0).Add(-10 * time.Second)}}
+	for number, head := range map[int]string{1: headA, 2: headB} {
+		layer := readyLayer(number, head)
+		layer.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: head}
+		f.reader.byNumber[number] = layer
+	}
+	got, err := f.svc.Stack(context.Background(), "2", "https://github.com/acme/widgets/pull/2")
+	if err != nil || got.Stack == nil || got.Stack.Layers[0].NoChecks || got.Stack.Layers[1].NoChecks {
+		t.Fatalf("got = %#v, err = %v", got, err)
+	}
+	if _, err := f.svc.MergeStack(context.Background(), StackMergeRequest{PRID: "2", PRURL: "https://github.com/acme/widgets/pull/2", ExpectedHeads: headsThrough(1, 2), AllowNoChecks: true}); !errors.Is(err, ErrPRPreconditions) || len(f.stacker.merge) != 0 {
+		t.Fatalf("err = %v, merge = %#v", err, f.stacker.merge)
 	}
 }
 

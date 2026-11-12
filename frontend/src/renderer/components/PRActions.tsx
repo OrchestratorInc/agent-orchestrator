@@ -131,7 +131,8 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 			if (usePreviewData) return undefined;
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
 				params: { path: { id: String(pr.number) } },
-				body: { prUrl: pr.url, expectedHeadSha: pr.headSha, method },
+				// The PR view merges a PR nothing checks; the daemon confirms it first.
+				body: { prUrl: pr.url, expectedHeadSha: pr.headSha, method, allowNoChecks: true },
 			});
 			if (error) throw apiErrorException(error, t("pr.merge.failed", { number: pr.number }));
 			return data;
@@ -151,7 +152,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 			if (usePreviewData) return undefined;
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/stack/merge", {
 				params: { path: { id: String(pr.number) } },
-				body: { prUrl: pr.url, method, expectedHeads: (landing ?? []).map(({ headSha, number }) => ({ headSha, number })) },
+				body: { prUrl: pr.url, method, allowNoChecks: true, expectedHeads: (landing ?? []).map(({ headSha, number }) => ({ headSha, number })) },
 			});
 			if (error) throw apiErrorException(error, t("pr.stack.mergeFailed"));
 			return data;

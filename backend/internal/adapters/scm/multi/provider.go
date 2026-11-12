@@ -310,6 +310,23 @@ func (m *Provider) MergeStack(ctx context.Context, request ports.SCMStackMergeRe
 	return stacker.MergeStack(ctx, request)
 }
 
+// HeadChecks delegates to the sub-provider matching repo.Provider when that
+// provider can read a commit's checks.
+func (m *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha string) (ports.SCMHeadChecks, error) {
+	if m == nil {
+		return ports.SCMHeadChecks{}, fmt.Errorf("%w: head checks provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(repo.Provider)
+	if err != nil {
+		return ports.SCMHeadChecks{}, err
+	}
+	reader, ok := p.(ports.SCMHeadChecksReader)
+	if !ok {
+		return ports.SCMHeadChecks{}, fmt.Errorf("%w: head checks for provider %q", ports.ErrSCMUnsupported, repo.Provider)
+	}
+	return reader.HeadChecks(ctx, repo, sha)
+}
+
 // PostComment delegates to the sub-provider matching request.PR.Repo.Provider
 // when that provider supports posting comments.
 func (m *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequest) (ports.SCMCommentResult, error) {

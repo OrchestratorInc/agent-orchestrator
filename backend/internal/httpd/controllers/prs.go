@@ -165,7 +165,7 @@ func (c *PRsController) mergeStack(w http.ResponseWriter, r *http.Request) {
 	for _, head := range in.ExpectedHeads {
 		heads = append(heads, prsvc.StackHead{Number: head.Number, HeadSHA: head.HeadSHA})
 	}
-	res, err := c.Svc.MergeStack(r.Context(), prsvc.StackMergeRequest{PRID: prID, PRURL: in.PRURL, Method: in.Method, ExpectedHeads: heads})
+	res, err := c.Svc.MergeStack(r.Context(), prsvc.StackMergeRequest{PRID: prID, PRURL: in.PRURL, Method: in.Method, ExpectedHeads: heads, AllowNoChecks: in.AllowNoChecks})
 	if err != nil {
 		writePRError(w, r, err)
 		return
@@ -205,7 +205,7 @@ func (c *PRsController) merge(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ACTION", "Merge method must be squash, merge, or rebase", nil)
 		return
 	}
-	res, err := c.Svc.Merge(r.Context(), prsvc.MergeRequest{PRID: prID, PRURL: in.PRURL, ExpectedHeadSHA: in.ExpectedHeadSHA, Method: in.Method})
+	res, err := c.Svc.Merge(r.Context(), prsvc.MergeRequest{PRID: prID, PRURL: in.PRURL, ExpectedHeadSHA: in.ExpectedHeadSHA, Method: in.Method, AllowNoChecks: in.AllowNoChecks})
 	if err != nil {
 		writePRError(w, r, err)
 		return

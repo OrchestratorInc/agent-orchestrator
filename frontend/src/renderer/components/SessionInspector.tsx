@@ -44,6 +44,7 @@ import {
 import { InfoRow, InfoRowButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
+import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
@@ -1061,6 +1062,7 @@ function PRViewSummaryCard({
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
+	usePRNoChecksClock([pr]);
 	const noChecks = prHasNoChecks(pr);
 	const detailsFailed = usePRDetailsLoad(pr, sessionId, hostId, !cloudOrgId);
 	const presentation = prCardPresentation(pr, { noChecks });

@@ -2881,6 +2881,10 @@ type MergePRRequest struct {
 	ExpectedHeadSHA string `json:"expectedHeadSha" minLength:"40"`
 	// Method is the merge strategy; squash when omitted.
 	Method string `json:"method,omitempty" enum:"squash,merge,rebase"`
+	// AllowNoChecks lets a PR that nothing checks merge, once the provider
+	// confirms nothing has started checking its head for a couple of minutes.
+	// Without it, a PR with no checks waits as it always has.
+	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
 }
 
 // MergePRResponse is the body of POST /api/v1/prs/{id}/merge (200).
@@ -2974,6 +2978,8 @@ type MergePRStackRequest struct {
 	ExpectedHeads []PRStackHead `json:"expectedHeads" minItems:"1"`
 	// Method is the merge strategy; squash when omitted.
 	Method string `json:"method,omitempty" enum:"squash,merge,rebase"`
+	// AllowNoChecks lets layers that nothing checks land, as MergePRRequest's does.
+	AllowNoChecks bool `json:"allowNoChecks,omitempty"`
 }
 
 // MergePRStackResponse is the body of POST /api/v1/prs/{id}/stack/merge (200).

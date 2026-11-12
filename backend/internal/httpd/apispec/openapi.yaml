@@ -20118,6 +20118,8 @@ components:
       type: object
     MergePRRequest:
       properties:
+        allowNoChecks:
+          type: boolean
         expectedHeadSha:
           minLength: 40
           type: string
@@ -20158,6 +20160,8 @@ components:
       type: object
     MergePRStackRequest:
       properties:
+        allowNoChecks:
+          type: boolean
         expectedHeads:
           items:
             $ref: '#/components/schemas/PRStackHead'
