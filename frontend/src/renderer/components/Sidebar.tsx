@@ -507,14 +507,16 @@ type SidebarProps = {
 	onOpenRemoteProject?: (hostId: string, projectId: string) => void;
 	onOpenRemoteOrchestrator?: (hostId: string, projectId: string) => void;
 	onConfigureRemoteProject?: (hostId: string, projectId: string) => void;
-	onRemoveRemoteProject?: (hostId: string, projectId: string) => Promise<void>;
+	/** Removes the project optimistically; the shell owns feedback and rollback. */
+	onRemoveRemoteProject?: (hostId: string, projectId: string) => void;
 	onRetryRemoteHosts?: () => void;
 	remoteWorkspaces?: WorkspaceSummary[];
 	remoteFailedHostIds?: string[];
 	onCloneProject: (input: CloneProjectInput) => Promise<void>;
 	onCreateProject: (input: CreateProjectInput) => Promise<void>;
 	onInitializeProject: (path: string) => Promise<void>;
-	onRemoveProject: (projectId: string) => Promise<void>;
+	/** Removes the project optimistically; the shell owns feedback and rollback. */
+	onRemoveProject: (projectId: string) => void;
 	/** Fixed shell chrome that also consumes the live sidebar width. */
 	resizeAuxiliaryTargetRef?: RefObject<HTMLElement | null>;
 };
@@ -703,7 +705,7 @@ export const Sidebar = memo(function Sidebar({
 	onOpenRemoteProject = () => undefined,
 	onOpenRemoteOrchestrator = () => undefined,
 	onConfigureRemoteProject = () => undefined,
-	onRemoveRemoteProject = async () => undefined,
+	onRemoveRemoteProject = () => undefined,
 	onRetryRemoteHosts = () => undefined,
 	remoteWorkspaces = [],
 	remoteFailedHostIds = [],
@@ -1481,7 +1483,7 @@ type ProjectItemProps = {
 	projectDragInProgress: boolean;
 	consumeDragClick: (id: string) => boolean;
 	onToggle: (projectId: string) => void;
-	onRemoveProject: (projectId: string) => Promise<void>;
+	onRemoveProject: (projectId: string) => void;
 	suppressInitialExpandAnimation: boolean;
 	onProjectDragStart: (event: ReactDragEvent<HTMLElement>, projectId: string) => void;
 	onProjectDragEnd: () => void;
@@ -1551,8 +1553,6 @@ const ProjectItem = memo(function ProjectItem({
 		);
 
 	const queryClient = useQueryClient();
-	const [removeError, setRemoveError] = useState<string | null>(null);
-	const [isRemoving, setIsRemoving] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [isSpawning, setIsSpawning] = useState(false);
 	// Skip enter animation on first mount — sessions arrive async and we don't
@@ -1775,10 +1775,7 @@ const ProjectItem = memo(function ProjectItem({
 	};
 
 
-	const removeProject = () => {
-		setRemoveError(null);
-		setConfirmOpen(true);
-	};
+	const removeProject = () => setConfirmOpen(true);
 	const copyToClipboard = useCopyToClipboard();
 	// Pins are a local list preference; remote host rows and the Scratchpad
 	// have their own sections and are not pinnable.
@@ -1878,7 +1875,6 @@ const ProjectItem = memo(function ProjectItem({
 						icon: <Trash2 aria-hidden="true" />,
 						label: t("shell.removeProjectTitle"),
 						destructive: true,
-						disabled: isRemoving,
 						onSelect: removeProject,
 					},
 				]
@@ -1886,24 +1882,11 @@ const ProjectItem = memo(function ProjectItem({
 		];
 	};
 
-	const handleConfirmRemove = async () => {
+	// Removal is optimistic: the row, its sessions and its pin leave at once,
+	// and the shell reports the outcome with a toast.
+	const handleConfirmRemove = () => {
 		setConfirmOpen(false);
-		setIsRemoving(true);
-		// Teardown can take a while when a project owns several sessions. Leave
-		// the confirmation immediately and move to the route that remains valid
-		// after removal while the sidebar keeps progress/error feedback visible.
-		selection.goHome();
-		try {
-			await onRemoveProject(workspace.id);
-			// Project ids come from the folder name, so a stale pin would come
-			// back if the same folder is added again.
-			if (canPin) setProjectPinned(workspace.id, false);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : t("shell.couldNotRemoveProject");
-			setRemoveError(message);
-		} finally {
-			setIsRemoving(false);
-		}
+		onRemoveProject(workspace.id);
 	};
 
 	return (
@@ -2158,15 +2141,6 @@ const ProjectItem = memo(function ProjectItem({
 						</div>
 						{/* end outer relative */}
 					</div>
-					{isRemoving ? (
-						<div className="sidebar-expanded-chrome px-5 py-1 text-2xs text-muted-foreground" role="status">
-							{t("shell.removingNamed", { name: workspace.name })}
-						</div>
-					) : removeError ? (
-						<div className="sidebar-expanded-chrome px-5 py-1 text-2xs text-destructive" role="alert">
-							{removeError}
-						</div>
-					) : null}
 					{/* project-sidebar__sessions: indented under the project parent so worker
           sessions read as children without adding a persistent guide rail. */}
 		<AnimatePresence initial={false}>

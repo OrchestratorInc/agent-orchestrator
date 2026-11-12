@@ -299,7 +299,7 @@ type CloneProjectHandler = (input: {
 	signal?: AbortSignal;
 }) => Promise<void>;
 type InitializeProjectHandler = (path: string) => Promise<void>;
-type RemoveProjectHandler = (projectId: string) => Promise<void>;
+type RemoveProjectHandler = (projectId: string) => void;
 type ImportValidationResult = components["schemas"]["ImportValidationResult"];
 type RepoGitStatus = components["schemas"]["RepoGitStatus"];
 
@@ -980,7 +980,7 @@ describe("Sidebar", () => {
 		}
 	});
 
-	it("shows a ConfirmDialog and calls onRemoveProject when confirmed", async () => {
+	it("shows a ConfirmDialog and hands the removal to the shell when confirmed", async () => {
 		const user = userEvent.setup();
 		const onRemoveProject = renderSidebar();
 
@@ -993,18 +993,16 @@ describe("Sidebar", () => {
 		expect(dialog).toHaveTextContent("Project One");
 
 		await user.click(screen.getByRole("button", { name: "Remove" }));
-		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledTimes(1));
-		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
+		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledWith("proj-1"));
+		// The shell leaves the project's page only when it is open (useRemoveProject).
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("dismisses project removal immediately and shows progress outside the modal", async () => {
-		let finishRemoval!: () => void;
-		const onRemoveProject = vi.fn(
-			() =>
-				new Promise<void>((resolve) => {
-					finishRemoval = resolve;
-				}),
-		) as RemoveProjectHandler;
+	it("shows no Removing… state on the row while the removal runs", async () => {
+		// Removal is optimistic: the shell drops the row from the list, so the
+		// row never shows progress or an error of its own, even while a slow
+		// teardown is still running.
+		const onRemoveProject = vi.fn() as RemoveProjectHandler;
 		const user = userEvent.setup();
 		renderSidebar({ onRemoveProject });
 
@@ -1013,11 +1011,10 @@ describe("Sidebar", () => {
 		await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
 
 		expect(screen.queryByRole("dialog", { name: "Remove project" })).not.toBeInTheDocument();
-		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
-		expect(screen.getByRole("status")).toHaveTextContent("Removing Project One");
-
-		finishRemoval();
-		await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+		expect(onRemoveProject).toHaveBeenCalledTimes(1);
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.queryByText(/Removing/)).not.toBeInTheDocument();
 	});
 
 	it("does not remove the project when cancellation is clicked in the ConfirmDialog", async () => {
@@ -1033,23 +1030,6 @@ describe("Sidebar", () => {
 		// Dialog should close and the handler must not have fired
 		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove project" })).not.toBeInTheDocument());
 		expect(onRemoveProject).not.toHaveBeenCalled();
-	});
-
-	it("keeps the removal dialog dismissed and surfaces failures in the sidebar", async () => {
-		const user = userEvent.setup();
-		const onRemoveProject = vi
-			.fn()
-			.mockRejectedValueOnce(new Error("Failed to remove project")) as RemoveProjectHandler;
-		renderSidebar({ onRemoveProject });
-
-		await user.click(screen.getByLabelText("Project actions for Project One"));
-		await user.click(await screen.findByRole("menuitem", { name: "Remove project" }));
-		await screen.findByRole("dialog", { name: "Remove project" });
-		await user.click(screen.getByRole("button", { name: "Remove" }));
-
-		expect(await screen.findByText("Failed to remove project")).toBeInTheDocument();
-		expect(screen.queryByRole("dialog", { name: "Remove project" })).not.toBeInTheDocument();
-		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
 	});
 
 	it("requests a new task for the project from the kebab menu", async () => {
