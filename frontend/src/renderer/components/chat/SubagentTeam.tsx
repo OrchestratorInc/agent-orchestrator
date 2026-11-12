@@ -107,12 +107,9 @@ export function SubagentTeam({
 				type="button"
 				onClick={() => setOpen(teamKey, !open)}
 				aria-expanded={open}
-				// One line: the count and the states beside it, and the chevron in the rows'
-				// column (inside the box's border and padding while it works).
-				className={cn(
-					"activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none",
-					folded ? "pr-0" : "pr-[13px]",
-				)}
+				// One line: the count, the states beside it, then the chevron right after them,
+				// the way "Worked for" carries its own.
+				className="activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none"
 			>
 				{/* Overlapping marks, each cut back short of the one over it, so two agents read
 				    as two marks rather than one shape. A mask, not a halo: the chat's canvas is
@@ -128,7 +125,7 @@ export function SubagentTeam({
 						/>
 					))}
 				</span>
-				<span className="flex min-w-0 flex-1 items-baseline gap-2">
+				<span className="flex min-w-0 items-baseline gap-2">
 					<span className="shrink-0 text-xs font-medium text-foreground/85 group-hover/run:text-foreground">
 						{t("chat.subagent.count", { count: agents.length })}
 					</span>
