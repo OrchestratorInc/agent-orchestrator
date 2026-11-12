@@ -69,6 +69,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
+	COMPOSER_SEND_INSET,
 	ComposerEditor,
 	type ComposerEditorHandle,
 	type ComposerImage,
@@ -2455,7 +2456,7 @@ export const ChatComposer = memo(function ChatComposer({
 						{settings}
 					</div>
 
-					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
+					<div role="group" aria-label="Send message controls" className={cn("flex h-7 shrink-0 items-center", COMPOSER_SEND_INSET)}>
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
 							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn">
 								Steer
