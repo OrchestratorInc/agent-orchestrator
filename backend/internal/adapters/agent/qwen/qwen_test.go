@@ -169,14 +169,20 @@ func TestGetLaunchCommandWorkerStartsInteractive(t *testing.T) {
 	}
 	script := cmd[2]
 	sessionKey := safeQwenSessionKey("repo/issue#42")
+	submitPath := filepath.Join(dataDir, "agent-runtime", "qwen", sessionKey, sessionKey+".submit.jsonl")
+	staged, err := os.ReadFile(submitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(staged) != `{"type":"submit","text":"-fix this"}`+"\n" {
+		t.Fatalf("staged submit = %q", staged)
+	}
 	for _, part := range []string{
 		"umask 077; ",
-		"mkdir -p ",
 		filepath.Join(dataDir, "agent-runtime", "qwen", sessionKey, sessionKey+".input.jsonl"),
 		sessionKey + ".input.jsonl",
 		sessionKey + ".output.jsonl",
-		`"type":"submit"`,
-		`"text":"-fix this"`,
+		"mv -f " + qwenShellQuote(submitPath),
 		`"session_start"`,
 		"exec 'qwen' '--append-system-prompt' 'be terse' '--json-file'",
 		"'--input-file'",
@@ -185,8 +191,8 @@ func TestGetLaunchCommandWorkerStartsInteractive(t *testing.T) {
 			t.Fatalf("worker script missing %q in: %s", part, script)
 		}
 	}
-	if strings.Contains(script, "'-p'") || strings.Contains(script, "'-i'") {
-		t.Fatalf("worker script must not use -p/-i prompt flags: %s", script)
+	if strings.Contains(script, "'-p'") || strings.Contains(script, "'-i'") || strings.Contains(script, "-fix this") {
+		t.Fatalf("worker script must not carry the task: %s", script)
 	}
 	if strings.Contains(script, workspace) || strings.Contains(script, ".qwen-remote-input") {
 		t.Fatalf("worker script must not store remote-input files in workspace: %s", script)
@@ -951,5 +957,59 @@ printf '%s' "$PATH" > "$QWEN_TEST_PATH_OUT"
 	}
 	if string(got) != want {
 		t.Fatalf("remote-input wrapper replaced the pinned runtime PATH: got %q, want %q", got, want)
+	}
+}
+
+// A task at the 100 KiB spawn cap must start Qwen and reach its input file
+// byte for byte. Linux caps each exec argument at 128 KiB (MAX_ARG_STRLEN with
+// 4 KiB pages), so the task must not ride inside the sh -c script.
+func TestRemoteInputWorkerLaunchesMaxSizeTask(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix remote-input wrapper")
+	}
+	const linuxMaxArgLen = 32 * 4096
+	dir := t.TempDir()
+	// JSON escapes < as < and shell quoting turns ' into '\'', so this is
+	// the worst case for any copy of the task kept in the script.
+	prompt := strings.Repeat("<'\"\n", (100<<10)/4)
+	out := filepath.Join(dir, "observed-input")
+	binary := filepath.Join(dir, "qwen")
+	script := `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  case "$1" in --json-file) output="$2"; shift 2;; --input-file) input="$2"; shift 2;; *) shift;; esac
+done
+printf '%s\n' '{"type":"session_start"}' > "$output"
+i=0
+while [ ! -s "$input" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+cp "$input" ` + qwenShellQuote(out) + `
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := qwenWorkerRemoteInputCommand([]string{binary}, ports.LaunchConfig{DataDir: dir, SessionID: "max-size", Prompt: prompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput(); err != nil {
+		t.Fatalf("worker launch failed: %v: %s", err, output)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := json.Marshal(qwenSubmitCommand{Type: "submit", Text: prompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want)+"\n" {
+		t.Fatalf("input file got %d bytes, want the %d-byte submit line", len(got), len(want)+1)
+	}
+	// macOS allows 1 MiB in total, so hold every platform to the Linux limit.
+	for i, arg := range argv {
+		if len(arg) >= linuxMaxArgLen {
+			t.Fatalf("argv[%d] is %d bytes; Linux exec rejects arguments of %d bytes or more", i, len(arg), linuxMaxArgLen)
+		}
 	}
 }

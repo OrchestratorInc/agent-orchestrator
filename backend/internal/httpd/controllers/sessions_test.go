@@ -45,9 +45,12 @@ import (
 )
 
 type fakeSessionService struct {
-	deleted       []domain.SessionID
-	deleteCleanup []bool
-	deleteErr     error
+	artifactsRegistered   []string
+	artifactsUnregistered []string
+	registerArtifactsErr  error
+	deleted               []domain.SessionID
+	deleteCleanup         []bool
+	deleteErr             error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
 	lastListFilter             sessionsvc.ListFilter
@@ -443,6 +446,19 @@ func (f *fakeSessionService) Kill(_ context.Context, id domain.SessionID) (bool,
 	s.Status = domain.StatusTerminated
 	f.sessions[id] = s
 	return true, nil
+}
+
+func (f *fakeSessionService) RegisterArtifacts(_ context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error) {
+	if f.registerArtifactsErr != nil {
+		return sessionsvc.ArtifactRegistration{}, f.registerArtifactsErr
+	}
+	f.artifactsRegistered = append(f.artifactsRegistered, references...)
+	return sessionsvc.ArtifactRegistration{Registered: references, OtherFiles: 2, OtherRootFiles: []string{"draft.md"}}, nil
+}
+
+func (f *fakeSessionService) UnregisterArtifact(_ context.Context, _ domain.SessionID, path string) error {
+	f.artifactsUnregistered = append(f.artifactsUnregistered, path)
+	return nil
 }
 
 func (f *fakeSessionService) DeleteArtifacts(_ context.Context, id domain.SessionID) error {
@@ -1153,7 +1169,7 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	s.Metadata = domain.SessionMetadata{Branch: "qa/modal-worker", WorkspacePath: "/tmp/private-worktree", RuntimeHandleID: "runtime-1", Prompt: "private prompt"}
 	s.SCMStatus = domain.StatusReviewPending
 	s.KanbanColumn = domain.KanbanNeedsReview
-	s.DisplayStatus = contract.DisplayNeedsHumanReview
+	s.DisplayStatus = contract.DisplayAwaitingReview
 	svc.sessions["ao-1"] = s
 	srv := newSessionTestServer(t, svc)
 
@@ -1171,7 +1187,7 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	if list.Sessions[0].KanbanColumn != string(domain.KanbanNeedsReview) {
 		t.Fatalf("kanbanColumn = %q, want the derived column on the wire", list.Sessions[0].KanbanColumn)
 	}
-	if list.Sessions[0].DisplayStatus != string(contract.DisplayNeedsHumanReview) {
+	if list.Sessions[0].DisplayStatus != string(contract.DisplayAwaitingReview) {
 		t.Fatalf("displayStatus = %q, want the derived phrase on the wire", list.Sessions[0].DisplayStatus)
 	}
 	if list.Sessions[0].Branch != "qa/modal-worker" {
@@ -2011,6 +2027,33 @@ func TestSessionsAPI_SpawnPassesParentSessionToService(t *testing.T) {
 	}
 	if svc.lastSpawn.ParentSessionID != "ao-1" {
 		t.Fatalf("service ParentSessionID = %q, want ao-1", svc.lastSpawn.ParentSessionID)
+	}
+}
+
+// `ao spawn` asks for the async start so the session reads as provisioning
+// with its prompt queued while it starts; a standalone worker has no project
+// to start in the background and stays synchronous.
+func TestSessionsAPI_SpawnAsyncOnlyForProjectSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"project", `{"projectId":"ao","kind":"worker","harness":"claude-code","prompt":"fix","async":true}`, true},
+		{"omitted", `{"projectId":"ao","kind":"worker","harness":"claude-code","prompt":"fix"}`, false},
+		{"standalone", `{"kind":"worker","harness":"claude-code","prompt":"fix","async":true}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", tc.body)
+			if status != http.StatusCreated {
+				t.Fatalf("POST session = %d, want 201; body=%s", status, body)
+			}
+			if svc.lastSpawn.Async != tc.want {
+				t.Fatalf("service Async = %v, want %v", svc.lastSpawn.Async, tc.want)
+			}
+		})
 	}
 }
 
@@ -3013,6 +3056,82 @@ func TestSessionsAPI_SetPreviewAbsoluteWorkspaceFileUsesConfinedOrigin(t *testin
 	previewBody, previewStatus, _ := doPreviewOriginRequest(t, srv, resp.Session.PreviewURL, "/")
 	if previewStatus != http.StatusOK || string(previewBody) != `<html>workspace preview</html>` {
 		t.Fatalf("workspace preview = %d, %q; want 200 and workspace file", previewStatus, previewBody)
+	}
+}
+
+func TestSessionsAPI_SetPreviewAbsoluteArtifactFileUsesArtifactOrigin(t *testing.T) {
+	svc := newFakeSessionService()
+	workspace, artifacts := t.TempDir(), t.TempDir()
+	report := filepath.Join(artifacts, "q3", "report.html")
+	notes := filepath.Join(artifacts, "notes.md")
+	if err := os.MkdirAll(filepath.Dir(report), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(report, []byte(`<html>artifact report</html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(notes, []byte("# Review notes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := svc.sessions["ao-1"]
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, ArtifactDir: artifacts}
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+
+	setPreview := func(target string) string {
+		t.Helper()
+		body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/preview", `{"url":`+strconv.Quote(target)+`}`)
+		if status != http.StatusOK {
+			t.Fatalf("set preview %q = %d, want 200; body=%s", target, status, body)
+		}
+		var resp struct {
+			Session struct {
+				PreviewURL string `json:"previewUrl"`
+			} `json:"session"`
+		}
+		mustJSON(t, body, &resp)
+		return resp.Session.PreviewURL
+	}
+
+	reportURLPath := filepath.ToSlash(report)
+	if filepath.VolumeName(report) != "" {
+		reportURLPath = "/" + reportURLPath
+	}
+	for _, target := range []string{report, (&url.URL{Scheme: "file", Path: reportURLPath}).String()} {
+		previewURL := setPreview(target)
+		parsed, err := url.Parse(previewURL)
+		if err != nil {
+			t.Fatalf("parse preview url: %v", err)
+		}
+		if !strings.HasPrefix(parsed.Hostname(), "ao-preview-artifact.") || parsed.Path != "/q3/report.html" {
+			t.Fatalf("previewUrl for %q = %q, want artifact origin at /q3/report.html", target, previewURL)
+		}
+		body, status, _ := doPreviewOriginRequest(t, srv, previewURL, parsed.Path)
+		if status != http.StatusOK || string(body) != `<html>artifact report</html>` {
+			t.Fatalf("artifact preview = %d, %q; want 200 and the artifact file", status, body)
+		}
+	}
+
+	notesURL := setPreview(notes)
+	body, status, _ := doPreviewOriginRequest(t, srv, notesURL, "/notes.md")
+	if status != http.StatusOK || !bytes.Contains(body, []byte("Review notes</h1>")) {
+		t.Fatalf("markdown artifact preview = %d, %q; want rendered Markdown", status, body)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.html")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escape := filepath.Join(artifacts, "escape.html")
+	if err := os.Symlink(outside, escape); err != nil {
+		if runtime.GOOS == "windows" || errors.Is(err, os.ErrPermission) {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		t.Fatalf("create symlink escape: %v", err)
+	}
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/preview", `{"url":`+strconv.Quote(escape)+`}`)
+	if status != http.StatusForbidden || !bytes.Contains(body, []byte(`"code":"PREVIEW_FILE_OUTSIDE_WORKSPACE"`)) {
+		t.Fatalf("set artifact symlink escape = %d, body=%s; want 403", status, body)
 	}
 }
 
@@ -4691,7 +4810,7 @@ func TestSessionsAPI_PreparesAndCancelsTaskWorkspace(t *testing.T) {
 func TestSessionsAPI_DelegateTaskAcceptsLongBrief(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
-	brief := strings.Repeat("a", 4097)
+	brief := strings.Repeat("a", 100<<10)
 	payload, err := json.Marshal(map[string]string{
 		"projectId": "ao",
 		"brief":     brief,
@@ -4712,7 +4831,7 @@ func TestSessionsAPI_DelegateTaskAcceptsLongBrief(t *testing.T) {
 func TestSessionsAPI_DelegateTaskRejectsBriefPastLaunchSafeLimit(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
-	brief := strings.Repeat("a", (16<<10)+1)
+	brief := strings.Repeat("a", (100<<10)+1)
 	payload, err := json.Marshal(map[string]string{
 		"projectId": "ao",
 		"brief":     brief,
@@ -4727,7 +4846,7 @@ func TestSessionsAPI_DelegateTaskRejectsBriefPastLaunchSafeLimit(t *testing.T) {
 		Message string `json:"message"`
 	}
 	mustJSON(t, body, &got)
-	if got.Message != "Task must be 16 KiB or fewer" {
+	if got.Message != "Task must be 100 KiB or fewer" {
 		t.Fatalf("error message = %q, want actionable size limit", got.Message)
 	}
 	if svc.delegationInput.ProjectID != "" {

@@ -12,10 +12,12 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
+	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -36,9 +38,14 @@ type APIDeps struct {
 	Automations        controllers.AutomationService
 	DesktopWorkspaces  controllers.DesktopWorkspaceService
 	Activity           controllers.ActivityRecorder
+	PRRefresh          controllers.PRRefresher
 	NativeSessions     ports.AgentNativeSessionResolver
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
+	UsageReport        controllers.UsageReportService
+	UsageLimitHistory  controllers.UsageLimitHistoryService
+	UsageLimitSetting  controllers.UsageLimitHistorySetting
+	UsagePrices        controllers.UsagePriceService
 	SessionMemory      controllers.SessionMemoryService
 	SessionSteps       controllers.SessionStepsReader
 	PRs                prsvc.ActionManager
@@ -48,6 +55,7 @@ type APIDeps struct {
 	NotificationStream controllers.NotificationStream
 	Push               controllers.PushRegistry
 	Import             controllers.ImportService
+	SessionImport      controllers.SessionImportService
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
 	Cues               controllers.CueService
@@ -94,10 +102,17 @@ type APIDeps struct {
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
 	Presence *presence.Tracker
+	// ClientTimeZone records the time zone the desktop app reports, which
+	// agent prompts prefer over this daemon's own. Nil disables recording.
+	ClientTimeZone *clienttz.Recorder
 
 	// DeviceRoster and DeviceLive back the desktop-only mobile device roster.
 	DeviceRoster controllers.DeviceRoster
 	DeviceLive   controllers.LiveSet
+	// DeviceAccess adds device tokens and the account to the device list. Nil skips them.
+	DeviceAccess controllers.DeviceAccess
+	// AccessDevices links push registrations to device tokens.
+	AccessDevices *mobilebridge.AccessDevices
 }
 
 // normalizeAPIDeps closes the Presence/DeviceLive duplication trap structurally.
@@ -146,6 +161,7 @@ type API struct {
 	reports       *controllers.ReportsController
 	push          *controllers.PushController
 	imports       *controllers.ImportController
+	sessionImport *controllers.SessionImportController
 	fs            *controllers.FSController
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
@@ -190,6 +206,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Svc:                      deps.Sessions,
 			Projects:                 deps.Projects,
 			Activity:                 deps.Activity,
+			PRRefresh:                deps.PRRefresh,
 			NativeSessions:           deps.NativeSessions,
 			DataDir:                  cfg.DataDir,
 			Usage:                    deps.UsageHooks,
@@ -203,13 +220,14 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		},
 		automations:   &controllers.AutomationsController{Svc: deps.Automations},
 		desktop:       &controllers.DesktopWorkspaceController{Svc: deps.DesktopWorkspaces},
-		usage:         &controllers.UsageController{Svc: deps.UsageSummary, Log: loggerOrDefault(log), Memory: deps.SessionMemory, Steps: deps.SessionSteps, Pressure: memoryPressure(deps.SessionMemory)},
+		usage:         &controllers.UsageController{Svc: deps.UsageSummary, Log: loggerOrDefault(log), Memory: deps.SessionMemory, Steps: deps.SessionSteps, Pressure: memoryPressure(deps.SessionMemory), Report: deps.UsageReport, LimitHistory: deps.UsageLimitHistory, LimitHistorySetting: deps.UsageLimitSetting, Prices: deps.UsagePrices},
 		prs:           &controllers.PRsController{Svc: deps.PRs},
 		reviews:       &controllers.ReviewsController{Svc: deps.Reviews},
 		notifications: &controllers.NotificationsController{Svc: deps.Notifications, Stream: deps.NotificationStream},
 		reports:       &controllers.ReportsController{Svc: deps.Reports},
-		push:          &controllers.PushController{Registry: deps.Push},
+		push:          &controllers.PushController{Registry: deps.Push, Devices: deps.AccessDevices},
 		imports:       &controllers.ImportController{Svc: deps.Import},
+		sessionImport: &controllers.SessionImportController{Svc: deps.SessionImport},
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
@@ -238,11 +256,20 @@ func setupRoute(req *http.Request) bool {
 		return false
 	}
 	switch chi.RouteContext(req.Context()).RoutePattern() {
-	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore":
+	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore",
+		// The first open of an imported chat runs Setup in its new workspace.
+		"/api/v1/sessions/{sessionId}/resume-agent":
 		return true
 	}
 	return false
 }
+
+// setupRequestBudget is the base budget of a Setup route before its Setup
+// steps extend it. A cold spawn fetches the default branch, creates a worktree
+// and starts the agent inside one request, which can outlast the general
+// REST timeout on a slow machine or a large repository.
+// A var only so tests can shorten it.
+var setupRequestBudget = 120 * time.Second
 
 // serveWithSetupBudget serves a Setup route under budget, like
 // middleware.Timeout, except that the operation may extend the deadline
@@ -280,7 +307,7 @@ func (a *API) Register(root chi.Router) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
-						pattern == "/api/v1/projects/clone/prepare" {
+						pattern == "/api/v1/projects/clone/prepare" || pattern == "/api/v1/projects/clone/prepare/stream" {
 						clone.ServeHTTP(w, req)
 						return
 					}
@@ -296,14 +323,18 @@ func (a *API) Register(root chi.Router) {
 					// than one REST request: the operation extends this budget by its
 					// Setup steps' limits once it knows its project.
 					if setupRoute(req) {
-						budget := timeout
-						if attachmentUploadRoute(req) {
+						budget := max(timeout, setupRequestBudget)
+						// Resuming an agent reads its whole native history, which takes
+						// over a minute for a large imported Codex thread.
+						if attachmentUploadRoute(req) ||
+							chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/sessions/{sessionId}/resume-agent" {
 							budget = max(timeout, 10*time.Minute)
 						}
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					if attachmentUploadRoute(req) {
+					// An import scan reads every local history.
+					if attachmentUploadRoute(req) || sessionImportRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}
@@ -319,6 +350,7 @@ func (a *API) Register(root chi.Router) {
 				})
 			})
 			r.Use(presenceMiddleware(a.deps.Presence))
+			r.Use(clientTimeZoneMiddleware(a.deps.ClientTimeZone))
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
 			a.agentAccounts.Register(r)
@@ -333,6 +365,7 @@ func (a *API) Register(root chi.Router) {
 			a.reports.Register(r)
 			a.push.Register(r)
 			a.imports.Register(r)
+			a.sessionImport.Register(r)
 			a.fs.Register(r)
 			a.shellTerms.Register(r)
 			a.cues.Register(r)
@@ -357,6 +390,11 @@ func (a *API) Register(root chi.Router) {
 		a.sessions.RegisterStreams(r)
 		a.events.Register(r)
 	})
+}
+
+// sessionImportRoute covers the scan and the import: both read every chosen history.
+func sessionImportRoute(req *http.Request) bool {
+	return chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/session-import"
 }
 
 func attachmentUploadRoute(req *http.Request) bool {

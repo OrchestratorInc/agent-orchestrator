@@ -11,6 +11,7 @@ import (
 // ChatFileReference is user-supplied captured code, not a verified transcript excerpt.
 // It contains no local absolute paths or credentials. Source hints do not authorize reads.
 type ChatFileReference struct {
+	ReferenceFormat  string                  `json:"referenceFormat,omitempty" enum:"numbered-v1"`
 	ID               string                  `json:"id"`
 	Order            int64                   `json:"order,omitempty"`
 	SessionID        string                  `json:"sessionId"`
@@ -49,6 +50,9 @@ type ChatFileReferenceLine struct {
 
 // ValidateChatFileReference bounds user-supplied context without reading mutable files.
 func ValidateChatFileReference(ref ChatFileReference) error {
+	if ref.ReferenceFormat != "" && ref.ReferenceFormat != "numbered-v1" {
+		return fmt.Errorf("invalid annotation reference format")
+	}
 	validPath := func(p string) bool {
 		return p != "" && len(p) <= 1024 && !strings.ContainsAny(p, "\\:\x00\r\n") && !strings.HasPrefix(p, "/") && path.Clean(p) == p && p != "." && p != ".." && !strings.HasPrefix(p, "../")
 	}

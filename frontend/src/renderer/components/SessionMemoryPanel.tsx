@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2 } from "@/components/app-icons";
 import {
 	chipTone,
 	largestSession,
@@ -40,6 +40,8 @@ import {
 import { useSessionUsageSummaries, type SessionUsageSummary } from "../hooks/useSessionUsageSummaries";
 import { isOrchestratorSession, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
+import { Pressable } from "./ui/pressable";
 import {
 	Dialog,
 	DialogClose,
@@ -123,7 +125,7 @@ export function AppMemoryIndicator() {
 		<>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<button
+					<Pressable
 						aria-label={`${word} · ${detail}`}
 						className="inline-flex items-center gap-2 px-2 font-mono text-2xs tabular-nums text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:underline"
 						data-memory-state={state ?? "unknown"}
@@ -133,7 +135,7 @@ export function AppMemoryIndicator() {
 					>
 						<span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", state ? stateDot[state] : "bg-passive")} />
 						<span className={state ? stateText[state] : undefined}>{formatMemory(app.rssBytes)}</span>
-					</button>
+					</Pressable>
 				</TooltipTrigger>
 				<TooltipContent side="bottom">{detail}</TooltipContent>
 			</Tooltip>
@@ -267,15 +269,15 @@ function cpuOrder<T extends { id: string; session: WorkspaceSession; reading: Se
  */
 function SortHeader({ active, ascending, className, label, onSort, sortable }: { active: boolean; ascending: boolean; className: string; label: string; onSort: () => void; sortable: boolean }) {
 	if (!sortable) {
-		return <th className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">{label}</th>;
+		return <th className={cn("pb-2 pt-3 font-medium", className)} scope="col">{label}</th>;
 	}
 	// Visible whenever it works, so the header reads as sortable before any
 	// click: faint on an idle column, full strength showing the direction on
 	// the active one.
 	const Arrow = active && ascending ? ChevronUp : ChevronDown;
 	return (
-		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">
-			<button
+		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("pb-2 pt-3 font-medium", className)} scope="col">
+			<Pressable
 				className={cn(
 					"inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
 					active && "text-settings-label",
@@ -286,13 +288,13 @@ function SortHeader({ active, ascending, className, label, onSort, sortable }: {
 			>
 				{label}
 				<Arrow aria-hidden="true" className={cn("size-icon-2xs", active ? "opacity-100" : "opacity-50")} />
-			</button>
+			</Pressable>
 		</th>
 	);
 }
 
 /** Every live session and AO's own processes, largest first. */
-export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (rows: ReportRow[]) => void; projectId?: string; underToolbar?: boolean }) {
+export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onRows?: (rows: ReportRow[]) => void; pinned?: boolean; projectId?: string; underToolbar?: boolean }) {
 	const { t } = useTranslation();
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory(projectId).data;
@@ -369,16 +371,18 @@ export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (r
 			</colgroup>
 			{/* The columns stay readable however far the list scrolls. */}
 			{/* Below the pinned summary (h-8) and, on the settings page, the window's
-			    transparent toolbar strip. */}
-			<thead className={cn("sticky z-10 bg-popover", underToolbar ? "top-[calc(var(--spacing-toolbar)+--spacing(8))]" : "top-8")}>
+			    transparent toolbar strip. At rest the header is part of the card, only
+			    its divider showing; once pinned it is filled so rows scroll under it,
+			    not through it. */}
+			<thead className={cn("sticky z-10", pinned && "bg-popover", underToolbar ? "top-[calc(var(--spacing-toolbar)+--spacing(8))]" : "top-8")}>
 				<tr className="border-b border-(--color-border-settings-dialog-header) text-xs text-settings-muted">
-					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
-					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
-					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.pid)} scope="col">{t("shell.memoryColumnPid")}</th>
+					<th className={cn("pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
+					<th className={cn("pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
+					<th className={cn("pb-2 pt-3 font-medium", cell.pid)} scope="col">{t("shell.memoryColumnPid")}</th>
 					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className={cell.cpu} label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} sortable={live.length > 1} />
 					{/* Memory next to Share: the bar is the memory figure drawn. */}
 					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className={cell.memory} label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} sortable={live.length > 1} />
-					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
+					<th className={cn("pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
 				</tr>
 			</thead>
 			<tbody className="[&_tr+tr.memory-group]:border-t [&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-group]:border-(--color-border-settings-dialog-header) [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
@@ -503,7 +507,7 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 					) : null}
 				</div>
 			</div>
-			<SessionsTable onRows={setRows} projectId={projectId} underToolbar={underToolbar} />
+			<SessionsTable onRows={setRows} pinned={scrolledPast} projectId={projectId} underToolbar={underToolbar} />
 			</div>
 		</>
 	);
@@ -559,9 +563,7 @@ export function SessionMemoryPanel({
 						<DialogDescription className="sr-only">{t("shell.memoryPanelDescription")}</DialogDescription>
 					</div>
 					<DialogClose asChild>
-						<Button aria-label={t("common.close")} size="icon" variant="ghost">
-							<X className="size-icon-md" aria-hidden="true" />
-						</Button>
+						<CloseButton aria-label={t("common.close")} />
 					</DialogClose>
 				</div>
 				<div
@@ -761,7 +763,7 @@ export function sessionReport(
 	const working = session.activity?.state === "active";
 	const identity = [session.workspaceName, session.kind ?? "worker", session.provider, session.mode].filter(Boolean).join(" · ");
 	const lines = [session.title, identity];
-	// The daemon's lane ("Needs review") and what the agent is doing right now
+	// The daemon's lane ("Awaiting review") and what the agent is doing right now
 	// ("Bash · 38s") are different facts, but on an idle session they collapse
 	// to the same word; print it once.
 	const lane = session.displayStatus ?? session.status;
@@ -832,14 +834,14 @@ export function diagnosticsReport(
 	const { app, system } = machine;
 	const lines = [t("shell.memorySectionMachine")];
 	if (app && system) {
-		lines.push(`Memory   AO ${formatMemory(app.rssBytes)} · ${formatMemory(system.availableBytes)} free of ${formatMemory(system.totalBytes)}`);
+		lines.push(`Memory   Orchestrator ${formatMemory(app.rssBytes)} · ${formatMemory(system.availableBytes)} free of ${formatMemory(system.totalBytes)}`);
 	} else if (app) {
-		lines.push(`Memory   AO ${formatMemory(app.rssBytes)}`);
+		lines.push(`Memory   Orchestrator ${formatMemory(app.rssBytes)}`);
 	}
 	if (system) {
 		// A negative load average is Windows' "not applicable" sentinel, never a real reading.
 		const load = system.load1 >= 0 ? ` · load ${system.load1.toFixed(2)}` : "";
-		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · AO ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))}${load}`);
+		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · Orchestrator ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))}${load}`);
 		if (system.swapBytesPerSec > 0) lines.push(`Swapping ${formatMemory(system.swapBytesPerSec)}/s`);
 	}
 	lines.push(`Sessions ${rows.length}`);
@@ -1078,12 +1080,11 @@ function CopyReportButton({ value }: { value: () => string }) {
 			<TooltipTrigger asChild>
 				<Button
 					aria-label={label}
-					className="text-settings-muted hover:text-settings-label"
 					data-testid="session-memory-copy"
 					onClick={() => void copy()}
 					size="icon-sm"
 					type="button"
-					variant="ghost"
+					variant="quiet"
 				>
 					{copied ? <Check aria-hidden="true" className="size-icon-sm text-success" /> : <Copy aria-hidden="true" className="size-icon-sm" />}
 				</Button>
@@ -1113,7 +1114,7 @@ function CopyControl({
 }) {
 	const { copied, copy } = useCopy(value);
 	return (
-		<button
+		<Pressable
 			aria-label={copied ? copiedLabel : label}
 			className="group relative inline-flex shrink-0 items-center rounded-sm text-settings-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 			data-testid={testId}
@@ -1133,7 +1134,7 @@ function CopyControl({
 					className="absolute left-full ml-1 size-icon-2xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
 				/>
 			)}
-		</button>
+		</Pressable>
 	);
 }
 

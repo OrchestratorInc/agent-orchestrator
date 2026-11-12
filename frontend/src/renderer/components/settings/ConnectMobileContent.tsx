@@ -1,9 +1,12 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Coffee, Copy, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "lucide-react";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { Check, Coffee, Copy, Eye, EyeOff, Globe, Info, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "@/components/app-icons";
+import { apiClient } from "../../lib/api-client";
+import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../../lib/mobile-pairing-code";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { fetchDevices, mobileDevicesQueryKey } from "./MobileDevicesSection";
 import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { useUiStore } from "../../stores/ui-store";
@@ -19,6 +22,7 @@ import { PairingQr } from "./PairingQr";
 import { scramblePairingCodes } from "./qrScramble";
 import { InstallCloudflared } from "./InstallCloudflared";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -217,11 +221,7 @@ function AndroidIcon({ className }: { className?: string }) {
 
 /** One store in the segmented control: platform icon and name. */
 const STORE_SEGMENT_CLASS =
-	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--color-settings-accent)";
-
-/** Icon actions beside the password. */
-const ICON_ACTION_CLASS =
-	"inline-flex size-6 items-center justify-center rounded-sm text-settings-muted transition-colors duration-(--duration-fast) hover:text-settings-label disabled:opacity-50";
+	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)]";
 
 interface MobileStatus {
 	enabled: boolean;
@@ -257,6 +257,7 @@ interface MobileStatus {
 	tailscaleHost: string;
 	port: number;
 	password: string;
+	requireDeviceCredentials?: boolean;
 	warning: string;
 	securePairing: {
 		enabled: boolean;
@@ -282,7 +283,7 @@ interface MobileStatus {
 
 export async function fetchMobileStatus(): Promise<MobileStatus> {
 	const { data, error } = await apiClient.GET("/api/v1/mobile/status");
-	if (error || !data) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw apiErrorException(error);
 	return data;
 }
 
@@ -354,7 +355,8 @@ function rememberKeepAwake(keepAwake: KeepAwakeStatus | undefined) {
 export function ConnectMobileContent({ active }: { active: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const [copied, setCopied] = useState(false);
+	const [copied, setCopied] = useState<"code" | "password" | null>(null);
+	const [passwordShown, setPasswordShown] = useState(false);
 	const [optimisticEnabled, setOptimisticEnabled] = useState<boolean | null>(null);
 	// The code crossfades only after the user has generated or regenerated one
 	// on this visit; opening the page shows whatever exists without a transition.
@@ -418,7 +420,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		if (started.error) {
 			// Not left listed at an address nothing serves.
 			if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
-			throw new Error(apiErrorMessage(started.error));
+			throw apiErrorException(started.error);
 		}
 		return started.data;
 	};
@@ -449,7 +451,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		}
 		if (initialEnabled === undefined || reportedOpen.current) return;
 		reportedOpen.current = true;
-		void captureRendererEvent("ao.renderer.mobile_connect_opened", { bridge_enabled: initialEnabled });
+		void captureRendererEvent("ao.mobile.connect_opened", { bridge_enabled: initialEnabled });
 	}, [active, initialEnabled]);
 
 	const keepAwakeStatus = query.data?.keepAwake;
@@ -476,7 +478,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			// not a computer that only serves this network after a restart. The
 			// link usually lands before the quick tunnel's address is advertised.
 			const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (!signedIn) return data;
 			invalidate(); // the code shows while the computer is linked
 			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
@@ -493,7 +495,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		mutationFn: async () => {
 			if (query.data?.noPublicTunnel === true) return linkAndStartRemoteAccess(query.data.password, query.data.hostId ?? "");
 			const { data, error } = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: invalidate,
@@ -502,7 +504,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const regenerate = useMutation({
 		mutationFn: async () => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/regenerate");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			invalidate(); // the new password shows at once; linking can take a minute
 			// A new password revokes the account link with the old one; link
 			// again so the fixed address survives the next restart. Only while
@@ -532,7 +534,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const disable = useMutation({
 		mutationFn: async () => {
 			const { error } = await apiClient.POST("/api/v1/mobile/disable");
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 		},
 		// Shutdown can finish before returning an error. Refresh the actual
 		// server state while retaining the mutation error for the user.
@@ -543,7 +545,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const setSecure = useMutation({
 		mutationFn: async (secureEnabled: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/secure-pairing", { body: { enabled: secureEnabled } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onSuccess: invalidate,
@@ -556,7 +558,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const setBrowserRemoteAccess = useMutation({
 		mutationFn: async (browserRemoteAccess: boolean) => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			return data;
 		},
 		onMutate: async (browserRemoteAccess) => {
@@ -599,6 +601,42 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const status = query.data;
 	const enabled = optimisticEnabled ?? status?.enabled ?? false;
+	const devices = useQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices, enabled: active && status?.enabled === true });
+	// The QR carries this one-time code, not the password. Settings prefetches it for the first paint.
+	const pairing = useQuery({
+		queryKey: mobilePairingCodeQueryKey,
+		queryFn: fetchPairingCode,
+		enabled: active && status?.enabled === true,
+		refetchInterval: PAIRING_CODE_REFRESH_MS,
+		refetchIntervalInBackground: true,
+		staleTime: PAIRING_CODE_REFRESH_MS,
+	});
+	// A hidden window or a sleeping Mac can outlive a code, so its expiry is checked every 30 seconds.
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!active) return;
+		const timer = setInterval(() => setNow(Date.now()), 30_000);
+		return () => clearInterval(timer);
+	}, [active]);
+	const codeExpired = pairing.data !== undefined && now >= pairing.data.expiresAt;
+	useEffect(() => {
+		if (codeExpired) void queryClient.invalidateQueries({ queryKey: mobilePairingCodeQueryKey });
+	}, [codeExpired, queryClient]);
+	const pairingCode = pairing.data && !codeExpired ? pairing.data.code : "";
+	// Offered only once the QR could be drawn: before that, the address is what is missing.
+	const pairingCodeFailed = pairing.isError && pairingCode === "" && qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
+	// A code is spent when a device pairs, and a new password drops unused
+	// codes: either change fetches the next one.
+	const codeSpentBy = devices.data === undefined || !status ? null : `${status.password}|${devices.data.map((device) => device.id).join(",")}`;
+	const lastCodeSpentBy = useRef<string | null>(null);
+	useEffect(() => {
+		if (codeSpentBy === null) return;
+		if (lastCodeSpentBy.current !== null && lastCodeSpentBy.current !== codeSpentBy) {
+			// Reset, not invalidated: the spent code must not stay on screen while, or if, its replacement fails.
+			void queryClient.resetQueries({ queryKey: mobilePairingCodeQueryKey });
+		}
+		lastCodeSpentBy.current = codeSpentBy;
+	}, [codeSpentBy, queryClient]);
 	const secureActive = mode === "tailscale" && (status?.securePairing?.active ?? false);
 	// Tunnel-only hosts deliberately have no LAN address. Use the same daemon
 	// endpoint list for both the offer and the address shown beside it.
@@ -635,20 +673,21 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		setLinkError("");
 	};
 
-	const copyPassword = async () => {
-		if (!status?.password) return;
+	const copy = async (what: "code" | "password") => {
+		const text = what === "code" ? pairingCode : status?.password;
+		if (!text) return;
 		try {
-			await navigator.clipboard.writeText(status.password);
-			setCopied(true);
+			await navigator.clipboard.writeText(text);
+			setCopied(what);
 			if (copiedTimeoutRef.current) clearTimeout(copiedTimeoutRef.current);
-			copiedTimeoutRef.current = setTimeout(() => setCopied(false), 1500);
+			copiedTimeoutRef.current = setTimeout(() => setCopied(null), 1500);
 		} catch {
 			// Clipboard can reject (permissions / non-secure context).
 		}
 	};
 
 	const reportToggle = (next: boolean, outcome: "succeeded" | "failed") => {
-		void captureRendererEvent("ao.renderer.mobile_bridge_toggled", { enabled: next, outcome });
+		void captureRendererEvent("ao.mobile.bridge_toggled", { enabled: next, outcome });
 	};
 
 	const turnOn = (report: boolean) => {
@@ -684,6 +723,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
+		(pairingCodeFailed && pairing.error instanceof Error && pairing.error.message) ||
 		stayAwake.error ||
 		linkError ||
 		null;
@@ -728,6 +768,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const showRealQR =
 		enabled &&
 		!secureBlocked &&
+		pairingCode !== "" &&
 		qrIsReady({ enabled, endpoints: status?.endpoints, tunnel: status?.tunnel });
 	// Computed once so the rendered v2 QR and its data attribute cannot drift.
 	const qrValue = showRealQR
@@ -735,7 +776,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				hostId: status?.hostId ?? "",
 				host: activeHost,
 				platform: "",
-				password: status?.password ?? "",
+				password: pairingCode,
 				endpoints: status?.endpoints ?? [],
 			})
 		: null;
@@ -753,11 +794,16 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				<div className="absolute inset-0 flex items-center justify-center">
 					<Button
 						type="button"
-						variant="footer-primary"
-						className="rounded-md shadow-lg"
+						variant="primary"
 						onClick={startBridge}
 						disabled={busy || enabled}
 					>
+						{t("mobile.generate")}
+					</Button>
+				</div>
+			) : pairingCodeFailed ? (
+				<div className="absolute inset-0 flex items-center justify-center">
+					<Button type="button" variant="primary" data-testid="mobile-pairing-code-retry" onClick={() => void pairing.refetch()}>
 						{t("mobile.generate")}
 					</Button>
 				</div>
@@ -814,33 +860,28 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						<dd className="min-w-0 truncate font-mono text-settings-label" data-testid="mobile-pairing-address">
 							{`${activeHost}:${activePort}`}
 						</dd>
-						<dt className="text-settings-muted">{t("mobile.password")}</dt>
+						<dt className="text-settings-muted">{t("mobile.pairingCode")}</dt>
 						<dd className="flex min-w-0 items-center">
-							<span className="min-w-0 truncate font-mono text-settings-label">{status.password}</span>
+							<span className="min-w-0 truncate font-mono text-settings-label" data-testid="mobile-pairing-code">{pairingCode}</span>
 							<span className="ml-2 flex shrink-0 items-center">
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											aria-label={copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-											className={ICON_ACTION_CLASS}
-											onClick={() => void copyPassword()}
-										>
-											{copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
-										</button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">
-										{copied ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
-									</TooltipContent>
-								</Tooltip>
+								<Button
+									type="button"
+									variant="quiet"
+									size="icon-xs"
+									aria-label={copied === "code" ? t("mobile.pairingCodeCopied") : t("mobile.copyPairingCode")}
+									onClick={() => void copy("code")}
+								>
+									{copied === "code" ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+								</Button>
 								<Tooltip>
 									<TooltipTrigger asChild>
 										{/* Span so the tooltip still opens while the button is disabled. */}
 										<span className="inline-flex">
-											<button
+											<Button
 												type="button"
+												variant="quiet"
+												size="icon-xs"
 												aria-label={t("mobile.regenerate")}
-												className={ICON_ACTION_CLASS}
 												disabled={busy}
 												onClick={() => {
 													clearActionErrors();
@@ -853,13 +894,46 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 												) : (
 													<RotateCcw className="size-3.5" aria-hidden="true" />
 												)}
-											</button>
+											</Button>
 										</span>
 									</TooltipTrigger>
 									<TooltipContent side="bottom">{t("mobile.regenerate")}</TooltipContent>
 								</Tooltip>
 							</span>
 						</dd>
+						{/* The password works until it is rotated, so it stays hidden until
+						    asked for. It is for an app from before pairing codes. */}
+						{!status.requireDeviceCredentials && (
+							<>
+								<dt className="text-settings-muted">{t("mobile.password")}</dt>
+								<dd className="flex min-w-0 items-center">
+									<span className="min-w-0 truncate font-mono text-settings-label" data-testid="mobile-pairing-password">
+										{passwordShown ? status.password : "•".repeat(status.password.length)}
+									</span>
+									<span className="ml-2 flex shrink-0 items-center">
+										<Button
+											type="button"
+											variant="quiet"
+											size="icon-xs"
+											aria-label={passwordShown ? t("mobile.hidePassword") : t("mobile.showPassword")}
+											aria-pressed={passwordShown}
+											onClick={() => setPasswordShown((shown) => !shown)}
+										>
+											{passwordShown ? <EyeOff className="size-3.5" aria-hidden="true" /> : <Eye className="size-3.5" aria-hidden="true" />}
+										</Button>
+										<Button
+											type="button"
+											variant="quiet"
+											size="icon-xs"
+											aria-label={copied === "password" ? t("mobile.passwordCopied") : t("mobile.copyPassword")}
+											onClick={() => void copy("password")}
+										>
+											{copied === "password" ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+										</Button>
+									</span>
+								</dd>
+							</>
+						)}
 					</dl>
 				)}
 
@@ -901,7 +975,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 				{qrValue && signInConfigured && !signedIn && !status?.tunnel?.fixed && (
 					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-hint" role="status">
-						{t("mobile.signInForFixedAddress", "Sign in to AO to give this computer an address that stays the same after restarts.")}
+						{t("mobile.signInForFixedAddress", "Sign in to Orchestrator to give this computer an address that stays the same after restarts.")}
 					</p>
 				)}
 
@@ -946,6 +1020,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				<KeepAwakeRow
 					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
 					disabled={busy || !stayAwake.supported}
+					confirming={stayAwake.busy}
 					onCheckedChange={(next) => {
 						clearActionErrors();
 						if (next) stayAwake.setLid(true);
@@ -978,24 +1053,31 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 function KeepAwakeRow({
 	keepAwake,
 	disabled = false,
+	confirming = false,
 	onCheckedChange,
 }: {
 	keepAwake: KeepAwakeStatus;
 	disabled?: boolean;
+	/** A wake request is in flight; the helper may not have acknowledged it yet. */
+	confirming?: boolean;
 	onCheckedChange?: (next: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
+	// While a request is in flight the switch already shows it, so hide the
+	// transient "starting" line. Once it settles, a lease that never armed
+	// stays visible: closing the lid would otherwise sleep the Mac silently.
+	const lidStarting = !keepAwake.lidActive && !lidUnavailable && (!keepAwake.lidReason || keepAwake.lidReason === "starting");
 	const lidNeedsAttention =
 		lidUnavailable ||
-		(keepAwake.enabled && keepAwake.lidClosed) ||
+		(keepAwake.enabled && keepAwake.lidClosed && !(confirming && lidStarting)) ||
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
 		keepAwake.lidReason === "helper_upgrade_required";
 	const status = keepAwake.lidActive && keepAwake.enabled
 		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
 		: keepAwake.lidReason || lidUnavailable
-			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
+			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason || "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the Orchestrator desktop app to retry.")
 			: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
 	return (
 		<SettingsRow
@@ -1007,13 +1089,12 @@ function KeepAwakeRow({
 					{t("mobile.keepAwake.combinedHelp")}
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<button
-								type="button"
+							<Pressable
 								aria-label={t("mobile.keepAwake.details")}
-								className="ml-1 inline-flex align-middle text-settings-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								className="ml-1 inline-flex align-[-0.125em] text-settings-muted hover:text-foreground"
 							>
 								<Info className="size-3.5" aria-hidden="true" />
-							</button>
+							</Pressable>
 						</TooltipTrigger>
 						<TooltipContent className="max-w-72">
 							{t("mobile.keepAwake.lidHelp")}
@@ -1078,15 +1159,14 @@ function ScanIntro() {
 					{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }) => (
 						<Tooltip key={key}>
 							<TooltipTrigger asChild>
-								<button
-									type="button"
+								<Pressable
 									className={STORE_SEGMENT_CLASS}
 									aria-label={t(ariaKey)}
 									onClick={() => void aoBridge.app.openExternal(url)}
 								>
 									<Icon className="size-3.5 shrink-0" />
 									{t(labelKey)}
-								</button>
+								</Pressable>
 							</TooltipTrigger>
 							<TooltipContent side="bottom" className="p-2" data-testid={testId}>
 								<div className="rounded-md bg-(--color-bg-settings-input) p-2">

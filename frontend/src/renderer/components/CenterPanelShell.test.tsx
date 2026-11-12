@@ -54,6 +54,36 @@ describe("CenterPanelShell platform classes", () => {
 		expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
 	});
 
+	it("floats the top bar band above the panel on macOS", () => {
+		mockIsMac.mockReturnValue(true);
+		const { container } = render(<CenterPanelShell>x</CenterPanelShell>);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(true);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(false);
+	});
+
+	it("does not float the top bar in native fullscreen", () => {
+		mockIsMac.mockReturnValue(true);
+		mockIsFullScreen.mockReturnValue(true);
+		const { container } = render(<CenterPanelShell topbar={false}>x</CenterPanelShell>);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(false);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(false);
+	});
+
+	it("lets a page without a top bar take the band back", () => {
+		mockIsMac.mockReturnValue(true);
+		const { container } = render(<CenterPanelShell topbar={false}>x</CenterPanelShell>);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(false);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(true);
+	});
+
+	it("keeps the band for a page without a top bar while the sidebar is closed", () => {
+		mockIsMac.mockReturnValue(true);
+		uiState.isSidebarOpen = false;
+		const { container } = render(<CenterPanelShell topbar={false}>x</CenterPanelShell>);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(true);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(false);
+	});
+
 	it("pads the framed titlebar past the Linux nav cluster when the sidebar is collapsed", () => {
 		mockIsLinux.mockReturnValue(true);
 		uiState.isSidebarOpen = false;

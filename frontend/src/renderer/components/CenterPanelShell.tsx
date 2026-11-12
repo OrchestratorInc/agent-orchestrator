@@ -20,6 +20,7 @@ export function CenterPanelShell({
 	children,
 	titlebarAlign = true,
 	notifications = false,
+	topbar = true,
 }: {
 	/** Extra classes on the outer frame. */
 	className?: string;
@@ -28,6 +29,8 @@ export function CenterPanelShell({
 	titlebarAlign?: boolean;
 	/** Workspace pages opt in; utility and settings pages keep quiet chrome. */
 	notifications?: boolean;
+	/** False for a page with no top bar: the panel grows into the band above it. */
+	topbar?: boolean;
 }) {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const isFullScreen = useWindowFullScreen();
@@ -36,12 +39,21 @@ export function CenterPanelShell({
 	const align = titlebarAlign && isMac;
 	const titlebarClearance = align && !isSidebarOpen;
 	const linuxTitlebarClearance = titlebarAlign && isLinux && !isSidebarOpen;
+	// With the sidebar closed the traffic lights and nav cluster float over the
+	// panel's top-left corner, so the band stays even when the page has no bar.
+	const reservesTopbarBand = topbar || titlebarClearance;
+	// On macOS the top bar floats on the window chrome, except in native fullscreen.
+	const floatingTopbar = align && !isFullScreen;
+	const bare = floatingTopbar && !reservesTopbarBand;
 
 	return (
 		<div
 			className={cn(
 				"center-panel-shell",
 				align && "center-panel-shell--mac",
+				// The top bar floats on the window chrome; the panel starts below it.
+				floatingTopbar && reservesTopbarBand && "center-panel-shell--floating-topbar",
+				bare && "center-panel-shell--bare",
 				titlebarClearance && "center-panel-shell--titlebar-clearance",
 				titlebarClearance && isFullScreen && "center-panel-shell--titlebar-clearance-fullscreen",
 				linuxTitlebarClearance && "center-panel-shell--titlebar-clearance-linux",

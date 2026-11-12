@@ -124,6 +124,54 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 	}
 }
 
+// A request that carries no password is not a guess. Opening the tunnel URL in a
+// browser fetches the page, its favicon and touch icons without one, and every
+// device behind the same public IP shares the visitor's lockout. Counting those
+// locked the phone out before it sent the correct password (#7980).
+func TestTokenlessRequestsDoNotCountTowardLockout(t *testing.T) {
+	h, lock := newAuthUnderTest("secret12", time.Now)
+	tunnelReq := func(path, auth string) *http.Request {
+		r := reqTo(http.MethodGet, path, auth)
+		r.RemoteAddr = "127.0.0.1:5555"
+		r.Header.Set("CF-Connecting-IP", "198.51.100.7")
+		return r
+	}
+	for _, path := range []string{"/", "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/", "/", "/"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, tunnelReq(path, ""))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("tokenless %s: got %d want 401", path, w.Code)
+		}
+	}
+	// A preview file with no cookie and an empty bearer carry no password either.
+	for _, r := range []*http.Request{
+		tunnelReq("/api/v1/sessions/s1/preview/files/index.html", ""),
+		tunnelReq("/api/v1/sessions", "Bearer "),
+	} {
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	if lock.blocked("198.51.100.7") {
+		t.Fatal("tokenless requests triggered the lockout")
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, tunnelReq("/api/v1/sessions", "Bearer secret12"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("correct password after tokenless requests: got %d want 200", w.Code)
+	}
+
+	// Wrong passwords still count, and tokenless requests in between neither
+	// add to nor clear the count.
+	for i := range 5 {
+		h.ServeHTTP(httptest.NewRecorder(), tunnelReq("/api/v1/sessions", fmt.Sprintf("Bearer wrong%d", i)))
+		h.ServeHTTP(httptest.NewRecorder(), tunnelReq("/favicon.ico", ""))
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, tunnelReq("/api/v1/sessions", "Bearer secret12"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("after five wrong passwords: got %d want 429", w.Code)
+	}
+}
+
 func TestValidTunnelClientSurvivesAnotherClientsLockout(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 	for range 5 {
@@ -472,5 +520,42 @@ func TestIdentityProbeDoesNotCountTowardLockout(t *testing.T) {
 	h.ServeHTTP(w, req("Bearer secret12"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("authenticated request after probes got %d, want 200", w.Code)
+	}
+}
+
+func TestLockoutGroupsIPv6SourcesBySlash64(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	for i := range 5 {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, reqFrom(fmt.Sprintf("[2001:db8:1:2::%x]:5555", i+1), "Bearer wrong"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: got %d want 401", i, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, reqFrom("[2001:db8:1:2::ffff]:5555", "Bearer secret12"))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("another address in the same /64: got %d want 429", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, reqFrom("[2001:db8:1:3::1]:5555", "Bearer secret12"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("another /64: got %d want 200", w.Code)
+	}
+}
+
+func TestRetiredHashesAreCapped(t *testing.T) {
+	state := &authState{}
+	for i := range maxRetiredHashes + 5 {
+		state.setHash(mobilebridge.HashPassword(fmt.Sprintf("pass%04d", i)))
+	}
+	if got := len(state.hashes.Load().retired); got != maxRetiredHashes {
+		t.Fatalf("retired hashes: got %d want %d", got, maxRetiredHashes)
+	}
+	if !state.retiredPasswordMatches(fmt.Sprintf("pass%04d", maxRetiredHashes+3)) {
+		t.Fatal("the most recent retired password is no longer recognized")
+	}
+	if state.retiredPasswordMatches("pass0000") {
+		t.Fatal("the oldest retired password is still recognized")
 	}
 }

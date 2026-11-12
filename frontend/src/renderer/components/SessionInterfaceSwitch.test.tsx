@@ -122,7 +122,7 @@ describe("SessionInterfaceSwitchButton", () => {
 
 	it("replaces progress with a non-interactive warning when target shutdown is unconfirmed", () => {
 		const detail =
-			"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface.";
+			"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface.";
 		render(
 			<TooltipProvider>
 				<SessionInterfaceSwitchButton
@@ -152,7 +152,7 @@ describe("SessionInterfaceSwitchButton", () => {
 		const { onClick } = renderSwitchButton(target);
 
 		const button = screen.getByRole("button", { name: label });
-		expect(button.classList.contains("topbar-control--icon")).toBe(true);
+		expect(button.classList.contains("size-control-md")).toBe(true);
 		expect(button.textContent).toBe("");
 		expect(button.querySelector(iconSelector)).not.toBeNull();
 		fireEvent.click(button);
@@ -221,7 +221,7 @@ describe("SessionInterfaceSwitchDialog", () => {
 		);
 
 		const dialog = screen.getByRole("dialog", { name: "Switch to Chat UI?" });
-		expect(dialog).toHaveTextContent("AO cannot verify whether this Terminal is idle.");
+		expect(dialog).toHaveTextContent("Orchestrator cannot verify whether this Terminal is idle.");
 		expect(within(dialog).queryByRole("button", { name: /^Finish work, then switch/ })).not.toBeInTheDocument();
 		const action = within(dialog).getByRole("button", { name: /^Terminate and then switch/ });
 		expect(onChoose).not.toHaveBeenCalled();
@@ -264,7 +264,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		"keeps unconfirmed target shutdown visible without unsafe recovery or dismissal actions (%s)",
 		(noticeAcknowledgedAt) => {
 			const detail =
-				"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. target still running";
+				"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface. target still running";
 			render(
 				<SessionInterfaceTransitionNotice
 					transition={{
@@ -299,7 +299,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		);
 
 		expect(screen.getByRole("alert")).toHaveTextContent(
-			"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface.",
+			"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface.",
 		);
 		expect(screen.queryByText(/original interface remains available/)).not.toBeInTheDocument();
 	});
@@ -363,7 +363,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 					...transition("recovery_required"),
 					historyPolicy: "provider_history",
 					errorCode: "DAEMON_RESTARTED",
-					errorDetail: "AO restored Terminal after the daemon restarted.",
+					errorDetail: "Orchestrator restored Terminal after the daemon restarted.",
 				}}
 				onDismiss={onDismiss}
 				onRetry={onRetry}
@@ -371,7 +371,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("status")).toHaveTextContent("AO restored Terminal");
+		expect(screen.getByRole("status")).toHaveTextContent("Orchestrator restored Terminal");
 		fireEvent.click(screen.getByRole("button", { name: "Retry switch to Chat UI" }));
 		fireEvent.click(screen.getByRole("button", { name: "Use provider history and switch" }));
 		fireEvent.click(screen.getByRole("button", { name: "Stay in Terminal" }));
@@ -428,7 +428,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 				transition={{
 					...transition("failed"),
 					errorCode: "DRAIN_DECISION_PENDING",
-					errorDetail: "AO found a provider decision waiting in Terminal.",
+					errorDetail: "Orchestrator found a provider decision waiting in Terminal.",
 				}}
 				onDismiss={vi.fn()}
 				onSwitchWithInterrupt={onSwitchWithInterrupt}
@@ -457,7 +457,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		);
 
 		const alert = screen.getByRole("alert");
-		expect(alert).toHaveTextContent("AO cannot verify whether this Terminal is idle.");
+		expect(alert).toHaveTextContent("Orchestrator cannot verify whether this Terminal is idle.");
 		const action = within(alert).getByRole("button", { name: "Terminate and then switch" });
 		expect(onSwitchWithInterrupt).not.toHaveBeenCalled();
 		fireEvent.click(action);
@@ -486,7 +486,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 				transition={{
 					...transition("failed"),
 					errorCode: "DRAIN_QUIESCENCE_UNVERIFIED",
-					errorDetail: "AO could not classify the current Terminal screen.",
+					errorDetail: "Orchestrator could not classify the current Terminal screen.",
 				}}
 				onDismiss={vi.fn()}
 				onSwitchWithInterrupt={vi.fn()}
@@ -500,7 +500,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 describe("a Cloud session that started in the terminal", () => {
 	it.each([
 		["CHAT_ADAPTER_UNAVAILABLE", "Chat for Claude needs the Claude ACP adapter, which this workspace doesn't have yet."],
-		["CHAT_START_UNSUPPORTED", "The AO worker in this workspace is an older version that can't set up Chat for Claude. You can switch this session to Chat."],
+		["CHAT_START_UNSUPPORTED", "The Orchestrator service in this workspace is an older version that can't set up Chat for Claude. You can switch this session to Chat."],
 	])("reads as information, not a failed switch (%s)", (errorCode, message) => {
 		const onDismiss = vi.fn();
 		render(

@@ -44,7 +44,8 @@ const PACKAGED_EXTERNAL_DEPENDENCIES = [
 
 function ignoreFromVitePackage(file: string): boolean {
 	if (!file) return false;
-	if (file.startsWith("/.vite")) return false;
+	// Release source maps are uploaded to Sentry, never shipped (vite.sentry.ts).
+	if (file.startsWith("/.vite")) return file.endsWith(".map");
 	if (file === "/node_modules") return false;
 	return !PACKAGED_EXTERNAL_DEPENDENCIES.some(
 		(dependency) => file === dependency || file.startsWith(`${dependency}/`),
@@ -104,6 +105,9 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"agent-browser",
 		"resources/acp-runtime",
 		...(platform === "darwin" ? ["update-helper", "wake-helper", "dictation-helper", "cloudflared", "assets/mac/en.lproj"] : []),
+		// macOS 26+ Liquid Glass app icon (CFBundleIconName below), precompiled
+		// from assets/brand/AO.icon by scripts/generate-brand-assets.swift.
+		...(platform === "darwin" ? ["assets/Assets.car"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -133,9 +137,10 @@ const ACP_RUNTIME_NODE_ENTITLEMENTS = [
 	"com.apple.security.cs.allow-unsigned-executable-memory",
 ];
 
-// The dictation helper records the microphone itself (it disclaims the app as
-// its responsible process), and the hardened runtime blocks audio input
-// without this entitlement. osx-sign signs its executable, then its bundle.
+// The dictation helper records the microphone itself, and the hardened runtime
+// blocks audio input without this entitlement. Its disclaim only helps dev and
+// terminal launches: signed and nested here, macOS checks the app's usage
+// strings instead (see extendInfo). osx-sign signs its executable, then its bundle.
 const DICTATION_HELPER_PATHS = [
 	"/Contents/Resources/dictation-helper/Orchestrator.app",
 	"/Contents/Resources/dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator",
@@ -183,12 +188,28 @@ const config: ForgeConfig = {
 			InternalName: WINDOWS_DISPLAY_NAME,
 			ProductName: WINDOWS_DISPLAY_NAME,
 		},
-		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
+		extendInfo: {
+			// macOS 26+ draws the Icon Composer icon from Resources/Assets.car;
+			// older macOS keeps using CFBundleIconFile (assets/icon.icns).
+			CFBundleIconName: "AppIcon",
+			LSHasLocalizedDisplayName: true,
+			CFBundleDevelopmentRegion: "en",
+			// In a signed build, macOS checks the dictation helper's speech and
+			// microphone requests against this app's Info.plist, despite the
+			// helper's own usage strings and its disclaim. Without the speech key
+			// it kills the helper. The microphone string also covers terminals and
+			// agents, which macOS attributes to this app.
+			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
+			NSMicrophoneUsageDescription: "Orchestrator uses the microphone for dictation and for tools you run in it.",
+		},
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
 		// (.icns on macOS, .ico on Windows); Linux menu icons come from the
 		// deb/rpm makers below, and the runtime window icon from src/main.ts.
+		// Keep the .icon bundle out of assets/: packager compiles an
+		// assets/icon.icon itself, which fails on macOS 15 build hosts. The
+		// precompiled Assets.car ships as an extra resource instead.
 		icon: "assets/icon",
 		extraResource: extraResourcesForPlatform(process.platform),
 		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
@@ -284,6 +305,7 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					if (!existsSync(path.join(resourcesPath, "Assets.car"))) throw new Error(`packaged macOS app icon catalog missing from ${resourcesPath}`);
 					if (!existsSync(path.join(resourcesPath, "dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator"))) throw new Error(`packaged macOS dictation helper missing from ${resourcesPath}`);
 					// Run it: remote access depends on this signed copy starting, not just existing.
 					const cloudflared = path.join(resourcesPath, "cloudflared", "cloudflared");
@@ -468,6 +490,7 @@ const config: ForgeConfig = {
 				{ entry: "src/main.ts", config: "vite.main.config.ts", target: "main" },
 				{ entry: "src/preload.ts", config: "vite.preload.config.ts", target: "preload" },
 				{ entry: "src/annotate-preload.ts", config: "vite.preload.config.ts", target: "preload" },
+				{ entry: "src/privacy-guide-preload.ts", config: "vite.preload.config.ts", target: "preload" },
 			],
 			renderer: [{ name: "main_window", config: "vite.renderer.config.ts" }],
 		}),

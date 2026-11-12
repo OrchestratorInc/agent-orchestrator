@@ -161,3 +161,99 @@ describe("connectHost", () => {
 		expect(got.ok).toBe(true);
 	});
 });
+
+describe("connectHost with device tokens", () => {
+	const token = "aod_" + "a".repeat(64);
+	const deps = (saved: Host, over: Record<string, unknown> = {}) => ({
+		findHost: vi.fn(async () => saved),
+		race: vi.fn(async () => ({ ok: true as const, endpoint: lan, hostId: "h_paired" })),
+		refreshEndpoints: vi.fn(async (_config: { password: string }) => [lan, tunnel]),
+		saveEndpoints: vi.fn(async () => {}),
+		adoptIdentity: vi.fn(async () => {}),
+		touch: vi.fn(async () => {}),
+		pair: vi.fn(async (): Promise<import("./deviceToken").PairDeviceResult> => ({ kind: "paired", token, credential: "password" })),
+		saveToken: vi.fn(async () => {}),
+		...over,
+	});
+
+	it("swaps a saved pairing password for this phone's own token and keeps the password", async () => {
+		const d = deps(host());
+		const got = await connectHost("h_paired", d);
+
+		expect(d.pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: "pw", hostId: "h_paired" }));
+		expect(d.saveToken).toHaveBeenCalledExactlyOnceWith("h_paired", token, "pw");
+		expect(got.ok && got.config.password).toBe(token);
+		expect(d.refreshEndpoints).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+	});
+
+	it.each([["unsupported"], ["unauthorized"], ["offline"]] as const)("keeps the password when the swap answers %s", async (kind) => {
+		const d = deps(host(), { pair: vi.fn(async () => ({ kind })) });
+		const got = await connectHost("h_paired", d);
+		expect(d.saveToken).not.toHaveBeenCalled();
+		expect(got.ok && got.config.password).toBe("pw");
+		// A refused password is not sent again for the refresh.
+		expect(d.refreshEndpoints).toHaveBeenCalledTimes(kind === "unauthorized" ? 0 : 1);
+	});
+
+	it("leaves a device token and an account token alone", async () => {
+		for (const saved of [host({ token }), host({ token: "a".repeat(64), accountUserId: "user-a" })]) {
+			const d = deps(saved);
+			const got = await connectHost("h_paired", d);
+			expect(d.pair).not.toHaveBeenCalled();
+			expect(d.saveToken).not.toHaveBeenCalled();
+			expect(got.ok && got.config.password).toBe(saved.token);
+		}
+	});
+
+	const refused = (code: string | undefined) => Object.assign(new Error("endpoint refresh returned 401"), { status: 401, code });
+	const refreshRefusing = (code: string | undefined) => vi.fn(async (config: { password: string }) => {
+		if (config.password === token) throw refused(code);
+		return [lan, tunnel];
+	});
+
+	it("falls back to the kept password on a machine that no longer knows device tokens", async () => {
+		const d = deps(host({ token, fallbackToken: "pw" }), {
+			refreshEndpoints: refreshRefusing("BAD_PASSWORD"),
+			pair: vi.fn(async () => ({ kind: "unsupported" as const })),
+		});
+		const got = await connectHost("h_paired", d);
+		expect(d.saveToken).toHaveBeenCalledExactlyOnceWith("h_paired", "pw");
+		expect(got.ok && got.config.password).toBe("pw");
+		expect(d.refreshEndpoints.mock.calls.map(([config]) => config.password)).toEqual([token, "pw"]);
+		expect(d.saveEndpoints).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the device token when the machine refuses the kept password too", async () => {
+		const d = deps(host({ token, fallbackToken: "pw" }), { refreshEndpoints: vi.fn(async () => { throw refused("BAD_PASSWORD"); }) });
+		const got = await connectHost("h_paired", d);
+		expect(d.saveToken).not.toHaveBeenCalled();
+		expect(got.ok && got.config.password).toBe(token);
+	});
+
+	it.each([["removed this phone", "DEVICE_REVOKED"], ["sent no error code", undefined]])("does not use the kept password when the machine %s", async (_name, code) => {
+		const d = deps(host({ token, fallbackToken: "pw" }), { refreshEndpoints: refreshRefusing(code) });
+		const got = await connectHost("h_paired", d);
+		expect(d.saveToken).not.toHaveBeenCalled();
+		expect(d.pair).not.toHaveBeenCalled();
+		expect(d.refreshEndpoints).toHaveBeenCalledOnce();
+		expect(got.ok && got.config.password).toBe(token);
+	});
+
+	it("keeps the token when the refresh fails for another reason", async () => {
+		for (const failure of [Object.assign(new Error("endpoint refresh returned 503"), { status: 503 }), new TypeError("Network request failed")]) {
+			const d = deps(host({ token, fallbackToken: "pw" }), { refreshEndpoints: vi.fn(async () => { throw failure; }) });
+			const got = await connectHost("h_paired", d);
+			expect(d.saveToken).not.toHaveBeenCalled();
+			expect(got.ok && got.config.password).toBe(token);
+		}
+	});
+
+	it("makes no extra request for a working token with a kept password", async () => {
+		const d = deps(host({ token, fallbackToken: "pw" }));
+		const got = await connectHost("h_paired", d);
+		expect(d.refreshEndpoints).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: token }));
+		expect(d.pair).not.toHaveBeenCalled();
+		expect(d.saveToken).not.toHaveBeenCalled();
+		expect(got.ok && got.config.password).toBe(token);
+	});
+});

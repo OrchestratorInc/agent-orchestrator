@@ -16,6 +16,11 @@ export type ContextMeterModel = {
 	severity: Exclude<Severity, "normal">;
 	/** Short enough to sit beside the turn-settings control. */
 	label: string;
+	/**
+	 * For the meter's `accessibilityValue`, so a screen reader hears how full
+	 * the window is rather than a bar it cannot see.
+	 */
+	accessibilityValue: { min: 0; max: 100; now: number; text: string };
 };
 
 /**
@@ -37,5 +42,6 @@ export function contextMeterModel(usage: ConversationUsage | undefined, quotaAct
 		fillPercent: readout.fillPercent,
 		severity: readout.severity,
 		label: `${readout.percent}% context`,
+		accessibilityValue: { min: 0, max: 100, now: readout.percent, text: `${readout.percent}% used` },
 	};
 }

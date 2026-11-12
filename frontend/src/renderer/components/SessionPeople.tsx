@@ -1,13 +1,15 @@
-import { Share2 } from "lucide-react";
+import { Share2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudSessionLive } from "../hooks/useCloudSessionLive";
+import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { orderSessionPeople, personInitials, SESSION_PEOPLE_SHOWN, sessionPeopleFromLive, type SessionPerson } from "../lib/session-people";
 import { cn } from "../lib/utils";
 import { ShareSessionDialog } from "./ShareSessionDialog";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
+import { Pressable } from "./ui/pressable";
 
 const circleClassName =
 	"inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-micro font-semibold leading-none text-muted-foreground ring-2";
@@ -58,8 +60,7 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 		<HoverCard>
 			<HoverCardTrigger asChild>
 				{onActivate ? (
-					<button
-						type="button"
+					<Pressable
 						aria-label={label}
 						className="inline-flex items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 						onClick={(event) => {
@@ -69,7 +70,7 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 						data-session-people
 					>
 						{circles}
-					</button>
+					</Pressable>
 				) : (
 					<span role="group" aria-label={label} tabIndex={0} className="inline-flex items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" data-session-people>
 						{circles}
@@ -107,19 +108,24 @@ function SessionPersonAvatar({ person }: { person: SessionPerson }) {
 }
 
 /**
- * The session header's sharing control. While someone else has the session
- * open it shows who is there as circles; otherwise the owner sees a Share
- * button. Either opens the share dialog for the owner; a guest only sees who
- * is there.
+ * The session header's sharing control, as Google Docs has it: one Share
+ * button that opens the share dialog, which holds people and teams, their
+ * access, General access and Copy link. While someone else has the session
+ * open it shows who is there as circles instead, which open the same dialog
+ * for the owner; a guest only sees who is there. The whole project is shared
+ * from the dialog or from Project settings.
  */
-export function SessionPeopleControl({ orgId, projectId, sessionId, canShare }: {
+export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string;
 	canShare: boolean;
+	sessionName?: string;
+	projectName?: string;
 }) {
 	const { t } = useTranslation();
 	const { userId } = useCloudCp();
+	const teams = useTeamsEnabled();
 	const [open, setOpen] = useState(false);
 	const live = useCloudSessionLive(orgId, sessionId, true);
 	const me = live?.you || userId;
@@ -133,12 +139,23 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare }: 
 					<SessionPeopleStack people={others} list={present} me={me} onActivate={canShare ? () => setOpen(true) : undefined} ringClassName="ring-background" />
 				</span>
 			) : (
-				<TopbarButton variant="accent" className="topbar-control--labeled" onClick={() => setOpen(true)} data-share-session-button>
+				<Button type="button" size="sm" variant="secondary" onClick={() => setOpen(true)} data-share-session-button>
 					<Share2 className="size-icon-md" aria-hidden="true" />
 					<span data-compact-label>{t("share.button")}</span>
-				</TopbarButton>
+				</Button>
 			)}
-			{canShare ? <ShareSessionDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} /> : null}
+			{canShare ? (
+				<ShareSessionDialog
+					open={open}
+					onOpenChange={setOpen}
+					orgId={orgId}
+					projectId={projectId}
+					sessionId={sessionId}
+					sessionName={sessionName}
+					projectName={projectName}
+					people={teams}
+				/>
+			) : null}
 		</>
 	);
 }

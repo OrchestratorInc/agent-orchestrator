@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "@/components/app-icons";
 import { type RefObject, useEffect, useRef } from "react";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
@@ -268,11 +268,15 @@ export function SwipeNavigation({
 
 	if (!enabled) return null;
 
+	// The pucks rest just past the pane's edges. Clip them in a box that cannot
+	// scroll: a container with overflow hidden can still be scrolled by code
+	// (scrollIntoView, focus), and 44px of overhang would then slide the whole
+	// pane sideways under the sidebar.
 	return (
-		<>
+		<div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-clip" data-swipe-pucks="">
 			<SwipePuck direction="back" puckRef={backRef} />
 			<SwipePuck direction="forward" puckRef={forwardRef} />
-		</>
+		</div>
 	);
 }
 

@@ -30,11 +30,13 @@ func sideSeedHistory(rows ConversationRows, anchor string) (string, error) {
 	if anchor == "" {
 		return "", nil
 	}
-	allowed := map[string]bool{}
+	allowed := map[string]int{}
+	var turnSizes []int
 	found := false
 	for _, turn := range rows.Turns {
 		if turn.RolledBackAt == nil && turn.State == domain.TurnStateCompleted {
-			allowed[turn.ID] = true
+			allowed[turn.ID] = len(turnSizes)
+			turnSizes = append(turnSizes, 0)
 		}
 		if turn.ID == anchor {
 			found = true
@@ -44,21 +46,46 @@ func sideSeedHistory(rows ConversationRows, anchor string) (string, error) {
 	if !found {
 		return "", ErrSideAnchorUnavailable
 	}
-	var b strings.Builder
+	type historyEntry struct {
+		turn int
+		text string
+	}
+	var entries []historyEntry
 	for _, message := range rows.Messages {
-		if !allowed[message.TurnID] || message.Streaming || strings.TrimSpace(message.Text) == "" {
+		turn, ok := allowed[message.TurnID]
+		if !ok || message.Streaming || strings.TrimSpace(message.Text) == "" {
 			continue
 		}
 		if message.Role != domain.MessageRoleUser && message.Role != domain.MessageRoleAssistant {
 			continue
 		}
-		fmt.Fprintf(&b, "%s:\n---\n%s\n---\n", message.Role, message.Text)
-		if b.Len() > 512*1024 {
-			return "", fmt.Errorf("side history exceeds reconstruction limit")
+		text := fmt.Sprintf("%s:\n---\n%s\n---\n", message.Role, message.Text)
+		entries = append(entries, historyEntry{turn: turn, text: text})
+		turnSizes[turn] += len(text)
+	}
+	// Long-lived chats, such as a project orchestrator, outgrow the budget. Keep
+	// the newest complete turns that fit, without separating questions and replies.
+	start, size := len(turnSizes), 0
+	for start > 0 && size+turnSizes[start-1] <= sideSeedHistoryLimit {
+		start--
+		size += turnSizes[start]
+	}
+	var history strings.Builder
+	if start > 0 {
+		history.WriteString(sideSeedHistoryOmitted)
+	}
+	for _, entry := range entries {
+		if entry.turn >= start {
+			history.WriteString(entry.text)
 		}
 	}
-	return b.String(), nil
+	return history.String(), nil
 }
+
+const (
+	sideSeedHistoryLimit   = 512 * 1024
+	sideSeedHistoryOmitted = "[Earlier main-chat history omitted: it exceeds the side-chat reconstruction limit.]\n"
+)
 
 const sidePolicyVersion = 1
 
