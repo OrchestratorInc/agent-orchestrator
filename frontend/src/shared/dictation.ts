@@ -7,4 +7,6 @@ export type DictationEvent =
 	| { type: "finishing" }
 	| { type: "end"; text: string }
 	| { type: "error"; message: string }
+	/** Another surface started dictating; this one's run ends with what it has. */
+	| { type: "superseded" }
 	| { type: "exit" };

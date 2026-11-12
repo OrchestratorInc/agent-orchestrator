@@ -559,6 +559,8 @@ export type BrowserViewHost = {
   clearProfileData: (profileId: BrowserProfileId) => Promise<void>;
   // Whether browser-owned UI was the most recently used application surface.
   isLastUsedBrowser: () => boolean;
+  // Whether `contents` is a page whose annotation composer may dictate right now.
+  isAnnotationDictationSender: (contents: Pick<WebContents, "id">) => boolean;
   // Whether any Browser panel is on screen with a page in it.
   hasVisiblePanel: () => boolean;
   // Refresh the live page after raising the transparent shell for an overlay.
@@ -632,6 +634,8 @@ type BrowserEntry = {
     { session: BrowserAnnotationSession; token: string }
   >;
   annotationTheme?: BrowserAnnotationModeInput["theme"];
+  // Whether the annotation composer may offer dictation (macOS only).
+  annotationDictation?: boolean;
   documentGeneration: number;
   navigationGeneration: number;
   blockedNavigationGeneration: number;
@@ -3457,11 +3461,13 @@ export function createBrowserViewHost(
     }
     entry.annotationEnabled = input.enabled;
     if (input.theme) entry.annotationTheme = input.theme;
+    if (input.dictation !== undefined) entry.annotationDictation = input.dictation === true;
     const annotationSession = annotationSessionFor(entry);
     entry.view.webContents.send("browser:annotation:setMode", {
       enabled: input.enabled,
       ...(annotationSession ? { session: annotationSession } : {}),
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
+      ...(entry.annotationDictation ? { dictation: true } : {}),
     });
     if (input.enabled) entry.view.webContents.focus();
   };
@@ -3563,6 +3569,7 @@ export function createBrowserViewHost(
     entry.view.webContents.send("browser:annotation:setMode", {
       enabled: entry.annotationEnabled,
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
+      ...(entry.annotationDictation ? { dictation: true } : {}),
     });
     pushAnnotationState(options, entry);
   };
@@ -3596,6 +3603,7 @@ export function createBrowserViewHost(
       enabled: false,
       ...(pageSession ? { session: pageSession } : {}),
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
+      ...(entry.annotationDictation ? { dictation: true } : {}),
     });
     if (active) pushAnnotationState(options, entry);
   };
@@ -5018,6 +5026,10 @@ export function createBrowserViewHost(
     clearProfileData,
     isLastUsedBrowser: () =>
       lastUsedViewId !== null && entries.has(lastUsedViewId),
+    isAnnotationDictationSender: (contents) => {
+      const entry = tabsByWebContentsId.get(contents.id);
+      return Boolean(entry?.annotationEnabled && entry.annotationDictation);
+    },
     hasVisiblePanel: () =>
       [...entries.values()].some((session) => session.visible && session.tabs.size > 0),
     // Reordering the transparent shell above a live page can leave either
@@ -5794,6 +5806,7 @@ function wireNavEvents(
       enabled: entry.annotationEnabled,
       ...(annotationSession ? { session: annotationSession } : {}),
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
+      ...(entry.annotationDictation ? { dictation: true } : {}),
     });
     if (entry.annotationEnabled) contents.focus();
     pushAnnotationState(options, entry, annotationSession);

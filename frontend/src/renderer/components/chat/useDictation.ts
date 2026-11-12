@@ -61,6 +61,9 @@ export function useDictation(target: DictationTarget) {
 				setError("Dictation stopped unexpectedly.");
 				end(true);
 				break;
+			case "superseded":
+				end(true);
+				break;
 		}
 	}, [end]);
 

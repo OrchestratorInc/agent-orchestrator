@@ -17,6 +17,8 @@ import {
 	type BrowserStyleAdjustment,
 } from "./shared/browser-annotations";
 import { promptPositionForRect, type AnnotationRectLike } from "./shared/browser-annotation-overlay";
+import type { DictationEvent } from "./shared/dictation";
+import { DICTATION_METER_BARS, dictationMeterSteps, runDictationMeter } from "./shared/dictation-meter";
 
 let enabled = false;
 let session = createBrowserAnnotationSession(window.location.href, document.title || undefined);
@@ -33,7 +35,22 @@ type AdjustmentLockName = "ratio" | "paddingHorizontal" | "paddingVertical" | "m
 const emptyAdjustmentLocks = () => ({ ratio: false, paddingHorizontal: false, paddingVertical: false, marginHorizontal: false, marginVertical: false, ratioValue: 0 });
 let adjustmentLocks = emptyAdjustmentLocks();
 let nextLocalId = 0;
-let screenshotNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+/** Whether the composer may dictate (macOS only), as the shell last said. */
+let dictationAllowed = false;
+/**
+ * The dictation running in the composer. Its words replace the selection the
+ * run started from; `before`/`after` are the note around it.
+ */
+let dictation: {
+	phase: "starting" | "listening" | "finishing";
+	before: string;
+	after: string;
+	/** A space when the words would otherwise run into the text before them. */
+	prefix: string;
+	unsubscribe: () => void;
+	stopMeter: (() => void) | null;
+} | null = null;
 
 const ADJUST_MODE_ENABLED = true;
 
@@ -127,6 +144,7 @@ const SUPPORTED_ADJUSTMENT_PROPERTIES = new Set(ADJUSTMENTS.map((item) => item.p
 
 ipcRenderer.on("browser:annotation:setMode", (_event, input: BrowserAnnotationPageMode) => {
 	if (input?.theme) theme = input.theme;
+	dictationAllowed = input?.dictation === true;
 	const nextEnabled = Boolean(input?.enabled);
 	// Clear any in-progress composer before applying the stored session when
 	// leaving mode, so a stale draft from main cannot reopen the input.
@@ -247,7 +265,9 @@ function handleKeyDown(event: KeyboardEvent): void {
 	if (!enabled || isOverlayEvent(event)) return;
 	if (event.key === "Escape") {
 		event.preventDefault();
-		if (session.draft) closeComposer();
+		// Escape belongs to dictation while it runs, as in the chat composer.
+		if (dictation) stopDictation();
+		else if (session.draft) closeComposer();
 		else setEnabled(false, "escape");
 	} else if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
 		event.preventDefault();
@@ -337,7 +357,7 @@ async function captureScreenshot(): Promise<void> {
 	await waitForPaint();
 	const copied = Boolean(await ipcRenderer.invoke("browser:annotation:capture"));
 	renderAll();
-	if (copied) showScreenshotNotice();
+	if (copied) showNotice("Screenshot copied to clipboard", 1_600);
 }
 
 function discardSelected(): void {
@@ -372,16 +392,156 @@ function discardAll(): void {
 	renderAll();
 }
 
-function showScreenshotNotice(): void {
-	const notice = ensureOverlay().querySelector<HTMLElement>(".screenshot-notice");
+function showNotice(message: string, durationMs: number): void {
+	const notice = ensureOverlay().querySelector<HTMLElement>(".notice");
 	if (!notice) return;
+	notice.textContent = message;
 	notice.hidden = false;
-	if (screenshotNoticeTimer) clearTimeout(screenshotNoticeTimer);
-	screenshotNoticeTimer = setTimeout(() => {
-		const current = shadow?.querySelector<HTMLElement>(".screenshot-notice");
+	if (noticeTimer) clearTimeout(noticeTimer);
+	noticeTimer = setTimeout(() => {
+		const current = shadow?.querySelector<HTMLElement>(".notice");
 		if (current) current.hidden = true;
-		screenshotNoticeTimer = null;
-	}, 1_600);
+		noticeTimer = null;
+	}, durationMs);
+}
+
+function onDictationEvent(listener: (event: DictationEvent) => void): () => void {
+	const handler = (_event: Electron.IpcRendererEvent, message: DictationEvent) => listener(message);
+	ipcRenderer.on("dictation:event", handler);
+	return () => {
+		ipcRenderer.removeListener("dictation:event", handler);
+	};
+}
+
+/**
+ * Native macOS dictation into the comment, the chat composer's (useDictation)
+ * without React: the transcript streams in at the caret while the user speaks.
+ */
+function startDictation(): void {
+	const draft = session.draft;
+	const textarea = shadow?.querySelector<HTMLTextAreaElement>(".composer-note");
+	if (!draft || !textarea || dictation) return;
+	const start = textarea.selectionStart ?? draft.body.length;
+	const before = draft.body.slice(0, start);
+	dictation = {
+		phase: "starting",
+		before,
+		after: draft.body.slice(textarea.selectionEnd ?? start),
+		prefix: before && !/\s$/.test(before) ? " " : "",
+		unsubscribe: onDictationEvent(handleDictationEvent),
+		stopMeter: null,
+	};
+	syncDictationButton();
+	void ipcRenderer.invoke("dictation:start");
+}
+
+function handleDictationEvent(event: DictationEvent): void {
+	const run = dictation;
+	if (!run) return;
+	switch (event.type) {
+		case "listening":
+		case "finishing":
+			run.phase = event.type;
+			syncDictationButton();
+			break;
+		case "text":
+			showDictatedText(event.text);
+			break;
+		case "end":
+			showDictatedText(event.text);
+			endDictation();
+			break;
+		case "error":
+			endDictation();
+			showNotice(event.message, 6_000);
+			break;
+		case "exit":
+			endDictation();
+			showNotice("Dictation stopped unexpectedly.", 6_000);
+			break;
+		case "superseded":
+			endDictation();
+			break;
+	}
+}
+
+/** Shows the transcript so far in place of the previous one. */
+function showDictatedText(text: string): void {
+	const run = dictation;
+	const draft = session.draft;
+	if (!run || !draft) return;
+	const words = text ? run.prefix + text : "";
+	draft.body = run.before + words + run.after;
+	const form = shadow?.querySelector<HTMLFormElement>(".composer");
+	const textarea = form?.querySelector<HTMLTextAreaElement>(".composer-note");
+	if (form && textarea) {
+		textarea.value = draft.body;
+		const caret = run.before.length + words.length;
+		textarea.setSelectionRange(caret, caret);
+		if (composerAnchorRect) resizeAndPositionComposer(form, textarea, composerAnchorRect);
+	}
+	emitState();
+}
+
+/** Ends the run here; the dictated words stay as typed text. */
+function endDictation(): void {
+	const run = dictation;
+	if (!run) return;
+	dictation = null;
+	run.unsubscribe();
+	syncDictationButton();
+}
+
+/** Stops listening at once, keeping what was dictated. */
+function haltDictation(): void {
+	if (!dictation) return;
+	endDictation();
+	void ipcRenderer.invoke("dictation:cancel");
+}
+
+/** Ends the audio and waits for the recognizer's final wording. */
+function stopDictation(): void {
+	if (!dictation || dictation.phase === "finishing") return;
+	dictation.phase = "finishing";
+	syncDictationButton();
+	void ipcRenderer.invoke("dictation:stop");
+}
+
+function toggleDictation(): void {
+	if (!dictation) startDictation();
+	else stopDictation();
+}
+
+/** Puts the mic control and its level meter in step with the running dictation. */
+function syncDictationButton(): void {
+	const run = dictation;
+	const listening = run?.phase === "listening";
+	if (run && listening && !run.stopMeter) run.stopMeter = runDictationMeter(onDictationEvent, drawDictationMeter);
+	if (run && !listening && run.stopMeter) {
+		run.stopMeter();
+		run.stopMeter = null;
+	}
+	const button = shadow?.querySelector<HTMLButtonElement>('[data-action="dictate"]');
+	if (!button) return;
+	const dictating = Boolean(run);
+	const label = dictating ? "Finish dictation" : "Dictate";
+	button.classList.toggle("dictate-button--active", dictating);
+	button.setAttribute("aria-pressed", String(dictating));
+	button.setAttribute("aria-label", label);
+	button.title = label;
+	const meter = button.querySelector(".dictation-meter");
+	if (dictating && !meter)
+		button.innerHTML = `<span class="dictation-meter" aria-hidden="true">${'<span class="dictation-bar"></span>'.repeat(DICTATION_METER_BARS)}</span>`;
+	else if (!dictating && meter) button.innerHTML = icon("mic");
+	if (!listening) drawDictationMeter(dictationMeterSteps(0, 0));
+}
+
+/** Bars grow from the 3px resting dot, 1px per step. */
+function drawDictationMeter(steps: number[]): void {
+	shadow?.querySelectorAll<HTMLElement>(".dictation-bar").forEach((bar, index) => {
+		const height = `${3 + (steps[index] ?? 0)}px`;
+		if (bar.style.height !== height) bar.style.height = height;
+	});
 }
 
 function emitState(): void {
@@ -455,7 +615,8 @@ function renderMarkers(): void {
 function renderComposer(): void {
 	const mount = ensureOverlay().querySelector<HTMLElement>(".composer-mount")!;
 	const draft = session.draft;
-	if (!draft) { mount.innerHTML = ""; return; }
+	// Saved, discarded or closed: a dictation still running keeps the words it gave.
+	if (!draft) { haltDictation(); mount.innerHTML = ""; return; }
 	const target = selectedElement ?? resolveTarget(draft.target);
 	// Always built in its comment shape, with the input row first: the adjustment
 	// panel is added and removed in place so the row (and the caret) survives the
@@ -465,6 +626,7 @@ function renderComposer(): void {
 			<div class="composer-input-row">
 				${ADJUST_MODE_ENABLED ? `<button type="button" data-action="adjust" class="adjust-button" aria-label="Adjust element" title="Adjust element">${adjustIcon()}</button>` : ""}
 				<textarea class="composer-note" rows="1" aria-label="Comment" placeholder="Add a comment..."></textarea>
+				${dictationAllowed ? `<button type="button" data-action="dictate" class="dictate-button" aria-label="Dictate" aria-pressed="false" title="Dictate">${icon("mic")}</button>` : ""}
 				<button type="button" data-action="add" class="add-button" aria-label="Add annotation" title="Add annotation">${icon("arrow")}</button>
 			</div>
 		</form>`;
@@ -475,6 +637,8 @@ function renderComposer(): void {
 	if (!composerAnchorRect && target) composerAnchorRect = copyRect(target.getBoundingClientRect());
 	const resize = () => composerAnchorRect && resizeAndPositionComposer(form, textarea, composerAnchorRect);
 	textarea.addEventListener("input", () => {
+		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
+		haltDictation();
 		draft.body = textarea.value;
 		resize();
 		emitState();
@@ -482,6 +646,7 @@ function renderComposer(): void {
 	textarea.addEventListener("keydown", (event) => {
 		event.stopPropagation();
 		if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); saveDraft(); }
+		else if (event.key === "Escape" && dictation) { event.preventDefault(); stopDictation(); }
 		else if (event.key === "Escape") { event.preventDefault(); closeComposer(); }
 		else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submitBatch(); }
 	});
@@ -491,14 +656,23 @@ function renderComposer(): void {
 		event.stopPropagation();
 		if (event.key === "Escape") {
 			event.preventDefault();
-			closeComposer();
+			if (dictation) stopDictation();
+			else closeComposer();
 		}
 	});
 	form.querySelector<HTMLElement>('[data-action="adjust"]')?.addEventListener("click", () => {
 		void toggleAdjustmentMode(form, draft, target, resize);
 	});
+	const dictateButton = form.querySelector<HTMLButtonElement>('[data-action="dictate"]');
+	// Keep focus in the note, where the words appear.
+	dictateButton?.addEventListener("mousedown", (event) => event.preventDefault());
+	dictateButton?.addEventListener("click", () => {
+		textarea.focus();
+		toggleDictation();
+	});
 	addButton?.addEventListener("click", () => saveDraft());
 	syncComposerAddButton();
+	syncDictationButton();
 	resize();
 	// A re-opened saved adjustment arrives already expanded; the composer itself
 	// appeared instantly, so there is nothing to open *from*.
@@ -612,7 +786,7 @@ async function toggleAdjustmentMode(
 	}
 }
 
-function icon(name: "camera" | "eye" | "trash" | "close" | "arrow" | "check" | "sliders" | "sliders-horizontal" | "palette" | "sparkles" | "settings" | "reset" | "link" | "plus"): string {
+function icon(name: "camera" | "eye" | "trash" | "close" | "arrow" | "check" | "sliders" | "sliders-horizontal" | "palette" | "sparkles" | "settings" | "reset" | "link" | "plus" | "mic"): string {
 	const paths = {
 		camera: '<path d="M14.5 5 13 3h-4L7.5 5H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><circle cx="11" cy="11" r="3.5"/>',
 		eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/>',
@@ -628,6 +802,7 @@ function icon(name: "camera" | "eye" | "trash" | "close" | "arrow" | "check" | "
 		reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5"/>',
 		link: '<path d="M10 13a5 5 0 0 0 7.54.54l2-2a5 5 0 0 0-7.07-7.07l-1.15 1.15M14 11a5 5 0 0 0-7.54-.54l-2 2a5 5 0 0 0 7.07 7.07l1.14-1.14"/>',
 		plus: '<path d="M12 5v14M5 12h14"/>',
+		mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
 	};
 	return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]}</svg>`;
 }
@@ -1436,7 +1611,7 @@ function ensureOverlay(): ShadowRoot {
 	(document.documentElement ?? document.body).appendChild(host);
 	shadow = host.attachShadow({ mode: "open" });
 	registerFonts(shadow);
-	shadow.innerHTML = `<style>${overlayStyles()}</style><div class="hover" hidden></div><div class="markers"></div><div class="composer-mount"></div><div class="screenshot-notice chrome" hidden>Screenshot copied to clipboard</div>`;
+	shadow.innerHTML = `<style>${overlayStyles()}</style><div class="hover" hidden></div><div class="markers"></div><div class="composer-mount"></div><div class="notice chrome" role="status" hidden></div>`;
 	return shadow;
 }
 
@@ -1533,6 +1708,23 @@ function overlayStyles(): string {
 		.add-button:not(:disabled):active{transform:scale(0.98)}
 		.add-button:disabled{background:transparent}
 		.add-button svg{width:16px;height:16px}
+		/* Same ghost box as the add control; while dictating it widens into a
+		   filled pill that holds the level meter, as in the chat composer. */
+		.dictate-button{
+			width:var(--control);height:var(--control);flex:0 0 auto;align-self:flex-start;
+			display:inline-flex;align-items:center;justify-content:center;overflow:hidden;
+			border:0;border-radius:var(--radius);background:transparent;color:var(--muted-fg);padding:0;
+			transform-origin:center;
+			transition:width 200ms cubic-bezier(0.23,1,0.32,1),background-color 120ms ease,color 120ms ease,transform 120ms ease;
+		}
+		.dictate-button:hover{background:var(--muted);color:var(--fg)}
+		.dictate-button:active{transform:scale(0.98)}
+		.dictate-button svg{width:16px;height:16px}
+		.dictate-button--active,.dictate-button--active:hover{
+			width:76px;border-radius:calc(var(--control) / 2);background:var(--accent);color:var(--accent-fg);
+		}
+		.dictation-meter{display:flex;height:20px;align-items:center;gap:2px}
+		.dictation-bar{width:3px;height:3px;border-radius:1.5px;background:currentColor}
 		.composer-note{
 			display:block;box-sizing:border-box;min-width:0;flex:1;resize:none;
 			border:0;background:transparent;color:var(--fg);caret-color:var(--fg);
@@ -1708,7 +1900,7 @@ function overlayStyles(): string {
 			.field{grid-column:1}
 			.field--wide{grid-column:1}
 		}
-		.screenshot-notice{
+		.notice{
 			position:fixed;left:50%;top:55px;transform:translateX(-50%);
 			border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);color:var(--fg);
 			padding:var(--pad) 12px;box-shadow:0 8px 22px rgba(0,0,0,.28);
@@ -1719,7 +1911,7 @@ function overlayStyles(): string {
 	`;
 }
 
-function cleanupOverlay(): void { host?.remove(); host = null; shadow = null; }
+function cleanupOverlay(): void { haltDictation(); host?.remove(); host = null; shadow = null; }
 function isOverlayEvent(event: Event): boolean { return Boolean(host && event.composedPath().includes(host)); }
 function waitForPaint(): Promise<void> { return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))); }
 function nextAnnotationNumber(): number { return session.annotations.reduce((max, item) => Math.max(max, item.number), 0) + 1; }
