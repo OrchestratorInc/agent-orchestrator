@@ -1658,6 +1658,9 @@ func TestACPDriverNegotiatesRichClientCapabilitiesAndNativePromptContent(t *test
 		initParams.ClientCapabilities.Meta["terminal_output"] != true {
 		t.Fatalf("client extension capabilities = %#v", initParams.ClientCapabilities.Meta)
 	}
+	if initParams.ClientInfo != nil {
+		t.Fatalf("initialize client identity = %#v, want native agent identity", initParams.ClientInfo)
+	}
 	if len(newParams.AdditionalDirectories) != 1 || newParams.AdditionalDirectories[0] != extra {
 		t.Fatalf("additional directories = %#v", newParams.AdditionalDirectories)
 	}

@@ -247,6 +247,18 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	}
 
 	// initialized must be notified, or the provider never leaves handshake.
+	initialize := srv.awaitFrame(func(f frame) bool { return f.Method == "initialize" })
+	var initParams struct {
+		ClientInfo struct {
+			Name string `json:"name"`
+		} `json:"clientInfo"`
+	}
+	if err := json.Unmarshal(initialize.Params, &initParams); err != nil {
+		t.Fatalf("initialize params: %v", err)
+	}
+	if initParams.ClientInfo.Name != "codex_cli_rs" {
+		t.Fatalf("initialize clientInfo.name = %q, want codex_cli_rs", initParams.ClientInfo.Name)
+	}
 	srv.awaitFrame(func(f frame) bool { return f.Method == "initialized" && f.ID == nil })
 
 	start := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/start" })
