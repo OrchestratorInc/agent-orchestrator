@@ -74,10 +74,10 @@ function setup({ viewing = false, cloud = { client: {} as CloudCpClient, orgId: 
 	queryClient.setQueryData(workspaceQueryKey, serverLocal);
 	const isViewing = vi.fn(() => viewing);
 	// Matches the way the shell finds the row, so the kind tells local from cloud.
-	const findWorkspace = (projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]) =>
+	const findWorkspace = (projectId: string, hostId?: string, cloud?: boolean) =>
 		[...(queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey) ?? []),
 			...(queryClient.getQueryData<WorkspaceSummary[]>(remoteWorkspaceQueryKey("box-a")) ?? [])]
-			.find((item) => isRemoveTarget(item, projectId, hostId, kind));
+			.find((item) => isRemoveTarget(item, projectId, hostId, cloud));
 	const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 	const view = renderHook(() => useRemoveProject({ findWorkspace, isViewing, cloud }), { wrapper });
 	return { queryClient, remove: view.result.current, isViewing };
@@ -332,7 +332,7 @@ describe("useRemoveProject", () => {
 		const deleteProject = vi.fn().mockReturnValue(new Promise(() => undefined));
 		const { queryClient, remove } = setup({ cloud: { client: { deleteProject } as unknown as CloudCpClient, orgId: "org-1" } });
 
-		act(() => remove("proj-2", undefined, "cloud"));
+		act(() => remove("proj-2", undefined, true));
 
 		await waitFor(() => expect(deleteProject).toHaveBeenCalledWith("org-1", "proj-2"));
 		expect(deleteMock).not.toHaveBeenCalled();
@@ -351,11 +351,26 @@ describe("useRemoveProject", () => {
 		const deleteProject = vi.fn();
 		const { remove } = setup({ cloud: { client: { deleteProject } as unknown as CloudCpClient, orgId: "org-1" } });
 
-		act(() => remove("proj-2", undefined, "single_repo"));
+		act(() => remove("proj-2", undefined, false));
 
 		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/projects/{id}", { params: { path: { id: "proj-2" } } }));
 		expect(deleteProject).not.toHaveBeenCalled();
 		expect(applyOptimisticProjectRemovals([doomed, cloudTwin])).toEqual([cloudTwin]);
+	});
+
+	it("removes a local row with no kind (older daemon), not a cloud project listed before it", async () => {
+		const cloudTwin = project("proj-2", "cloud twin", { kind: "cloud" });
+		const legacyLocal = project("proj-2", "legacy", { kind: undefined });
+		serverLocal = [cloudTwin, first, legacyLocal, last];
+		deleteMock.mockReturnValue(new Promise(() => undefined));
+		const deleteProject = vi.fn();
+		const { remove } = setup({ cloud: { client: { deleteProject } as unknown as CloudCpClient, orgId: "org-1" } });
+
+		act(() => remove("proj-2", undefined, false));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/projects/{id}", { params: { path: { id: "proj-2" } } }));
+		expect(deleteProject).not.toHaveBeenCalled();
+		expect(toasts()).toEqual([expect.objectContaining({ title: "Removed legacy" })]);
 	});
 
 	it("does not remove a cloud project while the control plane is not ready", async () => {

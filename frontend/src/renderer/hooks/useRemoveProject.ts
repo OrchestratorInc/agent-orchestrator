@@ -52,16 +52,13 @@ function codedError(message: string, code?: string): Error & { code?: string } {
 
 /**
  * Whether a listed project is the row the user removed. Local and cloud rows
- * both have no host, so the row's kind tells them apart.
+ * both have no host, so the caller says which one it means: `cloud` true or
+ * false. A local row from an older daemon may have no kind, so the flag is a
+ * boolean rather than the row's kind. Left out, it matches either.
  */
-export function isRemoveTarget(
-	workspace: WorkspaceSummary,
-	projectId: string,
-	hostId?: string,
-	kind?: WorkspaceSummary["kind"],
-): boolean {
+export function isRemoveTarget(workspace: WorkspaceSummary, projectId: string, hostId?: string, cloud?: boolean): boolean {
 	return workspace.id === projectId && workspace.hostId === hostId &&
-		(kind === undefined || (workspace.kind === CLOUD_PROJECT_KIND) === (kind === CLOUD_PROJECT_KIND));
+		(cloud === undefined || (workspace.kind === CLOUD_PROJECT_KIND) === cloud);
 }
 
 /** Put a removed item back at its old index, unless a newer read already has it. */
@@ -127,16 +124,16 @@ async function refetchLists(queryClient: QueryClient, { cloud, workspace, cacheK
  * page never renders a project that is gone.
  */
 export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
-	findWorkspace: (projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]) => WorkspaceSummary | undefined;
+	findWorkspace: (projectId: string, hostId?: string, cloud?: boolean) => WorkspaceSummary | undefined;
 	isViewing: (workspace: WorkspaceSummary) => boolean;
 	cloud: CloudContext;
-}): (projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]) => void {
+}): (projectId: string, hostId?: string, cloud?: boolean) => void {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 
-	const remove = useLatestCallback((projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]): void => {
-		const workspace = findWorkspace(projectId, hostId, kind);
+	const remove = useLatestCallback((projectId: string, hostId?: string, cloudRow?: boolean): void => {
+		const workspace = findWorkspace(projectId, hostId, cloudRow);
 		if (!workspace || isOptimisticallyRemovedProject(projectId, hostId, !hostId && workspace.kind === CLOUD_PROJECT_KIND)) return;
 		void removeOptimistically(workspace);
 	});
@@ -172,7 +169,7 @@ export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
 			dismissible: true,
 			durationMs: PROJECT_REMOVE_ERROR_TOAST_MS,
 			dedupeKey: toastKey,
-			action: { label: t("shell.removeProjectRetry"), run: () => remove(projectId, hostId, workspace.kind) },
+			action: { label: t("shell.removeProjectRetry"), run: () => remove(projectId, hostId, isCloud) },
 		});
 		if (!hostId) {
 			void addRendererExceptionStep("Project removal requested", telemetryContext(projectId));

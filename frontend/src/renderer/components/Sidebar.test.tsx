@@ -299,7 +299,7 @@ type CloneProjectHandler = (input: {
 	signal?: AbortSignal;
 }) => Promise<void>;
 type InitializeProjectHandler = (path: string) => Promise<void>;
-type RemoveProjectHandler = (projectId: string) => void;
+type RemoveProjectHandler = (projectId: string, cloud: boolean) => void;
 type ImportValidationResult = components["schemas"]["ImportValidationResult"];
 type RepoGitStatus = components["schemas"]["RepoGitStatus"];
 
@@ -993,8 +993,8 @@ describe("Sidebar", () => {
 		expect(dialog).toHaveTextContent("Project One");
 
 		await user.click(screen.getByRole("button", { name: "Remove" }));
-		// The row's kind travels with it, so the shell can tell local from cloud.
-		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledWith("proj-1", workspace.kind));
+		// The fixture has no kind, like a row from an older daemon: still a local row.
+		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledWith("proj-1", false));
 		// The shell leaves the project's page only when it is open (useRemoveProject).
 		expect(navigateMock).not.toHaveBeenCalled();
 	});

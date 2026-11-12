@@ -1048,9 +1048,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 
 	// Removal is optimistic: the project leaves every list on confirm and the
 	// daemon's teardown runs in the background (see useRemoveProject).
-	const findWorkspaceToRemove = useCallback((projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]) =>
+	const findWorkspaceToRemove = useCallback((projectId: string, hostId?: string, cloud?: boolean) =>
 		(hostId ? remoteWorkspacesRef.current ?? [] : workspacesRef.current)
-			.find((workspace) => isRemoveTarget(workspace, projectId, hostId, kind)), []);
+			.find((workspace) => isRemoveTarget(workspace, projectId, hostId, cloud)), []);
 	const isViewingProject = useCallback((workspace: WorkspaceSummary) => {
 		const route = routeParamsRef.current;
 		if (route.hostId !== workspace.hostId) return false;
@@ -1062,9 +1062,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		isViewing: isViewingProject,
 		cloud: { client: cloudClient, orgId: cloudOrg?.id },
 	});
-	// The row's kind tells a local project from a cloud project with the same id.
+	// The flag tells a local project from a cloud project with the same id.
 	const removeProject = useCallback(
-		(projectId: string, kind?: WorkspaceSummary["kind"]) => removeProjectById(projectId, undefined, kind),
+		(projectId: string, cloud: boolean) => removeProjectById(projectId, undefined, cloud),
 		[removeProjectById],
 	);
 	const removeRemoteProjectFromSidebar = useCallback(
