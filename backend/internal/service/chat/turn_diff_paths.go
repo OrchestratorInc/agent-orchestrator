@@ -26,24 +26,31 @@ func pathOutsideSession(workspaceDir, artifactDir, path string) bool {
 
 // pathUnderRoot compares lexically first, then through symlinks, so a worktree
 // reached by another spelling (macOS /var and /private/var) still owns its
-// files. A path that no longer exists is resolved through its directory.
+// files.
 func pathUnderRoot(root, path string) bool {
 	if within(filepath.Clean(root), filepath.Clean(path)) {
 		return true
 	}
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return false
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		dir, dirErr := filepath.EvalSymlinks(filepath.Dir(path))
-		if dirErr != nil {
-			return false
+	return within(resolveExistingPrefix(root), resolveExistingPrefix(path))
+}
+
+// resolveExistingPrefix resolves symlinks through the deepest ancestor that
+// still exists and keeps the rest as written, so a deleted file whose
+// directories went with it still resolves to the root that held it.
+func resolveExistingPrefix(path string) string {
+	path = filepath.Clean(path)
+	for dir := path; ; dir = filepath.Dir(dir) {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			rest, relErr := filepath.Rel(dir, path)
+			if relErr != nil {
+				return path
+			}
+			return filepath.Join(resolved, rest)
 		}
-		resolved = filepath.Join(dir, filepath.Base(path))
+		if filepath.Dir(dir) == dir {
+			return path
+		}
 	}
-	return within(resolvedRoot, resolved)
 }
 
 func within(root, path string) bool {

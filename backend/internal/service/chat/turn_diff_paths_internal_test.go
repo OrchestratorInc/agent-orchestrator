@@ -27,6 +27,10 @@ func TestPathOutsideSession(t *testing.T) {
 		{"inside", workspace, filepath.Join(workspace, "src", "a.go"), false},
 		{"worktree root", workspace, workspace, false},
 		{"through a symlink", workspace, filepath.Join(link, "src", "gone.go"), false},
+		// A deleted file whose parent directories went with it, reported
+		// through the other spelling of the worktree.
+		{"deleted directory through a symlink", workspace, filepath.Join(link, "removed", "nested", "gone.go"), false},
+		{"deleted directory with the root through a symlink", link, filepath.Join(workspace, "removed", "nested", "gone.go"), false},
 		{"artifact", workspace, filepath.Join(artifacts, "report.html"), false},
 		{"outside", workspace, filepath.Join(elsewhere, "memory", "MEMORY.md"), true},
 		{"sibling with a shared prefix", workspace, workspace + "-other/a.go", true},
