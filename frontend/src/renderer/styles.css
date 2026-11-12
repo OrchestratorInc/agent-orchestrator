@@ -3061,6 +3061,12 @@ html.sidebar-reordering * {
 	left: 0;
 }
 
+/* On a translucent window bg-surface is a 5% tint, so the transcript under the
+   open dock showed through it. The queue box keeps its solid fill there. */
+html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue-dock-body) {
+	background-color: var(--solid-bg-secondary);
+}
+
 /* Clip-height collapse: one row stays visible when folded; up to five when open. */
 .queue-dock-body {
 	--queue-dock-row-height: 2.5rem;
