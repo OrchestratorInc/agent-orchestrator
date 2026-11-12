@@ -29,8 +29,10 @@ export interface ChatEntranceGate {
 	readonly played: Set<string>;
 	/** The newest sequence `admitArrivals` has accounted for. */
 	seen: number | undefined;
-	/** When the reader started watching (the chat opened, or the window was seen again), in epoch ms. */
+	/** When the reader started watching (the chat opened, its panel or the window was seen again), in epoch ms. */
 	watchingSince: number;
+	/** When rows the reader did not watch last landed (performance.now()); the view snaps for a moment after. */
+	catchUpAt: number;
 }
 
 /**
@@ -41,7 +43,7 @@ export interface ChatEntranceGate {
 export const ARRIVAL_CLOCK_SKEW_MS = 5_000;
 
 export function createChatEntranceGate(): ChatEntranceGate {
-	return { floor: undefined, settled: false, played: new Set(), seen: undefined, watchingSince: Date.now() };
+	return { floor: undefined, settled: false, played: new Set(), seen: undefined, watchingSince: Date.now(), catchUpAt: -Infinity };
 }
 
 function writtenBefore(item: ConversationItem, limit: number): boolean {
@@ -53,8 +55,8 @@ function writtenBefore(item: ConversationItem, limit: number): boolean {
  * Accounts for the snapshot about to render, before its rows mount. Rows newer
  * than any seen so far are arrivals; when the window is hidden, or any of them
  * was written before the reader started watching, the batch is a catch-up: the
- * floor rises past it so none of it plays an entrance, and this returns true so
- * the view lands on it without a glide.
+ * floor rises past it so none of it plays an entrance, and `catchUpAt` marks it
+ * so the view lands on it without a glide. Returns whether it was a catch-up.
  */
 export function admitArrivals(gate: ChatEntranceGate, snapshot: { items: readonly ConversationItem[]; latestSequence: number }): boolean {
 	if (snapshot.items.length === 0) return false;
@@ -75,6 +77,7 @@ export function admitArrivals(gate: ChatEntranceGate, snapshot: { items: readonl
 	const catchUp = pageHidden() || snapshot.items.some((item) => item.sequence > seen && writtenBefore(item, watchedFrom));
 	if (!catchUp) return false;
 	gate.floor = Math.max(gate.floor, newest);
+	gate.catchUpAt = performance.now();
 	return true;
 }
 

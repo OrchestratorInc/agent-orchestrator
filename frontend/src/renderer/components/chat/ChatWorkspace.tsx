@@ -1041,6 +1041,18 @@ function ChatWorkspaceContent({
 	// session temporarily becomes terminated and later returns.
 	const reviewerActive = reviewerChatSelected || Boolean(reviewerTarget && session);
 	const shellActive = Boolean(shellTarget && session);
+	// When the conversation panel was last shown again after a terminal or reviewer
+	// tab covered it. The transcript is held while covered (HoldWhileHidden), so rows
+	// written meanwhile reach it only on return, and must not read as arrivals the
+	// reader watched. Adjusted during render, so the held transcript sees it in the
+	// same render that catches it up; only a tab change pays for the extra pass.
+	const panelCovered = reviewerActive || shellActive;
+	const [panelWasCovered, setPanelWasCovered] = useState(panelCovered);
+	const [panelShownAt, setPanelShownAt] = useState<number>();
+	if (panelCovered !== panelWasCovered) {
+		setPanelWasCovered(panelCovered);
+		if (!panelCovered) setPanelShownAt(Date.now());
+	}
 	const splitHiddenTabKeys = useSplitHiddenTabKeys();
 	const closeFocusedSplitPane = useSplitCloseFocused();
 	const auxiliaryTabs = useMemo<ChatAuxiliaryTab[]>(
@@ -2108,6 +2120,7 @@ function ChatWorkspaceContent({
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
 								<Timeline
+									shownAt={panelShownAt}
 							onAddToSideChat={onAddToSideChat}
 									checkingSideChatAvailability={checkingSideChatAvailability}
 									workerUpdates={sessionRole === "orchestrator"}
@@ -2977,9 +2990,12 @@ export function Timeline({
 	openingStartedAt,
 	openingStartupLabel,
 	controllerStopped = false,
+	shownAt,
 }: {
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
+	/** When the panel holding this transcript was last shown again after being covered (epoch ms). */
+	shownAt?: number;
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
@@ -3046,10 +3062,11 @@ export function Timeline({
 	// render with a transcript, so a placeholder or loading frame does not count.
 	// Rows the reader did not watch arrive (written while they were away, or landing
 	// while the window is hidden) raise the floor before they mount, and the view
-	// lands on them without a glide (catchUpSnapUntil).
+	// lands on them without a glide (the gate's catchUpAt).
 	const [entranceGate] = useState(createChatEntranceGate);
-	const catchUpSnapUntil = useRef(0);
-	if (admitArrivals(entranceGate, sourceSnapshot)) catchUpSnapUntil.current = performance.now() + INITIAL_SNAP_MS;
+	// Shown again after a terminal or reviewer tab covered it: the reader watches from then.
+	if (shownAt !== undefined && shownAt > entranceGate.watchingSince) entranceGate.watchingSince = shownAt;
+	admitArrivals(entranceGate, sourceSnapshot);
 	useEffect(() => {
 		entranceGate.settled = true;
 	}, [entranceGate]);
@@ -4398,7 +4415,7 @@ export function Timeline({
 		// again while rows that landed hidden measure.
 		const now = performance.now();
 		if (viewportResize.current || !initialLayoutDone.current || now - initialLayoutAt.current < INITIAL_SNAP_MS ||
-			now < catchUpSnapUntil.current || pageHidden()) {
+			now - entranceGate.catchUpAt < INITIAL_SNAP_MS || pageHidden()) {
 			if (viewportResize.current || isFlying()) cancelScrollFollow();
 			node.scrollTop = node.scrollHeight;
 			markWritten(node.scrollTop);
@@ -4642,7 +4659,7 @@ export function Timeline({
 	const onPageShown = useRef(() => {});
 	onPageShown.current = () => {
 		entranceGate.watchingSince = Date.now();
-		catchUpSnapUntil.current = performance.now() + INITIAL_SNAP_MS;
+		entranceGate.catchUpAt = performance.now();
 		if (isFlying()) cancelScrollFollow();
 		const node = scroller.current;
 		if (!node || !initialLayoutDone.current) return;

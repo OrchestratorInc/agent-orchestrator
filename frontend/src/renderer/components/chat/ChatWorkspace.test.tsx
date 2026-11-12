@@ -6225,6 +6225,35 @@ describe("ChatWorkspace shell tabs", () => {
 		};
 	};
 
+	it("does not replay entrances for rows written while a shell covered the conversation", () => {
+		const opened = Date.now();
+		const now = vi.spyOn(Date, "now").mockReturnValue(opened);
+		try {
+			const base = idleSnapshot();
+			const common = { session: chatSession, shellTerminals: shells, onSelectChat: vi.fn() };
+			const view = render(<ChatWorkspace {...common} snapshot={base} />);
+			// A minute into the shell, a prompt lands; the held transcript only sees it on return.
+			const written = new Date(opened + 60_000).toISOString();
+			const sequence = base.latestSequence + 1;
+			const covered: ConversationSnapshot = {
+				...base,
+				latestSequence: sequence,
+				turns: [...base.turns, { id: "turn-shell", state: "completed", requestedAt: written, startedAt: written, completedAt: written }],
+				items: [...base.items, {
+					kind: "message", id: "prompt-turn-shell", turnId: "turn-shell", sequence, revision: 0,
+					role: "user", origin: "human", text: "Sent while the shell was open", streaming: false, createdAt: written,
+				}],
+			};
+			view.rerender(<ChatWorkspace {...common} snapshot={covered} shellTarget={shellTarget("shell-1")} />);
+			now.mockReturnValue(opened + 120_000);
+			view.rerender(<ChatWorkspace {...common} snapshot={covered} />);
+			expect(screen.getAllByText("Sent while the shell was open").length).toBeGreaterThan(0);
+			expect(document.querySelectorAll(".chat-human-message-enter")).toHaveLength(0);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
 	// Shells are tabs inside the chat surface (#4033): opening one must not cost
 	// the conversation — the conversation panel hides instead of unmounting,
 	// exactly like the reviewer pane.
