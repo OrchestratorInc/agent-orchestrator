@@ -1,4 +1,3 @@
-import { resetLabel } from "./conversationChrome";
 import type { McpServer } from "./types";
 
 /**
