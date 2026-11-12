@@ -179,7 +179,7 @@ func updated(id string, payload map[string]any) cdc.Event {
 func startManager(t *testing.T, store *fakeStore, unavailable ...string) (*Manager, *fakeRuntime, *fakeEvents) {
 	t.Helper()
 	writeBefore := minWriteInterval
-	minWriteInterval = 30 * time.Millisecond
+	minWriteInterval = 200 * time.Millisecond
 	t.Cleanup(func() { minWriteInterval = writeBefore })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
