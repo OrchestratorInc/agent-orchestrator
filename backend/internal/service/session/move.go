@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -268,7 +269,8 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 }
 
 // CompleteMove marks the session as moved to AO Cloud, then archives it. A
-// live orchestrator of the project is told so it does not respawn the worker.
+// live orchestrator of the project is told so it does not respawn the worker;
+// the move does not wait for it to take the message.
 func (s *Service) CompleteMove(ctx context.Context, id domain.SessionID, in MoveCompleteInput) (domain.Session, error) {
 	d := in.Destination
 	if d.MoveID == "" || d.SessionID == "" || d.OrgID == "" {
@@ -293,7 +295,7 @@ func (s *Service) CompleteMove(ctx context.Context, id domain.SessionID, in Move
 		if _, err := store.SetSessionMovedTo(ctx, id, d, d.At); err != nil {
 			return domain.Session{}, err
 		}
-		s.tellOrchestrator(ctx, rec, d)
+		go s.tellOrchestrator(context.WithoutCancel(ctx), rec, d)
 	}
 	if !rec.IsTerminated {
 		if _, err := s.manager.RequestKill(ctx, id); err != nil {
@@ -338,7 +340,13 @@ func moveRequestHash(in MoveImportInput) string {
 func moveAPIError(err error) error {
 	var fileTooLarge *sessionmove.FileTooLargeError
 	if errors.As(err, &fileTooLarge) {
-		return apierr.Conflict("MOVE_FILE_TOO_LARGE", "A file is over GitHub's 100 MiB limit.",
+		var paths []string
+		for _, f := range fileTooLarge.Files {
+			if !slices.Contains(paths, f.Path) {
+				paths = append(paths, f.Path)
+			}
+		}
+		return apierr.Conflict("MOVE_FILE_TOO_LARGE", "Over GitHub's 100 MiB file limit: "+strings.Join(paths, ", ")+".",
 			map[string]any{"limit": fileTooLarge.Limit, "files": fileTooLarge.Files})
 	}
 	for _, c := range []struct {
@@ -349,15 +357,20 @@ func moveAPIError(err error) error {
 		{sessionmove.ErrOperationInProgress, "MOVE_GIT_OPERATION", "Finish or abort the merge, rebase or conflict in the worktree first."},
 		{sessionmove.ErrDetachedHead, "MOVE_DETACHED_HEAD", "The worktree has no branch checked out."},
 		{sessionmove.ErrNoCommits, "MOVE_NO_COMMITS", "The branch has no commits yet."},
-		{sessionmove.ErrDirtySubmodule, "MOVE_DIRTY_SUBMODULE", "Commit or discard the changes inside the submodule first."},
+		{sessionmove.ErrDirtySubmodule, "MOVE_DIRTY_SUBMODULE", "Commit or discard the changes inside %s first."},
 		{sessionmove.ErrRemoteAhead, "MOVE_REMOTE_AHEAD", "Origin's branch has commits this machine does not. Pull them first."},
-		{sessionmove.ErrLFSObjects, "MOVE_LFS", "The move includes Git LFS files, which cannot move yet."},
+		{sessionmove.ErrLFSObjects, "MOVE_LFS", "Git LFS files cannot move yet: %s."},
 		{sessionmove.ErrDiverged, "MOVE_BRANCH_DIVERGED", "The branch here has commits the moved branch does not."},
 		{sessionmove.ErrBranchCheckedOut, "MOVE_BRANCH_CHECKED_OUT", "The branch is checked out in a worktree here."},
 		{sessionmove.ErrMissingCommit, "MOVE_MISSING_COMMIT", "Origin does not have the commit Orchestrator Cloud pushed."},
 	} {
 		if errors.Is(err, c.err) {
-			return apierr.Conflict(c.code, c.msg, map[string]any{"detail": err.Error()})
+			msg := c.msg
+			if strings.Contains(msg, "%s") {
+				// sessionmove formats these as "<sentinel>: <paths>".
+				msg = fmt.Sprintf(msg, strings.TrimPrefix(err.Error(), c.err.Error()+": "))
+			}
+			return apierr.Conflict(c.code, msg, map[string]any{"detail": err.Error()})
 		}
 	}
 	return err

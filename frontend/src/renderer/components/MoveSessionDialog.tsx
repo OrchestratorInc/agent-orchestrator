@@ -5,7 +5,7 @@ import { Check, CircleAlert, Loader2 } from "@/components/app-icons";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { cloudSessionsQueryKey, useCloudProjectsQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
 import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
@@ -43,6 +43,9 @@ const STEPS: MoveStep[] = ["stop", "export", "import", "complete"];
 /** Uncommitted paths listed before the rest are summed up as a count. */
 const LISTED_FILES = 5;
 
+/** git status --short letters, so a deleted file does not read as one that moves. */
+const STATUS_LETTER = { added: "A", modified: "M", deleted: "D" } as const;
+
 function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession; onClose: () => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -52,6 +55,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	const { org } = useCloudOrg();
 	const offering = useCloudOffering();
 	const cloudProjects = useCloudProjectsQuery();
+	const cloudSessions = useCloudSessionsQuery();
 	const sourceHost: HostId = session.hostId ?? LOCAL_HOST;
 	const [step, setStep] = useState<MoveStep>();
 	const [result, setResult] = useState<MoveResult>();
@@ -82,27 +86,36 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 		retry: false,
 	});
 	const signedIn = Boolean(cloudClient && org);
-	const loading = signedIn && (sourceRepo.isPending || cloudProjects.isPending || preview.isPending);
+	const loading = signedIn && (sourceRepo.isPending || cloudProjects.isPending || cloudSessions.isPending || preview.isPending);
 	const project = sourceRepo.data
 		? (cloudProjects.data ?? []).find((candidate) => repoKey(candidate.repositoryUrl) === sourceRepo.data)
 		: undefined;
 	const harness = session.provider;
+	const branch = preview.data?.branch ?? "";
+	// Cloud refuses a second live session on a branch, but only after the push.
+	// Checked before the first attempt only: after it, the holder can be this move's own session.
+	const branchHolder =
+		project && step === undefined
+			? (cloudSessions.data ?? []).find((s) => s.projectId === project.id && s.branch === branch && !s.isTerminated)
+			: undefined;
 	const unavailable = !signedIn
 		? t("move.signedOut")
 		: loading
 			? undefined
 			: !project
-				? t("move.noCloudProject")
+				? // Without an origin there is no repository to look up; the daemon says why.
+					(!sourceRepo.data && preview.error?.message) || t("move.noCloudProject")
 				: !offering.features.includes(CLOUD_BRANCH_FEATURE)
 					? t("move.cloudNeedsUpdate")
 					: !(CLOUD_AGENT_PROVIDERS as readonly string[]).includes(harness)
 						? t("move.cloudAgentUnsupported", { agent: harness })
 						: preview.error
 							? preview.error.message
-							: undefined;
+							: branchHolder
+								? t("move.branchInUse", { branch, session: branchHolder.displayName })
+								: undefined;
 	const target: MoveTarget | undefined =
 		org && project && !loading && !unavailable ? { orgId: org.id, projectId: project.id, harness } : undefined;
-	const branch = preview.data?.branch ?? "";
 	const changes = preview.data?.changes ?? [];
 
 	const start = async () => {
@@ -179,8 +192,8 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 								{changes.length > 0 ? (
 									<ul className="flex flex-col gap-0.5 font-mono text-xs text-settings-muted" aria-label={t("move.uncommitted")}>
 										{changes.slice(0, LISTED_FILES).map((change) => (
-											<li key={change.path} className="truncate">
-												{change.path}
+											<li key={change.path} className="break-all">
+												{STATUS_LETTER[change.status]} {change.path}
 											</li>
 										))}
 										{changes.length > LISTED_FILES ? (
