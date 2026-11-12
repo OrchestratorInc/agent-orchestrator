@@ -328,7 +328,7 @@ function RemoteSection({ project }: { project: NewLocalProject }) {
 	const t = useTheme();
 	const remote = project.remote;
 	const [ownersOpen, setOwnersOpen] = useState(false);
-	const footer = remoteFooter(remote);
+	const footer = remoteFooter(remote, project.remoteResuming);
 	return (
 		<Column verticalArrangement={{ spacedBy: space.sm }} modifiers={[fillMaxWidth()]}>
 			{remote.mode === "github" && remote.owners?.length ? (

@@ -220,7 +220,7 @@ function RemoteSection({ project }: { project: NewLocalProject }) {
 	const t = useTheme();
 	const remote = project.remote;
 	return (
-		<SettingsSection title={REMOTE_TITLE} footer={remoteFooter(remote)} modifiers={sectionModifiers(t)}>
+		<SettingsSection title={REMOTE_TITLE} footer={remoteFooter(remote, project.remoteResuming)} modifiers={sectionModifiers(t)}>
 			<Picker
 				label="Remote"
 				selection={remote.mode}

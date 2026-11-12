@@ -86,7 +86,9 @@ export const REMOTE_MODE_OPTIONS: readonly { key: RemoteMode; label: string }[] 
 ];
 
 /** Under the remote: the name check, a bad URL, or what creating a repository needs. */
-export function remoteFooter(remote: RemoteSetup): string | undefined {
+export function remoteFooter(remote: RemoteSetup, resuming = false): string | undefined {
+	// The repository was made by the last try; only its push is left.
+	if (resuming && remote.mode === "github") return `Retries pushing to github.com/${remote.owner}/${remote.name}`;
 	if (remote.mode === "url") return remote.urlInvalid ? "Enter a valid HTTPS, SSH, Git, or file repository URL." : undefined;
 	if (remote.owners === null) return "Checking GitHub on this machine…";
 	if (!remote.owners.length) return "Sign in to GitHub CLI on this machine to create a repository, or use a remote URL.";

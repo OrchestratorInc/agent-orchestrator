@@ -16,6 +16,7 @@ import {
 	type DirectoryListing,
 	type ImportAction,
 	type ImportValidation,
+	type GitHubRepositoryInput,
 } from "./api";
 import { importState, needsRemote, nextAction, preparationFailureMessage, suggestedGitHubName, type ImportState } from "./importRules";
 import {
@@ -24,6 +25,7 @@ import {
 	DEFAULT_CLONE_PARENT,
 	filterDirectories,
 	folderNameFor,
+	joinPath,
 	localProjectErrorMessage,
 	localProjectRequest,
 	UNSUPPORTED_NEW_PROJECT,
@@ -41,6 +43,14 @@ const NEW_PROJECT_ACTIONS: readonly ImportAction[] = ["git_init", "git_commit", 
  * project is added, with the machine that made it: cleanup goes there.
  */
 type PreparedClone = { path: string; preparationId: string; remoteUrl: string; destinationParent: string; hostId: string; config: ServerConfig };
+
+/**
+ * A GitHub repository this form's create already made on the machine whose
+ * push then failed: the daemon keeps the remote step required and records the
+ * repository, so resending the same request retries only the push. The name
+ * is taken by then, by this very attempt, so it isn't checked again.
+ */
+type RemoteResume = { hostId: string; path: string; request: { remoteUrl: string; githubRepository: GitHubRepositoryInput } };
 
 /** What the daemon said about the folder being added, and for which path. */
 type ImportCheck = { path: string; validation: ImportValidation; state: ImportState };
@@ -115,6 +125,7 @@ export function useNewLocalProject({ onCreated }: {
 	// One id per new folder, kept across retries, so a create whose response
 	// was lost resumes the folder it made (the daemon records the id there).
 	const createId = useRef<{ path: string; id: string } | null>(null);
+	const [resume, setResume] = useState<RemoteResume | null>(null);
 
 	const mounted = useRef(true);
 	useEffect(() => {
@@ -157,6 +168,7 @@ export function useNewLocalProject({ onCreated }: {
 		setError(null);
 		setCheck(null);
 		createId.current = null;
+		setResume(null);
 		const shown = hostId;
 		void (async () => {
 			const remembered = await loadProjectPlaces(shown);
@@ -315,14 +327,29 @@ export function useNewLocalProject({ onCreated }: {
 		suggestedName: source === "new" ? folderNameFor(name) : suggestedGitHubName(checkFor?.path ?? folder ?? ""),
 	});
 
+	// The folder Create sets up: the chosen one, the clone, or the new one.
+	const targetPath = source === "folder" ? folder
+		: source === "clone" ? (prepared && preparedMatches(prepared) ? prepared.path : null)
+		: joinPath(destinationParent.trim(), folderNameFor(name));
+	// The same repository this attempt made, on the same folder and machine:
+	// ready without the name check (the name is taken, by it); anything else is
+	// checked as any new repository is.
+	const outgoing = remote.request;
+	const resuming = Boolean(resume && remoteNeeded && resume.hostId === hostId && resume.path === targetPath
+		&& outgoing.githubRepository
+		&& resume.request.githubRepository.owner === outgoing.githubRepository.owner
+		&& resume.request.githubRepository.name === outgoing.githubRepository.name
+		&& resume.request.githubRepository.private === outgoing.githubRepository.private);
+
 	// Not while a folder is being browsed: Create would use the one chosen before.
 	const canCreate = Boolean(config) && !busy && !checking && !blocked && browseTarget === null
 		&& canCreateLocalProject({ source, folder, remoteUrl, destinationParent, name })
 		&& (source !== "folder" || Boolean(checkFor))
-		&& (!remoteNeeded || remote.ready);
+		&& (!remoteNeeded || remote.ready || resuming);
 
 	const finish = async (createdOn: string, projectId: string, place: { folder?: string; destination?: string }) => {
 		haptics.success();
+		if (mounted.current) setResume(null);
 		await rememberProjectPlace(createdOn, place).catch(() => {});
 		await refreshHost(createdOn).catch(() => {});
 		if (mounted.current) onCreated(createdOn, projectId);
@@ -333,9 +360,9 @@ export function useNewLocalProject({ onCreated }: {
 	 * says the folder can be added, stopping on a failed step or a folder that
 	 * turns out blocked. Returns the last validation.
 	 */
-	const runSetup = async (cfg: NonNullable<typeof config>, start: ImportValidation): Promise<ImportValidation> => {
+	const runSetup = async (cfg: NonNullable<typeof config>, start: ImportValidation, on: string): Promise<ImportValidation> => {
 		let current = start;
-		const outgoing = remote.request;
+		const sending = resuming && resume ? resume.request : outgoing;
 		while (current.nextStep === "prepare_git") {
 			const action = nextAction(current);
 			if (!action) throw new Error("Orchestrator couldn't finish setting up Git for this folder.");
@@ -343,10 +370,19 @@ export function useNewLocalProject({ onCreated }: {
 			const { events, validation } = await prepareImportGit(cfg, {
 				path: current.root.repoPath,
 				approvedActions: current.root.requiredActions,
-				...(needsRemote(current.root.requiredActions) ? outgoing : {}),
+				...(needsRemote(current.root.requiredActions) ? sending : {}),
 			});
 			const failed = events.find((event) => event.state === "error");
-			if (failed) throw new Error(preparationFailureMessage(failed));
+			if (failed) {
+				// The repository was made and the folder points at it, but the push
+				// failed: the daemon still asks for the remote step. Keep this request
+				// so the next Create resends it and retries the push.
+				if (failed.action === "create_remote_repository" && sending.githubRepository
+					&& validation.root.hasOrigin && validation.root.requiredActions.includes("create_remote_repository") && mounted.current) {
+					setResume({ hostId: on, path: validation.root.repoPath, request: { remoteUrl: sending.remoteUrl, githubRepository: sending.githubRepository } });
+				}
+				throw new Error(preparationFailureMessage(failed));
+			}
 			const state = importState(validation);
 			if (state.kind === "blocked") throw new Error(state.message);
 			if (nextAction(validation) === action) throw new Error("Orchestrator couldn't finish setting up Git for this folder.");
@@ -403,7 +439,7 @@ export function useNewLocalProject({ onCreated }: {
 				}
 				// The checkout needs a remote of its own: the form asks for it, and Create goes on.
 				if (needsRemote(validation.root.requiredActions) && !remote.ready) return;
-				await runSetup(config, validation);
+				await runSetup(config, validation, createdOn);
 				// Its removal started meanwhile: the checkout may be going, so it isn't registered.
 				if (retired.current.has(clone)) throw new Error("The clone was removed before it could be added. Try again.");
 				const id = await addFolderProject(config, { path: clone.path, clonePreparationId: clone.preparationId, ...(request.input.name ? { name: request.input.name } : {}) });
@@ -423,12 +459,12 @@ export function useNewLocalProject({ onCreated }: {
 					if (createUnsupported(cause)) throw new Error(UNSUPPORTED_NEW_PROJECT);
 					throw cause;
 				}
-				await runSetup(config, await validated(config, request.input.path, createdOn));
+				await runSetup(config, await validated(config, request.input.path, createdOn), createdOn);
 				await finish(createdOn, await addFolderProject(config, request.input), { destination: destinationParent.trim() });
 				return;
 			}
 			const validation = checkFor?.validation ?? await validated(config, request.input.path, createdOn);
-			const done = await runSetup(config, validation);
+			const done = await runSetup(config, validation, createdOn);
 			await finish(createdOn, await addFolderProject(config, { ...request.input, path: done.root.repoPath }), { folder: request.input.path });
 		} catch (cause) {
 			haptics.error();
@@ -486,6 +522,8 @@ export function useNewLocalProject({ onCreated }: {
 		/** The remote step, when the setup gives the folder an origin. */
 		remote,
 		remoteNeeded,
+		/** Create retries the push to the repository this attempt already made. */
+		remoteResuming: resuming,
 		github,
 		/** A GitHub repository's clone URL into the field. */
 		takeRepository: (repo: Parameters<typeof github.take>[0]) => {

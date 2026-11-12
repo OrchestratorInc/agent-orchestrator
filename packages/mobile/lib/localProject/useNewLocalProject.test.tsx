@@ -6,12 +6,16 @@ import { useNewLocalProject, type NewLocalProject } from "./useNewLocalProject";
 
 // A fake machine: folders with their Git state, validated and prepared the
 // way the daemon's importer does it, so the hook's loop runs as it would.
-type Repo = { isRepo: boolean; hasCommit: boolean; hasOrigin: boolean; blocking?: string[]; children?: boolean };
+// pushPending: the GitHub repository was made and origin set, but the push failed (ao.import.githubRepository recorded).
+type Repo = { isRepo: boolean; hasCommit: boolean; hasOrigin: boolean; pushPending?: boolean; blocking?: string[]; children?: boolean };
 
 const fixtures = vi.hoisted(() => ({
 	app: {} as Record<string, unknown>,
 	repos: new Map<string, Repo>(),
 	failAction: null as ImportAction | null,
+	// The next GitHub creation makes the repository but its push fails, as the daemon's partial success.
+	failPushOnce: false,
+	githubSent: [] as unknown[],
 	remote: { ready: true, request: { remoteUrl: "https://github.com/octo/app.git", githubRepository: { owner: "octo", name: "app", private: true } } },
 	remoteActive: [] as boolean[],
 	listDirectories: vi.fn(),
@@ -63,7 +67,7 @@ function validationFor(path: string): ImportValidation {
 	const required: ImportAction[] = [];
 	if (!repo.isRepo) required.push("git_init");
 	if (!repo.hasCommit) required.push("git_commit");
-	if (!repo.hasOrigin) required.push("create_remote_repository");
+	if (!repo.hasOrigin || repo.pushPending) required.push("create_remote_repository");
 	const blocking = repo.blocking ?? [];
 	return {
 		isValid: blocking.length === 0,
@@ -141,6 +145,8 @@ beforeEach(() => {
 		[`${HOME}/notes`, { isRepo: false, hasCommit: false, hasOrigin: false }],
 	]);
 	fixtures.failAction = null;
+	fixtures.failPushOnce = false;
+	fixtures.githubSent = [];
 	fixtures.remote = { ready: true, request: { remoteUrl: "https://github.com/octo/app.git", githubRepository: { owner: "octo", name: "app", private: true } } };
 	fixtures.remoteActive = [];
 	fixtures.listDirectories.mockReset().mockImplementation(async (_cfg: unknown, path?: string) => {
@@ -166,10 +172,16 @@ beforeEach(() => {
 		const before = validationFor(input.path);
 		const action = before.root.requiredActions[0]!;
 		if (fixtures.failAction === action) return { events: [{ action, repoPath: input.path, state: "error", error: "gh: not logged in" }], validation: before };
+		if (action === "create_remote_repository") fixtures.githubSent.push((input as { githubRepository?: unknown }).githubRepository);
+		if (action === "create_remote_repository" && fixtures.failPushOnce) {
+			fixtures.failPushOnce = false;
+			fixtures.repos.set(input.path, { ...fixtures.repos.get(input.path)!, hasOrigin: true, pushPending: true });
+			return { events: [{ action, repoPath: input.path, state: "error", error: "push initial commit: network failed" }], validation: validationFor(input.path) };
+		}
 		const repo = { ...fixtures.repos.get(input.path)! } as Repo;
 		if (action === "git_init") repo.isRepo = true;
 		if (action === "git_commit") repo.hasCommit = true;
-		if (action === "create_remote_repository") repo.hasOrigin = true;
+		if (action === "create_remote_repository") { repo.hasOrigin = true; repo.pushPending = false; }
 		fixtures.repos.set(input.path, repo);
 		return { events: [{ action, repoPath: input.path, state: "success" }], validation: validationFor(input.path) };
 	});
@@ -530,5 +542,34 @@ describe("useNewLocalProject", () => {
 		expect(fixtures.cleanupClone).not.toHaveBeenCalled();
 		expect(fixtures.addFolderProject).toHaveBeenCalledWith(expect.anything(), { path: "~/ao/projects/sample", clonePreparationId: "prep-1" });
 		expect(onCreated).toHaveBeenCalledWith("studio", "sample");
+	});
+
+	it("retries only the push when GitHub made the repository but the push failed", async () => {
+		fixtures.failPushOnce = true;
+		await mount();
+		await act_(() => project().choose(`${HOME}/notes`));
+		await act_(() => project().create());
+		expect(project().error).toMatch(/push initial commit: network failed/);
+		expect(project().setupActions).toEqual(["create_remote_repository"]);
+		// The name is taken now, by the repository the first try made.
+		fixtures.remote.ready = false;
+		await act_(() => renderer?.update(<Probe />));
+		expect(project().remoteResuming).toBe(true);
+		expect(project().canCreate).toBe(true);
+		await act_(() => project().create());
+		expect(fixtures.githubSent).toEqual([fixtures.remote.request.githubRepository, fixtures.remote.request.githubRepository]);
+		expect(fixtures.addFolderProject).toHaveBeenCalledWith(expect.anything(), { path: `${HOME}/notes` });
+		expect(onCreated).toHaveBeenCalledWith("studio", "notes");
+	});
+
+	it("checks another repository name as any new one, even after a failed push", async () => {
+		fixtures.failPushOnce = true;
+		await mount();
+		await act_(() => project().choose(`${HOME}/notes`));
+		await act_(() => project().create());
+		fixtures.remote = { ready: false, request: { remoteUrl: "https://github.com/octo/other.git", githubRepository: { owner: "octo", name: "other", private: true } } };
+		await act_(() => renderer?.update(<Probe />));
+		expect(project().remoteResuming).toBe(false);
+		expect(project().canCreate).toBe(false);
 	});
 });
