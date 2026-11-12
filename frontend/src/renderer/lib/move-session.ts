@@ -1,5 +1,5 @@
 import { apiErrorCode, apiErrorMessage } from "./api-client";
-import type { CloudCpClient } from "./cloud-cp";
+import { CloudCpError, type CloudCpClient } from "./cloud-cp";
 import type { clientForSessionHost } from "./host-clients";
 
 type DaemonClient = ReturnType<typeof clientForSessionHost>;
@@ -111,7 +111,10 @@ export async function moveSession(
 		const { session } = await deps.cloud.createSession(target.orgId, request, { idempotencyKey: moveId });
 		cloudSessionId = session.id;
 	} catch (error) {
-		return rollback("import", error, "Could not start the session in Orchestrator Cloud", { branch: m.branch, tip: m.tip, wip: m.wip });
+		// Only a Cloud response becomes a CloudCpError; a request that got none
+		// throws Electron's IPC error, whose text means nothing to the user.
+		const reason = error instanceof CloudCpError && error.status !== 0 ? error : "Could not reach Orchestrator Cloud.";
+		return rollback("import", reason, "Could not start the session in Orchestrator Cloud", { branch: m.branch, tip: m.tip, wip: m.wip });
 	}
 
 	deps.onStep?.("complete");

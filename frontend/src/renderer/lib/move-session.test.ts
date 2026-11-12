@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CloudCpError } from "./cloud-cp";
 import { MoveError, moveSession, type MoveDeps } from "./move-session";
 
 type Reply = { data?: unknown; error?: unknown };
@@ -84,7 +85,7 @@ describe("moveSession", () => {
 			"/api/v1/sessions/{sessionId}/move/export": ok(exported),
 			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
 		}, calls);
-		const cp = cloud(async () => { throw { code: "branch_in_use", message: "Another session holds feat/move." }; });
+		const cp = cloud(async () => { throw new CloudCpError("Another session holds feat/move.", { status: 409, code: "branch_in_use" }); });
 		const error = await moveSession({ sessionId: "app-1", target }, { source, cloud: cp }).catch((e: unknown) => e);
 		expect(error).toMatchObject({
 			step: "import", rolledBack: true, message: "Another session holds feat/move.",
@@ -105,7 +106,7 @@ describe("moveSession", () => {
 		// The first create reached AO Cloud, but its response was lost.
 		const cp = cloud(async () => { throw new Error("network error"); });
 		await expect(moveSession({ sessionId: "app-1", moveId: "m-3", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))
-			.rejects.toMatchObject({ step: "import", rolledBack: true });
+			.rejects.toMatchObject({ step: "import", rolledBack: true, message: "Could not reach Orchestrator Cloud." });
 		replies["/api/v1/sessions/{sessionId}/move/export"] = ok({ ...exported, handoffNote: "a later note", manifest: { ...exported.manifest, wip: false } });
 		cp.createSession.mockImplementation(async () => ({ session: { id: "cloud-9" } }));
 		await expect(moveSession({ sessionId: "app-1", moveId: "m-3", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))

@@ -12,7 +12,7 @@ type Reply = { data?: unknown; error?: unknown };
 const { daemon, navigate, cloud } = vi.hoisted(() => ({
 	daemon: { posts: {} as Record<string, Reply>, repo: "", preview: {} as Reply },
 	navigate: vi.fn(),
-	cloud: { features: [] as string[], projects: [] as unknown[], createSession: vi.fn(), signedIn: true },
+	cloud: { features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true },
 }));
 
 vi.mock("../lib/host-clients", () => ({
@@ -29,6 +29,7 @@ vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: cloud.signed
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ features: cloud.features }) }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudProjectsQuery: () => ({ data: cloud.projects, isPending: false }),
+	useCloudSessionsQuery: () => ({ data: cloud.sessions, isPending: false }),
 	workspaceQueryKeyForHost: (host?: string) => ["workspace", host ?? "local"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
 }));
@@ -60,6 +61,7 @@ beforeEach(() => {
 	cloud.signedIn = true;
 	cloud.features = ["session.branch"];
 	cloud.projects = [{ id: "cloud-proj", displayName: "app", repositoryUrl: "https://github.com/Acme/App" }];
+	cloud.sessions = [];
 	daemon.repo = "git@github.com:acme/app.git";
 	daemon.posts = {};
 	daemon.preview = { data: { branch: "feat/x", changes: [{ path: "README.md", status: "modified" }, { path: "login.go", status: "added" }] } };
@@ -72,7 +74,7 @@ it("shows what moves, then opens the Cloud session and closes on success", async
 	renderDialog();
 	const user = userEvent.setup();
 	expect(await screen.findByText("feat/x")).toBeTruthy();
-	expect(screen.getByText("login.go")).toBeTruthy();
+	expect(screen.getByText("A login.go")).toBeTruthy();
 	expect(screen.getByText("2")).toBeTruthy();
 	expect(screen.getByText(/pushed to GitHub as one commit on feat\/x\. .* its worktree is removed, ignored files included\./)).toBeTruthy();
 	await user.click(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }));
@@ -99,10 +101,12 @@ it("keeps the session here and offers a retry when the push fails", async () => 
 
 it("tries again with the same move id and Cloud request after a lost response", async () => {
 	daemon.posts = { ...moveReplies, "/api/v1/sessions/{sessionId}/resume-agent": { data: {} } };
-	cloud.createSession.mockRejectedValueOnce(new Error("network error")).mockResolvedValueOnce({ session: { id: "cloud-9" } });
+	const unreachable = new Error("Error invoking remote method 'cloudCp:request': TypeError: fetch failed");
+	cloud.createSession.mockRejectedValueOnce(unreachable).mockResolvedValueOnce({ session: { id: "cloud-9" } });
 	renderDialog();
 	const user = userEvent.setup();
 	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	expect(await screen.findByText("Could not reach Orchestrator Cloud.")).toBeTruthy();
 	// The push already happened, so the session is not as it was.
 	expect(await screen.findByText("The uncommitted files are now commit abc1234 on feat/x, here and on GitHub.")).toBeTruthy();
 	expect(screen.getByText("The agent here is running again.")).toBeTruthy();
@@ -116,9 +120,11 @@ it("tries again with the same move id and Cloud request after a lost response", 
 
 it.each([
 	["the worktree cannot move", () => { daemon.preview = { error: { code: "MOVE_LFS", message: "The move includes Git LFS files, which cannot move yet." } }; }, "The move includes Git LFS files, which cannot move yet."],
-	["AO Cloud cannot start a session on a branch", () => { cloud.features = []; }, "Needs a newer Orchestrator Cloud"],
+	["AO Cloud cannot start a session on a branch", () => { cloud.features = []; }, "Needs a newer Orchestrator Cloud."],
 	["no Cloud project has the repository", () => { daemon.repo = "https://github.com/acme/other"; }, "Orchestrator Cloud has no project for this repository."],
 	["signed out of AO Cloud", () => { cloud.signedIn = false; }, "Sign in to Orchestrator Cloud to move this session."],
+	["the project has no origin", () => { daemon.repo = ""; daemon.preview = { error: { code: "MOVE_NO_ORIGIN", message: "No origin." } }; }, "No origin."],
+	["a live Cloud session is on the branch", () => { cloud.sessions = [{ id: "cloud-1", projectId: "cloud-proj", branch: "feat/x", isTerminated: false, displayName: "Fix login" }]; }, "The Cloud session Fix login is already on feat/x. Archive it first."],
 ])("explains and disables Move when %s", async (_, setup, message) => {
 	setup();
 	renderDialog();
