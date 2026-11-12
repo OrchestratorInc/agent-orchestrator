@@ -7,14 +7,20 @@ import type { WorkspaceManifest } from "./api";
 import type { FilesBackend } from "./backend";
 
 /**
- * The last manifest each open Files screen read, so a sheet over it (the
- * changes picker) can count the worktree's scopes without reading a manifest
- * of its own; on a big worktree that is megabytes.
+ * The last manifest any Files screen read, so a sheet over it (the changes
+ * picker) can count the worktree's scopes without reading a manifest of its
+ * own; on a big worktree that is megabytes. One slot, not one per session:
+ * only the focused screen polls, so the newest read is the sheet's screen's,
+ * and holding every session's would keep megabytes per session for the app's life.
  */
-const lastManifests = new Map<string, WorkspaceManifest>();
+let lastManifest: { key: string; manifest: WorkspaceManifest } | undefined;
 
 export function cachedManifest(backend: Pick<FilesBackend, "key"> | null | undefined, sessionId: string): WorkspaceManifest | null {
-	return backend ? lastManifests.get(`${backend.key}|${sessionId}`) ?? null : null;
+	return backend && lastManifest?.key === `${backend.key}|${sessionId}` ? lastManifest.manifest : null;
+}
+
+export function rememberManifest(backend: Pick<FilesBackend, "key">, sessionId: string, manifest: WorkspaceManifest): void {
+	lastManifest = { key: `${backend.key}|${sessionId}`, manifest };
 }
 
 /** How often an open Files screen asks whether the agent changed anything. */
@@ -46,7 +52,7 @@ export function useWorkspaceManifest(backend: FilesBackend | null, sessionId: st
 		try {
 			const next = await backend.manifest(sessionId);
 			if (current.current.backend !== backend || current.current.sessionId !== sessionId) return;
-			lastManifests.set(`${backend.key}|${sessionId}`, next);
+			rememberManifest(backend, sessionId, next);
 			setManifest((previous) => previous && previous.workspaceVersion && previous.workspaceVersion === next.workspaceVersion ? previous : next);
 			setError(undefined);
 		} catch (cause) {
