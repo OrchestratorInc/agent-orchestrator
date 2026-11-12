@@ -619,6 +619,8 @@ export function AgentModelCombobox({
 		</DropdownMenu>
 	);
 	const effortRoleLabel = tuning?.roleLabel ? `${tuning.roleLabel} ` : "";
+	// Like useModelTuning: a listed model that reports no efforts hasn't ruled a saved effort out.
+	const effortAvailability = effortModel && effortModel.efforts === undefined ? "unknown" : "supported";
 	return (
 		<>
 			{/* The wrapper stays put while the catalog loads, so the model trigger is never remounted. */}
@@ -630,6 +632,7 @@ export function AgentModelCombobox({
 						value={effectiveEffort}
 						choices={effortOptions.map((effort) => ({ value: effort }))}
 						defaultEffort={defaultEffort || undefined}
+						availability={effortAvailability}
 						disabled={disabled}
 						triggerClassName="w-fit"
 						onChange={tuning.onEffortChange}
