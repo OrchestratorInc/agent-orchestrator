@@ -25,7 +25,7 @@ const shellMocks = vi.hoisted(() => {
 		workspaces: [] as WorkspaceSummary[],
 		remoteWorkspaces: [] as WorkspaceSummary[],
 		remoteFailedHostIds: [] as string[],
-		removeRemoteProject: undefined as ((hostId: string, projectId: string) => Promise<void>) | undefined,
+		removeRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		configureRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		workspaceQuery: {
 			data: [] as WorkspaceSummary[],
@@ -119,7 +119,10 @@ const shellMocks = vi.hoisted(() => {
 			invalidateQueries: vi.fn(),
 			cancelQueries: vi.fn(),
 			prefetchQuery: vi.fn(async () => undefined),
+			refetchQueries: vi.fn(async () => undefined),
+			getQueriesData: vi.fn(() => []),
 			setQueryData: vi.fn(),
+			setQueriesData: vi.fn(),
 		},
 		remoteDelete: vi.fn(),
 		listRemoteHosts: vi.fn(async () => []),
@@ -190,6 +193,9 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	remoteProjectsQueryKey: (hostId: string) => ["remote-workspaces", hostId, "projects"],
+	cloudProjectsQueryKey: ["cloud-projects"],
+	cloudSessionsQueryKey: ["cloud-sessions"],
 	workspaceQueryOptions: {},
 	toWorkspaceSession: (session: { id: string }, project: { id: string; name: string }) => ({ ...session, workspaceId: project.id, workspaceName: project.name }),
 }));
@@ -349,7 +355,7 @@ vi.mock("../components/Sidebar", async () => {
 		SIDEBAR_DEFAULT_WIDTH: 240,
 		Sidebar: ({ topbarOffset, onRemoveRemoteProject, onConfigureRemoteProject }: {
 			topbarOffset?: string;
-			onRemoveRemoteProject: (hostId: string, projectId: string) => Promise<void>;
+			onRemoveRemoteProject: (hostId: string, projectId: string) => void;
 			onConfigureRemoteProject: (hostId: string, projectId: string) => void;
 		}) => {
 			shellMocks.state.removeRemoteProject = onRemoveRemoteProject;
@@ -535,10 +541,14 @@ describe("shell workspace startup", () => {
 		] as WorkspaceSummary[];
 		await renderShell();
 
-		await shellMocks.state.removeRemoteProject?.("box-b", "project-b");
+		// Removal is optimistic and runs in the background; the page is left
+		// before the project disappears, and only when it shows that project.
+		act(() => shellMocks.state.removeRemoteProject?.("box-b", "project-b"));
+		await waitFor(() => expect(shellMocks.remoteDelete).toHaveBeenCalledTimes(1));
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
-		await shellMocks.state.removeRemoteProject?.("box-a", "project-a");
-		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/" });
+		act(() => shellMocks.state.removeRemoteProject?.("box-a", "project-a"));
+		await waitFor(() => expect(shellMocks.remoteDelete).toHaveBeenCalledTimes(2));
+		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/", replace: true });
 	});
 
 	it("resyncs Developer Mode when an attached daemon restarts on the same port", async () => {
