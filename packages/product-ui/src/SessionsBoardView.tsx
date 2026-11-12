@@ -218,6 +218,9 @@ export type SessionCardViewProps = {
 	branchAction?: ReactNode;
 	branchIcon?: ReactNode;
 	branchLabel?: ReactNode;
+	/** The dense layout for a grid of many cards (the archive): branch, PRs and
+	 * time share one line, with no status footer strip. */
+	compact?: boolean;
 	error?: string;
 	externalLink: ExternalLinkComponent;
 	footer?: ReactNode;
@@ -241,6 +244,10 @@ export type SessionCardViewProps = {
 	/** Live cost on the machine (memory, CPU while working), shown before
 	 * token usage. Grey unless this card is part of the fix for a tight machine. */
 	resource?: BoardUsagePresentation & { tone?: "neutral" | "warning" | "critical" };
+	/** Set by a list that owns one selection (the archive): the card's fill
+	 * follows it instead of its own hover and focus, so only one card is ever
+	 * lit, and the card is not a focus target of its own. */
+	selected?: boolean;
 	session: BoardSessionPresentation;
 	/** A short label above the title, such as whose session this is. */
 	tag?: ReactNode;
@@ -254,6 +261,7 @@ export function SessionCardView({
 	branchAction,
 	branchIcon,
 	branchLabel,
+	compact = false,
 	error,
 	externalLink,
 	footer,
@@ -265,6 +273,7 @@ export function SessionCardView({
 	renderAvatar,
 	renderUsage = (usage) => <SessionUsageMetricView usage={usage} />,
 	resource,
+	selected,
 	session,
 	tag,
 	still = false,
@@ -316,6 +325,63 @@ export function SessionCardView({
 			? IN_PROGRESS_DISPLAY_STATUSES.has(session.displayStatus)
 			: session.status === "working" || session.status === "review_pending"));
 
+	const listSelection = selected !== undefined;
+	const statusLabel = (
+		<span
+			className={cn(
+				"inline-flex min-w-0 max-w-full items-center text-2xs font-medium",
+				needsAttentionChip
+					? "text-status-needs-you"
+					: statusClassName,
+			)}
+			data-kanban-column={statusPresentation ? undefined : column.column}
+			data-testid="session-status"
+		>
+			{showStatusLoader ? <LoaderCircleIcon aria-hidden="true" className="mr-1 size-icon-2xs animate-spin" /> : null}
+			<span className="min-w-0 truncate">{renderedStatusLabel}</span>
+		</span>
+	);
+	const metrics = (
+		<>
+			{resource ? (
+				<SessionUsageMetricView
+					className={cn(resource.tone === "critical" && "text-destructive", resource.tone === "warning" && "text-warning")}
+					data-resource-tone={resource.tone ?? "neutral"}
+					data-testid="session-resource"
+					usage={resource}
+				/>
+			) : null}
+			{resource ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
+			{usage ? renderUsage(usage) : null}
+			{usage ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
+			<span className="tabular-nums text-muted-foreground" title={labels.updatedAt(session.updatedAt)}>
+				{labels.formatTime(session.updatedAt)}
+			</span>
+		</>
+	);
+	const prGroups = groupBoardPullRequests(prs).flatMap((group) => {
+		const compactGroup = group.prs.filter((pr) => (pr.commentCount ?? 0) === 0);
+		const commented = group.prs.filter((pr) => (pr.commentCount ?? 0) > 0);
+		return [
+			...(compactGroup.length > 0 ? [{ ...group, prs: compactGroup }] : []),
+			...commented.map((pr) => ({ ...group, prs: [pr] })),
+		];
+	}).map((group) => (
+		<BoardPullRequestGroup
+			externalLink={externalLink}
+			group={group}
+			key={`${group.state}-${group.prs.map((pr) => pr.url || pr.number).join("-")}`}
+			labels={labels.pr}
+		/>
+	));
+	const branchRow = showBranch ? (
+		<>
+			{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
+			{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
+			{branchAction}
+		</>
+	) : null;
+
 	return (
 		<div
 			onClick={interactive ? onOpen : undefined}
@@ -324,26 +390,33 @@ export function SessionCardView({
 				still
 					? // A hover preview: one elevated surface, no outline, no motion.
 						"relative w-full rounded-lg bg-popover text-left"
-					: "group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
+					: listSelection
+						? // The list draws the one selection; it switches instantly.
+							"group relative w-full rounded-lg border border-border text-left"
+						: "group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
 				!still && ((session.plainSurface ? undefined : badge.cardClassName) ?? "border-border bg-surface"),
 				interactive &&
-					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100",
+					(listSelection
+						? "cursor-pointer"
+						: "cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100"),
 				needsAttention &&
 					(still
 						? "bg-[color-mix(in_srgb,var(--color-status-needs-you)_10%,var(--popover))]"
 						: "animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]"),
+				selected && "border-border-strong bg-interactive-hover",
 			)}
+			data-selected={selected || undefined}
 			data-testid="board-session-card"
 			data-session-id={session.id}
 		>
-			{interactive && onOpen ? (
+			{interactive && onOpen && !listSelection ? (
 				<button
 					aria-label={session.title}
 					className="pointer-events-none absolute inset-0 outline-none"
 					type="button"
 				/>
 			) : null}
-			<div className={still ? "px-3 pb-1.5 pt-2.5" : "px-3.5 pb-2.5 pt-2.5"}>
+			<div className={still ? "px-3 pb-1.5 pt-2.5" : compact ? "px-3 py-2" : "px-3.5 pb-2.5 pt-2.5"}>
 				{tag ? (
 					<div className="mb-1.5 flex min-w-0" data-testid="board-session-tag">
 						{tag}
@@ -364,78 +437,29 @@ export function SessionCardView({
 						</div>
 					) : null}
 				</div>
-				{showBranch && (
-					<div className={cn("flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground", still ? "mt-1" : "mt-1.5")}>
-						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
-						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
-						{branchAction}
-					</div>
-				)}
-			</div>
-			{prs.length > 0 && (
-				<div className={cn("flex min-w-0 flex-col gap-1.5 pb-1", still ? "px-3" : "px-3.5")}>
-					{prs.length > 0 && (
-						<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
-							{groupBoardPullRequests(prs).flatMap((group) => {
-								const compact = group.prs.filter((pr) => (pr.commentCount ?? 0) === 0);
-								const commented = group.prs.filter((pr) => (pr.commentCount ?? 0) > 0);
-								return [
-									...(compact.length > 0 ? [{ ...group, prs: compact }] : []),
-									...commented.map((pr) => ({ ...group, prs: [pr] })),
-								];
-							}).map((group) => (
-								<BoardPullRequestGroup
-									externalLink={externalLink}
-									group={group}
-									key={`${group.state}-${group.prs.map((pr) => pr.url || pr.number).join("-")}`}
-									labels={labels.pr}
-								/>
-							))}
+				{compact ? (
+					// Branch and PRs wrap only when they do not fit; the time stays on
+					// the first line's end.
+					<div className="mt-1 flex min-w-0 items-start gap-2 text-2xs text-muted-foreground" data-testid="session-card-meta">
+						<div className="flex min-h-5 min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-0.5">
+							{branchRow ? (
+								<span className="flex min-w-0 max-w-full items-center gap-1.5 font-sans">{branchRow}</span>
+							) : null}
+							{prGroups}
 						</div>
-					)}
-				</div>
-			)}
-			{artifacts ? <div className="relative z-10 min-w-0 px-3.5 pb-2">{artifacts}</div> : null}
-			<div
-				className={cn(
-					"grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2",
-					still ? "px-3 pb-2.5 pt-1" : "border-t border-border px-3.5 py-2.5",
-				)}
-			>
-				<div className="flex min-w-0 flex-1">
-					<span
-						className={cn(
-							"inline-flex min-w-0 max-w-full items-center text-2xs font-medium",
-							needsAttentionChip
-								? "text-status-needs-you"
-								: statusClassName,
-						)}
-						data-kanban-column={statusPresentation ? undefined : column.column}
-						data-testid="session-status"
-					>
-						{showStatusLoader ? <LoaderCircleIcon aria-hidden="true" className="mr-1 size-icon-2xs animate-spin" /> : null}
-						<span className="min-w-0 truncate">{renderedStatusLabel}</span>
-					</span>
-				</div>
-				<div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap text-2xs text-muted-foreground">
-					{resource ? (
-						<SessionUsageMetricView
-							className={cn(resource.tone === "critical" && "text-destructive", resource.tone === "warning" && "text-warning")}
-							data-resource-tone={resource.tone ?? "neutral"}
-							data-testid="session-resource"
-							usage={resource}
-						/>
-					) : null}
-					{resource ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
-					{usage ? renderUsage(usage) : null}
-					{usage ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
-					<span className="tabular-nums text-muted-foreground" title={labels.updatedAt(session.updatedAt)}>
-						{labels.formatTime(session.updatedAt)}
-					</span>
-				</div>
-				{pullRequestProgressLabel ? (
+						<div className="flex h-5 shrink-0 items-center gap-2 whitespace-nowrap">
+							{statusLabel}
+							{metrics}
+						</div>
+					</div>
+				) : showBranch ? (
+					<div className={cn("flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground", still ? "mt-1" : "mt-1.5")}>
+						{branchRow}
+					</div>
+				) : null}
+				{compact && pullRequestProgressLabel ? (
 					<div
-						className="col-span-2 min-w-0 truncate text-2xs text-muted-foreground"
+						className="mt-1 min-w-0 truncate text-2xs text-muted-foreground"
 						data-testid="session-pr-progress"
 						title={pullRequestProgressLabel}
 					>
@@ -443,6 +467,38 @@ export function SessionCardView({
 					</div>
 				) : null}
 			</div>
+			{!compact && prs.length > 0 && (
+				<div className={cn("flex min-w-0 flex-col gap-1.5 pb-1", still ? "px-3" : "px-3.5")}>
+					<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
+						{prGroups}
+					</div>
+				</div>
+			)}
+			{artifacts ? <div className={cn("relative z-10 min-w-0 pb-2", compact ? "px-3" : "px-3.5")}>{artifacts}</div> : null}
+			{compact ? null : (
+				<div
+					className={cn(
+						"grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2",
+						still ? "px-3 pb-2.5 pt-1" : "border-t border-border px-3.5 py-2.5",
+					)}
+				>
+					<div className="flex min-w-0 flex-1">
+						{statusLabel}
+					</div>
+					<div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap text-2xs text-muted-foreground">
+						{metrics}
+					</div>
+					{pullRequestProgressLabel ? (
+						<div
+							className="col-span-2 min-w-0 truncate text-2xs text-muted-foreground"
+							data-testid="session-pr-progress"
+							title={pullRequestProgressLabel}
+						>
+							{pullRequestProgressLabel}
+						</div>
+					) : null}
+				</div>
+			)}
 			{error ? (
 				<div className="border-t border-border px-3.5 py-1.5 text-2xs text-destructive" role="alert">
 					{error}

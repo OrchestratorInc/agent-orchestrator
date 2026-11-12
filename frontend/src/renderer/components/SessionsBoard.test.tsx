@@ -1070,7 +1070,7 @@ describe("SessionsBoard", () => {
 		const archive = await expandArchive();
 		const search = within(archive).getByRole("combobox");
 		expect(search).toHaveFocus();
-		const row = within(archive).getByText("dead worker").closest<HTMLElement>("[cmdk-item]");
+		const row = within(archive).getByText("dead worker").closest<HTMLElement>("[role='option']");
 		expect(row).not.toBeNull();
 		const card = within(row!).getByTestId("board-session-card");
 		expect(within(card).getByRole("img", { name: "claude-code" })).toBeInTheDocument();
@@ -1324,7 +1324,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		await expandArchive();
-		await waitFor(() => expect(screen.getByText("dead worker").closest("[cmdk-item]")).toHaveAttribute("data-selected", "true"));
+		await waitFor(() => expect(screen.getByText("dead worker").closest("[role='option']")).toHaveAttribute("aria-selected", "true"));
 		const mod = isMacPlatform() ? "Meta" : "Control";
 		await userEvent.keyboard(`{${mod}>}{Enter}{/${mod}}`);
 
@@ -1333,6 +1333,174 @@ describe("SessionsBoard", () => {
 				params: { path: { sessionId: "s-dead" } },
 			}),
 		);
+	});
+
+	it("moves the archive selection through the grid as laid out, with the search keeping focus", async () => {
+		const sessions = Array.from({ length: 5 }, (_, index) =>
+			terminatedSession({ id: `s-${index}`, title: `archived ${index}`, branch: `ao/archived-${index}`, prs: [], updatedAt: `2026-01-0${9 - index}T00:00:00Z` }),
+		);
+		workspaceQueryMock.mockReturnValue({ data: [workspaceWithSessions(sessions)], isError: false, isSuccess: true });
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		const search = within(archive).getByRole("combobox");
+		const listbox = within(archive).getByRole("listbox", { name: "Archived sessions" });
+		// Three columns, as the responsive grid would lay out a medium window:
+		//   0 1 2
+		//   3 4
+		const realGetComputedStyle = window.getComputedStyle.bind(window);
+		const styleSpy = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+			const style = realGetComputedStyle(element, pseudo);
+			if (element !== listbox) return style;
+			return {
+				display: style.display,
+				pointerEvents: style.pointerEvents,
+				visibility: style.visibility,
+				getPropertyValue: (name: string) => (name === "grid-template-columns" ? "100px 100px 100px" : style.getPropertyValue(name)),
+			} as CSSStyleDeclaration;
+		});
+		const selected = () => within(listbox).getAllByRole("option").find((option) => option.getAttribute("aria-selected") === "true");
+		const expectSelected = (title: string) => {
+			const option = selected();
+			expect(option).toHaveAccessibleName(title);
+			expect(search).toHaveAttribute("aria-activedescendant", option?.id);
+			expect(search).toHaveFocus();
+			expect(within(listbox).getAllByTestId("board-session-card").filter((card) => card.hasAttribute("data-selected"))).toHaveLength(1);
+		};
+
+		expectSelected("archived 0");
+		await userEvent.keyboard("{ArrowRight}");
+		expectSelected("archived 1");
+		await userEvent.keyboard("{ArrowDown}");
+		expectSelected("archived 4");
+		// The last row is the floor.
+		await userEvent.keyboard("{ArrowDown}");
+		expectSelected("archived 4");
+		await userEvent.keyboard("{ArrowUp}");
+		expectSelected("archived 1");
+		// Down from a column the short last row lacks lands on its last card.
+		await userEvent.keyboard("{ArrowRight}{ArrowDown}");
+		expectSelected("archived 4");
+		await userEvent.keyboard("{ArrowLeft}");
+		expectSelected("archived 3");
+		await userEvent.keyboard("{ArrowUp}");
+		expectSelected("archived 0");
+		// The first row is the ceiling.
+		await userEvent.keyboard("{ArrowUp}");
+		expectSelected("archived 0");
+		await userEvent.keyboard("{End}");
+		expectSelected("archived 4");
+		await userEvent.keyboard("{Home}");
+		expectSelected("archived 0");
+
+		// A new search starts again at its first result.
+		await userEvent.keyboard("{End}");
+		await userEvent.type(search, "archived");
+		await waitFor(() => expectSelected("archived 0"));
+		styleSpy.mockRestore();
+
+		await userEvent.keyboard("{ArrowRight}{Enter}");
+		expect(postMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "p1", sessionId: "s-1" },
+		});
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archived sessions" })).not.toBeInTheDocument());
+	});
+
+	it("selects the card under the pointer only when the pointer moves", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				terminatedSession({ id: "s-0", title: "archived 0", prs: [], updatedAt: "2026-01-03T00:00:00Z" }),
+				terminatedSession({ id: "s-1", title: "archived 1", prs: [], updatedAt: "2026-01-02T00:00:00Z" }),
+				terminatedSession({ id: "s-2", title: "archived 2", prs: [], updatedAt: "2026-01-01T00:00:00Z" }),
+			])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		const [first, second, third] = within(archive).getAllByRole("option");
+		const pointerMove = (target: HTMLElement, x: number, y: number) =>
+			act(() => {
+				target.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y }));
+			});
+
+		pointerMove(within(third!).getByText("archived 2"), 10, 10);
+		expect(third).toHaveAttribute("aria-selected", "true");
+		await userEvent.keyboard("{ArrowUp}");
+		expect(second).toHaveAttribute("aria-selected", "true");
+		// A card scrolling under a still pointer does not take the selection back.
+		pointerMove(within(third!).getByText("archived 2"), 10, 10);
+		expect(second).toHaveAttribute("aria-selected", "true");
+		pointerMove(within(first!).getByText("archived 0"), 12, 10);
+		expect(first).toHaveAttribute("aria-selected", "true");
+		expect(third).toHaveAttribute("aria-selected", "false");
+	});
+
+	it("tabs through the selected archive card's controls and deletes it with Mod+Backspace", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				terminatedSession({ updatedAt: "2026-01-02T00:00:00Z" }),
+				terminatedSession({ id: "s-other", title: "other worker", branch: "ao/other", prs: [] }),
+			])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		const search = within(archive).getByRole("combobox");
+		await userEvent.keyboard("{ArrowDown}");
+		expect(within(archive).getByRole("option", { name: "other worker" })).toHaveAttribute("aria-selected", "true");
+
+		// Tab walks only the selected card: restore, delete, copy branch, then the close button.
+		await userEvent.tab();
+		expect(screen.getByRole("button", { name: "Restore other worker" })).toHaveFocus();
+		await userEvent.tab();
+		expect(screen.getByRole("button", { name: "Delete other worker permanently" })).toHaveFocus();
+		await userEvent.tab();
+		expect(screen.getByRole("button", { name: "Copy branch ao/other" })).toHaveFocus();
+		await userEvent.tab();
+		expect(within(archive).getByRole("button", { name: "Close" })).toHaveFocus();
+		await userEvent.tab();
+		expect(search).toHaveFocus();
+		await userEvent.tab({ shift: true });
+		expect(within(archive).getByRole("button", { name: "Close" })).toHaveFocus();
+		await userEvent.tab({ shift: true });
+		expect(screen.getByRole("button", { name: "Copy branch ao/other" })).toHaveFocus();
+
+		// An arrow from a card's control moves the selection and hands focus back to the search.
+		await userEvent.keyboard("{ArrowUp}");
+		expect(search).toHaveFocus();
+		expect(within(archive).getByRole("option", { name: "dead worker" })).toHaveAttribute("aria-selected", "true");
+
+		const mod = isMacPlatform() ? "Meta" : "Control";
+		await userEvent.keyboard(`{${mod}>}{Backspace}{/${mod}}`);
+		const confirm = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		expect(confirm).toBeInTheDocument();
+		expect(navigateMock).not.toHaveBeenCalled();
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("ignores archive keys while an IME is composing", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([
+				terminatedSession({ updatedAt: "2026-01-02T00:00:00Z" }),
+				terminatedSession({ id: "s-other", title: "other worker", branch: "ao/other", prs: [] }),
+			])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const archive = await expandArchive();
+		const search = within(archive).getByRole("combobox");
+		fireEvent.keyDown(search, { key: "ArrowDown", isComposing: true });
+		fireEvent.keyDown(search, { key: "Enter", isComposing: true });
+		expect(within(archive).getByRole("option", { name: "dead worker" })).toHaveAttribute("aria-selected", "true");
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("confirms before deleting an archived session from the archive", async () => {

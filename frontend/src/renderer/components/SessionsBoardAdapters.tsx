@@ -155,6 +155,7 @@ export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSessi
 }
 
 export function ArchivedSessionCardAdapter({
+	compact = false,
 	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
@@ -163,8 +164,11 @@ export function ArchivedSessionCardAdapter({
 	isRestoring,
 	restoreAction,
 	restoreError,
+	selected,
 	session,
 }: {
+	/** The archive grid's dense card: branch, PRs and time on one line. */
+	compact?: boolean;
 	/** Drops the "1 of 1 PR merged" line; the PR links already say it. */
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
@@ -176,12 +180,16 @@ export function ArchivedSessionCardAdapter({
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
+	/** The list's selection, which then replaces the card's own hover fill. */
+	selected?: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
 	const branch = sessionBranchPresentation(session).branch ?? "";
 	return (
 		<DesktopSessionCard
+			compact={compact}
+			selected={selected}
 			hidePullRequestProgress={hidePullRequestProgress}
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
@@ -218,6 +226,7 @@ function DesktopSessionCard({
 	participants,
 	action,
 	branchAction,
+	compact = false,
 	footer,
 	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
@@ -228,11 +237,13 @@ function DesktopSessionCard({
 	onOpenArtifact,
 	onOpenArtifacts,
 	onTerminate,
+	selected,
 	session,
 	still = false,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
+	compact?: boolean;
 	footer?: ReactNode;
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
@@ -243,6 +254,7 @@ function DesktopSessionCard({
 	onOpenArtifact?: (path: string) => void;
 	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
+	selected?: boolean;
 	session: WorkspaceSession;
 	participants?: readonly SessionPerson[];
 	me?: string;
@@ -327,6 +339,7 @@ function DesktopSessionCard({
 			branchAction={branchAction}
 			branchLabel={sessionBranchPresentation(session).naming ? <BranchNamingLabel /> : undefined}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
+			compact={compact}
 			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}
 			footer={
@@ -371,6 +384,7 @@ function DesktopSessionCard({
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
 					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
+			selected={selected}
 			still={still}
 			legacyStatus={!newSidebarDesign}
 			translate={translate}

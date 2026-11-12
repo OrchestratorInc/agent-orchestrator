@@ -1,0 +1,67 @@
+/** The keys that move a selection through a grid of cards. */
+export type GridNavigationKey = "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End" | "PageUp" | "PageDown";
+
+const GRID_KEYS = new Set<string>(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
+
+export function isGridNavigationKey(key: string): key is GridNavigationKey {
+	return GRID_KEYS.has(key);
+}
+
+/**
+ * Where a key moves the selection in a grid filled row by row, `columns` wide,
+ * with `count` items in all (mounted or not). Left and Right step one item;
+ * Up and Down keep the column and stop at the first and last rows, and Down
+ * into a short last row lands on its last item; PageUp and PageDown move
+ * `pageRows` rows the same way, then to the first or last item. -1 when empty.
+ */
+export function gridNavigationTarget(key: GridNavigationKey, index: number, count: number, columns: number, pageRows: number): number {
+	if (count <= 0) return -1;
+	const last = count - 1;
+	const cols = Math.max(1, Math.floor(columns));
+	const rows = Math.max(1, Math.floor(pageRows));
+	const current = Math.min(Math.max(index, 0), last);
+	const row = Math.floor(current / cols);
+	const column = current % cols;
+	const lastRow = Math.floor(last / cols);
+	switch (key) {
+		case "ArrowLeft":
+			return Math.max(0, current - 1);
+		case "ArrowRight":
+			return Math.min(last, current + 1);
+		case "ArrowUp":
+			return row === 0 ? current : current - cols;
+		case "ArrowDown":
+			return row === lastRow ? current : Math.min(last, current + cols);
+		case "Home":
+			return 0;
+		case "End":
+			return last;
+		case "PageUp":
+			return row === 0 ? 0 : Math.max(0, row - rows) * cols + column;
+		case "PageDown":
+			return row === lastRow ? last : Math.min(last, Math.min(lastRow, row + rows) * cols + column);
+	}
+}
+
+/**
+ * Columns in a CSS grid as laid out now: the resolved track list of a
+ * responsive `repeat(auto-fill, …)` template, one px length per column. 1 when
+ * it cannot be read (no layout, as in a test without one).
+ */
+export function measureGridColumns(grid: HTMLElement | null): number {
+	if (!grid) return 1;
+	const template = getComputedStyle(grid).getPropertyValue("grid-template-columns").trim();
+	if (!template) return 1;
+	const tracks = template.split(/\s+/);
+	const columns = tracks.filter((track) => /^\d+(\.\d+)?px$/.test(track)).length;
+	return columns > 0 && columns === tracks.length ? columns : 1;
+}
+
+/** Whole rows of `grid` that fit in `viewport`'s height, at least 1. */
+export function measureVisibleRows(viewport: HTMLElement | null, grid: HTMLElement | null, mountedCount: number, columns: number): number {
+	if (!viewport || !grid || mountedCount <= 0) return 1;
+	const mountedRows = Math.ceil(mountedCount / Math.max(1, columns));
+	const rowHeight = grid.getBoundingClientRect().height / mountedRows;
+	if (!(rowHeight > 0)) return 1;
+	return Math.max(1, Math.floor(viewport.clientHeight / rowHeight));
+}
