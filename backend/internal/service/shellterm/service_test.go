@@ -203,6 +203,7 @@ type fakeShellTerminalStore struct {
 	records           []ShellTerminalRecord
 	insertErr         error
 	deleteErrByHandle map[string]error
+	markEndedErr      error
 }
 
 func (f *fakeShellTerminalStore) InsertShellTerminal(_ context.Context, rec ShellTerminalRecord) error {

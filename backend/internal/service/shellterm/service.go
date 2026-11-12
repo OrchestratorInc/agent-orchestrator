@@ -1014,9 +1014,13 @@ func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord) (ShellT
 		tracker.UntrackShellTerminal(rec.HandleID)
 	}
 	endedAt := s.now().UTC()
-	if _, err := s.store.MarkShellTerminalEnded(ctx, rec.HandleID, endedAt); err != nil {
-		// The host is gone either way; the next pass marks the row again.
-		s.log.Warn("shell terminal: mark ended failed", "handleId", rec.HandleID, "error", err)
+	marked, err := s.store.MarkShellTerminalEnded(ctx, rec.HandleID, endedAt)
+	if err != nil || !marked {
+		// Report the row as stored: reopen reads the stored row, so an ended
+		// tab it would refuse must not be shown. The host is gone either way,
+		// and the next pass marks the row again.
+		s.log.Warn("shell terminal: mark ended not stored", "handleId", rec.HandleID, "marked", marked, "error", err)
+		return rec, false, nil
 	}
 	s.log.Info("shell terminal ended; kept for reopening", "handleId", rec.HandleID)
 	rec.EndedAt = &endedAt

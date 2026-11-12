@@ -3,6 +3,7 @@ package shellterm
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -16,6 +17,9 @@ import (
 )
 
 func (f *fakeShellTerminalStore) MarkShellTerminalEnded(_ context.Context, handleID string, endedAt time.Time) (bool, error) {
+	if f.markEndedErr != nil {
+		return false, f.markEndedErr
+	}
 	for i, rec := range f.records {
 		if rec.HandleID == handleID && rec.EndedAt == nil {
 			at := endedAt
@@ -322,4 +326,54 @@ func (r *recordingTracker) TrackShellTerminal(handleID string) {
 }
 func (r *recordingTracker) UntrackShellTerminal(handleID string) {
 	r.untracked = append(r.untracked, handleID)
+}
+
+// A tab is shown as ended only once that is stored: reopen reads the stored
+// row and would refuse a tab the list showed as ended but never marked.
+func TestEndedStateNotReportedUntilStored(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime() // the host is gone
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{sessionShell("shellterm-a")}, markEndedErr: errors.New("disk busy")}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
+	if err != nil || len(listed) != 1 || listed[0].EndedAt != nil || st.records[0].EndedAt != nil {
+		t.Fatalf("list = %+v, %v; rows = %+v; want the row kept and not reported ended", listed, err, st.records)
+	}
+	st.markEndedErr = nil
+	listed, err = svc.ListShellTerminalsForCurrentAppRun(ctx)
+	if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || st.records[0].EndedAt == nil {
+		t.Fatalf("retry list = %+v, %v; rows = %+v; want it ended once stored", listed, err, st.records)
+	}
+}
+
+// A shell with no prompt signal cannot take the resume command, so the
+// request is refused before the ended tab is replaced.
+func TestReopenResumeRefusedForShellWithoutReadiness(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix shell paths")
+	}
+	shell := filepath.Join(t.TempDir(), "nu")
+	if err := os.WriteFile(shell, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rt := newFakeShellRuntime()
+	workspace := t.TempDir()
+	ended := endedSessionShell("shellterm-old", domain.HarnessClaudeCode)
+	ended.WorkingDir = workspace
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{ended}}
+	svc := reopenTestService(t, rt, st, workspace)
+
+	_, err := svc.ReopenShellTerminal(context.Background(), ReopenShellTerminalInput{HandleID: "shellterm-old", Shell: shell, ResumeAgent: true})
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SHELL_TERMINAL_AGENT_RESUME_UNSUPPORTED" {
+		t.Fatalf("err = %v, want SHELL_TERMINAL_AGENT_RESUME_UNSUPPORTED", err)
+	}
+	if len(rt.created) != 0 || len(st.records) != 1 || st.records[0].HandleID != "shellterm-old" || st.records[0].EndedAt == nil {
+		t.Fatalf("created = %d, rows = %+v; want the ended tab unchanged", len(rt.created), st.records)
+	}
+	// A plain reopen still works in that shell.
+	if _, err := svc.ReopenShellTerminal(context.Background(), ReopenShellTerminalInput{HandleID: "shellterm-old", Shell: shell}); err != nil {
+		t.Fatalf("plain reopen: %v", err)
+	}
 }
