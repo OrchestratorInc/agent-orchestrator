@@ -703,3 +703,35 @@ func TestRetriedSteerReplaysItsReceiptWhileAnotherProcessHoldsTheChat(t *testing
 		t.Fatalf("conversation has %d turns, %v; want the retries to add none", len(snapshot.Turns), err)
 	}
 }
+
+func TestSteerToASleepingChatWaitsWhileAnotherProcessHoldsIt(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return true }
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped {
+		t.Fatalf("idle hibernation = %v, %v", stopped, err)
+	}
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+
+	if _, err := h.svc.Steer(ctx, testSession, ports.ChatUserMessage{Text: "steered", ClientMessageID: "elsewhere-24"}); !errors.Is(err, chatsvc.ErrChatOpenElsewhere) {
+		t.Fatalf("steer error = %v; want ErrChatOpenElsewhere", err)
+	}
+	if snapshot, err := h.svc.Snapshot(ctx, testSession); err != nil || snapshot.Controller != ports.ChatControllerHibernated {
+		t.Fatalf("controller after steer = %s, %v; want it still asleep", snapshot.Controller, err)
+	}
+	result, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{Text: "steered or sent", ClientMessageID: "elsewhere-25"}, false)
+	if err != nil || result.Steered || result.Turn.State != domain.TurnStateQueued {
+		t.Fatalf("steer or send = %+v, %v; want it queued", result, err)
+	}
+	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "steered or sent")
+}

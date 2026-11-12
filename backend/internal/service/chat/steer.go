@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -132,7 +133,7 @@ func (s *Service) Steer(
 		return SteerResult{}, err
 	}
 	_, writerErr := s.stopForOtherWriter(ctx, record)
-	if held := s.isHeldElsewhere(id); held || writerErr != nil {
+	if held := s.heldByAnotherWriter(ctx, record); held || writerErr != nil {
 		if held {
 			defer s.startBackgroundWake(id)
 		}
@@ -147,6 +148,14 @@ func (s *Service) Steer(
 	}
 	defer release()
 	return controller.Steer(ctx, msg)
+}
+
+func (s *Service) heldByAnotherWriter(ctx context.Context, record domain.SessionRecord) bool {
+	if s.isHeldElsewhere(record.ID) {
+		return true
+	}
+	return s.otherWriter != nil && record.HibernatedAt != nil && !record.IsTerminated &&
+		s.otherWriter(ctx, record, time.Time{})
 }
 
 func (s *Service) steerReceipt(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) (SteerResult, bool, error) {
@@ -219,7 +228,7 @@ func (s *Service) SteerOrSend(
 			return SteerOrSendResult{}, err
 		}
 		_, writerErr := s.stopForOtherWriter(ctx, record)
-		if held := s.isHeldElsewhere(id); held || writerErr != nil {
+		if held := s.heldByAnotherWriter(ctx, record); held || writerErr != nil {
 			if held {
 				defer s.startBackgroundWake(id)
 			}
