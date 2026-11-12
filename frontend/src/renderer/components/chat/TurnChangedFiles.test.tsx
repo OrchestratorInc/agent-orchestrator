@@ -137,6 +137,31 @@ describe("TurnChangedFiles", () => {
 		expect(onOpenFile).toHaveBeenCalledWith(path);
 	});
 
+	it("lists a file outside the workspace without offering to open it", async () => {
+		const onOpenFile = vi.fn();
+		const memory = "/Users/me/.claude/projects/demo/memory/rate-limiting-deferred.md";
+		render(
+			<TurnChangedFiles
+				diff={diff({
+					files: [
+						{ path: "src/a.ts", additions: 1, deletions: 0, status: "modified" },
+						{ path: memory, additions: 11, deletions: 0, status: "added", outsideWorkspace: true },
+					],
+				})}
+				onOpenFile={onOpenFile}
+			/>,
+		);
+		expect(screen.getByText("rate-limiting-deferred.md")).toBeInTheDocument();
+		expect(screen.getByText("Outside workspace")).toBeInTheDocument();
+		expect(screen.getByText("+11")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /rate-limiting-deferred\.md/ })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByText("rate-limiting-deferred.md"));
+		expect(onOpenFile).not.toHaveBeenCalled();
+		// The workspace file beside it still opens.
+		await userEvent.click(screen.getByRole("button", { name: /Open src\/a\.ts in Files/ }));
+		expect(onOpenFile).toHaveBeenCalledWith("src/a.ts");
+	});
+
 	it("shows the full path on basename hover", async () => {
 		const user = userEvent.setup();
 		render(<TurnChangedFiles diff={diff()} />);

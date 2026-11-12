@@ -18434,6 +18434,8 @@ components:
           type: integer
         oldPath:
           type: string
+        outsideWorkspace:
+          type: boolean
         path:
           type: string
         rolledBack:

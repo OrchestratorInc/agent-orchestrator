@@ -184,6 +184,12 @@ export interface DiffFile {
 	status: DiffStatus;
 	/** Set only for a rename. */
 	oldPath?: string;
+	/**
+	 * The daemon placed this path in neither the session worktree nor its
+	 * artifact directory (an agent's own memory file, say), so the Files panel
+	 * cannot open it.
+	 */
+	outsideWorkspace?: boolean;
 }
 
 /** One session artifact a turn changed, by its path in the artifact directory. */

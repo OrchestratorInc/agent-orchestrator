@@ -2346,12 +2346,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				return;
 			}
 			if (resolved?.kind === "artifact" && await revealResolvedArtifact(resolved.path)) return;
-			// Outside the session, or the daemon could not say. Nothing shows the
-			// path belongs here, so open it as written and let the file pane say
-			// so, rather than a workspace file that happens to share its name.
+			if (resolved?.kind === "outside") {
+				// The Files panel serves only the worktree, so a tab could only say it
+				// cannot open this. Say that without leaving a dead tab behind.
+				showGlobalToast(t("files.error.outsideWorkspace"), reference);
+				return;
+			}
+			// The daemon could not say. Nothing shows the path belongs here, so open
+			// it as written and let the file pane say so, rather than a workspace
+			// file that happens to share its name.
 			openCenterFile(reference, options);
 		},
-		[fetchWorkspaceFiles, hostId, openCenterFile, revealResolvedArtifact, sessionId],
+		[fetchWorkspaceFiles, hostId, openCenterFile, revealResolvedArtifact, sessionId, showGlobalToast, t],
 	);
 
 	const handleOpenFiles = useCallback(() => {
