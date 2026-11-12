@@ -840,6 +840,18 @@ describe("harness updates on remote hosts", () => {
 		expect(JSON.parse(localStorage.getItem("ao.harness-update-dismissals.v1") ?? "[]")).toEqual([JSON.stringify(["local", "claude-code", "2.5.0"])]);
 	});
 
+	it("keeps a host's update shown when a later readiness refetch fails", async () => {
+		const { client } = mountNotice();
+		await screen.findByRole("article", { name: "Claude Code on my-vm" });
+		const get = remote.GET.getMockImplementation()!;
+		remote.GET.mockImplementation(async (path: string, ...rest: unknown[]) => path === "/api/v1/agents/readiness"
+			? { error: { message: "Remote readiness unavailable" } } : get(path, ...rest));
+		await act(async () => { await client.refetchQueries({ queryKey: ["agent-readiness", "host-vm"] }); });
+		await waitFor(() => expect(client.getQueryState(["agent-readiness", "host-vm"])?.status).toBe("error"), { timeout: 5000 });
+		// The cached readiness still describes the host, so its update stays.
+		expect(screen.getByRole("article", { name: "Claude Code on my-vm" })).toBeInTheDocument();
+	});
+
 	it("leaves out a remote whose checks fail, keeping this computer's update", async () => {
 		localAdvisory = behind("2.1.291", "2.1.292");
 		remote.POST.mockRejectedValue(new Error("offline"));

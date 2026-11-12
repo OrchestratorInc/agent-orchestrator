@@ -69,7 +69,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const jobQueries = useQueries({ queries: hostIds.map((hostId) => ({ ...installJobsQueryOptions(apiHost(hostId)), enabled })) });
 	const installedByHost = hostIds.map((_, index) => installedAgentIds(readinessQueries[index].data));
 	const advisoriesByHost = useHarnessUpdatesOnHosts(hostIds.map((hostId, index) => ({
-		hostId: apiHost(hostId), installed: installedByHost[index], enabled: ensured.has(hostId) && !readinessQueries[index].isError,
+		hostId: apiHost(hostId), installed: installedByHost[index], enabled: ensured.has(hostId) && Boolean(readinessQueries[index].data),
 	})));
 	const hosts = hostIds.map((hostId, index) => ({
 		hostId,
@@ -248,12 +248,14 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// Each host joins once its own checks are in, so ineligible harnesses never
 	// flash in the stack and a slow or offline remote never holds back this
 	// computer's updates. A failed background refetch keeps the cached data, so
-	// an update in flight or its failure stays visible. Within a host, let the
+	// an update in flight or its failure stays visible: readiness included, a
+	// host is judged on the data it has, never on a later refetch's error.
+	// Within a host, let the
 	// first batch settle so a fast, seldom-used harness cannot jump ahead of the
 	// most-used one; failed lookups don't block the other results. AO Cloud's
 	// answer joins this computer's first batch, so a harness never gains its
 	// cloud target after its entry is up.
-	const settled = hosts.filter((host) => ensured.has(host.hostId) && !host.readiness.isError && host.authPlans.data && host.installers.data
+	const settled = hosts.filter((host) => ensured.has(host.hostId) && host.readiness.data && host.authPlans.data && host.installers.data
 		&& !AGENT_OPTIONS.some((id) => host.installed.has(id) && host.advisories.get(id)?.isPending)
 		&& !(isLocal(host.hostId) && cloud.isPending));
 	const readinessByHost = new Map(hosts.map(({ hostId, readiness }) => [hostId, new Map(readiness.data?.agents.map((agent) => [agent.id, agent]))]));
