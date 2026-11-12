@@ -110,26 +110,33 @@ describe("Cloud project settings", () => {
 			{ id: "other-model", label: "Other model", efforts: ["low", "high", "max"] },
 		] } });
 		const view = mount();
+		const approval = role === "orchestrator" ? "Orchestrator agent approval" : `${label} approval`;
+		const effort = role === "orchestrator" ? "Orchestrator agent Effort" : `${label} Effort`;
 		expect(await screen.findByRole("button", { name: `${label} agent` })).toBeEnabled();
 		const model = await screen.findByRole("button", { name: `${label} model` });
 		// An unset model names the agent's real default instead of a placeholder.
-		await waitFor(() => expect(model).toHaveTextContent("Local default · High"));
+		await waitFor(() => expect(model).toHaveTextContent("Local default"));
 		expect(model).not.toHaveTextContent("Agent default");
+		expect(model).not.toHaveTextContent("High");
+		expect(screen.getByRole("button", { name: effort })).toHaveTextContent("High");
 		expect(model).toBeEnabled();
-		expect(screen.getByRole("button", { name: `${label} approval` })).toBeEnabled();
+		expect(screen.getByRole("button", { name: approval })).toBeEnabled();
 		const expectedPatch = (config: { model: string; effort: string; permissions: string }) => {
 			const agentConfig = { ...config, mode: "" };
 			return { config: role === "reviewer" ? { reviewers: [{ harness: agent, agentConfig }] } : { [role]: { agent, agentConfig } } };
 		};
-		await choose(`${label} approval`, "Bypass permissions");
+		await choose(approval, "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "", effort: "high", permissions: "bypass-permissions" })));
 		await choose(`${label} model`, "Other model");
-		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "high", permissions: "bypass-permissions" })));
+		await userEvent.click(screen.getByRole("button", { name: effort }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Low" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "low", permissions: "bypass-permissions" })));
 		view.unmount();
 		mount();
-		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low"));
-		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
+		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model"));
+		expect(screen.getByRole("button", { name: effort })).toHaveTextContent("Low");
+		expect(screen.getByRole("button", { name: approval })).toHaveTextContent("Bypass permissions");
 		expect(screen.getByRole("button", { name: `${label} agent` })).toHaveTextContent(agent === "codex" ? "Codex" : "Claude Code");
 	});
 
@@ -169,8 +176,8 @@ describe("Cloud project settings", () => {
 		expect(await screen.findByRole("menuitem", { name: /^Opus 5/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: /^Opus 5/ }));
-		// Picking the model asks for its effort, as for any role's model.
-		await userEvent.click(await screen.findByRole("menuitemradio", { name: "High" }));
+		// Effort has its own picker beside the model, so picking a model just closes the menu.
+		expect(screen.queryByRole("menuitemradio")).not.toBeInTheDocument();
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: expect.objectContaining({ worker: { agent: "claude-code", agentConfig: expect.objectContaining({ model: "claude-opus-5" }) } }),
 		}));
@@ -208,7 +215,7 @@ describe("Cloud project settings", () => {
 		] } });
 		mocks.models.mockRejectedValue(new CloudCpError("Unavailable", { status: 503, code: "unavailable" }));
 		mount();
-		const warnings = await screen.findAllByText("Couldn't load AO Cloud's model list for Claude Code.");
+		const warnings = await screen.findAllByText("Couldn't load Orchestrator Cloud's model list for Claude Code.");
 		expect(warnings.length).toBeGreaterThan(0);
 		// A model ID can still be entered by hand.
 		const model = screen.getByRole("button", { name: "Worker model" });
@@ -221,7 +228,7 @@ describe("Cloud project settings", () => {
 		mocks.models.mockResolvedValue({ source: "worker", cliVersion: "2.1.287", models: [{ id: "opus", displayName: "Opus", default: true }] });
 		await userEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]);
 		await waitFor(() => expect(mocks.models.mock.calls.length).toBeGreaterThan(calls));
-		await waitFor(() => expect(screen.queryByText("Couldn't load AO Cloud's model list for Claude Code.")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByText("Couldn't load Orchestrator Cloud's model list for Claude Code.")).not.toBeInTheDocument());
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		expect(await screen.findByRole("menuitem", { name: /^Opus/ })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
@@ -237,7 +244,7 @@ describe("Cloud project settings", () => {
 			return { source: "release", cliVersion: "test", models: [{ id: "opus", displayName: "Opus", default: true }] };
 		});
 		mount();
-		expect(await screen.findByText("AO Cloud has no model list for OpenCode. Enter a model ID.")).toBeInTheDocument();
+		expect(await screen.findByText("Orchestrator Cloud has no model list for OpenCode. Enter a model ID.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		expect(screen.queryByRole("menuitem", { name: /Only On This Computer/ })).not.toBeInTheDocument();
 	});
@@ -258,7 +265,8 @@ describe("Cloud project settings", () => {
 		mount();
 		const reviewer = await screen.findByRole("button", { name: "Reviewer agent" });
 		expect(reviewer).toHaveTextContent("Codex");
-		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model · Max"));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Reviewer model" })).toHaveTextContent("worker-model"));
+		expect(screen.getByRole("button", { name: "Reviewer Effort" })).toHaveTextContent("Max");
 		await choose("Reviewer approval", "Bypass permissions");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", {
 			config: { reviewers: [{ harness: "codex", agentConfig: { model: "worker-model", mode: "", effort: "max", permissions: "bypass-permissions" } }] },
@@ -404,7 +412,7 @@ describe("Cloud project settings", () => {
 
 	it("turns on workers requesting review through the settings patch", async () => {
 		mount("general");
-		await userEvent.click(await screen.findByRole("switch", { name: "Workers request AO review" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Workers request a built-in review" }));
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
 	});
 });

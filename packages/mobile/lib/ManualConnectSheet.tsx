@@ -90,7 +90,7 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 							label="Password"
 							value={cfg.password}
 							onChangeText={form.setField("password")}
-							placeholder="Connection password"
+							placeholder="Pairing code or password"
 							testID="manual-connect-password"
 						/>
 						<FormToggle label="Use TLS" value={!!cfg.secure} onValueChange={form.setSecure} testID="manual-connect-tls" />

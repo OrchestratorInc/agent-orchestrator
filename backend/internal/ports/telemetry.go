@@ -87,8 +87,6 @@ type TelemetryIdentityStore interface {
 	SetCloudUserID(ctx context.Context, id string) error
 	// MarkInstalledEvent reserves the one install event before queueing it.
 	MarkInstalledEvent(ctx context.Context) (bool, error)
-	// MarkFirstOpenEvent reserves ao.install.created once per install ID.
-	MarkFirstOpenEvent(ctx context.Context) (bool, error)
 	SetGitHubLogin(login string)
 }
 

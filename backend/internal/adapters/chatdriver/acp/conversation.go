@@ -214,6 +214,8 @@ type conversation struct {
 	compactionFailure string
 	compactedTurn     string
 
+	claudeRejectedLimits map[string]time.Time
+
 	eventMu      sync.RWMutex
 	events       chan ports.ChatEvent
 	eventsClosed bool
@@ -962,6 +964,10 @@ func (c *conversation) finishPrompt(
 			}})
 		}
 	}
+	var usageLimitResetsAt time.Time
+	if turnErr != nil && domain.ParseConversationUsageLimit(turnErr.Error(), nil) != nil {
+		usageLimitResetsAt, _ = c.claudeUsageLimitReset(time.Now())
+	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
 		// The provider has just contradicted whatever the readiness cache holds.
 		// Correct it for both request errors and structured prompt failures.
@@ -1016,6 +1022,7 @@ func (c *conversation) finishPrompt(
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
 		ProviderTurnID: turnID, TurnState: state, FailureCode: failureCode, Err: turnErr,
+		UsageLimitResetsAt: usageLimitResetsAt,
 	})
 	// Release the turn before announcing readiness, not after. A consumer that
 	// reacts to ChatControllerReady by sending the next turn — AO's own queue

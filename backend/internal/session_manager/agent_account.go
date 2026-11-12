@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -162,6 +163,18 @@ func (m *Manager) markAccountSwitch(ctx context.Context, rec domain.SessionRecor
 	}
 }
 
+func (m *Manager) deliverQueuedAfterAccountMove(transition domain.SessionInterfaceTransition) {
+	if !transition.AccountMove() || transition.SourceMode != domain.SessionModeChat || m.chat == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), interfaceTransitionStepLimit)
+	defer cancel()
+	if err := m.chat.DrainChatQueue(ctx, transition.SessionID); err != nil {
+		m.logger.Warn("account transition: messages sent during the move not delivered",
+			"sessionID", transition.SessionID, "transition", transition.ID, "error", err)
+	}
+}
+
 // runtimeEnvOnAccount is runtimeEnv as the session's agent would get it on
 // accountID, for checks made before the move. It leaves the account override
 // alone: the source agent still runs, and a restart of it must keep its own
@@ -182,14 +195,23 @@ func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) err
 	if err != nil {
 		return err
 	}
-	var errs []error
+	var (
+		errs  []error
+		errMu sync.Mutex
+		wg    sync.WaitGroup
+	)
+	fail := func(err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		errs = append(errs, err)
+	}
 	for _, rec := range recs {
 		if rec.IsTerminated {
 			continue
 		}
 		bound, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
 		if err != nil {
-			errs = append(errs, err)
+			fail(err)
 			continue
 		}
 		if bound != accountID {
@@ -200,16 +222,19 @@ func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) err
 		// exited until its agent reports. Refuse rather than delete the folder
 		// under it: a retry after it settles stops it like any running agent.
 		if m.launchInFlight(rec.ID) {
-			errs = append(errs, fmt.Errorf("session %s is starting its agent on the account", rec.ID))
+			fail(fmt.Errorf("session %s is starting its agent on the account", rec.ID))
 			continue
 		}
 		if rec.Activity.State == domain.ActivityExited {
 			continue
 		}
-		if _, err := m.ExitAgent(ctx, rec.ID); err != nil && !errors.Is(err, ErrAgentExited) {
-			errs = append(errs, err)
-		}
+		wg.Go(func() {
+			if _, err := m.ExitAgent(ctx, rec.ID); err != nil && !errors.Is(err, ErrAgentExited) {
+				fail(err)
+			}
+		})
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 

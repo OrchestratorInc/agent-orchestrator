@@ -16,6 +16,7 @@ import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
+import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
 import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
 import { seedCloudOpening } from "../lib/cloud-opening";
@@ -273,10 +274,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 				// new session on the board immediately.
 				seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, session);
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.created", { project_id: input.projectId });
 				return session.id;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.create_failed", { project_id: input.projectId });
 				// Cloud refused a model the account's list lacks: the list the picker
 				// showed is older than Cloud's, so it is read again (the message says why).
 				if (err instanceof CloudCpError && err.code === "MODEL_UNAVAILABLE" && cloudOrg?.id && input.agent) {
@@ -317,10 +318,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 					);
 				}
 				if (!data?.workerId) throw new Error(t("newTask.noSession"));
-				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.created", { project_id: input.projectId });
 				return data.workerId;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { project_id: input.projectId });
+				void captureRendererEvent("ao.tasks.create_failed", { project_id: input.projectId });
 				if (
 					err instanceof TaskCreateError &&
 					err.code &&
@@ -362,10 +363,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 				throw new TaskCreateError(apiErrorMessage(error, t("newTask.unableToStart")), apiErrorCode(error), error.details);
 			}
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
-			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
+			void captureRendererEvent("ao.tasks.created", { scope: "standalone" });
 			return data.session.id;
 			} catch (err) {
-				void captureRendererEvent("ao.renderer.task_create_failed", { scope: "standalone" });
+				void captureRendererEvent("ao.tasks.create_failed", { scope: "standalone" });
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
@@ -843,6 +844,15 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = availableAgents?.find((item) => item.id === selectedAgent)?.label || selectedAgent;
+	useResetStaleProjectTuning({
+		projectId: isCloudProject || isStandalone ? undefined : projectQuery.data?.id,
+		hostId,
+		agent: selectedAgent,
+		agentLabel: selectedAgentLabel,
+		projectAgent: configuredProjectAgent,
+		config: isCloudProject ? undefined : projectQuery.data?.config,
+		catalog: localCatalog,
+	});
 	// A cloud project's Chat-capable harnesses come from the control plane, as a
 	// local project's come from the daemon.
 	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
@@ -1434,6 +1444,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		renderEffortControl: (control: TaskComposerEffortControl) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : inheritedEffort || effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
 			footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />,
 		renderModelControl: (control: TaskComposerModelControl) => <TaskModelPicker {...control}
+			hostId={hostId}
 			onRefresh={isCloudProject && !cloudCatalogAgent ? undefined : refreshSelectedModels}
 			allowNativeSelection={isCloudProject}
 			footer={cloudModelSource}

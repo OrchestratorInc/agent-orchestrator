@@ -1,3 +1,6 @@
+import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
+import { decodePath } from "./workspace-file-path";
+
 export type SessionLinkTarget = { projectId: string; sessionId: string };
 export type ArtifactLinkTarget = SessionLinkTarget & { path: string };
 export type ResolvedSessionLink = SessionLinkTarget & { isTerminated: boolean };
@@ -52,18 +55,65 @@ export function artifactLink(projectId: string, sessionId: string, path: string)
 	return `${SESSION_LINK_PREFIX}${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/${ARTIFACT_SEGMENT}/${encodedPath}`;
 }
 
-type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> };
+type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string; previousPaths?: string[] }> }> };
+
+const ARTIFACT_DIRECTORY_MARKER = `/${ARTIFACT_SEGMENT}/`;
 
 /**
- * The artifact route for text naming a listed session artifact, either as
- * `{session}/{path}` or as a path containing `/artifacts/{session}/{path}`.
+ * The forms a link target can name an artifact by: as written, then with its
+ * percent escapes decoded (Markdown encodes a link's target, a space as %20,
+ * while a session lists the name as written). Each drops the link's query or
+ * fragment (`?raw`, `#L10`) before decoding, so a name's own "#" or "?"
+ * (%23, %3F) stays, and uses forward slashes, so a Windows path matches too.
+ */
+function linkTargetForms(value: string): string[] {
+	const written = value.trim().split(/[?#]/, 1)[0]!;
+	return [...new Set([written, decodePath(written)].map((form) => form.replace(/\\/g, "/")))];
+}
+
+/** True when a link target has an artifact directory segment, `.../artifacts/...`. */
+export function hasArtifactDirectorySegment(value: string): boolean {
+	return linkTargetForms(value).some((form) => form.includes(ARTIFACT_DIRECTORY_MARKER));
+}
+
+/**
+ * The artifact route for a link target naming a listed session artifact, as
+ * `{session}/{path}` or as a path containing `/artifacts/{session}/{path}`,
+ * read as a link: without its query or fragment, as written or decoded.
+ */
+export function artifactLinkForTarget(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
+	for (const form of linkTargetForms(value)) {
+		const link = listedArtifactLink(form, workspaces);
+		if (link) return link;
+	}
+	return undefined;
+}
+
+/**
+ * The artifact route for text naming a listed session artifact (inline code,
+ * a worker report's artifact line), either as `{session}/{path}` or as a path
+ * containing `/artifacts/{session}/{path}`. The text is a file path, where
+ * "#" and "?" are part of the name, so it is matched as written first; then as
+ * a link target, for a line or query written after it.
  */
 export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
 	const normalized = value.trim().replace(/\\/g, "/");
+	const listed = listedArtifactLink(normalized, workspaces);
+	if (listed) return listed;
+	// Read as a link only when what follows "#" or "?" is a reference to a
+	// place in the file: an unlisted `plan.md#draft` is its own file, never
+	// the listed plan.md.
+	const suffix = /[?#].*$/.exec(normalized)?.[0];
+	return suffix === undefined || FILE_REFERENCE_SUFFIX.test(suffix) ? artifactLinkForTarget(value, workspaces) : undefined;
+}
+
+/** A line reference (`#L10`, `#L3-L7`, `#L2C4`) or `?raw` after a file path. */
+const FILE_REFERENCE_SUFFIX = /^(?:#L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?|\?raw)$/i;
+
+function listedArtifactLink(normalized: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
 	const candidates = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) ? [] : [normalized];
-	const marker = `/${ARTIFACT_SEGMENT}/`;
-	for (let index = normalized.indexOf(marker); index >= 0; index = normalized.indexOf(marker, index + 1)) {
-		candidates.push(normalized.slice(index + marker.length));
+	for (let index = normalized.indexOf(ARTIFACT_DIRECTORY_MARKER); index >= 0; index = normalized.indexOf(ARTIFACT_DIRECTORY_MARKER, index + 1)) {
+		candidates.push(normalized.slice(index + ARTIFACT_DIRECTORY_MARKER.length));
 	}
 	for (const candidate of candidates) {
 		const slash = candidate.indexOf("/");
@@ -72,10 +122,27 @@ export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorks
 		const path = candidate.slice(slash + 1);
 		for (const workspace of workspaces) {
 			const session = workspace.sessions.find((entry) => entry.id === sessionId);
-			if (session?.artifactFiles?.some((file) => file.path === path)) return artifactLink(workspace.id, sessionId, path);
+			const file = artifactAtPath(session?.artifactFiles, path);
+			if (file) return artifactLink(workspace.id, sessionId, file.path);
 		}
 	}
 	return undefined;
+}
+
+/**
+ * A file path's place in one session's artifact directory (the worker writes
+ * a session's artifacts under `.../artifacts/{session}/`). Undefined for any
+ * other path, and for one that steps out of the directory. The path is a file
+ * path, not a link: "#" and "?" are part of the name, so a link's query or
+ * fragment is cut before its escapes are decoded, by whoever reads the link.
+ */
+export function sessionArtifactPath(path: string, sessionId: string): string | undefined {
+	const normalized = path.trim().replace(/\\/g, "/");
+	const marker = `${ARTIFACT_DIRECTORY_MARKER}${sessionId}/`;
+	const index = normalized.indexOf(marker);
+	if (!sessionId || index < 0) return undefined;
+	const artifact = normalized.slice(index + marker.length);
+	return artifact.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..") ? artifact : undefined;
 }
 
 /** True for either in-app route: a session or one of its artifacts. */

@@ -5,7 +5,21 @@ import { contentSecurityPolicy } from "./vite.renderer.config";
 describe("packaged renderer CSP", () => {
 	it.each(["build", "serve"] as const)("allows media from the app, loopback preview and control-plane origins in %s", (mode) => {
 		expect(contentSecurityPolicy(mode).split("; ").filter((directive) => directive.startsWith("media-src")))
-			.toEqual(["media-src 'self' http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev"]);
+			.toEqual(["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev"]);
+	});
+
+	// A just-sent attachment's tile draws from the composer's object URL. Without
+	// blob: the packaged app blocked it and the tile showed only its alt text.
+	it.each(["img-src", "media-src", "connect-src"])("lets just-sent attachments load from object URLs in %s", (name) => {
+		const directive = contentSecurityPolicy("build")
+			.split("; ")
+			.find((candidate) => candidate.startsWith(`${name} `));
+		expect(directive?.split(" ")).toContain("blob:");
+	});
+
+	it("keeps images to the app, data:, blob:, loopback and https", () => {
+		expect(contentSecurityPolicy("build").split("; ").filter((directive) => directive.startsWith("img-src")))
+			.toEqual(["img-src 'self' data: blob: http://127.0.0.1:* http://*.localhost:* https:"]);
 	});
 
 	it("frames agent renders from the loopback daemon and cloud artifacts from the control planes", () => {
@@ -23,6 +37,13 @@ describe("packaged renderer CSP", () => {
 			.find((directive) => directive.startsWith("connect-src"));
 		expect(connectSrc).toContain("wss://staging-api.aoagents.dev");
 		expect(connectSrc).toContain("wss://api.aoagents.dev");
+	});
+
+	it("lets chat image copy and save fetch data: images", () => {
+		const connectSrc = contentSecurityPolicy("build")
+			.split("; ")
+			.find((directive) => directive.startsWith("connect-src"));
+		expect(connectSrc?.split(" ")).toContain("data:");
 	});
 });
 

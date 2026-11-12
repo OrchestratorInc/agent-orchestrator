@@ -1,4 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
+import type { ComposerTrayItem } from "./ComposerAttachmentTray";
 import type { ChatImage, ChatResource } from "./types";
 
 export type ComposerAttachment =
@@ -30,6 +31,32 @@ export function updateComposerAttachments(key: string, update: (current: Compose
 	if (next.items.length || next.notice) states.set(key, next);
 	else states.delete(key);
 	listeners.get(key)?.forEach((listener) => listener());
+}
+
+/** Drops every session's unsent attachments on one machine (`machine.` keys). */
+export function forgetMachineComposerAttachments(machine: string): void {
+	const prefix = `${machine}.`;
+	for (const key of [...states.keys()]) {
+		if (!key.startsWith(prefix)) continue;
+		states.delete(key);
+		listeners.get(key)?.forEach((listener) => listener());
+	}
+}
+
+/** Drops one attachment the user removed, keeping what the last pick had to say. */
+export function removeComposerAttachment(key: string, id: string): void {
+	updateComposerAttachments(key, (current) => ({ items: current.items.filter((item) => item.id !== id), notice: current.notice }));
+}
+
+/**
+ * What the composer's tray draws for each attachment: a photo from its own
+ * bytes, anything else by name. Each data URI copies the whole photo, so
+ * callers memoize this on the attachments rather than building it per render.
+ */
+export function composerTrayItems(items: readonly ComposerAttachment[]): ComposerTrayItem[] {
+	return items.map((item) => item.kind === "image"
+		? { key: item.id, name: item.name, previewUri: `data:${item.image.mimeType};base64,${item.image.data}` }
+		: { key: item.id, name: item.name });
 }
 
 /**

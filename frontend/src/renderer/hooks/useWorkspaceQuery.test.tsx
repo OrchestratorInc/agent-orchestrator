@@ -50,7 +50,7 @@ vi.mock("./useCloudOrg", () => ({
 }));
 
 import { CloudCpError } from "../lib/cloud-cp";
-import { SHARED_ARTIFACT_RETRY_MS, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useSharedCloudWorkspacesQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { SHARED_ARTIFACT_RETRY_MS, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, refreshCloudSessionLifecycle, toCloudWorkspace, sharedCloudWorkspacesQueryKey, useCloudSessionQuery, useSharedCloudWorkspacesQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { forgetSharedSessions, sessionWasSharedWithYou } from "../lib/shared-session-memory";
 
 it("preserves the existing local and remote workspace cache keys", () => {
@@ -223,13 +223,31 @@ describe("useWorkspaceQuery", () => {
 		expect(result.current.data?.[0].sessions[0].artifactFiles?.[0]).toMatchObject({ path: "q3/report.html", inlineUrl });
 	});
 
+	it("keeps a published artifact's public link, which the Artifacts list marks it by", async () => {
+		const shareUrl = "https://viewer.test/artifact/abc";
+		respondWith({
+			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
+			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", statusReadiness: "ready",
+				activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" }, updatedAt: "2026-01-01T00:00:00Z", prs: [],
+				artifactFiles: [
+					{ path: "poem.html", name: "poem.html", kind: "html", size: 12, updatedAt: "2026-01-01T00:00:00Z", shareUrl },
+					{ path: "notes.md", name: "notes.md", kind: "markdown", size: 3, updatedAt: "2026-01-01T00:00:00Z" },
+				] }] } },
+		});
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		const [published, unshared] = result.current.data?.[0].sessions[0].artifactFiles ?? [];
+		expect(published).toMatchObject({ path: "poem.html", shareUrl });
+		expect(unshared).not.toHaveProperty("shareUrl");
+	});
+
 	it("rejects workspace reads while the daemon base URL is untrusted", async () => {
 		hasTrustedApiBaseUrlMock.mockReturnValue(false);
 
 		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 
 		await waitFor(() => expect(result.current.isError).toBe(true));
-		expect(result.current.error).toEqual(new Error("AO daemon API is not ready"));
+		expect(result.current.error).toEqual(new Error("Orchestrator daemon API is not ready"));
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
@@ -513,6 +531,32 @@ describe("useWorkspaceQuery", () => {
 			provisionError: "Agent failed to start",
 			provisionSteps: [{ id: "agent", status: "running", startedAt: "2026-06-10T16:15:00Z" }],
 		});
+	});
+
+	// Imported chats that were never opened have no workspace; the session
+	// surfaces rely on this flag to skip workspace requests.
+	it("keeps needsResume on imported chats in projects and in Scratchpad", async () => {
+		respondWith({
+			projects: { data: { projects: [{ id: "proj-1", name: "my-app", path: "/p" }] }, error: undefined },
+			sessions: {
+				data: {
+					sessions: [
+						{ id: "imported-1", projectId: "proj-1", harness: "codex", status: "idle", isTerminated: false, needsResume: true, updatedAt: "2026-10-18T10:00:00Z" },
+						{ id: "standalone-1", harness: "claude-code", status: "idle", isTerminated: false, needsResume: true, updatedAt: "2026-10-18T10:00:00Z" },
+					],
+				},
+				error: undefined,
+			},
+		});
+
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+		const sessions = result.current.data?.flatMap((workspace) => workspace.sessions) ?? [];
+		expect(sessions.map((session) => [session.id, session.needsResume])).toEqual([
+			["imported-1", true],
+			["standalone-1", true],
+		]);
 	});
 
 	it("localizes the standalone workspace name", async () => {
@@ -1094,5 +1138,27 @@ describe("refreshCloudSessionLifecycle", () => {
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-session"] });
 		// A shared session reads as connected from its own list, polled every 15 s.
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: sharedCloudWorkspacesQueryKey });
+	});
+});
+
+describe("toCloudWorkspace", () => {
+	const project = (config: Record<string, unknown>) => ({
+		id: "p-1", orgId: "org-1", displayName: "Platform", repositoryUrl: "https://github.com/acme/api", defaultBranch: "main",
+		config, createdAt: "", updatedAt: "",
+	});
+
+	it("marks a workspace and lists every repository as its own", () => {
+		const workspace = toCloudWorkspace(project({ layout: "workspace", repos: [{ url: "https://github.com/acme/web" }] }) as never, [], "org-1");
+		expect(workspace).toMatchObject({ kind: "cloud", cloudLayout: "workspace" });
+		expect(workspace.workspaceRepos).toEqual([
+			{ name: "api", relativePath: "api", repo: "https://github.com/acme/api" },
+			{ name: "web", relativePath: "web", repo: "https://github.com/acme/web" },
+		]);
+	});
+
+	it("leaves a project with additional repositories unmarked", () => {
+		const workspace = toCloudWorkspace(project({ repos: [{ url: "https://github.com/acme/web" }] }) as never, [], "org-1");
+		expect(workspace.cloudLayout).toBeUndefined();
+		expect(workspace.workspaceRepos).toBeUndefined();
 	});
 });

@@ -68,3 +68,23 @@ func TestShareLinksApply(t *testing.T) {
 		t.Fatalf("nil ShareLinks set %v", got)
 	}
 }
+
+// A record kept by artifact ID follows the file to its new path.
+func TestShareLinksApplyByArtifactID(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ShareLinksFile), []byte(`{
+		"[\"https://cp.test\",\"sess-1\",\"\",\"art-1\"]": {"shareId": "a", "url": "https://share.test/a"},
+		"[\"https://cp.test\",\"sess-1\",\"old.html\"]": {"shareId": "b", "url": "https://share.test/b"}
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := []domain.SessionArtifactFile{
+		{ID: "art-1", Path: "final/renamed.html"},
+		{ID: "art-2", Path: "old.html"},
+		{Path: "untracked.html"},
+	}
+	NewShareLinks(dir, "https://cp.test").Apply("sess-1", files)
+	if files[0].ShareURL != "https://share.test/a" || files[1].ShareURL != "https://share.test/b" || files[2].ShareURL != "" {
+		t.Fatalf("share URLs = %q, %q, %q", files[0].ShareURL, files[1].ShareURL, files[2].ShareURL)
+	}
+}

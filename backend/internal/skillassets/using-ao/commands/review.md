@@ -1,9 +1,9 @@
 # ao review
 
-Manage AO's native code reviewer for a worker's PR.
+Manage Orchestrator's native code reviewer for a worker's PR.
 
-AO's reviewer is an isolated reviewer agent for implementation PRs owned by an
-AO worker. To review that worker's PR, use `ao review trigger`. Inside a worker,
+Orchestrator's reviewer is an isolated reviewer agent for implementation PRs owned by a
+worker. To review that worker's PR, use `ao review trigger`. Inside a worker,
 the review commands default to the calling session (`AO_SESSION_ID`), so
 `ao review trigger` reviews your own implementation PR. An orchestrator passes
 the implementation worker's session id.
@@ -14,7 +14,7 @@ requested provider review and comments directly. Do not run `ao review trigger`,
 create an ownership-only placeholder, or require an implementation owner just
 to review the PR.
 
-AO's review is internal. An AO approval is not a GitHub approval: it does not
+Orchestrator's review is internal. An Orchestrator approval is not a GitHub approval: it does not
 satisfy required or independent-account reviews or branch protection, and it
 does not authorize merging.
 
@@ -73,7 +73,7 @@ ao review submit [worker-session-id] [flags]
 | `--session string` | Worker session id (or pass it as the positional argument) | - |
 | `--verdict string` | Review verdict: `approved` or `changes_requested` | Required |
 
-If the local daemon is restarting when a result is submitted, AO retains the
+If the local daemon is restarting when a result is submitted, Orchestrator retains the
 parsed result in memory and retries the same idempotent request for up to 30
 seconds. Validation errors return immediately. If the daemon remains unavailable,
 the command reports failure and can be repeated safely; daemon idempotency
@@ -118,7 +118,7 @@ ao review cancel mer-3
 
 ### ao review trigger
 
-Start AO's reviewer on a worker's open PR heads (default: the calling session).
+Start Orchestrator's reviewer on a worker's open PR heads (default: the calling session).
 Aliases: `execute`, `restart`. Reviewer panes cannot run it.
 
 **Syntax:**
@@ -130,15 +130,15 @@ ao review trigger [worker-session-id] [flags]
 
 | Flag | Meaning | Default / Required |
 |---|---|---|
-| `--session string` | Worker session id (or pass it positionally) | The calling AO session |
-| `--pr string` | Review only this session's implementation PR URL, attaching it to the session first if AO does not track it yet (never from another active session). Do not pass an external review target | Every eligible PR on the session |
+| `--session string` | Worker session id (or pass it positionally) | The calling Orchestrator-managed session |
+| `--pr string` | Review only this session's implementation PR URL, attaching it to the session first if Orchestrator does not track it yet (never from another active session). Do not pass an external review target | Every eligible PR on the session |
 | `--agent string` | Reviewer agent for this pass only (alias `--harness`) | Session reviewer, then project reviewer, then the project's default worker agent |
 | `--model string` | Reviewer model for this pass only | As above |
 | `--effort string` | Reviewer reasoning effort for this pass only | As above |
 | `--rerun` | Review a head that already has a review again, or add a reviewer with a different agent alongside one that is still running | - |
 | `--no-inject` | Leave the session's review auto-inject setting unchanged | Auto-inject is turned on |
 
-AO fetches the session's PRs fresh from the provider before deciding what is
+Orchestrator fetches the session's PRs fresh from the provider before deciding what is
 due, so the pass covers the commit really on the PR. Right after opening a PR,
 pass `--pr <url>`.
 
@@ -149,7 +149,7 @@ again: the command exits 1 with `REVIEW_ALREADY_RUNNING` or
 just pushed and it still says already reviewed, wait a few seconds and retry. The same reviewer agent never runs twice on one head at the same time.
 
 By default the command turns on the worker session's review auto-inject. The
-reviewer posts an inline GitHub comment for each change it requires, and AO
+reviewer posts an inline GitHub comment for each change it requires, and Orchestrator
 forwards those comments to the worker like any other review comments. An
 approval adds no comments, so check the verdict with `ao review ls`. If a run
 shows `failed` or `cancelled`, trigger again; nothing else reports it.

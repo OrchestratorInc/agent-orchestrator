@@ -11,9 +11,10 @@ import { cloudCatalogAsAgentCatalog, useCloudModelCatalog } from "../../hooks/us
 import { LOCAL_HOST } from "../../lib/hosts";
 import { TaskModelSelection } from "../TaskModelControls";
 import { AgentModelCombobox } from "./AgentModelCombobox";
+import { EffortPicker } from "./EffortPicker";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
-import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
+import { MENU_TRIGGER_CHROME, OptionMenuItem } from "../ui/option-menu";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
@@ -138,6 +139,29 @@ export function AgentModelField({
 			value: item.id,
 			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
 		}));
+		// Cloud (and a catalog with no marked mode) has no listed default: unset
+		// means the agent's own default, which the picker names and can return to.
+		const defaultListed = options.some((option) => option.value === defaultMode);
+		const shownMode = selectedMode || (defaultListed ? defaultMode : "") || "";
+		const selectMode = (value: string) => {
+			onModeChange(value === defaultMode ? "" : value);
+			onModelChange("");
+		};
+		// The agent picks its own model for each mode, so its modes are the row's
+		// effort levels and the model column reads "Auto".
+		if (options.length > 0) {
+			return (
+				<>
+					<div className="flex min-w-0 flex-wrap items-center gap-2">
+						<span className="text-settings-muted">{t("settings.models.autoRouteLabel")}</span>
+						<EffortPicker label={label} value={shownMode} choices={options} triggerClassName="w-fit" onChange={selectMode}
+							followLabel={defaultListed ? undefined : t("settings.models.agentDefaultMode")}
+							footer={!defaultListed && selectedMode ? <OptionMenuItem onSelect={() => { onModeChange(""); onModelChange(""); }}>{t("settings.models.useAgentMode")}</OptionMenuItem> : undefined} />
+					</div>
+					{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
+				</>
+			);
+		}
 		return (
 			<>
 				<div className="min-w-0">
@@ -193,40 +217,41 @@ export function AgentModelField({
 		onModelChange(value);
 		if (!independentMode) onModeChange("");
 	};
+	// No wrapper: the pickers and the effort warning join the caller's row, so the
+	// warning takes its own line there instead of widening the model's column.
 	return (
 		<>
-			<div className="min-w-0">
-				<div className="min-w-0">
-					<AgentModelCombobox
-						aria-label={label}
-						value={model}
-						models={models}
-						emptyLabel={unsetLabel}
-						allowCustom={catalog?.allowCustom}
-						customModelEntry={customModelEntry}
-						agentLabel={agentId}
-						agentId={agentId}
-						onRefresh={refreshCatalog}
-						refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
-						refreshError={catalog?.refreshError}
-						retryAt={catalog?.retryAt}
-						disabled={catalogFetching || agentId === ""}
-						onChange={selectCatalogModel}
-						onCustom={selectCustomModel}
-						triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
-						compact
-						recentScope={agentId}
-						menuAlign="start"
-						tuning={{
-							effort,
-							effortsWithoutModel: supportedEfforts,
-							onEffortChange,
-							onValidityChange,
-							roleLabel: t(`settings.models.${role}Role`),
-						}}
-					/>
-				</div>
-			</div>
+			<AgentModelCombobox
+				hostId={hostId}
+				aria-label={label}
+				value={model}
+				models={models}
+				emptyLabel={unsetLabel}
+				allowCustom={catalog?.allowCustom}
+				customModelEntry={customModelEntry}
+				agentLabel={agentId}
+				agentId={agentId}
+				onRefresh={refreshCatalog}
+				refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
+				refreshError={catalog?.refreshError}
+				retryAt={catalog?.retryAt}
+				disabled={catalogFetching || agentId === ""}
+				onChange={selectCatalogModel}
+				onCustom={selectCustomModel}
+				triggerClassName={cn(MENU_TRIGGER_CHROME, "w-fit")}
+				compact
+				recentScope={agentId}
+				menuAlign="start"
+				effortPlacement="chip"
+				warningClassName={warningClassName}
+				tuning={{
+					effort,
+					effortsWithoutModel: supportedEfforts,
+					onEffortChange,
+					onValidityChange,
+					roleLabel: t(`settings.models.${role}Role`),
+				}}
+			/>
 			{warning && <FieldWarning className={cn("px-1 text-xs leading-row", warningClassName)} warning={warning} onRetry={cloudGapWarning ? readCloudAgain : undefined} />}
 		</>
 	);

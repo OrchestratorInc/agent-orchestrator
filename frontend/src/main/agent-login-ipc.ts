@@ -50,7 +50,7 @@ export function parseAgentLoginRequest(input: unknown): AgentLoginRequest {
 
 export async function requestAgentLogin(input: unknown, port: number | undefined, fetchImpl: typeof fetch = fetch): Promise<AgentLoginResponse> {
 	const request = parseAgentLoginRequest(input);
-	if (!port) return { status: 503, body: { code: "DAEMON_UNAVAILABLE", message: "AO daemon is not ready." } };
+	if (!port) return { status: 503, body: { code: "DAEMON_UNAVAILABLE", message: "Daemon is not ready." } };
 	const operations = `http://127.0.0.1:${port}/api/v1/agents/${encodeURIComponent(request.agentId)}/auth/operations`;
 	let url = operations;
 	let method = "POST";
@@ -76,7 +76,7 @@ export async function requestAgentLogin(input: unknown, port: number | undefined
 			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 		});
 	} catch {
-		return { status: 503, body: { code: "DAEMON_UNAVAILABLE", message: "AO daemon is not reachable." } };
+		return { status: 503, body: { code: "DAEMON_UNAVAILABLE", message: "Daemon is not reachable." } };
 	}
 	const raw = await response.text().catch(() => "");
 	let parsed: unknown;

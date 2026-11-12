@@ -3,6 +3,7 @@ import type { MessageKey } from "./messages";
 
 /** Exhaustive mappings keep dynamic domain identifiers inside the typed catalog. */
 export const shortcutLabelKeys: Record<AppShortcutId, MessageKey> = {
+	"find-in-chat": "shortcut.find-in-chat",
 	"new-session": "shortcut.new-session",
 	"new-shell-terminal": "shortcut.new-shell-terminal",
 	"split-shell-terminal": "shortcut.split-shell-terminal",
