@@ -1,6 +1,6 @@
 // @vitest-environment node
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, test } from "vitest";
@@ -165,6 +165,25 @@ describe("cache entries", () => {
 		writeFileSync(path.join(src, "react", "index.js"), "changed");
 		storeEntry(cache, "node_modules", "k1", src, {}, { clone: copy });
 		assert.equal(readFileSync(path.join(output, "react", "index.js"), "utf8"), "react");
+	});
+
+	test("never replaces an entry another checkout completed during the store", () => {
+		const root = tempDir();
+		const src = path.join(root, "src");
+		mkdirSync(src);
+		writeFileSync(path.join(src, "f"), "mine");
+		const cache = path.join(root, "cache");
+		const final = path.join(cache, "daemon", "k");
+		const racingClone = (from, to) => {
+			cpSync(from, to, { recursive: true });
+			// The other checkout's rename lands while this clone runs.
+			mkdirSync(path.join(final, "output"), { recursive: true });
+			writeFileSync(path.join(final, "output", "f"), "theirs");
+			writeFileSync(path.join(final, "meta.json"), "{}");
+		};
+		assert.equal(storeEntry(cache, "daemon", "k", src, {}, { clone: racingClone }), final);
+		assert.equal(readFileSync(path.join(final, "output", "f"), "utf8"), "theirs");
+		assert.deepEqual(readdirSync(path.join(cache, "daemon")), ["k"]);
 	});
 
 	test("prunes all but the newest entries and only stale temporaries", () => {

@@ -272,10 +272,17 @@ export function storeEntry(root, name, key, sourceDir, meta, { clone = cloneTree
 	if (existsSync(path.join(final, "meta.json"))) return final;
 	const temp = path.join(root, name, `.tmp-${key}-${process.pid}-${Date.now()}`);
 	try {
+		mkdirSync(temp, { recursive: true });
 		clone(sourceDir, path.join(temp, "output"));
 		for (const rel of omit) rmSync(path.join(temp, "output", rel), { recursive: true, force: true });
 		for (const [fileName, source] of Object.entries(files)) cpSync(source, path.join(temp, fileName));
 		writeFileSync(path.join(temp, "meta.json"), `${JSON.stringify({ name, key, createdAt: new Date().toISOString(), ...meta }, null, 2)}\n`);
+		if (existsSync(path.join(final, "meta.json"))) {
+			// Another checkout finished the same key while this one cloned: keep theirs,
+			// readers may already be cloning from it.
+			rmSync(temp, { recursive: true, force: true });
+			return final;
+		}
 		if (existsSync(final)) rmSync(final, { recursive: true, force: true }); // incomplete leftover without meta.json
 		renameSync(temp, final);
 	} catch (error) {
