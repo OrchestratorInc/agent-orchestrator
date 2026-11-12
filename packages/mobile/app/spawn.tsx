@@ -493,7 +493,7 @@ export default function SpawnScreen() {
 			const added = merged.attachments.length - attachmentsRef.current.length;
 			attachmentsRef.current = merged.attachments;
 			setAttachments(merged.attachments);
-			setAttachmentError(next.error ?? merged.error ?? notice);
+			setAttachmentError([next.error ?? merged.error, notice].filter(Boolean).join(" ") || undefined);
 			return added;
 		} catch (cause) {
 			setAttachmentError(userFacingError(cause, fallback));
@@ -539,8 +539,9 @@ export default function SpawnScreen() {
 	// Pasting is a way to attach too, so it goes through the same gate as the
 	// menu. Native stops a paste at 8 images or 25 MB and says which.
 	const pasteImages = (assets: ComposerImageAsset[], overflow?: PasteOverflow) => {
-		const notice = overflow === "count" ? `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.` : overflow === "size" ? "Pasted images must total under 25 MB." : undefined;
-		void addAttachments(async () => pastedSpawnAttachments(assets, attachmentsRef.current.length), "Couldn't read the pasted image.", notice)
+		const { picks, error } = pastedSpawnAttachments(assets, attachmentsRef.current.length);
+		const skipped = overflow === "count" ? `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.` : overflow === "size" ? "Pasted images must total under 25 MB." : undefined;
+		void addAttachments(async () => picks, "Couldn't read the pasted image.", [error, skipped].filter(Boolean).join(" ") || undefined)
 			.then((added) => { if (added > 0) haptics.tap(); });
 	};
 

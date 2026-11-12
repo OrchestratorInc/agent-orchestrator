@@ -121,27 +121,31 @@ export function photoPickerAttachment(
 
 /**
  * Images pasted into the task's field (see `useImagePaste`), as picks. The
- * native side sends the bytes inline and leaves out any image over its 10 MB
- * limit, so one without data is reported by size rather than read. `start`
- * numbers the names after what is already attached.
+ * native side sends the bytes inline. It leaves out an image over its 10 MB
+ * limit, sending only the size, and one it could not read, sending a size of 0;
+ * both are dropped here and named in `error` instead of reaching the size
+ * checks. `start` numbers the names after what is already attached.
  */
-export function pastedSpawnAttachments(assets: readonly ComposerImageAsset[], start = 0): PickedSpawnAttachment[] {
-	return assets.map((asset, index) => {
+export function pastedSpawnAttachments(assets: readonly ComposerImageAsset[], start = 0): { picks: PickedSpawnAttachment[]; error?: string } {
+	const picks: PickedSpawnAttachment[] = [];
+	const errors: string[] = [];
+	assets.forEach((asset, index) => {
 		const data = asset.base64 ?? "";
 		const mimeType = (data && sniffImageMimeType(data)) || asset.mimeType || "image/png";
 		const name = `pasted-image-${start + index + 1}.${mimeType.split("/")[1] || "png"}`;
-		const bytes = asset.fileSize ?? Math.floor(data.length * 0.75);
-		return {
+		if (!data) {
+			errors.push(asset.fileSize ? `${name} must be under 10 MB.` : `Could not read ${name}.`);
+			return;
+		}
+		picks.push({
 			name,
 			mimeType,
-			bytes,
-			...(data ? { previewUri: `data:${mimeType};base64,${data}` } : {}),
-			readData: async () => {
-				if (!data) throw new Error(bytes > 0 ? `${name} must be under 10 MB.` : `Could not read ${name}.`);
-				return data;
-			},
-		};
+			bytes: asset.fileSize ?? Math.floor(data.length * 0.75),
+			previewUri: `data:${mimeType};base64,${data}`,
+			readData: async () => data,
+		});
 	});
+	return { picks, error: errors.length ? errors.join(" ") : undefined };
 }
 
 /** Images the sheet can draw: a thumbnail in the row, full screen on tap. */
