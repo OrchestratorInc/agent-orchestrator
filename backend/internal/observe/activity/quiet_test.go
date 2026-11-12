@@ -155,6 +155,7 @@ func TestPollNeverMovesTerminalWithoutDetectorOnMissingEvidence(t *testing.T) {
 		{"running commands unknown", nil, &quietRuntime{rendered: frozenScreen, commandsErr: errors.New("exact supervisor is not running")}},
 		{"runtime cannot count commands", nil, &fakeRuntime{output: frozenScreen}},
 		{"blank screen", nil, &quietRuntime{rendered: " \n\n"}},
+		{"styled blank screen", nil, &quietRuntime{rendered: "\x1b[0m   \n\x1b[2K\x1b]0;droid\x07"}},
 		{"rendered capture failed", nil, &quietRuntime{fakeRuntime: fakeRuntime{output: frozenScreen}, renderedErr: errors.New("capture failed")}},
 		{"chat session", func(s *domain.SessionRecord) { s.Mode = domain.SessionModeChat }, &quietRuntime{rendered: frozenScreen}},
 		{"already waiting on the user", func(s *domain.SessionRecord) { s.Activity.State = domain.ActivityWaitingInput }, &quietRuntime{rendered: frozenScreen}},
@@ -176,14 +177,19 @@ func TestPollNeverMovesTerminalWithoutDetectorOnMissingEvidence(t *testing.T) {
 	}
 }
 
-func TestPollReadsRenderedSurfaceOfInspectorAdapters(t *testing.T) {
-	// Antigravity CLI 1.3.4 frames, as in agy's inspector tests.
+// agyFrames returns Antigravity CLI 1.3.4 frames, as in agy's inspector tests.
+func agyFrames() (idle, working, approval, draft string) {
 	rule := strings.Repeat("─", 60)
 	model := "                     Gemini 3.8 Flash · medium"
-	idle := strings.Join([]string{rule, ">", rule, "? for shortcuts" + model}, "\n")
-	working := strings.Join([]string{"⡿  Generating...", rule, ">", rule, "esc to cancel" + model}, "\n")
-	approval := strings.Join([]string{rule, "Run this command?", "> 1. Yes, run command", "  4. No, cancel", "  ↑/↓ Navigate · tab Amend", "esc to cancel" + model}, "\n")
-	draft := strings.Join([]string{rule, "> retry the migration", rule, model}, "\n")
+	idle = strings.Join([]string{rule, ">", rule, "? for shortcuts" + model}, "\n")
+	working = strings.Join([]string{"⡿  Generating...", rule, ">", rule, "esc to cancel" + model}, "\n")
+	approval = strings.Join([]string{rule, "Run this command?", "> 1. Yes, run command", "  4. No, cancel", "  ↑/↓ Navigate · tab Amend", "esc to cancel" + model}, "\n")
+	draft = strings.Join([]string{rule, "> retry the migration", rule, model}, "\n")
+	return idle, working, approval, draft
+}
+
+func TestPollReadsRenderedSurfaceOfInspectorAdapters(t *testing.T) {
+	idle, working, approval, draft := agyFrames()
 	for _, tc := range []struct {
 		name    string
 		runtime outputReader
@@ -217,6 +223,40 @@ func TestPollReadsRenderedSurfaceOfInspectorAdapters(t *testing.T) {
 			got := sink.signals[0]
 			if got.State != tc.state || got.Event != tc.event || !got.Timestamp.Equal(start.Add(tc.after)) {
 				t.Fatalf("first signal = %+v, want %s/%s at +%s", got, tc.state, tc.event, tc.after)
+			}
+		})
+	}
+}
+
+func TestPollClearsWaitingInputFromInspectorIdleFrame(t *testing.T) {
+	idle, working, approval, draft := agyFrames()
+	for _, tc := range []struct {
+		name   string
+		screen string
+		want   domain.ActivityState
+	}{
+		// An approval dialog closed without a hook leaves the idle composer.
+		{"idle composer", idle, domain.ActivityIdle},
+		{"dialog still open", approval, ""},
+		{"working frame", working, ""},
+		{"unrecognized frame is not quiet-checked", draft, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start := time.Unix(500, 0).UTC()
+			clock := start
+			session := activeSession(start, domain.HarnessAgy)
+			session.Activity.State = domain.ActivityWaitingInput
+			sink := &fakeSink{}
+			observer := newQuietObserver(session, sink, &quietRuntime{rendered: tc.screen}, agy.New(), &clock)
+			pollEvery(t, observer, &clock, start, start.Add(2*quietAfter), nil)
+			if tc.want == "" {
+				if len(sink.signals) != 0 {
+					t.Fatalf("signals = %+v, want none", sink.signals)
+				}
+				return
+			}
+			if len(sink.signals) == 0 || sink.signals[0].State != tc.want || sink.signals[0].Event != "terminal-idle" {
+				t.Fatalf("signals = %+v, want %s from terminal-idle", sink.signals, tc.want)
 			}
 		})
 	}

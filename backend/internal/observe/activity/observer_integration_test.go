@@ -2,6 +2,8 @@ package activity
 
 import (
 	"context"
+	"flag"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -116,12 +118,22 @@ func TestObserverIntegrationReconcilesRealTmuxOutputIntoSQLite(t *testing.T) {
 	}
 }
 
-// workloadFreeTmux is the real tmux runtime with no command running under the
-// agent: the test pane has no AO supervisor for tmux to count commands below.
-type workloadFreeTmux struct{ *tmux.Runtime }
-
-func (workloadFreeTmux) RunningWorkloadCommands(context.Context, ports.RuntimeHandle, ports.SupervisedProcessRef) (int, error) {
-	return 0, nil
+// TestQuietSupervisorHelper stands in for AO's agent supervisor. The frozen
+// terminal test launches this binary with the supervisor's command line, and it
+// runs the agent after "--" as its child, so tmux counts the real process tree.
+func TestQuietSupervisorHelper(t *testing.T) {
+	if os.Getenv("AO_QUIET_SUPERVISOR_HELPER") != "1" {
+		return
+	}
+	args := flag.Args()
+	for i, arg := range args {
+		if arg == "--" && i+1 < len(args) {
+			agent := exec.Command(args[i+1], args[i+2:]...)
+			agent.Stdin, agent.Stdout, agent.Stderr = os.Stdin, os.Stdout, os.Stderr
+			_ = agent.Run()
+			return
+		}
+	}
 }
 
 func TestObserverIntegrationMovesFrozenTerminalWithoutDetectorToWaitingInput(t *testing.T) {
@@ -129,20 +141,30 @@ func TestObserverIntegrationMovesFrozenTerminalWithoutDetectorToWaitingInput(t *
 		t.Skip("tmux unavailable")
 	}
 
+	const frozen = "printf '>\\n  ? for help'; sleep 60"
 	tests := []struct {
-		name      string
-		script    string
-		wantState domain.ActivityState
+		name         string
+		script       string
+		unsupervised bool
+		wantState    domain.ActivityState
 	}{
 		{
 			name:      "prompt left after a lost stop hook",
-			script:    "printf '>\\n  ? for help'; sleep 60",
+			script:    frozen,
 			wantState: domain.ActivityWaitingInput,
 		},
 		{
 			name:      "turn timer keeps it working",
 			script:    "printf '? for help\\n'; i=0; while :; do i=$((i+1)); printf '\\r- Thinking (%ds)' \"$i\"; sleep 0.1; done",
 			wantState: domain.ActivityActive,
+		},
+		{
+			// Without a supervisor the running commands can't be counted, so
+			// the session fails closed and stays working.
+			name:         "pane without a supervisor stays working",
+			script:       frozen,
+			unsupervised: true,
+			wantState:    domain.ActivityActive,
 		},
 	}
 
@@ -175,8 +197,14 @@ func TestObserverIntegrationMovesFrozenTerminalWithoutDetectorToWaitingInput(t *
 				t.Fatal(err)
 			}
 
+			cfg := ports.RuntimeConfig{SessionID: session.ID, WorkspacePath: workspace, Argv: []string{"sh", "-c", tt.script}}
+			if !tt.unsupervised {
+				cfg.Argv = append([]string{os.Args[0], "-test.run=TestQuietSupervisorHelper", "--",
+					"agent-process", "supervise", "--session", string(session.ID), "--launch", "launch-1", "--"}, cfg.Argv...)
+				cfg.Env = map[string]string{"AO_QUIET_SUPERVISOR_HELPER": "1"}
+			}
 			runtime := tmux.New(tmux.Options{Timeout: 5 * time.Second, ReapGrace: 100 * time.Millisecond})
-			handle, err := runtime.Create(ctx, ports.RuntimeConfig{SessionID: session.ID, WorkspacePath: workspace, Argv: []string{"sh", "-c", tt.script}})
+			handle, err := runtime.Create(ctx, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -190,7 +218,7 @@ func TestObserverIntegrationMovesFrozenTerminalWithoutDetectorToWaitingInput(t *
 			}
 
 			clock := now
-			observer := New(store, lifecycle.New(store, nil), workloadFreeTmux{runtime}, fakeAgents{domain.HarnessDroid: droid.New()},
+			observer := New(store, lifecycle.New(store, nil), runtime, fakeAgents{domain.HarnessDroid: droid.New()},
 				Config{StaleAfter: time.Minute, Clock: func() time.Time { return clock }, Logger: testLogger()})
 			for at := now; !at.After(now.Add(quietAfter)); at = at.Add(DefaultTickInterval) {
 				clock = at

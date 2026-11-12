@@ -4,12 +4,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+// terminalEscape matches CSI and OSC sequences, which styled capture keeps.
+var terminalEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
 
 // quietScreen is the screen a stale terminal showed, and since when it has
 // shown it with no command running.
@@ -26,14 +30,18 @@ type quietScreen struct {
 // became active, so time alone cannot tell that from a long turn.
 //
 // An adapter's TerminalSurfaceInspector is authoritative and settles the state
-// from one rendered frame. Otherwise the evidence is the terminal itself: an
-// agent TUI animates a spinner or timer while a turn runs, and a tool runs as a
-// command under the agent. A screen unchanged for quietAfter with no command
-// running reads as waiting on the user. That surfaces the stall as Needs input
-// without claiming the turn ended, so nothing gated on idle acts on a guess.
+// from one rendered frame. Its idle frame also clears a stale waiting_input,
+// since no hook reports a dialog closing. Otherwise the evidence is the
+// terminal itself: an agent TUI animates a spinner or timer while a turn runs,
+// and a tool runs as a command under the agent. A screen unchanged for
+// quietAfter with no command running reads as waiting on the user. That
+// surfaces the stall as Needs input without claiming the turn ended, so nothing
+// gated on idle acts on a guess.
 func (o *Observer) reconcileUndetected(ctx context.Context, session domain.SessionRecord, agent ports.Agent, now time.Time, previous quietScreen) {
+	inspector, inspects := agent.(ports.TerminalSurfaceInspector)
+	waiting := inspects && session.Activity.State == domain.ActivityWaitingInput
 	if domain.NormalizeSessionMode(session.Mode) != domain.SessionModeTUI ||
-		session.Activity.State != domain.ActivityActive || session.Activity.LastActivityAt.IsZero() ||
+		(session.Activity.State != domain.ActivityActive && !waiting) || session.Activity.LastActivityAt.IsZero() ||
 		now.Sub(session.Activity.LastActivityAt) < o.staleAfter {
 		return
 	}
@@ -43,7 +51,7 @@ func (o *Observer) reconcileUndetected(ctx context.Context, session domain.Sessi
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return
 	}
-	if inspector, ok := agent.(ports.TerminalSurfaceInspector); ok {
+	if inspects {
 		// These TUIs' raw redraws never form their screen, so raw output is no
 		// evidence either way.
 		if !rendered {
@@ -54,13 +62,19 @@ func (o *Observer) reconcileUndetected(ctx context.Context, session domain.Sessi
 			o.apply(ctx, session, agent, domain.ActivityIdle, "terminal-idle", now)
 			return
 		case ports.TerminalSurfaceWorkWaitingInput:
-			o.apply(ctx, session, agent, domain.ActivityWaitingInput, "terminal-waiting-input", now)
+			if !waiting {
+				o.apply(ctx, session, agent, domain.ActivityWaitingInput, "terminal-waiting-input", now)
+			}
 			return
 		case ports.TerminalSurfaceWorkActive:
 			return
 		}
+		// The quiet check is for stale active sessions only.
+		if waiting {
+			return
+		}
 	}
-	if strings.TrimSpace(output) == "" {
+	if strings.TrimSpace(terminalEscape.ReplaceAllString(output, "")) == "" {
 		return
 	}
 	screen := quietScreen{launchID: session.Metadata.RuntimeLaunchID, digest: sha256.Sum256([]byte(output)), since: now}
