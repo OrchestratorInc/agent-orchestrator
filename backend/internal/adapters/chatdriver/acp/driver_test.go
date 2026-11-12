@@ -871,6 +871,8 @@ type fakeAgent struct {
 	cancelErr           error
 	cancelCalls         int
 	customPrompt        func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error)
+	// agentInfo, when set, is reported as the handshake's agentInfo.
+	agentInfo           *acpsdk.Implementation
 	mode                string
 	modeNotFound        bool // SetSessionMode returns -32601
 	modeRequiresOption  SessionOption
@@ -1036,6 +1038,7 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 	a.initParams = params
 	initErr := a.initErr
 	caps := a.capabilities
+	agentInfo := a.agentInfo
 	a.mu.Unlock()
 	if initErr != nil {
 		return acpsdk.InitializeResponse{}, initErr
@@ -1057,6 +1060,7 @@ func (a *fakeAgent) Initialize(_ context.Context, params acpsdk.InitializeReques
 		ProtocolVersion:   acpsdk.ProtocolVersionNumber,
 		Meta:              meta,
 		AgentCapabilities: defaultCaps,
+		AgentInfo:         agentInfo,
 	}, nil
 }
 

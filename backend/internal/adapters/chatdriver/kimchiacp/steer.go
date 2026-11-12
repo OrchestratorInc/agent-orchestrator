@@ -18,13 +18,33 @@ import (
 const (
 	kimchiMetaKey        = "kimchi.dev"
 	kimchiSteeringMethod = "_kimchi.dev/steering"
+	// minimumSteerImagesVersion is the first Kimchi whose steering reads
+	// `attachments`. Earlier ones queue the text and drop the images, and the
+	// handshake does not say which a build does.
+	minimumSteerImagesVersion = "1.2.0"
 )
 
 var steerRequest = &acpdriver.SteerRequest{
-	Supported: steeringAdvertised,
-	Method:    kimchiSteeringMethod,
-	Params:    steeringParams,
-	Outcome:   steeringOutcome,
+	Supported:   steeringAdvertised,
+	Method:      kimchiSteeringMethod,
+	Params:      steeringParams,
+	TakesImages: steeringTakesImages,
+	Outcome:     steeringOutcome,
+}
+
+// steeringTakesImages reads Kimchi's version from the handshake. A version it
+// cannot read is treated as too old: refusing an image is recoverable, a
+// silently dropped one is not.
+func steeringTakesImages(init acpsdk.InitializeResponse) bool {
+	if init.AgentInfo == nil {
+		return false
+	}
+	installed, ok := parseSemver(init.AgentInfo.Version)
+	if !ok {
+		return false
+	}
+	minimum, _ := parseSemver(minimumSteerImagesVersion)
+	return !installed.less(minimum)
 }
 
 // steeringAdvertised reads `agentCapabilities._meta["kimchi.dev"].steering`.

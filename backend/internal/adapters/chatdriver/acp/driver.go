@@ -950,6 +950,7 @@ func (d *Driver) initialize(
 			}
 		}
 		conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
+		conv.handshake = init
 		return conv, init, state, nil
 	}
 
@@ -1005,6 +1006,7 @@ func (d *Driver) initialize(
 		}
 	}
 	conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
+	conv.handshake = init
 	if d.cfg.AfterInitialize != nil {
 		if err := d.cfg.AfterInitialize(ctx, conv.conn, init, cfg); err != nil {
 			conv.discard()
