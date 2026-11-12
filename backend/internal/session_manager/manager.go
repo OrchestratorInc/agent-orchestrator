@@ -3455,7 +3455,8 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 		if rec.HibernatedAt == nil && m.chat != nil && m.chat.HasLiveChatController(id) {
 			return nil
 		}
-		_, err = m.ResumeAgentWithMode(ctx, id)
+		// Every wake caller drains the queue itself once the wake returns.
+		_, err = m.resumeAgentWithMode(ctx, id, false, true)
 		if errors.Is(err, ErrResumeInProgress) {
 			m.agentOpMu.Lock()
 			operation = m.agentOperations[id]
@@ -3473,12 +3474,14 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
-	return m.resumeAgentWithMode(ctx, id, false)
+	return m.resumeAgentWithMode(ctx, id, false, false)
 }
 
 // resumeAgentWithMode preserves strict native-history intent for automatic
 // retries, including update stops that have no stale-binary failure marker.
-func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool) (result RestoreResult, err error) {
+// callerDrains is set by callers that deliver the kept queue themselves after
+// the resume (a wake, a version move), so it is not drained twice.
+func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory, callerDrains bool) (result RestoreResult, err error) {
 	defer func() { m.logRelaunchFailure("resume agent", id, err) }()
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
@@ -3628,9 +3631,9 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 			defer release()
 		}
 	}
-	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec,
-		requireNativeHistory || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil))
-	if err == nil && chatResume {
+	switchFailed := rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil
+	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, requireNativeHistory || switchFailed)
+	if err == nil && chatResume && (!callerDrains || switchFailed) {
 		// Deliver what was kept, as a wake would.
 		if drainErr := m.chat.DrainChatQueue(ctx, id); drainErr != nil {
 			m.logger.Warn("could not deliver messages queued while the agent was stopped", "sessionID", id, "error", drainErr)
