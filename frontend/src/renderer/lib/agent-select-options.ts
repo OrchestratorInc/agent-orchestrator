@@ -111,18 +111,20 @@ export function preferredAgentNeedsChecks(agents: readonly AgentInfo[]): boolean
 }
 
 /**
- * A new project starts every role on the most preferred agent; project settings
- * can change each one. The reviewer follows the daemon's own rule: the agent
- * reviews only when it is one of the unattended-safe reviewers, otherwise
- * Claude Code does. Other reviewers need an explicit choice, and an older
- * remote host may not know them.
+ * A new project starts the worker and orchestrator on the most preferred agent;
+ * project settings can change each one. Only the unattended-safe reviewers can
+ * review by default (other reviewers need an explicit choice, and an older
+ * remote host may not know them), so the reviewer is the most preferred of
+ * those this machine has, and Claude Code, the daemon's own fallback, when it
+ * has none.
  */
 export function defaultProjectAgents(agents: readonly AgentInfo[]): ProjectAgentDefaults {
-	const top = preferredAgentList(agents)[0] ?? FALLBACK_PROJECT_AGENT;
+	const ranked = preferredAgentList(agents);
+	const top = ranked[0] ?? FALLBACK_PROJECT_AGENT;
 	return {
 		workerAgent: top,
 		orchestratorAgent: top,
-		reviewerAgent: defaultReviewerHarness(top),
+		reviewerAgent: ranked.find((id) => defaultReviewerHarness(id) === id) ?? defaultReviewerHarness(top),
 	};
 }
 

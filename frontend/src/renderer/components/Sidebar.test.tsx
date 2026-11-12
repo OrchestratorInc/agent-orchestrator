@@ -1827,14 +1827,14 @@ describe("Sidebar", () => {
 		expect(screen.queryByRole("combobox", { name: "Worker agent" })).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Create and start" }));
-		// Cursor leads AO's priority among these; it is not an unattended-safe
-		// reviewer, so Claude Code reviews.
+		// Cursor leads AO's priority among these but is not an unattended-safe
+		// reviewer; OpenCode is the best one installed, so it reviews.
 		await waitFor(() =>
 			expect(onCreateProject).toHaveBeenCalledWith(
 				expect.objectContaining({
 					workerAgent: "cursor",
 					orchestratorAgent: "cursor",
-					reviewerAgent: "claude-code",
+					reviewerAgent: "opencode",
 				}),
 			),
 		);

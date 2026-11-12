@@ -232,8 +232,18 @@ describe("defaultProjectAgents", () => {
 		});
 	});
 
-	it("reviews with Claude Code when the top agent is not an unattended-safe reviewer", () => {
-		expect(defaultProjectAgents([agent("cursor"), agent("codex", "unknown", "unknown")])).toEqual({
+	it("reviews with the most preferred unattended-safe reviewer when the top agent is not one", () => {
+		expect(defaultProjectAgents([agent("cursor"), agent("opencode"), agent("codex", "unknown", "unknown")])).toEqual({
+			workerAgent: "cursor",
+			orchestratorAgent: "cursor",
+			reviewerAgent: "opencode",
+		});
+		// A ready reviewer outranks one AO has not checked yet.
+		expect(defaultProjectAgents([agent("cursor"), agent("opencode", "unknown", "unknown"), agent("kimchi")]).reviewerAgent).toBe("kimchi");
+	});
+
+	it("reviews with Claude Code when no unattended-safe reviewer is usable", () => {
+		expect(defaultProjectAgents([agent("cursor"), agent("codex", "not_installed")])).toEqual({
 			workerAgent: "cursor",
 			orchestratorAgent: "cursor",
 			reviewerAgent: "claude-code",
