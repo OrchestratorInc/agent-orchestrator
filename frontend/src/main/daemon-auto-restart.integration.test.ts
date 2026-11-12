@@ -64,7 +64,11 @@ function setup() {
 	const establishSupervisorLink = vi.fn();
 	const daemonEnv = vi.fn((keep: boolean) => ({ AO_OWNER: keep ? "persistent" : "app" }));
 	const env: Record<string, string | undefined> = {};
+	const lifecycleLog = vi.fn();
+	const planDaemonSpawnIsolation = vi.fn(async (): Promise<unknown> => ({ kind: "unchanged", reason: "disabled" }));
+	const applyDaemonOomScoreAdj = vi.fn(() => 300);
 	const context = vm.createContext({
+		lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj,
 		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path,
 		openSync: vi.fn(() => 73), closeSync: vi.fn(),
 		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
@@ -91,7 +95,7 @@ function setup() {
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {
-		read, unlink, spawn, children, replace, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		read, unlink, spawn, children, replace, lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj, inspect, direct, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
 		setMarker(value: string | Error) { marker = value; },
 		start: () => ipc.get("daemon:start")!(), stop: () => ipc.get("daemon:stop")!(), restart: () => ipc.get("daemon:restart")!(),
 		status: () => vm.runInContext("daemonStatus", context),
@@ -156,6 +160,69 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.spawn).toHaveBeenCalledTimes(1);
 		expect(h.unlink).not.toHaveBeenCalled();
 		expect(h.status()).toEqual({ state: "stopped" });
+	});
+
+	it("records the observed exit and the restart decision before respawning", async () => {
+		const h = setup();
+		await h.start();
+		h.crash(null, "SIGBUS");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		const calls = h.lifecycleLog.mock.calls;
+		const exitIndex = calls.findIndex(([event]) => event === "daemon_exit");
+		const decisionIndex = calls.findIndex(([event]) => event === "daemon_restart_decision");
+		expect(calls[exitIndex][1]).toMatchObject({ daemonPid: 42, code: null, signal: "SIGBUS", current: true, requestedStop: false });
+		expect(calls[decisionIndex][1]).toMatchObject({
+			daemonPid: 42, signal: "SIGBUS", runFilePresent: true, runFilePid: 42,
+			cause: "ungraceful_exit", decision: "restart", attempt: 1, delayMs: 1000,
+		});
+		const decisionOrder = h.lifecycleLog.mock.invocationCallOrder[decisionIndex];
+		expect(decisionOrder).toBeLessThan(h.spawn.mock.invocationCallOrder[1]);
+		const respawn = calls.findIndex(([event, fields], index) => index > decisionIndex && event === "daemon_spawn" && fields.trigger === "auto_restart");
+		expect(calls[respawn][1]).toMatchObject({ crashedPid: 42 });
+		expect(h.lifecycleLog.mock.invocationCallOrder[respawn]).toBeLessThan(h.spawn.mock.invocationCallOrder[1]);
+	});
+
+	it("spawns through the isolation plan and records it", async () => {
+		const h = setup();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "ao-daemon-1-x", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--user", "--scope", "--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		expect(h.spawn.mock.calls[0][0]).toBe("/usr/bin/systemd-run");
+		expect(h.spawn.mock.calls[0][1]).toEqual(["--user", "--scope", "--", "/owned/ao"]);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ isolation: "scope", scopeUnit: "ao-daemon-1-x" }));
+		expect(h.applyDaemonOomScoreAdj).not.toHaveBeenCalled();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({ kind: "oom_score_adj", reason: "user_manager_unavailable", adjustment: 300 });
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.spawn.mock.calls[1][0]).toBe("/owned/ao");
+		expect(h.applyDaemonOomScoreAdj).toHaveBeenCalledWith(43, 300);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawned", expect.objectContaining({ daemonPid: 43, oomScoreAdj: 300 }));
+	});
+
+	it("records a graceful exit as no restart", async () => {
+		const h = setup();
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(0, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({
+			code: 0, runFilePresent: false, decision: "no_restart", cause: "graceful_exit",
+		}));
+	});
+
+	it("records giving up once the restart window is exhausted", async () => {
+		const h = setup();
+		await h.start();
+		for (let attempt = 0; attempt < 7; attempt++) {
+			h.setMarker(JSON.stringify({ pid: h.children.at(-1)!.pid, port: 3001 }));
+			h.crash(2, null);
+			await vi.advanceTimersByTimeAsync(31_000);
+		}
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ decision: "give_up", cause: "ungraceful_exit" }));
 	});
 
 	it("recovers a signal crash whose marker was initially absent", async () => {
