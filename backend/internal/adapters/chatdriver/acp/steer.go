@@ -24,9 +24,9 @@ const steeringMethod = "_session/steering"
 // guidance is withdrawn and the caller is told to try again.
 const defaultSteerDrainWait = 5 * time.Second
 
-// steerNudgeTimeout bounds the best-effort request asking a drain agent to
-// collect guidance now. The agent answers it at once; a slow answer only means
-// the guidance waits for the next ordinary boundary.
+// steerNudgeTimeout bounds the wait for an answer to the best-effort request
+// asking a drain agent to collect guidance now. The agent answers it at once; a
+// slow answer only means the guidance waits for the next ordinary boundary.
 const steerNudgeTimeout = time.Second
 
 type steeringResponse struct {
@@ -56,6 +56,11 @@ type SteerRequest struct {
 	// Params builds the request for the session's running turn. An error means
 	// the method cannot carry this prompt; nothing is sent.
 	Params func(sessionID string, prompt []acpsdk.ContentBlock) (any, error)
+	// TakesImages optionally reports from the handshake whether this agent
+	// reads images sent with the request. When it does not, a steer with an
+	// image is refused before anything is sent, rather than accepted with the
+	// image silently dropped. Nil means the request carries what Params takes.
+	TakesImages func(acpsdk.InitializeResponse) bool
 	// Outcome reads the agent's response.
 	Outcome func(json.RawMessage) (SteerOutcome, error)
 }
@@ -246,6 +251,7 @@ func (c *conversation) Steer(
 	activeTurn := c.activeTurn
 	sessionID := c.sessionID
 	closed := c.closed
+	stopping := activeTurn != "" && c.stoppingTurn == activeTurn
 	c.mu.Unlock()
 	if closed {
 		return ports.ChatTurnRef{}, errConversationClosed
@@ -255,6 +261,9 @@ func (c *conversation) Steer(
 	}
 	if providerTurnID == "" || providerTurnID != activeTurn {
 		return ports.ChatTurnRef{}, ports.ErrChatNoSteerableTurn
+	}
+	if stopping {
+		return ports.ChatTurnRef{}, errSteerTurnStopping
 	}
 	if c.steering.drain != nil {
 		return c.steerByDrain(ctx, providerTurnID, sessionID, prompt)
@@ -276,6 +285,15 @@ func (c *conversation) steerByRequest(
 	sessionID string,
 	prompt []acpsdk.ContentBlock,
 ) (ports.ChatTurnRef, error) {
+	if request.TakesImages != nil && hasImage(prompt) {
+		c.mu.Lock()
+		handshake := c.handshake
+		c.mu.Unlock()
+		if !request.TakesImages(handshake) {
+			return ports.ChatTurnRef{}, fmt.Errorf(
+				"%w: this agent version drops images sent while a turn is running", ports.ErrChatSteerContentUnsupported)
+		}
+	}
 	params, err := request.Params(sessionID, prompt)
 	if err != nil {
 		return ports.ChatTurnRef{}, fmt.Errorf("%w: %w", ports.ErrChatSteerContentUnsupported, err)
@@ -335,6 +353,11 @@ func (c *conversation) steerByDrain(
 		c.mu.Unlock()
 		return ports.ChatTurnRef{}, ports.ErrChatNoSteerableTurn
 	}
+	if c.stoppingTurn == providerTurnID {
+		// Stop withdrew this turn's guidance between Steer's check and now.
+		c.mu.Unlock()
+		return ports.ChatTurnRef{}, errSteerTurnStopping
+	}
 	c.pendingSteers = append(c.pendingSteers, pending)
 	c.mu.Unlock()
 
@@ -347,12 +370,17 @@ func (c *conversation) steerByDrain(
 	defer timer.Stop()
 
 	if drain.Nudge != "" {
-		nudgeCtx, cancel := context.WithTimeout(ctx, min(steerNudgeTimeout, wait))
-		if err := c.legacyWire.call(nudgeCtx, drain.Nudge, map[string]string{"sessionId": sessionID}); err != nil {
-			c.log.Debug("ACP steer nudge failed; guidance waits for the next boundary",
-				"method", drain.Nudge, "error", err)
-		}
-		cancel()
+		// Off Steer's path: a write can stall before the call sees its context,
+		// and Steer must still return within its wait. The guidance is already
+		// parked, so the nudge only hurries the agent along.
+		nudgeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), min(steerNudgeTimeout, wait))
+		go func() {
+			defer cancel()
+			if err := c.legacyWire.call(nudgeCtx, drain.Nudge, map[string]string{"sessionId": sessionID}); err != nil {
+				c.log.Debug("ACP steer nudge failed; guidance waits for the next boundary",
+					"method", drain.Nudge, "error", err)
+			}
+		}()
 	}
 
 	settled := func(collected bool) (ports.ChatTurnRef, error) {
@@ -449,6 +477,11 @@ func (c *conversation) steerByPrompt(
 	if c.activeTurn != providerTurnID || c.turnCtx == nil || c.settlingTurn == providerTurnID || c.turnResult != nil {
 		c.mu.Unlock()
 		return ports.ChatTurnRef{}, ports.ErrChatNoSteerableTurn
+	}
+	if c.stoppingTurn == providerTurnID {
+		// Stop withdrew this turn's guidance between Steer's check and now.
+		c.mu.Unlock()
+		return ports.ChatTurnRef{}, errSteerTurnStopping
 	}
 	c.promptSeq++
 	seq := c.promptSeq
@@ -760,12 +793,20 @@ func (c *conversation) collectSteers(params json.RawMessage) any {
 	return drain.Response(texts)
 }
 
+// errSteerTurnStopping refuses guidance for a turn Stop is stopping.
+var errSteerTurnStopping = fmt.Errorf("%w: the turn is being stopped", ports.ErrChatTurnNotSteerable)
+
 // WithdrawPendingSteers settles every steer still waiting for the agent as not
-// collected, so a Steer blocked on a drain agent returns at once. Stop calls it
-// before taking the Chat controller's dispatch lock.
+// collected, so a Steer blocked on a drain agent returns at once, and refuses
+// any later steer for the running turn. Stop calls it before taking the Chat
+// controller's dispatch lock, so a steer that already holds the lock but has
+// not reached the agent yet is turned away too. A later turn steers as usual.
 func (c *conversation) WithdrawPendingSteers() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.activeTurn != "" {
+		c.stoppingTurn = c.activeTurn
+	}
 	for _, pending := range c.pendingSteers {
 		pending.withdrawn = true
 	}
@@ -793,4 +834,13 @@ func drainText(prompt []acpsdk.ContentBlock) (string, error) {
 		parts = append(parts, block.Text.Text)
 	}
 	return strings.Join(parts, "\n\n"), nil
+}
+
+func hasImage(prompt []acpsdk.ContentBlock) bool {
+	for _, block := range prompt {
+		if block.Image != nil {
+			return true
+		}
+	}
+	return false
 }
