@@ -3485,6 +3485,8 @@
 	"remote.cloneDescription": "Cole uma URL do Git e escolha onde o Orchestrator deve criar o checkout na máquina.",
 	"remote.passwordRejected": "Acesso rejeitado",
 	"remote.retryHost": "Tentar {{label}} novamente",
+	"remote.retry": "Tentar novamente",
+	"remote.offline": "Offline",
 	"remote.startOn": "Iniciar em {{label}}",
 	"remote.hostLabel": "Máquina remota: {{hostId}}",
 	"remote.loadingSession": "Carregando sessão",

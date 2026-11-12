@@ -3423,6 +3423,8 @@
 	"remote.cloneDescription": "Git URL を貼り付け、ホスト上で Orchestrator がチェックアウトを作成する場所を選択します。",
 	"remote.passwordRejected": "アクセスが拒否されました",
 	"remote.retryHost": "{{label}} に再接続",
+	"remote.retry": "再試行",
+	"remote.offline": "オフライン",
 	"remote.startOn": "{{label}} で開始",
 	"remote.hostLabel": "リモートホスト: {{hostId}}",
 	"remote.loadingSession": "セッションを読み込み中",
