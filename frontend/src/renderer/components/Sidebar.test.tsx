@@ -1703,6 +1703,36 @@ describe("Sidebar", () => {
 		);
 	});
 
+	it("in Developer Mode, starts a new project on the most preferred agent for every role", async () => {
+		useUiStore.setState({ developerMode: true });
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
+		renderSidebar({ onCreateProject });
+
+		await openLocalProjectSources(user);
+		expect(screen.getByRole("dialog", { name: "New project" })).toBeInTheDocument();
+		expect(window.ao!.app.chooseDirectory).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
+
+		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
+		expect(window.ao!.app.chooseDirectory).toHaveBeenCalledWith("Choose a project repository");
+		const dialog = screen.getByRole("dialog", { name: "Set up project" });
+		expect(dialog).toHaveClass("left-1/2", "top-1/2", "-translate-x-1/2", "-translate-y-1/2");
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() =>
+			expect(onCreateProject).toHaveBeenCalledWith(
+				expect.objectContaining({
+					path: "/repo/new-project",
+					workerAgent: "claude-code",
+					orchestratorAgent: "claude-code",
+					reviewerAgent: "claude-code",
+				}),
+			),
+		);
+	});
+
 	it("opens an already registered project before agent setup", async () => {
 		const user = userEvent.setup();
 		useUiStore.getState().clearGlobalToast();
@@ -1850,6 +1880,44 @@ describe("Sidebar", () => {
 				expect.objectContaining({
 					workerAgent: "cursor",
 					orchestratorAgent: "cursor",
+				}),
+			),
+		);
+	});
+
+	it("in Developer Mode, starts on the preferred agent and the best unattended-safe reviewer", async () => {
+		useUiStore.setState({ developerMode: true });
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
+		mockAgentReadinessResponse({
+			data: {
+				agents: [
+					agentReadiness("goose", "Goose"),
+					agentReadiness("devin", "Devin"),
+					agentReadiness("aider", "Aider"),
+					agentReadiness("opencode", "OpenCode"),
+					agentReadiness("cursor", "Cursor"),
+				],
+			},
+			error: undefined,
+		});
+		renderSidebar({ onCreateProject, seedAgents: false });
+
+		await openLocalProjectSources(user);
+		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
+		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
+		expect(screen.queryByRole("combobox", { name: "Worker agent" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
+		// Cursor leads AO's priority among these but is not an unattended-safe
+		// reviewer; OpenCode is the best one installed, so it reviews.
+		await waitFor(() =>
+			expect(onCreateProject).toHaveBeenCalledWith(
+				expect.objectContaining({
+					workerAgent: "cursor",
+					orchestratorAgent: "cursor",
+					reviewerAgent: "opencode",
 				}),
 			),
 		);
@@ -2301,6 +2369,37 @@ describe("Sidebar", () => {
 		);
 	});
 
+	it("in Developer Mode, skips agents that are missing or signed out when picking the project's agent", async () => {
+		useUiStore.setState({ developerMode: true });
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
+		mockAgentReadinessResponse({
+			data: {
+				agents: [
+					agentReadiness("cursor", "Cursor", { authentication: "unauthorized" }),
+					agentReadiness("aider", "Aider", { installation: "not_installed", authentication: "unknown" }),
+					agentReadiness("opencode", "OpenCode"),
+				],
+			},
+			error: undefined,
+		});
+		renderSidebar({ onCreateProject, seedAgents: false });
+
+		await openLocalProjectSources(user);
+		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
+		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
+
+		await waitFor(() =>
+			expect(onCreateProject).toHaveBeenCalledWith(expect.objectContaining({
+				workerAgent: "opencode",
+				orchestratorAgent: "opencode",
+				reviewerAgent: "opencode",
+			})),
+		);
+	});
+
 	it("updates project agent options when the catalog loads after the dialog opens", async () => {
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
@@ -2336,6 +2435,47 @@ describe("Sidebar", () => {
 				path: "/repo/new-project",
 				workerAgent: "claude-code",
 				orchestratorAgent: "claude-code",
+				trackerIntake: undefined,
+				asWorkspace: false,
+			}),
+		);
+	});
+
+	it("in Developer Mode, waits for the agent catalog before choosing the project's agent", async () => {
+		useUiStore.setState({ developerMode: true });
+		const user = userEvent.setup();
+		const onCreateProject = vi.fn().mockResolvedValue(undefined) as CreateProjectHandler;
+		window.ao!.app.chooseDirectory = vi.fn().mockResolvedValue("/repo/new-project");
+		let resolveAgents!: (value: {
+			data: { agents: ReturnType<typeof agentReadiness>[] };
+			error: undefined;
+		}) => void;
+		mockAgentReadinessResponse(
+			new Promise((resolve) => {
+				resolveAgents = resolve;
+			}),
+		);
+		renderSidebar({ onCreateProject, seedAgents: false });
+
+		await openLocalProjectSources(user);
+		await user.click(screen.getByRole("button", { name: /^Open a local folder$/i }));
+		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
+		expect(onCreateProject).not.toHaveBeenCalled();
+
+		resolveAgents({
+			data: {
+				agents: [agentReadiness("codex", "Codex")],
+			},
+			error: undefined,
+		});
+
+		await waitFor(() =>
+			expect(onCreateProject).toHaveBeenCalledWith({
+				path: "/repo/new-project",
+				workerAgent: "codex",
+				orchestratorAgent: "codex",
+				reviewerAgent: "codex",
 				trackerIntake: undefined,
 				asWorkspace: false,
 			}),

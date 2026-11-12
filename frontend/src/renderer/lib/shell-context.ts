@@ -13,6 +13,7 @@ export type ShellContextValue = {
 		path: string;
 		workerAgent: string;
 		orchestratorAgent: string;
+		reviewerAgent?: string;
 		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 		asWorkspace?: boolean;
 	}) => Promise<void>;
@@ -21,6 +22,7 @@ export type ShellContextValue = {
 		destinationParent: string;
 		workerAgent: string;
 		orchestratorAgent: string;
+		reviewerAgent?: string;
 		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	}) => Promise<void>;
 	initializeProjectRepository: (path: string) => Promise<void>;

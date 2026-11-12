@@ -241,6 +241,7 @@ function findRegisteredWorkspaceByPath(workspaces: WorkspaceSummary[], path: str
 type CreateProjectConfigInput = {
 	workerAgent: string;
 	orchestratorAgent: string;
+	reviewerAgent?: string;
 	trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	defaultBranch?: string;
 };
@@ -250,6 +251,7 @@ export function createProjectConfig(input: CreateProjectConfigInput): components
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
 		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
 		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
+		...(input.reviewerAgent ? { reviewers: [{ harness: input.reviewerAgent }] } : {}),
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -751,19 +753,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
 					: item),
 			);
+			// Follow the new orchestrator only if the user is still waiting on
+			// this project's board; do not pull them back from another page.
+			// The provisioning gate stays up until the session route has landed,
+			// otherwise the board shows through for a beat between the two.
+			const current = routeParamsRef.current;
+			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				// A failed navigation is not a failed start: the session exists.
+				await navigate({
+					to: "/projects/$projectId/sessions/$sessionId",
+					params: { projectId: workspace.id, sessionId },
+				}).catch(() => undefined);
+			}
 			// The session now exists, so the sidebar button can open it even if
 			// the user left while it spawned.
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			// Follow the new orchestrator only if the user is still waiting on
-			// this project's board; do not pull them back from another page.
-			const current = routeParamsRef.current;
-			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
-				void navigate({
-					to: "/projects/$projectId/sessions/$sessionId",
-					params: { projectId: workspace.id, sessionId },
-				});
-			}
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
@@ -813,6 +818,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			path: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			asWorkspace?: boolean;
 			clonePreparationId?: string;
@@ -911,6 +917,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			destinationParent: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			signal?: AbortSignal;
 		}) => {
