@@ -80,6 +80,8 @@ function formatResetIn(seconds: number): string {
 	return `${Math.floor(hours / 24)}d`;
 }
 
+type QuotaWindow = { percent: number; resetsIn?: number; label: "Session" | "Weekly" };
+
 /**
  * The tighter of the provider's two windows, or undefined when it reported
  * neither. Negative is the daemon's "not reported" signal and must not be drawn:
@@ -87,11 +89,13 @@ function formatResetIn(seconds: number): string {
  */
 function worstWindow(
 	limits: ConversationRateLimits,
-): { percent: number; resetsIn?: number } | undefined {
-	const windows = [
-		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds },
-		{ percent: limits.secondaryUsedPercent, resetsIn: limits.secondaryResetsInSeconds },
-	].filter((w) => typeof w.percent === "number" && w.percent >= 0);
+): QuotaWindow | undefined {
+	// Primary is the short (session) window, secondary the weekly one. Both are
+	// already consumed percentages, so they are drawn as-is (never inverted).
+	const windows: QuotaWindow[] = [
+		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds, label: "Session" as const },
+		{ percent: limits.secondaryUsedPercent, resetsIn: limits.secondaryResetsInSeconds, label: "Weekly" as const },
+	].filter((w) => typeof w.percent === "number" && Number.isFinite(w.percent) && w.percent >= 0);
 	if (windows.length === 0) return undefined;
 	return windows.reduce((worst, w) => (w.percent > worst.percent ? w : worst));
 }
@@ -225,11 +229,11 @@ function QuotaWarning({
 	quota,
 	limits,
 }: {
-	quota: { percent: number; resetsIn?: number };
+	quota: QuotaWindow;
 	limits?: ConversationRateLimits;
 }) {
 	const severity = quotaSeverity(quota.percent);
-	const percent = Math.round(quota.percent);
+	const percent = Math.min(100, Math.round(quota.percent));
 	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatResetIn(quota.resetsIn) : undefined;
 
 	return (
@@ -244,13 +248,13 @@ function QuotaWarning({
 					)}
 				>
 					<AlertTriangle aria-hidden="true" className="size-3" />
-					{percent}% quota
+					{quota.label} {percent}% used
 				</span>
 			</TooltipTrigger>
 			<TooltipContent>
 				<p>
-					This account has used {percent}% of its
-					{limits?.planLabel ? ` ${limits.planLabel}` : ""} rate limit
+					This account has used {percent}% of its {quota.label.toLowerCase()}
+					{limits?.planLabel ? ` ${limits.planLabel}` : ""} usage limit
 					{resets ? `, which resets in ${resets}` : ""}.
 				</p>
 				{/* Named explicitly because this is the failure a user cannot otherwise
