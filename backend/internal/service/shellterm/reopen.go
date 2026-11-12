@@ -119,6 +119,13 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 	if err != nil {
 		return ShellTerminal{}, err
 	}
+	if readiness.file == "" {
+		// Without a prompt signal the command could not be delivered. Refuse
+		// before replacing the tab, so the ended tab stays as it was.
+		readiness.cleanup()
+		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_AGENT_RESUME_UNSUPPORTED",
+			"Reopening with an agent needs bash, zsh, sh or fish. Reopen the terminal and start the agent yourself.", nil)
+	}
 	cfg.argv = readiness.argv
 	cfg.env = agentlaunch.MergeEnv(launch.env, readiness.env)
 	terminal, err := s.openTerminal(ctx, cfg)
