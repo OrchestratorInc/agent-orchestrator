@@ -1399,7 +1399,8 @@ describe("SessionsBoard", () => {
 		await waitFor(() => expectSelected("archived 0"));
 		styleSpy.mockRestore();
 
-		await userEvent.keyboard("{ArrowRight}{Enter}");
+		// Unmeasured, the grid is one column: Down steps to the next card.
+		await userEvent.keyboard("{ArrowDown}{Enter}");
 		expect(postMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",

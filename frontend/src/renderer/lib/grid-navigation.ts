@@ -9,8 +9,8 @@ export function isGridNavigationKey(key: string): key is GridNavigationKey {
 
 /**
  * Where a key moves the selection in a grid filled row by row, `columns` wide,
- * with `count` items in all (mounted or not). Left and Right step one item;
- * Up and Down keep the column and stop at the first and last rows, and Down
+ * with `count` items in all (mounted or not). Left and Right step one item
+ * within the row, stopping at its ends rather than wrapping; Up and Down keep the column and stop at the first and last rows, and Down
  * into a short last row lands on its last item; PageUp and PageDown move
  * `pageRows` rows the same way, then to the first or last item. -1 when empty.
  */
@@ -25,9 +25,9 @@ export function gridNavigationTarget(key: GridNavigationKey, index: number, coun
 	const lastRow = Math.floor(last / cols);
 	switch (key) {
 		case "ArrowLeft":
-			return Math.max(0, current - 1);
+			return column === 0 ? current : current - 1;
 		case "ArrowRight":
-			return Math.min(last, current + 1);
+			return column === cols - 1 ? current : Math.min(last, current + 1);
 		case "ArrowUp":
 			return row === 0 ? current : current - cols;
 		case "ArrowDown":

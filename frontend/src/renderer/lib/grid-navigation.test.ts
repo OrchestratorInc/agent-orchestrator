@@ -9,9 +9,11 @@ describe("gridNavigationTarget", () => {
 	const move = (key: Parameters<typeof gridNavigationTarget>[0], index: number, pageRows = 1) =>
 		gridNavigationTarget(key, index, 10, 4, pageRows);
 
-	it("steps one item left and right, across rows, stopping at the ends", () => {
-		expect(move("ArrowRight", 3)).toBe(4);
-		expect(move("ArrowLeft", 4)).toBe(3);
+	it("steps one item left and right within the row, never wrapping to the next or previous row", () => {
+		expect(move("ArrowRight", 1)).toBe(2);
+		expect(move("ArrowLeft", 2)).toBe(1);
+		expect(move("ArrowRight", 3)).toBe(3);
+		expect(move("ArrowLeft", 4)).toBe(4);
 		expect(move("ArrowLeft", 0)).toBe(0);
 		expect(move("ArrowRight", 9)).toBe(9);
 	});
