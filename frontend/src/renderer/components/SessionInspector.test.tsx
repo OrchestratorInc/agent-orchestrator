@@ -2255,6 +2255,29 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
   });
 
+  it("keeps a Subagents selection while the chat has not reported its subagents yet", () => {
+    mockCommonGets([], "", []);
+    const onViewChange = vi.fn();
+    const inspector = (subagentsView?: ReactNode) => (
+      <SessionInspector session={session([])} sideChatView={<div />} subagentsView={subagentsView} view="subagents" onViewChange={onViewChange} />
+    );
+    const { rerender, queryClient } = renderWithQuery(inspector());
+
+    // Back on the session, the chat has not listed its subagents yet: Summary shows
+    // through the gap, but the reader's choice is not overwritten.
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(onViewChange).not.toHaveBeenCalled();
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>{inspector(<div data-testid="subagents-slot" />)}</TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
+    expect(onViewChange).not.toHaveBeenCalled();
+  });
+
   it("keeps the Reviews tab available for draft PRs", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(1, "draft")])} />);

@@ -189,4 +189,29 @@ describe("SubagentTeam", () => {
 		await user.click(screen.getByRole("button", { name: /Audit: info pages/ }));
 		expect(overrides).toMatchObject({ "turn:subagents-1:agent:pages": true });
 	});
+
+	it("does not call a child that ended before any step Starting", () => {
+		const stopped = launch("stopped", "Audit: stopped early", "cancelled");
+		const delivered = launch("delivered", "Audit: reported elsewhere");
+		delivered.detail = {
+			...delivered.detail,
+			output: JSON.stringify([{ text: "This agent's report was delivered to you directly.", type: "text" }]),
+		} as ConversationActivity["detail"];
+		const working = launch("working", "Audit: just launched", "running");
+		render(
+			<SubagentTeam
+				launches={[stopped, delivered, working]}
+				steps={new Map()}
+				live={new Set(["working"])}
+				harness="claude-code"
+			/>,
+		);
+
+		expect(within(screen.getByRole("button", { name: /Audit: stopped early/ })).getByText("No steps recorded")).toBeInTheDocument();
+		const done = screen.getByRole("button", { name: /Audit: reported elsewhere/ });
+		expect(within(done).getByText("No steps recorded")).toBeInTheDocument();
+		expect(within(done).queryByText("Starting")).not.toBeInTheDocument();
+		// Still at work with nothing recorded yet: that one is starting.
+		expect(within(screen.getByRole("button", { name: /Audit: just launched/ })).getByText("Starting")).toBeInTheDocument();
+	});
 });

@@ -66,6 +66,7 @@ export function SubagentPanel({
 		>
 			{open ? (
 				<SubagentConversation
+					key={open.launch.id}
 					agent={open}
 					harness={harness}
 					now={now}

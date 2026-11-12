@@ -109,7 +109,8 @@ export function SubagentTeam({
 				aria-expanded={open}
 				// One line: the count, the states beside it, then the chevron right after them,
 				// the way "Worked for" carries its own.
-				className="activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none"
+				// The chat draws no focus rings (styles.css), so keyboard focus is the rows' fill.
+				className="activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none focus-visible:rounded-md focus-visible:bg-interactive-hover"
 			>
 				{/* Overlapping marks, each cut back short of the one over it, so two agents read
 				    as two marks rather than one shape. A mask, not a halo: the chat's canvas is
@@ -473,8 +474,11 @@ function SubagentLineText({ agent }: { agent: Subagent }) {
 	} else {
 		const line = latestSubagentLine(agent.steps);
 		value = lineKey(line);
-		if (line.kind === "starting") text = t("chat.subagent.line.starting");
-		else if (line.kind === "said") text = line.text;
+		if (line.kind === "starting") {
+			// Only a child still at work is starting; one that ended before any step says so.
+			if (agent.state !== "working") value = "empty";
+			text = t(agent.state === "working" ? "chat.subagent.line.starting" : "chat.subagent.empty");
+		} else if (line.kind === "said") text = line.text;
 		else if (line.kind === "tool") text = line.name;
 		else {
 			const verb = line.kind === "command"

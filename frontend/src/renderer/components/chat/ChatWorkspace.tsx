@@ -6498,8 +6498,12 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		splitAtSteers(group)
 			.map((segment) => withSubagentSteps(segment, conversation))
 			// A part made only of steps that moved under a launch elsewhere has nothing
-			// left to draw. A live one keeps its Working row.
-			.filter((segment) => segment.live || segment.items.some((item) => !conversation.stepIds.has(item.id))),
+			// left to draw. A live one keeps its Working row, and one whose turn did not
+			// simply complete keeps how it ended: a failure must not vanish with its steps.
+			.filter((segment) =>
+				segment.live
+				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
+				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
 	);
 }
 

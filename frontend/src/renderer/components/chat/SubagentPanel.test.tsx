@@ -118,6 +118,24 @@ describe("SubagentPanel", () => {
 		expect(screen.getByTestId("subagent-prompt")).not.toHaveClass("max-h-36");
 	});
 
+	it("opens another child fresh, not with the last one's prompt unfolded", async () => {
+		const user = userEvent.setup();
+		const longPrompt = (id: string, title: string): SubagentRef => ({
+			...working,
+			launch: launch(id, title, "completed", `Check every page.\n${"- one more page to check\n".repeat(12)}`),
+		});
+		const first = longPrompt("first", "Audit: everything");
+		const second = longPrompt("second", "Audit: everything else");
+		const props = { subagents: [first, second], onOpen: vi.fn(), onBack: vi.fn(), harness: "claude-code" };
+		const { rerender } = render(<SubagentPanel {...props} openId="first" />);
+		await user.click(screen.getByRole("button", { name: "Show full message" }));
+		expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+
+		rerender(<SubagentPanel {...props} openId="second" />);
+		expect(screen.getByRole("heading", { name: "Audit: everything else" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show full message" })).toHaveAttribute("aria-expanded", "false");
+	});
+
 	it("keeps a long path inside the prompt bubble and paints no scroll track", () => {
 		const longPath: SubagentRef = {
 			...finished,
