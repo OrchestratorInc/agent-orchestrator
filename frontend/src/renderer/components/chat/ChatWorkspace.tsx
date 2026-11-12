@@ -209,6 +209,7 @@ import {
 	isUserQueuePrompt,
 	needsReauth,
 	queuedTurnIds,
+	type BatchedDelivery,
 	type ConversationPlan,
 	type ConversationSnapshot,
 	type ControllerState,
@@ -4001,7 +4002,8 @@ export function Timeline({
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
 		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
 		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
-		const items = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
+		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
+		const items = atCarryingSteer(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
@@ -4124,7 +4126,7 @@ export function Timeline({
 		rangeExtractor: (range) => {
 			const indexes = defaultRangeExtractor(range);
 			// Keep an in-progress inline edit mounted while its row leaves view.
-			const editing = messageEdit ? groups.findIndex((group) => group.turnId === messageEdit.turnId) : -1;
+			const editing = groups.findIndex((group) => turnEditing(group, messageEdit));
 			if (editing >= 0 && !indexes.includes(editing)) indexes.push(editing);
 			if (pinned && !indexes.includes(groups.length - 1)) indexes.push(groups.length - 1);
 			return indexes.sort((a, b) => a - b);
@@ -6257,7 +6259,8 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 	const groupForTurn = new Map<string, TimelineGroup>();
 
 	for (const item of snapshot.items) {
-		if (item.turnId === undefined) {
+		const turnId = carriedInto.get(item) ?? item.turnId;
+		if (turnId === undefined) {
 			// Consecutive turn-less items share one group rather than getting one each.
 			// A provider can run a turn AO never dispatched — a compaction, or a turn
 			// resumed inside the provider's own history — and every item it emits then
@@ -6278,20 +6281,20 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 			});
 			continue;
 		}
-		const existing = groupForTurn.get(item.turnId);
+		const existing = groupForTurn.get(turnId);
 		if (existing) {
 			existing.items.push(item);
 			continue;
 		}
 		const group: TimelineGroup = {
 			// A turn opened by a keyed human message keeps the key its echo had.
-			key: itemKey(item) === item.id ? byTurn.get(item.turnId)?.groupKey ?? `${item.turnId}-${item.sequence}` : itemKey(item),
-			turnId: item.turnId,
+			key: itemKey(item) === item.id ? byTurn.get(turnId)?.groupKey ?? `${turnId}-${item.sequence}` : itemKey(item),
+			turnId,
 			// A turn that began above the loaded history sorts where it began.
-			anchor: byTurn.get(item.turnId)?.anchorSequence ?? item.sequence,
+			anchor: byTurn.get(turnId)?.anchorSequence ?? item.sequence,
 			items: [item],
 		};
-		groupForTurn.set(item.turnId, group);
+		groupForTurn.set(turnId, group);
 		groups.push(group);
 	}
 
@@ -6455,6 +6458,49 @@ function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): 
 		detachedActions.set(item, detached);
 	}
 	return detached;
+}
+
+const carriedRows = new WeakMap<ConversationItem, ConversationItem>();
+const carriedInto = new WeakMap<ConversationItem, string>();
+
+function atCarryingSteer(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
+	if (deliveries.length === 0) return items;
+	const steers = new Map(items.flatMap((item) => (item.kind === "activity" && item.turnId && isSteer(item) ? [[item.id, item] as const] : [])));
+	const carriers = new Map(deliveries.flatMap((delivery) => {
+		const steer = delivery.steerActivityId ? steers.get(delivery.steerActivityId) : undefined;
+		return steer && !moved.has(delivery.turnId) ? [[delivery.turnId, steer] as const] : [];
+	}));
+	if (carriers.size === 0) return items;
+	const sentAt = (turnId: string) => {
+		const index = carriers.get(turnId)?.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1;
+		return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+	};
+	const carried = items.filter((item) => item.turnId && carriers.has(item.turnId));
+	const blocks = new Map<ConversationItem, ConversationItem[]>();
+	for (const item of carried.sort((a, b) => sentAt(a.turnId!) - sentAt(b.turnId!) || a.sequence - b.sequence)) {
+		const steer = carriers.get(item.turnId!)!;
+		const block = blocks.get(steer);
+		if (block) block.push(item);
+		else blocks.set(steer, [item]);
+	}
+	const isCarried = new Set(carried);
+	const place = new Map([...blocks].flatMap(([steer, block]) => {
+		const next = items.reduce((min, item) => (!isCarried.has(item) && item.sequence > steer.sequence && item.sequence < min ? item.sequence : min), steer.sequence + 1);
+		return block.map((item, index) => [item, steer.sequence + ((next - steer.sequence) * (index + 1)) / (block.length + 1)] as const);
+	}));
+	return items
+		.map((item) => {
+			const steer = item.turnId ? carriers.get(item.turnId) : undefined;
+			const sequence = place.get(item);
+			if (!steer || sequence === undefined) return item;
+			const cached = carriedRows.get(item);
+			if (cached && carriedInto.get(cached) === steer.turnId && cached.sequence === sequence) return cached;
+			const row = { ...item, sequence };
+			carriedRows.set(item, row);
+			carriedInto.set(row, steer.turnId!);
+			return row;
+		})
+		.sort((a, b) => a.sequence - b.sequence);
 }
 
 /** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */
