@@ -8,7 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
+import { ChatWorkspace, forgetReadingPositions, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -202,6 +202,7 @@ function stubGeometry(
 }
 
 beforeEach(() => {
+	forgetReadingPositions();
 	writeText.mockClear();
 	menuAction.mockClear();
 	previousTabListeners.clear();

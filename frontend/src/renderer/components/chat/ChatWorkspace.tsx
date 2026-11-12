@@ -2933,6 +2933,10 @@ function rememberReadingPosition(sessionId: string, position: ReadingPosition | 
 	readingPositions.set(sessionId, position);
 	if (readingPositions.size > MAX_READING_POSITIONS) readingPositions.delete(readingPositions.keys().next().value!);
 }
+/** Test hook: tests share session ids, so a position saved by one must not reopen the next. */
+export function forgetReadingPositions() {
+	readingPositions.clear();
+}
 /** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
 const READER_INTENT_HOLD_MS = 250;
 /** A settled turn holds the reader's view still this long while its rows re-measure. */
