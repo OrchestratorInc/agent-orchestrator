@@ -3034,15 +3034,22 @@ html.sidebar-reordering * {
 	animation: none;
 }
 
-/* The dock stays in the composer column's flow, so opening it shortens the
-   transcript instead of floating over its last rows (its fill is translucent
-   on a clear window, so anything under it would show through). */
+/* The parent reserves one compact footprint; the expanded dock floats above it. */
 .cursor-chat-composer-queue {
 	--queue-dock-header-height: 2rem;
 	--queue-dock-row-height: 2.5rem;
 	--queue-dock-collapsed-height: calc(var(--queue-dock-header-height) + var(--queue-dock-row-height));
 	position: relative;
+	height: var(--queue-dock-collapsed-height);
+	min-height: var(--queue-dock-collapsed-height);
 	flex-shrink: 0;
+}
+
+.cursor-chat-composer-queue .queue-dock {
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	left: 0;
 }
 
 /* Clip-height collapse: one row stays visible when folded; up to five when open. */
@@ -6311,10 +6318,12 @@ html[data-window-translucent="true"] body {
 
 /* Floating surfaces sit above the material: back to solid theme values.
  * `.z-overlay` covers custom floating menus; update notices also need solid
- * fills so the decorative stack stays behind the front card. */
+ * fills so the decorative stack stays behind the front card. The open queue
+ * dock floats over the transcript's last rows, which must not show through. */
 html[data-window-translucent="true"] :is(
 	.z-overlay,
 	.harness-update-notice,
+	.queue-dock,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],
@@ -6373,6 +6382,7 @@ html[data-window-translucent="true"] :is(
 	body,
 	.z-overlay,
 	.harness-update-notice,
+	.queue-dock,
 	[data-radix-popper-content-wrapper],
 	[role="dialog"],
 	[role="alertdialog"],

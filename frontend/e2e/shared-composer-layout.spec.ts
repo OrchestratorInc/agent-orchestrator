@@ -11,11 +11,8 @@ for (const width of [960, 390]) {
 	const form = page.locator("form.cursor-chat-composer");
 	const draft = page.getByRole("region", { name: "Alice Example's draft" });
 	await expect(draft).toContainText("Keep this live draft fully visible");
-	const slot = page.getByTestId("queued-composer-dock");
-	const [q, n, d, f, s] = await Promise.all([queue.boundingBox(), notice.boundingBox(), draft.boundingBox(), form.boundingBox(), slot.boundingBox()]);
-	expect(q && n && d && f && s).toBeTruthy();
-	// The open queue fills its own slot instead of floating over the transcript above it.
-	expect(q!.y).toBeGreaterThanOrEqual(s!.y - 1);
+	const [q, n, d, f] = await Promise.all([queue.boundingBox(), notice.boundingBox(), draft.boundingBox(), form.boundingBox()]);
+	expect(q && n && d && f).toBeTruthy();
 	expect(q!.y + q!.height).toBeLessThanOrEqual(n!.y + 1);
 	expect(n!.y + n!.height).toBeLessThanOrEqual(f!.y + 1);
 	expect(d!.y).toBeGreaterThanOrEqual(n!.y);
@@ -33,3 +30,17 @@ for (const width of [960, 390]) {
 	expect(await form.evaluate(el => Number.parseFloat(getComputedStyle(el).borderTopLeftRadius))).toBeGreaterThan(0);
  });
 }
+
+test("open queue keeps a solid fill over a translucent window @T0", async ({ page }) => {
+	await page.goto("/e2e/shared-composer/harness.html");
+	const queue = page.getByTestId("queued-message-dock");
+	await expect(queue).toHaveAttribute("data-expanded", "true");
+	await page.evaluate(() => document.documentElement.setAttribute("data-window-translucent", "true"));
+	// The open queue floats over the transcript's last rows; a see-through fill lets them show through it.
+	const alpha = await queue.evaluate(el => {
+		const color = getComputedStyle(el).backgroundColor;
+		const match = color.match(/\/\s*([\d.]+)(%?)\s*\)$/) ?? color.match(/^rgba\(.*,\s*([\d.]+)()\s*\)$/);
+		return match ? Number.parseFloat(match[1]) / (match[2] ? 100 : 1) : color === "transparent" ? 0 : 1;
+	});
+	expect(alpha).toBe(1);
+});
