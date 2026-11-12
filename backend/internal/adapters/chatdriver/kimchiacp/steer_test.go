@@ -92,3 +92,17 @@ func TestSteeringOutcomeMapsKimchiStatus(t *testing.T) {
 		t.Fatal("unknown response shape was accepted")
 	}
 }
+
+func TestSteeringTakesImagesFromKimchi120(t *testing.T) {
+	for version, want := range map[string]bool{
+		"1.0.8": false, "1.1.0": false, "1.2.0": true, "1.34.2": true, "dev": false, "": false,
+	} {
+		init := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: "kimchi", Version: version}}
+		if got := steeringTakesImages(init); got != want {
+			t.Errorf("steeringTakesImages(%q) = %v, want %v", version, got, want)
+		}
+	}
+	if steeringTakesImages(acpsdk.InitializeResponse{}) {
+		t.Error("steeringTakesImages with no agentInfo = true, want false")
+	}
+}

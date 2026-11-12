@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -78,6 +80,10 @@ func startDrainConversation(
 	drain *SteerDrain,
 ) (*conversation, string) {
 	t.Helper()
+	if agent.agentInfo == nil {
+		// testDrain offers Steer only to this agent, as a real binding would.
+		agent.agentInfo = &acpsdk.Implementation{Name: "drainer", Version: "1.0.0"}
+	}
 	driver := New(Config{
 		Harness:      domain.HarnessQwen,
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
@@ -93,6 +99,9 @@ func startDrainConversation(
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() { _ = opened.Close() })
+	if !opened.Capabilities().Has(ports.ChatCapabilitySteer) {
+		t.Fatal("Steer not offered to the agent the drain binding supports")
+	}
 	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "raise the timeout"})
 	if err != nil {
 		t.Fatalf("SendTurn: %v", err)
@@ -534,5 +543,200 @@ func TestACPSteerKeepsASubagentReplyInOneMessage(t *testing.T) {
 		if text != "reading the config. found the timeout." {
 			t.Fatalf("subagent text = %q", text)
 		}
+	}
+}
+
+// Stop withdraws a turn's guidance before it takes the dispatch lock. A steer
+// that reaches the conversation after that, such as one that already held the
+// lock, is refused at once instead of joining, or holding up, the turn being
+// stopped. A later turn steers as usual.
+func TestACPSteerAfterStopBeganIsRefused(t *testing.T) {
+	agent := &fakeAgent{promptBlock: true}
+	conv, turn := startDrainConversation(t, agent, testDrain(time.Minute))
+	var withdrawer ports.ChatSteerWithdrawer = conv
+	withdrawer.WithdrawPendingSteers()
+
+	started := time.Now()
+	_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging instead"})
+	if !errors.Is(err, ports.ErrChatTurnNotSteerable) || time.Since(started) > time.Second {
+		t.Fatalf("Steer after Stop began = %v after %s, want ErrChatTurnNotSteerable at once", err, time.Since(started))
+	}
+	conv.mu.Lock()
+	parked := len(conv.pendingSteers)
+	conv.activeTurn = "next-turn" // the stopped turn is over; another runs
+	conv.steering.drain = testDrain(50 * time.Millisecond)
+	conv.mu.Unlock()
+	if parked != 0 {
+		t.Fatalf("pending steers = %d, want none", parked)
+	}
+	_, err = conv.Steer(context.Background(), "next-turn", ports.ChatUserMessage{Text: "and keep the timeout"})
+	if err == nil || !strings.Contains(err.Error(), "did not collect") {
+		t.Fatalf("Steer on the next turn = %v, want it parked for the agent like any steer", err)
+	}
+}
+
+// The nudge asking a drain agent to collect now is best effort. A write that
+// stalls must not hold Steer past its wait.
+func TestACPSteerDrainStalledNudgeCannotHoldSteer(t *testing.T) {
+	agent := &fakeAgent{promptBlock: true}
+	conv, turn := startDrainConversation(t, agent, testDrain(100*time.Millisecond))
+	writer := conv.legacyWire.writer
+	writer.mu.Lock() // every write to the agent now stalls
+	unlock := sync.OnceFunc(writer.mu.Unlock)
+	t.Cleanup(unlock)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging instead"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ports.ErrChatTurnNotSteerable) {
+			t.Fatalf("Steer = %v, want the guidance withdrawn as not collected", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Steer waited on the stalled nudge")
+	}
+	unlock()
+}
+
+// An agent version that would drop images sent with its steering request gets
+// a clear refusal instead, and nothing is sent.
+func TestACPSteerRequestRefusesImagesTheAgentWouldDrop(t *testing.T) {
+	for _, takesImages := range []bool{false, true} {
+		t.Run(fmt.Sprintf("takes images %v", takesImages), func(t *testing.T) {
+			var calls []map[string]any
+			var mu sync.Mutex
+			agent := &fakeAgent{
+				capabilities: &acpsdk.AgentCapabilities{
+					PromptCapabilities:  acpsdk.PromptCapabilities{Image: true},
+					SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
+				},
+				agentInfo: &acpsdk.Implementation{Name: "vendor", Version: "1.1.0"},
+				extension: func(method string, raw json.RawMessage) (any, error) {
+					var params map[string]any
+					_ = json.Unmarshal(raw, &params)
+					mu.Lock()
+					calls = append(calls, params)
+					mu.Unlock()
+					return map[string]any{"status": "injected"}, nil
+				},
+			}
+			request := &SteerRequest{
+				Supported: func(acpsdk.InitializeResponse) bool { return true },
+				Method:    "_vendor/steering",
+				Params: func(sessionID string, prompt []acpsdk.ContentBlock) (any, error) {
+					return map[string]any{"sessionId": sessionID, "blocks": len(prompt)}, nil
+				},
+				TakesImages: func(init acpsdk.InitializeResponse) bool {
+					return init.AgentInfo != nil && init.AgentInfo.Version == "1.1.0" && takesImages
+				},
+				Outcome: func(json.RawMessage) (SteerOutcome, error) { return SteerInjected, nil },
+			}
+			driver := New(Config{
+				Harness:      domain.HarnessKimchi,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				SteerRequest: request,
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer opened.Close()
+			conv := opened.(*conversation)
+			conv.mu.Lock()
+			conv.activeTurn = "turn-1"
+			conv.mu.Unlock()
+
+			_, err = conv.Steer(context.Background(), "turn-1", ports.ChatUserMessage{
+				Text:    "look at this",
+				Content: []ports.ChatContent{{Type: "image", Data: "aGVsbG8=", MIMEType: "image/png"}},
+			})
+			mu.Lock()
+			sent := len(calls)
+			mu.Unlock()
+			if !takesImages {
+				if !errors.Is(err, ports.ErrChatSteerContentUnsupported) || sent != 0 {
+					t.Fatalf("image steer = %v with %d requests sent, want refused before sending", err, sent)
+				}
+				if _, err := conv.Steer(context.Background(), "turn-1", ports.ChatUserMessage{Text: "text still steers"}); err != nil {
+					t.Fatalf("text steer: %v", err)
+				}
+				return
+			}
+			if err != nil || sent != 1 {
+				t.Fatalf("image steer = %v with %d requests sent, want it sent", err, sent)
+			}
+		})
+	}
+}
+
+// Kimchi and OMP tag every streamed message with an id. A request-mode steer,
+// counted when the agent queues the guidance, then cannot split a reply that
+// is still streaming: text keeps its own message until the agent starts a new
+// one.
+func TestACPSteerKeepsAnIdentifiedReplyInOneMessage(t *testing.T) {
+	agent := &fakeAgent{
+		capabilities: &acpsdk.AgentCapabilities{
+			Meta:                map[string]any{"steering": map[string]any{"supported": true}},
+			SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
+		},
+		extension: func(string, json.RawMessage) (any, error) {
+			return map[string]any{"outcome": "injected"}, nil
+		},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessOMP,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	conv := opened.(*conversation)
+	conv.mu.Lock()
+	conv.activeTurn = "turn-1"
+	conv.mu.Unlock()
+	say := func(messageID, text string) {
+		t.Helper()
+		if err := conv.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+			SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+			Update: acpsdk.SessionUpdate{AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{
+				MessageId: &messageID, Content: acpsdk.TextBlock(text),
+			}},
+		}); err != nil {
+			t.Fatalf("SessionUpdate: %v", err)
+		}
+	}
+
+	say("reply-1", "editing prod.yaml, ")
+	if _, err := conv.Steer(context.Background(), "turn-1", ports.ChatUserMessage{Text: "use staging"}); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	say("reply-1", "then the timeout.")
+	say("reply-2", "Switched to staging.")
+
+	var items []string
+	deltas := map[string]string{}
+	for len(items) < 2 || deltas[items[1]] == "" {
+		event := nextEvent(t, conv.Events())
+		if event.Kind != ports.ChatEventMessageDelta {
+			continue
+		}
+		if _, seen := deltas[event.ProviderItemID]; !seen {
+			items = append(items, event.ProviderItemID)
+		}
+		deltas[event.ProviderItemID] += event.Delta
+	}
+	if deltas[items[0]] != "editing prod.yaml, then the timeout." || deltas[items[1]] != "Switched to staging." {
+		t.Fatalf("messages = %#v in order %v, want the first reply whole and the steered one after it", deltas, items)
 	}
 }

@@ -96,7 +96,10 @@ type conversation struct {
 	providerScopeID      string
 	decodeConversationID func(string) (string, error)
 	canDeleteFork        bool
-	unadoptedForkID      string
+	// handshake is the agent's initialize answer, for steering details that
+	// vary by agent version.
+	handshake       acpsdk.InitializeResponse
+	unadoptedForkID string
 
 	mu                sync.Mutex
 	sessionID         string
@@ -139,6 +142,10 @@ type conversation struct {
 	// binding.
 	steerChannel  SteerChannel
 	pendingSteers []*pendingSteer
+	// stoppingTurn is the turn Stop has begun to stop. Steers for it are
+	// refused, so one that arrives while Stop waits for the dispatch lock
+	// cannot join, or hold up, a turn the user is stopping.
+	stoppingTurn string
 	// steerSegment counts steers the running turn has taken. Text the agent
 	// streams without a message id after one goes to a new message, so it
 	// renders after the steer instead of growing the reply above it.
