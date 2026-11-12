@@ -345,14 +345,18 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			</div>
 
 			{hasArchive ? (
-				<div className="flex h-9 shrink-0 items-center border-t border-border px-2">
+				// Even 4px gap to the divider and the panel's bottom and left edges; the
+				// 30px button puts its text on the same line as the sidebar's Sign in.
+				<div className="flex shrink-0 items-center border-t border-border p-1">
 					<Button
 						aria-haspopup="dialog"
 						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
 						data-testid="board-archive-button"
 						// The shell's archive modal, the same one the sidebar and Cmd+K open.
 						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
-						size="xs"
+						// The xs button at 30px (no Button size is 30).
+						className="h-7.5 gap-1 px-2 text-xs"
+						size="none"
 						type="button"
 						variant="quiet"
 					>

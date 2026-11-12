@@ -239,6 +239,9 @@ if (typeof window !== "undefined") {
 			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
+		artifactSnapshot: {
+			request: async () => false,
+		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
 			start: async () => ({ state: "starting" }),

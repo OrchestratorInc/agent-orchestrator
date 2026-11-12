@@ -48,9 +48,11 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 - When the user asks to bring a repository's Conductor settings (scripts, run actions, environment variables, prompt) into Orchestrator, read [commands/conductor.md](commands/conductor.md) first.
 - `--agent` is an alias for `--harness` on `ao spawn`.
 - Every command accepts `-h / --help` for the full flag list.
-- For frontend launch, preview selection, or artifact handoff, read
+- For frontend launch or preview selection, read
   [commands/preview.md](commands/preview.md) before acting. Its static-file,
-  project-runtime, and automatic-handoff rules are load-bearing.
+  project-runtime, and artifact rules are load-bearing: artifacts render in the
+  Artifacts tab after `ao artifact add`, never through `ao preview` unless the
+  user explicitly asks to see one in the Browser panel.
 - For page inspection, interaction, or request diagnosis, read
   [commands/browser.md](commands/browser.md). It defines shared-tab behavior
   and the opt-in network policy.
