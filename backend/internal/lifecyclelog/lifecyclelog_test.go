@@ -34,12 +34,14 @@ func readRecords(t *testing.T, path string) []map[string]any {
 func TestScrubRemovesSecretsAndPromptLikeText(t *testing.T) {
 	home := "/home/alice"
 	cases := map[string]struct{ in, mustNotContain, mustContain string }{
-		"url":         {"dial https://api.example.com/v1?key=abc failed", "api.example.com", "[url]"},
-		"bearer":      {"header Bearer sk-live-123456 rejected", "sk-live-123456", "[credential]"},
-		"assignment":  {"config token=ghp_abcdefghijklmnop invalid", "ghp_abcdefghijklmnop", "token=[redacted]"},
-		"opaque":      {"id 0123456789abcdef0123456789abcdef01 unknown", "0123456789abcdef0123456789abcdef01", "[opaque]"},
-		"quoted text": {`parse "please refactor the billing module and add tests" failed`, "billing module", `"[text]"`},
-		"home":        {"open /home/alice/.ao/data/state.db: denied", "/home/alice", "~/.ao/data/state.db"},
+		"url":                     {"dial https://api.example.com/v1?key=abc failed", "api.example.com", "[url]"},
+		"bearer":                  {"header Bearer sk-live-123456 rejected", "sk-live-123456", "[credential]"},
+		"assignment":              {"config token=ghp_abcdefghijklmnop invalid", "ghp_abcdefghijklmnop", "token=[redacted]"},
+		"quoted multi-word value": {`login password="correct horse battery staple" rejected`, "horse", "password=[redacted] rejected"},
+		"single-quoted value":     {"api_key: 'two secret words' then ok", "secret words", "api_key: [redacted] then ok"},
+		"opaque":                  {"id 0123456789abcdef0123456789abcdef01 unknown", "0123456789abcdef0123456789abcdef01", "[opaque]"},
+		"quoted text":             {`parse "please refactor the billing module and add tests" failed`, "billing module", `"[text]"`},
+		"home":                    {"open /home/alice/.ao/data/state.db: denied", "/home/alice", "~/.ao/data/state.db"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

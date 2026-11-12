@@ -3,9 +3,10 @@ import path from "node:path";
 
 // Local, crash-survivable record of why Electron main and its daemon child
 // started, stopped and were respawned (logs/desktop-lifecycle.jsonl beside
-// running.json, normally ~/.ao/logs next to updater.jsonl). It exists because a Linux user lost the app with no log, core
-// dump or Sentry event to say why. Never forwarded anywhere: it is read only
-// when a user attaches it to a bug report.
+// running.json, normally ~/.ao/logs next to updater.jsonl). It exists because
+// a Linux user lost the app with no log, core dump or Sentry event to say why.
+// Never forwarded anywhere: it is read only when a user attaches it to a bug
+// report.
 //
 // Durability: every record is a synchronous open/append/close, so it is in
 // the kernel's page cache before record() returns and survives the process
@@ -35,7 +36,8 @@ export function scrubText(value: string, homeDir: string, limit = 300): string {
 	out = out
 		.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s<>"'`)]+/gi, "[url]")
 		.replace(/\b(?:bearer|basic)\s+[^\s"']+/gi, "[credential]")
-		.replace(/\b([A-Za-z_]*(?:token|secret|password|passwd|apikey|api_key|api-key|authorization|cookie|credential)[A-Za-z_]*)(["']?\s*[:=]\s*)(["']?)[^\s"',;]+\3/gi, "$1$2[redacted]")
+		// A quoted value is redacted through its closing quote, spaces included.
+		.replace(/\b([A-Za-z_]*(?:token|secret|password|passwd|apikey|api_key|api-key|authorization|cookie|credential)[A-Za-z_]*)(["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi, "$1$2[redacted]")
 		.replace(/(["'`])[^"'`\n]{40,}\1/g, "$1[text]$1")
 		.replace(/[A-Za-z0-9+_=-]{32,}/g, "[opaque]");
 	return out.length > limit ? `${out.slice(0, limit)}…` : out;

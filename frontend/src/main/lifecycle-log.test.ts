@@ -26,6 +26,8 @@ describe("scrubText", () => {
 		["url", "fetch https://api.example.com/v1?key=abc failed", "api.example.com", "[url]"],
 		["bearer", "Bearer sk-live-123456 rejected", "sk-live-123456", "[credential]"],
 		["assignment", "token=ghp_abcdefghijklmnop invalid", "ghp_abcdefghijklmnop", "token=[redacted]"],
+		["quoted multi-word value", 'login password="correct horse battery staple" rejected', "horse", 'password=[redacted] rejected'],
+		["single-quoted value", "api_key: 'two secret words' then ok", "secret words", "api_key: [redacted] then ok"],
 		["opaque", "id 0123456789abcdef0123456789abcdef01", "0123456789abcdef0123456789abcdef01", "[opaque]"],
 		["quoted prompt", 'Unexpected token in "please refactor the billing module and add tests"', "billing module", '"[text]"'],
 		["home", "ENOENT /home/alice/.ao/data/x", "/home/alice", "~/.ao/data/x"],

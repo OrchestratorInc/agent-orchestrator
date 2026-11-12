@@ -48,7 +48,7 @@ var (
 
 	urlPattern        = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s<>"'` + "`" + `)]+`)
 	authSchemePattern = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[^\s"']+`)
-	secretPattern     = regexp.MustCompile(`(?i)\b([A-Za-z_]*(?:token|secret|password|passwd|apikey|api_key|api-key|authorization|cookie|credential)[A-Za-z_]*)(["']?\s*[:=]\s*)["']?[^\s"',;]+["']?`)
+	secretPattern     = regexp.MustCompile(`(?i)\b([A-Za-z_]*(?:token|secret|password|passwd|apikey|api_key|api-key|authorization|cookie|credential)[A-Za-z_]*)(["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s"',;]+)`)
 	doubleQuoted      = regexp.MustCompile(`"[^"\n]{40,}"`)
 	singleQuoted      = regexp.MustCompile(`'[^'\n]{40,}'`)
 	opaquePattern     = regexp.MustCompile(`[A-Za-z0-9+_=-]{32,}`)
