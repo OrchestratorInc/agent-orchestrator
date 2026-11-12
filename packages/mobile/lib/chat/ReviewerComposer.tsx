@@ -1,7 +1,7 @@
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { AppSymbol } from "../AppSymbol";
@@ -15,13 +15,13 @@ import { DictationField } from "../voice/DictationField";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
-import { ComposerAttachment } from "./ComposerAttachment";
+import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
 import { ComposerGlass } from "./composer-glass";
 import { HardwareReturn } from "./HardwareReturn";
 import { useKeyboardSendRefocus } from "./useKeyboardSendRefocus";
 import { COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import type { ChatImage, ChatResource } from "./types";
-import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
+import { composerTrayItems, forgetComposerAttachments, readComposerAttachments, removeComposerAttachment, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
 import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
 import { useImagePaste } from "./useImagePaste";
 
@@ -49,6 +49,7 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const [text, setText] = useState("");
 	const { items: attachments, notice: attachmentNotice } = useComposerAttachments(attachmentKey);
+	const trayItems = useMemo(() => composerTrayItems(attachments), [attachments]);
 	const clearAttachments = useCallback(() => updateComposerAttachments(attachmentKey, () => ({ items: [] })), [attachmentKey]);
 	const dismissAttachmentNotice = useCallback(() => updateComposerAttachments(attachmentKey, (current) => current.notice ? { items: current.items } : current), [attachmentKey]);
 	const [submitting, setSubmitting] = useState(false);
@@ -133,10 +134,11 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 	}));
 	const sendDisabled = stopped || submitting || (!text.trim() && !attachments.length);
 	return <Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
-		{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <ComposerAttachment key={item.id} name={item.name} image={item.kind === "image" ? item.image : undefined} onRemove={() => updateComposerAttachments(attachmentKey, (current) => ({ items: current.items.filter((candidate) => candidate.id !== item.id), notice: current.notice }))} />)}</ScrollView> : null}
 		{error || attachmentNotice || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{error || attachmentNotice || voice.error}</Text> : null}
 		<View style={[styles.composer, stopped && inactive]}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
+			{/* What goes with the reply, inside the pill over the field, as in ChatComposer. */}
+			<ComposerAttachmentTray items={trayItems} onRemove={(id) => removeComposerAttachment(attachmentKey, id)} />
 			<View style={styles.composerRow}>
 				<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
 				{/* While the mic is open the dictation takes the field's place, as in ChatComposer. */}

@@ -146,6 +146,7 @@ import {
 	LiveResponseStatus,
 	LiveStepChoices,
 	isLiveStepKind,
+	isModelReroute,
 	liveTaskLabel,
 	reconnectCopy,
 	stepInProgress,
@@ -895,8 +896,11 @@ function ChatWorkspaceContent({
 		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
 		[assetBaseUrl],
 	);
-	const turn = activeTurn(snapshot);
-	const canContinue = Boolean(onContinueTurn) && !turn && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
+	// The turn the daemon still holds open, whatever the controller is doing. It
+	// gates history mutations (continue, rollback, edit, retry): the daemon refuses
+	// them while a turn is open, even one settled on screen for a stopped controller.
+	const durableTurn = activeTurn(snapshot);
+	const canContinue = Boolean(onContinueTurn) && !durableTurn && !newWorkDisabled && Boolean(continuableTurnId(snapshot));
 	const latestSettledTurn = snapshot.turns.findLast((entry) =>
 		!entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled",
 	);
@@ -919,6 +923,13 @@ function ChatWorkspaceContent({
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
 		session?.statusReadiness === "checking";
+	// The controller is really gone: not a handoff, a wake, a resume or a restart
+	// the daemon is still reconnecting. The stopped banner shows on exactly this.
+	const controllerStopped = snapshot.controller.state === "stopped" &&
+		!(controllerTransitioning || agentResuming || suppressStopped || resumingAgent || startupReconnecting);
+	// A running turn cannot be running without a controller: it settles instead of
+	// spinning forever (#6064).
+	const turn = activeTurn(snapshot, { controllerStopped });
 	const signInRequired = needsReauth(snapshot) && agentAccountProviderFor(snapshot.harness) !== null && !activeRemoteHostId && !session?.cloud;
 	const startupState =
 		session?.provisionState === "provisioning" || session?.provisionState === "failed"
@@ -1842,7 +1853,7 @@ function ChatWorkspaceContent({
 		setTimeout(() => headerSlidSessions.delete(slideKey), 15_000);
 		return true;
 	});
-	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !firstTurnSettled(snapshot) &&
+	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !openingTurnSettled(snapshot, controllerStopped) &&
 		!(turn?.state === "running" && snapshot.controller.state !== "connecting");
 	const conversationEmpty = !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
@@ -2075,7 +2086,7 @@ function ChatWorkspaceContent({
 						staleBinary={session?.staleBinary}
 						hostId={activeRemoteHostId}
 						// Only a resume starts a stopped agent, on the new release.
-						agentStopped={snapshot.controller.state === "stopped" && !(controllerTransitioning || agentResuming || suppressStopped || resumingAgent || startupReconnecting)}
+						agentStopped={controllerStopped}
 					/>
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
@@ -2102,6 +2113,7 @@ function ChatWorkspaceContent({
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
 									snapshot={timelineSnapshot}
+									controllerStopped={controllerStopped}
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
 									findUnavailable={Boolean(session?.cloud)}
@@ -2121,13 +2133,13 @@ function ChatWorkspaceContent({
 									composerRecoveryTurnId={retryControl ? limitedTurn?.id : undefined}
 									onEditHumanMessage={draftPersistenceAvailable ? editHumanMessage : undefined}
 									editPending={editMessagePending}
-									editBusy={Boolean(turn)}
+									editBusy={Boolean(durableTurn)}
 									editError={editMessageError}
 									onActivateBranch={onActivateBranch}
 									activateBranchPending={activateBranchPending}
 									activateBranchError={activateBranchError}
 									newWorkDisabled={newWorkDisabled}
-									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
+									rollbackDisabled={Boolean(durableTurn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									openingStartedAt={openingStartedAt}
@@ -2157,7 +2169,7 @@ function ChatWorkspaceContent({
 											? (enabled) => { void Promise.resolve(retryControl.setAutoResume?.(limitedTurn.id, enabled)).catch(() => undefined); }
 											: undefined}
 										pending={retryControl.pending || retryControl.autoResumePending}
-										disabled={Boolean(turn || busy || newWorkDisabled || agentInputDisabled || controllerTransitioning || agentResuming)}
+										disabled={Boolean(durableTurn || busy || newWorkDisabled || agentInputDisabled || controllerTransitioning || agentResuming)}
 										error={(retryControl.turnId === limitedTurn.id ? retryControl.error : undefined) ??
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
 									/>
@@ -2302,7 +2314,7 @@ function ChatWorkspaceContent({
 										onCompact={newWorkDisabled || snapshot.controller.state === "hibernated" ? undefined : onCompact}
 										compacting={compacting}
 										compactUnavailable={compactUnavailable}
-										compactBlocked={Boolean(turn)}
+										compactBlocked={Boolean(durableTurn)}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
 										assetBaseUrl={assetBaseUrl}
@@ -2963,7 +2975,10 @@ export function Timeline({
 	workerUpdates = false,
 	openingStartedAt,
 	openingStartupLabel,
+	controllerStopped = false,
 }: {
+	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
+	controllerStopped?: boolean;
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
@@ -3396,7 +3411,9 @@ export function Timeline({
 	const inspectorOpenRef = useRef(
 		inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId),
 	);
-	const turn = activeTurn(snapshot);
+	const turn = activeTurn(snapshot, { controllerStopped });
+	// The daemon refuses a retry while any turn is open, settled on screen or not.
+	const durableTurn = activeTurn(snapshot);
 	const [scrollbar, setScrollbar] = useState({
 		visible: false,
 		top: 0,
@@ -3921,7 +3938,9 @@ export function Timeline({
 					(item.turnId && backgroundQueuedTurnIds.has(item.turnId)) ||
 					// A terminal switch hands the note over as the first prompt; it is not the user's.
 					item.text.trimStart().startsWith("<ao-handoff-request")
-				)),
+				)) &&
+					// The model picker already names the model that answered.
+					!isModelReroute(item),
 			), localEchos),
 			...localItems,
 		],
@@ -3970,7 +3989,7 @@ export function Timeline({
 	}, [localEchos, requestGlideToEnd]);
 	// The brief that started this chat reads as working from the moment it was
 	// sent, through the agent connecting, until its turn settles.
-	const openingPending = Boolean(openingStartedAt) && !firstTurnSettled(snapshot);
+	const openingPending = Boolean(openingStartedAt) && !openingTurnSettled(snapshot, controllerStopped);
 	const batchedReports = useMemo(
 		() => workerUpdates ? placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items) : NO_BATCHED_REPORTS,
 		[snapshot.batchedDeliveries, snapshot.items, workerUpdates],
@@ -3983,7 +4002,7 @@ export function Timeline({
 		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
 		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
 		const items = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
-		const groups = groupByTurn({ ...snapshot, items })
+		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
@@ -3995,7 +4014,7 @@ export function Timeline({
 		return placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [batchedReports, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
+	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Whether the reader opened a step from the live row, kept for the step's own row
 	// (LiveStepChoices). Read once, when that row mounts, so nothing re-renders on it.
@@ -4937,7 +4956,7 @@ export function Timeline({
 										pending: retryControl.pending && retrySelected,
 										error: retrySelected ? retryControl.error : undefined,
 										disabled:
-											Boolean(turn) ||
+											Boolean(durableTurn) ||
 											Boolean(retryControl.pending) ||
 											Boolean(newWorkDisabled),
 									}
@@ -6069,7 +6088,8 @@ type TimelineGroup = {
 	anchor: number;
 	items: ConversationItem[];
 	outcome?: {
-		state: "completed" | "recovered" | "interrupted" | "failed";
+		/** `unknown`: the controller stopped while the turn ran, so nothing reported how it ended. */
+		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown";
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
@@ -6198,6 +6218,17 @@ function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
 }
 
 /**
+ * Whether the opening brief has stopped reading as working. A running first turn
+ * under a really stopped controller is settled too (#6064): its group shows the
+ * unknown outcome, so the opening must not dress it as live again. Only a running
+ * one: a queued first turn under a stopped controller can still be a chat that is
+ * provisioning, whose brief rightly reads as setting up.
+ */
+function openingTurnSettled(snapshot: ConversationSnapshot, controllerStopped: boolean): boolean {
+	return firstTurnSettled(snapshot) || (controllerStopped && snapshot.turns[0]?.state === "running");
+}
+
+/**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
  *
@@ -6213,8 +6244,14 @@ function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
  *
  * Items with no turn (an automation relay that arrived between turns) form their
  * own group and keep their sequence position.
+ *
+ * With the controller really stopped, a turn the daemon still holds as running is
+ * not live: nothing is working on it. It settles with an unknown outcome instead
+ * of a Working row that never ends (#6064). It offers no rollback, since the
+ * daemon refuses to roll back a turn it still holds open; the stopped banner's
+ * Resume and Open shell are the way on.
  */
-function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
+function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false }: { controllerStopped?: boolean } = {}): TimelineGroup[] {
 	const byTurn = new Map(snapshot.turns.map((turn) => [turn.id, turn]));
 	const groups: TimelineGroup[] = [];
 	const groupForTurn = new Map<string, TimelineGroup>();
@@ -6271,7 +6308,8 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		group.artifacts = turn.artifacts;
 		// A later turn or run carries a newer copy of a list that spans turns.
 		group.plan = turn.plan?.steps.length && !turn.plan.superseded ? turn.plan : undefined;
-		group.live = turn.state === "running";
+		const orphaned = controllerStopped && turn.state === "running";
+		group.live = turn.state === "running" && !orphaned;
 		group.liveStartedAt = turn.startedAt ?? turn.requestedAt;
 		group.blocked = group.items.some(
 			(item) =>
@@ -6287,6 +6325,11 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 					item.status === "running" &&
 					item.detail?.event === "provider.failure",
 			);
+		if (orphaned) {
+			group.liveProviderFailure = undefined;
+			group.outcome = { state: "unknown" };
+			continue;
+		}
 		if (turn.state === "running" || turn.state === "queued" || turn.state === "cancelled") continue;
 		group.rollbackable = Boolean(turn.providerTurnId);
 		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");

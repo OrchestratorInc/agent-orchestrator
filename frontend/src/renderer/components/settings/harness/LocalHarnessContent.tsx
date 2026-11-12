@@ -6,6 +6,7 @@ import type { components } from "../../../../api/schema";
 import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
 import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
+import { CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
 import {
 	agentReadinessQueryKeyForHost,
 	cacheAgentReadiness,
@@ -52,6 +53,7 @@ import { Pressable } from "../../ui/pressable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
+import { cloudNeedsAttention, type HarnessCloudState } from "./HarnessCloudLine";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
@@ -170,6 +172,31 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// The API has no durable update history. Only record verified updates we
 	// actually observed here; a restored job/check timestamp is not an update date.
 	const [lastUpdatedAt, setLastUpdatedAt] = useState<Partial<Record<AgentId, string>>>({});
+	// AO Cloud runs some of these harnesses too: its side is a second line of
+	// the same harness's row, and one Update covers both.
+	const cloud = useCloudHarnessVersions();
+	const [cloudPending, setCloudPending] = useState<ReadonlySet<AgentId>>(new Set());
+	const cloudPendingRef = useRef(new Set<AgentId>());
+	const [cloudErrors, setCloudErrors] = useState<Partial<Record<AgentId, string>>>({});
+	const cloudState = (agentId: AgentId): HarnessCloudState | undefined => !cloud.expected || !CLOUD_VERSIONED_HARNESSES.has(agentId) ? undefined : {
+		details: describeCloudHarness(cloud.data, agentId),
+		loading: cloud.isPending,
+		pending: cloudPending.has(agentId),
+		error: cloudErrors[agentId],
+	};
+	const runCloudChange = async (agentId: AgentId, change: (agentId: AgentId) => Promise<{ error?: string }>) => {
+		if (cloudPendingRef.current.has(agentId)) return;
+		cloudPendingRef.current.add(agentId);
+		setCloudPending(new Set(cloudPendingRef.current));
+		setCloudErrors((current) => ({ ...current, [agentId]: undefined }));
+		try {
+			const result = await change(agentId);
+			if (mountedRef.current && result.error) setCloudErrors((current) => ({ ...current, [agentId]: result.error }));
+		} finally {
+			cloudPendingRef.current.delete(agentId);
+			if (mountedRef.current) setCloudPending(new Set(cloudPendingRef.current));
+		}
+	};
 
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
 	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
@@ -516,6 +543,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		void startAgentOperation(agentId, method, "update");
 	};
 
+	// The one Update a harness's row offers: AO Cloud's side starts at once
+	// (it only saves the release new Cloud sessions run), this host's as before.
+	const requestCombinedUpdate = (agentId: AgentId) => {
+		if (cloudState(agentId)?.details?.actionable) void runCloudChange(agentId, cloud.startUpdate);
+		requestUpdate(agentId);
+	};
+
 	const verifyInstall = async (agentId: AgentId) => {
 		if (!beginAction(agentId)) return;
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
@@ -775,6 +809,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		return <HarnessAccountTab
 			details={details}
 			hostId={hostId}
+			cloud={cloudState(agentId)}
+			onCloudUpdate={() => void runCloudChange(agentId, cloud.startUpdate)}
+			onCloudReset={() => void runCloudChange(agentId, cloud.resetVersion)}
 			loginPanel={uiLoginAgent === agentId ? <HarnessLoginPanel
 				key={agentId}
 				agentId={agentId}
@@ -814,7 +851,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			onInstall={(methodId) => void startAgentOperation(agentId, methodId, "install")}
 			onSelectMethod={(methodId) => setSelectedMethods((current) => ({ ...current, [agentId]: methodId }))}
 			onCopyCommand={(command) => void copyText(agentId, command)}
-			onUpdate={() => requestUpdate(agentId)}
+			onUpdate={() => requestCombinedUpdate(agentId)}
 			onViewSessions={(waiting) => setInUseSessions({ agentId, inUse: waiting })}
 			onLogin={() => void startAuth(agentId)}
 			onLogout={() => setLogoutRequest(agentId)}
@@ -866,6 +903,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						: "relative min-h-0 flex-1 harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
+							const cloudSide = cloudState(agentId);
+							const localUpdate = details.isInstalled && details.updateAvailable;
+							const cloudUpdate = Boolean(cloudSide?.details?.actionable);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
 							return <Pressable key={agentId}
@@ -889,14 +929,17 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
 								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
-								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
+								{/* AO Cloud's side shares it: one mark per harness, whichever places it covers. */}
+								{details.busy || cloudSide?.pending ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.busy ? details.progressLabel : t("settings.harness.updating")}</span></span>
 									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-									: details.isInstalled && details.updateAvailable ? <CircleArrowUp
+									: localUpdate || cloudUpdate ? <CircleArrowUp
 										className="size-4 shrink-0 text-settings-muted"
-										aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
+										aria-label={localUpdate && cloudUpdate ? (hostId ? t("settings.harness.cloud.updatesAvailableBoth", { host: labelForHost(hostId) ?? hostId }) : t("settings.harness.cloud.updatesAvailableBothLocal"))
+											: localUpdate ? t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })
+											: t("settings.harness.cloud.versionAvailable", { version: versionLabel(cloudSide!.details!.latestVersion!) })}
 										role="img"
 									/>
-									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
+									: details.listTone === "error" || cloudNeedsAttention(cloudSide) ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
 							</Pressable>;
 						})}

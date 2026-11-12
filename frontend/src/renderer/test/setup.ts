@@ -239,6 +239,9 @@ if (typeof window !== "undefined") {
 			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
+		artifactSnapshot: {
+			request: async () => false,
+		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
 			start: async () => ({ state: "starting" }),
@@ -513,6 +516,8 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "not available in tests" }),
+			previewFolderUpload: async () => ({ status: "ok", source: "import", leftOut: [] }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {

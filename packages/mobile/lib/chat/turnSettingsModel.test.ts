@@ -119,6 +119,15 @@ describe("turnSettingsRows", () => {
 		)).toBe("Opus · Ask when unsure");
 	});
 
+	it("names the model that answered when the provider rerouted the pick", () => {
+		const models: ChatModel[] = [{ id: "opus", displayName: "Opus", default: true }, { id: "claude-sonnet-5-5", displayName: "Sonnet 5.5", default: false }];
+		const modelReroute = { fromModel: "opus", toModel: "claude-sonnet-5-5", at: "" };
+		expect(turnSettingsModelLabel(snapshot({ harness: "claude-code", capabilities: [], settings: { model: "opus" }, modelReroute }), models, [])).toBe("Sonnet 5.5");
+		// Picking another model leaves the old reroute behind.
+		models.push({ id: "haiku", displayName: "Haiku", default: false });
+		expect(turnSettingsModelLabel(snapshot({ harness: "claude-code", capabilities: [], settings: { model: "haiku" }, modelReroute }), models, [])).toBe("Haiku");
+	});
+
 	it("uses a provider permission control in the turn-settings summary", () => {
 		const options: ChatConfigOption[] = [
 			{ id: "model", name: "Model", category: "model", type: "select", currentValue: "sonnet", choices: [{ value: "sonnet", name: "Sonnet" }] },

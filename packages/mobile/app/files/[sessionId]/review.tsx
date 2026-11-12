@@ -11,6 +11,7 @@ import { plural } from "../../../lib/files/model";
 import { QueuedComments } from "../../../lib/files/QueuedComments";
 import { reviewKey } from "../../../lib/files/reviewStore";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
+import { useFilesBackend } from "../../../lib/files/useFilesBackend";
 
 export { SheetErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -28,9 +29,10 @@ function ReviewCommentsContent() {
 	const id = String(sessionId ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId } = useApp();
+	const { currentHostId } = useApp();
+	const { backend } = useFilesBackend();
 	const styles = useThemedStyles(makeStyles);
-	const review = useReviewSender(config, reviewKey(currentHostId, id), id);
+	const review = useReviewSender(backend, reviewKey(currentHostId, id), id);
 	const count = review.comments.length;
 
 	// Nothing left to send, whether it all went or the last one was removed:

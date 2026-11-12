@@ -9,6 +9,7 @@ import { AppSymbol } from "../lib/AppSymbol";
 import { loadHosts } from "../lib/hosts";
 import { completeOnboarding } from "../lib/onboardingNavigation";
 import { useApp } from "../lib/store";
+import { useCloud } from "../lib/cloud/CloudProvider";
 import { Button, MASCOT_ASPECT } from "../lib/ui";
 import MASCOT from "../assets/mascot.png";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -28,6 +29,7 @@ const PULSE_MS = 1800;
  * thing to do. How to pair is the pair page's to say, under the scanner it
  * describes. The app needs a machine to show anything, so the ways on are
  * pairing one, or signing in to pull in the machines an account already has.
+ * The same sign-in opens Orchestrator Cloud, which needs no machine at all.
  */
 export default function OnboardingScreen() {
 	const styles = useThemedStyles(makeStyles);
@@ -35,6 +37,7 @@ export default function OnboardingScreen() {
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
 	const { reloadConfig } = useApp();
+	const { client: cloudClient } = useCloud();
 	const [signingIn, setSigningIn] = useState(false);
 
 	useEffect(() => {
@@ -42,7 +45,9 @@ export default function OnboardingScreen() {
 	}, []);
 
 	// The same sign-in as Settings, which an unpaired phone can't reach: the
-	// account's machines come in and the first one opens the board.
+	// account's machines come in and the first one opens the board. An account
+	// with Orchestrator Cloud has somewhere to run agents already, so it opens
+	// the board too, with Cloud on it, rather than asking for a machine.
 	function signIn() {
 		setSigningIn(true);
 		void (async () => {
@@ -50,7 +55,7 @@ export default function OnboardingScreen() {
 			if (!account) return;
 			await syncAccountHosts(account);
 			await reloadConfig();
-			if ((await loadHosts()).length > 0) {
+			if ((await loadHosts()).length > 0 || await hasCloud()) {
 				mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 				completeOnboarding(navigation);
 				return;
@@ -63,6 +68,16 @@ export default function OnboardingScreen() {
 		})().catch((error: unknown) => {
 			Alert.alert("Could not sign in", error instanceof Error ? error.message : "Try again.");
 		}).finally(() => setSigningIn(false));
+	}
+
+	/** Whether the account reaches Orchestrator Cloud; an account it doesn't serve is refused. */
+	async function hasCloud(): Promise<boolean> {
+		try {
+			await cloudClient.getMe();
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	return (

@@ -248,6 +248,8 @@ export type WorkspaceSession = {
 	 * is `"artifact"`. Empty/absent for sessions whose output is a PR or nothing.
 	 */
 	artifactFiles?: SessionArtifact[];
+	/** A cloud session counts artifacts whose list has not loaded yet. */
+	artifactFilesPending?: boolean;
 	/**
 	 * Present only for sessions that run in a control-plane sandbox. Carries the
 	 * org the session is scoped to so its terminal can be opened against the CP;
@@ -509,6 +511,11 @@ export type WorkspaceSummary = {
 	 * `kind === CLOUD_PROJECT_KIND`.
 	 */
 	kind?: ProjectKind | typeof CLOUD_PROJECT_KIND | typeof STANDALONE_PROJECT_KIND;
+	/**
+	 * "workspace" on a cloud project laid out like a local workspace: every
+	 * repository (workspaceRepos) side by side in one folder.
+	 */
+	cloudLayout?: "workspace";
 	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
 	folderMissing?: boolean;

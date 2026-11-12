@@ -457,7 +457,9 @@ function ShellLayout() {
 			workspaces.some((workspace) => workspace.id === routeParams.projectId && workspace.kind !== CLOUD_PROJECT_KIND),
 		leavePage: () => void navigate({ to: "/", replace: true }),
 	});
-	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
+	const linkSession = (routeParams.hostId ? remoteWorkspaces ?? [] : workspaces)
+		.flatMap((workspace) => workspace.sessions)
+		.find((session) => session.id === routeParams.sessionId && session.hostId === routeParams.hostId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);
 	useEffect(() => {
@@ -1476,6 +1478,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			initializeProjectRepository,
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 			openProject,
+			remoteHosts,
+			retryRemoteHosts,
 			validateImport,
 		}),
 		[
@@ -1485,6 +1489,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			initializeProjectRepository,
 			openProjectSettings,
 			openProject,
+			remoteHosts,
+			retryRemoteHosts,
 			validateImport,
 			workspaceStartupState,
 		],

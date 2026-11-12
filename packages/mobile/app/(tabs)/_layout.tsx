@@ -1,71 +1,56 @@
-import { useRouter } from "expo-router";
+import { usePathname, useRouter } from "expo-router";
 import { NativeTabs } from "expo-router/unstable-native-tabs";
-import { useMemo } from "react";
-import { Platform, useWindowDimensions } from "react-native";
-import { boardTitle, workersNeedingYou } from "../../lib/board-tabs";
-import { rippleColor } from "../../lib/pressFeedback";
+import { useMemo, useRef } from "react";
+import { Platform, StyleSheet, View } from "react-native";
+import { BoardTabBar } from "../../lib/BoardTabBar";
+import { reselectBoardTab } from "../../lib/boardTabReselect";
+import { boardTabs, boardTitle, workersNeedingYou, type BoardTabName } from "../../lib/board-tabs";
 import { startNewTask } from "../../lib/newTaskAction";
 import { useApp } from "../../lib/store";
 import { symbols } from "../../lib/symbols";
 import { useTheme } from "../../lib/ThemeProvider";
-import { fontScaleCap } from "../../lib/tokens";
-// Material Symbols has no pull request, so the tab draws lucide's, as the
-// board's bar did, from a bundled bitmap.
-import PULL_REQUEST_GLYPH from "../../assets/icons/pull-request.png";
 /**
- * The board: Workers and Projects as the platform's own tab bar. On iOS Pull
- * Requests and Settings open from the header, as sheets over the board; on
- * Android they are tabs of their own.
- * UITabBarController on iOS (a sidebar on iPad), Material navigation bar on
- * Android.
+ * The board: Workers and Projects as tabs, New task as a round button set apart
+ * at the bar's end, and Pull Requests and Settings in the header, on both
+ * platforms. iOS draws the bar as UITabBarController's own (a sidebar on iPad).
+ * Android hides Material's navigation bar, which shares the whole width out
+ * between its items, and floats `BoardTabBar` over the tabs instead.
  *
  * Every tab stays mounted, so each keeps its list and scroll position while
- * another is showing. Tapping the current tab again scrolls its list to the top
- * natively, and the list has to be its page's first view for that.
+ * another is showing. Tapping the current tab again scrolls its list to the
+ * top: natively on iOS, where the list has to be its page's first view for
+ * that, and through `boardTabReselect` on Android.
  */
 export default function BoardTabsLayout() {
 	const t = useTheme();
 	const router = useRouter();
 	const { allSessions } = useApp();
 	const waiting = workersNeedingYou(allSessions);
-	// iOS labels stay in the system font at the system size, as in Apple's own
-	// bars: any font family there also takes React Native's 14pt default and
-	// swells the bar. Android's Material bar takes the app's face.
-	const labelFont = Platform.OS === "ios" ? {} : { fontFamily: "DMSans_500Medium" };
-	// Android's tabs lay their pages out under the clear bar and keep their
-	// content clear of it themselves (`useTabBarFrost`), rather than being
-	// ended above it. iOS's tabs keep the system's own insets.
+	// Android's tabs lay their pages out under the floating bar and keep their
+	// content clear of it themselves (`useTabBarFrost`). iOS's tabs keep the
+	// system's own insets.
 	const android = Platform.OS === "android";
-	// Past 1.3× text, four labels no longer fit Android's bar side by side and
-	// run into each other, so only the selected tab keeps its label, as
-	// Material's own bars do; TalkBack still names every tab.
-	const { fontScale } = useWindowDimensions();
-	const labelVisibilityMode = fontScale > fontScaleCap.chrome ? "selected" : "labeled";
+	// The tab on screen, for Android's bar. A page pushed over the board has a
+	// path of its own and covers the bar, so the last board tab stays selected
+	// under it.
+	const pathname = usePathname();
+	const lastTab = useRef<BoardTabName>("(workers)");
+	lastTab.current = boardTabs.find((tab) => tab.href === pathname)?.name ?? lastTab.current;
+	const selectedTab = lastTab.current;
 	// The store changes on every poll; the tabs only need to change with the
 	// theme or the badge.
-	return useMemo(() => (
+	const tabs = useMemo(() => (
 		<NativeTabs
+			// Android's bar is `BoardTabBar`; the tabs stay, without Material's.
+			hidden={android}
 			sidebarAdaptable
 			minimizeBehavior="onScrollDown"
+			// iOS labels stay in the system font at the system size, as in Apple's
+			// own bars, over the system material (glass on iOS 26), which already
+			// follows the theme's light or dark.
 			tintColor={t.accent}
 			iconColor={{ default: t.textSecondary, selected: t.accent }}
-			labelStyle={{
-				default: { ...labelFont, color: t.textSecondary },
-				selected: { ...labelFont, color: t.accent },
-			}}
-			// iOS keeps the system material behind the bar (glass on iOS 26), which
-			// already follows the theme's light or dark. Android's bar takes the
-			// page's own colour, solid: without a blur, rows showing through a
-			// clear bar fight its labels. Each tab still runs its page on under it
-			// and lays the bar's frost over the rows (see `frost`), so they
-			// dissolve into the bar as they reach it.
-			backgroundColor={Platform.OS === "android" ? t.bgBase : undefined}
-			indicatorColor={t.accentTint}
-			// Every destination keeps its label, as Material 3's bar specifies:
-			// past three tabs the platform's bar otherwise labels only the
-			// selected one. Large text is the exception (see above).
-			labelVisibilityMode={labelVisibilityMode}
-			rippleColor={rippleColor(t)}
+			labelStyle={{ default: { color: t.textSecondary }, selected: { color: t.accent } }}
 		>
 			<NativeTabs.Trigger name="(workers)" disableAutomaticContentInsets={android}>
 				{/* Outlined at rest and filled once selected, as Apple's own tab
@@ -78,26 +63,14 @@ export default function BoardTabsLayout() {
 				<NativeTabs.Trigger.Icon sf={{ default: "folder", selected: "folder.fill" }} md={symbols.projects.android} />
 				<NativeTabs.Trigger.Label>{boardTitle("(projects)")}</NativeTabs.Trigger.Label>
 			</NativeTabs.Trigger>
-			{/* Pull Requests and Settings are tabs on Android, where Material's
-			    bar holds up to five destinations and its top app bar is no place
-			    for a page's way in. iOS opens both as sheets from the board's bar,
-			    and never shows these. */}
-			<NativeTabs.Trigger name="(pull-requests)" hidden={!android} disableAutomaticContentInsets={android}>
-				<NativeTabs.Trigger.Icon src={PULL_REQUEST_GLYPH} />
-				<NativeTabs.Trigger.Label>{boardTitle("(pull-requests)")}</NativeTabs.Trigger.Label>
-			</NativeTabs.Trigger>
-			<NativeTabs.Trigger name="(preferences)" hidden={!android} disableAutomaticContentInsets={android}>
-				<NativeTabs.Trigger.Icon md={symbols.settings.android} />
-				<NativeTabs.Trigger.Label>{boardTitle("(preferences)")}</NativeTabs.Trigger.Label>
-			</NativeTabs.Trigger>
 			{/* New task in the tab bar's own row: iOS 26 sets the search role's
 			    item apart from the tabs as a round button, and the compose glyph
 			    Notes and Mail use replaces the magnifying glass. Disabled, so a
 			    press never selects it; the press opens the New task page the way the
 			    page under it would.
-			    Android keeps its floating New button and never shows this tab:
-			    the role is iOS's, and `hidden` stays fixed so the tabs never
-			    remount. */}
+			    Android draws its own round button in `BoardTabBar` and never
+			    shows this tab: the role is iOS's, and `hidden` stays fixed so the
+			    tabs never remount. */}
 			<NativeTabs.Trigger
 				name="compose"
 				role="search"
@@ -112,5 +85,25 @@ export default function BoardTabsLayout() {
 				<NativeTabs.Trigger.Label>New task</NativeTabs.Trigger.Label>
 			</NativeTabs.Trigger>
 		</NativeTabs>
-	), [android, labelVisibilityMode, router, t, waiting]);
+	), [android, router, t, waiting]);
+	if (!android) return tabs;
+	return (
+		<View style={styles.board}>
+			{tabs}
+			<BoardTabBar
+				selected={selectedTab}
+				// Tapping the tab on screen again scrolls its list to the top, as
+				// iOS's bar does natively.
+				onSelect={(name) => name === selectedTab
+					? reselectBoardTab(name)
+					: router.navigate(boardTabs.find((tab) => tab.name === name)!.href)}
+				waiting={waiting}
+				onNewTask={() => startNewTask(() => router.push("/spawn"))}
+			/>
+		</View>
+	);
 }
+
+const styles = StyleSheet.create({
+	board: { flex: 1 },
+});
