@@ -17,9 +17,10 @@ import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
 import { IncompatibleHostVersionError, type ProbeAnswer, raceEndpoints } from "./race";
 
-function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string {
+// `encrypted`: the phone saved the machine's key, so a machine without /api/v1/e2ee is too old to talk to.
+function identityHost(body: { hostId?: unknown; apiVersion?: unknown; e2ee?: unknown }, encrypted = false): string {
 	const hostId = typeof body.hostId === "string" ? body.hostId : "";
-	if (hostId && body.apiVersion !== 1) throw new IncompatibleHostVersionError(hostId);
+	if (hostId && (body.apiVersion !== 1 || (encrypted && body.e2ee !== true))) throw new IncompatibleHostVersionError(hostId);
 	return hostId;
 }
 
@@ -37,12 +38,12 @@ export const PROBE_TIMEOUT_MS = 3_000;
  * is safe to send a credential to, so it has to come first. See
  * docs/adr/0003-unauthenticated-identity-probe.md.
  */
-export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, options: { retryTunnel?: boolean } = {}): Promise<ProbeAnswer> {
+export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, options: { retryTunnel?: boolean; encrypted?: boolean } = {}): Promise<ProbeAnswer> {
 	// A tunnel hostname may simply not have propagated yet; see probeRetry.
 	const startedAt = Date.now();
 	for (;;) {
 		try {
-			return await probeOnce(endpoint, signal);
+			return await probeOnce(endpoint, signal, options.encrypted);
 		} catch (e) {
 			if (signal.aborted) throw e; // The race already has a winner.
 			if (e instanceof IncompatibleHostVersionError) throw e;
@@ -67,7 +68,7 @@ function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
 	});
 }
 
-async function probeOnce(endpoint: Endpoint, signal: AbortSignal): Promise<ProbeAnswer> {
+async function probeOnce(endpoint: Endpoint, signal: AbortSignal, encrypted = false): Promise<ProbeAnswer> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 	// Abort when either the race picked a winner or our own timeout fired.
@@ -79,7 +80,7 @@ async function probeOnce(endpoint: Endpoint, signal: AbortSignal): Promise<Probe
 			signal: controller.signal,
 		});
 		if (!res.ok) throw new Error(`identity probe returned ${res.status}`);
-		const hostId = identityHost((await res.json()) as { hostId?: unknown; apiVersion?: unknown });
+		const hostId = identityHost((await res.json()) as { hostId?: unknown; apiVersion?: unknown; e2ee?: unknown }, encrypted);
 		if (!hostId) {
 			throw new Error("identity probe returned no host id");
 		}
@@ -186,7 +187,7 @@ export type ConnectOptions = {
 export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 	return {
 		findHost,
-		race: (host) => raceEndpoints(host.endpoints, host.id, probeEndpoint),
+		race: (host) => raceEndpoints(host.endpoints, host.id, (endpoint, signal) => probeEndpoint(endpoint, signal, { encrypted: Boolean(host.hostKey) })),
 		// Skipped as nothing advertised: merged, that leaves the stored list as is.
 		refreshEndpoints: (config) =>
 			options.refreshEndpoints === false

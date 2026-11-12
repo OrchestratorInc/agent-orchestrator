@@ -18990,11 +18990,14 @@ components:
       properties:
         apiVersion:
           type: integer
+        e2ee:
+          type: boolean
         hostId:
           type: string
       required:
       - hostId
       - apiVersion
+      - e2ee
       type: object
     ImportReport:
       properties:

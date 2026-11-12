@@ -36,5 +36,6 @@ func (c *IdentityController) identity(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, IdentityResponse{
 		HostID:     c.HostID,
 		APIVersion: MobileAPIVersion,
+		E2EE:       true,
 	})
 }

@@ -48,7 +48,7 @@ func TestGetIdentityReturnsTheHostID(t *testing.T) {
 
 // The probe is reachable without a credential, so it must not become a place
 // where anything else about the machine leaks.
-func TestGetIdentityExposesNothingBeyondIDAndVersion(t *testing.T) {
+func TestGetIdentityExposesNothingBeyondIDVersionAndE2EE(t *testing.T) {
 	srv := identityServer(t, "h_abc")
 
 	res, err := http.Get(srv.URL + "/api/v1/identity")
@@ -62,7 +62,7 @@ func TestGetIdentityExposesNothingBeyondIDAndVersion(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	for k := range got {
-		if k != "hostId" && k != "apiVersion" {
+		if k != "hostId" && k != "apiVersion" && k != "e2ee" {
 			t.Errorf("unexpected field %q in the unauthenticated identity probe", k)
 		}
 	}

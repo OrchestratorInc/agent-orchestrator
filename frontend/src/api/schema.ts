@@ -6590,6 +6590,7 @@ export interface components {
         };
         IdentityResponse: {
             apiVersion: number;
+            e2ee: boolean;
             hostId: string;
         };
         ImportReport: {

@@ -97,6 +97,15 @@ describe("identity API compatibility", () => {
 		expect(fetch.mock.calls[0][1].headers).toBeUndefined();
 	});
 
+	it("calls a machine without end-to-end encryption incompatible when this phone saved its key, not offline", async () => {
+		const endpoint = { kind: "lan" as const, host: "192.168.1.5", port: 3011, secure: false };
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ hostId: "h_A", apiVersion: 1 }) }));
+		await expect(probeEndpoint(endpoint, new AbortController().signal, { encrypted: true })).rejects.toBeInstanceOf(IncompatibleHostVersionError);
+		await expect(probeEndpoint(endpoint, new AbortController().signal)).resolves.toEqual({ hostId: "h_A" });
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ hostId: "h_A", apiVersion: 1, e2ee: true }) }));
+		await expect(probeEndpoint(endpoint, new AbortController().signal, { encrypted: true })).resolves.toEqual({ hostId: "h_A" });
+	});
+
 	it.each([undefined, 2])("rejects identity version %s before authentication", async (apiVersion) => {
 		const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ hostId: "h_A", apiVersion }) });
 		vi.stubGlobal("fetch", fetch);

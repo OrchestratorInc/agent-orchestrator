@@ -2773,11 +2773,14 @@ type EndpointsResponse struct {
 
 // IdentityResponse is the body of the unauthenticated GET /api/v1/identity
 // probe. It is deliberately minimal: the route is reachable without the
-// connection password, so it must carry nothing but an opaque host id and the
-// mobile contract version.
+// connection password, so it must carry nothing but an opaque host id, the
+// mobile contract version, and whether the host serves /api/v1/e2ee.
 type IdentityResponse struct {
 	HostID     string `json:"hostId"`
 	APIVersion int    `json:"apiVersion"`
+	// E2EE says the host serves /api/v1/e2ee. A phone that saved the host's key
+	// asks for an update instead of reporting an older host as offline.
+	E2EE bool `json:"e2ee"`
 }
 
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
