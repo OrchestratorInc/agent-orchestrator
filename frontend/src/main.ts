@@ -166,6 +166,7 @@ import {
 	handleCloudDeepLink,
 	getCloudAccessToken,
 	getCloudSession,
+	getCloudSessionCached,
 	installCloudIPC,
 	registerCloudProtocol,
 	resolveCloudAuthDir,
@@ -211,6 +212,9 @@ import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
+import { createArtifactSnapshotStore, registerArtifactSnapshotIpc, registerArtifactSnapshotProtocol } from "./main/artifact-snapshots";
+import { ARTIFACT_SNAPSHOT_SCHEME } from "./shared/artifact-snapshot";
+import { createArtifactSnapshotRenderer } from "./main/artifact-snapshot-window";
 import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
@@ -624,6 +628,9 @@ protocol.registerSchemesAsPrivileged([
 		scheme: RENDERER_SCHEME,
 		privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true },
 	},
+	// Cached artifact previews, loaded by the cards' <img>s (main/artifact-snapshots.ts). Secure, so
+	// the app:// renderer may show them.
+	{ scheme: ARTIFACT_SNAPSHOT_SCHEME, privileges: { standard: true, secure: true } },
 ]);
 
 // Only the app's single instance claims (or, for a loopback dev build,
@@ -1315,6 +1322,10 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
 
 	mainWindow.on("closed", () => {
+		// The snapshot window is a BaseWindow too: left open it would count as the app's last window,
+		// and the requests still queued must not open another one.
+		artifactSnapshotStore.cancel();
+		artifactSnapshotRenderer.close();
 		chatDraftRisks = [];
 		chatDraftDialog = undefined;
 		chatDraftQuitConfirmed = false;
@@ -3608,6 +3619,21 @@ registerChatImageIpc({
 	downloadsDirectory: () => app.getPath("downloads"),
 	appName: app.getName(),
 });
+const artifactSnapshotRenderer = createArtifactSnapshotRenderer({
+	BrowserWindow,
+	preload: preloadPath(),
+	pageUrl: () => new URL("artifact-snapshot.html", rendererUrl()).href,
+	// Never open the hidden window without the shell: the app stays alive on macOS after the shell closes.
+	shellOpen: () => {
+		const contents = getShellWebContents();
+		return contents !== null && !contents.isDestroyed();
+	},
+});
+const artifactSnapshotStore = createArtifactSnapshotStore({
+	directory: path.join(desktopDataDir, "artifact-previews"),
+	render: artifactSnapshotRenderer.render,
+});
+registerArtifactSnapshotIpc({ ipcMain, store: artifactSnapshotStore });
 registerCloudArtifactIpc({
 	ipcMain,
 	openInBrowser: (target) => openFileInDefaultBrowser(target),
@@ -3979,6 +4005,13 @@ ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 // The account this run last told the renderer about, to notice another one signing in.
 let notifiedCloudUserId: string | undefined;
 
+function bindArtifactSnapshotsToCloudAccount(userId: string | null): void {
+	artifactSnapshotStore.bindCloudAccount(userId).catch((error) => {
+		// The old files stay on record as another account's, so the next sign-in, or the next launch, tries again.
+		console.warn("AO: could not delete the cached Cloud artifact previews", error);
+	});
+}
+
 function notifyRenderersOfCloudSession(
 	account: import("./shared/cloud-account").CloudAccount | null,
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
@@ -3992,6 +4025,9 @@ function notifyRenderersOfCloudSession(
 		void sessionShareUrls.clear().catch(() => undefined);
 	}
 	notifiedCloudUserId = account?.user.id;
+	// The Cloud artifact previews on disk belong to one account: another one signing in, or this one
+	// being lost (a sign-out, or a refresh that failed for good), clears them.
+	bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();
@@ -4004,7 +4040,13 @@ function notifyRenderersOfCloudSession(
 // Telemetry's Cloud binding is retired as part of sign-out itself, not only when
 // the renderer later hands the sign-out to the daemon: the app can quit first,
 // and a CLI-started daemon would then restore the departed account.
-installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, () => telemetryIdentity.signOut());
+installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, async () => {
+	// Cloud artifact previews cached on disk go with the account, before the app can quit.
+	await artifactSnapshotStore.clearCloud().catch((error) => {
+		console.warn("AO: could not delete the cached Cloud artifact previews", error);
+	});
+	await telemetryIdentity.signOut();
+});
 
 // Dev-only local (email/password) sign-in against a loopback Docker control
 // plane running AO_CLOUD_LOCAL_AUTH. Gated to unpackaged/dev builds + loopback
@@ -4336,6 +4378,13 @@ app.whenReady().then(async () => {
 	}
 
 	registerRendererProtocol();
+	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
+	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
+	// even if the app quit before it could.
+	void getCloudSessionCached(cloudDataDir()).then(
+		(account) => bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null),
+		() => bindArtifactSnapshotsToCloudAccount(null),
+	);
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))
