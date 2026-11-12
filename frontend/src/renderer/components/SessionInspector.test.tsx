@@ -390,12 +390,12 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByTestId("inspector-branch")).not.toBeInTheDocument();
   });
 
-  it("gives a remote orchestrator the same tabs without a local account", () => {
+  it("gives a remote orchestrator the same tabs with its host's account", () => {
     renderWithQuery(<SessionInspector orchestrator hostId="box-a" session={session([], { kind: "orchestrator", hostId: "box-a" })} />);
     expect(screen.getByRole("tab", { name: "Summary" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
-    expect(screen.queryByTestId("session-account-summary")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
   });
 
   it("shows an orchestrator's direct and rendered HTML artifacts beside Summary and Browser", async () => {

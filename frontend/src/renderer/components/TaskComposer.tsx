@@ -15,6 +15,7 @@ import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
+import { agentAccountProviderFor, type AgentAccountProvider } from "../hooks/useAgentAccounts";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -90,6 +91,7 @@ type CreateTaskInput = {
 	effort?: string;
 	mode?: "chat" | "tui";
 	approvalMode?: ApprovalMode;
+	accountId?: string;
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
 };
@@ -162,6 +164,7 @@ export type LaunchReplay = {
 	effort?: string;
 	approvalMode?: ApprovalMode;
 	mode?: "chat" | "tui";
+	accountId?: string;
 };
 
 /**
@@ -191,6 +194,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const [status, setStatus] = useState<string | undefined>();
 	const [errorAction, setErrorAction] = useState<"install-agent" | "choose-branch" | undefined>();
 	const [branchOverride, setBranchOverride] = useState("");
+	// The account picked per provider; none starts on the provider's default.
+	const [accountPicks, setAccountPicks] = useState<Partial<Record<AgentAccountProvider, string>>>({});
+	useEffect(() => setAccountPicks({}), [hostId]);
 	const [branchDraft, setBranchDraft] = useState("");
 	useEffect(() => {
 		setBranchOverride("");
@@ -322,6 +328,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
 						...(input.mode ? { mode: input.mode } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
+						...(input.accountId ? { accountId: input.accountId } : {}),
 						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
 					},
@@ -372,6 +379,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					...(input.effort ? { effort: input.effort } : {}),
 					...(input.mode ? { mode: input.mode } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
+					...(input.accountId ? { accountId: input.accountId } : {}),
 					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 				},
 			});
@@ -489,6 +497,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
+	const accountProvider = agentAccountProviderFor(selectedAgent);
+	const accountId = accountProvider && !isCloudProject ? accountPicks[accountProvider] : undefined;
 	// The connection a cloud task with this agent runs on; its catalog follows it.
 	const selectedCloudConnection = isCloudProject
 		? cloudConnectionsQuery.data?.find(
@@ -1118,6 +1128,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					effort: replay.effort,
 					mode: replay.mode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 					approvalMode: replay.approvalMode,
+					accountId: replay.accountId,
 				} : {
 					agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 					model: requestedModel,
@@ -1127,6 +1138,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// plane has none, so a cloud task carries it.
 					mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 					approvalMode: requestedApproval ?? launchApproval,
+					accountId,
 				}),
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
@@ -1338,7 +1350,14 @@ export function useTaskLaunch({ projectId, hostId }: {
 			effort: requestedEffort,
 			approvalMode: launchApproval,
 			mode: submitMode,
+			accountId,
 		}),
+		/** The account the task starts on, for Claude Code and Codex on a daemon. */
+		account: accountProvider && !isCloudProject ? {
+			provider: accountProvider,
+			value: accountId,
+			choose: (id: string) => setAccountPicks((picks) => ({ ...picks, [accountProvider]: id })),
+		} : undefined,
 		// The interface a plain send starts in, including the Settings default.
 		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",
 		refreshModels: refreshSelectedModels,

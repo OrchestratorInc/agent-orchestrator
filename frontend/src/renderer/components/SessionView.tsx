@@ -547,7 +547,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const filesKind = session ? filesProjectKind(session, sessionWorkspaceKind) : undefined;
 	const interfaceContext = hostId ?? (session ? session.cloud ?? null : cloudOrgId && projectId ? { orgId: cloudOrgId } : undefined);
 	const interfaceUi = useSessionInterfaceSwitch(sessionId, session, interfaceContext);
-	const accountLabel = useAgentAccountLabel(Boolean(interfaceUi.accountMoveTarget));
+	const accountLabel = useAgentAccountLabel(Boolean(interfaceUi.accountMoveTarget), hostId);
 	const accountSwitchingLabel = interfaceUi.accountMoveTarget
 		? t("settings.agentAccounts.switching", { email: accountLabel(interfaceUi.accountMoveTarget) })
 		: undefined;

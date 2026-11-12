@@ -31,6 +31,8 @@ import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
+import { agentAccountName, useAgentAccounts } from "../hooks/useAgentAccounts";
+import type { AccountChoice } from "./chat/AgentSwitchPicker";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 
@@ -46,6 +48,14 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const queryClient = useQueryClient();
 	// A Cloud task's session starts spinning up as the page opens (not Coder's).
 	const task = useTaskLaunch({ projectId, hostId });
+	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
+	const accountRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
+	const accountChoice: AccountChoice | undefined = task.account && accountRows.length > 0 ? {
+		options: accountRows.map((row) => ({ id: row.id, label: agentAccountName(row, t), disabled: !row.signedIn })),
+		value: task.account.value ?? accountRows.find((row) => row.default)?.id,
+		onPick: task.account.choose,
+		disabled: accountRows.length < 2,
+	} : undefined;
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
@@ -450,6 +460,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 								onPendingChange: (next) => {
 									if (next) task.switchAgent(next.harness, { model: next.model, effort: next.effort ?? next.shownEffort });
 								},
+								account: accountChoice,
 							}}
 							autoSelectEffortOnOpen
 						/>

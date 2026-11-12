@@ -18466,6 +18466,9 @@ components:
       type: object
     DelegateTaskRequest:
       properties:
+        accountId:
+          maxLength: 128
+          type: string
         agent:
           enum:
           - claude-code
@@ -22792,6 +22795,9 @@ components:
       type: object
     SpawnSessionRequest:
       properties:
+        accountId:
+          maxLength: 128
+          type: string
         approvalMode:
           enum:
           - default

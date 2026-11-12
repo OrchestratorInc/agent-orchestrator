@@ -638,6 +638,9 @@ type SpawnSessionRequest struct {
 	Model string `json:"model,omitempty" maxLength:"256"`
 	// Effort is the optional reasoning level for the selected model.
 	Effort string `json:"effort,omitempty" maxLength:"32"`
+	// AccountID is the subscription account the agent starts on. Empty uses the
+	// provider's default account.
+	AccountID string `json:"accountId,omitempty" maxLength:"128"`
 
 	// RequestedOutput asks for a specific deliverable. artifact tells the worker to
 	// write a file in its artifact directory instead of opening a PR. Omitted is
@@ -1421,6 +1424,9 @@ type DelegateTaskRequest struct {
 	// Mode is omitted for the daemon-owned default. The UI sends tui only when
 	// the user explicitly accepts the fallback after Chat preflight fails.
 	Mode domain.SessionMode `json:"mode,omitempty" enum:"tui,chat"`
+	// AccountID is the subscription account the worker starts on. Empty uses
+	// the provider's default account.
+	AccountID string `json:"accountId,omitempty" maxLength:"128"`
 	// Attachments are files pasted, dropped, or picked into the delegated task
 	// brief. Each carries bytes as standard base64 (no data: URL prefix). The
 	// daemon writes them into the spawned worker worktree and appends path

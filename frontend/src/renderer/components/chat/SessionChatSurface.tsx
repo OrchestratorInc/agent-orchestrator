@@ -1,4 +1,5 @@
 import { apiErrorException } from "../../lib/api-error-exception";
+import { useSessionAccountSwitch } from "../SessionAccountSummary";
 import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
@@ -326,11 +327,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [currentHarness, snapshot?.items, snapshot?.settings.approvalMode]);
 	const permissionModes = useChatPermissionModes(hostId, pendingSwitch?.harness);
 	const pendingPermissionModes = pendingSwitch ? permissionModes?.get(pendingSwitch.harness) : undefined;
+	const accountSwitch = useSessionAccountSwitch(session, hostId ?? session.hostId);
+	const account = accountSwitch.choice;
 	const agentSwitch = useMemo(
 		() => currentHarness && !session.cloud && !newWorkDisabled
-			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact }
+			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact, account }
 			: undefined,
-		[autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
+		[account, autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
@@ -616,6 +619,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		<div className="relative h-full min-h-0">
 			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
+			{accountSwitch.dialog}
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}

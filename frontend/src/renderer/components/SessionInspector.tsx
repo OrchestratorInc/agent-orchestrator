@@ -445,7 +445,7 @@ const SummaryView = memo(function SummaryView({
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId ? null : <SessionAccountSummary session={session} />}
+					<SessionAccountSummary session={session} hostId={hostId} />
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"

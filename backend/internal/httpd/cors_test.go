@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -380,6 +381,33 @@ func TestUILoginRequiresConfiguredRendererOrigin(t *testing.T) {
 					t.Fatalf("%s %s origin=%q: status=%d want=%d", method, path, origin, w.Code, want)
 				}
 			}
+		}
+	}
+}
+
+func TestAgentAccountsAllowPairedMobileOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		path      string
+		origin    string
+		lanBearer bool
+		want      int
+	}{
+		{"/api/v1/agents/accounts", "http://localhost", true, http.StatusNoContent},
+		{"/api/v1/agents/accounts/sessions/s1", "http://localhost", true, http.StatusNoContent},
+		{"/api/v1/agents/accounts", "http://localhost", false, http.StatusForbidden},
+		{"/api/v1/agents/accounts", "http://ao-preview.hostile.localhost:5181", true, http.StatusForbidden},
+		{"/api/v1/agents/codex/accounts", "http://localhost", true, http.StatusForbidden},
+		{"/api/v1/agents/claude-code/auth/operations", "http://localhost", true, http.StatusForbidden},
+	} {
+		r := httptest.NewRequest(http.MethodPost, tc.path, nil)
+		r.Header.Set("Origin", tc.origin)
+		if tc.lanBearer {
+			r = r.WithContext(context.WithValue(r.Context(), lanBearerContextKey{}, true))
+		}
+		w := httptest.NewRecorder()
+		rendererOriginMiddleware([]string{"app://renderer"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).ServeHTTP(w, r)
+		if w.Code != tc.want {
+			t.Fatalf("%s origin=%q lanBearer=%v: status=%d want=%d", tc.path, tc.origin, tc.lanBearer, w.Code, tc.want)
 		}
 	}
 }

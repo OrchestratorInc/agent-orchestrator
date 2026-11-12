@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 
-const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
+const { getMock, hostsAsked } = vi.hoisted(() => ({ getMock: vi.fn(), hostsAsked: [] as Array<string | undefined> }));
 
 vi.mock("../lib/preview-mode", () => ({ usesPreviewWorkspaceData: false }));
 
@@ -19,7 +19,10 @@ vi.mock("../lib/api-client", () => ({
 
 vi.mock("../lib/host-clients", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/host-clients")>(),
-	clientForSessionHost: () => ({ GET: getMock }),
+	clientForSessionHost: (hostId?: string) => {
+		hostsAsked.push(hostId);
+		return { GET: getMock };
+	},
 }));
 
 vi.mock("../hooks/useCloudCp", async (importOriginal) => ({
@@ -54,4 +57,16 @@ it("asks the local daemon about a local session's account, never a cloud session
 	unmount();
 	queryClient.clear();
 	await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+it("asks a remote session's own host about its account", async () => {
+	hostsAsked.length = 0;
+	getMock.mockImplementation((path: string) => Promise.resolve({ data: path === "/api/v1/agents/accounts" ? { accounts: [] } : {} }));
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(<QueryClientProvider client={queryClient}>
+		<SessionAccountSummary session={session("s-remote", { hostId: "box-a" })} />
+	</QueryClientProvider>);
+
+	await waitFor(() => expect(hostsAsked.filter((host) => host === "box-a").length).toBeGreaterThanOrEqual(3));
+	expect(hostsAsked.every((host) => host === "box-a")).toBe(true);
 });
