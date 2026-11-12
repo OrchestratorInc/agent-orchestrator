@@ -158,7 +158,7 @@ export const PRCard = memo(function PRCard({
 	}
 
 	return (
-		<View onLayout={menuWidth.onLayout}>
+		<View ref={menuWidth.ref} onLayout={menuWidth.onLayout}>
 			<MenuView
 				ref={menu}
 				colorScheme={scheme}

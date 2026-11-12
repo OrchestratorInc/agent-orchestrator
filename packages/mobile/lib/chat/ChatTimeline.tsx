@@ -581,7 +581,7 @@ const TimelineItem = memo(function TimelineItem({
 			return (
 				<>
 				{reports.length > 0 ? <WorkerUpdateRows updates={reports} /> : null}
-				<View style={styles.userRow} onLayout={userRow.onLayout}>
+				<View ref={userRow.ref} style={styles.userRow} onLayout={userRow.onLayout}>
 					<MessageContextMenu canEdit={Boolean(onEdit)} onAction={(action) => {
 						if (action === "edit") onEdit?.(item);
 						else { void Clipboard.setStringAsync(editableMessageText(humanVisibleText(item.text)).body.trim()); haptics.success(); }
