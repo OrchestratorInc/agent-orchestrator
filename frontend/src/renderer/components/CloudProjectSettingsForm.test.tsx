@@ -413,8 +413,37 @@ describe("Cloud project settings", () => {
 		mount("general");
 		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
 		expect(toggle).toBeChecked();
+		// The page is read by admins too, for every session's commits: it promises nothing about who "you" are.
+		expect(screen.getByText("When enabled, commits the agents make in this project list the Orchestrator GitHub App as a co-author. The commit author does not change.")).toBeInTheDocument();
 		await userEvent.click(toggle);
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coAuthorCommits: false } }));
+	});
+
+	it("puts the co-author switch back on when the control plane does not support it yet", async () => {
+		// A control plane from before the setting rejects it as unknown.
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("unsupported or null config.coAuthorCommits", { status: 422, code: "validation_error" }));
+		useUiStore.setState({ globalToast: null, globalToasts: [] });
+		mount("general");
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "This Cloud control plane does not support the co-author setting yet, so it stays on.", tone: "error",
+		}));
+		await waitFor(() => expect(toggle).toBeChecked());
+		// Nothing else changed, so nothing else is sent, and the next edit does not resend the setting.
+		expect(mocks.patch).toHaveBeenCalledTimes(1);
+		await userEvent.click(screen.getByRole("switch", { name: "Workers request a built-in review" }));
+		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { workersRequestReview: true } }));
+	});
+
+	it("still reports any other failure to save the co-author setting", async () => {
+		mocks.patch.mockRejectedValueOnce(new CloudCpError("Cloud is unavailable", { status: 503, code: "unavailable" }));
+		const onSaveState = vi.fn();
+		mount("general", onSaveState);
+		const toggle = await screen.findByRole("switch", { name: "Add Orchestrator as a commit co-author" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Cloud is unavailable" })));
+		expect(toggle).not.toBeChecked();
 	});
 });
 

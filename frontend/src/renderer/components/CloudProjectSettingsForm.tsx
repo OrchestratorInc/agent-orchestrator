@@ -18,7 +18,7 @@ import { agentLabel } from "../lib/agent-options";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { isCloudWorkspaceProject, isStandaloneCloudProject, projectAdditionalRepos, projectConfigText, projectRepositoryUrls, repoDirName } from "../lib/cloud-project-repos";
-import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
+import type { CloudCpProject, CloudCpProjectCoderConfig, CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
 import { AgentAvatar } from "./AgentAvatar";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
@@ -26,6 +26,7 @@ import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettin
 import { AgentSelectMenuItem } from "./settings/AgentSelectMenuItem";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { SettingsInlineInput, SettingsRow } from "./settings/SettingsRow";
+import { useUiStore } from "../stores/ui-store";
 
 export const cloudProjectSettingsQueryKey = (baseUrl: string, orgId: string, projectId: string) => ["cloud-project-settings", baseUrl, orgId, projectId] as const;
 
@@ -71,11 +72,28 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	// repository (the local daemon's AO_TRACKER_INTAKE gate is about its own
 	// poller); a project without a repository has no issues.
 	const intakeVisible = !standalone;
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const save = async (values: ProjectSettingsDraft) => {
-		const response = await client.updateProjectSettings(project.orgId, project.id, cloudProjectSettingsPatch(saved.current, toCloudDraft(values)));
-		saved.current = cloudProjectSettingsDraft(response.project);
-		queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
-		void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+		const patch = cloudProjectSettingsPatch(saved.current, toCloudDraft(values));
+		let updated: CloudCpProject | undefined;
+		try {
+			updated = (await client.updateProjectSettings(project.orgId, project.id, patch)).project;
+		} catch (error) {
+			// A control plane from before the co-author setting rejects it. Save the
+			// rest and put the switch back, so later saves do not keep failing on it.
+			if (patch.config?.coAuthorCommits === undefined || !coAuthorCommitsUnsupported(error)) throw error;
+			const { coAuthorCommits: _unsupported, ...config } = patch.config;
+			const rest: CloudCpProjectSettingsRequest = { ...patch };
+			if (Object.keys(config).length > 0) rest.config = config;
+			else delete rest.config;
+			if (Object.keys(rest).length > 0) updated = (await client.updateProjectSettings(project.orgId, project.id, rest)).project;
+			showGlobalToast(t("settings.cloudProject.coAuthorCommitsUnsupported"), undefined, "error");
+		}
+		if (updated) {
+			saved.current = cloudProjectSettingsDraft(updated);
+			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), updated);
+			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+		}
 		return { values: toEditorDraft(saved.current) };
 	};
 	return <ProjectSettingsEditor initialValues={toEditorDraft(cloudProjectSettingsDraft(project))} section={section}
@@ -105,6 +123,11 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		// The control plane takes only issues from the repository's owners, members and collaborators.
 		intakeDescription={t("settings.cloudProject.intakeDescription")} renderAgent={(props) => <CloudAgentPicker {...props} />}
 		save={save} onSaveState={onSaveState} />;
+}
+
+/** A control plane that predates the co-author setting answers it as an unknown one. */
+function coAuthorCommitsUnsupported(error: unknown): boolean {
+	return error instanceof Error && error.message.includes("coAuthorCommits");
 }
 
 /** The coder config the control plane stores on a project (config.coder). */
