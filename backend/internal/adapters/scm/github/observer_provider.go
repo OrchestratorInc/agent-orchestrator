@@ -62,9 +62,11 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 	return ports.SCMGuardResult{ETag: firstNonEmptyHeader(resp.ETag, etag), NotModified: resp.NotModified}, nil
 }
 
-// ListPRsByRepo lists pull requests in the repository, optionally filtered to
-// those updated after updatedAfter (zero = full listing). It paginates the REST
-// pulls endpoint using state=open and sort=updated
+// ListPRsByRepo lists open pull requests in the repository, optionally only
+// those updated at or after updatedAfter (zero = full listing). The REST pulls
+// endpoint has no server-side update filter, so it pages newest-updated first
+// and stops at the first PR updated before updatedAfter. A PR whose updated_at
+// is missing or unparseable is kept, since it cannot be placed before the cursor.
 func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
 	const perPage = 100
 	out := []ports.SCMPRObservation{}
@@ -75,9 +77,6 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 		q.Set("direction", "desc")
 		q.Set("per_page", strconv.Itoa(perPage))
 		q.Set("page", strconv.Itoa(page))
-		if !updatedAfter.IsZero() {
-			q.Set("since", updatedAfter.UTC().Format(time.RFC3339Nano))
-		}
 		resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
 		if err != nil {
 			return nil, err
@@ -87,7 +86,11 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 			return nil, fmt.Errorf("github scm: decode open PR list: %w", err)
 		}
 		for _, pull := range pulls {
-			out = append(out, restListPullToSCM(pull))
+			pr := restListPullToSCM(pull)
+			if !pr.UpdatedAtProvider.IsZero() && pr.UpdatedAtProvider.Before(updatedAfter) {
+				return out, nil
+			}
+			out = append(out, pr)
 		}
 		if len(pulls) < perPage {
 			return out, nil

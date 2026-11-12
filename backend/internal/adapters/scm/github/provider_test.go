@@ -2118,6 +2118,82 @@ func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 	}
 }
 
+// The pulls endpoint ignores since, so an incremental listing pages
+// newest-updated first and stops at the first PR updated before the cursor.
+func TestListPRsByRepoStopsAtUpdatedAfter(t *testing.T) {
+	const total = 102
+	newest := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	updatedAt := func(number int) time.Time { return newest.Add(-time.Duration(number) * time.Minute) }
+	for _, tc := range []struct {
+		name         string
+		after        time.Time
+		wantPRs      int
+		wantRequests int
+	}{
+		{name: "full listing", wantPRs: total, wantRequests: 2},
+		{name: "cursor on the first page keeps the PR updated at it", after: updatedAt(3), wantPRs: 3, wantRequests: 1},
+		{name: "cursor past a full page", after: updatedAt(101), wantPRs: 101, wantRequests: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeGH(t)
+			f.on(http.MethodGet, "/repos/acme/repo/pulls", func(w http.ResponseWriter, r *http.Request) {
+				q := r.URL.Query()
+				if q.Has("since") || q.Get("state") != "open" || q.Get("sort") != "updated" || q.Get("direction") != "desc" {
+					t.Errorf("query = %v, want state=open sort=updated direction=desc and no since", q)
+				}
+				page, _ := strconv.Atoi(q.Get("page"))
+				pulls := []map[string]any{}
+				for n := (page-1)*100 + 1; n <= min(page*100, total); n++ {
+					pulls = append(pulls, map[string]any{"number": n, "state": "open", "updated_at": updatedAt(n).Format(time.RFC3339)})
+				}
+				_ = json.NewEncoder(w).Encode(pulls)
+			})
+			p := newProviderForTest(t, f)
+
+			prs, err := p.ListPRsByRepo(ctx(), ports.SCMRepo{Provider: "github", Owner: "acme", Name: "repo", Repo: "acme/repo"}, tc.after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(prs) != tc.wantPRs || prs[len(prs)-1].Number != tc.wantPRs {
+				t.Fatalf("listed %d PRs, want #1..#%d", len(prs), tc.wantPRs)
+			}
+			if n := f.callsTo(http.MethodGet, "/repos/acme/repo/pulls"); n != tc.wantRequests {
+				t.Fatalf("list requests = %d, want %d", n, tc.wantRequests)
+			}
+		})
+	}
+}
+
+// A missing or malformed updated_at parses to zero. The incremental listing
+// keeps that PR and reads on to the valid rows after it, instead of reading
+// zero as older than the cursor and dropping the rest of the listing.
+func TestListPRsByRepoKeepsUnparseableUpdatedAt(t *testing.T) {
+	after := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	f := newFakeGH(t)
+	f.on(http.MethodGet, "/repos/acme/repo/pulls", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"number": 1, "state": "open", "updated_at": "not-a-time"},
+			{"number": 2, "state": "open"},
+			{"number": 3, "state": "open", "updated_at": after.Add(time.Minute).Format(time.RFC3339)},
+			{"number": 4, "state": "open", "updated_at": after.Add(-time.Minute).Format(time.RFC3339)},
+			{"number": 5, "state": "open", "updated_at": after.Add(-2 * time.Minute).Format(time.RFC3339)},
+		})
+	})
+	p := newProviderForTest(t, f)
+
+	prs, err := p.ListPRsByRepo(ctx(), ports.SCMRepo{Provider: "github", Owner: "acme", Name: "repo", Repo: "acme/repo"}, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]int, 0, len(prs))
+	for _, pr := range prs {
+		got = append(got, pr.Number)
+	}
+	if fmt.Sprint(got) != "[1 2 3]" {
+		t.Fatalf("listed PRs %v, want [1 2 3]: keep the unparseable rows, then stop at the first older one", got)
+	}
+}
+
 // A branch lookup asks GitHub to filter by head owner:branch in one request,
 // so a repository's other open PRs are never paged through. It keeps each
 // PR's author, which decides whether AO may attach it.
