@@ -2,6 +2,7 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { shouldPoll } from "../appStatePoll";
+import { ApiError } from "../api";
 import { userFacingError } from "../connectionError";
 import type { WorkspaceBranches, WorkspaceCommitSelection, WorkspaceHistory, WorkspaceManifest } from "./api";
 import type { FilesBackend } from "./backend";
@@ -108,25 +109,50 @@ export function useChangeList(branchBackend: FilesBackend | null, sessionId: str
 }
 
 /**
- * The session's branch list, read once when Files opens: whether it has Git
- * history to compare at all (a scratch session has none), and the checked-out
- * branch's name. Undefined until it answers or where `git` is missing.
+ * Whether this machine's daemon can compare branches and split the worktree:
+ * a newer daemon always lists `sections.uncommitted`, even in a degraded
+ * manifest, so the first manifest that has it settles it for the backend. One
+ * slow, degraded poll then never takes the pickers (and the user's pick) away.
  */
-export function useBranchList(backend: FilesBackend | null, sessionId: string, enabled: boolean): WorkspaceBranches | undefined {
-	const [list, setList] = useState<{ key: string; value: WorkspaceBranches }>();
+export function useGitCapable(backend: FilesBackend | null, manifest: WorkspaceManifest | null): boolean {
+	const key = backend?.git ? backend.key : "";
+	const now = Boolean(key && manifest && manifest.sections.uncommitted !== undefined);
+	const [seen, setSeen] = useState<string>();
+	useEffect(() => {
+		if (now) setSeen(key);
+	}, [key, now]);
+	return now || (Boolean(key) && seen === key);
+}
+
+/** An older daemon has no branches route; that is the only failure that keeps the pickers off for good. */
+function routeMissing(cause: unknown): boolean {
+	return cause instanceof ApiError && (cause.status === 404 || cause.status === 405);
+}
+
+/**
+ * The session's branch list, read when Files opens: whether it has Git history
+ * to compare at all (a scratch session has none), and the checked-out branch's
+ * name. `list` is undefined until it answers; `reload` reads it again after a
+ * failure (a pull to refresh), unless the daemon has no such route.
+ */
+export function useBranchList(backend: FilesBackend | null, sessionId: string, enabled: boolean): { list: WorkspaceBranches | undefined; reload: () => void } {
+	const [state, setState] = useState<{ key: string; value?: WorkspaceBranches; missing?: boolean }>();
+	const [attempt, setAttempt] = useState(0);
 	const keyed = useKeyedBackend(backend);
 	const git = keyed?.git;
 	const key = `${keyed?.key ?? ""}|${sessionId}|${enabled}`;
+	const shown = state?.key === key ? state : undefined;
 	useEffect(() => {
 		if (!git || !enabled) return;
 		const controller = new AbortController();
 		git.branches(sessionId, controller.signal)
-			.then((value) => { if (!controller.signal.aborted) setList({ key, value }); })
-			// No list leaves the pickers off, as on a daemon without the route.
-			.catch(() => {});
+			.then((value) => { if (!controller.signal.aborted) setState({ key, value }); })
+			.catch((cause) => { if (!controller.signal.aborted && routeMissing(cause)) setState({ key, missing: true }); });
 		return () => controller.abort();
-	}, [enabled, git, key, sessionId]);
-	return list?.key === key ? list.value : undefined;
+	}, [attempt, enabled, git, key, sessionId]);
+	const retry = !shown?.value && !shown?.missing;
+	const reload = useCallback(() => { if (retry) setAttempt((count) => count + 1); }, [retry]);
+	return { list: shown?.value, reload };
 }
 
 /** The pick a Files route carries in its params, the same object while it names the same pick. */

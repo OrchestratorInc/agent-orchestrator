@@ -31,6 +31,15 @@ describe("the Files list", () => {
 describe("the Files list's loading state", () => {
 	// A worktree pick has no groups until a manifest arrives, so a failed first
 	// read must end the spinner and show its error with Try again.
+	// One degraded poll must not drop the pickers and the pick, and a branch list
+	// that failed to load comes back with a pull to refresh.
+	it("settles the pickers once per machine and retries a failed branch list", () => {
+		const index = source("../../app/files/[sessionId]/index.tsx");
+		expect(index).toContain("const capable = useGitCapable(");
+		expect(index).not.toContain("scopesAvailable(manifest)");
+		expect(index).toContain("reloadBranches();");
+	});
+
 	it("shows a failed manifest read instead of loading forever", () => {
 		expect(source("../../app/files/[sessionId]/index.tsx")).toContain("!(error && fromManifest)");
 	});

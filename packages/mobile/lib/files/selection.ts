@@ -210,3 +210,27 @@ export function selectionGroups(
 			return group("committed", "Committed on branch", sectionGroup(manifest, ["committed"], []));
 	}
 }
+
+// ---- Comments ------------------------------------------------------------------
+
+/**
+ * What a comment was made on, in the words desktop's Files review sends: the
+ * source (the worktree, a branch, a pull request) and the comparison scope. The
+ * shared formatter prints both, so the agent knows line 42 of a commit's diff is
+ * not line 42 of its worktree file.
+ */
+export function annotationContext(selection: FilesSelection): { source: string; scope: string } {
+	const { branch, changes } = normalizeSelection(selection);
+	const source = branch.kind === "branch" ? `Branch ${branch.name.replace(/^refs\/remotes\//, "")}`
+		: branch.kind === "pull_request" ? `PR #${branch.number}${branch.url ? ` (${branch.url})` : ""}`
+		: "Workspace";
+	const scope = changes.kind === "commits" ? (changes.sha ? `commit ${shortSha(changes.sha)}` : "committed")
+		: changes.kind === "all" ? "combined"
+		: changes.kind;
+	return { source, scope };
+}
+
+/** Whether a comment was made in this pick. One queued before picks existed was made in the default view. */
+export function inPick(target: { source?: string; scope?: string }, context: { source: string; scope: string }): boolean {
+	return (target.source ?? "Workspace") === context.source && (target.scope ?? "combined") === context.scope;
+}

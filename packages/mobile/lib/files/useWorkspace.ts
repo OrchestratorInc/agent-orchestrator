@@ -46,17 +46,23 @@ export function useWorkspaceManifest(backend: FilesBackend | null, sessionId: st
 	const [error, setError] = useState<string>();
 	const current = useRef({ backend, sessionId });
 	current.current = { backend, sessionId };
+	// Polls, focus reloads and pulls overlap; an answer older than the last one
+	// applied must not put older files on screen or in the sheet's cache.
+	const issued = useRef(0);
+	const applied = useRef(0);
 
 	const load = useCallback(async () => {
 		if (!backend || !enabled) return;
+		const ticket = ++issued.current;
 		try {
 			const next = await backend.manifest(sessionId);
-			if (current.current.backend !== backend || current.current.sessionId !== sessionId) return;
+			if (ticket < applied.current || current.current.backend !== backend || current.current.sessionId !== sessionId) return;
+			applied.current = ticket;
 			rememberManifest(backend, sessionId, next);
 			setManifest((previous) => previous && previous.workspaceVersion && previous.workspaceVersion === next.workspaceVersion ? previous : next);
 			setError(undefined);
 		} catch (cause) {
-			if (current.current.backend === backend && current.current.sessionId === sessionId) setError(userFacingError(cause, "Couldn't load this session's files."));
+			if (ticket >= applied.current && current.current.backend === backend && current.current.sessionId === sessionId) setError(userFacingError(cause, "Couldn't load this session's files."));
 		} finally {
 			if (current.current.backend === backend && current.current.sessionId === sessionId) setLoading(false);
 		}

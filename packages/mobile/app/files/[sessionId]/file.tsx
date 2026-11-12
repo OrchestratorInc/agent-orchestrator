@@ -54,7 +54,7 @@ import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
 import { SegmentedChoice, type SegmentedChoiceOption } from "../../../lib/files/SegmentedChoice";
-import { branchLabel, changesLabel, fileRead, selectionParams, type SelectionParams } from "../../../lib/files/selection";
+import { annotationContext, branchLabel, changesLabel, fileRead, inPick, selectionParams, type SelectionParams } from "../../../lib/files/selection";
 import { useBranchBackend, useChangeList, useRouteSelection } from "../../../lib/files/useChangeList";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
@@ -177,7 +177,11 @@ function SessionFileContent() {
 		return effectiveMode === "diff" ? diffDisplayRows(parsed, lines, revealed) : fileDisplayRows(lines ?? []);
 	}, [detail, effectiveMode, lines, parsed, revealed]);
 	// Comments on this file, queued and sent, drawn under the lines they are about.
-	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path), [path, review.all]);
+	// What a comment here is made on; only this pick's comments are drawn on its lines.
+	const context = useMemo(() => annotationContext(pick), [pick]);
+	// Another branch, or part of the changes, in words: under the title, and on each queued comment.
+	const compared = picked ? [viewing ? branchLabel(pick.branch) : "", changesLabel(pick.changes)].filter(Boolean).join(" · ") : "";
+	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path && inPick(comment.target, context)), [context, path, review.all]);
 	const commentById = useMemo(() => new Map(fileComments.map((comment) => [comment.id, comment])), [fileComments]);
 	const rows = useMemo(() => withInlineComments(baseRows, fileComments), [baseRows, fileComments]);
 	const digits = useMemo(() => String(rows.reduce((max, row) => row.type === "line" ? Math.max(max, row.row.newNo ?? 0, row.row.oldNo ?? 0) : max, 0)).length, [rows]);
@@ -334,10 +338,10 @@ function SessionFileContent() {
 	const act = useCallback(async (action: ComposerAction, text: string) => {
 		if (!backend || !detail || !chosen.length) return;
 		const feedback = text.trim();
-		const target = annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen);
+		const target = { ...annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen), ...context };
 		const anchor = commentAnchor(chosen);
 		if (action === "comment") {
-			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor });
+			addReviewComment(key, { label: `${name} · ${label}${compared ? ` · ${compared}` : ""}`, feedback, target, anchor });
 			haptics.success();
 			setSelection(null);
 			showToast("Comment added to the review.");
@@ -348,7 +352,7 @@ function SessionFileContent() {
 		try {
 			await backend.sendFeedback(id, [{ target, feedback }]);
 			// What was sent stays on the line, like a posted review comment.
-			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor, status: "sent" });
+			addReviewComment(key, { label: `${name} · ${label}${compared ? ` · ${compared}` : ""}`, feedback, target, anchor, status: "sent" });
 			haptics.success();
 			setSelection(null);
 			showToast("Sent. The agent's reply appears in the session.");
@@ -358,7 +362,7 @@ function SessionFileContent() {
 		} finally {
 			setBusy(false);
 		}
-	}, [backend, chosen, detail, id, key, label, name, path, showToast]);
+	}, [backend, chosen, compared, context, detail, id, key, label, name, path, showToast]);
 
 	const copySelection = useCallback(() => {
 		void Clipboard.setStringAsync(chosen.map((row) => row.text).join("\n"));
@@ -395,7 +399,6 @@ function SessionFileContent() {
 		: detail?.contentTruncated && effectiveMode === "file" ? "This file is too large to show in full." : "";
 	// Another branch, or part of the changes: said under the title, since the
 	// page reads the same either way. The branch is named only when it is not the worktree's.
-	const compared = picked ? [viewing ? branchLabel(pick.branch) : "", changesLabel(pick.changes)].filter(Boolean).join(" · ") : "";
 	const meta = metaRow || compared || detail?.previousPath || viewOptions.length > 1 || truncation ? (
 		<View style={styles.meta}>
 			{compared ? <Text accessibilityLabel={`Comparing ${compared}`} maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="middle" style={styles.compared}>{compared}</Text> : null}

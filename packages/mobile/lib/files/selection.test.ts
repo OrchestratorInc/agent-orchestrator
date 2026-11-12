@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceBranch, WorkspaceFileSummary, WorkspaceManifest } from "./api";
+import { formatFileAnnotationMessage } from "../../../shared/files/file-annotations";
 import {
+	annotationContext,
 	branchLabel,
 	branchOfRow,
 	changesLabel,
 	compareBase,
 	DEFAULT_SELECTION,
 	fileRead,
+	inPick,
 	scopesAvailable,
 	selectionForBranch,
 	selectionFromParams,
@@ -142,5 +145,30 @@ describe("labels", () => {
 		expect(scopesAvailable({ sections: { committed: [], staged: [], unstaged: [], untracked: [], uncommitted: [] }, degraded: false })).toBe(true);
 		expect(scopesAvailable({ sections: { committed: [], staged: [], unstaged: [], untracked: [] }, degraded: false })).toBe(false);
 		expect(scopesAvailable({ sections: { committed: [], staged: [], unstaged: [], untracked: [], uncommitted: [] }, degraded: true })).toBe(false);
+	});
+});
+
+describe("comments", () => {
+	it("say what they were made on, in desktop's words", () => {
+		expect(annotationContext(DEFAULT_SELECTION)).toEqual({ source: "Workspace", scope: "combined" });
+		expect(annotationContext({ branch: { kind: "checked_out" }, changes: { kind: "staged" } })).toEqual({ source: "Workspace", scope: "staged" });
+		expect(annotationContext({ branch: { kind: "branch", name: "refs/remotes/origin/main" }, changes: { kind: "commits", sha: "abcdef1234" } })).toEqual({ source: "Branch origin/main", scope: "commit abcdef1" });
+		expect(annotationContext({ branch: { kind: "pull_request", number: 7, url: "https://x/pull/7", branch: "fix" }, changes: { kind: "commits" } })).toEqual({ source: "PR #7 (https://x/pull/7)", scope: "committed" });
+	});
+
+	it("reach the agent with that source and scope", () => {
+		const context = annotationContext({ branch: { kind: "branch", name: "main" }, changes: { kind: "commits", sha: "abcdef1234" } });
+		const message = formatFileAnnotationMessage({ path: "a.ts", side: "new", line: 42, ...context }, "why?");
+		expect(message).toContain("- Source: Branch main");
+		expect(message).toContain("- Comparison scope: commit abcdef1");
+	});
+
+	it("are drawn only in the pick they were made in; older ones belong to the default view", () => {
+		const staged = annotationContext({ branch: { kind: "checked_out" }, changes: { kind: "staged" } });
+		const all = annotationContext(DEFAULT_SELECTION);
+		expect(inPick(staged, staged)).toBe(true);
+		expect(inPick(staged, all)).toBe(false);
+		expect(inPick({}, all)).toBe(true);
+		expect(inPick({}, staged)).toBe(false);
 	});
 });

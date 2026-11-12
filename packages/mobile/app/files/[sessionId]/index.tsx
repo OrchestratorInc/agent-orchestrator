@@ -28,18 +28,19 @@ import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
 import { useFilesBackend } from "../../../lib/files/useFilesBackend";
 import {
+	annotationContext,
 	branchLabel,
 	changesLabel,
 	compareBase,
 	DEFAULT_SELECTION,
+	inPick,
 	normalizeSelection,
-	scopesAvailable,
 	selectionForBranch,
 	selectionFromParams,
 	type FilesSelection,
 	type SelectionParams,
 } from "../../../lib/files/selection";
-import { useBranchBackend, useBranchList, useChangeList } from "../../../lib/files/useChangeList";
+import { useBranchBackend, useBranchList, useChangeList, useGitCapable } from "../../../lib/files/useChangeList";
 import { filesBranchSheetRoute, filesChangesSheetRoute } from "../../../lib/sheetResult";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
@@ -70,15 +71,20 @@ function SessionFilesContent() {
 	// pull request, and which of its changes. The pickers need the daemon's
 	// branches and its Uncommitted section; without them (Orchestrator Cloud, an
 	// older daemon, a scratch session) the list stays the worktree's.
-	const git = hostMatches ? backend?.git : undefined;
-	const scopes = scopesAvailable(manifest);
-	const branches = useBranchList(hostMatches ? backend : null, id, scopes);
-	const pickers = Boolean(git && scopes && branches?.supported);
+	// Settled once per machine from the daemon's answers, not from each poll: a
+	// degraded poll must not drop the pickers or the pick.
+	const capable = useGitCapable(hostMatches ? backend : null, manifest);
+	const { list: branches, reload: reloadBranches } = useBranchList(hostMatches ? backend : null, id, capable);
+	const pickers = Boolean(capable && branches?.supported);
 	const [picked, setPicked] = useState<FilesSelection>(() => selectionFromParams(params));
 	const selection = pickers ? picked : DEFAULT_SELECTION;
 	const branchBackend = useBranchBackend(hostMatches ? backend : null, selection.branch);
 	const list = useChangeList(branchBackend, id, selection, manifest, hostMatches);
-	const refresh = useCallback(async () => { await Promise.all([refreshManifest(), list.refresh()]); }, [list.refresh, refreshManifest]);
+	const refresh = useCallback(async () => {
+		// A branch list that failed to load is read again with the rest.
+		reloadBranches();
+		await Promise.all([refreshManifest(), list.refresh()]);
+	}, [list.refresh, refreshManifest, reloadBranches]);
 	const key = reviewKey(currentHostId, id);
 	const review = useReviewSender(backend, key, id);
 	const toast = useToast();
@@ -97,11 +103,13 @@ function SessionFilesContent() {
 	const chooseChanges = useCallback(() => {
 		router.push(filesChangesSheetRoute({ sessionId: id, hostId: routeHostId, selection, base, onSelect: (changes) => setPicked((current) => normalizeSelection({ branch: current.branch, changes })) }));
 	}, [base, id, routeHostId, router, selection]);
+	// A row counts the comments made in this pick; another pick's are about other code.
 	const commentsByPath = useMemo(() => {
+		const context = annotationContext(selection);
 		const counts = new Map<string, number>();
-		for (const comment of review.comments) counts.set(comment.target.path, (counts.get(comment.target.path) ?? 0) + 1);
+		for (const comment of review.comments) if (inPick(comment.target, context)) counts.set(comment.target.path, (counts.get(comment.target.path) ?? 0) + 1);
 		return counts;
-	}, [review.comments]);
+	}, [review.comments, selection]);
 
 	useLayoutEffect(() => {
 		navigation.setOptions({ title: "Files", headerBackTitle: title || "Session" });
