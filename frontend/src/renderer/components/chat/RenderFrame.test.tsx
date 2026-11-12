@@ -466,12 +466,12 @@ describe("artifact activity", () => {
 	const previewUrl = "http://ao-preview-artifact.x.localhost:3001/q3/Q3%20(final).html";
 	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
 
-	function renderArtifact(artifacts?: SessionArtifact[]) {
+	function renderArtifact(artifacts?: SessionArtifact[], activity = artifactActivity) {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		return render(
 			<QueryClientProvider client={client}>
 				<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
-					<ActivityRow activity={artifactActivity} />
+					<ActivityRow activity={activity} />
 				</ChatImageSourceProvider>
 			</QueryClientProvider>,
 		);
@@ -620,6 +620,40 @@ describe("artifact activity", () => {
 		expect(header).toHaveTextContent("Q3 (final).html");
 		// The session lists no preview for this artifact, so there is nothing to open.
 		expect(within(header).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
+	});
+
+	it("folds the page from its header and keeps it folded when the card remounts", async () => {
+		const user = userEvent.setup();
+		// Its own card: the fold is remembered per card for the rest of the run.
+		const activity = { ...artifactActivity, id: "act-fold" };
+		const fold = () => within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" });
+		const { unmount } = renderArtifact(undefined, activity);
+		expect(fold()).toHaveAttribute("aria-expanded", "true");
+		const frame = artifactFrame();
+		await user.click(fold());
+		expect(fold()).toHaveAttribute("aria-expanded", "false");
+		// Folded, the page leaves the tab order and its hover actions go with it.
+		expect(frame.closest("[inert]")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Expand page" })).toBeNull();
+		// A long chat remounts a card that scrolls away; it comes back folded, without loading the page.
+		unmount();
+		renderArtifact(undefined, activity);
+		expect(fold()).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByTitle("Q3 (final).html")).toBeNull();
+		await user.click(fold());
+		expect(fold()).toHaveAttribute("aria-expanded", "true");
+		expect(artifactFrame().closest("[inert]")).toBeNull();
+		expect(screen.getByRole("button", { name: "Expand page" })).toBeInTheDocument();
+	});
+
+	it("opens a later report of a folded file unfolded", async () => {
+		const user = userEvent.setup();
+		const first = renderArtifact(undefined, { ...artifactActivity, id: "act-fold-first" });
+		await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" }));
+		first.unmount();
+		renderArtifact(undefined, { ...artifactActivity, id: "act-fold-later" });
+		expect(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" })).toHaveAttribute("aria-expanded", "true");
+		expect(artifactFrame()).toBeInTheDocument();
 	});
 
 	it("opens the artifact in the Artifacts tab straight from the card", async () => {
