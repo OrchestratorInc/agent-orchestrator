@@ -433,6 +433,14 @@ func (r *acpRelay) providerFrame(
 	delete(r.pending, string(id))
 	r.captureResponse(request, envelope)
 
+	if request.method == "session/prompt" && keepsTurn(request.params) {
+		// A steer command's answer. The turn's result comes from its other
+		// prompts, which may already have ended the turn.
+		if !attached || request.generation != generation {
+			return nil, false, nil
+		}
+		return rewriteResponseID(envelope, request.clientID, frame), false, nil
+	}
 	if request.method == "session/prompt" && r.newestPendingPrompt() != "" {
 		// Another prompt of the turn still runs, so this answer is a handoff or a
 		// refused steer prompt: the turn goes on, and its result is the answer of
@@ -493,16 +501,21 @@ func (r *acpRelay) failStalledPrompt(
 		return acpClientFrames{}, nil
 	}
 	// A turn with a steer prompt has several prompts in flight. Every one of
-	// them fails, oldest first, so the newest failure is the turn's result and
-	// no prompt the controller is waiting on is left unanswered.
-	var stalled []int64
+	// them fails, so no prompt the controller is waiting on is left unanswered:
+	// steer commands first, then the rest oldest first, so the newest of those
+	// is the turn's result.
+	var stalled, commands []int64
 	var sessionParams json.RawMessage
 	for providerID, request := range r.pending {
 		if request.method != "session/prompt" {
 			continue
 		}
 		if n, err := strconv.ParseInt(providerID, 10, 64); err == nil {
-			stalled = append(stalled, n)
+			if keepsTurn(request.params) {
+				commands = append(commands, n)
+			} else {
+				stalled = append(stalled, n)
+			}
 		}
 		if sessionParams == nil {
 			var prompt struct {
@@ -515,9 +528,10 @@ func (r *acpRelay) failStalledPrompt(
 	if len(stalled) == 0 {
 		return acpClientFrames{}, nil
 	}
+	slices.Sort(commands)
 	slices.Sort(stalled)
 	var client []byte
-	for _, n := range stalled {
+	for _, n := range append(commands, stalled...) {
 		providerID := strconv.FormatInt(n, 10)
 		failure := rpcErrorFrame(json.RawMessage(providerID), -32603, fmt.Sprintf(
 			"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout))
@@ -647,11 +661,11 @@ func (r *acpRelay) captureResponse(request acpClientRequest, envelope map[string
 }
 
 // newestPendingPrompt returns the provider id of the newest session/prompt
-// still waiting for an answer, or "".
+// still waiting for an answer whose answer can be the turn's result, or "".
 func (r *acpRelay) newestPendingPrompt() string {
 	newest, newestID := "", int64(-1)
 	for providerID, request := range r.pending {
-		if request.method != "session/prompt" {
+		if request.method != "session/prompt" || keepsTurn(request.params) {
 			continue
 		}
 		if n, err := strconv.ParseInt(providerID, 10, 64); err == nil && n > newestID {
@@ -659,6 +673,19 @@ func (r *acpRelay) newestPendingPrompt() string {
 		}
 	}
 	return newest
+}
+
+// keepsTurn reports whether session/prompt params mark a steer command whose
+// answer is never the turn's result (ACPSteerKeepsTurnMetaKey).
+func keepsTurn(params json.RawMessage) bool {
+	var prompt struct {
+		Meta map[string]any `json:"_meta"`
+	}
+	if json.Unmarshal(params, &prompt) != nil {
+		return false
+	}
+	keeps, _ := prompt.Meta[ACPSteerKeepsTurnMetaKey].(bool)
+	return keeps
 }
 
 // isSteerPrompt reports whether session/prompt params carry ACPSteerPromptMetaKey.

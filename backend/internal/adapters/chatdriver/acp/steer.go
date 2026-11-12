@@ -502,13 +502,19 @@ func (c *conversation) steerByPrompt(
 	if messageID == "" {
 		messageID = uuid.NewString()
 	}
+	// A persistent host admits it into the running turn by this mark. An
+	// acknowledging agent answers the steer as a command while the turn's
+	// earlier prompt keeps the work, so that answer is never the turn's result.
+	meta := map[string]any{persistenthost.ACPSteerPromptMetaKey: true}
+	if binding.Ack != nil {
+		meta[persistenthost.ACPSteerKeepsTurnMetaKey] = true
+	}
 	go func() {
 		resp, err := c.conn.Prompt(turnCtx, acpsdk.PromptRequest{
 			SessionId: acpsdk.SessionId(sessionID),
 			MessageId: &messageID,
 			Prompt:    prompt,
-			// A persistent host admits it into the running turn by this mark.
-			Meta: map[string]any{persistenthost.ACPSteerPromptMetaKey: true},
+			Meta:      meta,
 		})
 		if c.promptReturned != nil {
 			c.promptReturned(seq)
@@ -610,7 +616,7 @@ func hostResultEventID(resp acpsdk.PromptResponse, err error) string {
 // receipt, since its first prompt belongs to the host, not this conversation.
 func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.PromptResponse, err error) {
 	c.mu.Lock()
-	if c.activeTurn != turnID {
+	if c.activeTurn != turnID || c.settlingTurn == turnID {
 		lateAnswer := c.steerSettledTurn == turnID
 		c.mu.Unlock()
 		if !lateAnswer {
@@ -653,6 +659,16 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		}
 	}
 	if len(c.outstanding) > 0 || (c.adoptedPrompt && c.turnResult == nil) {
+		if result && len(c.outstanding) > 0 {
+			// The host has ended the turn; its other prompts' answers are on
+			// their way. A steer command's answer could still go missing, so
+			// the wait for them is bounded.
+			wait := c.stragglerWait
+			if wait <= 0 {
+				wait = promptStragglerWait
+			}
+			go c.finishAfterStragglers(turnID, c.turnResult, wait)
+		}
 		c.mu.Unlock()
 		if err != nil {
 			c.log.Debug("ACP prompt returned an error while another prompt keeps the turn",
@@ -668,6 +684,30 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 	}
 	c.mu.Unlock()
 	c.finishPrompt(turnID, answer.resp, answer.err)
+}
+
+// promptStragglerWait bounds how long a turn whose host result has arrived
+// waits for its other prompts' answers, which normally follow at once.
+const promptStragglerWait = 10 * time.Second
+
+// finishAfterStragglers ends a turn with the host's result if its other
+// prompts have still not answered after wait. Their late answers are then
+// dropped.
+func (c *conversation) finishAfterStragglers(turnID string, result *promptAnswer, wait time.Duration) {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	<-timer.C
+	c.mu.Lock()
+	if c.activeTurn != turnID || c.turnResult != result || len(c.outstanding) == 0 || c.settlingTurn == turnID {
+		c.mu.Unlock()
+		return
+	}
+	c.log.Warn("ACP turn ended without every prompt answering; finishing it with the host's result",
+		"turn", turnID, "unanswered", len(c.outstanding))
+	c.steerSettledTurn = turnID
+	c.settlingTurn = turnID // the stragglers' answers are late from here on
+	c.mu.Unlock()
+	c.finishPrompt(turnID, result.resp, result.err)
 }
 
 // adoptedPromptHandoff hears that the prompt an earlier attachment sent

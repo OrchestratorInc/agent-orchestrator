@@ -170,6 +170,8 @@ type conversation struct {
 	// steerSettledTurn is the last turn a steer prompt settled. An earlier
 	// prompt of that turn answering late is dropped, not a second completion.
 	steerSettledTurn string
+	// stragglerWait, when set by a test, replaces promptStragglerWait.
+	stragglerWait time.Duration
 	// promptReturned, when set by a test, runs as each of the turn's prompts
 	// returns and before its answer is routed, to fix the order in which
 	// overlapping answers are handled.

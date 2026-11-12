@@ -27,6 +27,8 @@ type scriptedHost struct {
 	t      *testing.T
 	conn   net.Conn
 	frames chan map[string]json.RawMessage
+	// lastPrompt holds the params of the last session/prompt nextPrompt read.
+	lastPrompt json.RawMessage
 }
 
 func (h *scriptedHost) send(frame string) {
@@ -46,6 +48,7 @@ func (h *scriptedHost) nextPrompt() string {
 			var method string
 			_ = json.Unmarshal(frame["method"], &method)
 			if method == "session/prompt" {
+				h.lastPrompt = frame["params"]
 				return string(frame["id"])
 			}
 		case <-deadline:
