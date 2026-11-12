@@ -312,8 +312,11 @@ func TestBuildSystemPromptAsksEveryRoleToNarrateToolCalls(t *testing.T) {
 		{Role: sessionPromptRoleOrchestrator},
 	} {
 		got := buildSystemPromptText(cfg)
-		if !strings.Contains(got, "Before each tool call, or each batch of related calls, write one short sentence") {
+		if !strings.Contains(got, "Before each tool call, or each batch of related calls, write a short, friendly sentence") {
 			t.Errorf("%s (standalone=%v) prompt does not ask for narration:\n%s", cfg.Role, cfg.Standalone, got)
+		}
+		if !strings.Contains(got, "describe what it does in plain technical terms, not the command") {
+			t.Errorf("%s (standalone=%v) prompt does not translate Orchestrator commands:\n%s", cfg.Role, cfg.Standalone, got)
 		}
 	}
 }

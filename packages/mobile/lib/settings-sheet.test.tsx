@@ -20,6 +20,7 @@ vi.mock("react-native-safe-area-context", () => ({ SafeAreaProvider: "SafeAreaPr
 vi.mock("./ThemeProvider", () => ({ ThemeProvider: "ThemeProvider", useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("./themeStore", () => ({ loadThemeSettings: async () => ({ preference: "system", style: "orchestrate" }) }));
 vi.mock("./store", () => ({ AppProvider: "AppProvider" }));
+vi.mock("./cloud/CloudProvider", () => ({ CloudProvider: "CloudProvider" }));
 vi.mock("./OnboardingGate", () => ({ OnboardingGate: () => null }));
 vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));

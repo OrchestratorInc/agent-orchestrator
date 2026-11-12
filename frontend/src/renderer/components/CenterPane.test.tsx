@@ -255,7 +255,7 @@ describe("CenterPane toolbar session label", () => {
 
 		const mainTab = screen.getByRole("tab", { name: /^do the thing/ });
 		const mainContainer = mainTab.closest("[data-terminal-tab-frame]");
-		expect(mainContainer).toHaveClass("self-stretch", "min-w-shell-tab-min", "max-w-shell-tab-max");
+		expect(mainContainer).toHaveClass("self-stretch", "min-w-shell-tab-min", "max-w-session-tab-max");
 		expect(mainContainer).not.toHaveClass("bg-surface");
 		expect(mainContainer).not.toHaveClass("session-primary-tab");
 		expect(mainContainer).not.toHaveClass("rounded-md");
@@ -534,8 +534,10 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByRole("tablist", { name: "Open terminals" })).not.toHaveClass("flex-1");
 		expect(screen.queryByRole("toolbar", { name: "Terminal display controls" })).not.toBeInTheDocument();
 		expect(terminalRegion).toContainElement(screen.getByRole("button", { name: "Session tab action" }));
-		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("absolute", "left-2", "top-1/2");
-		expect(screen.getByRole("tab", { name: /^do the thing/ })).toHaveClass("h-full", "flex-1");
+		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("mr-2", "shrink-0");
+		expect(screen.getByTestId("session-tab-action").parentElement?.previousElementSibling).toBe(screen.getByRole("tab", { name: /^do the thing/ }));
+		expect(screen.getByRole("tab", { name: /^do the thing/ })).toHaveClass("h-full", "flex-1", "pl-2", "pr-1.5");
+		expect(screen.getByRole("tab", { name: /^do the thing/ }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-session-tab-max");
 		expect(terminalRegion).not.toContainElement(screen.getByTestId("session-action-region"));
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).not.toHaveClass("border-l");

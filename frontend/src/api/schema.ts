@@ -5238,6 +5238,17 @@ export interface components {
             data: string;
             mimeType?: string;
         };
+        AutoSpawnPause: {
+            effort?: string;
+            errorCode: string;
+            failures: number;
+            harness: string;
+            kind?: string;
+            message: string;
+            model?: string;
+            /** Format: date-time */
+            pausedAt: string;
+        };
         AutomationEnvelope: {
             automation: components["schemas"]["AutomationResponse"];
         };
@@ -7261,6 +7272,7 @@ export interface components {
             project: components["schemas"]["Project"];
         };
         ProjectSummary: {
+            autoSpawnPauses?: components["schemas"]["AutoSpawnPause"][];
             folderMissing: boolean;
             id: string;
             /** @enum {string} */

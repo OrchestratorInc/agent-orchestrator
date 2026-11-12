@@ -166,7 +166,55 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		ValidateModel: func(ctx context.Context, _ acpdriver.LaunchConfig, model string) error {
 			return claudeValidateModel(ctx, plugin, model)
 		},
+		ReadOnly: claudeReadOnlySession,
 	}, log)}
+}
+
+// claudeReadOnlySession runs a review-owned Chat the way AO runs a reviewer
+// pane: claudeSessionMeta sends the reviewer tool lists, the mode is pinned to
+// "default" so every call outside them reaches AO, and AO answers those calls
+// in place of a human. Not "auto": its classifier approves shell commands no
+// rule names. Not "dontAsk": it would also refuse the review POST, and newer
+// adapters drop it from their mode list.
+func claudeReadOnlySession(cfg acpdriver.LaunchConfig) acpdriver.ReadOnlySession {
+	return acpdriver.ReadOnlySession{
+		Mode:             "default",
+		PermissionPolicy: reviewerPermissionPolicy(strings.TrimSpace(cfg.Env["AO_REVIEW_WORKER_SESSION_ID"])),
+	}
+}
+
+// reviewerPermissionPolicy allows once the exact submit commands the review
+// prompt dictates and rejects every other request, as the reviewer pane's
+// PermissionRequest hook does. It handles every request, so none waits for a
+// human: without a usable option it cancels. Bash is the only tool Claude's ACP
+// adapter reports as an execute call.
+func reviewerPermissionPolicy(workerSessionID string) acpdriver.PermissionPolicy {
+	return func(_ ports.PermissionMode, params acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+		if params.ToolCall.Kind != nil && *params.ToolCall.Kind == acpsdk.ToolKindExecute {
+			input, _ := params.ToolCall.RawInput.(map[string]any)
+			if command, _ := input["command"].(string); claudecode.ReviewerSubmitCommandAllowed(command, workerSessionID) {
+				if id, ok := permissionOption(params.Options, acpsdk.PermissionOptionKindAllowOnce); ok {
+					return id, true
+				}
+			}
+		}
+		for _, kind := range []acpsdk.PermissionOptionKind{acpsdk.PermissionOptionKindRejectOnce, acpsdk.PermissionOptionKindRejectAlways} {
+			if id, ok := permissionOption(params.Options, kind); ok {
+				return id, true
+			}
+		}
+		// Nothing to select: cancel rather than park the request for a human.
+		return acpdriver.CancelPermission, true
+	}
+}
+
+func permissionOption(options []acpsdk.PermissionOption, kind acpsdk.PermissionOptionKind) (acpsdk.PermissionOptionId, bool) {
+	for _, option := range options {
+		if option.Kind == kind {
+			return option.OptionId, true
+		}
+	}
+	return "", false
 }
 
 func claudeCanHibernate(ctx context.Context, conn *acpsdk.ClientSideConnection, id acpsdk.SessionId) (bool, error) {
@@ -475,6 +523,11 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 		options["tools"] = []string{}
 		options["strictMcpConfig"] = true
 		options["disallowedTools"] = []string{"mcp__*"}
+	} else if cfg.ReadOnly {
+		// The adapter passes these to Claude Code as --allowedTools and
+		// --disallowedTools; deny rules hold in every permission mode.
+		options["allowedTools"] = claudecode.ReviewerAllowedTools
+		options["disallowedTools"] = claudecode.ReviewerDisallowedTools
 	}
 	if len(options) > 0 {
 		claudeCode["options"] = options

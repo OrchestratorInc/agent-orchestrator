@@ -14,7 +14,9 @@ import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { useCloudSessionEventStream } from "../../hooks/useCloudSessionEvents";
 import { useComposerLease } from "../../hooks/useComposerLease";
-import { cloudSessionsQueryKey, refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
+import { useUiStore } from "../../stores/ui-store";
+import { sessionArtifactPath } from "../../lib/session-links";
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
@@ -41,6 +43,7 @@ import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
 import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
+import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -1026,6 +1029,7 @@ export function CloudSessionChatSurface({
 	session,
 	headerActions,
 	sessionTabAction,
+	sessionTabActionPinned = false,
 	onOpenFiles,
 	onOpenFile,
 	onOpenArtifact,
@@ -1070,6 +1074,8 @@ export function CloudSessionChatSurface({
 	workspaceFileActive?: boolean;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
+	/** Keep the session tab's action showing at rest, while an interface switch is in flight. */
+	sessionTabActionPinned?: boolean;
 	/** The Cloud reviewer terminal, shown as its own tab beside the chat as in local sessions. */
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -1608,10 +1614,23 @@ export function CloudSessionChatSurface({
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
+	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	// A file link in the transcript opens the file it names in the workspace, as
-	// the same file from the Files tab does (one tab for both).
+	// the same file from the Files tab does (one tab for both). A file the agent
+	// wrote to this session's artifact directory opens in Artifacts instead, since
+	// the file view cannot read outside the checkout (HTTP 422). Artifacts shows
+	// it once the session lists it, so one written moments ago opens too; the list
+	// is read again now rather than at its next poll.
 	const openFileFromChat = useCallback((path: string) => {
 		if (!onOpenFile) return;
+		const artifact = sessionArtifactPath(path, session.id);
+		if (artifact) {
+			if (!artifactAtPath(session.artifactFiles, artifact)) {
+				void queryClient.invalidateQueries({ queryKey: cloud?.shared ? sharedCloudWorkspacesQueryKey : cloudSessionsQueryKey });
+			}
+			requestWorkspaceFileOpen(session.id, artifact, undefined, "artifact");
+			return;
+		}
 		if (!path.startsWith("/") || !cloud) {
 			onOpenFile(path);
 			return;
@@ -1619,7 +1638,7 @@ export function CloudSessionChatSurface({
 		void cloudWorkspaceFilePath(path, async (query) =>
 			(await client.searchWorkspaceReview(cloud.orgId, session.id, { query, limit: 100 })).results.map((result) => result.path),
 		).then((relative) => onOpenFile(relative ?? path));
-	}, [client, cloud, onOpenFile, session.id]);
+	}, [client, cloud, onOpenFile, queryClient, requestWorkspaceFileOpen, session.artifactFiles, session.id]);
 	// "@" offers the workspace's files as a local chat does. A Cloud workspace is
 	// searched rather than listed, so what follows "@" is asked of the worker
 	// (shortly after typing stops), and an empty query lists its top level.
@@ -1796,6 +1815,7 @@ export function CloudSessionChatSurface({
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
+			sessionTabActionPinned={sessionTabActionPinned}
 			sessionTitle={session.title}
 			// The chat tab renames the session as a local one does; the rename
 			// updates the cached session lists itself, and this catches up the rest.

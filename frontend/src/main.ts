@@ -181,6 +181,7 @@ import { ShareLinkRecords } from "./main/cloud-share-links";
 import { registerSessionShareUrlsIpc, SessionShareUrls } from "./main/session-share-urls";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
+import { clearFolderImports, isChosenFolder, registerCloudFolderPushIpc, rememberChosenFolder } from "./main/cloud-folder-push";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
@@ -3396,7 +3397,10 @@ async function chooseDirectory(title: string, defaultPath?: string): Promise<str
 	const result = await dialog.showOpenDialog(options);
 
 	if (result.canceled) return null;
-	return result.filePaths[0] ?? null;
+	const chosen = result.filePaths[0] ?? null;
+	// A cloud workspace may upload only a folder picked here.
+	if (chosen) rememberChosenFolder(chosen);
+	return chosen;
 }
 
 const remoteRegistry = new RemoteRegistry((entry) => {
@@ -4010,6 +4014,27 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
 const cloudCpProxy = installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
+
+// A local folder added to a cloud workspace is uploaded from here, into the
+// empty repository the control plane made for it, so the token stays in main.
+const folderImportDir = path.join(desktopDataDir, "tmp", "folder-imports");
+void clearFolderImports(folderImportDir).catch(() => undefined);
+registerCloudFolderPushIpc(ipcMain, {
+	controlPlaneUrl: cloudControlPlaneUrl,
+	getToken: () => getCloudAccessToken(cloudDataDir()),
+	tmpRoot: () => folderImportDir,
+	env: () => daemonEnv(),
+	homeDir: os.homedir(),
+	// The data directory this app resolved (AO_DATA_DIR) and its Electron
+	// profile: no folder inside or holding either is uploaded.
+	appStateDirs: () => [desktopDataDir, app.getPath("userData")],
+	ready: ensureShellEnv,
+	trustedSender: (sender) => {
+		const contents = sender as WebContents;
+		return trustedShellWebContents.get(contents?.id) === contents;
+	},
+	chosenFolder: isChosenFolder,
+});
 ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
 	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 
@@ -4192,12 +4217,6 @@ app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
-	if (app.isPackaged) {
-		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");
-		await checkDesktopVersionFloor().catch((err) =>
-			console.warn("desktop version floor check failed:", err),
-		);
-	}
 	void refreshGitHubOwners();
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
@@ -4351,6 +4370,19 @@ app.whenReady().then(async () => {
 	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
+	// Not awaited: launch must not wait on this network fetch (up to 10 s). It
+	// runs once the window exists so its dialogs attach to it.
+	if (app.isPackaged) {
+		void import("./main/desktop-version-floor")
+			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({
+					parent: () => mainWindow,
+					quit: () => {
+						preserveAgentsOnQuit = true;
+						desktopQuit.quitCompletely();
+					},
+				}))
+			.catch((err) => console.warn("desktop version floor check failed:", err));
+	}
 	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();
 

@@ -513,6 +513,8 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "not available in tests" }),
+			previewFolderUpload: async () => ({ status: "ok", source: "import", leftOut: [] }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {

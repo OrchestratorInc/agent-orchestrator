@@ -5,6 +5,7 @@ import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucen
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
+import type { TerminalClickMode } from "../lib/terminal-mouse";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
@@ -44,7 +45,7 @@ export type GlobalSettingsSection =
 	| "help";
 
 /** Project settings pages: the project form sections plus the cues manager. */
-export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions";
+export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions" | "sharing";
 
 /** Which failure a "Show diagnostics" shortcut is about: the job it produced,
  * if any, and the error the user saw. */
@@ -125,6 +126,7 @@ export type GlobalToast = {
 	tone?: "info" | "error" | "success";
 	placement?: "bottom-right" | "top-center" | "bottom-center";
 	dismissible?: boolean;
+	/** Zero keeps the toast visible until explicitly dismissed. */
 	durationMs?: number;
 	dedupeKey?: string;
 	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */
@@ -211,6 +213,15 @@ export type UiState = {
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	/**
+	 * Where plain terminal clicks go when the running program has asked for the
+	 * mouse (DECSET 1000/1002/1003). "app" reports them to the program, like a
+	 * native terminal; Option (macOS) or Shift (elsewhere) still selects text.
+	 * "select" always selects text, the behavior before this setting existed.
+	 */
+	terminalClickMode: TerminalClickMode;
+	/** The one-time "hold Option to select text" hint has been shown. */
+	terminalSelectHintShown: boolean;
 	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
 	chatSendKeyMode: ChatSendKeyMode;
 	navigationGestures: boolean;
@@ -291,6 +302,8 @@ export type UiState = {
 	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setTerminalClickMode: (mode: TerminalClickMode) => void;
+	markTerminalSelectHintShown: () => void;
 	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
@@ -368,6 +381,8 @@ const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
 const splitPanesStorageKey = "ao.splitPanes";
 const prViewStorageKey = "ao.prView";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const terminalClickModeStorageKey = "ao.terminalClickMode";
+const terminalSelectHintShownStorageKey = "ao.terminalSelectHintShown";
 const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
@@ -406,6 +421,10 @@ function initialSessionImportOfferClosed() {
 	} catch {
 		return false;
 	}
+}
+
+function initialTerminalClickMode(): TerminalClickMode {
+	return getLocalStorage()?.getItem(terminalClickModeStorageKey) === "select" ? "select" : "app";
 }
 
 function initialTerminalCopyOnSelect() {
@@ -482,6 +501,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
+	terminalClickMode: initialTerminalClickMode(),
+	terminalSelectHintShown: getLocalStorage()?.getItem(terminalSelectHintShownStorageKey) === "true",
 	chatSendKeyMode: initialChatSendKeyMode(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
@@ -586,6 +607,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
+	},
+	setTerminalClickMode: (terminalClickMode) => {
+		getLocalStorage()?.setItem(terminalClickModeStorageKey, terminalClickMode);
+		set({ terminalClickMode });
+	},
+	markTerminalSelectHintShown: () => {
+		getLocalStorage()?.setItem(terminalSelectHintShownStorageKey, "true");
+		set({ terminalSelectHintShown: true });
 	},
 	setProjectAvatars: (projectAvatars) => {
 		getLocalStorage()?.setItem(projectAvatarsStorageKey, String(projectAvatars));

@@ -20,6 +20,7 @@ import { ReviewButton } from "../../../lib/files/ReviewButton";
 import { reviewKey } from "../../../lib/files/reviewStore";
 import { useFileActions } from "../../../lib/files/useFileActions";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
+import { useFilesBackend } from "../../../lib/files/useFilesBackend";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -40,13 +41,14 @@ function SessionFolderContent() {
 	const dir = String(dirParam ?? "").replace(/\/+$/, "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection, loading: appLoading } = useApp();
+	const { currentHostId, connection, loading: appLoading } = useApp();
+	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
-	const review = useReviewSender(config, reviewKey(currentHostId, id), id);
+	const review = useReviewSender(backend, reviewKey(currentHostId, id), id);
 	const toast = useToast();
 	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
-	const search = useFileSearch(hostMatches ? config : null, id);
+	const search = useFileSearch(hostMatches ? backend : null, id);
 	const insets = useSafeAreaInsets();
 	const name = splitPath(dir).name || "Worktree";
 
@@ -60,8 +62,10 @@ function SessionFolderContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="These files belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
-	if (!config && appLoading) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Connecting" /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
+	if (signedOut) return <View style={styles.center}><EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this session's files." /></View>;
+	if (unreachable) return <View style={styles.center}><EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
+	if (!backend && (appLoading || cloud)) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Connecting" /></View>;
+	if (!backend && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
 
 	const bottomInset = review.comments.length ? REVIEW_BUTTON_CLEARANCE : space.xxl;
 	return (
@@ -71,7 +75,7 @@ function SessionFolderContent() {
 				<SearchResults query={search.query} results={search.results} searching={search.searching} bottomInset={bottomInset} onOpenFile={openPath} onAction={pathAction} />
 			) : (
 				<FolderList
-					config={config}
+					backend={backend}
 					sessionId={id}
 					dir={dir}
 					bottomInset={bottomInset}

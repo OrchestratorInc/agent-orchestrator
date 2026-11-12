@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { artifactBytesUrl, getArtifactPage, getArtifactText } from "./api";
+import { artifactBytesUrl, getArtifactText } from "./api";
+import type { ArtifactsBackend } from "./artifactsBackend";
 import { FULL_PAGE_LIMITS, inlineArtifactPage, type ArtifactAssetLoader, type InlineLimits } from "./artifactPageInliner";
 import { cachedArtifactPage } from "./artifactPageCache";
 import { authHeaders, type ServerConfig } from "./config";
@@ -42,32 +43,33 @@ export function artifactAssetLoader(config: ServerConfig, sessionId: string): Ar
  * a rewritten page; without one the page is read afresh on each mount.
  * `failed` asks the caller to fall back to the page's URL.
  */
-export function useInlinedArtifactPage({ enabled, config, sessionId, path, version, limits = FULL_PAGE_LIMITS }: {
+export function useInlinedArtifactPage({ enabled, backend, sessionId, path, version, limits = FULL_PAGE_LIMITS }: {
 	enabled: boolean;
-	config: ServerConfig | null | undefined;
+	/** The machine's daemon or Orchestrator Cloud (artifactsBackend.ts). */
+	backend: ArtifactsBackend | null | undefined;
 	sessionId: string;
 	path: string;
 	version?: string;
 	/** How much of the files it links the page takes in: a card's is small. */
 	limits?: InlineLimits;
 }): { html?: string; failed: boolean } {
-	const page = `${config?.host ?? ""}:${config?.httpPort ?? ""}|${sessionId}|${path}|${limits.name}`;
+	const page = `${backend?.key ?? ""}|${sessionId}|${path}|${limits.name}`;
 	const key = `${page}|${version ?? ""}`;
 	const [state, setState] = useState<{ key: string; html?: string; failed: boolean }>({ key: "", failed: false });
-	const active = enabled && Boolean(config);
+	const active = enabled && Boolean(backend);
 	useEffect(() => {
-		if (!active || !config) return;
+		if (!active || !backend) return;
 		let live = true;
 		// A page with no known version is read on every mount (see cachedArtifactPage).
 		cachedArtifactPage(page, version, async () => {
-			// The page as the desktop frames it, with AO's theme written in.
-			const html = await getArtifactPage(config, sessionId, path);
-			return (await inlineArtifactPage(html, path, artifactAssetLoader(config, sessionId), sessionId, limits)).html;
+			// The page as the desktop frames it (a daemon writes AO's theme in).
+			const html = await backend.page(sessionId, path);
+			return (await inlineArtifactPage(html, path, backend.assetLoader(sessionId), sessionId, limits)).html;
 		})
 			.then((html) => { if (live) setState({ key, html, failed: false }); })
 			.catch(() => { if (live) setState({ key, failed: true }); });
 		return () => { live = false; };
-	}, [active, config, key, limits, page, path, sessionId, version]);
+	}, [active, backend, key, limits, page, path, sessionId, version]);
 	if (!active || state.key !== key) return { failed: false };
 	return { html: state.html, failed: state.failed };
 }
