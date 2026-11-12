@@ -43,7 +43,12 @@ func (o *Observer) reconcileUndetected(ctx context.Context, session domain.Sessi
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return
 	}
-	if inspector, ok := agent.(ports.TerminalSurfaceInspector); ok && rendered {
+	if inspector, ok := agent.(ports.TerminalSurfaceInspector); ok {
+		// These TUIs' raw redraws never form their screen, so raw output is no
+		// evidence either way.
+		if !rendered {
+			return
+		}
 		switch inspector.InspectTerminalSurface(output).Work {
 		case ports.TerminalSurfaceWorkIdle:
 			o.apply(ctx, session, agent, domain.ActivityIdle, "terminal-idle", now)

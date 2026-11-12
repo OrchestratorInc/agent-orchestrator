@@ -195,8 +195,9 @@ func TestPollReadsRenderedSurfaceOfInspectorAdapters(t *testing.T) {
 		{"approval dialog", &quietRuntime{rendered: approval}, domain.ActivityWaitingInput, "terminal-waiting-input", 0},
 		{"working frame never goes quiet", &quietRuntime{rendered: working}, "", "", 0},
 		{"unrecognized frame falls back to the quiet screen", &quietRuntime{rendered: draft}, domain.ActivityWaitingInput, "terminal-quiet", quietAfter},
-		// Antigravity's raw stream never forms a composer, so it is not evidence.
-		{"raw output is not inspected", &fakeRuntime{output: idle}, "", "", 0},
+		// Antigravity's raw stream never forms a composer, so it is not evidence,
+		// even unchanged with no command running.
+		{"raw output never moves the session", &quietRuntime{fakeRuntime: fakeRuntime{output: idle}, renderedErr: ports.ErrStyledTerminalOutputUnavailable}, "", "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			start := time.Unix(500, 0).UTC()
