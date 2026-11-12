@@ -271,6 +271,17 @@ describe("optimistic orchestrator topbar", () => {
 		expect(screen.getByRole("button", { name: "Choose editor", hidden: true })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Run a cue" })).toBeDisabled();
 	});
+
+	it("reserves no editor or cue slot on a remote host, where the session has neither", () => {
+		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><SessionTopbarActions startingOrchestrator route={{ hostId: "host-1", projectId: "proj-1" }} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.queryByRole("button", { name: "Choose editor", hidden: true })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
+	});
 });
 
 describe("SessionTopbarActions embedded actions", () => {

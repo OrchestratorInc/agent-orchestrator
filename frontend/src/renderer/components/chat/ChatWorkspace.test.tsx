@@ -3165,11 +3165,16 @@ describe("ChatWorkspace timeline", () => {
 
 	it("keeps the sample requests on screen while the orchestrator starts, without filling the composer", async () => {
 		const user = userEvent.setup();
-		render(<ChatWorkspace snapshot={chatFixtureEmpty} newWorkDisabled />);
+		const view = render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} newWorkDisabled />);
 
 		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
 		await user.click(prompts[0]);
 		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("Review my recent changes for bugs");
+		view.unmount();
+
+		// Other fenced chats (an unreachable host, leaving for the terminal) keep them hidden.
+		render(<ChatWorkspace snapshot={chatFixtureEmpty} newWorkDisabled />);
+		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
 	});
 
 	it("offers sample artifact requests to artifact sessions outside Scratchpad too", () => {

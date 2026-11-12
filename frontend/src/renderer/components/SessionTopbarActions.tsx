@@ -155,17 +155,19 @@ export function SessionTopbarActions({
 				</div>
 			) : null}
 			{/* The session's own controls take their space while it starts, so the
-			    cluster keeps its width and nothing slides when the session lands. */}
-			{startingOrchestrator ? (
+			    cluster keeps its width and nothing slides when the session lands.
+			    Each placeholder follows its real control's rule below: no editor on
+			    a remote host or cloud project, no cues on a remote host. */}
+			{startingOrchestrator && !hostId ? (
 				<>
-					<div aria-hidden="true" className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md before:hidden`} style={noDragStyle}>
+					{project?.kind !== CLOUD_PROJECT_KIND ? <div aria-hidden="true" className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md before:hidden`} style={noDragStyle}>
 						<Button type="button" size="icon-sm" variant="quiet" className="before:hidden" aria-label={t("editor.chooseEditor")} disabled tabIndex={-1}>
 							<Code2 className="size-icon-md" aria-hidden="true" />
 						</Button>
 						<Button type="button" size="icon-sm" variant="quiet" className="before:hidden" aria-label={t("editor.openOptionsAria")} disabled tabIndex={-1}>
 							<ChevronDown className="size-icon-sm" aria-hidden="true" />
 						</Button>
-					</div>
+					</div> : null}
 					<span className="inline-flex" style={noDragStyle}>
 						<Button type="button" size="icon-sm" variant="quiet" aria-label={t("cues.run")} data-priority="secondary" disabled tabIndex={-1}>
 							<Play className="size-icon-md" aria-hidden="true" />

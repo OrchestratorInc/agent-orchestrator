@@ -1,4 +1,4 @@
-import { KNOWN_REVIEWER_HARNESS_IDS } from "./reviewer-harnesses";
+import { defaultReviewerHarness } from "./reviewer-harnesses";
 
 export type AgentInfo = {
 	authentication: {
@@ -95,15 +95,19 @@ export function preferredAgentList(agents: readonly AgentInfo[]): string[] {
 		.map((agent) => agent.id);
 }
 
-/** A new project starts every role on the most preferred agent; project settings can change each one. */
+/**
+ * A new project starts every role on the most preferred agent; project settings
+ * can change each one. The reviewer follows the daemon's own rule: the agent
+ * reviews only when it is one of the unattended-safe reviewers, otherwise
+ * Claude Code does. Other reviewers need an explicit choice, and an older
+ * remote host may not know them.
+ */
 export function defaultProjectAgents(agents: readonly AgentInfo[]): ProjectAgentDefaults {
-	const preferred = preferredAgentList(agents);
-	const top = preferred[0] ?? FALLBACK_PROJECT_AGENT;
+	const top = preferredAgentList(agents)[0] ?? FALLBACK_PROJECT_AGENT;
 	return {
 		workerAgent: top,
 		orchestratorAgent: top,
-		// Reviewers are a narrower set than agents; take the best one that can review.
-		reviewerAgent: preferred.find((id) => KNOWN_REVIEWER_HARNESS_IDS.has(id)) ?? FALLBACK_PROJECT_AGENT,
+		reviewerAgent: defaultReviewerHarness(top),
 	};
 }
 

@@ -216,12 +216,13 @@ describe("defaultProjectAgents", () => {
 		});
 	});
 
-	it("gives the reviewer the best agent that can review", () => {
-		expect(defaultProjectAgents([agent("goose"), agent("codex", "unknown", "unknown")])).toEqual({
-			workerAgent: "goose",
-			orchestratorAgent: "goose",
-			reviewerAgent: "codex",
+	it("reviews with Claude Code when the top agent is not an unattended-safe reviewer", () => {
+		expect(defaultProjectAgents([agent("cursor"), agent("codex", "unknown", "unknown")])).toEqual({
+			workerAgent: "cursor",
+			orchestratorAgent: "cursor",
+			reviewerAgent: "claude-code",
 		});
+		expect(defaultProjectAgents([agent("goose")]).reviewerAgent).toBe("claude-code");
 	});
 
 	it("falls back to Claude Code when no agent is usable", () => {
