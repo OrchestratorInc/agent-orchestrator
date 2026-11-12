@@ -4468,7 +4468,9 @@ export function Timeline({
 			pendingReading.current = undefined;
 			const row = virtualizer.measurementsCache.find((candidate) => candidate.key === reading.key);
 			if (row) {
-				node.scrollTop = row.start - reading.offset;
+				// Disclosures reopen collapsed, so the turn may be shorter than when the reader
+				// left it; never land past its end, in a later turn.
+				node.scrollTop = Math.min(row.start - reading.offset, Math.max(row.start, row.end - node.clientHeight));
 				markWritten(node.scrollTop);
 				lastScrollTop.current = node.scrollTop;
 			} else {
