@@ -74,7 +74,7 @@ it("shows what moves, then opens the Cloud session and closes on success", async
 	expect(await screen.findByText("feat/x")).toBeTruthy();
 	expect(screen.getByText("login.go")).toBeTruthy();
 	expect(screen.getByText("2")).toBeTruthy();
-	expect(screen.getByText(/pushed to GitHub as one commit on feat\/x/)).toBeTruthy();
+	expect(screen.getByText(/pushed to GitHub as one commit on feat\/x\. .* its worktree is removed, ignored files included\./)).toBeTruthy();
 	await user.click(screen.getByRole("button", { name: "Move to AO Cloud" }));
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
 	expect(cloud.createSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ projectId: "cloud-proj", branch: "feat/x" }), expect.anything());
