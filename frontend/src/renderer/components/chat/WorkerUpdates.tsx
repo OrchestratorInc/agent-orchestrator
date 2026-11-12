@@ -558,13 +558,16 @@ export function Folded({ watch, children }: { watch: unknown; children: ReactNod
 	}, [open, watch]);
 	return (
 		<>
-			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")}>
+			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")} onToggle={(event) => (event.target as HTMLDetailsElement).open && setOpen(true)}>
 				<div>{children}</div>
 			</div>
 			{folds || open ? (
 				<Pressable
 					aria-expanded={open}
-					onClick={() => setOpen((current) => !current)}
+					onClick={() => {
+						if (open) body.current?.querySelectorAll("details[open]").forEach((details) => details.removeAttribute("open"));
+						setOpen(!open);
+					}}
 					className="mt-1 inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					{t(open ? "shell.showLess" : "shell.showMore")}

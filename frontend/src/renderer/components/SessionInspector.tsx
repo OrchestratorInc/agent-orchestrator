@@ -204,6 +204,10 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
+	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
+	const artifactsUnseen = useUiStore((state) =>
+		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
+	);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -260,17 +264,21 @@ export const SessionInspector = memo(function SessionInspector({
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
+	// The chat reports its subagents just after it mounts, so on the way back to a
+	// session the Subagents tab is briefly missing. Show Summary through that gap but
+	// keep the reader's choice, so the tab comes back selected.
+	const awaitingSubagents = requestedView === "subagents" && subagentsView === undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator) || awaitingSubagents) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
+	}, [awaitingSubagents, onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
 			...entry,
-			badge: entry.id === "browser" && browserUnseen,
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)

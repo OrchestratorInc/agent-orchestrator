@@ -278,6 +278,32 @@ describe("ChatWorkspace subagents", () => {
 		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
 	});
 
+	it("keeps a later turn's failure in view when that turn held only a child's steps", () => {
+		// The child's steps move under its launch, so the later turn has nothing else to
+		// draw, but how it ended still belongs on the timeline.
+		const later = "turn-later";
+		render(<ChatWorkspace snapshot={{
+			...chatFixtureEmpty,
+			harness: "claude-code",
+			controller: { state: "ready" },
+			latestSequence: 4,
+			turns: [
+				{ id: turnId, state: "completed", requestedAt: at(0), startedAt: at(0), completedAt: at(3) },
+				{ id: later, state: "failed", requestedAt: at(4), startedAt: at(4), completedAt: at(9), errorMessage: "The provider stopped responding." },
+			],
+			items: [
+				text("prompt", 1, "user", "Audit the storefront in the background"),
+				launch("pages", 2, "Audit: info pages"),
+				text("started", 3, "assistant", "Started one background agent."),
+				inTurn(child("p1", 5, "tool-pages", "cd /repo; cat src/app/faq/page.tsx"), later),
+			],
+		}} />);
+
+		expect(screen.getAllByText(/The provider stopped responding/).length).toBeGreaterThan(0);
+		// The step itself still hangs under its launch, not loose in the failed turn.
+		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
+	});
+
 	it("does not stop the parent turn when Escape is pressed in the Subagents panel", async () => {
 		const user = userEvent.setup();
 		const tabBody = document.createElement("div");
@@ -341,8 +367,8 @@ describe("ChatWorkspace subagents", () => {
 		expect(panel.getByRole("button", { name: /Searched for 1 pattern · Read 2 files/ })).toBeInTheDocument();
 
 		await user.click(panel.getByRole("button", { name: "All subagents" }));
-		expect(panel.getByRole("region", { name: "Working" })).toHaveTextContent("Audit: info pages");
-		expect(panel.getByRole("region", { name: "Finished" })).toHaveTextContent("Audit: testing gaps");
+		expect(panel.getByRole("group", { name: "Working" })).toHaveTextContent("Audit: info pages");
+		expect(panel.getByRole("group", { name: "Finished" })).toHaveTextContent("Audit: testing gaps");
 
 		unmount();
 		expect(onAvailableChange).toHaveBeenLastCalledWith(false);

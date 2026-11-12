@@ -147,6 +147,7 @@ import {
 	LiveResponseStatus,
 	LiveStepChoices,
 	isLiveStepKind,
+	isModelReroute,
 	liveTaskLabel,
 	reconnectCopy,
 	stepInProgress,
@@ -3962,7 +3963,9 @@ export function Timeline({
 					(item.turnId && backgroundQueuedTurnIds.has(item.turnId)) ||
 					// A terminal switch hands the note over as the first prompt; it is not the user's.
 					item.text.trimStart().startsWith("<ao-handoff-request")
-				)),
+				)) &&
+					// The model picker already names the model that answered.
+					!isModelReroute(item),
 			), localEchos),
 			...localItems,
 		],
@@ -4951,6 +4954,7 @@ export function Timeline({
 				onOpen={setOpenSubagentId}
 				onBack={closeSubagent}
 				harness={snapshot.harness}
+				models={subagentPanel.models}
 				disclosureOverrides={activityDisclosureOverrides}
 				onDisclosureChange={onActivityDisclosureChange}
 			/>,
@@ -6518,8 +6522,12 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		splitAtSteers(group)
 			.map((segment) => withSubagentSteps(segment, conversation))
 			// A part made only of steps that moved under a launch elsewhere has nothing
-			// left to draw. A live one keeps its Working row.
-			.filter((segment) => segment.live || segment.items.some((item) => !conversation.stepIds.has(item.id))),
+			// left to draw. A live one keeps its Working row, and one whose turn did not
+			// simply complete keeps how it ended: a failure must not vanish with its steps.
+			.filter((segment) =>
+				segment.live
+				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
+				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
 	);
 }
 

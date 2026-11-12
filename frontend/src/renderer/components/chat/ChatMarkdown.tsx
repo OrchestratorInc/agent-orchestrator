@@ -9,7 +9,8 @@ import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excer
  * visible backticks.
  *
  * Raw HTML is escaped, not rendered. Agent output is only as trustworthy as the
- *     files it just read, so `rehype-raw` is deliberately absent; markdown-only is
+ *     files it just read, so `rehype-raw` runs only where a caller passes it with a
+ *     sanitizer (GitHub review bodies); otherwise markdown-only is
  *     the whole sanitization story and there is no schema to get wrong, with two
  *     exceptions: ```mermaid fences render as diagrams through `MermaidBlock`,
  *     whose SVG passes through mermaid's strict mode plus DOMPurify with
@@ -49,7 +50,7 @@ import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
-import { fenceOf } from "../../lib/markdown-fence";
+import { fenceOf, textOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
@@ -227,6 +228,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	className,
 	safeOrigin = false,
 	remarkPlugins,
+	rehypePlugins,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -240,6 +242,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	safeOrigin?: boolean;
 	/** Run after the built-in plugins; keep the array stable, a new one re-parses the text. */
 	remarkPlugins?: Options["remarkPlugins"];
+	rehypePlugins?: Options["rehypePlugins"];
 }) {
 	// Replies opened from history mount settled and never wrap; live ones keep the fade a
 	// beat past the end of the stream.
@@ -293,6 +296,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 						fading={animate && index === blocks.blocks.length - 1}
 						settledOffset={Math.max(0, settledOffset - block.start)}
 						remarkPlugins={plugins}
+						rehypePlugins={rehypePlugins}
 					/>
 				))}
 			</div>
@@ -302,7 +306,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 
 // No wrapper DOM: list/table layout, image galleries and prose spacing keep
 // their existing parent. Only the changing chunk enters react-markdown again.
-const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
+const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins, rehypePlugins }: {
 	source: string;
 	sourceOffset: number;
 	repairInline: boolean;
@@ -310,6 +314,7 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repair
 	fading: boolean;
 	settledOffset: number;
 	remarkPlugins: Options["remarkPlugins"];
+	rehypePlugins: Options["rehypePlugins"];
 }) {
 	const repaired = useMemo(() => streaming && repairInline ? remend(source, {
 		linkMode: "text-only", images: false, htmlTags: false,
@@ -318,10 +323,11 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repair
 	const plugins = useMemo<NonNullable<Options["rehypePlugins"]>>(() => {
 		// Repaired streaming tails cannot be selected. Settled chunks retain only
 		// source bounds; detailed mappings are built when a selection is captured.
-		const entries: NonNullable<Options["rehypePlugins"]> = streaming ? [] : [[rehypeExcerptSource, { offset: sourceOffset }]];
+		const entries: NonNullable<Options["rehypePlugins"]> = [...(rehypePlugins ?? [])];
+		if (!streaming) entries.push([rehypeExcerptSource, { offset: sourceOffset }]);
 		if (fading) entries.push([rehypeStreamFade, { settledOffset }]);
 		return entries;
-	}, [sourceOffset, streaming, fading, settledOffset]);
+	}, [rehypePlugins, sourceOffset, streaming, fading, settledOffset]);
 	return <StreamingProse.Provider value={streaming}>
 		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 			{repaired}
@@ -763,7 +769,7 @@ const COMPONENTS: Components = {
 	// on the class alone rendered those as inline code.
 	pre: ({ children, node }) => {
 		const fence = fenceOf(children);
-		if (!fence) return <>{children}</>;
+		if (!fence) return <CodeBlock code={textOf(children).replace(/\n$/, "")} sourceNode={node} />;
 		// Mermaid is a diagram, not source: it renders through the sandboxed SVG
 		// path rather than the highlighter. See `MermaidBlock.tsx`.
 		if (fence.language?.toLowerCase() === "mermaid") return <div {...excerptElementProps(node)} data-excerpt-block="" data-excerpt-flowchart=""><MermaidFence code={fence.code} /></div>;
@@ -800,6 +806,10 @@ const COMPONENTS: Components = {
 	hr: () => <hr className="my-3 border-border" />,
 	strong: ({ children, node: _node, ...props }) => <strong {...props} className="font-semibold text-foreground">{children}</strong>,
 	del: ({ children, node: _node, ...props }) => <del {...props} className="text-muted-foreground">{children}</del>,
+	details: ({ children, node: _node, ...props }) => <details {...props} className="my-2 first:mt-0 last:mb-0">{children}</details>,
+	summary: ({ children, node: _node, ...props }) => (
+		<summary {...props} className="cursor-pointer text-muted-foreground transition-colors hover:text-foreground">{children}</summary>
+	),
 
 	// Match terminal links: a plain HTTP(S) click uses the session's AO Browser;
 	// Cmd/Ctrl- or Option/Alt-click and non-web schemes use the system browser,

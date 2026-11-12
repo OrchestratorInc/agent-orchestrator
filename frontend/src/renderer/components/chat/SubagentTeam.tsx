@@ -61,7 +61,7 @@ export function SubagentTeam({
 	live: ReadonlySet<string>;
 	/** Whose agents these are, for the avatar. */
 	harness?: string;
-	/** A finished team under "Worked for": plain rows on the chat's canvas instead of a box. */
+	/** A finished team under "Worked for": it starts closed, like the turn's other folded work. */
 	folded?: boolean;
 	disclosureKey?: string;
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
@@ -92,7 +92,7 @@ export function SubagentTeam({
 	const open = isOpen(teamKey, !folded);
 	const counts = countStates(agents);
 	// Each mark after the first widens the header's stack by 12px (18px marks, 6px
-	// overlap). Folded rows sit in by that much, so their names line up under the team's.
+	// overlap). The rows sit in by that much, so their names line up under the team's.
 	const stackInset = (Math.min(agents.length, STACKED_AVATARS) - 1) * 12;
 
 	return (
@@ -109,7 +109,8 @@ export function SubagentTeam({
 				aria-expanded={open}
 				// One line: the count, the states beside it, then the chevron right after them,
 				// the way "Worked for" carries its own.
-				className="activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none"
+				// The chat draws no focus rings (styles.css), so keyboard focus is the rows' fill.
+				className="activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none focus-visible:rounded-md focus-visible:bg-interactive-hover"
 			>
 				{/* Overlapping marks, each cut back short of the one over it, so two agents read
 				    as two marks rather than one shape. A mask, not a halo: the chat's canvas is
@@ -150,13 +151,9 @@ export function SubagentTeam({
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: EASE_OUT }}
 						className="overflow-hidden"
 					>
-						<ul
-							className={cn(
-								"mt-1 flex min-w-0 flex-col",
-								!folded && "cursor-chat-explore-box overflow-hidden rounded-lg border",
-							)}
-							style={folded ? { paddingLeft: stackInset } : undefined}
-						>
+						{/* Plain rows on the chat's canvas, working or finished: only the spinner and the
+						    live line tell a working child apart, so nothing changes shape as it ends. */}
+						<ul className="mt-1 flex min-w-0 flex-col" style={{ paddingLeft: stackInset }}>
 							<AnimatePresence initial={false}>
 								{agents.map((agent) => {
 									const agentKey = `${teamKey}:agent:${agent.launch.id}`;
@@ -167,14 +164,13 @@ export function SubagentTeam({
 											animate={{ opacity: 1, y: 0 }}
 											exit={{ opacity: 0 }}
 											transition={{ duration: reducedMotion ? 0 : 0.2, ease: EASE_OUT }}
-											className={cn("min-w-0", !folded && "border-t border-border/60 first:border-t-0")}
+											className="min-w-0"
 										>
 											{openSubagent ? (
 												<SubagentRowButton
 													agent={agent}
 													harness={harness}
 													now={now}
-													folded={folded}
 													onClick={() => openSubagent(agent.launch.id)}
 												/>
 											) : (
@@ -182,7 +178,6 @@ export function SubagentTeam({
 													agent={agent}
 													harness={harness}
 													now={now}
-													folded={folded}
 													open={isOpen(agentKey, false)}
 													onOpenChange={(next) => setOpen(agentKey, next)}
 													disclosureKey={agentKey}
@@ -253,16 +248,13 @@ export function SubagentRowButton({
 	now,
 	onClick,
 	expanded,
-	folded = false,
-}: {
+	}: {
 	agent: Subagent;
 	harness?: string;
 	now: number;
 	onClick: () => void;
 	expanded?: boolean;
-	/** Under "Worked for": a plain row on the chat's canvas, packed tight. */
-	folded?: boolean;
-}) {
+	}) {
 	const elapsed = elapsedLabel(agent, now);
 	return (
 		<button
@@ -271,26 +263,15 @@ export function SubagentRowButton({
 			aria-expanded={expanded}
 			// A list row, not a raised button: `activity-summary-button` keeps the chat's
 			// press-scale off it, the same as the other timeline disclosures.
-			// The mark, the time and the chevron are centred on the row's two lines.
-			className={cn(
-				"activity-summary-button group/agent flex w-full min-w-0 select-none items-center text-left outline-none",
-				folded
-					// Like the turn's other folded steps, hover brightens the text rather than
-					// filling a slab the width of the chat. Keyboard focus still shows a fill.
-					? "gap-2 py-1.5 focus-visible:rounded-md focus-visible:bg-interactive-hover"
-					: "gap-2.5 px-3 py-2 hover:bg-interactive-hover focus-visible:bg-interactive-hover",
-			)}
+			// The mark, the time and the chevron are centred on the row's two lines. Like the
+			// turn's other steps, hover brightens the text rather than filling a slab the width
+			// of the chat; keyboard focus still shows a fill.
+			className="activity-summary-button group/agent flex w-full min-w-0 select-none items-center gap-2 py-1.5 text-left outline-none focus-visible:rounded-md focus-visible:bg-interactive-hover"
 		>
 			<SubagentAvatar harness={harness} state={agent.state} centered />
-			<span className={cn("flex min-w-0 flex-1 flex-col", !folded && "gap-0.5")}>
+			<span className="flex min-w-0 flex-1 flex-col">
 				<span className="flex min-w-0 items-baseline gap-2">
-					<span
-						className={cn(
-							"min-w-0 truncate text-xs font-medium",
-							folded ? "text-foreground/85 group-hover/agent:text-foreground" : "text-foreground/90",
-						)}
-						title={agent.title}
-					>
+					<span className="min-w-0 truncate text-xs font-medium text-foreground/85 group-hover/agent:text-foreground">
 						{agent.title}
 					</span>
 					<SubagentTypeLabel agent={agent} />
@@ -317,7 +298,6 @@ function InlineSubagentRow({
 	agent,
 	harness,
 	now,
-	folded,
 	open,
 	onOpenChange,
 	disclosureKey,
@@ -327,7 +307,6 @@ function InlineSubagentRow({
 	agent: Subagent;
 	harness?: string;
 	now: number;
-	folded: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	disclosureKey: string;
@@ -337,7 +316,7 @@ function InlineSubagentRow({
 	const reducedMotion = useReducedMotion();
 	return (
 		<div className="flex min-w-0 flex-col">
-			<SubagentRowButton agent={agent} harness={harness} now={now} folded={folded} onClick={() => onOpenChange(!open)} expanded={open} />
+			<SubagentRowButton agent={agent} harness={harness} now={now} onClick={() => onOpenChange(!open)} expanded={open} />
 			<AnimatePresence initial={false}>
 				{open ? (
 					<motion.div
@@ -349,7 +328,7 @@ function InlineSubagentRow({
 						className="overflow-hidden"
 					>
 						{/* Indented to the row's text: its padding, the mark, and the gap after it. */}
-						<div className={folded ? "pb-2.5 pl-6" : "pb-2.5 pl-[38px] pr-3"}>
+						<div className="pb-2.5 pl-6">
 							<SubagentTranscript
 								agent={agent}
 								disclosureKey={disclosureKey}
@@ -473,8 +452,11 @@ function SubagentLineText({ agent }: { agent: Subagent }) {
 	} else {
 		const line = latestSubagentLine(agent.steps);
 		value = lineKey(line);
-		if (line.kind === "starting") text = t("chat.subagent.line.starting");
-		else if (line.kind === "said") text = line.text;
+		if (line.kind === "starting") {
+			// Only a child still at work is starting; one that ended before any step says so.
+			if (agent.state !== "working") value = "empty";
+			text = t(agent.state === "working" ? "chat.subagent.line.starting" : "chat.subagent.empty");
+		} else if (line.kind === "said") text = line.text;
 		else if (line.kind === "tool") text = line.name;
 		else {
 			const verb = line.kind === "command"
