@@ -12,5 +12,7 @@ export const sheetCornerRadius: number | undefined = 28;
  * An inset-grouped list drawn in React Native: Material 3's connected list,
  * the shape composeGroupedList draws in Compose. Fully rounded at a section's
  * ends, slightly between rows, with a small gap in place of dividers.
+ * `radius.xl`, `radius.xs` and `space.hair`, as numbers: tokens.ts imports
+ * this file, so it cannot import them back.
  */
 export const groupedCorner: { outer: number; inner: number; gap: number } = { outer: 20, inner: 4, gap: 2 };

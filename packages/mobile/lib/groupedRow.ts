@@ -1,6 +1,7 @@
-// An inset-grouped list drawn row by row in React Native, for lists that need
-// a FlatList or SectionList (pull to refresh, long-press menus per row) rather
-// than a native Form. Each row draws its own slice of the section's card.
+// The shape of an inset-grouped list, row by row: where a row sits in its
+// section and the corners that follows from. The React Native lists that need
+// a FlatList or SectionList (the pull-request list) and Android's Compose
+// grouped lists (composeGroupedList) both draw from it, so they keep one shape.
 import { groupedCorner } from "./tokens";
 
 export type GroupedRowPosition = "only" | "leading" | "middle" | "trailing";
@@ -12,10 +13,17 @@ export function groupedRowPosition(index: number, total: number): GroupedRowPosi
 	return index === total - 1 ? "trailing" : "middle";
 }
 
-/** The row's corners: the section's radius at its ends, the join radius between rows. */
+/** A row's top and bottom radius: the section's at its ends, the join radius between rows. */
+export function groupedRowRadii(position: GroupedRowPosition, corner: { outer: number; inner: number } = groupedCorner): { top: number; bottom: number } {
+	return {
+		top: position === "only" || position === "leading" ? corner.outer : corner.inner,
+		bottom: position === "only" || position === "trailing" ? corner.outer : corner.inner,
+	};
+}
+
+/** The row's corners as React Native border radii. */
 export function groupedRowCorners(position: GroupedRowPosition, corner: { outer: number; inner: number } = groupedCorner) {
-	const top = position === "only" || position === "leading" ? corner.outer : corner.inner;
-	const bottom = position === "only" || position === "trailing" ? corner.outer : corner.inner;
+	const { top, bottom } = groupedRowRadii(position, corner);
 	return { borderTopLeftRadius: top, borderTopRightRadius: top, borderBottomLeftRadius: bottom, borderBottomRightRadius: bottom };
 }
 

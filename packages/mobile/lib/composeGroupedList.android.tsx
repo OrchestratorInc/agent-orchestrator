@@ -1,8 +1,9 @@
 import { Column, ListItem, Text } from "@expo/ui/jetpack-compose";
 import { alpha, clickable, clip, combinedClickable, fillMaxWidth, padding, Shapes, testID as testTag } from "@expo/ui/jetpack-compose/modifiers";
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
+import { groupedRowPosition, groupedRowRadii, type GroupedRowPosition } from "./groupedRow";
 import { useTheme } from "./ThemeProvider";
-import { gutter, radius, space, stateOpacity } from "./tokens";
+import { groupedCorner, gutter, space, stateOpacity } from "./tokens";
 
 // Android: a Material 3 settings list, built from Compose ListItems in the
 // theme's surfaces. Rows in a section join into one rounded group, fully
@@ -13,21 +14,9 @@ import { gutter, radius, space, stateOpacity } from "./tokens";
 /** The padding a LazyColumn of GroupedSections takes, inset to the screen's gutter. */
 export const groupedListPadding = { start: gutter, end: gutter, top: space.sm, bottom: space.xxl };
 
-type RowPosition = "only" | "leading" | "middle" | "trailing";
-
-const FULL = radius.xl;
-const JOINED = radius.xs;
-
-function cornerRadii(position: RowPosition) {
-	const top = position === "only" || position === "leading" ? FULL : JOINED;
-	const bottom = position === "only" || position === "trailing" ? FULL : JOINED;
+function cornerRadii(position: GroupedRowPosition) {
+	const { top, bottom } = groupedRowRadii(position);
 	return { topStart: top, topEnd: top, bottomStart: bottom, bottomEnd: bottom };
-}
-
-function rowPosition(index: number, total: number): RowPosition {
-	if (total === 1) return "only";
-	if (index === 0) return "leading";
-	return index === total - 1 ? "trailing" : "middle";
 }
 
 /** A titled group of GroupedRows, with an optional footnote under it. */
@@ -39,13 +28,13 @@ export function GroupedSection({ title, footer, footerColor, children }: {
 	children: ReactNode;
 }) {
 	const t = useTheme();
-	const rows = Children.toArray(children).filter(isValidElement) as ReactElement<{ position?: RowPosition }>[];
+	const rows = Children.toArray(children).filter(isValidElement) as ReactElement<{ position?: GroupedRowPosition }>[];
 	return (
-		<Column verticalArrangement={{ spacedBy: space.hair }} modifiers={[fillMaxWidth()]}>
+		<Column verticalArrangement={{ spacedBy: groupedCorner.gap }} modifiers={[fillMaxWidth()]}>
 			{title ? (
 				<Text color={t.textSecondary} style={{ typography: "titleSmall" }} modifiers={[padding(gutter, space.sm, gutter, space.xs)]}>{title}</Text>
 			) : null}
-			{rows.map((row, index) => cloneElement(row, { position: rowPosition(index, rows.length) }))}
+			{rows.map((row, index) => cloneElement(row, { position: groupedRowPosition(index, rows.length) }))}
 			{footer ? (
 				<Text color={footerColor ?? t.textSecondary} style={{ typography: "bodySmall" }} modifiers={[padding(gutter, space.xs, gutter, space.none)]}>{footer}</Text>
 			) : null}
@@ -68,7 +57,7 @@ export function GroupedRow({ headline, supporting, leading, trailing, onPress, o
 	destructive?: boolean;
 	testID?: string;
 	/** Set by GroupedSection. */
-	position?: RowPosition;
+	position?: GroupedRowPosition;
 }) {
 	const t = useTheme();
 	const press = disabled ? [] : onLongPress ? [combinedClickable({ onClick: onPress, onLongClick: onLongPress })] : onPress ? [clickable(onPress)] : [];
