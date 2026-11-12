@@ -89,6 +89,7 @@ function QueuedMessageRowContent({
 	onCancelQueuedTurn,
 	turnId,
 	busy,
+	steady = false,
 	onRunAction,
 	reorderEnabled,
 	dragHandleRef,
@@ -106,6 +107,8 @@ function QueuedMessageRowContent({
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	turnId: string;
 	busy?: boolean;
+	/** Busy only while the composer sends: the actions wait without dimming. */
+	steady?: boolean;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
 	reorderEnabled?: boolean;
 	dragHandleRef?: (element: HTMLButtonElement | null) => void;
@@ -130,6 +133,9 @@ function QueuedMessageRowContent({
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
+	// Each send briefly disables every row. Dimming them on every Enter made the
+	// dock flicker and showed the hidden hover Steer on every row.
+	const steadyClass = steady ? "disabled:opacity-100" : undefined;
 
 	return (
 		<div className="queue-dock-row-content flex h-10 w-full min-w-0 items-center gap-2.5 overflow-hidden px-3">
@@ -159,7 +165,9 @@ function QueuedMessageRowContent({
 							"focus-visible:pointer-events-auto focus-visible:opacity-100",
 							showHoverSteer
 								? "pointer-events-none opacity-100"
-								: "pointer-events-none opacity-0 group-hover/queued-row:pointer-events-auto group-hover/queued-row:opacity-100",
+								: busy
+									? "pointer-events-none opacity-0 disabled:opacity-0"
+									: "pointer-events-none opacity-0 group-hover/queued-row:pointer-events-auto group-hover/queued-row:opacity-100",
 						)}
 						aria-label="Steer this queued message into the running turn"
 						title="Steer into running turn"
@@ -173,6 +181,7 @@ function QueuedMessageRowContent({
 						variant="quiet"
 						size="sm"
 						disabled={busy}
+						className={steadyClass}
 						onClick={() => {
 							void onRunAction(turnId, () => onPromoteQueuedTurn(turnId));
 						}}
@@ -198,6 +207,7 @@ function QueuedMessageRowContent({
 						variant="quiet"
 						size="icon-sm"
 						disabled={busy}
+						className={steadyClass}
 						onClick={() => onBeginQueuedEdit(turnId, message.text)}
 						aria-label="Edit queued message"
 						title="Edit"
@@ -211,6 +221,7 @@ function QueuedMessageRowContent({
 						variant="destructive-ghost"
 						size="icon-sm"
 						disabled={busy}
+						className={steadyClass}
 						onClick={() => {
 							void onRunAction(turnId, () => onCancelQueuedTurn(turnId));
 						}}
@@ -225,7 +236,10 @@ function QueuedMessageRowContent({
 						ref={dragHandleRef}
 						{...dragHandleProps}
 						disabled={busy}
-						className="flex size-7 cursor-grab items-center justify-center rounded-md text-muted-foreground touch-none active:cursor-grabbing disabled:pointer-events-none disabled:opacity-50"
+						className={cn(
+							"flex size-7 cursor-grab items-center justify-center rounded-md text-muted-foreground touch-none active:cursor-grabbing disabled:pointer-events-none disabled:opacity-50",
+							steadyClass,
+						)}
 						aria-label="Drag to reorder queued message"
 						title="Drag to reorder"
 					>
@@ -249,6 +263,7 @@ function SortableQueuedMessageRow({
 	onBeginQueuedEdit,
 	onCancelQueuedTurn,
 	busy,
+	steady,
 	error,
 	onRunAction,
 	reorderEnabled,
@@ -267,6 +282,7 @@ function SortableQueuedMessageRow({
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	busy?: boolean;
+	steady?: boolean;
 	error?: string;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
 	reorderEnabled?: boolean;
@@ -308,6 +324,7 @@ function SortableQueuedMessageRow({
 		>
 			<QueuedMessageRowContent
 				busy={busy}
+				steady={steady}
 				canSteer={canSteer}
 				dragHandleProps={{ ...attributes, ...listeners }}
 				dragHandleRef={setActivatorNodeRef}
@@ -335,6 +352,7 @@ function SortableQueuedMessageRow({
 export const QueuedMessageDock = memo(function QueuedMessageDock({
 	messages,
 	disabled,
+	sending,
 	editingTurnId,
 	canSteer,
 	canSteerNext,
@@ -349,6 +367,8 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 }: {
 	messages: QueuedMessage[];
 	disabled?: boolean;
+	/** The composer is sending: row actions wait for it, without dimming. */
+	sending?: boolean;
 	editingTurnId?: string;
 	canSteer?: boolean;
 	canSteerNext?: boolean;
@@ -636,8 +656,9 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 								)}
 							>
 								{displayMessages.map(({ turnId, message, pending }, index) => {
-									const busy =
+									const rowBusy =
 										disabled || promotePendingTurnId === turnId || cancelPendingTurnId === turnId;
+									const busy = rowBusy || Boolean(sending);
 									const isNextQueuedTurn = turnId === nextQueuedTurnId;
 									return (
 										<SortableQueuedMessageRow
@@ -652,6 +673,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											showPersistentSteer={Boolean(canSteer && isNextQueuedTurn)}
 											enterSteers={Boolean(canSteer && canSteerNext && isNextQueuedTurn)}
 											busy={busy}
+											steady={busy && !rowBusy}
 											dragSnapshot={dragSnapshot}
 											error={errors[turnId] ?? steerErrors?.[turnId]}
 											isReordering={isReordering}

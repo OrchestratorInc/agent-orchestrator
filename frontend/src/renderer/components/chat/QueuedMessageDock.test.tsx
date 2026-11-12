@@ -163,6 +163,41 @@ describe("QueuedMessageDock reorder", () => {
 	});
 });
 
+describe("QueuedMessageDock while the composer sends", () => {
+	it("keeps rows steady and hover-only Steer hidden instead of dimming every row", () => {
+		const props = {
+			canSteer: true,
+			messages: queuedMessages(["first queued", "second queued", "third queued"]),
+			onPromoteQueuedTurn: vi.fn().mockResolvedValue(undefined),
+			onCancelQueuedTurn: vi.fn().mockResolvedValue(undefined),
+			onBeginQueuedEdit: vi.fn(),
+		};
+		const { rerender } = render(<QueuedMessageDock {...props} sending />);
+		const steerIn = (turnId: string) =>
+			within(screen.getByTestId(`queued-message-${turnId}`)).getByRole("button", {
+				name: "Steer this queued message into the running turn",
+			});
+
+		for (const turnId of ["queued-2", "queued-3"]) {
+			// The hidden hover Steer must not pick up the disabled 50% opacity.
+			expect(steerIn(turnId)).toBeDisabled();
+			expect(steerIn(turnId)).toHaveClass("opacity-0", "disabled:opacity-0");
+			expect(steerIn(turnId)).not.toHaveClass("group-hover/queued-row:opacity-100");
+		}
+		expect(steerIn("queued-1")).toBeDisabled();
+		expect(steerIn("queued-1")).toHaveClass("disabled:opacity-100");
+		for (const button of screen.getAllByRole("button", { name: "Delete queued message" })) {
+			expect(button).toBeDisabled();
+			expect(button).toHaveClass("disabled:opacity-100");
+		}
+
+		rerender(<QueuedMessageDock {...props} />);
+		expect(steerIn("queued-2")).toBeEnabled();
+		expect(steerIn("queued-2")).toHaveClass("group-hover/queued-row:opacity-100");
+		expect(screen.getAllByRole("button", { name: "Delete queued message" })[0]).toBeEnabled();
+	});
+});
+
 describe("ChatWorkspace queue reorder", () => {
 	function queuedPrompt(turnId: string, sequence: number, origin: "human" | "automation", text: string) {
 		return {

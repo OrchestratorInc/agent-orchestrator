@@ -937,12 +937,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const queuedDockWithSteer = isValidElement<{
 		canSteerNext?: boolean;
 		steerNextRequest?: number;
-		disabled?: boolean;
+		sending?: boolean;
 	}>(queuedDock)
-		? cloneElement(
-				queuedDock,
-				{ canSteerNext, steerNextRequest, disabled: submitting || queuedDock.props.disabled },
-			)
+		? cloneElement(queuedDock, { canSteerNext, steerNextRequest, sending: submitting })
 		: queuedDock;
 
 	const focusEditor = useCallback(() => {
