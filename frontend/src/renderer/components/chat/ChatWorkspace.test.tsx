@@ -3111,14 +3111,17 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
 	});
 
-	it.each([
-		["fetch", "Getting the latest code"],
-		["worktree", "Preparing your workspace"],
-		["setup", "Running your project setup"],
-		["agent", "Starting your orchestrator"],
-	] as const)("shows the actual %s setup step in the placeholder", (id, message) => {
-		render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
-		expect(screen.getByText(message)).toBeInTheDocument();
+	it("keeps one placeholder through every step of an orchestrator start", () => {
+		const view = render(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" />);
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
+		for (const id of ["fetch", "worktree", "setup", "agent"] as const) {
+			view.rerender(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" startingSteps={[{ id, status: "running" }]} />);
+			expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
+		}
+		// A brand-new orchestrator's first connect is not a conversation to restore.
+		view.rerender(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} sessionRole="orchestrator" session={{ ...chatSession, kind: "orchestrator", lastUserMessageAt: undefined }} controllerTransitioning />);
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
+		expect(screen.queryByText("Restoring your conversation")).not.toBeInTheDocument();
 	});
 
 	it("offers sample artifact requests in an empty artifact session, fills the composer with one, and hides them", async () => {

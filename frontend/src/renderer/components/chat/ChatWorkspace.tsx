@@ -1836,19 +1836,17 @@ function ChatWorkspaceContent({
 	// A local or other-provider orchestrator opens its composer once it is up.
 	const startupQueues = cloudStarting || (session?.provisionState === "provisioning" && sessionRole !== "orchestrator");
 	const orchestratorBlocksComposer = orchestratorStarting && !startupQueues;
-	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
-	const setupPlaceholder = currentSetupStep === "fetch" ? "Getting the latest code"
-		: currentSetupStep === "worktree" ? "Preparing your workspace"
-		: currentSetupStep === "setup" ? "Running your project setup"
-		: currentSetupStep === "agent" ? "Starting your orchestrator"
-		: provisionSteps?.length && provisionSteps.every((step) => step.status === "done")
-			? "Connecting to your orchestrator"
-			: "Getting your project ready";
+	// One steady line for the whole start. A local start runs its steps in a
+	// second or two, and naming each one flickered through the placeholder.
+	const setupPlaceholder = "Starting your orchestrator";
 	// Arriving from the terminal reuses the startup composer: the shimmer plus a
 	// placeholder that follows the controller. Leaving for the terminal
 	// (newWorkDisabled) stays quiet, since that screen is about to go away.
 	const arrivingInChat = (Boolean(controllerTransitioning) || historyPending) && !accountMoving && !newWorkDisabled && startupState !== "provisioning";
-	const arrivingPlaceholder = historyPending || snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
+	// A new orchestrator has no conversation to restore; keep the start's words.
+	const arrivingPlaceholder = sessionRole === "orchestrator" && !historyPending && !session?.lastUserMessageAt
+		? setupPlaceholder
+		: historyPending || snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
 		? "Restoring your conversation"
 		: "Starting the chat agent";
 	const compactStartup = sessionRole === "orchestrator" && startupState === "failed" ? startup : undefined;

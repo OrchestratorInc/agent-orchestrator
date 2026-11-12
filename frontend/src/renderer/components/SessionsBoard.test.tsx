@@ -274,7 +274,7 @@ describe("SessionsBoard", () => {
 		useUiStore.getState().setProjectProvisioning("p1", true);
 		try {
 			renderBoard("p1");
-			expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+			expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 			expect(screen.getByLabelText("Message the agent")).toBeInTheDocument();
 			expect(screen.getByTestId("session-workspace-topbar")).toBeInTheDocument();
 		} finally {
