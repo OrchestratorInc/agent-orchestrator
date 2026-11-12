@@ -1228,7 +1228,7 @@ describe("Sidebar", () => {
 		expect(navigateMock).not.toHaveBeenCalledWith(expect.objectContaining({ to: "/projects/$projectId" }));
 	});
 
-	it("offers no board, orchestrator or project settings for a Cloud standalone agent, owned or shared", async () => {
+	it("offers no new task, board, orchestrator or project settings for a Cloud standalone agent, owned or shared", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [
@@ -1258,17 +1258,19 @@ describe("Sidebar", () => {
 		// The person's own agent is a Scratchpad row, with no project row or project menu.
 		expect(screen.queryByLabelText("Project actions for Fix the flake")).toBeNull();
 
-		// A shared one keeps its row, but its right-click menu opens no board.
+		// A shared one keeps its row, but its right-click menu opens no board and
+		// starts no task in it: someone else's agent takes no session but its own.
 		const row = document.querySelector('li[data-project-id="agent-shared"]') as HTMLElement;
 		fireEvent.contextMenu(within(row).getAllByText("Shared agent")[0]!);
-		expect(await screen.findByRole("menuitem", { name: /New task/ })).toBeInTheDocument();
-		for (const name of [/Open dashboard/, /Project settings/, /Remove project/, /orchestrator/i]) {
+		expect(await screen.findByRole("menuitem", { name: /Pin to top/ })).toBeInTheDocument();
+		for (const name of [/New task/, /Open dashboard/, /Project settings/, /Remove project/, /orchestrator/i]) {
 			expect(screen.queryByRole("menuitem", { name })).toBeNull();
 		}
 		await user.keyboard("{Escape}");
 
-		// A regular project still has its board.
+		// A regular project still offers a new task and its board.
 		await user.click(screen.getByLabelText("Project actions for Project One"));
+		expect(await screen.findByRole("menuitem", { name: /New task/ })).toBeInTheDocument();
 		await user.click(await screen.findByRole("menuitem", { name: /Open dashboard/ }));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
 	});

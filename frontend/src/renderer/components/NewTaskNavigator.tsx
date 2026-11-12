@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useMatchRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useCloudOffering } from "../hooks/useCloudOffering";
-import { useCloudProjectsQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useCloudProjectsQuery, useSharedCloudWorkspacesQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useUiStore } from "../stores/ui-store";
@@ -23,6 +23,7 @@ export function NewTaskNavigator() {
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
 	const [dialog, setDialog] = useState<{ open: boolean; projectId?: string; hostId?: string }>({ open: false });
 	const cloudProjects = useCloudProjectsQuery().data;
+	const sharedWorkspaces = useSharedCloudWorkspacesQuery().data;
 	const cloudOffering = useCloudOffering();
 
 	useEffect(() => {
@@ -30,8 +31,12 @@ export function NewTaskNavigator() {
 		lastNonce.current = newTaskRequest.nonce;
 		const { projectId, hostId } = newTaskRequest;
 		const cloudProject = hostId ? undefined : cloudProjects?.find((project) => project.id === projectId);
-		// A Cloud standalone agent runs one session: a new task beside it is another agent.
-		const target = cloudProject?.standaloneAgent ? CLOUD_STANDALONE_WORKSPACE_ID : projectId;
+		// A Cloud standalone agent runs one session: a new task beside the person's
+		// own is another agent, and one beside an agent shared with them starts
+		// outside it (neither takes a new session).
+		const sharedAgent = !hostId && !cloudProject &&
+			Boolean(sharedWorkspaces?.some((workspace) => workspace.id === projectId && workspace.standaloneAgent));
+		const target = cloudProject?.standaloneAgent ? CLOUD_STANDALONE_WORKSPACE_ID : sharedAgent ? STANDALONE_WORKSPACE_ID : projectId;
 		if (cloudProject && !cloudProject.standaloneAgent && projectSandboxProvider(cloudProject.config, cloudOffering) === CODER_PROVIDER) {
 			// An open dialog keeps its form rather than retargeting to another project.
 			setDialog((current) => current.open ? current : { open: true, projectId, hostId });
@@ -46,7 +51,7 @@ export function NewTaskNavigator() {
 			// A new task from the new chat page replaces it rather than stacking history.
 			replace: Boolean(matchRoute({ to: "/new" })),
 		});
-	}, [cloudOffering, cloudProjects, matchRoute, navigate, newTaskRequest]);
+	}, [cloudOffering, cloudProjects, matchRoute, navigate, newTaskRequest, sharedWorkspaces]);
 
 	const handleCreated = async (sessionId: string) => {
 		if (!dialog.projectId) return;

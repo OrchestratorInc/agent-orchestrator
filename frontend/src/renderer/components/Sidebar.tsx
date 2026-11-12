@@ -1895,14 +1895,17 @@ const ProjectItem = memo(function ProjectItem({
 		// Archive button and Cmd+K's Open archive are.
 		const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;
 		return [
-			{
-				kind: "item",
-				id: "new-task",
-				icon: <Plus aria-hidden="true" />,
-				label: t("shell.newTask"),
-				disabled: isProjectRestarting,
-				onSelect: () => requestNewTask(workspace.id, workspace.hostId),
-			},
+			// A new task in someone else's agent is a dead end: it takes no session but its own.
+			...(!isAgent
+				? [{
+					kind: "item" as const,
+					id: "new-task",
+					icon: <Plus aria-hidden="true" />,
+					label: t("shell.newTask"),
+					disabled: isProjectRestarting,
+					onSelect: () => requestNewTask(workspace.id, workspace.hostId),
+				}]
+				: []),
 			...(!isStandalone && !isAgent && (!workspace.shared || orchestrator)
 				? [{
 					kind: "item" as const,

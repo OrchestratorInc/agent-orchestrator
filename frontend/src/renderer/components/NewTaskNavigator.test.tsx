@@ -27,6 +27,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		// A standalone agent's project on an organization that defaults to Coder.
 		{ id: "agent-1", config: {}, standaloneAgent: true },
 	] }),
+	useSharedCloudWorkspacesQuery: () => ({ data: [
+		{ id: "shared-1", kind: CLOUD_PROJECT_KIND, sessions: [], shared: { source: "link" } },
+		{ id: "agent-shared", kind: CLOUD_PROJECT_KIND, sessions: [], shared: { source: "link" }, standaloneAgent: true },
+	] }),
 	workspaceQueryKeyForHost: () => ["workspaces"],
 }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "freestyle", loaded: true }) }));
@@ -82,6 +86,14 @@ describe("NewTaskNavigator", () => {
 		act(() => useUiStore.getState().requestNewTask("agent-1"));
 		expect(navigateMock).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: { project: CLOUD_STANDALONE_WORKSPACE_ID, host: undefined } }));
 		expect(dialog.props).toMatchObject({ open: false });
+	});
+
+	it("starts a new task beside a standalone agent shared with the person outside it, and in a shared project as before", () => {
+		renderNavigator();
+		act(() => useUiStore.getState().requestNewTask("agent-shared"));
+		expect(navigateMock).toHaveBeenLastCalledWith(expect.objectContaining({ to: "/new", search: { project: undefined, host: undefined } }));
+		act(() => useUiStore.getState().requestNewTask("shared-1"));
+		expect(navigateMock).toHaveBeenLastCalledWith(expect.objectContaining({ to: "/new", search: { project: "shared-1", host: undefined } }));
 	});
 
 	it("opens the new chat page for cloud projects too", () => {
