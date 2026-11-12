@@ -48,16 +48,40 @@ describe("SubagentPanel", () => {
 	it("lists working children first, then finished ones, the newest at the top of each", () => {
 		panel();
 
-		const workingGroup = screen.getByRole("region", { name: "Working" });
-		expect(within(workingGroup).getByRole("heading")).toHaveTextContent("Working · 1");
+		// Each group is a Summary-style section: a header that folds it, then one line a child.
+		const workingGroup = screen.getByRole("group", { name: "Working" });
+		expect(within(workingGroup).getByRole("button", { name: "Working · 1" })).toHaveAttribute("aria-expanded", "true");
 		expect(within(workingGroup).getByRole("button", { name: /Audit: testing gaps/ })).toBeInTheDocument();
 
-		const finishedGroup = screen.getByRole("region", { name: "Finished" });
-		expect(within(finishedGroup).getByRole("heading")).toHaveTextContent("Finished · 2");
-		expect(within(finishedGroup).getAllByRole("button").map((row) => row.textContent)).toEqual([
+		const finishedGroup = screen.getByRole("group", { name: "Finished" });
+		expect(within(finishedGroup).getByRole("button", { name: "Finished · 2" })).toBeInTheDocument();
+		expect(within(finishedGroup).getAllByRole("listitem").map((row) => row.textContent)).toEqual([
 			expect.stringContaining("Audit: cart"),
 			expect.stringContaining("Audit: info pages"),
 		]);
+	});
+
+	it("lists the newest ten of a section and folds the rest behind Show more", async () => {
+		const user = userEvent.setup();
+		const many: SubagentRef[] = Array.from({ length: 12 }, (_, index) => ({
+			launch: launch(`m${index}`, `Audit: page ${index}`),
+			steps: [handback(`m${index}h`, `tool-m${index}`, "Done.")],
+			live: false,
+		}));
+		panel({ subagents: many });
+
+		const finishedGroup = screen.getByRole("group", { name: "Finished" });
+		expect(within(finishedGroup).getByRole("button", { name: "Finished · 12" })).toBeInTheDocument();
+		// Newest first: the two oldest wait behind Show more.
+		expect(within(finishedGroup).getByRole("button", { name: /Audit: page 11/ })).toBeInTheDocument();
+		expect(within(finishedGroup).queryByRole("button", { name: /Audit: page 1(?!\d)/ })).not.toBeInTheDocument();
+		expect(within(finishedGroup).queryByRole("button", { name: /Audit: page 0/ })).not.toBeInTheDocument();
+
+		const more = within(finishedGroup).getByRole("button", { name: "Show more" });
+		expect(more).toHaveAttribute("aria-expanded", "false");
+		await user.click(more);
+		expect(within(finishedGroup).getByRole("button", { name: /Audit: page 0/ })).toBeInTheDocument();
+		expect(within(finishedGroup).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
 	});
 
 	it("opens a child from the list", async () => {
@@ -165,7 +189,7 @@ describe("SubagentPanel", () => {
 
 	it("falls back to the list when the open child is gone", () => {
 		panel({ openId: "rolled-back" });
-		expect(screen.getByRole("region", { name: "Finished" })).toBeInTheDocument();
+		expect(screen.getByRole("group", { name: "Finished" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "All subagents" })).not.toBeInTheDocument();
 	});
 

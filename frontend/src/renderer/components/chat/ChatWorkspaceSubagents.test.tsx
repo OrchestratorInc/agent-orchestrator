@@ -367,8 +367,8 @@ describe("ChatWorkspace subagents", () => {
 		expect(panel.getByRole("button", { name: /Searched for 1 pattern · Read 2 files/ })).toBeInTheDocument();
 
 		await user.click(panel.getByRole("button", { name: "All subagents" }));
-		expect(panel.getByRole("region", { name: "Working" })).toHaveTextContent("Audit: info pages");
-		expect(panel.getByRole("region", { name: "Finished" })).toHaveTextContent("Audit: testing gaps");
+		expect(panel.getByRole("group", { name: "Working" })).toHaveTextContent("Audit: info pages");
+		expect(panel.getByRole("group", { name: "Finished" })).toHaveTextContent("Audit: testing gaps");
 
 		unmount();
 		expect(onAvailableChange).toHaveBeenLastCalledWith(false);

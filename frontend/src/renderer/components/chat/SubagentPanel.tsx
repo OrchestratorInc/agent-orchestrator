@@ -7,16 +7,17 @@
  * subagent takes its instructions from the parent agent, not from the reader.
  */
 
-import { useMemo } from "react";
-import { ArrowLeft, ArrowUp, Plus } from "@/components/app-icons";
+import { useMemo, useState } from "react";
+import { InspectorSection } from "@aoagents/product-ui";
+import { ArrowLeft, ArrowUp, ChevronRight, Plus } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { Button } from "../ui/button";
+import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import {
 	elapsedLabel,
 	StateGlyph,
 	SubagentAvatar,
-	SubagentRowButton,
 	SubagentTypeLabel,
 	useNow,
 } from "./SubagentTeam";
@@ -26,6 +27,8 @@ import { readSubagent, type Subagent, type SubagentRef } from "./subagent-team";
 import type { ChatModel, TurnSettings } from "../../types/conversation";
 
 const NO_MODELS: ChatModel[] = [];
+/** A section lists this many children, newest first; the rest fold behind Show more. */
+const ROWS_COLLAPSED = 10;
 const NO_SETTINGS: TurnSettings = {};
 const IGNORE_SETTINGS = () => {};
 
@@ -110,10 +113,11 @@ function SubagentList({
 	const working = newestFirst.filter((agent) => agent.state === "working");
 	const finished = newestFirst.filter((agent) => agent.state !== "working");
 
+	// The inspector's own body and sections, as Summary and Artifacts draw theirs.
 	return (
-		<div className="cursor-chat-timeline scrollbar-none flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden px-3 py-3">
+		<div className="board-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden pt-0.5 pb-3">
 			{agents.length === 0 ? (
-				<p className="px-1 text-xs text-muted-foreground">{t("chat.subagent.panel.empty")}</p>
+				<p className="px-3 pt-2 text-xs text-muted-foreground">{t("chat.subagent.panel.empty")}</p>
 			) : null}
 			<SubagentGroup label={t("chat.subagent.state.working")} agents={working} harness={harness} now={now} onOpen={onOpen} />
 			<SubagentGroup label={t("chat.subagent.panel.finished")} agents={finished} harness={harness} now={now} onOpen={onOpen} />
@@ -121,6 +125,7 @@ function SubagentList({
 	);
 }
 
+/** One section: a Summary-style header, then a row per child, the newest ten until asked. */
 function SubagentGroup({
 	label,
 	agents,
@@ -134,22 +139,69 @@ function SubagentGroup({
 	now: number;
 	onOpen: (launchId: string) => void;
 }) {
+	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
 	if (agents.length === 0) return null;
+	const rows = expanded ? agents : agents.slice(0, ROWS_COLLAPSED);
 	return (
-		<section aria-label={label} className="flex min-w-0 flex-col gap-1.5">
-			<h3 className="px-1 text-caption text-muted-foreground">
-				{label}
-				<span className="text-muted-foreground/60"> · </span>
-				<span className="tabular-nums">{agents.length}</span>
-			</h3>
-			<ul className="cursor-chat-explore-box flex min-w-0 flex-col overflow-hidden rounded-lg border">
-				{agents.map((agent) => (
-					<li key={agent.launch.id} className="min-w-0 border-t border-border/60 first:border-t-0">
-						<SubagentRowButton agent={agent} harness={harness} now={now} onClick={() => onOpen(agent.launch.id)} />
-					</li>
-				))}
-			</ul>
-		</section>
+		<div role="group" aria-label={label}>
+			<InspectorSection surface={false} title={`${label} · ${agents.length}`}>
+				<ul className="flex min-w-0 flex-col">
+					{rows.map((agent) => (
+						<li key={agent.launch.id}>
+							<SubagentListRow agent={agent} harness={harness} now={now} onClick={() => onOpen(agent.launch.id)} />
+						</li>
+					))}
+					{agents.length > ROWS_COLLAPSED ? (
+						<li>
+							<Pressable
+								aria-expanded={expanded}
+								className="flex min-h-8 w-full min-w-0 items-center rounded-md px-1 text-sm text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover"
+								onClick={() => setExpanded((current) => !current)}
+							>
+								{t(expanded ? "inspector.showLess" : "inspector.showMore")}
+							</Pressable>
+						</li>
+					) : null}
+				</ul>
+			</InspectorSection>
+		</div>
+	);
+}
+
+/**
+ * One child as a line, like Summary's artifact rows: its mark, name and type, then how it
+ * stands and how long it took. What it is doing or found shows once it is opened.
+ */
+function SubagentListRow({
+	agent,
+	harness,
+	now,
+	onClick,
+}: {
+	agent: Subagent;
+	harness?: string;
+	now: number;
+	onClick: () => void;
+}) {
+	const elapsed = elapsedLabel(agent, now);
+	return (
+		<Pressable
+			className="group/agent flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover"
+			onClick={onClick}
+		>
+			<SubagentAvatar harness={harness} state={agent.state} centered />
+			<span className="min-w-0 truncate text-foreground/90">{agent.title}</span>
+			<SubagentTypeLabel agent={agent} />
+			<span className="flex flex-1 items-center justify-end gap-2">
+				<StateGlyph state={agent.state} />
+				{elapsed ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground/70">{elapsed}</span> : null}
+				<ChevronRight
+					aria-hidden="true"
+					className="size-3 shrink-0 text-muted-foreground/40 group-hover/agent:text-muted-foreground"
+				/>
+			</span>
+		</Pressable>
 	);
 }
 
