@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 func TestSendHoldsMessageWhileAnotherProcessWritesThenDeliversToResumedProvider(t *testing.T) {
@@ -507,4 +508,117 @@ func TestRelayHoldsMessageWhileAnotherProcessWrites(t *testing.T) {
 		t.Fatalf("running provider received %v; want only the first message", sent)
 	}
 	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "relayed")
+}
+
+func TestDeliveryWhileTheAgentWorksIsRefusedWhenAnotherProcessWrites(t *testing.T) {
+	h, conv := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+	})
+	ctx := context.Background()
+	var elsewhere atomic.Bool
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "long task", ClientMessageID: "elsewhere-14"}); err != nil {
+		t.Fatal(err)
+	}
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-2"})
+	deadline := time.Now().Add(2 * time.Second)
+	for h.ctrl.State() != ports.ChatControllerBusy {
+		if time.Now().After(deadline) {
+			t.Fatalf("controller state = %s; want busy", h.ctrl.State())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	elsewhere.Store(true)
+
+	deliveries := map[string]func() error{
+		"send": func() error {
+			_, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "typed", ClientMessageID: "elsewhere-15"})
+			return err
+		},
+		"relay": func() error {
+			_, err := h.svc.RelayChatTurnWithID(ctx, testSession, "relayed", "elsewhere-16")
+			return err
+		},
+		"steer": func() error {
+			_, err := h.svc.Steer(ctx, testSession, ports.ChatUserMessage{Text: "steered", ClientMessageID: "elsewhere-17"})
+			return err
+		},
+		"steer or send": func() error {
+			_, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{Text: "steered or sent", ClientMessageID: "elsewhere-18"}, false)
+			return err
+		},
+	}
+	for name, deliver := range deliveries {
+		if err := deliver(); !errors.Is(err, chatsvc.ErrChatOpenElsewhere) {
+			t.Errorf("%s error = %v; want ErrChatOpenElsewhere", name, err)
+		}
+	}
+
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2", TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 2 && s.Turns[1].State == domain.TurnStateCompleted
+	})
+	if err := h.svc.DrainQueued(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if sent := conv.sentTexts(); len(sent) != 2 || conv.calls.Load() != 0 {
+		t.Fatalf("provider received %v after %d stops; want only the first two messages", sent, conv.calls.Load())
+	}
+}
+
+func TestSteerOrSendHoldsMessageWhileAnotherProcessWrites(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	resumed := newFakeConversation()
+	resumed.turnSeq = 1
+	h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+
+	if _, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{ClientMessageID: "elsewhere-19"}, true); !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) || old.calls.Load() != 0 {
+		t.Fatalf("recovery = %v after %d stops; want an uncertain receipt and no stop", err, old.calls.Load())
+	}
+	result, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{Text: "steered", ClientMessageID: "elsewhere-20"}, false)
+	if err != nil || result.Steered || result.Turn.State != domain.TurnStateQueued {
+		t.Fatalf("steer or send = %+v, %v; want it queued", result, err)
+	}
+	if sent := old.sentTexts(); len(sent) != 1 {
+		t.Fatalf("running provider received %v; want only the first message", sent)
+	}
+	expectHeldUntilWriterLeaves(t, h, woke, &elsewhere, resumed, "steered")
+}
+
+func TestSteerToAnIdleChatYieldsItToAnotherProcess(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+	})
+	ctx := context.Background()
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	woke := wakeOnNewRelease(t, h, old, nil)
+
+	if _, err := h.svc.Steer(ctx, testSession, ports.ChatUserMessage{Text: "steered", ClientMessageID: "elsewhere-21"}); !errors.Is(err, chatsvc.ErrChatOpenElsewhere) {
+		t.Fatalf("steer error = %v; want ErrChatOpenElsewhere", err)
+	}
+	if snapshot, err := h.svc.Snapshot(ctx, testSession); err != nil || !snapshot.OpenElsewhere {
+		t.Fatalf("snapshot after steer = elsewhere %v, %v", snapshot.OpenElsewhere, err)
+	}
+	elsewhere.Store(false)
+	select {
+	case <-woke:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the chat did not wake after the other process left")
+	}
+	if sent := old.sentTexts(); len(sent) != 1 {
+		t.Fatalf("provider received %v; want only the first message", sent)
+	}
 }

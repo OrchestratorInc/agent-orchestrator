@@ -725,7 +725,11 @@ func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionReco
 		return false, nil
 	}
 	controller, err := s.Controller(rec.ID)
-	if ready := err == nil && controller.State() == ports.ChatControllerReady; !ready {
+	var state ports.ChatControllerState
+	if err == nil {
+		state = controller.State()
+	}
+	if state != ports.ChatControllerReady && state != ports.ChatControllerBusy {
 		return false, nil
 	}
 	since := controller.started
@@ -734,6 +738,9 @@ func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionReco
 	}
 	if !s.otherWriter(ctx, rec, since) {
 		return false, nil
+	}
+	if state == ports.ChatControllerBusy {
+		return false, ErrChatOpenElsewhere
 	}
 	s.holdElsewhere(rec.ID)
 	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{otherWriter: true, ignoreViews: true})

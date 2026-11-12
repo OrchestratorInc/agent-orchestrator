@@ -127,6 +127,18 @@ func (s *Service) Steer(
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
 	}
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return SteerResult{}, err
+	}
+	held, err := s.stopForOtherWriter(ctx, record)
+	if held {
+		s.startBackgroundWake(id)
+		err = ErrChatOpenElsewhere
+	}
+	if err != nil {
+		return SteerResult{}, err
+	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerResult{}, err
@@ -175,6 +187,20 @@ func (s *Service) SteerOrSend(
 	// targets render the same way.
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
+	}
+	if !recoverOnly {
+		record, err := s.requireChatSession(ctx, id)
+		if err != nil {
+			return SteerOrSendResult{}, err
+		}
+		if _, err := s.stopForOtherWriter(ctx, record); err != nil {
+			return SteerOrSendResult{}, err
+		}
+		if s.isHeldElsewhere(id) {
+			defer s.startBackgroundWake(id)
+			turn, err := s.Send(ctx, id, msg)
+			return SteerOrSendResult{Turn: turn}, err
+		}
 	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
