@@ -392,3 +392,28 @@ func TestACPSteerPromptStallFailureEndsTheTurnOnce(t *testing.T) {
 		t.Fatalf("turn completions = %+v, want one failed with the host's receipt", done)
 	}
 }
+
+// Once Stop has begun, a steer prompt for the turn is refused and never sent.
+func TestACPSteerPromptAfterStopBeganIsNotSent(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	conv.WithdrawPendingSteers()
+	if _, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "too late"}); !errors.Is(err, ports.ErrChatTurnNotSteerable) {
+		t.Fatalf("Steer after Stop began = %v, want ErrChatTurnNotSteerable", err)
+	}
+	host.send(receiptResult(root, "acp-host:10"))
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].ProviderEventID != "acp-host:10" {
+		t.Fatalf("turn completions = %+v, want the turn's own result", done)
+	}
+	select {
+	case frame := <-host.frames:
+		var method string
+		_ = json.Unmarshal(frame["method"], &method)
+		if method == "session/prompt" {
+			t.Fatalf("a steer prompt reached the host after Stop began: %v", frame)
+		}
+	default:
+	}
+}
