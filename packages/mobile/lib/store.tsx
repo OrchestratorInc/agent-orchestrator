@@ -97,6 +97,8 @@ export type SpawnOptions = {
 	effort?: string;
 	/** The worker's starting approval mode; omitted keeps the project's. */
 	approvalMode?: ApprovalMode;
+	/** The subscription account the agent starts on; omitted uses the machine's default. */
+	accountId?: string;
 	attachments?: SpawnAttachmentInput[];
 	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
 	mode?: SessionMode;
@@ -1176,13 +1178,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, accountId, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { projectId, prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, accountId, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -1196,6 +1198,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					model,
 					effort,
 					approvalMode,
+					accountId,
 					mode: resolvedMode,
 					attachments,
 					clientRequestId,
