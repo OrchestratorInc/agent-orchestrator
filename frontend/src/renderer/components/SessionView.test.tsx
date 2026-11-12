@@ -5853,6 +5853,27 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("dismisses a session's artifact toast when the user leaves that session", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		const toastFor = (key: string) => useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === key);
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "files");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "shot.png", path: "shot.png", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(toastFor("artifact-registered:sess-1")).toBeDefined();
+
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(toastFor("artifact-registered:sess-1")).toBeUndefined();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
 	it("takes the baseline from a cloud session's artifact list once it loads", () => {
 		const worker = workerSession("sess-1");
 		// The session arrives before its artifact list.

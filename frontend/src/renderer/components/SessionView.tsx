@@ -2185,6 +2185,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		handleOpenArtifact({ path: newest.path });
 	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, artifactListUnsettled, hasInspector, setArtifactsUnseen, showGlobalToast, t, terminated, uiSessionId]);
 
+	// The toast's Open writes this session's inspector state through its own
+	// closure, so it must not outlive the session it was raised for.
+	useEffect(() => () => {
+		const dedupeKey = `artifact-registered:${uiSessionId}`;
+		const { dismissGlobalToast, globalToasts } = useUiStore.getState();
+		for (const toast of globalToasts) if (toast.dedupeKey === dedupeKey) dismissGlobalToast(toast.nonce);
+	}, [uiSessionId]);
+
 	// A file written moments ago, or one past the artifact list cap, is not in
 	// the cached session, and the Files inspector can only show listed
 	// artifacts. Refresh once before deciding it cannot be opened.
