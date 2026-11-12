@@ -460,9 +460,12 @@ export async function uploadShare(
 	signal?: AbortSignal,
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
 	const { baseUrl, snapshot } = input;
-	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", input.shareId
-		? { name: input.name, size: snapshot.size, sha256: snapshot.sha256, shareId: input.shareId }
-		: { name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature }, signal);
+	// An update names where the file is now too, so its link follows a file
+	// moved to another folder.
+	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", {
+		name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature,
+		...(input.shareId ? { shareId: input.shareId } : {}),
+	}, signal);
 	const handle = await fs.open(snapshot.path, "r");
 	// One failed part stops the others before the upload is aborted and the
 	// snapshot closed.

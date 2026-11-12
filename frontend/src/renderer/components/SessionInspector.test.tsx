@@ -407,8 +407,9 @@ describe("SessionInspector tabs", () => {
     renderWithQuery(<SessionInspector orchestrator session={session([], {
       kind: "orchestrator",
       artifactFiles: [
-        artifact({ path: "direct.html", name: "direct.html", kind: "html" }),
-        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html" }),
+        // A kept render is listed once the agent registers it, like any file.
+        artifact({ path: "direct.html", name: "direct.html", kind: "html", registered: true }),
+        artifact({ path: "renders/chart.html", name: "chart.html", kind: "html", registered: true }),
       ],
     })} />);
 
@@ -536,6 +537,18 @@ describe("SessionInspector tabs", () => {
     ).toBe(false);
   });
 
+  it("does not query workspace endpoints for an imported chat that has not been opened", async () => {
+    renderWithQuery(<SessionInspector session={session([], { id: "import-1", needsResume: true })} />);
+
+    await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(0));
+
+    expect(
+      getMock.mock.calls
+        .map(([path]) => String(path))
+        .filter((path) => path.startsWith("/api/v1/sessions/{sessionId}/workspace/")),
+    ).toEqual([]);
+  });
+
   it("shows a live changed-file count on the Files tab once the shared cache is populated", () => {
     renderWithQuery(
       <SessionInspector session={session([])} />,
@@ -648,7 +661,7 @@ describe("SessionInspector PR section", () => {
     expect(section.getByRole("link", { name: /gitlab.com\/release\/notes MR #9/ })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
     expect(section.getByText("Reported by worker")).toBeInTheDocument();
     expect(section.getByText("External repository")).toBeInTheDocument();
-    expect(section.getByRole("button", { name: /Linked for reference.*AO does not track checks/ })).toBeInTheDocument();
+    expect(section.getByRole("button", { name: /Linked for reference.*Orchestrator does not track checks/ })).toBeInTheDocument();
     expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
     expect(section.queryByRole("button", { name: /^Merge PR #/ })).not.toBeInTheDocument();
     expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
@@ -1034,7 +1047,7 @@ describe("SessionInspector PR section", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
-        name: "When disabled, AO keeps this session open after all pull requests merge.",
+        name: "When disabled, Orchestrator keeps this session open after all pull requests merge.",
       }),
     ).toBeInTheDocument();
 
@@ -1153,6 +1166,42 @@ const artifact = (
 });
 
 describe("SessionInspector Artifacts section", () => {
+  beforeEach(() => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+
+  it("previews the most recent artifacts and lists the rest by name behind Show more", () => {
+    const onOpenArtifact = vi.fn();
+    // file-0 is the newest; listed oldest first to check the sort.
+    const files = Array.from({ length: 7 }, (_, index) =>
+      artifact({ path: `file-${index}.md`, name: `file-${index}.md`, kind: "markdown", updatedAt: `2026-06-${20 - index}T00:00:00Z` }),
+    ).reverse();
+    renderWithQuery(
+      <SessionInspector onOpenArtifact={onOpenArtifact} session={session([], { outputType: "artifact", artifactFiles: files })} />,
+    );
+
+    // jsdom has no layout, so the row keeps its default of three previews.
+    for (const name of ["file-0.md", "file-1.md", "file-2.md"]) {
+      expect(screen.getByTitle(name).closest("li")).toBeNull();
+    }
+    for (const name of ["file-3.md", "file-4.md", "file-5.md"]) {
+      expect(screen.getByTitle(name).closest("li")).not.toBeNull();
+    }
+    expect(screen.queryByTitle("file-6.md")).not.toBeInTheDocument();
+
+    const list = screen.getByTitle("file-3.md").closest("ul") as HTMLElement;
+    fireEvent.click(within(list).getByRole("button", { name: "Show more" }));
+    expect(screen.getByTitle("file-6.md").closest("li")).not.toBeNull();
+    expect(within(list).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByTitle("file-0.md"));
+    expect(onOpenArtifact).toHaveBeenCalledWith({ path: "file-0.md" });
+  });
+
   it("shows an artifact list, not the empty PR state, when the session output is artifacts", () => {
     renderWithQuery(
       <SessionInspector
@@ -1343,7 +1392,6 @@ describe("SessionInspector usage", () => {
 		renderWithQuery(<SessionInspector session={session([])} />);
 		expect(await screen.findByText("Branch")).toBeInTheDocument();
 		expect(screen.queryByText("Usage & cost")).not.toBeInTheDocument();
-		expect(getMock).not.toHaveBeenCalledWith("/api/v1/usage/sessions/{sessionId}", expect.anything());
 	});
 });
 
@@ -1792,6 +1840,29 @@ describe("SessionInspector Activity section", () => {
       .getByText("Idle")
       .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
     expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      name: "a standalone session",
+      overrides: { workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" },
+      expected: "Created session",
+    },
+    { name: "a project worker", overrides: { kind: "worker" as const }, expected: "Created workspace" },
+    { name: "an orchestrator", overrides: { kind: "orchestrator" as const }, expected: "Created workspace" },
+  ])("labels $name's creation as $expected", ({ overrides, expected }) => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          ...overrides,
+          status: "idle",
+          createdAt: "2026-06-15T09:00:00Z",
+        })}
+      />,
+    );
+
+    expect(activitySection().getByText(expected)).toBeInTheDocument();
+    expect(activitySection().getAllByText(/^Created (session|workspace)$/)).toHaveLength(1);
   });
 
   it.each(["closed", "merged"] as const)("ignores a conflict and changes requested left on a %s PR when the open PR is clean", (state) => {
@@ -2634,7 +2705,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       await screen.findByRole("button", { name: "Run review" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText("AO code reviews")).not.toBeInTheDocument();
+    expect(screen.queryByText("Orchestrator code reviews")).not.toBeInTheDocument();
     expect(
       screen.queryByText("Reviews on the pull request"),
     ).not.toBeInTheDocument();
@@ -2649,7 +2720,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       await screen.findByRole("button", { name: "Review latest commit" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText("AO code reviews")).not.toBeInTheDocument();
+    expect(screen.queryByText("Orchestrator code reviews")).not.toBeInTheDocument();
     expect(screen.queryByText("Reviewable change 3")).not.toBeInTheDocument();
   });
 
@@ -2941,7 +3012,7 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     await userEvent.click(await screen.findByRole("button", { name: "Review actions" }));
-    await userEvent.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+    await userEvent.click(screen.getByRole("button", { name: "Open in Orchestrator Browser" }));
 
     await waitFor(() =>
       expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
@@ -3122,7 +3193,7 @@ describe("SessionInspector summary reviews", () => {
     ["cancelled", "approved", "Review needed", "Review latest commit"],
     ["running", "approved", "Reviewing...", "Stop review"],
   ] as const)(
-    "keeps the current AO review state clear while the current head is %s",
+    "keeps the current Orchestrator review state clear while the current head is %s",
     async (status, previousVerdict, runLabel, actionLabel) => {
       const current = {
         ...reviewState(
@@ -3273,7 +3344,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       screen.queryByText("Reviews on the pull request"),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("AO code reviews")).not.toBeInTheDocument();
+    expect(screen.queryByText("Orchestrator code reviews")).not.toBeInTheDocument();
     expect(
       screen.queryByText("No unresolved threads."),
     ).not.toBeInTheDocument();

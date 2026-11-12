@@ -179,7 +179,7 @@ function RestartToUpdateDialogBody() {
 				</div>
 
 				<div className={cn(settingsDialogBodyClass, "gap-3 pt-4")}>
-					{(workspace.isError || !workspace.data) && <p role="status">{t("update.restart.unknownWorkers", { defaultValue: "Current worker state could not be confirmed. Installing restarts AO and may interrupt current tasks." })}</p>}
+					{(workspace.isError || !workspace.data) && <p role="status">{t("update.restart.unknownWorkers", { defaultValue: "Current worker state could not be confirmed. Installing restarts Orchestrator and may interrupt current tasks." })}</p>}
 					{atRisk.length > 0 && (
 						<div
 							className="rounded-md border border-warning/30 bg-warning/8 px-3 py-2.5"

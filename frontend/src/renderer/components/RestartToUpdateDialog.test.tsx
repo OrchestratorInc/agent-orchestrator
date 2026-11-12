@@ -2,13 +2,15 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { RestartToUpdateDialog } from "./RestartToUpdateDialog";
+import { AppBrowserLinkContext } from "./AppLink";
 import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 import type { UpdateStatus } from "../../main/update-settings";
 import { appI18n } from "../i18n";
 
-const { updInstall, updRelaunch, updGetStatus, updOnStatus, workspaceData } = vi.hoisted(() => ({
+const { updInstall, updRelaunch, updGetStatus, updOnStatus, openExternal, workspaceData } = vi.hoisted(() => ({
 	updInstall: vi.fn(),
+	openExternal: vi.fn(),
 	updRelaunch: vi.fn(),
 	updGetStatus: vi.fn(),
 	updOnStatus: vi.fn(),
@@ -16,7 +18,10 @@ const { updInstall, updRelaunch, updGetStatus, updOnStatus, workspaceData } = vi
 }));
 
 vi.mock("../lib/bridge", () => ({
-	aoBridge: { updates: { getStatus: updGetStatus, install: updInstall, relaunch: updRelaunch, onStatus: updOnStatus } },
+	aoBridge: {
+		app: { openExternal },
+		updates: { getStatus: updGetStatus, install: updInstall, relaunch: updRelaunch, onStatus: updOnStatus },
+	},
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: workspaceData.current }),
@@ -44,7 +49,8 @@ function renderDialog(status: UpdateStatus) {
 }
 
 beforeEach(() => {
-	for (const m of [updInstall, updRelaunch, updGetStatus, updOnStatus]) m.mockReset();
+	for (const m of [updInstall, updRelaunch, updGetStatus, updOnStatus, openExternal]) m.mockReset();
+	openExternal.mockResolvedValue(undefined);
 	updOnStatus.mockReturnValue(() => undefined);
 	workspaceData.current = [];
 	useUiStore.setState({ updateInstallPromptOpen: false });
@@ -70,7 +76,7 @@ it("shows what the build changes", async () => {
 		new Date(Date.UTC(2026, 8, 2, 17, 13)),
 	);
 	expect(screen.getByText(`Nightly 0.12.11 · ${expected}`)).toBeVisible();
-	expect(screen.queryByText(/Leave AO closed until it reopens/)).toBeNull();
+	expect(screen.queryByText(/Leave Orchestrator closed until it reopens/)).toBeNull();
 });
 
 it("shows stable notes without contributor handles and retains linked PR numbers", async () => {
@@ -164,6 +170,43 @@ it("links the generated nightly comparison without allowing arbitrary compare UR
 
 	expect(await screen.findByRole("link", { name: "full comparison" })).toHaveAttribute("href", comparisonUrl);
 	expect(screen.queryByRole("link", { name: "another comparison" })).toBeNull();
+});
+
+it("opens release-note links in the system browser, never the Orchestrator Browser", async () => {
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	const comparisonUrl = "https://github.com/Untrivial-ai/agent-orchestrator/compare/v0.14.10...v0.14.11-nightly.202611120300";
+	const commitUrl = "https://github.com/Untrivial-ai/agent-orchestrator/commit/4d7c9cf";
+	const openInAo = vi.fn();
+	updGetStatus.mockResolvedValue({
+		state: "downloaded",
+		version: "0.14.11-nightly.202611120300",
+		releaseNotes: [
+			"**Changes in this nightly**",
+			"",
+			`- 2 more linked changes are included in the [full comparison](${comparisonUrl}).`,
+			"",
+			"**Build details**",
+			"",
+			`- Commit: [4d7c9cf](${commitUrl})`,
+		].join("\n"),
+	});
+	render(
+		<TooltipProvider>
+			<AppBrowserLinkContext.Provider value={openInAo}>
+				<RestartToUpdateDialog />
+			</AppBrowserLinkContext.Provider>
+		</TooltipProvider>,
+	);
+
+	const comparison = await screen.findByRole("link", { name: "full comparison" });
+	expect(fireEvent.click(comparison)).toBe(false);
+	expect(fireEvent.click(screen.getByRole("link", { name: "4d7c9cf" }), { metaKey: true })).toBe(false);
+	const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+	fireEvent(comparison, middle);
+	expect(middle.defaultPrevented).toBe(true);
+
+	expect(openExternal.mock.calls).toEqual([[comparisonUrl], [commitUrl], [comparisonUrl]]);
+	expect(openInAo).not.toHaveBeenCalled();
 });
 
 it("renders the nightly build date from the UTC instant", async () => {
@@ -285,7 +328,7 @@ it("shows an inline failure and retries by relaunching AO", async () => {
 	await screen.findByText("Safer updates");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	await act(async () => install.reject(new Error("Error invoking remote method 'updates:install': Error: Couldn't finish preparing the update. Retry to try again.")));
-	expect(screen.getByRole("alert")).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(screen.getByRole("alert")).toHaveTextContent("Orchestrator could not prepare the update. Please try again.");
 	expect(screen.getByRole("alert")).toHaveTextContent("Couldn't finish preparing the update. Retry to try again.");
 	expect(screen.getByRole("alert")).not.toHaveTextContent("Error invoking remote method");
 	expect(screen.getByText("Safer updates")).toBeVisible();
@@ -294,7 +337,7 @@ it("shows an inline failure and retries by relaunching AO", async () => {
 	expect(screen.queryByRole("progressbar")).toBeNull();
 	// The primary action becomes Relaunch AO, and retry restarts AO rather than
 	// re-invoking install() against a Squirrel that cannot be reset in-process.
-	await userEvent.click(screen.getByRole("button", { name: "Relaunch AO" }));
+	await userEvent.click(screen.getByRole("button", { name: "Relaunch Orchestrator" }));
 	expect(updRelaunch).toHaveBeenCalledTimes(1);
 	expect(updInstall).toHaveBeenCalledTimes(1);
 });
@@ -324,7 +367,7 @@ it.each(["before", "after"])("restores install confirmation when native readines
 	if (order === "before") ready();
 	await act(async () => install.reject(new Error("Couldn't finish preparing the update. Relaunch AO to try again.")));
 	if (order === "after") {
-		expect(screen.getByRole("button", { name: "Relaunch AO" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Relaunch Orchestrator" })).toBeVisible();
 		ready();
 	}
 	expect(screen.queryByRole("alert")).toBeNull();
@@ -387,7 +430,7 @@ it("keeps only the heading for overlong recovery details (#5755)", async () => {
 	await screen.findByText("v1.2.3");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	const alert = await screen.findByRole("alert");
-	expect(alert).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(alert).toHaveTextContent("Orchestrator could not prepare the update. Please try again.");
 	expect(alert).not.toHaveTextContent(/Fix folder permissions/);
 	expect(alert.children).toHaveLength(1);
 });
@@ -401,7 +444,7 @@ it("keeps only the heading when the install rejects with an updater dump (#5755)
 	await screen.findByText("v1.2.3");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	const alert = await screen.findByRole("alert");
-	expect(alert).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(alert).toHaveTextContent("Orchestrator could not prepare the update. Please try again.");
 	expect(alert).not.toHaveTextContent(/HttpError|set-cookie/);
 	expect(alert.children).toHaveLength(1);
 });

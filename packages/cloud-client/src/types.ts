@@ -180,6 +180,9 @@ export type ChatApprovalDecisionInput = Schemas["ChatApprovalDecisionInput"];
 export type TurnSteeredEvent = Schemas["TurnSteeredEvent"];
 export type ChatModel = Schemas["ChatModel"];
 export type ChatModelsResponse = Schemas["ChatModelsResponse"];
+export type CloudHarnessVersions = Schemas["CloudHarnessVersions"];
+export type CloudHarnessVersion = Schemas["CloudHarnessVersion"];
+export type CloudHarnessInstallInput = Schemas["CloudHarnessInstallInput"];
 export type WorkerWorkspaceListPayload =
   Schemas["WorkerWorkspaceListPayload"];
 export type WorkerWorkspaceReadPayload =

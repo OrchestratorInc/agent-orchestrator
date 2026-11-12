@@ -197,8 +197,8 @@ describe("checkRender", () => {
 		const result = await checkRender(f as never, { url: url.replace("127.0.0.1", "localhost"), width: 390 });
 		expect(allowRenderPage).toHaveBeenLastCalledWith("localhost", 3001, expect.any(Function));
 		expect(result.consoleMessages).toEqual([
-			{ level: "warning", text: "AO blocked a request to 192.168.1.1:80. A render check loads only public addresses." },
-			{ level: "warning", text: "AO blocked a request to [::1]:22. A render check loads only public addresses." },
+			{ level: "warning", text: "Orchestrator blocked a request to 192.168.1.1:80. A render check loads only public addresses." },
+			{ level: "warning", text: "Orchestrator blocked a request to [::1]:22. A render check loads only public addresses." },
 			{ level: "error", text: "Uncaught ReferenceError: d3 is not defined" },
 		]);
 	});
@@ -211,7 +211,7 @@ describe("checkRender", () => {
 		expect(f.cancelled).toEqual({ [url]: false, [linkPreview]: true, "https://cdn.example/d3.js": false });
 		expect(result.consoleMessages[0]).toEqual({
 			level: "warning",
-			text: "AO blocked a request to 127.0.0.1:3001/api/v1/link-preview. The agent has no network access, so the check loads no network resources.",
+			text: "Orchestrator blocked a request to 127.0.0.1:3001/api/v1/link-preview. The agent has no network access, so the check loads no network resources.",
 		});
 	});
 
@@ -311,7 +311,7 @@ describe("checkRender", () => {
 		expect(f.contents.session.setProxy).toHaveBeenCalledWith({ proxyRules: "socks5://127.0.0.1:1081", proxyBypassRules: "<-loopback>" });
 		expect(result.consoleMessages[0]).toEqual({
 			level: "warning",
-			text: "AO blocked a request to example.com:443. The agent has no network access, so the check loads no network resources.",
+			text: "Orchestrator blocked a request to example.com:443. The agent has no network access, so the check loads no network resources.",
 		});
 		await expect(checkRender(fakes() as never, { url, width: 390, network: "lan" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
 	});

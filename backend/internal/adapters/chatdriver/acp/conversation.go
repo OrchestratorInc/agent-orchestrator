@@ -145,15 +145,26 @@ type conversation struct {
 	turnCtx context.Context
 	// promptSeq numbers the running turn's prompts: 0 started it and each
 	// SteerPrompt steer adds one. outstanding holds those still running; the
-	// turn settles when the last of them returns.
+	// turn settles once every one of them has returned.
 	promptSeq   int
 	outstanding map[int]bool
+	// adoptedPrompt means the running turn's prompt was sent by an earlier
+	// daemon attachment (live reconnect). The host passes its answers on as
+	// private notifications, and only the host's result ends the turn.
+	adoptedPrompt bool
+	// turnResult is the host's result for the running turn, the answer that
+	// carries its receipt, once one of the turn's prompts has returned it.
+	turnResult *promptAnswer
 	// promptSteers are SteerPrompt steers waiting to learn whether they took.
 	promptSteers []*promptSteer
 	// steerSettledTurn is the last turn a steer prompt settled. An earlier
 	// prompt of that turn answering late is dropped, not a second completion.
 	steerSettledTurn string
-	legacyModel      bool
+	// promptReturned, when set by a test, runs as each of the turn's prompts
+	// returns and before its answer is routed, to fix the order in which
+	// overlapping answers are handled.
+	promptReturned func(seq int)
+	legacyModel    bool
 	// The agent lists model among its own config options, as well as the older model list.
 	modelConfigOption  bool
 	legacyMode         bool
@@ -214,6 +225,8 @@ type conversation struct {
 	compactionSummary string
 	compactionFailure string
 	compactedTurn     string
+
+	claudeRejectedLimits map[string]time.Time
 
 	eventMu      sync.RWMutex
 	events       chan ports.ChatEvent
@@ -492,6 +505,16 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 	c.mu.Lock()
 	if durableBusy {
 		c.activeTurn = providerTurnID
+		if c.liveState.ActivePrompt && c.liveState.PendingResultEventID == "" {
+			// The host still runs the turn's prompt, so a steer prompt can join
+			// it. Its answers reach this attachment as the host's notifications.
+			turnCtx, cancel := context.WithCancel(context.Background())
+			c.turnCtx, c.turnCancel = turnCtx, cancel
+			c.settlingTurn = ""
+			c.resetPromptSteeringLocked()
+			c.outstanding = map[int]bool{}
+			c.adoptedPrompt = true
+		}
 		if c.liveState.ActiveCompaction {
 			c.compactingTurnID = providerTurnID
 			c.compactionBefore = c.contextTokens
@@ -793,9 +816,8 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
 	c.turnCtx = turnCtx
-	c.promptSeq = 0
+	c.resetPromptSteeringLocked()
 	c.outstanding = map[int]bool{0: true}
-	c.promptSteers = nil
 	sessionID := c.sessionID
 	c.messages = make(map[string]string)
 	c.steerSegment = 0
@@ -829,6 +851,9 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 		Prompt:    turn.prompt,
 	})
 
+	if c.promptReturned != nil {
+		c.promptReturned(0)
+	}
 	c.finishTurnPrompt(turn.id, 0, resp, err)
 }
 
@@ -872,13 +897,7 @@ func (c *conversation) finishPrompt(
 	resp acpsdk.PromptResponse,
 	err error,
 ) {
-	eventID, _ := resp.Meta[persistenthost.ACPEventIDMetaKey].(string)
-	var requestErr *acpsdk.RequestError
-	if eventID == "" && errors.As(err, &requestErr) {
-		if data, ok := requestErr.Data.(map[string]any); ok {
-			eventID, _ = data[persistenthost.ACPEventIDMetaKey].(string)
-		}
-	}
+	eventID := hostResultEventID(resp, err)
 	// A transport error may win the race with watchConnection. The host still
 	// owns this prompt; its journal, not an SDK disconnect, supplies the outcome.
 	if err != nil && eventID == "" && c.providerDetaching() {
@@ -964,6 +983,10 @@ func (c *conversation) finishPrompt(
 			}})
 		}
 	}
+	var usageLimitResetsAt time.Time
+	if turnErr != nil && domain.ParseConversationUsageLimit(turnErr.Error(), nil) != nil {
+		usageLimitResetsAt, _ = c.claudeUsageLimitReset(time.Now())
+	}
 	if errors.Is(turnErr, ports.ErrChatAuthRequired) {
 		// The provider has just contradicted whatever the readiness cache holds.
 		// Correct it for both request errors and structured prompt failures.
@@ -1018,6 +1041,7 @@ func (c *conversation) finishPrompt(
 	c.emit(ports.ChatEvent{
 		Kind: ports.ChatEventTurnCompleted, ProviderEventID: eventID,
 		ProviderTurnID: turnID, TurnState: state, FailureCode: failureCode, Err: turnErr,
+		UsageLimitResetsAt: usageLimitResetsAt,
 	})
 	// Release the turn before announcing readiness, not after. A consumer that
 	// reacts to ChatControllerReady by sending the next turn — AO's own queue
@@ -1030,12 +1054,7 @@ func (c *conversation) finishPrompt(
 		c.settlingTurn = ""
 		c.turnCancel = nil
 		c.turnCtx = nil
-		c.promptSeq = 0
-		c.outstanding = nil
-		for _, w := range c.promptSteers {
-			w.settle(nil)
-		}
-		c.promptSteers = nil
+		c.resetPromptSteeringLocked()
 		c.providerFailure = nil
 		if c.interrupt == interrupt {
 			c.interrupt = nil

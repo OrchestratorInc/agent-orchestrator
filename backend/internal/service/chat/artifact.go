@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
@@ -37,7 +36,7 @@ func (s *Service) recordReportedArtifact(ctx context.Context, id domain.SessionI
 		return err
 	}
 	dir := cmp.Or(record.Metadata.ArtifactDir, sessionartifacts.Dir(s.dataDir, id))
-	rel, ok := artifactRelPath(dir, reference)
+	rel, ok := sessionartifacts.RelPath(dir, reference)
 	if !ok {
 		return errors.New("not in the session's artifact directory")
 	}
@@ -59,25 +58,6 @@ func (s *Service) recordReportedArtifact(ctx context.Context, id domain.SessionI
 	// entry.Path is the cleaned path the route serves, so the row and the
 	// served file always name the same page.
 	return controller.recordArtifact(ctx, entry.Path)
-}
-
-// artifactRelPath is reference as a slash-separated path inside dir: an
-// absolute path under dir, or a path relative to it, once cleaned.
-func artifactRelPath(dir, reference string) (string, bool) {
-	if dir == "" {
-		return "", false
-	}
-	rel := filepath.Clean(reference)
-	if filepath.IsAbs(rel) {
-		var err error
-		if rel, err = filepath.Rel(filepath.Clean(dir), rel); err != nil {
-			return "", false
-		}
-	}
-	if !filepath.IsLocal(rel) {
-		return "", false
-	}
-	return filepath.ToSlash(rel), true
 }
 
 // recordArtifact shows a reported HTML artifact in the turn in flight, as a

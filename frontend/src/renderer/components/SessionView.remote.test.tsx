@@ -206,8 +206,8 @@ it("locks the last saved chat when the upstream daemon fails but its proxy remai
 });
 
 it.each([
-	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "Host rejected the password"],
-	[426, { error: "incompatible", code: "HOST_API_INCOMPATIBLE" }, "AO versions are incompatible"],
+	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "The host rejected this device"],
+	[426, { error: "incompatible", code: "HOST_API_INCOMPATIBLE" }, "Orchestrator versions are incompatible"],
 	[502, { error: "unavailable", code: "HOST_IDENTITY_UNVERIFIED", message: "Host identity changed" }, "Host is offline"],
 ])("explains remote session HTTP %i failures while its proxy is still connected", async (status, body, message) => {
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -451,7 +451,7 @@ it("automatically reveals a remote preview after session data finishes loading",
 	});
 	const navigate = vi.spyOn(window.ao!.browser, "navigate").mockImplementation(async ({ viewId, url }) => {
 		emitTabs?.({ viewId, activeTabId: "t1", tabs: [{ id: "t1", url, title: "QA preview", active: true }] });
-		return { viewId, url, title: "AO preview", canGoBack: false, canGoForward: false, isLoading: false };
+		return { viewId, url, title: "Orchestrator preview", canGoBack: false, canGoForward: false, isLoading: false };
 	});
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const path = new URL(input instanceof Request ? input.url : String(input)).pathname;

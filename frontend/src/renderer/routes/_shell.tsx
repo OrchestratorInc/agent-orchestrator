@@ -1,5 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
+import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
@@ -10,6 +11,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
+import { useLatestCallback } from "../hooks/useStable";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
@@ -18,6 +20,7 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
+import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
@@ -27,6 +30,7 @@ import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
+import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
@@ -72,8 +76,9 @@ import {
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
-import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
+import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { useHeldSession } from "../hooks/useHeldSession";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -84,6 +89,8 @@ import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to
 import { sessionUiKey } from "../lib/hosts";
 import { pageHasTopbar } from "../lib/shell-topbar";
 import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
+import { watchRemoteUnpins } from "../lib/remote-session-unpins";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
@@ -98,6 +105,8 @@ const loadOrchestratorStartingChat = () => import("../components/chat/Orchestrat
 const OrchestratorStartingChat = lazy(() =>
 	loadOrchestratorStartingChat().then((module) => ({ default: module.OrchestratorStartingChat })),
 );
+
+const EMPTY_PAUSE_PROJECTS: never[] = [];
 function preloadOrchestratorStartingChat(): void {
 	void loadOrchestratorStartingChat().catch(() => undefined);
 }
@@ -198,13 +207,18 @@ function LocalSessionHost() {
 		select: (match) => match.params,
 	});
 	const { org } = useCloudOrg();
-	const sessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const cloudOrgId = org?.id;
+	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const liveProjectId = projectSession?.projectId;
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	const view = useMemo(
+		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
+		[cloudOrgId, projectId, sessionId],
+	);
 	if (!sessionId) return null;
 	return (
 		<CatchBoundary errorComponent={LazyChunkErrorPanel} getResetKey={() => sessionId} onCatch={captureSessionViewCrash}>
-			<Suspense fallback={null}>
-				<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
-			</Suspense>
+			<Suspense fallback={null}>{view}</Suspense>
 		</CatchBoundary>
 	);
 }
@@ -306,6 +320,7 @@ const ShellCenter = memo(function ShellCenter({
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
+	useSetupCheckedTelemetry();
 	useSessionSwitchSnap();
 	useLinkThisComputerOnSignIn();
 	const { t } = useTranslation();
@@ -326,13 +341,19 @@ function ShellLayout() {
 	// What each host showed last stays only for the hosts still saved, and shows
 	// while they connect or are offline.
 	useEffect(() => {
-		if (remoteHostsListed) void syncRemoteCache(queryClient, remoteHostIds);
+		if (!remoteHostsListed) return;
+		void syncRemoteCache(queryClient, remoteHostIds);
+		// Pins removed here for a host that is no longer saved have no row left to hide.
+		useRemoteUnpinStore.getState().keepHosts(remoteHostIds);
 	}, [queryClient, remoteHostIds, remoteHostsListed]);
+	// Pins removed here while a host was unreachable reach it once its list loads.
+	useEffect(() => watchRemoteUnpins(queryClient), [queryClient]);
 	const refusedRemoteHostKey = remoteHosts.filter((host) => host.failureReason === "unauthorized").map((host) => host.hostId).join("\0");
 	useEffect(() => {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
 	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
 	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
 	useEffect(() => {
 		if (failedRemoteHostKey) void refreshRemoteHosts();
@@ -705,6 +726,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					projectId: workspace.id,
 					kind: "orchestrator",
 					harness: input.orchestratorAgent as components["schemas"]["SpawnSessionRequest"]["harness"],
+					// The daemon already starts orchestrators in the background; say so
+					// explicitly, as the CLI does, so the request never holds a Setup.
+					async: true,
 				},
 			});
 			if (spawnError || !spawnData?.session?.id) {
@@ -713,7 +737,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					: `Failed to spawn orchestrator (${spawnResponse.status})`;
 				throw new Error(message);
 			}
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", {
+			void captureRendererEvent("ao.orchestrators.spawned", {
 				project_id: workspace.id,
 				source,
 			});
@@ -741,7 +765,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", {
+			void captureRendererEvent("ao.orchestrators.spawn_failed", {
 				project_id: workspace.id,
 				source,
 			});
@@ -769,7 +793,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				orchestratorAgent: input.orchestratorAgent as WorkspaceSummary["orchestratorAgent"],
 				sessions: [],
 			};
-			void captureRendererEvent(`ao.renderer.${source}_succeeded`, { project_id: workspace.id });
+			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			useSidebarOrderStore.getState().moveProjectToTop(workspace.id);
@@ -803,7 +827,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
-				throw new Error(status.message || "AO daemon is not ready.");
+				throw new Error(status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
 				body: {
@@ -894,12 +918,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				surface: "project_board",
 			});
 			const reportFailure = (code: string | undefined) => {
-				void captureRendererEvent("ao.renderer.project_clone_failed", { error_code: code || "unknown" });
+				void captureRendererEvent("ao.projects.clone_failed", { error_code: code || "unknown" });
 			};
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
-				throw new Error(status.message || "AO daemon is not ready.");
+				throw new Error(status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects/clone", {
 				signal: input.signal,
@@ -1051,7 +1075,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					});
 					throw failure;
 				}
-				void captureRendererEvent("ao.renderer.project_removed", { project_id: projectId });
+				void captureRendererEvent("ao.projects.removed", { project_id: projectId });
 				// The archive is asynchronous (202); refresh the cloud queries so the
 				// merged board drops the project and its sessions on the next fetch.
 				await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
@@ -1075,7 +1099,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				});
 				throw failure;
 			}
-			void captureRendererEvent("ao.renderer.project_removed", { project_id: projectId });
+			void captureRendererEvent("ao.projects.removed", { project_id: projectId });
 			updateWorkspaces((current) => current.filter((item) => item.id !== projectId));
 			if (isLastWorkspace) {
               void navigate({ to: "/" });
@@ -1120,6 +1144,28 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			showGlobalToast(t("shell.couldNotSpawn"), message, "error");
 		}
 	}, [navigate, openProjectSettings, queryClient, remoteWorkspaces, setOrchestratorStartupError, showGlobalToast, t]);
+	// The sidebar is memoized, and the shell re-renders several times per route
+	// change. Handlers that keep their identity let those renders skip it.
+	const openRemoteProjectFromSidebar = useCallback((hostId: string, projectId: string) => {
+		void navigate(projectNavigateTarget(projectId, hostId));
+	}, [navigate]);
+	const openRemoteOrchestratorFromSidebar = useLatestCallback((hostId: string, projectId: string) => {
+		void openRemoteProjectOrchestrator(hostId, projectId);
+	});
+	const configureRemoteProjectFromSidebar = useCallback(
+		(hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
+		[openProjectSettings],
+	);
+	const removeRemoteProjectFromSidebar = useLatestCallback(removeRemoteProject);
+	const retryRemoteHosts = useCallback(() => {
+		void refreshRemoteHosts();
+		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
+	}, [queryClient, refreshRemoteHosts]);
+	// A new handler on every shell render would rebuild the sidebar context and
+	// re-render every row button that reads it.
+	const handleSidebarOpenChange = useCallback((open: boolean) => {
+		if (open !== isSidebarOpen) toggleSidebar();
+	}, [isSidebarOpen, toggleSidebar]);
 
 	const restartOrchestrator = useCallback(
 		async (projectId: string, mode?: "chat" | "tui", approvalMode?: "bypass-permissions") => {
@@ -1161,6 +1207,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					body: { enabled: developerMode },
 				});
 				if (error) throw error;
+				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
+					body: { enabled: developerMode },
+				});
+				if (limitHistoryError) throw limitHistoryError;
 			}).catch(() => {
 				if (!cancelled) retry = setTimeout(sync, 5_000);
 			});
@@ -1485,8 +1535,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					</div>
 				) : null}
 				<NewTaskNavigator />
+				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
+				<SessionImportDialog />
 				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
@@ -1524,9 +1576,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<SidebarProvider
 					className="min-h-0 flex-1 flex-col overflow-x-hidden"
 					keyboardShortcut={false}
-					onOpenChange={(open) => {
-						if (open !== isSidebarOpen) toggleSidebar();
-					}}
+					onOpenChange={handleSidebarOpenChange}
 					open={!isStartupLoading && isSidebarOpen}
 					style={
 						{
@@ -1555,14 +1605,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						remoteHosts={remoteHosts}
 						onCreateRemoteProject={createRemoteProject}
 						onInitializeRemoteProject={initializeRemoteProject}
-						onOpenRemoteProject={(hostId, projectId) => { void navigate(projectNavigateTarget(projectId, hostId)); }}
-						onOpenRemoteOrchestrator={(hostId, projectId) => { void openRemoteProjectOrchestrator(hostId, projectId); }}
-						onConfigureRemoteProject={(hostId, projectId) => openProjectSettings(projectId, hostId)}
-						onRemoveRemoteProject={removeRemoteProject}
-						onRetryRemoteHosts={() => {
-							void refreshRemoteHosts();
-							void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
-						}}
+						onOpenRemoteProject={openRemoteProjectFromSidebar}
+						onOpenRemoteOrchestrator={openRemoteOrchestratorFromSidebar}
+						onConfigureRemoteProject={configureRemoteProjectFromSidebar}
+						onRemoveRemoteProject={removeRemoteProjectFromSidebar}
+						onRetryRemoteHosts={retryRemoteHosts}
 						remoteWorkspaces={remoteWorkspaces}
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>

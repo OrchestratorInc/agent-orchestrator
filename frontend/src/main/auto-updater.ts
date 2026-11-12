@@ -1,4 +1,5 @@
 import { autoUpdater as stockAutoUpdater } from "electron-updater";
+import { StableGitHubProvider } from "./stable-github-provider";
 import { MacDifferentialV2Updater } from "./mac-differential-v2-updater";
 import macV2TrustedKeys from "../../scripts/mac-differential-v2-trust.json";
 import macDifferentialRollout from "../../scripts/mac-differential-rollout.json";
@@ -8,7 +9,7 @@ import { startMacUpdateProgress } from "./mac-update-progress";
 import { markUpdateRelaunch } from "./update-relaunch-flag";
 import { createUpdateDiagnostics } from "./update-diagnostics";
 import { accessSync, constants as fsConstants, existsSync, lstatSync, readFileSync, readdirSync, statfsSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import semver from "semver";
@@ -164,10 +165,8 @@ async function reconcileAndPersist(
 }
 
 // configureFeed sets the update channel on electron-updater. The repo/owner
-// are loaded automatically from app-update.yml (written by forge.config.ts's
-// postPackage hook into the app's Resources dir at build time). No runtime env
-// or setFeedURL call is needed; electron-updater reads the bundled yml on first
-// checkForUpdates.
+// come from app-update.yml, written by forge.config.ts at build time. Stable
+// uses the same GitHub download discovery with an exact-tag release-notes lookup.
 //
 // When settings.feature is set, the feed tracks the pr<N> prerelease channel
 // (e.g. "pr2270") with allowPrerelease enabled. Otherwise it uses the home
@@ -176,6 +175,16 @@ async function reconcileAndPersist(
 export function configureFeed(
   settings: Pick<UpdateSettings, "channel" | "feature">,
 ): void {
+  if (settings.channel === "latest" && !settings.feature) {
+    directFeedReleaseNotes = undefined;
+    directFeedDiscoveredAvailable = undefined;
+  }
+  const coordinates = readAppUpdateYml();
+  if (coordinates) {
+    autoUpdater.setFeedURL(settings.channel === "latest" && !settings.feature
+      ? { provider: "custom", updateProvider: StableGitHubProvider, ...coordinates }
+      : { provider: "github", ...coordinates });
+  }
   if (settings.feature !== null && settings.feature !== undefined) {
     // Feature build: pin to the pr<N> semver prerelease identifier channel.
     autoUpdater.channel = `pr${settings.feature.pr}`;
@@ -249,7 +258,7 @@ function requiredFreeBytesToStage(archiveBytes: number | undefined): number {
   return Math.min(STAGE_FREE_BYTES_CAP, Math.max(STAGE_FREE_BYTES_FLOOR, derived));
 }
 // Short user-facing lines; the raw ditto/pkzip/codesign detail is logged, not shown.
-const STAGE_STALL_MESSAGE = "Couldn't finish preparing the update. AO stayed open. Relaunch AO to try again.";
+const STAGE_STALL_MESSAGE = "Couldn't finish preparing the update. Orchestrator stayed open. Relaunch Orchestrator to try again.";
 const STAGE_DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then try again.";
 let nativePreparationBlocked: Error | undefined;
 // A stage refused by the disk preflight. Unlike a stall nothing reached
@@ -536,7 +545,7 @@ function nativeStagingWasLost(): boolean {
 function discardLostNativeStaging(): boolean {
   if (!nativeStagingWasLost()) return false;
   recordUpdateDiagnostic("native-staging-lost", { version: stagedVersion });
-  const failure = new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
+  const failure = new Error("The staged update files are missing. Orchestrator is checking for a fresh update. Confirm installation again when it is ready.");
   const restartWasRequested = updateRestartRequested;
   discardStagedBuild();
   updateRestartRequested = false;
@@ -859,12 +868,10 @@ function broadcastCompletedCheck(
 // (see issue #2270 for why this path must not broadcast errors).
 
 /** Owner/repo from the bundled app-update.yml; undefined in dev or on any failure. */
-async function readAppUpdateYml(): Promise<
-  { owner: string; repo: string } | undefined
-> {
+function readAppUpdateYml(): { owner: string; repo: string } | undefined {
   if (!app.isPackaged) return undefined;
   try {
-    const yml = await readFile(
+    const yml = readFileSync(
       path.join(process.resourcesPath, "app-update.yml"),
       "utf8",
     );
@@ -1009,7 +1016,9 @@ async function configureDirectPrereleaseFeed(
     (semver.valid(runningVersion) === null || semver.gt(tag, runningVersion))
   ) {
     directFeedDiscoveredAvailable = {
-      version: tag,
+      // Release tags carry a "v" prefix; status versions are bare (electron-updater's
+      // info.version), and every label adds its own "v".
+      version: semver.valid(tag)!,
       ...(directFeedReleaseNotes !== undefined ? { notes: directFeedReleaseNotes } : {}),
     };
   }
@@ -1249,7 +1258,7 @@ function unavailableChannelStatus(version?: string): UpdateStatus {
       semver.lt(version, app.getVersion())) {
     return {
       state: "unsupported",
-      message: "This channel's latest release is older than the installed build. AO will switch when a newer release is available.",
+      message: "This channel's latest release is older than the installed build. Orchestrator will switch when a newer release is available.",
     };
   }
   return { state: "not-available" };
@@ -2187,7 +2196,7 @@ function wireUpdaterEvents(): void {
     clearDownloadStallWatchdog();
     downloadStalled = false;
     emitUpdateOutcome({
-      event: "ao.renderer.update_downloaded",
+      event: "ao.updates.downloaded",
       phase: "download",
       trigger: activeUpdateTrigger(),
       ...(info?.version ? { to_version: info.version } : {}),
@@ -2355,11 +2364,11 @@ function wireUpdaterEvents(): void {
           message:
             exhausted
               ? "Couldn't install the update — the copy failed verification twice. " +
-                "AO has discarded the download and stopped retrying on its own. Check " +
+                "Orchestrator has discarded the download and stopped retrying on its own. Check " +
                 "for updates again to start a fresh one, or download the latest build " +
                 "manually and install it over this one."
               : "Couldn't install the update — the downloaded copy failed verification. " +
-                "AO will prepare it again on the next check.",
+                "Orchestrator will prepare it again on the next check.",
         }),
       );
       return;
@@ -2520,8 +2529,7 @@ async function runAutomaticUpdateCheck(
         staleStaged || (hasStagedBuild() && !isNativeInstallReady()) ||
         (settings.enabled && !hasStagedBuild() && !automaticRecoveryExhausted()));
       applyInstallOnQuitPolicy();
-      // Only prerelease channels resolve a direct feed. Skipping the await on
-      // stable keeps that check's event ordering exactly as it was.
+      // Stable configuration is synchronous so check events retain their ordering.
       const restoreFeed = directPrereleaseChannel(settings)
         ? await configureDirectPrereleaseFeed(settings)
         : undefined;
@@ -3094,7 +3102,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
   }
   if (discardLostNativeStaging()) {
     if (escalationStateDir) void runAutomaticUpdateCheck(escalationStateDir);
-    throw new Error("The staged update files are missing. AO is checking for a fresh update. Confirm installation again when it is ready.");
+    throw new Error("The staged update files are missing. Orchestrator is checking for a fresh update. Confirm installation again when it is ready.");
   }
   if (macRestartPreparation) return macRestartPreparation;
   let confirmation: UpdateInstallResult;
@@ -3154,7 +3162,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       assertInstallActive();
       recordUpdateDiagnostic("quit-and-install", { version });
       autoUpdater.quitAndInstall(false, true);
-      if (!updateRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
+      if (!updateRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart Orchestrator.");
     } catch (err) {
       if (installAbandoned) {
         await progress?.fail(userFacingUpdateError(err, "install")).catch(() => undefined);

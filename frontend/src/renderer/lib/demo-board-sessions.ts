@@ -49,7 +49,7 @@ export function demoBoardSessions(workspaceId: string): WorkspaceSession[] {
 		{
 			...base,
 			branch: "ao/demo-review",
-			displayStatus: "Needs human review",
+			displayStatus: "Awaiting review",
 			id: "demo-needs-review",
 			kanbanColumn: "needs_review",
 			prs: [
