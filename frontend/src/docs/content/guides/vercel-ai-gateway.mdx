@@ -42,39 +42,49 @@ The variables reach every new session in the project: worker and orchestrator se
 
 ## Codex
 
-<Steps>
-<Step>
+Codex reads its model provider from a `config.toml` file, and `model_provider` in that file applies to every Codex session that reads it. Choose where the gateway applies.
 
-### Add a gateway provider to Codex
+### One project only
 
-Codex reads its provider from `~/.codex/config.toml`. Add:
+Give the project its own Codex settings folder, so only its sessions use the gateway:
 
-```toml
-model_provider = "vercel"
-model = "openai/gpt-6-astra"
+1. Create a folder, for example `/Users/you/.codex-vercel`, and in it a `config.toml` with:
 
-[model_providers.vercel]
-name = "Vercel AI Gateway"
-base_url = "https://ai-gateway.vercel.sh/codex/v1"
-env_key = "AI_GATEWAY_API_KEY"
-wire_api = "responses"
-```
+   ```toml
+   model_provider = "vercel"
+   model = "openai/gpt-6-astra"
 
-</Step>
-<Step>
+   [model_providers.vercel]
+   name = "Vercel AI Gateway"
+   base_url = "https://ai-gateway.vercel.sh/codex/v1"
+   env_key = "AI_GATEWAY_API_KEY"
+   wire_api = "responses"
+   ```
 
-### Add the key to the project
+2. In the project's **Environment**, add both variables. Use the folder's full path; `~` isn't expanded here.
 
-In the project's **Environment**, add:
+   ```bash
+   CODEX_HOME=/Users/you/.codex-vercel
+   AI_GATEWAY_API_KEY=<your AI Gateway API key>
+   ```
 
-```bash
-AI_GATEWAY_API_KEY=<your AI Gateway API key>
-```
+3. Start a new Codex session in the project.
 
-Then start a new Codex session.
+Codex sessions in other projects and your own terminals keep `~/.codex` and your usual sign-in. The new folder has no Codex sign-in of its own, which is fine: the gateway key authenticates.
 
-</Step>
-</Steps>
+### Every Codex session
+
+1. Add the same `[model_providers.vercel]` block and `model_provider = "vercel"` line to `~/.codex/config.toml`.
+2. Export the key from your shell profile, so every Codex session has it, in Orchestrator and in your own terminals:
+
+   ```bash
+   export AI_GATEWAY_API_KEY="<your AI Gateway API key>"
+   ```
+
+3. Restart the desktop app so it reads the new shell environment, then start a new Codex session.
+
+If the key is set only in one project's **Environment**, Codex sessions elsewhere still use the gateway provider but have no key, and fail to authenticate.
+
 
 For other agents, set the variables from Vercel's page for that agent in the same **Environment** list. Vercel lists them under [coding agents](https://vercel.com/docs/ai-gateway/coding-agents).
 
@@ -90,7 +100,7 @@ Each project has its own environment, so give each project its own AI Gateway ke
 
 - **Values are stored unencrypted** in the local project settings. Anyone who can use the project's sessions, and the agents themselves, can read them. Use a gateway key you can rotate.
 - **Variables set in your shell also work.** The desktop app reads your login shell's environment when it starts, so `export` lines in `~/.zshrc` reach the agents after you restart the app. The project's **Environment** is easier to change and applies to one project only.
-- **Separate agent accounts.** A session that runs on a separate Claude Code account, rather than your computer's own login, clears `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` when they come from your shell. Set them in the project's **Environment** instead. A session on a separate Codex account uses that account's own Codex settings, not `~/.codex/config.toml`.
+- **Separate agent accounts.** A session that runs on a separate Claude Code account, rather than your computer's own login, clears `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` when they come from your shell. Set them in the project's **Environment** instead. A session on a separate Codex account uses that account's own Codex settings folder, which takes the place of `CODEX_HOME` and `~/.codex`.
 
 ## Related
 
