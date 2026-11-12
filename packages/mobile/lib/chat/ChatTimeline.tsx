@@ -78,6 +78,7 @@ import type {
 	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
+	DiffFile,
 	FileChange,
 	MessageFile,
 } from "./types";
@@ -103,6 +104,8 @@ import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
 import { TurnRollbackButton } from "./TurnRollbackButton";
+import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
+import { splitTurnArtifacts } from "../../../shared/artifacts/turn-artifacts";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
 import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -1094,27 +1097,36 @@ function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?
 	const styles = useThemedStyles(makeStyles);
 	const settled = turn.state !== "running" && turn.state !== "queued";
 	const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
+	// The deliverables the turn made show as cards; every other changed file
+	// stays in the changed-files card, so nothing shows twice (the desktop's TurnResults).
+	const source = useTurnArtifactSource();
+	const split = useMemo(
+		() => splitTurnArtifacts(turn.diff?.files, source?.sessionId, source?.artifacts, undefined, turn.artifacts),
+		[source?.artifacts, source?.sessionId, turn.artifacts, turn.diff?.files],
+	);
+	// Cards are a settled result, as on desktop: a completed turn's.
+	const cards = source && turn.state === "completed" ? split.artifacts : [];
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
-	if (!plan && !turn.diff?.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
+	if (!plan && !cards.length && !split.files.length && !(onRollback && canRollBack) && !turn.errorMessage) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
-			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
+			{cards.length && source ? <TurnArtifacts artifacts={cards} source={source} /> : null}
+			{split.files.length ? <ChangedFiles turn={turn} changed={split.files} /> : null}
 			{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
 }
 
-function ChangedFiles({ turn }: { turn: ConversationTurn }) {
+function ChangedFiles({ turn, changed }: { turn: ConversationTurn; changed: DiffFile[] }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("row");
 	const reviewFeedback = usePressFeedback("button");
 	const files = useFilesNavigation();
 	const [open, setOpen] = useState(false);
-	const changed = turn.diff?.files ?? [];
 	const additions = changed.reduce((sum, file) => sum + file.additions, 0);
 	const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
 	return <View style={styles.planCard}>

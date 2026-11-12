@@ -19,6 +19,7 @@ import type { ChatConfigOption, ChatImage, ChatResource, MessageFile, TurnSettin
 import { useChatKeyboard } from "../chat/useChatKeyboard";
 import { cloudFilesBackend } from "../files/cloudBackend";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { TurnArtifactsContext, useTurnArtifactSourceFor } from "../chat/TurnArtifacts";
 import { useBackendChangeSummary } from "../files/useChangeSummary";
 import { Frost, FROST_TAIL, frostStops } from "../frost";
 import { haptics } from "../haptics";
@@ -419,6 +420,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		openChanges: () => router.push(filesRoute(sessionId, CLOUD_HOST_ID, title)),
 		openFile: (path, previousPath) => router.push(fileRoute(sessionId, path, CLOUD_HOST_ID, previousPath)),
 	}), [router, sessionId, title]);
+	// The artifacts a turn made, drawn as cards under its reply.
+	const turnArtifacts = useTurnArtifactSourceFor(sessionId, snapshot?.turns, CLOUD_HOST_ID);
 	// git's totals, re-read when a turn reports edits. Only while the sandbox
 	// runs: the read goes to its worker, and would wake a paused one.
 	const lastTurn = snapshot?.turns.at(-1);
@@ -576,6 +579,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 				{CLEAR_HEADER ? null : banners}
 				<View style={styles.conversation}>
 					<FilesNavigationContext.Provider value={filesNavigation}>
+				<TurnArtifactsContext.Provider value={turnArtifacts}>
 					<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession}>
 						<MessageFileSourceContext.Provider value={fileSource}>
 							<ChatTimeline
@@ -597,7 +601,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 							/>
 						</MessageFileSourceContext.Provider>
 					</ChatLinkProvider>
-					</FilesNavigationContext.Provider>
+					</TurnArtifactsContext.Provider>
+				</FilesNavigationContext.Provider>
 					{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (
 						<Frost from="top" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
 					) : null}
