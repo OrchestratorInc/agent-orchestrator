@@ -852,6 +852,21 @@ describe("harness updates on remote hosts", () => {
 		expect(screen.getByRole("article", { name: "Claude Code on my-vm" })).toBeInTheDocument();
 	});
 
+	it("starts this computer's updates from Update all without waiting on a slow remote", async () => {
+		localAdvisory = behind("2.1.291", "2.1.292");
+		const stalled = deferred<unknown>();
+		const get = remote.GET.getMockImplementation()!;
+		// The remote's click-time advisory check hangs until released.
+		remote.GET.mockImplementation((path: string, options?: { params?: { query?: { refresh?: boolean } } }) =>
+			path === "/api/v1/agents/{agent}/update-advisory" && options?.params?.query?.refresh ? stalled.promise : get(path, options));
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ params: { path: { agent: "claude-code" } } })));
+		expect(remote.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+		await act(async () => stalled.resolve({ data: behind("2.4.1", "2.5.0") }));
+		await waitFor(() => expect(remote.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ body: expect.objectContaining({ expectedVersion: "2.5.0" }) })));
+	});
+
 	it("leaves out a remote whose checks fail, keeping this computer's update", async () => {
 		localAdvisory = behind("2.1.291", "2.1.292");
 		remote.POST.mockRejectedValue(new Error("offline"));

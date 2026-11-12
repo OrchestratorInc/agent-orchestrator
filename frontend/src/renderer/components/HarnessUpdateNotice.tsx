@@ -250,11 +250,10 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// computer's updates. A failed background refetch keeps the cached data, so
 	// an update in flight or its failure stays visible: readiness included, a
 	// host is judged on the data it has, never on a later refetch's error.
-	// Within a host, let the
-	// first batch settle so a fast, seldom-used harness cannot jump ahead of the
-	// most-used one; failed lookups don't block the other results. AO Cloud's
-	// answer joins this computer's first batch, so a harness never gains its
-	// cloud target after its entry is up.
+	// Within a host, let the first batch settle so a fast, seldom-used harness
+	// cannot jump ahead of the most-used one; failed lookups don't block the
+	// other results. AO Cloud's answer joins this computer's first batch, so a
+	// harness never gains its cloud target after its entry is up.
 	const settled = hosts.filter((host) => ensured.has(host.hostId) && host.readiness.data && host.authPlans.data && host.installers.data
 		&& !AGENT_OPTIONS.some((id) => host.installed.has(id) && host.advisories.get(id)?.isPending)
 		&& !(isLocal(host.hostId) && cloud.isPending));
@@ -351,11 +350,17 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		for (const target of cloudUpdateAllTargets) void startCloudUpdate(target.agentId, target.details, target.alone);
 		try {
 			// Each notice keeps its existing target/owner recheck and error display.
-			for (const target of targets) {
-				const refused = await startUpdate(target.target, target.advisory, target.methodId);
-				if (refused) skipped.push({ target: target.target, count: refused.count });
-				else started += 1;
-			}
+			// Hosts start side by side, so a slow remote never holds back another
+			// host's updates; within a host they start one after another.
+			const targetsByHost = new Map<HostId, typeof targets>();
+			for (const target of targets) targetsByHost.set(target.target.hostId, [...(targetsByHost.get(target.target.hostId) ?? []), target]);
+			await Promise.all([...targetsByHost.values()].map(async (hostTargets) => {
+				for (const target of hostTargets) {
+					const refused = await startUpdate(target.target, target.advisory, target.methodId);
+					if (refused) skipped.push({ target: target.target, count: refused.count });
+					else started += 1;
+				}
+			}));
 		} finally {
 			updateAllInFlight.current = false;
 			setStartingAll(false);
