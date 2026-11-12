@@ -708,7 +708,7 @@ func (r *Runtime) WatchTerminalForeground(ctx context.Context, handle ports.Runt
 		return fmt.Errorf("conpty: pty-host protocol version %d: %w", protocolVersion, ports.ErrTerminalForegroundUnavailable)
 	}
 	return clientWatchForeground(ctx, sess.addr, func(state ForegroundPayload) {
-		fn(ports.TerminalForeground{PGID: state.PGID, Argv: state.Argv, Busy: state.Busy})
+		fn(ports.TerminalForeground{PGID: state.PGID, Argv: state.Argv, Busy: state.Busy, EchoOnly: state.EchoOnly})
 	})
 }
 

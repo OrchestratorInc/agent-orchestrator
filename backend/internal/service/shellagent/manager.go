@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -46,6 +47,10 @@ var (
 	screenReadTimeout      = 3 * time.Second
 	initialWatchRetryDelay = 500 * time.Millisecond
 	watchRetryMax          = 30 * time.Second
+	// maxWatchFailures ends a watch whose host keeps refusing connections:
+	// the host died while its record still resolves. A new subscription after
+	// every client left starts it again.
+	maxWatchFailures = 6
 )
 
 // Manager remembers shell terminals and watches them while a client subscribes.
@@ -143,11 +148,20 @@ func (m *Manager) SubscribeShellAgents(fn func(json.RawMessage)) func() {
 func (m *Manager) watch(ctx context.Context, handleID string) {
 	defer m.apply(ctx, handleID, nil)
 	handle := ports.RuntimeHandle{ID: handleID}
+	failures := 0
 	for backoff := initialWatchRetryDelay; ; backoff = min(backoff*2, watchRetryMax) {
+		var connected atomic.Bool
 		err := m.rt.WatchTerminalForeground(ctx, handle, func(fg ports.TerminalForeground) {
+			connected.Store(true)
 			m.observe(ctx, handleID, fg)
 		})
 		if ctx.Err() != nil || errors.Is(err, ports.ErrTerminalForegroundUnavailable) {
+			return
+		}
+		if connected.Load() {
+			failures, backoff = 0, initialWatchRetryDelay
+		} else if failures++; failures >= maxWatchFailures {
+			m.log.Debug("shell agent watch gave up on an unreachable host", "handleId", handleID, "err", err)
 			return
 		}
 		// The host went away; forget the agent until a new reading arrives.
@@ -169,12 +183,27 @@ func (m *Manager) observe(ctx context.Context, handleID string, fg ports.Termina
 	}
 	state := StateWorking
 	if !fg.Busy {
+		// Typing at an idle agent's prompt only echoes: keep the idle reading
+		// rather than reading the screen on every pause. A waiting agent is
+		// re-read, since the keys may have answered its question.
+		if fg.EchoOnly && m.currentState(handleID, harness) == StateIdle {
+			return
+		}
 		state = StateIdle
 		if m.waiting(ctx, handleID, harness) {
 			state = StateWaiting
 		}
 	}
 	m.apply(ctx, handleID, &Agent{HandleID: handleID, Harness: harness, State: state})
+}
+
+func (m *Manager) currentState(handleID string, harness domain.AgentHarness) State {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if agent, ok := m.current[handleID]; ok && agent.Harness == harness {
+		return agent.State
+	}
+	return ""
 }
 
 // apply records a reading unless its watch already ended: a screen read can
