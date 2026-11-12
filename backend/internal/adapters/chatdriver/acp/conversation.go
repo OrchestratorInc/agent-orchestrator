@@ -33,7 +33,10 @@ const (
 
 var (
 	errConversationClosed = errors.New("ACP conversation closed")
-	errClientCapability   = errors.New("ACP client capability not advertised")
+	// errProviderSessionLost is a provider that answered for a session it no
+	// longer holds. AO stops that provider so the agent reads as exited.
+	errProviderSessionLost = errors.New("the agent lost this chat session; AO stopped it so it can be resumed")
+	errClientCapability    = errors.New("ACP client capability not advertised")
 
 	// ErrACPSetterUnsupported is returned by applyTurnSettings when the agent
 	// does not implement session/set_mode or session/set_config_option
@@ -507,7 +510,7 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 		return ports.ChatTurnRef{}, err
 	}
 	if err := c.applyTurnSettings(ctx, msg.Settings); err != nil {
-		return ports.ChatTurnRef{}, err
+		return ports.ChatTurnRef{}, c.abandonLostSession(err)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -805,6 +808,33 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 	})
 
 	c.finishPrompt(turn.id, resp, err)
+	if err != nil {
+		_ = c.abandonLostSession(err)
+	}
+}
+
+// abandonLostSession stops a provider that answered for a session it no longer
+// holds, and returns err otherwise unchanged. A daemon that reattaches to a
+// surviving chat host trusts the session id the host recorded; if the agent
+// behind it has dropped that session, every later request fails while the
+// host stays alive, so the agent never reads as exited and resume refuses it.
+// Terminating the provider ends the event stream, which the controller records
+// as an exited agent that a resume can replace. The stop runs asynchronously
+// because callers may hold turn state that Terminate also settles.
+func (c *conversation) abandonLostSession(err error) error {
+	if !isACPSessionNotFound(err) {
+		return err
+	}
+	c.mu.Lock()
+	sessionID := c.sessionID
+	closed := c.closed
+	c.mu.Unlock()
+	if !closed {
+		c.log.Warn("chat: ACP agent lost its session; stopping it so the agent can be resumed",
+			"providerSessionID", sessionID, "harness", c.harness, "reconnected", c.proc != nil && c.proc.reconnected, "error", err)
+		go func() { _ = c.Terminate() }()
+	}
+	return &providerRefusal{err: fmt.Errorf("%w: %w", errProviderSessionLost, err)}
 }
 
 // reportServedModel tells the client which model actually answered when the

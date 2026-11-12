@@ -1170,6 +1170,35 @@ func isACPInternalError(err error) bool {
 	return errors.As(err, &requestErr) && requestErr.Code == -32603
 }
 
+// isACPSessionNotFound reports an agent answering a session-scoped request for
+// a session it no longer holds. claude-agent-acp throws "Session not found",
+// which its TypeScript SDK sends as -32603 with data.details; the Go SDK puts a
+// coerced handler error under data.error. Only the provider's own words count:
+// a failed transport is not proof the session is gone.
+func isACPSessionNotFound(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) {
+		return false
+	}
+	if requestErr.Code != -32603 && requestErr.Code != acpResourceNotFound {
+		return false
+	}
+	texts := []string{requestErr.Message}
+	if data, ok := requestErr.Data.(map[string]any); ok {
+		for _, key := range []string{"details", "error", "message"} {
+			if text, ok := data[key].(string); ok {
+				texts = append(texts, text)
+			}
+		}
+	}
+	for _, text := range texts {
+		if strings.Contains(strings.ToLower(text), "session not found") {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeACPError(operation string, err error) error {
 	if isACPAuthRequired(err) {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatAuthRequired, operation, err)

@@ -74,6 +74,11 @@ func (c *conversation) Steer(
 		if isACPMethodNotFound(err) {
 			return ports.ChatTurnRef{}, &providerRefusal{err: wrapped}
 		}
+		// A lost session is also a definite answer: the guidance was not
+		// delivered, so the steer must settle as rejected, not stay uncertain.
+		if isACPSessionNotFound(err) {
+			return ports.ChatTurnRef{}, c.abandonLostSession(wrapped)
+		}
 		return ports.ChatTurnRef{}, wrapped
 	}
 	var response steeringResponse
