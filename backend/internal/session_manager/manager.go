@@ -1232,8 +1232,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 	id := rec.ID
-	if m.agentAccounts != nil {
-		if err := m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID); err != nil {
+	if m.agentAccounts != nil || cfg.AgentAccountID != "" {
+		err := ports.ErrAgentAccountUnknown
+		if m.agentAccounts != nil {
+			err = m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID)
+		}
+		if err != nil {
 			if prep != nil {
 				cleanupCtx, cancel := spawnRollbackContext(ctx)
 				m.discardClaimedTaskPreparation(cleanupCtx, prep)

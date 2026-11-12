@@ -595,18 +595,20 @@ function AccountRows({ account }: { account: AccountChoice }) {
 		<OptionMenuSub closeOnSelect>
 			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
 			<OptionMenuSubContent scrollable className={SUB_CLASS}>
-				{account.options.map((option) => (
-					<OptionMenuItem
-						key={option.id}
-						active={option.id === account.value}
-						radio
-						disabled={option.disabled}
-						onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
-						className="text-xs text-foreground"
-					>
-						<span className="min-w-0 truncate">{option.label}</span>
-					</OptionMenuItem>
-				))}
+				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+					{account.options.map((option) => (
+						<OptionMenuItem
+							key={option.id}
+							active={option.id === account.value}
+							radio
+							disabled={option.disabled}
+							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
+							className="text-xs text-foreground"
+						>
+							<span className="min-w-0 truncate">{option.label}</span>
+						</OptionMenuItem>
+					))}
+				</div>
 			</OptionMenuSubContent>
 		</OptionMenuSub>
 	);

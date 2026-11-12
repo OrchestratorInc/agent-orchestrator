@@ -1356,7 +1356,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		account: accountProvider && !isCloudProject ? {
 			provider: accountProvider,
 			value: accountId,
-			choose: (id: string) => setAccountPicks((picks) => ({ ...picks, [accountProvider]: id })),
+			choose: (id: string | undefined) => setAccountPicks((picks) => ({ ...picks, [accountProvider]: id })),
 		} : undefined,
 		// The interface a plain send starts in, including the Settings default.
 		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",

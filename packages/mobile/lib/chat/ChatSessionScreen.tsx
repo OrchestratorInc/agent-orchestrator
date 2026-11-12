@@ -636,7 +636,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		}
 	}, [interfaceSwitch]);
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
-	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `Switching to Terminal UI · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
+	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `${accountMove ? "Switching account" : "Switching to Terminal UI"} · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
 	const interfaceTransitionBanner = {
 		text: interfaceSwitch.fetchFailed
 			? `${interfaceTransitionPhaseText}. Couldn't check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : ""}`
@@ -813,7 +813,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				) : (
 					<InterfaceSwitchCard
 						title={interfaceRecoveryMessage ? "Interface recovery blocked" : accountMove ? "Switching account" : "Switching to Terminal"}
-						message={interfaceRecoveryMessage || interfacePhaseLabel(interfaceSwitch.transition?.phase)}
+						message={interfaceRecoveryMessage || (accountMove ? accountPhaseLabel : interfacePhaseLabel)(interfaceSwitch.transition?.phase)}
 						blocked={Boolean(interfaceRecoveryMessage)}
 						cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
 						cancelling={interfaceSwitch.cancelling}
@@ -955,6 +955,18 @@ function interfacePhaseLabel(phase?: string): string {
 		case "activating": return "Opening the Terminal UI.";
 		case "completed": return "Terminal UI is ready. Opening it now.";
 		default: return "Checking that the terminal can resume this agent's native conversation.";
+	}
+}
+/** The card's phase while the agent moves to another account in the same Chat. */
+function accountPhaseLabel(phase?: string): string {
+	switch (phase) {
+		case "draining": return "Waiting for the current turn to finish.";
+		case "source_stopping": return "Stopping the agent on its current account.";
+		case "source_stopped":
+		case "target_starting": return "Resuming the same conversation on the new account.";
+		case "activating":
+		case "completed": return "The agent is ready on the new account.";
+		default: return "Checking that the agent can move to that account.";
 	}
 }
 function signInCommand(harness: string): string | undefined { return harness === "codex" ? "codex login" : harness === "claude-code" || harness === "claude" ? "claude auth login" : undefined; }
