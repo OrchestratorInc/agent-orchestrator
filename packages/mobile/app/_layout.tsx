@@ -57,6 +57,8 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 const PICKER_SHEETS = [
 	{ name: "sheets/agent", title: "Agent" },
 	{ name: "sheets/model", title: "Model" },
+	{ name: "sheets/files-branch", title: "Branch" },
+	{ name: "sheets/files-changes", title: "Changes" },
 ] as const;
 
 // iOS's machine-name sheet, the one sheet with a text input: a native bar
