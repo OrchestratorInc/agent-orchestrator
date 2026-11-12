@@ -18,7 +18,7 @@ import { agentLabel } from "../lib/agent-options";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { isCloudWorkspaceProject, isStandaloneCloudProject, projectAdditionalRepos, projectConfigText, projectRepositoryUrls, repoDirName } from "../lib/cloud-project-repos";
-import type { CloudCpProject, CloudCpProjectCoderConfig, CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpProject, type CloudCpProjectCoderConfig, type CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
 import { AgentAvatar } from "./AgentAvatar";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
@@ -125,9 +125,14 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		save={save} onSaveState={onSaveState} />;
 }
 
-/** A control plane that predates the co-author setting answers it as an unknown one. */
+/**
+ * A control plane that predates the co-author setting rejects it as an unknown
+ * one, with exactly this answer. Any other failure, even one that names the
+ * setting, is a failure to save and is reported as one.
+ */
 function coAuthorCommitsUnsupported(error: unknown): boolean {
-	return error instanceof Error && error.message.includes("coAuthorCommits");
+	return error instanceof CloudCpError && error.status === 422 && error.code === "validation_error" &&
+		error.message === "unsupported or null config.coAuthorCommits";
 }
 
 /** The coder config the control plane stores on a project (config.coder). */
