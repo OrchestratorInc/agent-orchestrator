@@ -15,7 +15,7 @@
 
 import { createContext, Fragment, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronRight, Loader2, Square, X } from "@/components/app-icons";
+import { ChevronRight, Loader2, Square } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
@@ -425,10 +425,7 @@ export function StateGlyph({ state }: { state: SubagentState }) {
 		glyph = undefined;
 	} else if (state === "failed") {
 		glyph = (
-			<span className="flex items-center gap-1 text-caption text-destructive">
-				<X aria-hidden="true" className="size-3" />
-				{t("chat.subagent.state.failed")}
-			</span>
+			<span className="text-caption text-destructive">{t("chat.subagent.state.failed")}</span>
 		);
 	} else if (state === "stopped") {
 		glyph = (
