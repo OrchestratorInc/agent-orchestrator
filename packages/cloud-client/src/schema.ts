@@ -83,8 +83,49 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Revokes a link: it stops serving at once, its stored file is deleted at once, and it frees its slot for another document. Publishing the same document again uploads it again and restores the link, under a new URL, when a slot is free; the revoked URL never serves again. A link already revoked returns 404. */
+        /** @description Revokes a link: it stops serving at once, its stored file is deleted at once, and it frees its slot for another document. Publishing the same document again uploads it again and restores the link, under a new URL, when a slot is free; the revoked URL never serves again. A link already revoked returns 404. Who the link was shared with is deleted with it: publishing again starts with nobody invited. */
         delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        /** @description Makes an active link private (restricted: only its owner and the emails it is shared with, signed in with that verified email) or public (anyone with the link). The URL never changes, so a link already sent starts or stops opening for people without an invite, and who it is shared with is kept either way. 409 artifact_share_private_unavailable for restricted when the control plane's viewer has no sign-in (ArtifactShareList.privateLinks false). A link the caller does not own, or revoked, returns 404. */
+        patch: operations["setArtifactShareAccess"];
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/{shareId}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Lists the emails an active link of the caller's is shared with, oldest first. Only the link's owner may list them; anyone else, and a revoked link, gets 404. */
+        get: operations["listArtifactShareGrants"];
+        put?: never;
+        /** @description Shares an active link of the caller's with emails, at once, and lists everyone it is shared with now. Each gets view access once they sign in with that verified email; nobody is emailed. Emails are matched case-insensitively; one already listed, and the owner's own, change nothing. 400 for a value that is not a bare email address or more than 50 at once; 409 artifact_share_grant_limit past 200 emails on one link; 409 artifact_share_private_unavailable where links cannot be private. Only the link's owner may invite; anyone else gets 404. */
+        post: operations["addArtifactShareGrants"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/{shareId}/grants/{grantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Stops a link being shared with one email. Their next request for the file is refused, even with a view token they already hold; a page they have open keeps showing until it is refreshed. Only the link's owner may remove someone; anyone else gets 404. */
+        delete: operations["removeArtifactShareGrant"];
         options?: never;
         head?: never;
         patch?: never;
@@ -168,10 +209,30 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description Returns what the public viewer page shows for a share link: its file's name, type and size, its owner's display name, and the URL its file is served at. Needs no sign-in and never returns the owner's email. Readable from a browser only by the configured viewer origin, and rate-limited per client (429 rate_limited). An unknown or revoked link returns 404. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        /** @description Returns what the public viewer page shows for a share link: its file's name, type and size, its owner's display name, and the URL its file is served at. Needs no sign-in and never returns the owner's email. Readable from a browser only by the configured viewer origin, and rate-limited per client (429 rate_limited). An unknown, revoked or private link returns 404, with the same body: a private link's details come only from viewArtifactShare. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["getPublicArtifactShare"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Returns what the viewer page shows a signed-in person for a link: the same details as getPublicArtifactShare, for a public link, a link they own, or a private link shared with their verified email. For a private link contentUrl carries a view token (?vt=) that opens the file for 10 minutes; the file host checks the token and the link's grants on every request, so removing someone or unpublishing takes effect at once. Any other link, private or not there at all, returns 404, so the answer never says that a private link exists. For the link's owner the answer adds you, with the link's ID, so they can unpublish it from the viewer page. Rate-limited per person (429 rate_limited). */
+        post: operations["viewArtifactShare"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4626,6 +4687,32 @@ export interface components {
              * @description When the link was revoked. A revoked link serves nothing and uses no slot.
              */
             revokedAt?: string;
+            access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description How many emails the link is shared with. Absent from a control plane that predates private links. */
+            grantCount?: number;
+        };
+        /**
+         * @description Who a link opens for. restricted: only its owner and the emails it is shared with, once they sign in with that verified email; its file needs a view token (viewArtifactShare), so share viewerUrl, never contentUrl. anyone: everyone with the link, no sign-in. Absent from a control plane that predates private links, where every link is anyone.
+         * @enum {string}
+         */
+        ArtifactShareAccess: "restricted" | "anyone";
+        ArtifactShareAccessInput: {
+            access: components["schemas"]["ArtifactShareAccess"];
+        };
+        ArtifactShareGrant: {
+            /** Format: uuid */
+            id: string;
+            /** @description The invited email, lowercased. */
+            email: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ArtifactShareGrantList: {
+            grants: components["schemas"]["ArtifactShareGrant"][];
+        };
+        ArtifactShareGrantsInput: {
+            /** @description Bare email addresses to share the link with. */
+            emails: string[];
         };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
@@ -4640,6 +4727,8 @@ export interface components {
             unlimited?: boolean;
             /** @description How many active links the user holds; revoked links do not count. */
             used: number;
+            /** @description True when links may be private here: the viewer has sign-in. Absent or false, links are public only, and publishing restricted, inviting, or switching a link to restricted returns 409 artifact_share_private_unavailable. */
+            privateLinks?: boolean;
         };
         ArtifactShareUploadInput: {
             /** @description The file name, without a directory. */
@@ -4705,6 +4794,10 @@ export interface components {
                 /** @description The ETag the part's PUT returned. */
                 etag: string;
             }[];
+            /** @description The access a new or restored link starts with. Absent, it is anyone, as before links could be private. An active link keeps its own access. */
+            access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
+            emails?: string[];
         };
         SessionArtifactShareInput: {
             /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
@@ -4716,6 +4809,10 @@ export interface components {
              * @description An active link of the caller's to point at this file, also after the file was renamed.
              */
             shareId?: string;
+            /** @description The access a new or restored link starts with. Absent, it is anyone, as before links could be private. An active link keeps its own access. */
+            access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
+            emails?: string[];
         };
         PublicArtifactShare: {
             linkId: string;
@@ -4729,8 +4826,16 @@ export interface components {
                 /** @description The owner's display name; empty when they set none. */
                 displayName: string;
             };
-            /** @description Where the link's file is served; the viewer frames it. */
+            /** @description Where the link's file is served; the viewer frames it. For a private link (viewArtifactShare) it carries a short-lived view token in its vt query parameter. */
             contentUrl: string;
+            access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description Only from viewArtifactShare, and only for the link's owner: what the viewer page needs to manage the link. shareId unpublishes it (deleteArtifactShare); grantCount is how many emails it is shared with. Absent for everyone else. */
+            you?: {
+                owner: boolean;
+                /** Format: uuid */
+                shareId: string;
+                grantCount: number;
+            };
         };
         WorkerArtifactFile: {
             path: string;
@@ -5774,6 +5879,105 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    setArtifactShareAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareAccessInput"];
+            };
+        };
+        responses: {
+            /** @description The link with its new access. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listArtifactShareGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Who the link is shared with. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareGrantList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addArtifactShareGrants: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareGrantsInput"];
+            };
+        };
+        responses: {
+            /** @description Everyone the link is shared with now. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareGrantList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeArtifactShareGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The email no longer has access. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     createArtifactShareUpload: {
         parameters: {
             query?: never;
@@ -5894,6 +6098,30 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The link's public details. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    viewArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link's details, with a contentUrl that opens it. */
             200: {
                 headers: {
                     [name: string]: unknown;

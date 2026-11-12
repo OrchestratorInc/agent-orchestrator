@@ -59,8 +59,11 @@ import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/u
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
+	type CloudShareAccess,
 	type CloudShareFile,
+	type CloudShareGrant,
 	type CloudShareInspection,
+	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudShareProgress,
 	type CloudSharePublishResult,
@@ -474,7 +477,7 @@ const api = {
 		forget: (baseUrl: string, linkIds: readonly string[]) =>
 			ipcRenderer.invoke("sessionShareUrls:forget", { baseUrl, linkIds }) as Promise<void>,
 	},
-	// Public share links, published from the share popover's Publish button.
+	// Share links, published from the share popover's Publish button.
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
@@ -484,6 +487,13 @@ const api = {
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
 		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
+		setAccess: (baseUrl: string, shareId: string, access: CloudShareAccess) =>
+			ipcRenderer.invoke("cloudShare:setAccess", { baseUrl, shareId, access }) as Promise<CloudShareLink>,
+		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrant[]>,
+		invite: (baseUrl: string, shareId: string, emails: string[]) =>
+			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, emails }) as Promise<CloudShareGrant[]>,
+		removeGrant: (baseUrl: string, shareId: string, grantId: string) =>
+			ipcRenderer.invoke("cloudShare:removeGrant", { baseUrl, shareId, grantId }) as Promise<void>,
 		onProgress: (listener: (progress: CloudShareProgress) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, progress: CloudShareProgress) => listener(progress);
 			ipcRenderer.on(CLOUD_SHARE_PROGRESS_CHANNEL, wrapped);
