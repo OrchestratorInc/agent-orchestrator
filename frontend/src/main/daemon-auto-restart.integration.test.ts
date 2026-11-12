@@ -101,6 +101,7 @@ function setup() {
 		start: () => ipc.get("daemon:start")!(), stop: () => ipc.get("daemon:stop")!(), restart: () => ipc.get("daemon:restart")!(),
 		status: () => vm.runInContext("daemonStatus", context),
 		refresh: () => ipc.get("daemon:getStatus")!(),
+		markQuitPastPointOfNoReturn: () => vm.runInContext("browserQuitRequested = true", context),
 		rejectRuntime: () => vm.runInContext('handleBrowserRuntimeRejection("invalid-token")', context),
 		quit: () => app.emit("before-quit", { preventDefault: vi.fn() }),
 		crash(code: number | null = 1, signal: string | null = null) { children.at(-1)!.emit("exit", code, signal); },
@@ -215,6 +216,19 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		held.resolve({ kind: "unchanged", reason: "disabled" });
 		await starting;
 		expect(h.openSync).not.toHaveBeenCalled();
+		expect(h.spawn).not.toHaveBeenCalled();
+	});
+
+	it("does not spawn from a normal start when quit proceeds during isolation planning", async () => {
+		const h = setup();
+		const held = deferred<unknown>();
+		h.planDaemonSpawnIsolation.mockImplementationOnce(() => held.promise);
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.planDaemonSpawnIsolation).toHaveBeenCalledTimes(1);
+		h.markQuitPastPointOfNoReturn();
+		held.resolve({ kind: "unchanged", reason: "disabled" });
+		await starting;
 		expect(h.spawn).not.toHaveBeenCalled();
 	});
 

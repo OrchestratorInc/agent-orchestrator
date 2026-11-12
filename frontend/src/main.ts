@@ -2261,8 +2261,9 @@ async function repairDevAcpRuntime(): Promise<void> {
 }
 
 async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAutoRestartIntent | undefined, trigger: DaemonStartTrigger): Promise<DaemonStatus> {
-	const startCancelled = () => startEpoch !== daemonStartEpoch || (autoRestartIntent !== undefined &&
-		(autoRestartIntent.generation !== daemonAutoRestartGeneration || browserQuitRequested));
+	// Once quit is past its point of no return, no start of any kind may spawn.
+	const startCancelled = () => startEpoch !== daemonStartEpoch || browserQuitRequested ||
+		(autoRestartIntent !== undefined && autoRestartIntent.generation !== daemonAutoRestartGeneration);
 	if (daemonProcess) {
 		return daemonStatus;
 	}
