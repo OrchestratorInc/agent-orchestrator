@@ -69,7 +69,7 @@ describe("ChatComposer steering", () => {
 		expect(screen.queryByText(/steer/i)).not.toBeInTheDocument();
 	});
 
-	it("steers the next queued message on empty Enter", async () => {
+	it("steers the next queued message on Cmd/Ctrl+Enter in the empty composer, not on plain Enter", async () => {
 		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
 		render(
 			<ChatComposer
@@ -89,11 +89,14 @@ describe("ChatComposer steering", () => {
 
 		await userEvent.click(screen.getByRole("combobox"));
 		await userEvent.keyboard("{Enter}");
+		await act(async () => {});
+		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
 
+		await userEvent.keyboard("{Control>}{Enter}{/Control}");
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
 	});
 
-	it("does not steer the message just queued when Enter is tapped again right after sending", async () => {
+	it("does not steer the message just queued when Cmd/Ctrl+Enter follows right after sending", async () => {
 		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
 		const onSend = vi.fn().mockResolvedValue(undefined);
 		render(
@@ -118,6 +121,7 @@ describe("ChatComposer steering", () => {
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("just queued"));
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
 		await userEvent.keyboard("{Enter}");
+		await userEvent.keyboard("{Control>}{Enter}{/Control}");
 		await act(async () => {});
 
 		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
@@ -141,7 +145,7 @@ describe("ChatComposer steering", () => {
 			/>,
 		);
 
-		fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", repeat: true });
+		fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", ctrlKey: true, repeat: true });
 		await act(async () => {});
 
 		expect(onPromoteQueuedTurn).not.toHaveBeenCalled();
@@ -826,7 +830,7 @@ describe("ChatWorkspace steering", () => {
 		expect(within(dock).getByText("second queued")).toBeVisible();
 	});
 
-	it("shows the standard steer action on the next row and hover steer on later rows", () => {
+	it("shows the same steer action on every queued row", () => {
 		render(
 			<ChatWorkspace
 				snapshot={withQueuedMessages()}
@@ -846,7 +850,7 @@ describe("ChatWorkspace steering", () => {
 			within(screen.getByTestId("queued-message-queued-2")).getByRole("button", {
 				name: "Steer this queued message into the running turn",
 			}),
-		).toBeInTheDocument();
+		).not.toHaveClass("opacity-0");
 	});
 
 	it("does not show delivery indicators in the composer for a running turn without a pending approval", () => {

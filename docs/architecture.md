@@ -647,6 +647,13 @@ entered; an edit made since waits for its own Enter. If the previous send is
 refused or gets no answer, the held message stays in the box instead of
 overtaking it.
 
+The queue dock lists waiting messages in send order: the next one on top, the
+newest at the bottom, and a send the daemon has not confirmed yet after them.
+Folded, it keeps the next message in view. While a turn can be steered, every
+row shows Steer. Cmd/Ctrl+Enter in an empty composer steers the next message,
+as Cmd/Ctrl+Enter steers a typed draft. A plain Enter in an empty composer does
+nothing.
+
 ---
 
 ## Persistence and CDC

@@ -97,7 +97,7 @@ function QueuedMessageRowContent({
 }: {
 	message: ConversationMessage;
 	showPersistentSteer?: boolean;
-	/** Enter in the empty composer steers this row; the button shows the key. */
+	/** Cmd/Ctrl+Enter in the empty composer steers this row; the button shows the key. */
 	enterSteers?: boolean;
 	showHoverSteer?: boolean;
 	canSteer?: boolean;
@@ -433,22 +433,22 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		() => messages.filter((entry) => !entry.pending).map(({ turnId }) => turnId),
 		[messages],
 	);
-	const defaultDisplayTurnIds = useMemo(() => [...fifoTurnIds].reverse(), [fifoTurnIds]);
+	// Rows read in send order, like the transcript: the next message on top, the
+	// newest at the bottom, and a send not yet confirmed after everything queued.
 	const displayTurnIds = useMemo(() => {
-		if (!displayOrder) return defaultDisplayTurnIds;
+		if (!displayOrder) return fifoTurnIds;
 		const known = new Set(fifoTurnIds);
 		const ordered = displayOrder.filter((turnId) => known.has(turnId));
 		const missing = fifoTurnIds.filter((turnId) => !ordered.includes(turnId));
 		return [...ordered, ...missing];
-	}, [defaultDisplayTurnIds, displayOrder, fifoTurnIds]);
+	}, [displayOrder, fifoTurnIds]);
 	const displayMessages = useMemo(
 		() => [
-			// Newest first, like the rest of the dock: a pending send is the newest of all.
-			...[...pendingMessages].reverse(),
 			...displayTurnIds.flatMap((turnId) => {
 				const message = messagesByTurnId.get(turnId);
 				return message ? [message] : [];
 			}),
+			...pendingMessages,
 		],
 		[displayTurnIds, messagesByTurnId, pendingMessages],
 	);
@@ -487,10 +487,9 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 
 	useEffect(() => {
 		if (!displayOrder) return;
-		const expectedFifo = [...displayOrder].reverse();
 		if (
-			expectedFifo.length === fifoTurnIds.length &&
-			expectedFifo.every((turnId, index) => turnId === fifoTurnIds[index])
+			displayOrder.length === fifoTurnIds.length &&
+			displayOrder.every((turnId, index) => turnId === fifoTurnIds[index])
 		) {
 			setDisplayOrder(null);
 		}
@@ -540,7 +539,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	const onDragStart = useCallback(
 		({ active }: DragStartEvent) => {
 			const turnId = String(active.id);
-			const showPersistentSteer = Boolean(canSteer && turnId === nextQueuedTurnId);
+			const showPersistentSteer = Boolean(canSteer);
 			setIsReordering(true);
 			setDragSnapshot({
 				showPersistentSteer,
@@ -550,7 +549,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			});
 			suppressHoverSteer();
 		},
-		[canSteer, hoveredTurnId, nextQueuedTurnId, suppressHoverSteer],
+		[canSteer, hoveredTurnId, suppressHoverSteer],
 	);
 
 	const onDragEnd = useCallback(
@@ -562,10 +561,9 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			if (!over || !onReorderQueuedTurns) return;
 			const nextDisplay = reorderById(displayTurnIds, String(active.id), String(over.id));
 			if (!nextDisplay) return;
-			const fifoOrder = [...nextDisplay].reverse();
 			setReorderError(undefined);
 			flushSync(() => setDisplayOrder(nextDisplay));
-			void onReorderQueuedTurns(fifoOrder).catch((error) => {
+			void onReorderQueuedTurns(nextDisplay).catch((error) => {
 				setDisplayOrder(null);
 				setReorderError(
 					error instanceof Error ? error.message : "Could not reorder queued messages.",
@@ -667,10 +665,12 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											key={message.clientMessageId ?? turnId}
 											turnId={turnId}
 											message={message}
-											hiddenFromView={!isOpen && index !== displayMessages.length - 1}
-											// The next row's Steer stays put while a turn can be steered; typing
-											// or sending only toggles its Enter hint.
-											showPersistentSteer={Boolean(canSteer && isNextQueuedTurn)}
+											// Folded, the dock keeps the next message to send in view.
+											hiddenFromView={!isOpen && index !== 0}
+											// Every row's Steer stays put while a turn can be steered, so the
+											// buttons never come and go; typing or sending only toggles the next
+											// row's key hint.
+											showPersistentSteer={Boolean(canSteer)}
 											enterSteers={Boolean(canSteer && canSteerNext && isNextQueuedTurn)}
 											busy={busy}
 											steady={busy && !rowBusy}

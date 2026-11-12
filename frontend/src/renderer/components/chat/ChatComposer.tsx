@@ -2033,9 +2033,15 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 
 			if (enterSends && canSteerNext && !textRef.current.trim() && !fileAttachments.hasPendingReads()) {
-				// Only a deliberate Enter steers: not a held key, and not a second tap
+				// Cmd/Ctrl+Enter steers, as it does for a typed draft: here the next queued
+				// message. A plain Enter in the empty box does nothing, so a double tap
+				// after a send never steers. Neither does a held key, or a Cmd/Ctrl+Enter
 				// right after a send, which would steer the message just queued.
-				if (!event.repeat && Date.now() - lastSubmitAt.current >= STEER_NEXT_AFTER_SEND_MS) {
+				if (
+					(event.metaKey || event.ctrlKey) &&
+					!event.repeat &&
+					Date.now() - lastSubmitAt.current >= STEER_NEXT_AFTER_SEND_MS
+				) {
 					setSteerNextRequest((request) => request + 1);
 				}
 				return true;
