@@ -27,6 +27,7 @@ import type { FileRowAction } from "../../../lib/files/FileRowMenu.types";
 import { useFileActions } from "../../../lib/files/useFileActions";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
+import { useFilesBackend } from "../../../lib/files/useFilesBackend";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -43,18 +44,20 @@ function SessionFilesContent() {
 	const id = String(sessionId ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection, loading: appLoading } = useApp();
+	const { currentHostId, connection, loading: appLoading } = useApp();
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
+	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [tab, setTab] = useState<Tab>(initialTab === "all" ? "all" : "changes");
-	const { manifest, loading, error, refreshing, refresh } = useWorkspaceManifest(hostMatches ? config : null, id, hostMatches);
+	const { manifest, loading, error, refreshing, refresh } = useWorkspaceManifest(hostMatches ? backend : null, id, hostMatches);
 	const key = reviewKey(currentHostId, id);
-	const review = useReviewSender(config, key, id);
+	const review = useReviewSender(backend, key, id);
 	const toast = useToast();
 	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
 	const insets = useSafeAreaInsets();
-	const search = useFileSearch(hostMatches ? config : null, id);
+	const search = useFileSearch(hostMatches ? backend : null, id);
 	const dismissSearch = search.dismiss;
 	const searchActive = search.active;
 	const groups = useMemo(() => manifest ? changeGroups(manifest) : [], [manifest]);
@@ -86,8 +89,10 @@ function SessionFilesContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="These files belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
-	if (!config && appLoading) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Connecting" /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
+	if (signedOut) return <View style={styles.center}><EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this session's files." /></View>;
+	if (unreachable) return <View style={styles.center}><EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
+	if (!backend && (appLoading || cloud)) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Connecting" /></View>;
+	if (!backend && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
 
 	const summary = manifest?.summary;
 	const bottomInset = review.comments.length ? REVIEW_BUTTON_CLEARANCE : space.xxl;
@@ -137,7 +142,7 @@ function SessionFilesContent() {
 	} else if (search.active) {
 		body = <SearchResults query={search.query} results={search.results} searching={search.searching} header={header} bottomInset={bottomInset} onOpenFile={openPath} onAction={pathAction} />;
 	} else {
-		body = <FolderList config={config} sessionId={id} dir="" header={header} bottomInset={bottomInset} onOpenFile={openPath} onOpenFolder={openFolder} onAction={pathAction} />;
+		body = <FolderList backend={backend} sessionId={id} dir="" header={header} bottomInset={bottomInset} onOpenFile={openPath} onOpenFolder={openFolder} onAction={pathAction} />;
 	}
 
 	return (

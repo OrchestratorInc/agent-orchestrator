@@ -1,3 +1,4 @@
+import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { Stack, useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -33,7 +34,7 @@ import { McpServerNotice } from "./McpServerNotice";
 import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
-import { conversationMenuGroups, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
+import { conversationMenuGroups, type CloudConversationMenuAction, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
 import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpNoticeKey, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
@@ -485,7 +486,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuContextPercent = contextReadout(menuSnapshot?.usage)?.percent;
 	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
 	const menuCompacting = conversation.pendingActions.includes("compact");
-	const menuArtifactCount = "projectName" in session ? undefined : session.artifacts?.length;
+	const menuArtifactCount = "projectName" in session ? undefined : deliverableArtifacts(session.artifacts ?? []).length;
 	const menuHasPullRequest = !("projectName" in session) && Boolean(session.prs?.length || session.pr);
 	const previewReady = useSessionPreview(config, session.id);
 	// Offered only where the agent can carry the conversation on in Terminal UI.
@@ -522,7 +523,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// Each menu item's work, read when it is chosen, so the menu does not have to
 	// change whenever a callback does.
-	const menuActions: Record<ConversationMenuAction, () => void> = {
+	// A local chat's sheet never offers the cloud-only actions (see conversationMenuSections).
+	const menuActions: Record<Exclude<ConversationMenuAction, CloudConversationMenuAction>, () => void> = {
 		preview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
 		shell: () => void openShell(),
 		artifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId: session.id, title: sessionName, hostId: currentHostId } }),
@@ -557,7 +559,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	};
 	const menuActionsRef = useRef(menuActions);
 	menuActionsRef.current = menuActions;
-	const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);
+	const runMenuAction = useCallback((action: ConversationMenuAction) => {
+		const run = (menuActionsRef.current as Partial<Record<ConversationMenuAction, () => void>>)[action];
+		run?.();
+	}, []);
 
 	// The header holds only "⋯", which opens the actions as a bottom sheet, as
 	// Android's always has. The terminal's switch, preview and files buttons

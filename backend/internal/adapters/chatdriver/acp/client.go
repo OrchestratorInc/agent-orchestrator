@@ -65,6 +65,9 @@ func (c *conversation) RequestPermission(
 	c.mu.Unlock()
 	if policy != nil {
 		if selected, handled := policy(mode, params); handled {
+			if selected == CancelPermission {
+				return acpsdk.RequestPermissionResponse{Outcome: acpsdk.NewRequestPermissionOutcomeCancelled()}, nil
+			}
 			for _, option := range params.Options {
 				if option.OptionId == selected {
 					return acpsdk.RequestPermissionResponse{

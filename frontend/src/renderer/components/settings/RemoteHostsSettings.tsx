@@ -6,7 +6,7 @@ import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useCloudSession } from "../../lib/cloud-session";
-import { deleteAccountRemoteHost, readAccountHostDirectory, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { useSettings } from "../../hooks/useSettings";
 import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -93,14 +93,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (editing?.hostId) await disconnectHost(editing.hostId);
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
 			const current = (await aoBridge.remotes.list()).find((item) => item.url === nextUrl);
-			if (current?.hostId && cloudBaseUrl) {
-				// With the machine's host key AO Cloud needs its own signature; an AO
-				// Cloud that does not say it takes host keys refuses the field. Read
-				// first: issuing the token moves it from any other account.
-				const { hostKeys } = await readAccountHostDirectory(cloudBaseUrl);
-				const { token, hostKey } = await aoBridge.remotes.issueAccountToken(current.url);
-				await saveAccountRemoteHost(cloudBaseUrl, { hostId: current.hostId, label: current.label, url: current.url, token, hostKey: hostKeys ? hostKey : undefined });
-			}
+			if (current?.hostId && cloudBaseUrl) await aoBridge.remotes.linkAccountHost(current.url);
 			await load();
 			resetForm();
 			if (!enabled) setEnabled(true);

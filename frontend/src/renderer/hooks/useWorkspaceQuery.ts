@@ -1,12 +1,16 @@
 import { markApiError } from "../lib/reported-errors";
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import { useUiStore } from "../stores/ui-store";
+import { useRemoteUnpinStore, withRemoteUnpins } from "../stores/remote-unpin-store";
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useTranslation } from "react-i18next";
+import { useStableArray } from "./useStable";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
+import { CLOUD_WORKSPACE_LAYOUT, isCloudWorkspaceProject, projectRepositoryUrls, repoDirName } from "../lib/cloud-project-repos";
 import { CloudCpError, type CloudCpClient, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { rememberSharedSessions } from "../lib/shared-session-memory";
@@ -20,7 +24,7 @@ import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh } from "./useRemoteHosts";
-import { applyOptimisticSessionKills } from "./optimistic-session-kills";
+import { applyOptimisticSessionKills, optimisticSessionKillsVersion, subscribeOptimisticSessionKills } from "./optimistic-session-kills";
 import { appI18n } from "../i18n";
 import {
 	type PRState,
@@ -67,6 +71,7 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 
 function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
 	return {
+		...(artifact.id ? { id: artifact.id } : {}),
 		kind: artifact.kind,
 		name: artifact.name,
 		path: artifact.path,
@@ -75,6 +80,10 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 		inlineUrl: artifact.inlineUrl,
 		size: artifact.size,
 		updatedAt: artifact.updatedAt,
+		registered: artifact.registered,
+		...(artifact.previousPaths?.length ? { previousPaths: artifact.previousPaths } : {}),
+		// Set while the file is published from this computer; the Artifacts list marks it.
+		...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
 	};
 }
 
@@ -310,6 +319,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 			kind,
 			path: project.path,
 			folderMissing: project.folderMissing,
+			autoSpawnPauses: project.autoSpawnPauses,
 			orchestratorAgent: project.orchestratorAgent ? toAgentProvider(project.orchestratorAgent) : undefined,
 			sessions: sessions
 				.filter((session) => session.projectId === project.id)
@@ -370,6 +380,7 @@ function toRemoteWorkspaces(
 		kind: toProjectKind(project.kind),
 		path: project.path,
 		folderMissing: project.folderMissing,
+		autoSpawnPauses: project.autoSpawnPauses,
 		orchestratorAgent: project.orchestratorAgent ? toAgentProvider(project.orchestratorAgent) : undefined,
 		sessions: sessions.filter((session) => session.projectId === project.id).map((session) => ({
 			...toWorkspaceSession(session, project),
@@ -536,21 +547,34 @@ export function toCloudWorkspaceSession(
 		// files from each session's own artifact list query. File URLs come from a short-lived access prefix when a file is
 		// opened (useCloudArtifactAccess), not from the list.
 		artifactFiles: session.artifactFiles?.map((file) => ({
+			...(file.id ? { id: file.id } : {}),
 			kind: file.kind,
 			name: file.name,
 			path: file.path,
 			size: file.size,
 			updatedAt: file.updatedAt,
+			registered: file.registered,
+			...(file.previousPaths?.length ? { previousPaths: file.previousPaths } : {}),
 		})),
+		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles && !session.isTerminated ? { artifactFilesPending: true } : {}),
 	};
 }
 
 export function toCloudWorkspace(project: CloudCpProject, sessions: CloudCpSession[], orgId: string): WorkspaceSummary {
+	// A cloud workspace's repositories are all its own, side by side in one
+	// folder, the way a local workspace lists its child repositories.
+	const workspace = isCloudWorkspaceProject(project);
 	return {
 		id: project.id,
 		cloudOrgId: orgId,
 		name: project.displayName,
 		kind: "cloud",
+		...(workspace
+			? {
+				cloudLayout: CLOUD_WORKSPACE_LAYOUT,
+				workspaceRepos: projectRepositoryUrls(project).map((url) => ({ name: repoDirName(url), relativePath: repoDirName(url), repo: url })),
+			}
+			: {}),
 		// Cloud projects run in control-plane sandboxes; there is no local folder.
 		path: "",
 		sessions: sessions
@@ -885,14 +909,43 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 			subscribed: options.subscribed,
 		})),
 	});
+	// Pins removed here that the host has not confirmed yet (it may be offline).
+	const unpins = useRemoteUnpinStore((state) => state.unpins);
 	const live = (predicate: (index: number) => boolean) => hostIds.filter((hostId, index) => connected.includes(hostId) && predicate(index));
-	return {
-		data: hostIds.flatMap((hostId, index) => projects[index]?.data
-			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? [])
+	// Every render of the shell would otherwise hand out new lists, which
+	// re-renders the sidebar and its rows even with no remote hosts. Rebuild
+	// them only when something the mapping reads changed: a host's data, a
+	// pending unpin, Developer Mode (terminal titles), the language (the
+	// Scratchpad name) or an in-flight kill (a remote row hides at once).
+	const developerMode = useUiStore((state) => state.developerMode);
+	const language = useTranslation().i18n.language;
+	const killVersion = useSyncExternalStore(subscribeOptimisticSessionKills, optimisticSessionKillsVersion);
+	const dataInputs = useStableArray([
+		hostIds,
+		unpins,
+		developerMode,
+		language,
+		killVersion,
+		...projects.map((query) => query.data),
+		...sessions.map((query) => query.data),
+	]);
+	const data = useMemo(
+		() => hostIds.flatMap((hostId, index) => projects[index]?.data
+			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []).map((workspace) => withRemoteUnpins(workspace, unpins))
 			: []),
-		loadedProjectHostIds: live((index) => projects[index]?.data !== undefined),
-		loadedSessionHostIds: live((index) => sessions[index]?.data !== undefined),
-		failedHostIds: live((index) => Boolean(projects[index]?.isError || sessions[index]?.isError)),
+		// dataInputs holds every value read here, including the ones the mapping
+		// reads outside React (Developer Mode, the language, in-flight kills).
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[dataInputs],
+	);
+	const loadedProjectHostIds = useStableArray(live((index) => projects[index]?.data !== undefined));
+	const loadedSessionHostIds = useStableArray(live((index) => sessions[index]?.data !== undefined));
+	const failedHostIds = useStableArray(live((index) => Boolean(projects[index]?.isError || sessions[index]?.isError)));
+	return {
+		data,
+		loadedProjectHostIds,
+		loadedSessionHostIds,
+		failedHostIds,
 		refetch: () => Promise.all([...projects, ...sessions].map((query) => query.refetch())),
 	};
 }
@@ -900,11 +953,28 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 /** A host-qualified project detail query for the board. It shares the remote
  * session query's key, so session mutations refresh both detail surfaces. */
 export function useRemoteProjectQuery(hostId: string, projectId: string) {
+	const unpins = useRemoteUnpinStore((state) => state.unpins);
+	const select = useCallback((workspaces: WorkspaceSummary[]) => {
+		const workspace = workspaces.find((candidate) => candidate.id === projectId);
+		return workspace && withRemoteUnpins(workspace, unpins);
+	}, [projectId, unpins]);
 	return useQuery({
 		queryKey: remoteWorkspaceQueryKey(hostId),
 		queryFn: () => fetchRemoteWorkspaces(hostId),
-		select: (workspaces) => workspaces.find((workspace) => workspace.id === projectId),
+		select,
 		enabled: Boolean(hostId && projectId),
+		retry: 1,
+	});
+}
+
+/** Every project on one remote host, from the same cache as the board's
+ * project query. The archive modal reads it, only while it is open. */
+export function useRemoteHostWorkspacesQuery(hostId: string, options: WorkspaceSubscriptionOptions = {}) {
+	return useQuery({
+		queryKey: remoteWorkspaceQueryKey(hostId),
+		queryFn: () => fetchRemoteWorkspaces(hostId),
+		enabled: Boolean(hostId) && options.enabled !== false,
+		subscribed: options.subscribed,
 		retry: 1,
 	});
 }

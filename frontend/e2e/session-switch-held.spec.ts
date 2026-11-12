@@ -101,12 +101,16 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 	await page.waitForTimeout(1_000);
 
 	let streaming: ReturnType<typeof setInterval> | undefined;
+	let dispatching = false;
 	return {
 		drafts,
 		requests,
 		/** Grows every session's reply and tells the app, as the daemon does while agents stream. */
 		startStreaming() {
 			streaming = setInterval(() => {
+				// Bound CDP delivery while the throttled page is busy.
+				if (dispatching) return;
+				dispatching = true;
 				for (const session of sessions) chunks.set(session.id, (chunks.get(session.id) ?? 1) + 1);
 				void page.evaluate((ids) => {
 					const sources = (window as unknown as { __heldSources: { url: string; readyState: number; _dispatch: (type: string, data: string) => void }[] }).__heldSources;
@@ -116,7 +120,7 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 							source._dispatch("session_updated", JSON.stringify({ seq: Date.now(), projectId: "fake-proj", sessionId: id, type: "session_updated", payload: { conversationId: `conversation-${id}` }, createdAt: new Date().toISOString() }));
 						}
 					}
-				}, sessions.map((session) => session.id)).catch(() => undefined);
+				}, sessions.map((session) => session.id)).catch(() => undefined).finally(() => { dispatching = false; });
 			}, 120);
 		},
 		stop() {

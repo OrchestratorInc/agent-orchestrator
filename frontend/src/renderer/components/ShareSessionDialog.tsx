@@ -41,6 +41,7 @@ import {
 	useLinkAccess,
 } from "./share/linkAccess";
 import { UndoNotice, useUndoNotice } from "./share/UndoNotice";
+import { SettingsSection } from "./settings/SettingsSection";
 import { NewTeamDialog } from "./teams/NewTeamDialog";
 import { PeopleField, recipientKey, type Recipient } from "./teams/PeopleField";
 import { PersonAvatar, TeamTile } from "./teams/TeamVisuals";
@@ -228,25 +229,24 @@ function widensToWrite(link: Pick<CloudCpShareLink, "role" | "modeCap"> | undefi
 }
 
 /**
- * Shares this cloud session, or its whole project, the way Google Docs does:
- * people and teams on top (named, with what each can do), then General
- * access, one sentence that says who else the link lets in, then Copy link
- * beside Done. Picking someone turns the dialog into a short confirm step
- * that names what will happen to whom. Against a control plane from before
- * teams, or in a build without Teams, it is General access and Copy link only.
+ * Everything sharing holds for one session or its whole project, the way
+ * Google Docs does it: people and teams on top (named, with what each can
+ * do), then General access, one sentence that says who else the link lets
+ * in, then Copy link. Picking someone turns it into a short confirm step that
+ * names what will happen to whom. Against a control plane from before teams,
+ * or in a build without Teams, it is General access and Copy link only.
+ * Without a session it shares the whole project only. SharePanel draws it in
+ * the share dialog and in Project settings › Sharing.
  */
-export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true }: {
-	open: boolean;
-	onOpenChange: (open: boolean) => void;
+function useShareController({ active: open, orgId, projectId, sessionId, teams }: {
+	/** Whether the surface is showing; closing it forgets everything but the shares themselves. */
+	active: boolean;
 	orgId: string;
 	projectId: string;
-	sessionId: string;
-	/** The session's title, for "Share \"<title>\"". */
-	sessionName?: string;
-	/** The project's name, for "Session in <project>". */
-	projectName?: string;
-	/** Sharing with people and teams (Teams builds); off, the dialog is links only. */
-	people?: boolean;
+	/** The session to share; without one only the whole project. */
+	sessionId?: string;
+	/** Sharing with people and teams (Teams builds); off, links only. */
+	teams: boolean;
 }) {
 	const { t, i18n } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
@@ -260,8 +260,9 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	// A personal workspace has nobody else in it, so "people in <it>" reads oddly.
 	const personal = isPersonalWorkspace(workspace);
 	const queryClient = useQueryClient();
-	const restoreFocusOnClose = useRestoreFocusOnClose(open);
-	const [scope, setScope] = useState<ShareScope>("session");
+	// Opened for a project rather than a session: there is no session to go back to.
+	const projectOnly = !sessionId;
+	const [scope, setScope] = useState<ShareScope>(projectOnly ? "project" : "session");
 	const [view, setView] = useState<"main" | "settings">("main");
 	const [staged, setStaged] = useState<Recipient[]>([]);
 	const [stagedRole, setStagedRole] = useState<CloudCpShareRole>("viewer");
@@ -319,7 +320,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		[baseUrl, open, queryClient],
 	);
 	const peopleAvailable = teams && (access.data === undefined ? !knownUnavailable : access.data !== null);
-	const links = useLinkAccess({ orgId, projectId, sessionId, scope, enabled: open });
+	const links = useLinkAccess({ orgId, projectId, sessionId: sessionId ?? "", scope, enabled: open });
 	const entries = access.data?.entries ?? [];
 	const ownEntries = entries.filter((entry) => entry.scope === scope);
 	const unavailable = useMemo(() => {
@@ -464,7 +465,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		setStaged([]);
 		setStagedRole("viewer");
 		setStagedCap("read-only");
-		setScope("session");
+		setScope(projectOnly ? "project" : "session");
 		setView("main");
 		setConfirm(null);
 		setAnnouncement("");
@@ -663,6 +664,66 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		? failure instanceof Error ? failure.message : String(failure)
 		: linkError ? linkErrorMessage(t, linkError)
 			: undoNotice.failed ? t("share.undoFailed") : null;
+
+	// What Esc steps back out of before the surface closes: Link settings, then the confirm step.
+	const canStepBack = view === "settings" || staging;
+	const stepBack = (): boolean => {
+		if (view === "settings") {
+			closeSettings();
+			return true;
+		}
+		if (staging) {
+			cancelStaging();
+			return true;
+		}
+		return false;
+	};
+	// Where focus starts: ready to type a name. Links only: on Copy link when it
+	// can copy, else on General access; while that loads, on the first control.
+	const initialFocus = (): HTMLElement | null => (
+		peopleAvailable && fieldInputRef.current
+			? fieldInputRef.current
+			: canCopy(links) && copyButtonRef.current
+				? copyButtonRef.current
+				: contentRef.current?.querySelector<HTMLElement>("[data-general-access-menu]") ?? null
+	);
+
+	return {
+		orgId, projectId, projectOnly, scope, scopeSession, switchScope, view, openSettings, closeSettings, staging, canStepBack, stepBack, initialFocus,
+		contentRef, fieldInputRef, copyButtonRef, backButtonRef, ready, peopleAvailable, error, locale: i18n.language,
+		staged, setStaged, stagedRole, setStagedRole, stagedCap, setStagedCap, share, unavailable, submitShare, cancelStaging, ownEntries, myEmail,
+		access, ordered, workspaceName, personal, update, accessKey, stopEntry, undoNotice, links, restricted, turnOnLinks, askTurnOff, askChange,
+		expiry, setExpiry, askRevoke, checkingRevoke, announcement, announceCopy, askCopy, newTeamFor, setNewTeamFor,
+		confirm, removeJoined, setRemoveJoined, runConfirm, cancelConfirm,
+	};
+}
+
+type ShareController = ReturnType<typeof useShareController>;
+
+/**
+ * Shares this cloud session, or its whole project, in a dialog: the title,
+ * where it is and the switch between the session and the whole project, Link
+ * settings and Close on top, the SharePanel, then Copy link beside Done.
+ * Without a session it shares the whole project only.
+ */
+export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true }: {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	orgId: string;
+	projectId: string;
+	/** The session to share; without one the dialog shares the whole project only. */
+	sessionId?: string;
+	/** The session's title, for "Share \"<title>\"". */
+	sessionName?: string;
+	/** The project's name, for "Session in <project>". */
+	projectName?: string;
+	/** Sharing with people and teams (Teams builds); off, the dialog is links only. */
+	people?: boolean;
+}) {
+	const { t } = useTranslation();
+	const share = useShareController({ active: open, orgId, projectId, sessionId, teams });
+	const restoreFocusOnClose = useRestoreFocusOnClose(open);
+	const { scope, view, staging, projectOnly } = share;
 	const title = scope === "project"
 		? projectName ? t("share.projectTitleNamed", { name: projectName }) : t("share.projectTitle")
 		: sessionName ? t("share.titleNamed", { name: sessionName }) : t("share.title");
@@ -670,7 +731,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
-				ref={contentRef}
+				ref={share.contentRef}
 				showCloseButton={false}
 				className={cn(settingsDialogContentClass, "w-[min(540px,calc(100vw-24px))]")}
 				onClick={(event) => event.stopPropagation()}
@@ -678,52 +739,30 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				onInteractOutside={(event) => {
 					if (event.target instanceof Element && event.target.closest("[data-global-toast]")) event.preventDefault();
 				}}
-				// Opens ready to type a name. Links only: on Copy link when it can copy,
-				// else on General access; while that loads, on the first control. Focus
-				// must never stay on the page behind, where keys would reach the terminal.
+				// Focus must never stay on the page behind, where keys would reach the terminal.
 				onOpenAutoFocus={(event) => {
-					const target = peopleAvailable && fieldInputRef.current
-						? fieldInputRef.current
-						: canCopy(links) && copyButtonRef.current
-							? copyButtonRef.current
-							: contentRef.current?.querySelector<HTMLElement>("[data-general-access-menu]");
+					const target = share.initialFocus();
 					if (!target) return;
 					event.preventDefault();
 					target.focus();
 				}}
 				onCloseAutoFocus={restoreFocusOnClose}
 				onEscapeKeyDown={(event) => {
-					// Esc steps back before it closes: out of link settings, then out of the confirm step.
-					if (view === "settings") {
-						event.preventDefault();
-						closeSettings();
-					} else if (staging) {
-						event.preventDefault();
-						cancelStaging();
-					}
+					if (share.stepBack()) event.preventDefault();
 				}}
 				data-share-session-dialog
 			>
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 px-5 pt-4 pb-0")}>
 					<div className="flex items-center gap-1">
 						{view === "settings" ? (
-							<Button ref={backButtonRef} type="button" variant="quiet" size="icon-sm" className="-ml-1.5" aria-label={t("share.back")} onClick={closeSettings} data-share-back="">
+							<Button ref={share.backButtonRef} type="button" variant="quiet" size="icon-sm" className="-ml-1.5" aria-label={t("share.back")} onClick={share.closeSettings} data-share-back="">
 								<ArrowLeft className="size-3.5" aria-hidden="true" />
 							</Button>
 						) : null}
 						<DialogTitle className="settings-dialog-title min-w-0 flex-1 truncate text-subtitle" title={view === "settings" ? undefined : title}>
 							{view === "settings" ? t("share.general.linkSettings") : title}
 						</DialogTitle>
-						{view === "main" && !staging ? (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button type="button" variant="quiet" size="icon-sm" aria-label={t("share.general.linkSettings")} onClick={() => openSettings("gear")} data-share-settings="">
-										<Settings2 className="size-3.5" aria-hidden="true" />
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent>{t("share.general.linkSettings")}</TooltipContent>
-							</Tooltip>
-						) : null}
+						{view === "main" && !staging ? <LinkSettingsButton onClick={() => share.openSettings("gear")} /> : null}
 						<DialogClose asChild>
 							<CloseButton size="icon-sm" aria-label={t("confirm.close")} />
 						</DialogClose>
@@ -739,196 +778,365 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 											? t("share.projectIncludes")
 											: projectName ? t("share.sessionIn", { project: projectName }) : t("share.sessionInProject")}
 									</span>
-									<span aria-hidden="true">·</span>
-									<Button
-										type="button"
-										variant="link"
-										className="text-xs text-muted-foreground no-underline hover:text-foreground hover:underline"
-										onClick={() => switchScope(scope === "project" ? "session" : "project")}
-										data-share-switch-scope={scope === "project" ? "session" : "project"}
-									>
-										{scope === "project" ? t("share.backToSession") : t("share.shareProjectInstead")}
-									</Button>
+									{projectOnly ? null : (
+										<>
+											<span aria-hidden="true">·</span>
+											{/* A dotted underline, as Add Project's "Start without a repo", so it
+											    reads as an action. Keyboard focus brightens it as hover does: the
+											    app draws no focus rings (styles.css). */}
+											<Button
+												type="button"
+												variant="link"
+												className="text-xs font-medium text-muted-foreground decoration-dotted decoration-muted-foreground/60 underline-offset-4 hover:text-foreground hover:decoration-foreground focus-visible:text-foreground focus-visible:decoration-foreground"
+												onClick={() => share.switchScope(scope === "project" ? "session" : "project")}
+												data-share-switch-scope={scope === "project" ? "session" : "project"}
+											>
+												{scope === "project" ? t("share.backToSession") : t("share.shareProjectInstead")}
+											</Button>
+										</>
+									)}
 								</>
 							)}
 						</p>
 					</DialogDescription>
 				</div>
-				<div className={cn(settingsDialogBodyClass, "gap-3.5 px-5 pt-4 pb-5")}>
-					{view === "settings" ? (
-						<>
-							<LinkSettings
-								scope={scope}
-								access={links}
-								expiry={expiry}
-								onExpiryChange={setExpiry}
-								onRevoke={(link, index) => void askRevoke(link, index)}
-								busy={links.revoke.isPending || checkingRevoke !== null}
-								locale={i18n.language}
-							/>
-							{error ? <p role="alert" className="text-caption leading-4 text-error">{error}</p> : null}
-						</>
-					) : (
-						<>
-							{peopleAvailable ? (
-								<>
-									<PeopleField
-										orgId={orgId}
-										value={staged}
-										inputRef={fieldInputRef}
-										onChange={(next) => {
-											setStaged(next);
-											undoNotice.clearFailure();
-											if (!share.isPending) share.reset();
-										}}
-										unavailable={unavailable}
-										workspaceHasAccess
-										placeholder={t("share.addPeopleOrTeams")}
-										ariaLabel={t("share.addPeopleOrTeams")}
-										onNewTeam={(people, typed) => {
-											// A typed email joins the new team; other text names it.
-											const email = looksLikeEmail(typed) ? typed.toLowerCase() : "";
-											const picked = people.filter((recipient) => recipient.kind === "person");
-											setNewTeamFor({
-												people: email && !picked.some((recipient) => recipient.kind === "person" && recipient.email === email) ? [...picked, { kind: "person", email }] : picked,
-												name: email ? "" : typed,
-											});
-										}}
-										onSubmit={submitShare}
-										trailing={staging ? (
-											<AccessMenu
-												role={stagedRole}
-												modeCap={stagedCap}
-												scope={scope}
-												showCap={false}
-												onChange={({ role, modeCap }) => {
-													setStagedRole(role);
-													setStagedCap(modeCap);
-												}}
-											/>
-										) : undefined}
-										invalid={Boolean(share.error)}
-									/>
-									{error ? <p role="alert" className="-mt-1.5 text-caption leading-4 text-error">{error}</p> : null}
-									{staging ? (
-										<StagedSummary
-											orgId={orgId}
-											projectId={projectId}
-											sessionId={scopeSession}
-											scope={scope}
-											staged={staged}
-											role={stagedRole}
-											modeCap={stagedCap}
-											onCapChange={setStagedCap}
-											entries={ownEntries}
-											me={myEmail}
-											locale={i18n.language}
-										/>
-									) : (
-										<AccessList
-											orgId={orgId}
-											projectId={projectId}
-											sessionId={scopeSession}
-											scope={scope}
-											access={access.data ?? undefined}
-											entries={ordered}
-											loading={access.isLoading}
-											me={myEmail}
-											workspaceName={workspaceName}
-											personal={personal}
-											onChange={(entry, next) => update.mutate({ key: accessKey, entry, ...next })}
-											onStop={stopEntry}
-											onShowProject={() => switchScope("project")}
-										/>
-									)}
-								</>
-							) : error ? <p role="alert" className="text-caption leading-4 text-error">{error}</p> : null}
-							{staging ? null : (
-								<GeneralAccessCard
-									scope={scope}
-									access={links}
-									restricted={restricted}
-									locale={i18n.language}
-									onTurnOn={turnOnLinks}
-									onTurnOff={askTurnOff}
-									onChangeRole={askChange}
-									onOpenSettings={() => openSettings("card")}
-								/>
-							)}
-						</>
-					)}
-					<UndoNotice
-						notice={undoNotice.shown}
-						onUndo={() => {
-							undoNotice.undo();
-							fieldInputRef.current?.focus();
-						}}
-						onDismiss={undoNotice.dismiss}
-					/>
-					<p className="sr-only" aria-live="polite" data-share-announcement="">{announcement}</p>
-				</div>
-				<div className="flex items-start justify-between gap-2 border-t border-border px-5 py-3.5" data-share-footer="">
-					{staging ? (
-						<>
-							{/* Where "Notify people" goes once sharing sends email; for now they find it in the app. */}
-							<p className="self-center text-xs text-muted-foreground" data-share-in-app="">{t("share.inAppNotice")}</p>
-							<div className="flex shrink-0 gap-2">
-								<Button type="button" variant="secondary" onClick={cancelStaging}>
-									{t("confirm.cancel")}
-								</Button>
-								<Button type="button" variant="primary" onClick={submitShare} disabled={!ready || share.isPending} data-share-submit="">
-									{share.isPending ? t("share.sharing") : t("share.shareAction")}
-								</Button>
-							</div>
-						</>
-					) : (
-						<>
-							{view === "main" ? (
-								<CopyLinkButton access={links} people={peopleAvailable} onCopied={announceCopy} onAsk={askCopy} buttonRef={copyButtonRef} />
-							) : <span />}
-							{view === "settings" ? (
-								<Button type="button" variant="primary" onClick={closeSettings} data-share-done="">
-									{t("share.done")}
-								</Button>
-							) : (
-								<DialogClose asChild>
-									<Button type="button" variant="primary" data-share-done="">
-										{t("share.done")}
-									</Button>
-								</DialogClose>
-							)}
-						</>
-					)}
-				</div>
-				{newTeamFor ? (
-					<NewTeamDialog
-						orgId={orgId}
-						open
-						initialPeople={newTeamFor.people}
-						initialName={newTeamFor.name}
-						onOpenChange={(next) => {
-							if (!next) setNewTeamFor(null);
-						}}
-						onCreated={(team) => {
-							setNewTeamFor(null);
-							setStaged((current) => [
-								...current.filter((recipient) => recipient.kind === "team"),
-								{ kind: "team", teamId: team.team.id, name: team.team.name, memberCount: team.team.memberCount },
-							]);
-						}}
-					/>
-				) : null}
-				<LinkConfirmDialog
-					confirm={confirm}
-					scope={scope}
-					links={links}
-					removeJoined={removeJoined}
-					onRemoveJoinedChange={setRemoveJoined}
-					onConfirm={runConfirm}
-					onCancel={cancelConfirm}
-				/>
+				<SharePanel share={share} layout="dialog" />
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+/**
+ * The whole project's sharing as a page, for Project settings › Sharing:
+ * the same SharePanel the share dialog shows for the project, with nothing to
+ * close. Changes apply at once, as they do in the dialog.
+ */
+export function ProjectSharePanel({ orgId, projectId, people: teams = true }: {
+	orgId: string;
+	projectId: string;
+	/** Sharing with people and teams (Teams builds); off, links only. */
+	people?: boolean;
+}) {
+	const share = useShareController({ active: true, orgId, projectId, teams });
+	return <SharePanel share={share} layout="inline" />;
+}
+
+/** The gear that opens Link settings. */
+function LinkSettingsButton({ onClick }: { onClick: () => void }) {
+	const { t } = useTranslation();
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button type="button" variant="quiet" size="icon-sm" aria-label={t("share.general.linkSettings")} onClick={onClick} data-share-settings="">
+					<Settings2 className="size-3.5" aria-hidden="true" />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent>{t("share.general.linkSettings")}</TooltipContent>
+		</Tooltip>
+	);
+}
+
+/**
+ * Sharing's controls, from useShareController. In the dialog, its body and
+ * footer: people, General access, then Copy link beside Done. Inline (Project
+ * settings › Sharing), the same controls as settings sections: the people
+ * field, People with access, then General access with Link settings and Copy
+ * link beside its heading, and no Done. The confirm step and Link settings
+ * take the panel's place in both, and Esc steps back out of them.
+ */
+function SharePanel({ share: controller, layout }: { share: ShareController; layout: "dialog" | "inline" }) {
+	const { t } = useTranslation();
+	const {
+		orgId, projectId, scope, scopeSession, switchScope, view, openSettings, closeSettings, staging, canStepBack, stepBack,
+		contentRef, fieldInputRef, copyButtonRef, backButtonRef, ready, peopleAvailable, error, locale,
+		staged, setStaged, stagedRole, setStagedRole, stagedCap, setStagedCap, share, unavailable, submitShare, cancelStaging, ownEntries, myEmail,
+		access, ordered, workspaceName, personal, update, accessKey, stopEntry, undoNotice, links, restricted, turnOnLinks, askTurnOff, askChange,
+		expiry, setExpiry, askRevoke, checkingRevoke, announcement, announceCopy, askCopy, newTeamFor, setNewTeamFor,
+		confirm, removeJoined, setRemoveJoined, runConfirm, cancelConfirm,
+	} = controller;
+	// Inline, a link the clipboard refused shows under General access rather than beside Copy link in its heading.
+	const [copyFallbackHost, setCopyFallbackHost] = useState<HTMLDivElement | null>(null);
+	const inline = layout === "inline";
+
+	const peopleField = (
+		<PeopleField
+			orgId={orgId}
+			value={staged}
+			inputRef={fieldInputRef}
+			onChange={(next) => {
+				setStaged(next);
+				undoNotice.clearFailure();
+				if (!share.isPending) share.reset();
+			}}
+			unavailable={unavailable}
+			workspaceHasAccess
+			placeholder={t("share.addPeopleOrTeams")}
+			ariaLabel={t("share.addPeopleOrTeams")}
+			onNewTeam={(people, typed) => {
+				// A typed email joins the new team; other text names it.
+				const email = looksLikeEmail(typed) ? typed.toLowerCase() : "";
+				const picked = people.filter((recipient) => recipient.kind === "person");
+				setNewTeamFor({
+					people: email && !picked.some((recipient) => recipient.kind === "person" && recipient.email === email) ? [...picked, { kind: "person", email }] : picked,
+					name: email ? "" : typed,
+				});
+			}}
+			onSubmit={submitShare}
+			trailing={staging ? (
+				<AccessMenu
+					role={stagedRole}
+					modeCap={stagedCap}
+					scope={scope}
+					showCap={false}
+					onChange={({ role, modeCap }) => {
+						setStagedRole(role);
+						setStagedCap(modeCap);
+					}}
+				/>
+			) : undefined}
+			invalid={Boolean(share.error)}
+		/>
+	);
+	const stagedSummary = (
+		<StagedSummary
+			orgId={orgId}
+			projectId={projectId}
+			sessionId={scopeSession}
+			scope={scope}
+			staged={staged}
+			role={stagedRole}
+			modeCap={stagedCap}
+			onCapChange={setStagedCap}
+			entries={ownEntries}
+			me={myEmail}
+			locale={locale}
+		/>
+	);
+	const accessList = (
+		<AccessList
+			orgId={orgId}
+			projectId={projectId}
+			sessionId={scopeSession}
+			scope={scope}
+			access={access.data ?? undefined}
+			entries={ordered}
+			loading={access.isLoading}
+			me={myEmail}
+			workspaceName={workspaceName}
+			personal={personal}
+			label={!inline}
+			onChange={(entry, next) => update.mutate({ key: accessKey, entry, ...next })}
+			onStop={stopEntry}
+			onShowProject={() => switchScope("project")}
+		/>
+	);
+	const generalAccess = (
+		<GeneralAccessCard
+			scope={scope}
+			access={links}
+			restricted={restricted}
+			locale={locale}
+			label={!inline}
+			onTurnOn={turnOnLinks}
+			onTurnOff={askTurnOff}
+			onChangeRole={askChange}
+			onOpenSettings={() => openSettings("card")}
+		/>
+	);
+	const copyLink = (
+		<CopyLinkButton
+			access={links}
+			people={peopleAvailable}
+			onCopied={announceCopy}
+			onAsk={askCopy}
+			buttonRef={copyButtonRef}
+			{...(inline ? { size: "sm" as const, fallbackHost: copyFallbackHost } : {})}
+		/>
+	);
+	const linkSettings = (
+		<LinkSettings
+			scope={scope}
+			access={links}
+			expiry={expiry}
+			onExpiryChange={setExpiry}
+			onRevoke={(link, index) => void askRevoke(link, index)}
+			busy={links.revoke.isPending || checkingRevoke !== null}
+			locale={locale}
+		/>
+	);
+	const errorLine = (className?: string) => (error ? <p role="alert" className={cn("text-caption leading-4 text-error", className)}>{error}</p> : null);
+	// Where "Notify people" goes once sharing sends email; for now they find it in the app.
+	const inAppNotice = <p className="self-center text-xs text-muted-foreground" data-share-in-app="">{t("share.inAppNotice")}</p>;
+	const stagingActions = (
+		<div className="flex shrink-0 gap-2">
+			<Button type="button" variant="secondary" size={inline ? "sm" : "default"} onClick={cancelStaging}>
+				{t("confirm.cancel")}
+			</Button>
+			<Button type="button" variant="primary" size={inline ? "sm" : "default"} onClick={submitShare} disabled={!ready || share.isPending} data-share-submit="">
+				{share.isPending ? t("share.sharing") : t("share.shareAction")}
+			</Button>
+		</div>
+	);
+	const notices = (
+		<>
+			<UndoNotice
+				notice={undoNotice.shown}
+				onUndo={() => {
+					undoNotice.undo();
+					fieldInputRef.current?.focus();
+				}}
+				onDismiss={undoNotice.dismiss}
+			/>
+			<p className="sr-only" aria-live="polite" data-share-announcement="">{announcement}</p>
+		</>
+	);
+	const dialogs = (
+		<>
+			{newTeamFor ? (
+				<NewTeamDialog
+					orgId={orgId}
+					open
+					initialPeople={newTeamFor.people}
+					initialName={newTeamFor.name}
+					onOpenChange={(next) => {
+						if (!next) setNewTeamFor(null);
+					}}
+					onCreated={(team) => {
+						setNewTeamFor(null);
+						setStaged((current) => [
+							...current.filter((recipient) => recipient.kind === "team"),
+							{ kind: "team", teamId: team.team.id, name: team.team.name, memberCount: team.team.memberCount },
+						]);
+					}}
+				/>
+			) : null}
+			<LinkConfirmDialog
+				confirm={confirm}
+				scope={scope}
+				links={links}
+				removeJoined={removeJoined}
+				onRemoveJoinedChange={setRemoveJoined}
+				onConfirm={runConfirm}
+				onCancel={cancelConfirm}
+			/>
+		</>
+	);
+
+	if (inline) {
+		return (
+			<div
+				ref={contentRef}
+				className="flex flex-col gap-(--size-settings-section-gap)"
+				data-share-panel={scope}
+				data-share-layout="inline"
+				// Esc steps back out of Link settings or the confirm step before it closes Settings.
+				data-settings-inline-edit={canStepBack ? "" : undefined}
+				onKeyDown={(event) => {
+					if (event.key !== "Escape" || event.nativeEvent.isComposing || !stepBack()) return;
+					event.preventDefault();
+					event.stopPropagation();
+				}}
+			>
+				{view === "settings" ? (
+					<section className="flex flex-col gap-(--size-settings-section-inner-gap)" aria-label={t("share.general.linkSettings")}>
+						<div className="flex items-start gap-1 px-(--settings-row-inset)">
+							<Button ref={backButtonRef} type="button" variant="quiet" size="icon-sm" className="-mt-1 -ml-2" aria-label={t("share.back")} onClick={closeSettings} data-share-back="">
+								<ArrowLeft className="size-3.5" aria-hidden="true" />
+							</Button>
+							<div className="min-w-0 flex-1">
+								<h2 className="text-sm font-medium leading-5 text-foreground">{t("share.general.linkSettings")}</h2>
+								<p className="text-xs leading-5 text-settings-muted">{scope === "project" ? t("share.settings.descriptionProject") : t("share.settings.description")}</p>
+							</div>
+						</div>
+						{linkSettings}
+						{errorLine()}
+					</section>
+				) : (
+					<>
+						<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
+							<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{scope === "project" ? t("share.projectIncludes") : t("share.sessionInProject")}</p>
+							{peopleAvailable ? peopleField : null}
+							{errorLine("px-(--settings-row-inset)")}
+						</div>
+						{peopleAvailable ? (
+							staging ? (
+								<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
+									{stagedSummary}
+									<div className="flex items-center justify-between gap-2 pl-(--settings-row-inset)" data-share-footer="">
+										{inAppNotice}
+										{stagingActions}
+									</div>
+								</div>
+							) : (
+								<SettingsSection title={t("share.peopleWithAccess")} sectionId="share-people">{accessList}</SettingsSection>
+							)
+						) : null}
+						{staging ? null : (
+							<SettingsSection
+								title={t("share.generalAccess")}
+								sectionId="share-general-access"
+								titleAction={<LinkSettingsButton onClick={() => openSettings("gear")} />}
+								action={copyLink}
+							>
+								{generalAccess}
+								<div ref={setCopyFallbackHost} className="contents" />
+							</SettingsSection>
+						)}
+					</>
+				)}
+				{notices}
+				{dialogs}
+			</div>
+		);
+	}
+
+	return (
+		<>
+			<div className={cn(settingsDialogBodyClass, "gap-3.5 px-5 pt-4 pb-5")} data-share-panel={scope} data-share-layout="dialog">
+				{view === "settings" ? (
+					<>
+						{linkSettings}
+						{errorLine()}
+					</>
+				) : (
+					<>
+						{peopleAvailable ? (
+							<>
+								{peopleField}
+								{errorLine("-mt-1.5")}
+								{staging ? stagedSummary : accessList}
+							</>
+						) : errorLine()}
+						{staging ? null : generalAccess}
+					</>
+				)}
+				{notices}
+			</div>
+			<div className="flex items-start justify-between gap-2 border-t border-border px-5 py-3.5" data-share-footer="">
+				{staging ? (
+					<>
+						{inAppNotice}
+						{stagingActions}
+					</>
+				) : (
+					<>
+						{view === "main" ? copyLink : <span />}
+						{view === "settings" ? (
+							<Button type="button" variant="primary" onClick={closeSettings} data-share-done="">
+								{t("share.done")}
+							</Button>
+						) : (
+							<DialogClose asChild>
+								<Button type="button" variant="primary" data-share-done="">
+									{t("share.done")}
+								</Button>
+							</DialogClose>
+						)}
+					</>
+				)}
+			</div>
+			{dialogs}
+		</>
 	);
 }
 
@@ -1025,7 +1233,7 @@ export function orderEntries(entries: readonly CloudCpShareEntry[], scope: Share
 		.map(({ entry }) => entry);
 }
 
-function AccessList({ orgId, projectId, sessionId, scope, access, entries, loading, me, workspaceName, personal, onChange, onStop, onShowProject }: {
+function AccessList({ orgId, projectId, sessionId, scope, access, entries, loading, me, workspaceName, personal, label = true, onChange, onStop, onShowProject }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string | undefined;
@@ -1039,6 +1247,8 @@ function AccessList({ orgId, projectId, sessionId, scope, access, entries, loadi
 	workspaceName?: string;
 	/** A personal workspace has nobody but its owner, so it gets no row of its own. */
 	personal: boolean;
+	/** "People with access" over the list; off where a section heading says it. */
+	label?: boolean;
 	onChange: (entry: CloudCpShareEntry, next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => void;
 	onStop: (entry: CloudCpShareEntry) => void;
 	onShowProject: () => void;
@@ -1048,7 +1258,7 @@ function AccessList({ orgId, projectId, sessionId, scope, access, entries, loadi
 	if (loading) {
 		return (
 			<div className="flex flex-col gap-1.5" aria-busy="true">
-				<p className="text-xs text-muted-foreground">{t("share.peopleWithAccess")}</p>
+				{label ? <p className="text-xs text-muted-foreground">{t("share.peopleWithAccess")}</p> : null}
 				<div className="flex flex-col gap-2 rounded-md bg-muted/40 p-3">
 					{[0, 1].map((row) => (
 						<div key={row} className="flex items-center gap-2.5">
@@ -1064,7 +1274,7 @@ function AccessList({ orgId, projectId, sessionId, scope, access, entries, loadi
 	const workspaceRow = !personal || (!owner && scope === "project");
 	return (
 		<div className="flex flex-col gap-1.5">
-			<p className="text-xs text-muted-foreground">{t("share.peopleWithAccess")}</p>
+			{label ? <p className="text-xs text-muted-foreground">{t("share.peopleWithAccess")}</p> : null}
 			<ul className="flex flex-col divide-y divide-border rounded-md bg-muted/40 py-0.5" data-share-access-list="">
 				{owner ? (
 					<li className="flex min-h-11 items-center gap-2.5 py-1.5 pr-2 pl-2.5" data-share-owner-row="">

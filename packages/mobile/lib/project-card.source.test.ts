@@ -71,11 +71,20 @@ describe("project page", () => {
 	// toolbar's trailing item; on Android Material's FAB, clear of the gesture
 	// bar with the list scrolling out from under it.
 	it("starts a task in this project from a bottom-right compose button on iOS and a FAB on Android", () => {
-		expect(page).toContain('const bottomCompose = Platform.OS === "ios" && canStartTask ? (');
+		expect(page).toContain('const bottomCompose = Platform.OS === "ios" && offerNewTask ? (');
 		expect(page).toMatch(/<Stack\.Toolbar placement="bottom">\s*<Stack\.Toolbar\.Spacer \/>/);
 		expect(page).toContain('<Stack.Toolbar.Button icon="square.and.pencil" accessibilityLabel="New task" onPress={startTask}>New task</Stack.Toolbar.Button>');
 		expect(page).not.toContain('toolbarIcon("add")');
 		expect(page).toContain('<AddFab expanded={fab.expanded} label="New task" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" />');
 		expect(page).toContain('params: { projectId: id, hostId: routeHostId }');
+	});
+
+	// One way to start a task at a time: "No workers yet" has its own Start
+	// task, so the compose button and the FAB wait for a worker to show.
+	it("leaves the compose button and the FAB out while No workers yet offers Start task", () => {
+		expect(page).toContain("const offerNewTask = canStartTask && !noWorkersShown;");
+		expect(page).toContain("onEmptyChange={setNoWorkersShown}");
+		expect(page).toContain('{offerNewTask ? <AddFab expanded={fab.expanded} label="New task"');
+		expect(page).toContain('action={<Button title="Start task" icon="plus" onPress={startTask} />}');
 	});
 });

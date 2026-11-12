@@ -166,6 +166,7 @@ import {
 	handleCloudDeepLink,
 	getCloudAccessToken,
 	getCloudSession,
+	getCloudSessionCached,
 	installCloudIPC,
 	registerCloudProtocol,
 	resolveCloudAuthDir,
@@ -181,6 +182,7 @@ import { ShareLinkRecords } from "./main/cloud-share-links";
 import { registerSessionShareUrlsIpc, SessionShareUrls } from "./main/session-share-urls";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
+import { clearFolderImports, isChosenFolder, registerCloudFolderPushIpc, rememberChosenFolder } from "./main/cloud-folder-push";
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
@@ -210,6 +212,9 @@ import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
+import { createArtifactSnapshotStore, registerArtifactSnapshotIpc, registerArtifactSnapshotProtocol } from "./main/artifact-snapshots";
+import { ARTIFACT_SNAPSHOT_SCHEME } from "./shared/artifact-snapshot";
+import { createArtifactSnapshotRenderer } from "./main/artifact-snapshot-window";
 import { pruneCloudArtifactFolders, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
@@ -257,6 +262,7 @@ import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenu
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
+import { sealSavedPasswords, setPasswordCipher } from "./main/remotes-store";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
@@ -622,6 +628,9 @@ protocol.registerSchemesAsPrivileged([
 		scheme: RENDERER_SCHEME,
 		privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true },
 	},
+	// Cached artifact previews, loaded by the cards' <img>s (main/artifact-snapshots.ts). Secure, so
+	// the app:// renderer may show them.
+	{ scheme: ARTIFACT_SNAPSHOT_SCHEME, privileges: { standard: true, secure: true } },
 ]);
 
 // Only the app's single instance claims (or, for a loopback dev build,
@@ -676,8 +685,8 @@ function privacyGuidePreloadPath(): string {
 	return path.join(__dirname, "privacy-guide-preload.js");
 }
 
-// Runtime window/taskbar icon for Linux and Windows, and the macOS dock icon.
-// Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
+// Runtime window/taskbar icon for Linux and Windows, and the unpackaged macOS
+// dock icon. Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
 // the orange "DEV" variant so they are recognisable and never impersonate the
 // installed app's taskbar/dock icon (#3642).
 function windowIconPath(): string | undefined {
@@ -697,8 +706,11 @@ function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
 	]);
 }
 
+// Unpackaged runs only: the Dock shows the DEV icon. A packaged app keeps its
+// bundle icon, which macOS 26+ renders as Liquid Glass from Assets.car and
+// adapts to light, dark, tinted and clear; a runtime PNG would flatten it.
 function applyRuntimeAppIcon(): void {
-	if (process.platform !== "darwin") return;
+	if (process.platform !== "darwin" || app.isPackaged) return;
 	const iconPath = windowIconPath();
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
@@ -1310,6 +1322,10 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.on("render-process-gone", () => trayLifecycle.clear());
 
 	mainWindow.on("closed", () => {
+		// The snapshot window is a BaseWindow too: left open it would count as the app's last window,
+		// and the requests still queued must not open another one.
+		artifactSnapshotStore.cancel();
+		artifactSnapshotRenderer.close();
 		chatDraftRisks = [];
 		chatDraftDialog = undefined;
 		chatDraftQuitConfirmed = false;
@@ -1523,10 +1539,10 @@ function telemetryOverrides(): Record<string, string> {
 		AO_TELEMETRY_POSTHOG_KEY: process.env.AO_TELEMETRY_POSTHOG_KEY ?? DEFAULT_POSTHOG_PROJECT_KEY,
 		AO_TELEMETRY_POSTHOG_HOST: process.env.AO_TELEMETRY_POSTHOG_HOST ?? DEFAULT_POSTHOG_HOST,
 		// Daemon-side Sentry (5xx + panics with Go stacks). Stamped on the daemon
-		// env so the spawned daemon inherits the DSN; off in dev to match the
-		// PostHog remote gate, and an explicit env always wins. A blank value
-		// leaves the daemon's Sentry a no-op.
-		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, isDev),
+		// env so the spawned daemon inherits the DSN; off in dev and in any copy
+		// that is not a published stable or nightly build, and an explicit env
+		// always wins. A blank value leaves the daemon's Sentry a no-op.
+		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(), isDev),
 		// The daemon binary has no version of its own that release tooling sets,
 		// so without this every daemon event lands unattributable to a release.
 		AO_TELEMETRY_APP_VERSION: process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(),
@@ -3392,7 +3408,10 @@ async function chooseDirectory(title: string, defaultPath?: string): Promise<str
 	const result = await dialog.showOpenDialog(options);
 
 	if (result.canceled) return null;
-	return result.filePaths[0] ?? null;
+	const chosen = result.filePaths[0] ?? null;
+	// A cloud workspace may upload only a folder picked here.
+	if (chosen) rememberChosenFolder(chosen);
+	return chosen;
 }
 
 const remoteRegistry = new RemoteRegistry((entry) => {
@@ -3401,6 +3420,13 @@ const remoteRegistry = new RemoteRegistry((entry) => {
 	const devUrl = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "undefined" ? undefined : MAIN_WINDOW_VITE_DEV_SERVER_URL;
 	return startRemoteProxy(entry, devUrl ? new URL(devUrl).origin : RENDERER_ORIGIN);
 });
+setPasswordCipher(() => protectedStorageAvailable() ? {
+	encrypt: (text) => safeStorage.encryptString(text).toString("base64"),
+	decrypt: (sealed) => safeStorage.decryptString(Buffer.from(sealed, "base64")),
+} : null);
+void app.whenReady().then(() => sealSavedPasswords(remotesFilePath())).catch((error: unknown) => {
+	console.warn("[remotes] could not encrypt saved host passwords", error);
+});
 registerRemotesIpc(ipcMain, {
 	file: remotesFilePath(),
 	registry: remoteRegistry,
@@ -3408,6 +3434,14 @@ registerRemotesIpc(ipcMain, {
 		if (!await getCloudSession(cloudDataDir())) throw new ExpectedIpcError("Sign in to Orchestrator Cloud to use remote hosts.");
 	},
 	getAccountId: async () => (await getCloudSession(cloudDataDir()))?.user.id ?? "",
+	cloudRequest: async (method, path, { body, signal } = {}) => {
+		const baseUrl = await cloudControlPlaneUrl();
+		if (!baseUrl) throw new ExpectedIpcError("No Orchestrator Cloud control plane is configured.");
+		return cloudCpProxy.request({
+			baseUrl, path, method,
+			...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+		}, { hostTokens: true, signal });
+	},
 	localIdentity: createLocalHostIdentity(() => daemonStatus.state === "ready" && daemonStatus.port
 		? { port: daemonStatus.port, pid: daemonStatus.pid, generation: daemonAttachmentGeneration }
 		: null),
@@ -3585,6 +3619,21 @@ registerChatImageIpc({
 	downloadsDirectory: () => app.getPath("downloads"),
 	appName: app.getName(),
 });
+const artifactSnapshotRenderer = createArtifactSnapshotRenderer({
+	BrowserWindow,
+	preload: preloadPath(),
+	pageUrl: () => new URL("artifact-snapshot.html", rendererUrl()).href,
+	// Never open the hidden window without the shell: the app stays alive on macOS after the shell closes.
+	shellOpen: () => {
+		const contents = getShellWebContents();
+		return contents !== null && !contents.isDestroyed();
+	},
+});
+const artifactSnapshotStore = createArtifactSnapshotStore({
+	directory: path.join(desktopDataDir, "artifact-previews"),
+	render: artifactSnapshotRenderer.render,
+});
+registerArtifactSnapshotIpc({ ipcMain, store: artifactSnapshotStore });
 registerCloudArtifactIpc({
 	ipcMain,
 	openInBrowser: (target) => openFileInDefaultBrowser(target),
@@ -3956,6 +4005,13 @@ ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 // The account this run last told the renderer about, to notice another one signing in.
 let notifiedCloudUserId: string | undefined;
 
+function bindArtifactSnapshotsToCloudAccount(userId: string | null): void {
+	artifactSnapshotStore.bindCloudAccount(userId).catch((error) => {
+		// The old files stay on record as another account's, so the next sign-in, or the next launch, tries again.
+		console.warn("AO: could not delete the cached Cloud artifact previews", error);
+	});
+}
+
 function notifyRenderersOfCloudSession(
 	account: import("./shared/cloud-account").CloudAccount | null,
 	signIn?: import("./shared/cloud-account").CloudSignInContext,
@@ -3969,6 +4025,9 @@ function notifyRenderersOfCloudSession(
 		void sessionShareUrls.clear().catch(() => undefined);
 	}
 	notifiedCloudUserId = account?.user.id;
+	// The Cloud artifact previews on disk belong to one account: another one signing in, or this one
+	// being lost (a sign-out, or a refresh that failed for good), clears them.
+	bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
 		void cloudAgentProxy.close();
@@ -3981,7 +4040,13 @@ function notifyRenderersOfCloudSession(
 // Telemetry's Cloud binding is retired as part of sign-out itself, not only when
 // the renderer later hands the sign-out to the daemon: the app can quit first,
 // and a CLI-started daemon would then restore the departed account.
-installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, () => telemetryIdentity.signOut());
+installCloudIPC(cloudDataDir, notifyRenderersOfCloudSession, async () => {
+	// Cloud artifact previews cached on disk go with the account, before the app can quit.
+	await artifactSnapshotStore.clearCloud().catch((error) => {
+		console.warn("AO: could not delete the cached Cloud artifact previews", error);
+	});
+	await telemetryIdentity.signOut();
+});
 
 // Dev-only local (email/password) sign-in against a loopback Docker control
 // plane running AO_CLOUD_LOCAL_AUTH. Gated to unpackaged/dev builds + loopback
@@ -3990,7 +4055,28 @@ installCloudLocalAuthIPC(cloudDataDir, notifyRenderersOfCloudSession);
 
 // Cloud control-plane proxy IPC — cloudCp:request/openStream/closeStream.
 // CP calls go through main so the WorkOS bearer token never reaches a renderer.
-installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
+const cloudCpProxy = installCloudCpProxy(cloudDataDir, cloudControlPlaneUrl);
+
+// A local folder added to a cloud workspace is uploaded from here, into the
+// empty repository the control plane made for it, so the token stays in main.
+const folderImportDir = path.join(desktopDataDir, "tmp", "folder-imports");
+void clearFolderImports(folderImportDir).catch(() => undefined);
+registerCloudFolderPushIpc(ipcMain, {
+	controlPlaneUrl: cloudControlPlaneUrl,
+	getToken: () => getCloudAccessToken(cloudDataDir()),
+	tmpRoot: () => folderImportDir,
+	env: () => daemonEnv(),
+	homeDir: os.homedir(),
+	// The data directory this app resolved (AO_DATA_DIR) and its Electron
+	// profile: no folder inside or holding either is uploaded.
+	appStateDirs: () => [desktopDataDir, app.getPath("userData")],
+	ready: ensureShellEnv,
+	trustedSender: (sender) => {
+		const contents = sender as WebContents;
+		return trustedShellWebContents.get(contents?.id) === contents;
+	},
+	chosenFolder: isChosenFolder,
+});
 ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unknown, sessionId: unknown) =>
 	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 
@@ -4173,12 +4259,6 @@ app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
-	if (app.isPackaged) {
-		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");
-		await checkDesktopVersionFloor().catch((err) =>
-			console.warn("desktop version floor check failed:", err),
-		);
-	}
 	void refreshGitHubOwners();
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
@@ -4298,6 +4378,13 @@ app.whenReady().then(async () => {
 	}
 
 	registerRendererProtocol();
+	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
+	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
+	// even if the app quit before it could.
+	void getCloudSessionCached(cloudDataDir()).then(
+		(account) => bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null),
+		() => bindArtifactSnapshotsToCloudAccount(null),
+	);
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))
@@ -4332,6 +4419,19 @@ app.whenReady().then(async () => {
 	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
 	if (browserQuitRequested) return;
+	// Not awaited: launch must not wait on this network fetch (up to 10 s). It
+	// runs once the window exists so its dialogs attach to it.
+	if (app.isPackaged) {
+		void import("./main/desktop-version-floor")
+			.then(({ checkDesktopVersionFloor }) => checkDesktopVersionFloor({
+					parent: () => mainWindow,
+					quit: () => {
+						preserveAgentsOnQuit = true;
+						desktopQuit.quitCompletely();
+					},
+				}))
+			.catch((err) => console.warn("desktop version floor check failed:", err));
+	}
 	if (!daemonStartsWithWindow) void startDaemon();
 	initAutoUpdates();
 

@@ -99,7 +99,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId, same name). The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit, 409 artifact_share_name_changed for an update with another name. Paid plans have no link limit. */
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. */
         post: operations["createArtifactShareUpload"];
         delete?: never;
         options?: never;
@@ -566,7 +566,8 @@ export interface paths {
         };
         get: operations["listGitHubRepositories"];
         put?: never;
-        post?: never;
+        /** @description Create an empty private GitHub repository, for a folder uploaded from the desktop, in an account the organization's GitHub App installation covers, and grant it to the organization. With several accounts connected, owner names the one (422 repository_owner_required without it). An empty private repository of that name that already exists is connected instead (200, created false); a public one is refused (422 repository_create_refused), as is a repository the member's own GitHub account cannot push to when the installation is user-scoped. Push the folder to pushPath, relative to the control plane, with the same bearer token. That endpoint only accepts pushes to a repository this operation returned for the organization, only pushes that create branches, and answers 403 otherwise; GitHub's own refusals (for example of .github/workflows changes the App may not make) reach git's output unchanged. 422 codes: repository_owner_required, github_installation_required, github_installation_ineligible, repository_create_on_github, repository_create_refused, validation_error. 502 SCM_BROKER_FAILED when GitHub could not be reached or did not grant the repository in time; retry later. */
+        post: operations["createGitHubRepository"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1817,6 +1818,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The release of each coding-agent CLI the organization's new Cloud sessions run, the newest release its publisher has, and how the last install of a release the organization chose went (any member). A harness runs the release AO tested (`defaultVersion`) until an organization admin chooses a newer one (`selectedVersion`). Each entry carries the local daemon's install plan, update advisory and install job shapes, so a client shows AO Cloud's harnesses the way it shows a computer's. `editable` says whether the caller may change them. */
+        get: operations["listOrgHarnessVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions/{agent}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Have the organization's new sessions run `expectedVersion` of this harness in place of the AO-tested release (organization admins). The version must be a stable release newer than the AO-tested one that the publisher has (the npm registry, or Cursor's download host). Only the harness's CLI moves: the tools it also runs (Claude Code's Chat adapter) keep the release AO tested. Each new session's worker installs the release and checks it against what the publisher listed; when that fails the session runs the AO-tested release and the failure shows as the entry's failed `job`. Sessions already running keep their release. */
+        post: operations["installOrgHarnessVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/harness-versions/{agent}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Have the organization's new sessions run the AO-tested release of this harness's CLI again (organization admins; 403 ORG_ADMIN_REQUIRED otherwise). */
+        delete: operations["resetOrgHarnessVersion"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/coder-config": {
         parameters: {
             query?: never;
@@ -2139,6 +2201,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/worker/artifacts/registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Registers the committed files at paths in the worker's own session as
+         *     its deliverables, including the files inside a bundle directory, which
+         *     is what ao artifact add calls, and returns every file the session has
+         *     registered. A path with no committed file registers nothing and is
+         *     absent from the result, so the caller asks again once the worker's sync
+         *     has committed it. Registering a file again changes nothing; a newly
+         *     registered file appends an artifact.changed event and moves its
+         *     updatedAt. Requires `worker:connect`.
+         *      */
+        post: operations["registerWorkerArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/worker/children": {
         parameters: {
             query?: never;
@@ -2382,6 +2469,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/billing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The organization's plan, its limits and its usage against them, for
+         *     any member. billingMode is self_serve only when the deployment has
+         *     Stripe and the organization is offered a billed provider; otherwise
+         *     plans do not apply and nothing is enforced. A self-serve organization
+         *     without an entitled subscription (active, trialing, or past due
+         *     within the grace period) is on Free, which runs no billed sessions:
+         *     creating or waking one answers 402 PLAN_REQUIRED. Usage counts every
+         *     running billed session per minute. Plans lists what the organization
+         *     can buy, cheapest first, for self-serve organizations only.
+         *      */
+        get: operations["getOrgBilling"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/notifications": {
         parameters: {
             query?: never;
@@ -2493,6 +2606,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/push-devices/{installId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Registers this app install's Expo push token, so the account's new
+         *     cloud notifications reach the phone as pushes, or replaces the
+         *     install's earlier registration. Registrations follow the account, not
+         *     an organization; an account keeps its 20 most recent. A token already
+         *     registered under another account or install moves to this one. A
+         *     deployment that does not send pushes still accepts registrations.
+         *      */
+        put: operations["putPushDevice"];
+        post?: never;
+        /** @description Stops pushes to this app install, as on sign-out. Removing an install
+         *     that is not registered also succeeds.
+         *      */
+        delete: operations["deletePushDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/remote-hosts/{hostId}/address": {
         parameters: {
             query?: never;
@@ -2569,6 +2711,94 @@ export interface components {
             token: string;
             /** @description The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it. */
             hostKey?: string;
+        };
+        BillingSummary: {
+            /** @description Stripe billing is configured on the deployment. */
+            enabled: boolean;
+            /**
+             * @description Plans apply only to self_serve. contract is no longer sent and is kept for older clients.
+             * @enum {string}
+             */
+            billingMode: "self_serve" | "contract" | "off";
+            /** @description Always false; kept for older desktop releases. */
+            exempt: boolean;
+            /** @description The plan recorded on the organization; free without a subscription. */
+            plan: string;
+            /** @description Stripe's status for the subscription (active, trialing, past_due, canceled, ...). */
+            subscriptionStatus?: string;
+            /** @description The subscription may run billed sessions now. */
+            entitled: boolean;
+            /** Format: date-time */
+            currentPeriodEnd?: string;
+            /**
+             * Format: date-time
+             * @description When a subscription set to cancel ends and the organization moves to Free.
+             */
+            cancelAt?: string;
+            limits?: components["schemas"]["PlanLimits"];
+            usage?: components["schemas"]["BillingUsage"];
+            /** @description Paywalled features the organization's plan includes. */
+            features: string[];
+            /** @description Plans the organization can choose, cheapest first; empty unless billingMode is self_serve. */
+            plans: components["schemas"]["PlanOffer"][];
+        };
+        /** @description A plan's limits, from its Stripe product metadata. */
+        PlanLimits: {
+            plan: string;
+            /** @description Sessions with a sandbox, running or paused, orchestrators included. */
+            maxActiveSandboxes: number;
+            /** @description How many of them may run at once. */
+            maxRunningSandboxes: number;
+            /** @description Running slots reserved for orchestrators. */
+            orchestratorSlots: number;
+            /** @description Length of the rolling usage window. */
+            windowHours: number;
+            windowSessionHours: number;
+            weeklySessionHours: number;
+            manualResetsPerMonth: number;
+            features?: string[];
+        };
+        /** @description Usage against the plan, in session-minutes of running billed sandbox time. */
+        BillingUsage: {
+            windowUsedMinutes: number;
+            windowLimitMinutes: number;
+            windowHours: number;
+            /** Format: date-time */
+            windowResetsAt?: string;
+            weeklyUsedMinutes: number;
+            weeklyLimitMinutes: number;
+            /** Format: date-time */
+            weeklyResetsAt?: string;
+            manualResetsAllowed: number;
+            manualResetsUsed: number;
+            /** Format: date-time */
+            manualResetsRenewAt?: string;
+            activeOrchestrators: number;
+            activeWorkers: number;
+            runningOrchestrators: number;
+            runningWorkers: number;
+        };
+        /** @description A plan the organization can choose. The price fields are zero or empty when Stripe could not be read. */
+        PlanOffer: {
+            name: string;
+            /** @description The Stripe price. */
+            id: string;
+            /**
+             * Format: int64
+             * @description In the currency's smallest unit.
+             */
+            unitAmount: number;
+            currency: string;
+            interval: string;
+            limits?: components["schemas"]["PlanLimits"];
+        };
+        PutPushDeviceInput: {
+            /** @description The Expo push token the app minted. */
+            token: string;
+            /** @enum {string} */
+            platform: "ios" | "android";
+            /** @description The phone's name, shown wherever the account lists its devices. */
+            deviceName?: string;
         };
         RemoteHostAddress: {
             /**
@@ -2692,6 +2922,89 @@ export interface components {
         PutOrgSandboxProviderInput: {
             /** @description A provider from the organization's offering, or empty to clear the choice. */
             defaultProvider: string;
+        };
+        CloudHarnessVersions: {
+            /** @description The caller administers the organization, so may change the versions. */
+            editable: boolean;
+            agents: components["schemas"]["CloudHarnessVersion"][];
+        };
+        /** @description One harness as the organization's new Cloud sessions run it. */
+        CloudHarnessVersion: {
+            /** @enum {string} */
+            agentId: "claude-code" | "codex" | "cursor";
+            /** @description The release of the harness's CLI that AO tested and its images bake. */
+            defaultVersion: string;
+            /** @description The newer release the organization chose in its place; absent while it runs the default. */
+            selectedVersion?: string;
+            /** @description A release the organization chose that AO's tested release has since caught up with or passed. New sessions run `defaultVersion` instead, never an older CLI than AO tests; absent otherwise. */
+            supersededVersion?: string;
+            plan: components["schemas"]["CloudHarnessInstallPlan"];
+            advisory: components["schemas"]["CloudHarnessUpdateAdvisory"];
+            job?: components["schemas"]["CloudHarnessInstallJob"];
+            /** @description Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter). They always run the release AO tested; clients show them read-only. */
+            components?: components["schemas"]["CloudHarnessComponent"][];
+        };
+        CloudHarnessComponent: {
+            tool: string;
+            version: string;
+            defaultVersion: string;
+        };
+        /** @description The local daemon's AgentInstallPlan shape. AO Cloud has one method, ao-cloud. */
+        CloudHarnessInstallPlan: {
+            agentId: string;
+            automatic: boolean;
+            available: boolean;
+            documentationUrl: string;
+            method: string;
+            methods: components["schemas"]["CloudHarnessInstallMethod"][];
+        };
+        /** @description The local daemon's AgentInstallMethod shape. updateAvailable is false for a caller who may not change the version, with updateReason saying why. */
+        CloudHarnessInstallMethod: {
+            id: string;
+            label: string;
+            available: boolean;
+            recommended: boolean;
+            reinstallAvailable: boolean;
+            updateAvailable: boolean;
+            updateReason?: string;
+        };
+        /** @description The local daemon's AgentUpdateAdvisory shape. currentVersion is the release new sessions run; latestVersion the newest the publisher has. */
+        CloudHarnessUpdateAdvisory: {
+            agentId: string;
+            /** Format: date-time */
+            checkedAt: string;
+            currentVersion?: string;
+            latestVersion?: string;
+            maintenanceMethod?: string;
+            source?: string;
+            /** @enum {string} */
+            reason?: "lookup_failed" | "build_unordered";
+            /** @enum {string} */
+            status: "unknown" | "current" | "behind_latest" | "ahead_of_latest";
+        };
+        /** @description The local daemon's InstallJob shape, for the latest install of the organization's chosen release a session's worker reported: failed when it could not be installed (that session ran the AO-tested release), succeeded once one installed it. */
+        CloudHarnessInstallJob: {
+            target: string;
+            /** @enum {string} */
+            status: "succeeded" | "failed";
+            method?: string;
+            error?: string;
+            /** @description The end of the installer's output. */
+            output?: string;
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            finishedAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        CloudHarnessInstallInput: {
+            /** @enum {string} */
+            method?: "ao-cloud";
+            /** @enum {string} */
+            operation?: "update";
+            /** @description The release to run, as the advisory listed it (its latestVersion). */
+            expectedVersion: string;
         };
         /** @description What an organization may use and how it is billed. The control plane is the source of truth; clients shape their UI from it and the server enforces the same rules on create. */
         Offering: {
@@ -2826,9 +3139,15 @@ export interface components {
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
+            layout?: components["schemas"]["ProjectLayout"];
         } & {
             [key: string]: unknown;
         };
+        /**
+         * @description "workspace" lays the project out like a local workspace: every session checks the main repository and each additional one (repos) out side by side inside one workspace folder, and the agent starts in that folder (agentStartsIn is treated as parent). Set only when the project is created; any settings write that includes layout is refused (422), even with the project's current value. A standalone project has no repository, so creating one with this layout is refused (422).
+         * @enum {string}
+         */
+        ProjectLayout: "workspace";
         /** @description The project's additional repositories, beside its main repository (repositoryUrl). Every session clones each into its own folder beside the main checkout, named after the repository, and checks it out on the session branch, on every sandbox provider. Each must be a github.com repository granted to the organization's GitHub App through the same installation as the main one; none may repeat the main repository or share a folder name with another. Replaces the legacy coder.extraRepos, which is still read when repos is absent. A repository whose name starts with a dot is refused. Only organization owners and admins may set it. */
         ProjectAdditionalRepositories: components["schemas"]["ProjectRepository"][];
         ProjectRepository: {
@@ -3400,6 +3719,18 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             };
+        };
+        CreateGitHubRepositoryInput: {
+            name: string;
+            /** @description The GitHub account login to create the repository in. */
+            owner?: string;
+            description?: string;
+        };
+        CreateGitHubRepositoryResponse: {
+            repository: components["schemas"]["GitHubRepository"];
+            created: boolean;
+            /** @description The repository's push-only git smart HTTP endpoint, relative to the control plane (/api/cloud/v1/orgs/{orgId}/github/git/{owner}/{name}.git). */
+            pushPath: string;
         };
         CreateGitHubScratchProjectInput: {
             displayName: string;
@@ -4055,6 +4386,13 @@ export interface components {
         StartSessionInterfaceTransitionInput: {
             targetMode: components["schemas"]["SessionInterfaceMode"];
             policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
+            /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. */
+            model?: string;
+            /**
+             * @description The effort the terminal agent starts at, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's effort.
+             * @enum {string}
+             */
+            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
         };
         Session: {
             /** Format: uuid */
@@ -4147,6 +4485,11 @@ export interface components {
          */
         SessionOutputType: "none" | "pr" | "artifact" | "pr_artifact";
         SessionArtifact: {
+            /**
+             * Format: uuid
+             * @description The artifact's identity. It stays the same when the session's agent renames or moves the file, so a client keys anything it keeps about the file, such as its share link, by it. Absent from a control plane that does not track artifacts across renames.
+             */
+            id?: string;
             /** @description Slash-separated path in the session's artifact directory. */
             path: string;
             name: string;
@@ -4158,9 +4501,13 @@ export interface components {
             sha256: string;
             /**
              * Format: date-time
-             * @description When the control plane last committed a new version of the file.
+             * @description When the control plane last committed a new version of the file, or registered it as a deliverable.
              */
             updatedAt: string;
+            /** @description Set on a file the session's agent registered as a deliverable with ao artifact add, or inside a bundle directory it registered. Absent otherwise. A client lists only registered files as the session's artifacts, or the files at the root of its artifact directory when none is registered. */
+            registered?: boolean;
+            /** @description The paths the artifact had before it was renamed, most recent last, so a link naming one still opens it. Absent when it was never renamed. */
+            previousPaths?: string[];
         };
         SessionArtifactResult: {
             artifact: components["schemas"]["SessionArtifact"];
@@ -4281,6 +4628,7 @@ export interface components {
             size: number;
             /** @description The whole file's SHA-256, as the uploader computed it. The control plane records it on the link but does not check it against the bytes; each part is checked against its own SHA-256. */
             sha256: string;
+            /** @description With feature and name, the document the file is. On an update it is optional: when sent, the link follows a file moved to another document, as one moved to another folder. */
             project?: string;
             feature?: string;
             /**
@@ -4345,7 +4693,7 @@ export interface components {
             sha256: string;
             /**
              * Format: uuid
-             * @description An active link of the caller's, for a file of the same name, to point at this file.
+             * @description An active link of the caller's to point at this file, also after the file was renamed.
              */
             shareId?: string;
         };
@@ -4393,6 +4741,19 @@ export interface components {
             files?: components["schemas"]["WorkerArtifactCommitFile"][];
             /** @description Paths this worker previously synced and has since removed. */
             deleted?: string[];
+            /** @description Files this worker previously synced that were renamed or moved: each keeps its artifact, registration and version history at its new path. Moves apply before files, so a file both moved and changed is listed in both, with its new path in files. */
+            moved?: components["schemas"]["WorkerArtifactMove"][];
+        };
+        WorkerArtifactMove: {
+            from: string;
+            to: string;
+        };
+        WorkerArtifactRegistrationInput: {
+            paths: string[];
+        };
+        WorkerArtifactRegistrationResult: {
+            /** @description Every file the session has registered. */
+            registered: string[];
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
@@ -5190,6 +5551,10 @@ export interface components {
         ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
         RemoteHostId: string;
+        /** @description The app install's stable identifier. */
+        PushInstallId: string;
+        /** @description A harness whose version AO Cloud manages. */
+        CloudHarnessAgent: "claude-code" | "codex" | "cursor";
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -6238,6 +6603,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitHubRepositoryPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createGitHubRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateGitHubRepositoryInput"];
+            };
+        };
+        responses: {
+            /** @description An existing empty repository was connected. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateGitHubRepositoryResponse"];
+                };
+            };
+            /** @description The repository was created and granted. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateGitHubRepositoryResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -8295,6 +8696,113 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listOrgHarnessVersions: {
+        parameters: {
+            query?: {
+                /** @description Look up the newest releases again instead of reading the control plane's cache. */
+                refresh?: boolean;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every harness whose version AO Cloud manages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersions"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    installOrgHarnessVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloudHarnessInstallInput"];
+            };
+        };
+        responses: {
+            /** @description The harness as new sessions now run it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersion"];
+                };
+            };
+            /** @description ORG_ADMIN_REQUIRED. Only organization owners and admins change the version. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description INVALID_HARNESS_VERSION (not a stable release of the harness), HARNESS_VERSION_NOT_NEWER (not newer than the AO-tested release), UNKNOWN_HARNESS_VERSION (the publisher has no such release), or UNVERIFIABLE_HARNESS_VERSION (the release installs something AO Cloud cannot check against its publisher's listing). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RELEASE_LOOKUP_UNAVAILABLE. The publisher could not be reached; nothing changed. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    resetOrgHarnessVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description A harness whose version AO Cloud manages. */
+                agent: components["parameters"]["CloudHarnessAgent"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The harness as new sessions now run it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloudHarnessVersion"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getOrgCoderConfig: {
         parameters: {
             query?: never;
@@ -8806,6 +9314,33 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    registerWorkerArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactRegistrationInput"];
+            };
+        };
+        responses: {
+            /** @description The committed files at the paths are registered. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactRegistrationResult"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            default: components["responses"]["Error"];
+        };
+    };
     listWorkerChildren: {
         parameters: {
             query?: {
@@ -9213,6 +9748,30 @@ export interface operations {
             409: components["responses"]["Error"];
         };
     };
+    getOrgBilling: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's billing summary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
     listCloudNotifications: {
         parameters: {
             query?: {
@@ -9386,6 +9945,58 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putPushDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutPushDeviceInput"];
+            };
+        };
+        responses: {
+            /** @description Registered. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `validation_error`: the token is not an Expo push token, the platform is unknown, or the device name is too long. */
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deletePushDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The app install's stable identifier. */
+                installId: components["parameters"]["PushInstallId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed, or was not registered. */
             204: {
                 headers: {
                     [name: string]: unknown;

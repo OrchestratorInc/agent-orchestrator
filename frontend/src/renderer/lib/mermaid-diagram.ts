@@ -31,19 +31,14 @@
  *     single div per diagram.
  */
 
+import { isRenderableDiagram, MAX_DIAGRAM_CHARS } from "../../../../packages/shared/files/file-formats";
+
 export type DiagramTheme = "light" | "dark";
 
-/**
- * Above this, the fence stays source text. Mermaid lays out synchronously on
- * the render thread, and a pasted 100KB "diagram" is really a log file with
- * the wrong label — rendering it would hang the timeline.
- */
-export const MAX_DIAGRAM_CHARS = 20_000;
-
-/** Empty fences have nothing to lay out; callers keep them as code blocks. */
-export function isRenderableDiagram(code: string): boolean {
-	return code.trim().length > 0 && code.length <= MAX_DIAGRAM_CHARS;
-}
+// Above MAX_DIAGRAM_CHARS the fence stays source text: Mermaid lays out
+// synchronously on the render thread, and a pasted 100KB "diagram" is really a
+// log file with the wrong label. Shared with the mobile app's diagram viewer.
+export { isRenderableDiagram, MAX_DIAGRAM_CHARS };
 
 /* -------------------------------------------------------------------------- */
 /* cache                                                                      */

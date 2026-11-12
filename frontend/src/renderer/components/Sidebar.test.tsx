@@ -13,6 +13,7 @@ vi.mock("motion/react", async (importOriginal) => {
 });
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
 import {
@@ -37,6 +38,10 @@ import { useSessionImportStore } from "../stores/session-import-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { resetSessionPreviewWarmth } from "../hooks/useSessionPreviewHover";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
+import { useRemoteWorkspaces } from "../hooks/useWorkspaceQuery";
+import { clearOptimisticSessionKill, trackOptimisticSessionKill } from "../hooks/optimistic-session-kills";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
+import { sessionUiKey } from "../lib/hosts";
 
 type DragOverTestEvent = {
 	active: {
@@ -60,6 +65,7 @@ const {
 	navigateMock,
 	mockLocation,
 	mockParams,
+	routeStore,
 	postMock,
 	renameSessionMock,
 	spawnMock,
@@ -72,7 +78,7 @@ const {
 		cloudGateState: { cloudEnabled: true, localEnabled: true, client: "" },
 		cloudSessionState: {
 			configured: false,
-			session: null as null | { user: { email: string } },
+			session: null as null | { user: { email: string; displayName?: string } },
 			status: "unauthenticated" as "authenticated" | "loading" | "unauthenticated",
 			signIn: vi.fn(),
 			signOut: vi.fn().mockResolvedValue(undefined),
@@ -85,6 +91,9 @@ const {
 		navigateMock: vi.fn(),
 		mockLocation: { pathname: "/" },
 		mockParams: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+		// The router hooks subscribe to the route, as the real ones do, so a
+		// memoized Sidebar still sees a route change without new props.
+		routeStore: { version: 0, listeners: new Set<() => void>() },
 		renameSessionMock: vi.fn().mockResolvedValue(undefined),
 		spawnMock: vi.fn(),
 		resumeOrchestratorMock: vi.fn(),
@@ -165,11 +174,31 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 	return {
 		...actual,
 		useNavigate: () => navigateMock,
-		useParams: () => ({ ...mockParams }),
-		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) =>
-			select({ location: { pathname: mockLocation.pathname } }),
+		useParams: () => {
+			useSyncExternalStore(subscribeRoute, routeVersion);
+			return { ...mockParams };
+		},
+		useRouterState: ({ select }: { select: (state: { location: { pathname: string } }) => unknown }) => {
+			useSyncExternalStore(subscribeRoute, routeVersion);
+			return select({ location: { pathname: mockLocation.pathname } });
+		},
 	};
 });
+
+function subscribeRoute(listener: () => void) {
+	routeStore.listeners.add(listener);
+	return () => routeStore.listeners.delete(listener);
+}
+
+function routeVersion() {
+	return routeStore.version;
+}
+
+/** Tells the mocked router hooks that `mockParams` / `mockLocation` changed. */
+function notifyRouteChange() {
+	routeStore.version += 1;
+	for (const listener of routeStore.listeners) listener();
+}
 
 vi.mock("../lib/bridge", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../lib/bridge")>();
@@ -535,6 +564,7 @@ beforeEach(() => {
 		settingsModal: null,
 		provisioningProjectIds: new Set(),
 		restartingProjectIds: new Set(),
+		updateInstallPromptOpen: false,
 	});
 	getMock.mockReset();
 	getMock.mockResolvedValue({
@@ -677,7 +707,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		const signInControls = screen.getAllByLabelText("Sign in to cloud");
+		const signInControls = screen.getAllByLabelText("Sign in");
 		expect(signInControls).toHaveLength(2);
 		const activeControl = signInControls.find((control) => control.tabIndex === 0);
 		expect(activeControl).toBeDefined();
@@ -692,6 +722,39 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
+	});
+
+	it("shows only the name in the footer row and the email in the account menu", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "ada@example.com", displayName: "Ada Park" } };
+		renderSidebar();
+
+		const account = screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!;
+		expect(account).toHaveTextContent("Ada Park");
+		expect(account).not.toHaveTextContent("ada@example.com");
+
+		await user.click(account);
+		const menu = await screen.findByRole("menu");
+		expect(within(menu).getByText("Ada Park")).toBeVisible();
+		expect(within(menu).getByText("ada@example.com")).toBeVisible();
+		await user.click(within(menu).getByRole("menuitem", { name: "Sign out" }));
+		expect(cloudSessionState.signOut).toHaveBeenCalledOnce();
+	});
+
+	it("opens the account menu from the collapsed rail avatar instead of signing out", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "user@example.com" } };
+		renderSidebar({ initialOpen: false });
+
+		const railAvatar = screen.getAllByLabelText("Signed in as user@example.com").find((el) => el.tabIndex === 0)!;
+		await user.click(railAvatar);
+
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
+		expect(await screen.findByRole("menuitem", { name: "Sign out" })).toBeVisible();
 	});
 
 	it("keeps AO account controls visible for remote hosts when Cloud execution is off", () => {
@@ -709,7 +772,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
+		expect(screen.getAllByLabelText("Sign in")).toHaveLength(2);
 	});
 
 	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
@@ -776,9 +839,11 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const footer = document.querySelector('[data-sidebar="footer"]');
-		expect(footer).toHaveClass("border-t", "border-border-strong", "!py-2");
+		expect(footer).toHaveClass("!pt-0", "!pb-2");
+		expect(footer).not.toHaveClass("border-t");
+		expect(footer?.querySelector(".border-t")).toBeNull();
 		expect(screen.getAllByRole("button", { name: "Settings" })[0]).toHaveClass("h-9");
-		expect(screen.getAllByRole("button", { name: "Connect mobile" })[0]).toHaveClass("h-9");
+		expect(screen.getAllByRole("button", { name: "Mobile" })[0]).toHaveClass("size-9");
 		expect(footer?.className).not.toContain("--size-center-panel-bottom-inset");
 		expect(footer?.className).not.toContain("--size-center-panel-inset-mac");
 	});
@@ -790,7 +855,8 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
-		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "0");
+		expect(screen.queryByTestId("awake-button")).not.toBeInTheDocument();
+		expect(screen.getByTestId("footer-mobile-menu")).toHaveAttribute("tabindex", "0");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "0");
 		expect(expandedButton?.parentElement).not.toHaveAttribute("aria-hidden");
@@ -805,7 +871,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
-		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "-1");
+		expect(screen.getByTestId("footer-mobile-menu")).toHaveAttribute("tabindex", "-1");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "-1");
 		expect(expandedButton?.closest('[aria-hidden="true"]')).toBeInTheDocument();
@@ -2287,15 +2353,30 @@ describe("Sidebar", () => {
 	it("opens the Mobile settings page from the footer and starts pairing", async () => {
 		const user = userEvent.setup();
 		renderSidebar();
-		await user.click((await screen.findAllByRole("button", { name: "Connect mobile" }))[0]);
+		await user.click((await screen.findAllByRole("button", { name: "Mobile" }))[0]);
+		await user.click(await screen.findByRole("menuitem", { name: "Connect mobile" }));
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "mobile", startPairing: true });
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("always shows Connect mobile", () => {
+	it("always shows the Mobile menu", () => {
 		renderSidebar();
 
-		expect(screen.getByRole("button", { name: "Connect mobile" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Mobile" })).toBeVisible();
+	});
+
+	it("keeps Stay Awake inside the Mobile menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+
+		expect(screen.queryByRole("button", { name: "Stay Awake" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Mobile" }));
+		const awake = await screen.findByTestId("awake-menu-item");
+		expect(awake).toHaveTextContent("Stay Awake");
+		// A switch row, not a nested control: the row itself carries the checked state.
+		expect(awake).toHaveAttribute("role", "menuitemcheckbox");
+		expect(awake).toHaveAttribute("aria-checked", "false");
+		expect(within(awake).queryByRole("switch")).not.toBeInTheDocument();
 	});
 
 	it("opens the command palette when Search is clicked", async () => {
@@ -2970,7 +3051,7 @@ describe("Sidebar", () => {
 		renderSidebar({
 			workspaces: [{
 				...workspace,
-				sessions: [{ ...session, status: "commented", scmStatus: "commented", kanbanColumn: "validating", displayStatus: "Needs review" }],
+				sessions: [{ ...session, status: "commented", scmStatus: "commented", kanbanColumn: "validating", displayStatus: "Review scheduled" }],
 			}],
 		});
 		expect(screen.getByLabelText("Open fix login").querySelector("[data-session-marker]")).not.toBeInTheDocument();
@@ -3748,76 +3829,121 @@ describe("Sidebar", () => {
 		resolveKill?.();
 	});
 
-	it("downloads the update when the available row is clicked", async () => {
-		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9" });
+	it("downloads the update from the available row's pill", async () => {
+		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9", releaseNotes: "### Fixes\n- Faster boot" });
 		renderSidebar();
 
-		// Both footer variants (expanded row and collapsed rail icon) are mounted.
-		const buttons = await screen.findAllByLabelText("Download update v9.9.9");
-		expect(buttons.length).toBeGreaterThan(0);
-		expect(screen.getByText("Update available")).toBeInTheDocument();
-		const availableRow = screen.getByTestId("sidebar-update-available");
-		expect(within(availableRow).getByText("v9.9.9")).toBeVisible();
-		expect(availableRow.querySelector(".rounded-full")).toBeNull();
-		expect(screen.getByRole("button", { name: "Hide update v9.9.9 for 24 hours" })).not.toHaveClass(
-			"bg-interactive-hover",
-		);
+		const availableRow = await screen.findByTestId("sidebar-update-available");
+		expect(availableRow).toHaveTextContent(/^Update available/);
+		// The whole row is the one action, and its label names the version.
+		const pill = availableRow;
+		expect(pill).toHaveRole("button");
+		expect(pill).toHaveAccessibleName("Download update v9.9.9");
+		// No dismiss control or second button inside it.
+		expect(within(availableRow).queryAllByRole("button")).toHaveLength(0);
 		// Nothing is staged yet, so the restart action must not be offered.
 		expect(screen.queryByLabelText(/Restart to install update/)).not.toBeInTheDocument();
 
-		await userEvent.click(buttons[0]);
+		await userEvent.click(pill);
 		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("dismisses the current available update without downloading it", async () => {
-		updateStatusMock.mockResolvedValue({ state: "available", version: "9.9.9" });
+	it("says \"Update available\" in plain text with the dimmed base version beside it", async () => {
+		updateStatusMock.mockResolvedValue({ state: "available", version: "0.12.11-nightly.202609021713", releaseNotes: "Faster boot" });
 		renderSidebar();
 
-		await userEvent.click(await screen.findByRole("button", {
-			name: "Hide update v9.9.9 for 24 hours",
-		}));
-
-		expect(screen.queryByText("Update available")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Download update v9.9.9")).not.toBeInTheDocument();
-		expect(downloadUpdateMock).not.toHaveBeenCalled();
+		const availableRow = await screen.findByTestId("sidebar-update-available");
+		const word = within(availableRow).getByText(/^Update available/);
+		expect(word).not.toHaveClass("decoration-dotted");
+		// The nightly's base version, one "v", no build stamp.
+		expect(within(availableRow).getByText("v0.12.11", { exact: true })).toHaveClass("text-passive");
+		expect(availableRow).not.toHaveTextContent(/Nightly|202609021713/);
+		await userEvent.hover(word);
+		expect(screen.queryByText("Faster boot")).not.toBeInTheDocument();
+		expect(document.querySelector('[data-slot="hover-card-content"]')).toBeNull();
 	});
 
-	it("keeps showing update activity while the automatic download is in progress", async () => {
+	it("shows download progress as a bar, not a percentage", async () => {
 		updateStatusMock.mockResolvedValue({ state: "downloading", version: "9.9.9", percent: 42 });
 		renderSidebar();
 
-		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
-		expect(screen.getByText("Downloading… 42%")).toBeInTheDocument();
-		const downloadingRow = screen.getByTestId("sidebar-update-downloading");
-		expect(downloadingRow).not.toHaveClass("border");
-		expect(downloadingRow.querySelector("svg circle")).toBeNull();
-		expect(screen.queryByLabelText(/Restart to install update/)).not.toBeInTheDocument();
+		const downloadingRow = await screen.findByTestId("sidebar-update-downloading");
+		expect(within(downloadingRow).getByText("Downloading update")).toBeVisible();
+		expect(within(downloadingRow).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
+		expect(downloadingRow).not.toHaveTextContent("%");
 		// A download already in flight must not offer a second one.
 		expect(screen.queryByLabelText(/Download update/)).not.toBeInTheDocument();
-		expect(screen.queryByLabelText(/Hide update/)).not.toBeInTheDocument();
+		expect(screen.queryByLabelText(/Restart to install update/)).not.toBeInTheDocument();
 	});
 
-	it("keeps automatic update check failures out of the sidebar", async () => {
+	it("keeps failing update checks out of the sidebar", async () => {
 		updateStatusMock.mockResolvedValue({ state: "idle", checksFailing: true });
 		renderSidebar();
 
 		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
-		expect(screen.queryAllByLabelText("Retry update check")).toHaveLength(2);
-		expect(screen.getByText("Update check failed")).toBeInTheDocument();
-		expect(screen.getByTestId("sidebar-update-failed")).toBeInTheDocument();
+		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
+		expect(screen.queryByLabelText("Retry update")).not.toBeInTheDocument();
 	});
 
-	it("keeps explicit update errors out of the sidebar", async () => {
+	it("keeps a failed check's error out of the sidebar", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "error",
 			message: "net::ERR_SSL_PROTOCOL_ERROR",
 			netError: true,
+			errorInfo: { kind: "unreachable", phase: "check" },
 		});
 		renderSidebar();
 
 		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
 		expect(screen.queryByText("net::ERR_SSL_PROTOCOL_ERROR")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Retry update check")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
+	});
+
+	it("offers a retry when a download fails", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "error",
+			message: "Download failed.",
+			version: "9.9.9",
+			errorInfo: { kind: "generic", phase: "download" },
+		});
+		renderSidebar();
+
+		const failedRow = await screen.findByTestId("sidebar-update-failed");
+		// One row: the reason is in the row's tooltip and screen-reader text.
+		expect(failedRow).toHaveTextContent("Update failed · Couldn't download");
+		await userEvent.click(failedRow);
+		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries a failed install through the restart confirmation", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "error",
+			message: "Install failed.",
+			errorInfo: { kind: "generic", phase: "install" },
+			staged: { version: "9.9.9", stagedAt: Date.now(), escalated: false },
+		});
+		renderSidebar();
+
+		const failedRow = await screen.findByTestId("sidebar-update-failed");
+		expect(failedRow).toHaveTextContent("Update failed · Couldn't install");
+		await userEvent.click(failedRow);
+		expect(useUiStore.getState().updateInstallPromptOpen).toBe(true);
+		expect(downloadUpdateMock).not.toHaveBeenCalled();
+	});
+
+	it("checks for updates again when a failed install left nothing staged", async () => {
+		updateStatusMock.mockResolvedValue({
+			state: "error",
+			message: "Couldn't prepare the update.",
+			errorInfo: { kind: "generic", phase: "install" },
+		});
+		renderSidebar();
+
+		const failedRow = await screen.findByTestId("sidebar-update-failed");
+		await userEvent.click(failedRow);
+		expect(checkUpdateMock).toHaveBeenCalledTimes(1);
+		expect(useUiStore.getState().updateInstallPromptOpen).toBe(false);
+		expect(downloadUpdateMock).not.toHaveBeenCalled();
 	});
 
 	it("keeps a ready install action when a later check fails", async () => {
@@ -3845,29 +3971,29 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
 	});
 
-	it("keeps a staged build's restart action ahead of the failing-checks retry", async () => {
+	it("asks to restart a staged build from the same tinted pill", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
 			version: "9.9.9",
 			stagedAt: Date.now(),
+			escalated: true,
 			checksFailing: true,
 		});
 		renderSidebar();
 
-		// A build ready to install is more actionable than "checks are failing".
-		expect(await screen.findAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
-		const readyRow = screen.getByTestId("sidebar-update-ready");
-		expect(readyRow).toHaveClass("bg-muted", "rounded-lg", "w-full");
-		expect(readyRow).not.toHaveClass("shadow-md", "rounded-xl", "absolute", "bottom-2", "text-success", "border-success/35", "bg-success/12", "border-primary/35", "bg-primary/12");
-		expect(within(readyRow).getByText("Restart to update")).toBeVisible();
-		expect(within(readyRow).getByText("9.9.9")).toBeVisible();
-		expect(within(readyRow).queryByText(/ready|Nightly/)).not.toBeInTheDocument();
-		expect(readyRow.querySelector(".rounded-full")).toBeNull();
-		expect(screen.queryAllByLabelText("Retry update check")).toHaveLength(0);
-		// Stays above Connect mobile / Settings — not overlaid on them.
-		const connectMobile = screen.getByRole("button", { name: "Connect mobile" });
-		expect(readyRow.compareDocumentPosition(connectMobile) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(screen.queryByLabelText(/Hide update/)).not.toBeInTheDocument();
+		const readyRow = await screen.findByTestId("sidebar-update-ready");
+		expect(within(readyRow).getByText("Ready to install")).toBeVisible();
+		expect(readyRow).not.toHaveTextContent("Restart to finish");
+		const pill = readyRow;
+		expect(pill).toHaveRole("button");
+		expect(pill).toHaveAccessibleName("Restart to install update v9.9.9");
+		expect(screen.queryByTestId("sidebar-update-failed")).not.toBeInTheDocument();
+		// Sits above the account and Settings rows, not overlaid on them.
+		const settings = screen.getAllByRole("button", { name: "Settings" })[0];
+		expect(readyRow.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+		await userEvent.click(pill);
+		expect(useUiStore.getState().updateInstallPromptOpen).toBe(true);
 	});
 
 	it("keeps the staged restart row up while a background check runs", async () => {
@@ -3886,7 +4012,7 @@ describe("Sidebar", () => {
 		expect(screen.getByTestId("sidebar-update-ready")).toBeVisible();
 	});
 
-	it("shows the base version number for a staged nightly without channel or date", async () => {
+	it("names a staged nightly by its base version", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
 			version: "0.12.11-nightly.202609021713",
@@ -3895,54 +4021,16 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const readyRow = await screen.findByTestId("sidebar-update-ready");
-		expect(within(readyRow).getByText("Restart to update")).toBeVisible();
-		expect(within(readyRow).getByText("0.12.11")).toBeVisible();
 		expect(within(readyRow).queryByText(/Nightly|Sep/)).not.toBeInTheDocument();
 		expect(screen.getAllByLabelText("Restart to install update v0.12.11")).not.toHaveLength(0);
 	});
 
-	it("stays quiet for a one-off update failure that has not become a streak", async () => {
+	it("shows nothing while AO is up to date", async () => {
 		updateStatusMock.mockResolvedValue({ state: "idle" });
 		renderSidebar();
 
 		await waitFor(() => expect(updateStatusMock).toHaveBeenCalled());
-		expect(screen.queryByLabelText("Retry update check")).not.toBeInTheDocument();
-		expect(screen.queryByText("Update check failed")).not.toBeInTheDocument();
-	});
-
-	it("keeps the muted install cue when the staged update is escalated", async () => {
-		updateStatusMock.mockResolvedValue({
-			state: "downloaded",
-			version: "9.9.9",
-			stagedAt: Date.now(),
-			escalated: true,
-		});
-		renderSidebar();
-
-		// Both footer variants (expanded row and collapsed rail icon) are mounted.
-		const buttons = await screen.findAllByLabelText("Restart to install update v9.9.9");
-		expect(buttons.length).toBeGreaterThan(0);
-		for (const button of buttons) {
-			expect(button).toHaveClass("bg-muted");
-			expect(button).not.toHaveClass("text-success", "bg-working/12");
-		}
-		expect(screen.getByTestId("sidebar-update-ready")).toHaveTextContent("Restart to update");
-		expect(within(screen.getByTestId("sidebar-update-ready")).getByText("9.9.9")).toBeVisible();
-	});
-
-	it("keeps install label and version number on one line without nightly copy", async () => {
-		updateStatusMock.mockResolvedValue({
-			state: "downloaded",
-			version: "0.12.11-nightly.202609021713",
-			stagedAt: Date.now(),
-		});
-		renderSidebar();
-
-		const readyRow = await screen.findByTestId("sidebar-update-ready");
-		expect(readyRow).toHaveTextContent("Restart to update");
-		expect(readyRow).toHaveTextContent("0.12.11");
-		expect(within(readyRow).queryByText(/Nightly|ready/)).not.toBeInTheDocument();
-		expect(readyRow).toHaveAccessibleName("Restart to install update v0.12.11");
+		expect(screen.queryByTestId(/^sidebar-update-/)).not.toBeInTheDocument();
 	});
 
 	it("commits a project drop", () => {
@@ -4183,7 +4271,7 @@ describe("Sidebar session switch rendering", () => {
 		sessionRowRenders.clear();
 		mockParams.projectId = p2.id;
 		mockParams.sessionId = "p2-a";
-		view.rerender(tree());
+		act(() => notifyRouteChange());
 
 		expect([...sessionRowRenders.keys()].sort()).toEqual(["p1-a", "p2-a"]);
 
@@ -4314,5 +4402,181 @@ describe("Sidebar active-session reveal", () => {
 		});
 		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
 		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+	});
+});
+
+// The shell's re-renders no longer reach the memoized Sidebar, so it has to
+// follow every store it reads by itself. Each test renders it once with props
+// that keep their identity, then changes only the real store.
+describe("Memoized Sidebar with unchanged props", () => {
+	const handlers = {
+		onCloneProject: vi.fn().mockResolvedValue(undefined),
+		onCreateProject: vi.fn().mockResolvedValue(undefined),
+		onInitializeProject: vi.fn().mockResolvedValue(undefined),
+		onRemoveProject: vi.fn().mockResolvedValue(undefined),
+		onCreateRemoteProject: vi.fn().mockResolvedValue(undefined),
+		onInitializeRemoteProject: vi.fn().mockResolvedValue(undefined),
+	};
+	const alpha: WorkspaceSummary = {
+		...workspace,
+		id: "alpha",
+		name: "Alpha",
+		path: "/repo/alpha",
+		sessions: [{ ...session, id: "alpha-1", workspaceId: "alpha", workspaceName: "Alpha", title: "alpha task" }],
+	};
+	const bravo: WorkspaceSummary = {
+		...workspace,
+		id: "bravo",
+		name: "Bravo",
+		path: "/repo/bravo",
+		sessions: [{ ...session, id: "bravo-1", workspaceId: "bravo", workspaceName: "Bravo", title: "bravo task" }],
+	};
+
+	function newClient() {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		client.setQueryData(agentReadinessQueryKey, {
+			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
+		});
+		return client;
+	}
+
+	function shell(client: QueryClient, children: React.ReactNode) {
+		return (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<SidebarProvider>{children}</SidebarProvider>
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+	}
+
+	afterEach(() => {
+		useRemoteUnpinStore.setState({ unpins: {} });
+	});
+
+	it("moves a project pinned through the order store to the top, and back", () => {
+		const workspaces = [alpha, bravo];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+		const labels = () => Array.from(document.querySelectorAll("[data-project-label]"), (node) => node.textContent);
+		expect(labels()).toEqual(["Alpha", "Bravo"]);
+
+		act(() => useSidebarOrderStore.getState().setProjectPinned("bravo", true));
+
+		expect(labels()).toEqual(["Bravo", "Alpha"]);
+		expect(screen.getByRole("button", { name: "Unpin" }).closest("[data-project-id]")).toHaveAttribute("data-project-id", "bravo");
+
+		act(() => useSidebarOrderStore.getState().setProjectPinned("bravo", false));
+
+		expect(screen.queryByRole("button", { name: "Unpin" })).not.toBeInTheDocument();
+	});
+
+	it("opens a collapsed project when the import store reports sessions imported into it", () => {
+		const workspaces = [alpha];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+		expect(screen.queryByLabelText("Open alpha task")).not.toBeInTheDocument();
+
+		act(() => useSessionImportStore.getState().recordImport("alpha", 1));
+
+		expect(screen.getByLabelText("Open alpha task")).toBeInTheDocument();
+		expect(screen.getByLabelText("Toggle Alpha sessions")).toHaveAttribute("aria-expanded", "true");
+	});
+
+	it("opens and closes projects in turn, each click seeing the state the last one left", async () => {
+		const user = userEvent.setup();
+		const workspaces = [alpha, bravo];
+		render(shell(newClient(), <Sidebar workspaces={workspaces} {...handlers} />));
+
+		await user.click(screen.getByLabelText("Toggle Alpha sessions"));
+		await user.click(screen.getByLabelText("Toggle Bravo sessions"));
+		expect(screen.getByLabelText("Open alpha task")).toBeInTheDocument();
+		expect(screen.getByLabelText("Open bravo task")).toBeInTheDocument();
+
+		await user.click(screen.getByLabelText("Toggle Alpha sessions"));
+
+		expect(screen.queryByLabelText("Open alpha task")).not.toBeInTheDocument();
+		expect(screen.getByLabelText("Open bravo task")).toBeInTheDocument();
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual(["bravo"]);
+	});
+
+	it("counts archived sessions from the latest workspaces and opens that archive in place", async () => {
+		const user = userEvent.setup();
+		useUiStore.setState({ archiveModal: null });
+		const client = newClient();
+		const view = render(shell(client, <Sidebar workspaces={[alpha]} {...handlers} />));
+		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
+		expect(await screen.findByRole("menuitem", { name: "Open dashboard" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Archive/ })).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Open dashboard" })).not.toBeInTheDocument());
+
+		const archived = { ...alpha, sessions: [...alpha.sessions, { ...alpha.sessions[0]!, id: "alpha-2", title: "old task", kanbanColumn: "archive" as const }] };
+		view.rerender(shell(client, <Sidebar workspaces={[archived]} {...handlers} />));
+		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
+		await user.click(await screen.findByRole("menuitem", { name: "Archive, 1 session" }));
+
+		expect(useUiStore.getState().archiveModal).toMatchObject({ projectId: "alpha" });
+		// The modal opens over the current page; the menu never goes to the board.
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	describe("remote pins through the real remote hook", () => {
+		const hosts: RemoteHost[] = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3011", status: "offline" }];
+		const savedHostIds = ["box-a"];
+		const noLocalWorkspaces: WorkspaceSummary[] = [];
+		const pinnedAt = "2026-11-01T00:00:00Z";
+		// The host's own project row may list the same session; look only in Pinned.
+		const pinnedRow = () => {
+			const list = screen.queryByTestId("pinned-session-list");
+			return list ? within(list).queryByRole("button", { name: "Open remote task · Box A" }) : null;
+		};
+
+		// The shell's wiring: a saved, offline host's cached lists go through
+		// useRemoteWorkspaces into the memoized Sidebar.
+		function RemoteShell() {
+			const remote = useRemoteWorkspaces({ cachedHostIds: savedHostIds });
+			return <Sidebar workspaces={noLocalWorkspaces} remoteHosts={hosts} remoteWorkspaces={remote.data} {...handlers} />;
+		}
+
+		function renderRemote() {
+			const client = newClient();
+			client.setQueryData(["remote-workspaces", "box-a", "projects"], [{ id: "remote-project", name: "Remote Project", path: "/remote" }]);
+			client.setQueryData(["remote-workspaces", "box-a", "sessions"], [{
+				id: "remote-1",
+				projectId: "remote-project",
+				harness: "codex",
+				status: "working",
+				prs: [],
+				displayName: "remote task",
+				isPinned: true,
+				pinnedAt,
+			}]);
+			render(shell(client, <RemoteShell />));
+		}
+
+		it("drops a pinned row unpinned here while its host is offline, and restores it when the unpin is cleared", () => {
+			renderRemote();
+			expect(pinnedRow()).toBeInTheDocument();
+
+			act(() => useRemoteUnpinStore.getState().add("box-a", "remote-1", pinnedAt));
+
+			expect(pinnedRow()).not.toBeInTheDocument();
+
+			act(() => useRemoteUnpinStore.getState().remove([sessionUiKey("remote-1", "box-a")]));
+
+			expect(pinnedRow()).toBeInTheDocument();
+		});
+
+		it("drops a pinned remote row while its kill is in flight, before the host's lists change", () => {
+			renderRemote();
+			expect(pinnedRow()).toBeInTheDocument();
+			try {
+				act(() => trackOptimisticSessionKill("remote-1", "box-a"));
+
+				expect(pinnedRow()).not.toBeInTheDocument();
+			} finally {
+				act(() => clearOptimisticSessionKill("remote-1", "box-a"));
+			}
+			expect(pinnedRow()).toBeInTheDocument();
+		});
 	});
 });

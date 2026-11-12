@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
@@ -24,13 +24,27 @@ const PREVIEW_CLASS = "pointer-events-none absolute inset-0 flex flex-col overfl
  * the start of a text file, with its type as a chip. It loads only near the
  * viewport, and the name card under it shows until it paints or if it fails.
  */
-export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPreviewKind; url: string; name: string }) {
+export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }: {
+	kind: AttachmentPreviewKind;
+	url: string;
+	name: string;
+	/** Told when `url` fails, so the caller can offer another source in its place. */
+	onError?: () => void;
+}) {
 	const src = useChatImageSrc(url);
 	const sentinel = useRef<HTMLSpanElement>(null);
 	const [near, setNear] = useState(false);
-	const [failed, setFailed] = useState(false);
+	// The failed URL rather than a flag: a replacement source gets its own attempt.
+	const [failedSrc, setFailedSrc] = useState<string>();
+	const failed = src !== undefined && src === failedSrc;
 	const [open, setOpen] = useState(false);
 	const [text, setText] = useState<string>();
+	const onLoadErrorRef = useRef(onLoadError);
+	onLoadErrorRef.current = onLoadError;
+	const fail = useCallback((failedUrl: string) => {
+		setFailedSrc(failedUrl);
+		onLoadErrorRef.current?.();
+	}, []);
 
 	useEffect(() => {
 		const element = sentinel.current;
@@ -47,19 +61,26 @@ export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPre
 	useEffect(() => {
 		if (!near || kind !== "text" || !src) return;
 		const controller = new AbortController();
-		void fetch(`${src}${src.includes("?") ? "&" : "?"}raw=true`, { signal: controller.signal, headers: { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` } })
+		// A file just sent is read from its in-memory copy, which takes no query or range.
+		const local = src.startsWith("blob:");
+		void fetch(local ? src : `${src}${src.includes("?") ? "&" : "?"}raw=true`, {
+			signal: controller.signal,
+			headers: local ? undefined : { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` },
+		})
 			.then(async (response) => {
 				if (!response.ok) throw new Error(`Preview failed: ${response.status}`);
-				return response.text();
+				return local ? (await response.blob()).slice(0, TEXT_PREVIEW_BYTES).text() : response.text();
 			})
 			.then(setText)
 			.catch(() => {
-				if (!controller.signal.aborted) setFailed(true);
+				if (!controller.signal.aborted) fail(src);
 			});
 		return () => controller.abort();
-	}, [near, kind, src]);
+	}, [near, kind, src, fail]);
 
-	const onError = () => setFailed(true);
+	const onError = () => {
+		if (src) fail(src);
+	};
 	const type = attachmentTypeLabel(name);
 	const preview = !near || failed || !src
 		? null

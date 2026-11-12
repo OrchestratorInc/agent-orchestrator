@@ -152,6 +152,9 @@ export const aoBridge: AoBridge =
 			},
 			onFrameNavigated: () => () => undefined,
 		},
+		artifactSnapshot: {
+			request: async () => false,
+		},
 		daemon: {
 			getStatus: async () => ({
 				state: "stopped",
@@ -421,9 +424,8 @@ export const aoBridge: AoBridge =
 		// which is the truth there.
 		remotes: {
 			list: async () => [],
-			importAccountHost: async () => undefined,
-			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => { throw new Error("remote hosts need the desktop app"); },
+			syncAccountHosts: async () => undefined,
+			linkAccountHost: async () => { throw new Error("remote hosts need the desktop app"); },
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
@@ -453,6 +455,8 @@ export const aoBridge: AoBridge =
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
+			previewFolderUpload: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {

@@ -1,6 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
+import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, PanelRight, Plus, SquareTerminal } from "@/components/app-icons";
 import { useBlocker } from "@tanstack/react-router";
@@ -281,6 +282,8 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 
 /** How often the startup screen reads the session's events while their stream is down or still opening. */
 const STARTUP_EVENTS_POLL_MS = 2_000;
+
+const CHAT_VIEW_LEASE_MS = 30_000;
 
 /**
  * The furthest startup step a session's events confirm, with when it was
@@ -599,6 +602,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
 	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
+	const setArtifactsUnseen = useUiStore((state) => state.setArtifactsUnseen);
 	const { daemonStatus } = useShell();
 	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
 	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
@@ -947,7 +951,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const renderReviewerChat = (reviewId: string) => session?.cloud ? (
 		<CloudReviewerChatSurface hideHeader session={session} reviewId={reviewId} harness={reviewerChat?.harness ?? "claude-code"} />
 	) : (
-		<ReviewerChatSurface hideHeader hostId={hostId} hostUnreachable={hostUnreachable} workerSessionId={sessionId} reviewId={reviewId} />
+		<ReviewerChatSurface
+			hideHeader
+			hostId={hostId}
+			hostUnreachable={hostUnreachable}
+			workerSessionId={sessionId}
+			reviewId={reviewId}
+			// The reviewer runs in this session's worktree, so its stopped banner's
+			// Open shell opens the same shell the worker's banner does.
+			onOpenShell={addShellTerminal}
+			openingShell={openShellTerminal.isPending}
+			shellError={openShellTerminal.error ? apiErrorMessage(openShellTerminal.error) : undefined}
+		/>
 	);
 
 	// Shell terminals opened inside a session live beside its pane as extra tabs,
@@ -1985,6 +2000,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const viewId = crypto.randomUUID();
 		let left = false;
 		let refreshed = false;
+		let renewedAt = Date.now();
 		let pending = Promise.resolve();
 		const setViewActive = async (active: boolean) => {
 			try {
@@ -1993,6 +2009,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					body: { viewId, active },
 				});
 				if (error) throw error;
+				if (active) renewedAt = Date.now();
 				// Remote conversations already refresh every two seconds. A ready or
 				// working chat hears every change through events, and a wake emits
 				// one, so only a chat still waking or stopped is refreshed here;
@@ -2019,29 +2036,43 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			if (left || hostId) return;
 			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 		};
+		const leaseLapsed = () => Date.now() - renewedAt > CHAT_VIEW_LEASE_MS;
 		void renewView().catch(refreshAfterWakeError);
-		const renewal = window.setInterval(() => { void renewView().catch(refreshAfterWakeError); }, 10_000);
+		const renewal = window.setInterval(() => {
+			if (document.hidden && leaseLapsed()) return;
+			void renewView().catch(refreshAfterWakeError);
+		}, 10_000);
+		const renewOnReturn = () => {
+			if (!document.hidden && leaseLapsed()) void renewView().catch(refreshAfterWakeError);
+		};
+		document.addEventListener("visibilitychange", renewOnReturn);
 		return () => {
 			left = true;
 			window.clearInterval(renewal);
+			document.removeEventListener("visibilitychange", renewOnReturn);
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A local session's tab menus hold the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
+	// A session's tab menus hold the interface switch and, in a local terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	// The agent rows apply while there is a switch to offer, or a terminal's
-	// agent to pick and no switch running. Then the tab also shows its ⋮ button;
-	// otherwise the running switch's status takes the tab's action slot.
+	// The agent rows apply while there is a switch to offer, or a local
+	// terminal's agent to pick and no switch running.
 	const sessionTabAgentMenu = useMemo<SessionTabAgentMenu | undefined>(() => {
-		if (!session || session.cloud) return undefined;
-		const picksAgent = interfaceUi.target === "chat" && !interfaceUi.switchControl;
-		if (!interfaceUi.switchAction && !picksAgent) return undefined;
-		return { session, hostId, blocked: agentWorking, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
+		if (!session) return undefined;
+		const picksAgent = !session.cloud && interfaceUi.target === "chat";
+		if (!interfaceUi.switchAction && !(picksAgent && !interfaceUi.switchControl)) return undefined;
+		return { session, hostId, blocked: agentWorking, picksAgent, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
 	}, [agentWorking, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
-	const sessionTabActions = sessionTabAgentMenu
-		? <SessionTabMenuButton key={uiSessionId} />
-		: session ? (interfaceUi.switchControl ?? null) : null;
+	// The session tab always shows its ⋮ menu after the title; the other tabs
+	// show a close button on hover. While an interface switch is requested or
+	// running, the switch's status (cancel on hover) takes the ⋮'s place.
+	const sessionTabActionPinned = Boolean(session);
+	const sessionTabActions = !session
+		? null
+		: interfaceUi.switchPending
+			? interfaceUi.switchControl
+			: <SessionTabMenuButton key={uiSessionId} />;
 	const sessionHeaderActions = (
 		<div
 			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"
@@ -2068,8 +2099,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<SessionTopbarActions route={sessionTopbarRoute} />
 		</div>
 	);
-	// While an interface switch runs, its status replaces the tab menu and stays visible.
-	const sessionTabActionPinned = Boolean(interfaceUi.switchControl && !interfaceUi.switchAction);
 
 	// The pane shows one terminal at a time, so selecting a shell or the reviewer
 	// takes the agent's terminal off screen while the route still points here.
@@ -2109,12 +2138,78 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
 
+	// A deliverable the agent registers with `ao artifact add` while the user
+	// watches opens in the Artifacts tab, whatever its file type; agents no
+	// longer hand artifacts to the Browser panel. Artifacts already registered
+	// when the session is entered are the baseline and never reveal anything.
+	// While the user is watching a live page in Browser or reviewing Files,
+	// docked or popped out, a registration only badges Artifacts instead of
+	// taking the view, so an agent registering screenshots as it iterates on a
+	// UI does not steal the running app.
+	// A remote host's session can first show what the sidebar kept from an
+	// earlier read, which can predate artifacts registered since. Fresh data is
+	// authoritative at once; stale data is refetched on mount, and until that
+	// read lands the baseline keeps absorbing what it sees. A cloud session's
+	// artifact list loads after the session itself, so it waits for that too.
+	// A local session whose listing failed reads as having none; the next good
+	// read can then open an existing artifact, which is harmless.
+	const registeredArtifactsBaselineRef = useRef<{ sessionId: string; keys: Set<string>; settled: boolean } | null>(null);
+	const artifactFiles = session?.artifactFiles;
+	const artifactListUnsettled = (Boolean(hostId) && remoteSessionQuery.isStale) || Boolean(session?.artifactFilesPending);
+	useEffect(() => {
+		if (!hasInspector) return;
+		const registered = (artifactFiles ?? []).filter((file) => file.registered);
+		const keyOf = (file: SessionArtifact) => file.id ?? file.path;
+		const baseline = registeredArtifactsBaselineRef.current;
+		if (!baseline || baseline.sessionId !== uiSessionId) {
+			registeredArtifactsBaselineRef.current = { sessionId: uiSessionId, keys: new Set(registered.map(keyOf)), settled: !artifactListUnsettled };
+			return;
+		}
+		if (!baseline.settled) {
+			for (const file of registered) baseline.keys.add(keyOf(file));
+			baseline.settled = !artifactListUnsettled;
+			return;
+		}
+		// A rename keeps its id; a file without one counts as known under an old path.
+		const added = registered.filter(
+			(file) => !baseline.keys.has(keyOf(file)) && !(file.previousPaths ?? []).some((previous) => baseline.keys.has(previous)),
+		);
+		for (const file of registered) baseline.keys.add(keyOf(file));
+		if (added.length === 0 || terminated) return;
+		const inspector = useUiStore.getState().inspectorSessions[uiSessionId];
+		const busy = filesPoppedOut || (browserPoppedOut && hasBrowserContent)
+			|| Boolean(inspector?.isOpen && (inspector.view === "files" || (inspector.view === "browser" && hasBrowserContent)));
+		const newest = added.reduce((latest, file) => ((Date.parse(file.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? file : latest));
+		if (busy) {
+			setArtifactsUnseen(uiSessionId, true);
+			// The badge sits on the rail, which a maximized Browser covers and a
+			// screen reader does not announce; the toast stays above overlays and
+			// is a polite status. One per session, so a burst of screenshots
+			// replaces it rather than stacking.
+			showGlobalToast(t("artifacts.newArtifact", { name: newest.name }), undefined, {
+				tone: "info",
+				dedupeKey: `artifact-registered:${uiSessionId}`,
+				action: { label: t("artifacts.openNew"), run: () => handleOpenArtifact({ path: newest.path }) },
+			});
+			return;
+		}
+		handleOpenArtifact({ path: newest.path });
+	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, artifactListUnsettled, hasInspector, setArtifactsUnseen, showGlobalToast, t, terminated, uiSessionId]);
+
+	// The toast's Open writes this session's inspector state through its own
+	// closure, so it must not outlive the session it was raised for.
+	useEffect(() => () => {
+		const dedupeKey = `artifact-registered:${uiSessionId}`;
+		const { dismissGlobalToast, globalToasts } = useUiStore.getState();
+		for (const toast of globalToasts) if (toast.dedupeKey === dedupeKey) dismissGlobalToast(toast.nonce);
+	}, [uiSessionId]);
+
 	// A file written moments ago, or one past the artifact list cap, is not in
 	// the cached session, and the Files inspector can only show listed
 	// artifacts. Refresh once before deciding it cannot be opened.
 	const revealResolvedArtifact = useCallback(
 		async (path: string) => {
-			const listed = (artifacts: SessionArtifact[] | undefined) => artifacts?.some((artifact) => artifact.path === path) ?? false;
+			const listed = (artifacts: SessionArtifact[] | undefined) => artifactAtPath(artifacts, path) !== undefined;
 			if (!listed(session?.artifactFiles)) {
 				await refreshWorkspaces();
 				const refreshed = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId))
@@ -2553,8 +2648,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
 									onOpenFile={openCenterFile}
+									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
 									session={session}
 									sessionTabAction={sessionTabActions}
+									sessionTabActionPinned={sessionTabActionPinned}
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
@@ -2631,6 +2728,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									}
 									onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 									onOpenFile={handleOpenFile}
+									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
          onOpenFileAnnotation={(reference,resolution)=>{
           if(reference.sessionId!==sessionId || resolution.state==="unavailable")return;
           const path=resolution.path??reference.path;

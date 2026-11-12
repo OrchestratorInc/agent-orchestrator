@@ -22,7 +22,9 @@ import { ToastHost } from "../../../lib/Toast";
 import { font, fontScaleCap, radius, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
-import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
+import type { WorkspaceFileDetail } from "../../../lib/files/api";
+import type { FilesBackend, WorkspaceImageSource } from "../../../lib/files/backend";
+import { useFilesBackend } from "../../../lib/files/useFilesBackend";
 import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, MARKER_WIDTH, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
 import { fileIcon } from "../../../lib/files/fileIcons";
 import {
@@ -83,13 +85,15 @@ function SessionFileContent() {
 	const path = String(params.path ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection, loading: appLoading } = useApp();
+	const { currentHostId, connection, loading: appLoading } = useApp();
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
+	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
 	const { width } = useWindowDimensions();
 	const codeScale = useCodeScale();
 
-	const { manifest } = useWorkspaceManifest(hostMatches ? config : null, id, hostMatches);
+	const { manifest } = useWorkspaceManifest(hostMatches ? backend : null, id, hostMatches);
 	const changes = useMemo(() => manifest ? orderedChanges(changeGroups(manifest)) : [], [manifest]);
 	const position = changes.findIndex((file) => file.path === path);
 	const listed = position >= 0 ? changes[position] : undefined;
@@ -115,17 +119,17 @@ function SessionFileContent() {
 	const request = useRef(0);
 
 	const key = reviewKey(currentHostId, id);
-	const review = useReviewSender(config, key, id);
+	const review = useReviewSender(backend, key, id);
 
 	// What says the file changed under us: its fingerprint in the manifest, or the
 	// whole workspace version for a file the manifest does not list.
 	const fingerprint = listed?.fileFingerprint || manifest?.workspaceVersion || "";
 	const load = useCallback(async (quiet: boolean) => {
-		if (!config || !hostMatches || !path) return;
+		if (!backend || !hostMatches || !path) return;
 		const ticket = ++request.current;
 		if (!quiet) setLoading(true);
 		try {
-			const next = await getWorkspaceFile(config, id, path);
+			const next = await backend.file(id, path);
 			if (ticket !== request.current) return;
 			setDetail(next);
 			setLoadError(undefined);
@@ -134,7 +138,7 @@ function SessionFileContent() {
 		} finally {
 			if (ticket === request.current) setLoading(false);
 		}
-	}, [config, hostMatches, id, path]);
+	}, [backend, hostMatches, id, path]);
 
 	// A new path starts from a clean slate; the same path reloads quietly when the
 	// agent edits it, keeping the reader's place.
@@ -171,6 +175,7 @@ function SessionFileContent() {
 	const markdown = isMarkdownPath(path);
 	const image = isImagePath(path);
 	const svg = isSvgPath(path);
+	const imageSources = useImageSources(backend, id, path, detail, changed, image);
 
 	// Lines with a comment card under them, so a screen reader hears "has a comment" there.
 	const commented = useMemo(() => new Set(fileComments.flatMap((comment) => comment.anchor ? [`${comment.anchor.side}:${comment.anchor.line}`] : [])), [fileComments]);
@@ -316,7 +321,7 @@ function SessionFileContent() {
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
-		if (!config || !detail || !chosen.length) return;
+		if (!backend || !detail || !chosen.length) return;
 		const feedback = text.trim();
 		const target = annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen);
 		const anchor = commentAnchor(chosen);
@@ -330,7 +335,7 @@ function SessionFileContent() {
 		setBusy(true);
 		setActionError(undefined);
 		try {
-			await sendFileFeedback(config, id, [{ target, feedback }]);
+			await backend.sendFeedback(id, [{ target, feedback }]);
 			// What was sent stays on the line, like a posted review comment.
 			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor, status: "sent" });
 			haptics.success();
@@ -342,7 +347,7 @@ function SessionFileContent() {
 		} finally {
 			setBusy(false);
 		}
-	}, [chosen, config, detail, id, key, label, name, path, showToast]);
+	}, [backend, chosen, detail, id, key, label, name, path, showToast]);
 
 	const copySelection = useCallback(() => {
 		void Clipboard.setStringAsync(chosen.map((row) => row.text).join("\n"));
@@ -352,8 +357,10 @@ function SessionFileContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
-	if (!config && appLoading) return <View style={styles.center}>{headerItems}<Spinner size="large" accessibilityLabel="Connecting" /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
+	if (signedOut) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this file." /></View>;
+	if (unreachable) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
+	if (!backend && (appLoading || cloud)) return <View style={styles.center}>{headerItems}<Spinner size="large" accessibilityLabel="Connecting" /></View>;
+	if (!backend && connection === "closed") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
 
 	// Where the file lives and how much changed, under the title that names it;
 	// then the one control over how it reads. iOS adds the file's place among the
@@ -403,11 +410,10 @@ function SessionFileContent() {
 		body = <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (loadError && !detail) {
 		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" onPress={() => void load(false)} />} /></View>;
-	} else if (detail && image) {
-		body = <ImageCompare detail={detail} name={name} sources={{
-			before: detail.status !== "added" && changed ? workspaceImageSource(config!, id, path, "before", detail.workspaceVersion) : undefined,
-			after: !detail.deleted ? workspaceImageSource(config!, id, path, "after", detail.workspaceVersion) : undefined,
-		}} />;
+	} else if (detail && image && !imageSources.unavailable) {
+		body = imageSources.resolved
+			? <ImageCompare detail={detail} name={name} sources={imageSources} />
+			: <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (detail && svg && effectiveMode === "file" && lines && !detail.binary) {
 		body = <ScrollView contentContainerStyle={styles.preview}><SvgXml xml={detail.content} width="100%" height={width} /></ScrollView>;
 	} else if (detail?.binary) {
@@ -493,7 +499,36 @@ function SessionFileContent() {
 	);
 }
 
-type ImageSide = { uri: string; headers: Record<string, string> };
+type ImageSide = WorkspaceImageSource;
+
+/**
+ * Both sides of a changed image. A machine's are URLs read with its Bearer
+ * header; Orchestrator Cloud has no image URL, so its are read as data and
+ * may not exist, which `unavailable` reports so the page says so instead.
+ */
+function useImageSources(backend: FilesBackend | null, sessionId: string, path: string, detail: WorkspaceFileDetail | null, changed: boolean, image: boolean) {
+	const [sources, setSources] = useState<{ key: string; before?: ImageSide; after?: ImageSide }>();
+	const wantBefore = Boolean(detail && detail.status !== "added" && changed);
+	const wantAfter = Boolean(detail && !detail.deleted);
+	const version = detail?.workspaceVersion ?? "";
+	const key = JSON.stringify([backend?.key, sessionId, path, version, wantBefore, wantAfter]);
+	useEffect(() => {
+		if (!backend || !detail || !image) return;
+		let current = true;
+		// A side that can't be read is no side: the page then says the image is
+		// unavailable rather than staying on Opening… with the read rejected.
+		const read = (side: "before" | "after") => backend.imageSource(sessionId, path, side, version).catch(() => undefined);
+		void Promise.all([
+			wantBefore ? read("before") : undefined,
+			wantAfter ? read("after") : undefined,
+		]).then(([before, after]) => { if (current) setSources({ key, before, after }); });
+		return () => { current = false; };
+		// `key` covers what the effect reads from `detail`.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [key, image]);
+	const resolved = sources?.key === key;
+	return { before: resolved ? sources.before : undefined, after: resolved ? sources.after : undefined, resolved, unavailable: resolved && !sources.before && !sources.after };
+}
 
 /**
  * A changed image, before and after. Each pane opens the full-screen viewer,

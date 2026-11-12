@@ -1,6 +1,7 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
-import { Chat, CheckWaves, FileText, Folder, List, Package } from "@/components/app-icons";
+import { artifactFileIcon } from "./artifact-file-icon";
+import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
@@ -76,7 +77,7 @@ import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../typ
 import {
 	openPRs,
 	resolveNextNavigationAfterSessionKill,
-	sessionArtifacts,
+	sessionDeliverables,
 	sessionWorkspaceReady,
 	sortedPRs,
 	STANDALONE_WORKSPACE_ID,
@@ -199,6 +200,10 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
+	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
+	const artifactsUnseen = useUiStore((state) =>
+		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
+	);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -261,7 +266,7 @@ export const SessionInspector = memo(function SessionInspector({
 		const label = t(entry.labelKey);
 		return {
 			...entry,
-			badge: entry.id === "browser" && browserUnseen,
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)
@@ -418,7 +423,7 @@ const SummaryView = memo(function SummaryView({
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
-	const artifacts = sessionArtifacts(session);
+	const artifacts = sessionDeliverables(session);
 	const hasArtifacts = artifacts.length > 0;
 	const opensPR = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
 	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : opensPR ? t("inspector.pullRequest") : t("inspector.branch");
@@ -1172,17 +1177,14 @@ function ArtifactSummaryRow({
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 }) {
+	const KindIcon = artifactFileIcon(artifact);
 	return (
 		<Pressable
 			className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
 			onClick={() => onOpenArtifact?.({ path: artifact.path })}
 			title={artifact.path}
 		>
-			{artifact.kind === "html" ? (
-				<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-			) : (
-				<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-			)}
+			<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
 			{artifact.updatedAt ? (
 				<time
@@ -2933,6 +2935,8 @@ function BrowserView({
 	// second BrowserPanelView — it would fight the overlay over the shared native
 	// view slot). Exit is via the overlay's own minimize button.
 	const { t } = useTranslation();
+	// Stable, so the memoized panel skips this view's unrelated renders.
+	const togglePopOut = useCallback((next: boolean) => onTogglePopOut?.(next), [onTogglePopOut]);
 	if (browserPoppedOut) {
 		return (
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
@@ -2955,7 +2959,7 @@ function BrowserView({
 			active={isActive}
 			annotationQueue={browserAnnotationQueue}
 			browserView={browserView}
-			onTogglePopOut={(next) => onTogglePopOut?.(next)}
+			onTogglePopOut={togglePopOut}
 			poppedOut={false}
 			session={session}
 			topbarHost={topbarHost}

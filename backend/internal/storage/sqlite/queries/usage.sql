@@ -112,17 +112,32 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
   )
 ORDER BY us.artifact_path, us.generation, us.id;
 
+-- name: ListFinalizingUsageSourceIDs :many
+SELECT us.id
+FROM usage_sources us
+JOIN usage_bindings ub ON ub.id = us.binding_id
+WHERE ub.state = 'finalizing'
+ORDER BY us.id;
+
 -- name: HasPendingUsageDiscovery :one
 SELECT CAST(EXISTS (
     SELECT 1
     FROM usage_bindings ub
     JOIN sessions s ON s.id = ub.session_id
     WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-      AND ub.harness IN ('claude-code', 'codex', 'kimi')
       AND (
-          ub.harness = 'kimi'
+          ub.harness IN ('kimi', 'qwen')
           OR ub.state = 'discovering'
           OR ub.last_error_code = 'source_discovery_pending'
+          OR (
+              ub.harness = 'pi'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM usage_sources source
+                  WHERE source.binding_id = ub.id
+                    AND source.kind = 'pi_session'
+              )
+          )
           OR EXISTS (
               SELECT 1
               FROM usage_codex_pending_children pending
@@ -143,6 +158,23 @@ SELECT CAST(EXISTS (
                     LIMIT 1
                 )
           )
+      )
+) OR EXISTS (
+    SELECT 1
+    FROM sessions s
+    WHERE s.is_terminated = 0
+      AND s.activity_state <> 'exited'
+      AND s.harness = 'pi'
+      AND trim(s.agent_session_id) <> ''
+      AND (
+          trim(s.runtime_launch_id) = ''
+          OR s.agent_session_id_launch_id = s.runtime_launch_id
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM usage_bindings ub
+          WHERE ub.session_id = s.id
+            AND ub.harness = 'pi'
       )
 ) AS INTEGER);
 
@@ -169,28 +201,36 @@ SELECT ub.*
 FROM usage_bindings ub
 JOIN sessions s ON s.id = ub.session_id
 WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
-  AND ub.harness IN ('claude-code', 'codex', 'kimi')
   AND (
       ub.state IN ('discovering', 'active', 'finalizing')
       OR (ub.state = 'partial' AND ub.last_error_code = 'codex_source_budget_exceeded')
   )
   AND (
-      ub.harness IN ('claude-code', 'kimi')
+      ub.harness IN ('claude-code', 'kimi', 'qwen')
       OR ub.state = 'discovering'
       OR ub.state = 'finalizing'
       OR ub.last_error_code = 'codex_source_budget_exceeded'
       OR ub.last_error_code = 'source_discovery_pending'
-      OR NOT EXISTS (
+      OR (ub.harness = 'codex' AND NOT EXISTS (
           SELECT 1
           FROM usage_sources us
           WHERE us.binding_id = ub.id
             AND us.kind = 'codex_rollout'
-      )
+      ))
+      OR (ub.harness = 'pi' AND NOT EXISTS (
+          SELECT 1
+          FROM usage_sources us
+          WHERE us.binding_id = ub.id
+            AND us.kind = 'pi_session'
+      ))
       OR EXISTS (
           SELECT 1
           FROM usage_sources us
           WHERE us.binding_id = ub.id
-            AND us.kind = 'codex_rollout'
+            AND (
+                ub.harness = 'codex' AND us.kind = 'codex_rollout'
+                OR ub.harness = 'pi' AND us.kind = 'pi_session'
+            )
             AND us.state = 'error'
             AND us.last_error_code IN ('artifact_missing', 'source_read_failed')
       )
@@ -370,11 +410,12 @@ INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
-    provider_usage_json,
+    provider_usage_json, service_tier, provider_message_id,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
 RETURNING id;
 
 -- name: RehomeOpenUsageEventToReplacementSource :execrows
@@ -407,10 +448,10 @@ WHERE model_usage_events.id = sqlc.arg(id)
 -- A later observation supersedes an inferred billing provider and every cost
 -- derived from that inference. ApplyUsageChunk rehomes replacement-generation
 -- rows before this statement, so the source guard also prevents promotion on a
--- stale generation.
 UPDATE model_usage_events
 SET billing_provider_id = sqlc.arg(billing_provider_id),
     billing_provider_source = 'observed',
+    service_tier = COALESCE(service_tier, sqlc.narg(service_tier)),
     input_cost_nanos = sqlc.narg(input_cost_nanos),
     cached_input_cost_nanos = sqlc.narg(cached_input_cost_nanos),
     output_cost_nanos = sqlc.narg(output_cost_nanos),
@@ -457,6 +498,7 @@ SELECT
     event.uncached_input_tokens,
     event.output_tokens,
     event.provider_usage_json,
+    event.service_tier,
     event.pricing_version,
     event.source_event_key
 FROM model_usage_events event
@@ -488,10 +530,75 @@ WHERE id = sqlc.arg(id)
   AND uncached_input_tokens IS sqlc.narg(expected_uncached_input_tokens)
   AND output_tokens IS sqlc.narg(expected_output_tokens)
   AND provider_usage_json IS sqlc.narg(expected_provider_usage_json)
+  AND service_tier IS sqlc.narg(expected_service_tier)
   AND source_event_key = sqlc.arg(expected_source_event_key)
   AND pricing_version = sqlc.arg(expected_pricing_version)
-  AND estimated_cost_nanos IS NULL
+  AND estimated_cost_nanos IS sqlc.narg(expected_estimated_cost_nanos)
+  AND (estimated_cost_nanos IS NULL
+       OR pricing_version LIKE 'ao-catalog:%'
+       OR pricing_version LIKE 'ao-override:%')
 RETURNING binding_id;
+
+-- name: ListUsagePricedVersions :many
+SELECT DISTINCT pricing_version
+FROM model_usage_events
+WHERE estimated_cost_nanos IS NOT NULL
+  AND pricing_version >= sqlc.arg(version_from)
+  AND pricing_version < sqlc.arg(version_to)
+ORDER BY pricing_version;
+
+-- name: ListUsageRepriceCandidates :many
+SELECT sqlc.embed(event)
+FROM model_usage_events event
+WHERE event.pricing_version = sqlc.arg(pricing_version)
+  AND event.estimated_cost_nanos IS NOT NULL
+  AND event.id > sqlc.arg(after_id)
+ORDER BY event.id
+LIMIT 256;
+
+-- name: ListUsageModelCostCandidates :many
+SELECT sqlc.embed(event)
+FROM model_usage_events event
+WHERE event.model_id = sqlc.arg(model_id)
+  AND (event.estimated_cost_nanos IS NULL
+       OR event.pricing_version LIKE 'ao-catalog:%'
+       OR event.pricing_version LIKE 'ao-override:%')
+  AND event.id > sqlc.arg(after_id)
+ORDER BY event.id
+LIMIT 256;
+
+-- name: ListUsageTierRepairSourceIDs :many
+SELECT usage_source_id FROM usage_tier_repairs ORDER BY usage_source_id;
+
+-- name: DeleteUsageTierRepair :exec
+DELETE FROM usage_tier_repairs WHERE usage_source_id = ?;
+
+-- name: SetUntieredUsageEventTier :execrows
+UPDATE model_usage_events
+SET service_tier = sqlc.arg(service_tier),
+    input_cost_nanos = NULL,
+    cached_input_cost_nanos = NULL,
+    output_cost_nanos = NULL,
+    estimated_cost_nanos = NULL,
+    pricing_version = ''
+WHERE binding_id = sqlc.arg(binding_id)
+  AND source_event_key = sqlc.arg(source_event_key)
+  AND service_tier IS NULL
+  AND (estimated_cost_nanos IS NULL
+       OR pricing_version LIKE 'ao-catalog:%'
+       OR pricing_version LIKE 'ao-override:%');
+
+-- name: ListUsagePriceOverrides :many
+SELECT * FROM usage_price_overrides ORDER BY model_id;
+
+-- name: DeleteUsagePriceOverrides :exec
+DELETE FROM usage_price_overrides;
+
+-- name: InsertUsagePriceOverride :exec
+INSERT INTO usage_price_overrides (
+    model_id, input_usd_per_mtok, output_usd_per_mtok,
+    cache_read_usd_per_mtok, cache_write_usd_per_mtok, price_as, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListLegacyUsageSourceIDs :many
 -- Open attribution: never attributed, or attributed only by inference and so
@@ -505,6 +612,19 @@ FROM model_usage_events mue
 WHERE mue.billing_provider_id IS NULL
    OR mue.billing_provider_source = 'inferred'
 ORDER BY mue.usage_source_id;
+
+-- name: ListUntimedUsageSourceIDs :many
+SELECT DISTINCT usage_source_id
+FROM model_usage_events
+WHERE created_at IS NULL
+ORDER BY usage_source_id;
+
+-- name: SetUntimedUsageEventTime :execrows
+UPDATE model_usage_events
+SET created_at = sqlc.arg(created_at)
+WHERE binding_id = sqlc.arg(binding_id)
+  AND source_event_key = sqlc.arg(source_event_key)
+  AND created_at IS NULL;
 
 -- name: ListLegacyUsageEvents :many
 SELECT
@@ -535,6 +655,7 @@ SET billing_provider_id = sqlc.arg(billing_provider_id),
     -- The reparse is the only way a pre-capture event can ever gain its bounded
     -- provider object, and it is exactly what makes the event priceable.
     provider_usage_json = sqlc.narg(provider_usage_json),
+    service_tier = COALESCE(service_tier, sqlc.narg(service_tier)),
     input_cost_nanos = sqlc.narg(input_cost_nanos),
     cached_input_cost_nanos = sqlc.narg(cached_input_cost_nanos),
     output_cost_nanos = sqlc.narg(output_cost_nanos),
@@ -616,11 +737,6 @@ WHERE ub.session_id = ?
 GROUP BY ub.harness, mue.model_id
 ORDER BY SUM(mue.input_tokens + mue.output_tokens) DESC, ub.harness, mue.model_id;
 
--- name: GetUsageSessionIncomplete :one
-SELECT CAST(COALESCE((
-    SELECT incomplete FROM usage_session_integrity WHERE session_id = ?
-), 0) AS INTEGER);
-
 -- name: ListCompactSessionUsage :many
 SELECT
     ub.session_id,
@@ -654,3 +770,43 @@ LEFT JOIN usage_session_integrity integrity ON integrity.session_id = ub.session
 WHERE (sqlc.arg(project_id) = '' OR s.project_id = sqlc.arg(project_id))
 GROUP BY ub.session_id, s.project_id, s.num, integrity.incomplete
 ORDER BY s.project_id, s.num;
+
+-- name: ListUsageReportEvents :many
+SELECT
+    model_usage_events.created_at,
+    model_usage_events.provider_id,
+    model_usage_events.billing_provider_id,
+    model_usage_events.model_id,
+    model_usage_events.service_tier,
+    model_usage_events.cached_input_tokens,
+    model_usage_events.uncached_input_tokens,
+    model_usage_events.output_tokens,
+    model_usage_events.input_cost_nanos,
+    model_usage_events.cached_input_cost_nanos,
+    model_usage_events.output_cost_nanos,
+    model_usage_events.estimated_cost_nanos,
+    CAST(COALESCE(CASE WHEN json_valid(model_usage_events.provider_usage_json) THEN
+        CASE model_usage_events.provider_id
+            WHEN 'anthropic' THEN COALESCE(
+                json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
+            ELSE COALESCE(
+                json_extract(model_usage_events.provider_usage_json, '$.last_token_usage.cache_write_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
+        END
+    END, -1) AS INTEGER) AS cache_write_tokens,
+    CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)
+        THEN COALESCE(
+            json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens'),
+            json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_1h_input_tokens')) END, -1) AS INTEGER) AS cache_write_1h_tokens,
+    usage_bindings.harness,
+    usage_bindings.session_id,
+    sessions.project_id,
+    CAST(COALESCE(NULLIF(trim(sessions.display_name), ''), NULLIF(trim(sessions.issue_id), ''), sessions.id) AS TEXT) AS session_title
+FROM model_usage_events
+JOIN usage_bindings ON usage_bindings.id = model_usage_events.binding_id
+JOIN sessions ON sessions.id = usage_bindings.session_id
+WHERE model_usage_events.created_at IS NOT NULL
+  AND substr(model_usage_events.created_at, 1, 19) >= CAST(sqlc.arg(since_utc) AS TEXT)
+  AND substr(model_usage_events.created_at, 1, 19) < CAST(sqlc.arg(until_utc) AS TEXT)
+ORDER BY model_usage_events.id;
