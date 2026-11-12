@@ -622,3 +622,84 @@ func TestSteerToAnIdleChatYieldsItToAnotherProcess(t *testing.T) {
 		t.Fatalf("provider received %v; want only the first message", sent)
 	}
 }
+
+type steerableHibernation struct {
+	*hibernationConversation
+	steers atomic.Int32
+	fail   atomic.Bool
+}
+
+func (c *steerableHibernation) Steer(_ context.Context, providerTurnID string, _ ports.ChatUserMessage) (ports.ChatTurnRef, error) {
+	c.steers.Add(1)
+	if c.fail.Load() {
+		return ports.ChatTurnRef{}, errors.New("connection reset while waiting for steer reply")
+	}
+	return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
+}
+
+func TestRetriedSteerReplaysItsReceiptWhileAnotherProcessHoldsTheChat(t *testing.T) {
+	t.Cleanup(chatsvc.SetOtherWriterPoll(5 * time.Millisecond))
+	var provider *steerableHibernation
+	h, _ := hibernationHarnessWith(t, "", func(opts *chatsvc.Options) {
+		opts.HibernationEnabled = func() bool { return false }
+		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+		inner := driver.conv.(*hibernationConversation)
+		caps := productionCaps()
+		caps[ports.ChatCapabilitySteer] = true
+		inner.setCapabilities(caps)
+		provider = &steerableHibernation{hibernationConversation: inner}
+		driver.conv = provider
+		opts.Drivers = fakeRegistry{driver: driver}
+	})
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "do work", ClientMessageID: "hibernate-1"}); err != nil {
+		t.Fatal(err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	accepted := ports.ChatUserMessage{Text: "narrow the search", ClientMessageID: "elsewhere-22"}
+	first, err := h.svc.SteerOrSend(ctx, testSession, accepted, false)
+	if err != nil || !first.Steered {
+		t.Fatalf("first steer = %+v, %v; want it steered", first, err)
+	}
+	uncertain := ports.ChatUserMessage{Text: "skip the tests", ClientMessageID: "elsewhere-23"}
+	provider.fail.Store(true)
+	if _, err := h.svc.SteerOrSend(ctx, testSession, uncertain, false); !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("second steer error = %v; want ErrSteerDeliveryUncertain", err)
+	}
+	provider.fail.Store(false)
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+	})
+	if err := h.svc.DrainQueued(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	var elsewhere atomic.Bool
+	elsewhere.Store(true)
+	h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) bool { return elsewhere.Load() })
+	t.Cleanup(func() { elsewhere.Store(false) })
+
+	retried, err := h.svc.SteerOrSend(ctx, testSession, accepted, false)
+	if err != nil || !retried.Steered || !retried.Duplicate || withoutReplay(retried.Steer) != first.Steer {
+		t.Fatalf("retried accepted steer = %+v, %v; want the first result replayed", retried, err)
+	}
+	snapshot, err := h.svc.Snapshot(ctx, testSession)
+	if err != nil || !snapshot.OpenElsewhere {
+		t.Fatalf("snapshot after the retry = elsewhere %v, %v; want the chat held", snapshot.OpenElsewhere, err)
+	}
+	if replayed, err := h.svc.Steer(ctx, testSession, accepted); err != nil || !replayed.Replayed {
+		t.Fatalf("retried plain steer = %+v, %v; want the first result replayed", replayed, err)
+	}
+	if _, err := h.svc.SteerOrSend(ctx, testSession, uncertain, false); !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("retried uncertain steer error = %v; want ErrSteerDeliveryUncertain", err)
+	}
+	if _, err := h.svc.Steer(ctx, testSession, uncertain); !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) {
+		t.Fatalf("retried uncertain plain steer error = %v; want ErrSteerDeliveryUncertain", err)
+	}
+	if sent, steers := provider.sentTexts(), provider.steers.Load(); len(sent) != 1 || steers != 2 {
+		t.Fatalf("provider received sends %v and %d steers; want the first send and two steers", sent, steers)
+	}
+	if snapshot, err := h.svc.Snapshot(ctx, testSession); err != nil || len(snapshot.Turns) != 1 {
+		t.Fatalf("conversation has %d turns, %v; want the retries to add none", len(snapshot.Turns), err)
+	}
+}
