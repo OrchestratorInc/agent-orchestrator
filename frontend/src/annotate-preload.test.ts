@@ -867,6 +867,25 @@ describe("annotation composer dictation", () => {
 		expect(textarea.value).toBe("Make this bigger");
 	});
 
+	it.each([
+		["Hello ()", 7, "Hello (world)"],
+		["Say it.", 6, "Say it world."],
+		["Done, ok", 4, "Done world, ok"],
+		["[]", 1, "[world]"],
+	])("does not space the words from punctuation around them in %j", (value, caret, expected) => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-punctuation");
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+		textarea.value = value;
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.setSelectionRange(caret, caret);
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+
+		emitDictation({ type: "end", text: "world" });
+
+		expect(textarea.value).toBe(expected);
+	});
+
 	it("keeps the selected text when the run ends without words", () => {
 		setMode(true, createBrowserAnnotationSession(window.location.href), true);
 		const root = openComment("dictate-empty");

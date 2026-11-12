@@ -441,8 +441,9 @@ function startDictation(): void {
 		before,
 		selected: draft.body.slice(start, end),
 		after,
-		prefix: before && !/\s$/.test(before) ? " " : "",
-		suffix: after && !/^\s/.test(after) ? " " : "",
+		// Words are spaced from words, not from the brackets and punctuation around them.
+		prefix: before && !/[\s([{“‘]$/.test(before) ? " " : "",
+		suffix: after && !/^[\s.,;:!?)\]}"'”’…]/.test(after) ? " " : "",
 		unsubscribe: onDictationEvent(handleDictationEvent),
 		stopMeter: null,
 	};
