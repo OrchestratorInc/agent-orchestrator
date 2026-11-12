@@ -37,7 +37,7 @@ export function TurnWorkSummary({
 		// Same box and text edge as the fold's trigger below, so a turn with work and
 		// one without line up, and nothing moves if a turn gains steps to fold.
 		return (
-			<div className="flex h-7 select-none items-center gap-1 text-sm text-muted-foreground" data-turn-worked-label="">
+			<div className="flex h-7 select-none items-center gap-1 text-xs font-normal text-muted-foreground" data-turn-worked-label="">
 				{label}
 			</div>
 		);
@@ -52,7 +52,7 @@ export function TurnWorkSummary({
 		>
 			<AccordionItem value="worked" className="border-0">
 				<AccordionTrigger
-					className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-sm font-normal text-muted-foreground hover:text-foreground"
+					className="chat-worked-trigger h-7 select-none gap-1 px-1 py-0 text-xs font-normal text-muted-foreground hover:text-foreground"
 					headerClassName="hover:bg-transparent data-[state=open]:bg-transparent"
 					trailing={null}
 				>
@@ -60,7 +60,7 @@ export function TurnWorkSummary({
 						{label}
 						<ChevronRight
 							aria-hidden="true"
-							className="size-3.5 shrink-0 transition-transform duration-200 group-data-[state=open]/row:rotate-90"
+							className="size-3 shrink-0 transition-transform duration-200 group-data-[state=open]/row:rotate-90"
 						/>
 					</span>
 				</AccordionTrigger>

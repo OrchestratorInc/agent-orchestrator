@@ -2376,8 +2376,8 @@ function OrchestratorStartupStatus({ error, onRetry, retrying, retryError }: Com
 	const { t } = useTranslation();
 	return (
 		<div data-testid="orchestrator-startup-status" className="px-2 text-xs text-muted-foreground">
-			<div role="alert" className="flex items-center gap-2">
-				<TriangleAlert aria-hidden="true" className="size-3.5 text-destructive" />
+			<div role="alert" className="flex items-center gap-1.5">
+				<TriangleAlert aria-hidden="true" className="size-3 shrink-0 text-destructive" />
 				<span>{t("chat.startup.failed")}</span>
 				{onRetry ? <Button type="button" variant="link" className="ml-auto text-xs text-foreground" onClick={onRetry} disabled={retrying}>{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}</Button> : null}
 			</div>

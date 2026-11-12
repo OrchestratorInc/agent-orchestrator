@@ -941,11 +941,12 @@ export function ResponseSpinner() {
 /**
  * The live turn's working mark: a lattice of dots with a trail running round it
  * (see LatticeLoader). Decorative here, since the label and timer beside it carry
- * the meaning.
+ * the meaning. Like ResponseSpinner it sits in the step icons' 12px slot, so the
+ * dots centre on the same column as the icon of the step rows above it.
  */
 export function LiveWorkingMark() {
 	return (
-		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+		<span aria-hidden="true" data-testid="response-spinner" className="flex size-3 shrink-0 items-center justify-center text-muted-foreground">
 			<LatticeLoader />
 		</span>
 	);
@@ -1461,17 +1462,21 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	const quietLabelKind = useRef<string | null | undefined>(labelEnters ? null : labelKind);
 	if (quietLabelKind.current !== null && quietLabelKind.current !== labelKind) quietLabelKind.current = null;
 	const labelEntrance = quietLabelKind.current === null;
-	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
+	// The step rows' type and icon column (ACTIVITY_SUMMARY_BUTTON_CLASS): 12px text,
+	// a 12px mark at the turn's edge and a 6px gap, so a step that moves up from here
+	// keeps its size and its label's left edge. The row keeps its 28px height, the
+	// height of the action row that takes its place under a reply.
+	const rowClass = "-mx-1 flex h-7 select-none items-center gap-1.5 px-1 py-0";
 	const row = (
 		<>
-			<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center">
+			<span aria-hidden="true" className="flex size-3 shrink-0 items-center justify-center">
 				{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
 			</span>
 			<span
 				id={labelId}
 				role={failed ? "alert" : "status"}
 				data-testid="live-working-label"
-				className="flex min-w-0 items-center gap-2 text-sm"
+				className="flex min-w-0 items-center gap-1.5 text-xs font-normal"
 			>
 				{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
 				    while the text inside updates in place. */}
@@ -1496,7 +1501,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 					</span>
 				) : null}
 				{startupLabel ? null : (
-					<span className="shrink-0 tabular-nums text-muted-foreground/75" data-testid="live-working-timer">
+					<span className="shrink-0 tabular-nums text-muted-foreground/70" data-testid="live-working-timer">
 						{formatDuration(elapsedMs)}
 					</span>
 				)}
@@ -1549,7 +1554,7 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 			</AnimatePresence>
 			{reconnect?.detail && !startupLabel ? (
 				<p
-					className="truncate pl-7 text-xs leading-5 text-muted-foreground"
+					className="truncate pl-4.5 text-xs leading-5 text-muted-foreground"
 					title={reconnect.detail}
 					data-testid="live-turn-status"
 				>
@@ -2491,10 +2496,10 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 
 	return (
 		<div className="flex gap-2.5 border-l-2 border-border-strong py-0.5 pl-3">
-			<Brain aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-muted-foreground/70" />
+			<Brain aria-hidden="true" className="mt-0.5 size-3 shrink-0 text-muted-foreground/70" />
 			<div className="min-w-0 flex-1">
 				<div className="flex items-center gap-2">
-					<span className="text-caption text-muted-foreground/70">
+					<span className="text-xs font-normal text-muted-foreground/70">
 						{streaming ? "Thinking" : "Thought"}
 					</span>
 					{streaming ? (
@@ -4170,7 +4175,7 @@ function fileLocationLabel(path: string, oldPath?: string): string {
 export function TurnDuration({ durationMs }: { durationMs: number }) {
 	if (durationMs <= 0) return null;
 	// The summary's own color (and the fold's hover color) carries the number with the words.
-	return <span className="shrink-0 font-sans text-sm leading-none tabular-nums">{formatDuration(durationMs)}</span>;
+	return <span className="shrink-0 font-sans text-xs leading-none tabular-nums">{formatDuration(durationMs)}</span>;
 }
 
 export { User };
