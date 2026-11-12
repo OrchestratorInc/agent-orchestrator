@@ -1,4 +1,4 @@
-import { apiRequest } from "../api";
+import { ApiError, apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
 import { formatFileAnnotationMessages, type FileAnnotationComment } from "../../../shared/files/file-annotations";
 import { scopedFileDetail, sumFiles, type ScopedDiffs, type ScopedRevision } from "./model";
@@ -175,22 +175,38 @@ export async function getWorkspaceFile(
 	return (await res.json()) as WorkspaceFileDetail;
 }
 
+/** How many times a scoped read starts over when the worktree moves between its two halves. */
+const SCOPED_READ_ATTEMPTS = 3;
+
 /**
  * One file in a worktree scope: `workspace/diffs` for the scope's patch (Staged
- * is `--cached`, the branch's commits `<base> HEAD`), and `workspace/file/revision`
- * for its after side (the index, HEAD, or the worktree).
+ * is `--cached`, the branch's commits `<base> HEAD`), then `workspace/file/revision`
+ * for its after side (the index, HEAD, or the worktree), fenced to the patch's
+ * workspace version. If the agent changes the worktree in between, the daemon
+ * refuses the fenced read and the pair is read again, so a patch is never shown
+ * over another moment's content.
  */
 export async function getScopedWorkspaceFile(cfg: ServerConfig, sessionId: string, path: string, scope: FileSection, init?: Pick<RequestInit, "signal">): Promise<WorkspaceFileDetail> {
-	const [diffs, revision] = await Promise.all([
-		apiRequest(cfg, sessionPath(sessionId, "workspace/diffs"), {
+	for (let attempt = 1; ; attempt += 1) {
+		const diffs = await apiRequest(cfg, sessionPath(sessionId, "workspace/diffs"), {
 			...init,
 			method: "POST",
 			body: JSON.stringify({ paths: [path], scope, contextLines: 3, ignoreWhitespace: false }),
-		}).then((res) => res.json() as Promise<ScopedDiffs>),
-		apiRequest(cfg, `${sessionPath(sessionId, "workspace/file/revision")}?${new URLSearchParams({ path, scope, side: "after" })}`, init)
-			.then((res) => res.json() as Promise<ScopedRevision>),
-	]);
-	return scopedFileDetail(path, diffs ?? {}, revision ?? {});
+		}).then((res) => res.json() as Promise<ScopedDiffs | null>);
+		// A repository's git failure arrives inside a successful answer; it is not "no changes".
+		const failure = (diffs?.groups ?? []).flatMap((group) => group.errors ?? [])[0];
+		if (failure) throw new Error(failure.message || "Git couldn't read this file's changes.");
+		const query = new URLSearchParams({ path, scope, side: "after" });
+		if (diffs?.workspaceVersion) query.set("workspaceVersion", diffs.workspaceVersion);
+		try {
+			const revision = await apiRequest(cfg, `${sessionPath(sessionId, "workspace/file/revision")}?${query}`, init)
+				.then((res) => res.json() as Promise<ScopedRevision | null>);
+			return scopedFileDetail(path, diffs ?? {}, revision ?? {});
+		} catch (cause) {
+			const moved = cause instanceof ApiError && cause.code === "WORKSPACE_SNAPSHOT_STALE";
+			if (!moved || attempt >= SCOPED_READ_ATTEMPTS) throw cause;
+		}
+	}
 }
 
 /** One folder, of the worktree or of a view's tip. */

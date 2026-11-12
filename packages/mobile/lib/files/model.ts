@@ -65,7 +65,7 @@ export function sumFiles(files: readonly Pick<WorkspaceFileSummary, "additions" 
 /** What `POST workspace/diffs` answers for one path. */
 export type ScopedDiffs = {
 	workspaceVersion?: string;
-	groups?: Array<{ patch?: string; includedPaths?: string[]; truncated?: boolean; deferred?: Array<{ path: string; reason: string }> }>;
+	groups?: Array<{ patch?: string; includedPaths?: string[]; truncated?: boolean; deferred?: Array<{ path: string; reason: string }>; errors?: Array<{ code: string; message: string }> }>;
 };
 
 /** What `GET workspace/file/revision` answers for a scope's after side. */
