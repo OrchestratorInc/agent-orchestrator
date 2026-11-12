@@ -445,9 +445,11 @@ export function SessionCardView({
 					<div className="mt-1 flex min-w-0 flex-col gap-1 text-2xs text-muted-foreground" data-testid="session-card-meta">
 						<div className="flex min-h-5 min-w-0 items-center gap-2">
 							<div className="flex min-w-0 flex-1 items-center gap-1.5 font-sans">{branchRow}</div>
-							<div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+							{/* A long status truncates rather than squeezing out the branch;
+							    only the time and metrics keep their full width. */}
+							<div className="flex min-w-0 max-w-[70%] items-center justify-end gap-2 whitespace-nowrap">
 								{statusLabel}
-								{metrics}
+								<div className="flex shrink-0 items-center gap-2">{metrics}</div>
 							</div>
 						</div>
 						{prGroups.length > 0 ? (
