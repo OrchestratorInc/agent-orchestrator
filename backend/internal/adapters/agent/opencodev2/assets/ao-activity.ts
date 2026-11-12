@@ -20,6 +20,23 @@ export default {
     const seenSessions = new Set()
     const childSessions = new Set()
     let rootSessionID = null
+    // An inbox item can be re-delivered or reconciled, and a replayed prompt
+    // does not clear AO's unsettled checkpoint. Emit each inbox item once.
+    const seenInboxItems = new Set()
+    // OpenCode 2 publishes a durable execution lifecycle per turn
+    // (session.execution.started -> succeeded / failed / interrupted) and also
+    // an ephemeral session.status that can report idle between the steps of a
+    // still-running execution. Once a session reports execution events, the
+    // execution terminal is its turn boundary and an idle status cannot end a
+    // turn early.
+    const executionSessions = new Set()
+    // A turn can end with both a terminal and a trailing status idle, and a
+    // coalesced drain can repeat a terminal. Report one stop per turn; only a
+    // new user prompt opens the next one.
+    const stoppedSessions = new Set()
+    // Until the plugin has seen a prompt (for example when it subscribed
+    // mid-turn), a new execution segment is the only evidence of a new turn.
+    const promptedSessions = new Set()
     const controller = new AbortController()
 
     let queue = Promise.resolve()
@@ -59,6 +76,14 @@ export default {
       report("session-start", sessionID)
     }
 
+    // A second stop in the same turn would mark the completed conversation
+    // checkpoint unsettled, so the turn boundary is emitted at most once.
+    function reportStop(sessionID) {
+      if (!sessionID || stoppedSessions.has(sessionID)) return
+      stoppedSessions.add(sessionID)
+      report("stop", sessionID)
+    }
+
     function isChildSession(sessionID) {
       return !!sessionID && childSessions.has(sessionID)
     }
@@ -92,6 +117,14 @@ export default {
         case "session.execution.started": {
           const root = resolveSessionID(sessionID)
           ensureSession(root)
+          if (!isChildSession(sessionID)) {
+            executionSessions.add(root)
+            // A segment boundary only reopens a turn the plugin never saw a
+            // prompt for. Once a prompt is observed, a further segment belongs
+            // to that turn: reopening here would let a completed checkpoint be
+            // marked unsettled by the turn's own next boundary.
+            if (!promptedSessions.has(root)) stoppedSessions.delete(root)
+          }
           report("active", root)
           break
         }
@@ -102,15 +135,45 @@ export default {
           if (!sessionID || isChildSession(sessionID)) break
           rootSessionID = sessionID
           ensureSession(sessionID)
-          report("stop", sessionID)
+          executionSessions.add(sessionID)
+          reportStop(sessionID)
           break
         case "session.status":
           if (!sessionID || isChildSession(sessionID)) break
           rootSessionID = sessionID
           ensureSession(sessionID)
-          if (data?.status?.type === "idle") report("stop", sessionID)
-          else if (data?.status?.type === "busy") report("active", sessionID)
+          if (data?.status?.type === "idle") {
+            // A status-only session (no execution lifecycle on its bus) still
+            // gets its boundary, but a session that reports executions is
+            // stopped by their terminal so a mid-turn idle cannot end the turn.
+            if (executionSessions.has(sessionID)) break
+            reportStop(sessionID)
+          } else if (data?.status?.type === "busy") {
+            if (!promptedSessions.has(sessionID)) stoppedSessions.delete(sessionID)
+            report("active", sessionID)
+          }
           break
+        case "session.inbox.enqueued": {
+          // Only real user input is a prompt boundary. Synthetic, compaction,
+          // and move items would otherwise mark the session active with no
+          // prompt of their own.
+          if (!sessionID || isChildSession(sessionID)) break
+          const item = data?.item
+          if (item?.type !== "user") break
+          const inboxID = data?.inboxID || item?.id || ""
+          if (inboxID) {
+            if (seenInboxItems.has(inboxID)) break
+            seenInboxItems.add(inboxID)
+          }
+          const root = resolveSessionID(sessionID)
+          ensureSession(root)
+          promptedSessions.add(root)
+          stoppedSessions.delete(root)
+          // Forward only the prompt text; files and metadata stay native.
+          const text = typeof item.payload?.text === "string" ? item.payload.text : ""
+          report("user-prompt-submit", root, { prompt: text })
+          break
+        }
         case "permission.asked": {
           // A child dialog still blocks the tree; surface it on the root id.
           const root = resolveSessionID(sessionID)

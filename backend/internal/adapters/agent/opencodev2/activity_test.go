@@ -15,6 +15,7 @@ func TestDeriveActivityState(t *testing.T) {
 	}{
 		{"native session startup", "session-start", domain.ActivityActive, true},
 		{"active work", "active", domain.ActivityActive, true},
+		{"user prompt", "user-prompt-submit", domain.ActivityActive, true},
 		{"tool start", "pre-tool-use", domain.ActivityActive, true},
 		{"tool finish", "post-tool-use", domain.ActivityActive, true},
 		{"tool failure", "post-tool-use-failure", domain.ActivityActive, true},

@@ -6,6 +6,7 @@
 //   message.updated / message.part.updated -> `ao hooks opencode user-prompt-submit`
 //   tool.execute.before                  -> `ao hooks opencode pre-tool-use`
 //   tool.execute.after                   -> `ao hooks opencode post-tool-use`
+//   child tool traffic (folded)           -> `ao hooks opencode active`
 //   session.status (status.type == idle)   -> `ao hooks opencode stop`
 //                                             (carries the turn's final assistant text)
 //   permission.asked / question.asked      -> `ao hooks opencode permission-blocked`

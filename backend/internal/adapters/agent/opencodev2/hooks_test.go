@@ -188,7 +188,7 @@ process.stdin.on("end", () => {
 	}
 
 	calls := readV2HookCalls(t, capture)
-	wantEvents := []string{"session-start", "active", "pre-tool-use", "permission-blocked", "permission-resolved", "stop", "active", "stop", "active", "stop", "stop"}
+	wantEvents := []string{"session-start", "user-prompt-submit", "active", "pre-tool-use", "permission-blocked", "permission-resolved", "stop", "user-prompt-submit", "active", "stop", "user-prompt-submit", "active", "stop", "user-prompt-submit", "active", "stop"}
 	if len(calls) != len(wantEvents) {
 		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
 	}
@@ -399,6 +399,182 @@ process.stdin.on("end", () => {
 	}
 }
 
+func TestManagedV2PluginReportsUserPrompts(t *testing.T) {
+	// Prompt boundaries come from user inbox items only, deduped per item, and a
+	// turn emits one stop so a completed checkpoint is not marked unsettled.
+	for _, marker := range []string{"session.inbox.enqueued", `item?.type !== "user"`, "seenInboxItems", "reportStop"} {
+		if !strings.Contains(v2PluginSource, marker) {
+			t.Fatalf("managed v2 plugin missing prompt wiring %q", marker)
+		}
+	}
+	// A turn's boundary is its execution terminal. Status idle can land between
+	// the steps of a running execution, so it may not end the turn once the
+	// session reports executions, and only a prompt may reopen a seen turn.
+	for _, marker := range []string{"executionSessions", "promptedSessions", "if (executionSessions.has(sessionID)) break"} {
+		if !strings.Contains(v2PluginSource, marker) {
+			t.Fatalf("managed v2 plugin missing turn-boundary wiring %q", marker)
+		}
+	}
+}
+
+func TestManagedV2PluginReportsPromptsOnceAndStopsOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ao executable fixture uses a Unix shebang")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	capture := filepath.Join(fixture, "calls.jsonl")
+	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.AO_TEST_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, launch: process.env.AO_RUNTIME_LAUNCH_ID }) + "\n");
+  process.exit(9);
+});
+`, 0o755)
+	harness := writeV2Harness(t, fixture)
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "prompts")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fixture+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AO_TEST_CAPTURE="+capture,
+		"AO_RUNTIME_LAUNCH_ID=launch-v2-7",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plugin harness failed: %v\n%s", err, output)
+	}
+
+	calls := readV2HookCalls(t, capture)
+	wantEvents := []string{"session-start", "user-prompt-submit", "active", "stop", "user-prompt-submit", "active", "stop"}
+	if len(calls) != len(wantEvents) {
+		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
+	}
+	payloads := make([]map[string]any, len(calls))
+	for i, event := range wantEvents {
+		if !reflect.DeepEqual(calls[i].Args, []string{"hooks", "opencode-v2", event}) {
+			t.Fatalf("call %d args = %#v, want hooks/opencode-v2/%s", i, calls[i].Args, event)
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[i].Input)), &payloads[i]); err != nil {
+			t.Fatalf("call %d payload: %v", i, err)
+		}
+		if payloads[i]["session_id"] != "ses_prompts" {
+			t.Fatalf("call %d session_id = %#v", i, payloads[i]["session_id"])
+		}
+	}
+	for _, index := range []int{1, 4} {
+		want := "hello"
+		if index == 4 {
+			want = "again"
+		}
+		if payloads[index]["prompt"] != want {
+			t.Fatalf("call %d prompt = %#v, want %q", index, payloads[index]["prompt"], want)
+		}
+		for _, leaked := range []string{"files", "metadata"} {
+			if _, ok := payloads[index][leaked]; ok {
+				t.Fatalf("call %d forwarded %q: %#v", index, leaked, payloads[index])
+			}
+		}
+	}
+}
+
+func TestManagedV2PluginStopsOncePerTurn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ao executable fixture uses a Unix shebang")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required to execute the OpenCode 2 plugin fixture")
+	}
+
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := t.TempDir()
+	modulePath := filepath.Join(fixture, "ao-activity.mjs")
+	source, err := os.ReadFile(v2PluginPath(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
+	writeV2TestFile(t, modulePath, string(source), 0o600)
+	capture := filepath.Join(fixture, "calls.jsonl")
+	writeV2TestFile(t, filepath.Join(fixture, "ao"), `#!/usr/bin/env node
+const fs = require("node:fs");
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  fs.appendFileSync(process.env.AO_TEST_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), input, launch: process.env.AO_RUNTIME_LAUNCH_ID }) + "\n");
+  process.exit(9);
+});
+`, 0o755)
+	harness := writeV2Harness(t, fixture)
+	cmd := exec.CommandContext(context.Background(), node, harness, modulePath, workspace, "dedupe")
+	cmd.Env = append(os.Environ(),
+		"PATH="+fixture+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AO_TEST_CAPTURE="+capture,
+		"AO_RUNTIME_LAUNCH_ID=launch-v2-7",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plugin harness failed: %v\n%s", err, output)
+	}
+
+	// A mid-turn idle is not a stop, the execution terminal is, a trailing idle
+	// and a second segment add nothing, and the next prompt opens the next turn.
+	// A session without execution events still stops on its idle status.
+	calls := readV2HookCalls(t, capture)
+	wantEvents := []string{
+		"session-start", "user-prompt-submit", "active", "active", "stop", "active",
+		"user-prompt-submit", "active", "stop",
+		"session-start", "user-prompt-submit", "active", "stop", "user-prompt-submit", "stop",
+	}
+	if len(calls) != len(wantEvents) {
+		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
+	}
+	stops := map[string]int{}
+	prompts := map[string]int{}
+	for i, event := range wantEvents {
+		if !reflect.DeepEqual(calls[i].Args, []string{"hooks", "opencode-v2", event}) {
+			t.Fatalf("call %d args = %#v, want hooks/opencode-v2/%s", i, calls[i].Args, event)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(calls[i].Input)), &payload); err != nil {
+			t.Fatalf("call %d payload: %v", i, err)
+		}
+		sessionID, _ := payload["session_id"].(string)
+		switch event {
+		case "stop":
+			stops[sessionID]++
+		case "user-prompt-submit":
+			prompts[sessionID]++
+		}
+	}
+	// One stop per observed turn: the mid-turn idle, the trailing idle, and the
+	// second execution segment must not add boundaries.
+	for _, sessionID := range []string{"ses_dedupe", "ses_status_only"} {
+		if stops[sessionID] != prompts[sessionID] {
+			t.Fatalf("%s stops = %d, want one per prompt (%d) (%#v)", sessionID, stops[sessionID], prompts[sessionID], wantEvents)
+		}
+	}
+}
+
 func TestManagedV2PluginBoundsHungHook(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake ao executable fixture uses a Unix shebang")
@@ -534,8 +710,84 @@ if (mode === "single") {
   await callbacks["tool:execute.after"]({ sessionID: "ses_tools", tool: "read", id: "call_2", status: "error", error: { message: "nope" } });
   emit({ type: "session.execution.succeeded", data: { sessionID: "ses_tools" } });
   await flush();
+} else if (mode === "prompts") {
+  emit({ type: "session.created", data: { sessionID: "ses_prompts" } });
+  await flush();
+  const prompt = (inboxID, text) => emit({
+    type: "session.inbox.enqueued",
+    data: {
+      inboxID,
+      sessionID: "ses_prompts",
+      item: { type: "user", payload: { text, files: ["/secret.txt"], metadata: { secret: "x" } } },
+    },
+  });
+  prompt("inbox_1", "hello");
+  await flush();
+  prompt("inbox_1", "hello");
+  await flush();
+  emit({ type: "session.inbox.enqueued", data: { inboxID: "inbox_syn", sessionID: "ses_prompts", item: { type: "synthetic", payload: { text: "synthetic" } } } });
+  emit({ type: "session.inbox.enqueued", data: { inboxID: "inbox_comp", sessionID: "ses_prompts", item: { type: "compaction", payload: {} } } });
+  emit({ type: "session.inbox.enqueued", data: { inboxID: "inbox_move", sessionID: "ses_prompts", item: { type: "move", payload: {} } } });
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_prompts" } });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_prompts" } });
+  await flush();
+  emit({ type: "session.status", data: { sessionID: "ses_prompts", status: { type: "idle" } } });
+  await flush();
+  prompt("inbox_2", "again");
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_prompts" } });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_prompts" } });
+  emit({ type: "session.status", data: { sessionID: "ses_prompts", status: { type: "idle" } } });
+  await flush();
+} else if (mode === "dedupe") {
+  const prompt = (sessionID, inboxID, text) => emit({
+    type: "session.inbox.enqueued",
+    data: { inboxID, sessionID, item: { type: "user", payload: { text } } },
+  });
+  emit({ type: "session.created", data: { sessionID: "ses_dedupe" } });
+  await flush();
+  prompt("ses_dedupe", "inbox_a", "first");
+  await flush();
+  // Mid-turn status inside a running execution: idle, busy, idle again.
+  emit({ type: "session.execution.started", data: { sessionID: "ses_dedupe" } });
+  emit({ type: "session.status", data: { sessionID: "ses_dedupe", status: { type: "idle" } } });
+  emit({ type: "session.status", data: { sessionID: "ses_dedupe", status: { type: "busy" } } });
+  emit({ type: "session.status", data: { sessionID: "ses_dedupe", status: { type: "idle" } } });
+  await flush();
+  // The turn's real end, followed by its trailing idle.
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_dedupe" } });
+  emit({ type: "session.status", data: { sessionID: "ses_dedupe", status: { type: "idle" } } });
+  await flush();
+  // A second execution segment still belongs to the same turn.
+  emit({ type: "session.execution.started", data: { sessionID: "ses_dedupe" } });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_dedupe" } });
+  emit({ type: "session.status", data: { sessionID: "ses_dedupe", status: { type: "idle" } } });
+  await flush();
+  // The next prompt opens the next turn.
+  prompt("ses_dedupe", "inbox_b", "second");
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_dedupe" } });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_dedupe" } });
+  emit({ type: "session.status", data: { sessionID: "ses_dedupe", status: { type: "idle" } } });
+  await flush();
+  // A session that never reports an execution lifecycle is still bounded by
+  // its idle status.
+  emit({ type: "session.created", data: { sessionID: "ses_status_only" } });
+  await flush();
+  prompt("ses_status_only", "inbox_c", "third");
+  await flush();
+  emit({ type: "session.status", data: { sessionID: "ses_status_only", status: { type: "busy" } } });
+  emit({ type: "session.status", data: { sessionID: "ses_status_only", status: { type: "idle" } } });
+  await flush();
+  prompt("ses_status_only", "inbox_d", "fourth");
+  await flush();
+  emit({ type: "session.status", data: { sessionID: "ses_status_only", status: { type: "idle" } } });
+  await flush();
 } else {
   emit({ type: "session.created", data: { sessionID: "ses_native_v2" } });
+  await flush();
+  emit({ type: "session.inbox.enqueued", data: { inboxID: "inbox_1", sessionID: "ses_native_v2", item: { type: "user", payload: { text: "first prompt" } } } });
   await flush();
   emit({ type: "session.execution.started", data: { sessionID: "ses_native_v2" } });
   await flush();
@@ -546,12 +798,23 @@ if (mode === "single") {
   await flush();
   emit({ type: "session.execution.succeeded", data: { sessionID: "ses_native_v2" } });
   await flush();
+  // Same turn: status idle must not add a second stop.
+  emit({ type: "session.status", data: { sessionID: "ses_native_v2", status: { type: "idle" } } });
+  await flush();
+  emit({ type: "session.inbox.enqueued", data: { inboxID: "inbox_2", sessionID: "ses_native_v2", item: { type: "user", payload: { text: "second prompt" } } } });
+  await flush();
   emit({ type: "session.execution.started", data: { sessionID: "ses_native_v2" } });
   emit({ type: "session.execution.failed", data: { sessionID: "ses_native_v2", error: { type: "unknown", message: "x" } } });
+  await flush();
+  emit({ type: "session.inbox.enqueued", data: { inboxID: "inbox_3", sessionID: "ses_native_v2", item: { type: "user", payload: { text: "third prompt" } } } });
   await flush();
   emit({ type: "session.execution.started", data: { sessionID: "ses_native_v2" } });
   emit({ type: "session.execution.interrupted", data: { sessionID: "ses_native_v2", reason: "user" } });
   await flush();
+  emit({ type: "session.inbox.enqueued", data: { inboxID: "inbox_4", sessionID: "ses_native_v2", item: { type: "user", payload: { text: "fourth prompt" } } } });
+  await flush();
+  emit({ type: "session.execution.started", data: { sessionID: "ses_native_v2" } });
+  emit({ type: "session.execution.succeeded", data: { sessionID: "ses_native_v2" } });
   emit({ type: "session.status", data: { sessionID: "ses_native_v2", status: { type: "idle" } } });
   await flush();
 }
