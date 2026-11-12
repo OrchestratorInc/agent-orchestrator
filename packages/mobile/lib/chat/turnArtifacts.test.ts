@@ -76,6 +76,13 @@ describe("turnResults", () => {
 		expect(results.files.map((entry) => entry.path)).toEqual(["src/app.ts", `${ROOT}/report.md`]);
 	});
 
+	it("finds an artifact renamed after the turn by the path the turn reported", () => {
+		const renamed = { ...artifact("final.md"), previousPaths: ["report.md"] };
+		const results = turnResults(turn({ diff }), { sessionId: SESSION, artifacts: [renamed] });
+		expect(results.artifacts.map(({ artifact: entry }) => entry.path)).toEqual(["final.md"]);
+		expect(results.files.map((entry) => entry.path)).toEqual(["src/app.ts"]);
+	});
+
 	it("lists every changed file while the artifact list is unread", () => {
 		expect(turnResults(turn({ diff }), null)).toEqual({ artifacts: [], files: diff.files });
 		expect(turnResults(turn({ diff }), { sessionId: SESSION })).toEqual({ artifacts: [], files: diff.files });

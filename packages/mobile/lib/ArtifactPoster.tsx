@@ -33,7 +33,12 @@ export function ArtifactPoster({ artifact, backend, sessionId, visible, versionO
 	// The URI carries the file's modified time, so a rewrite loads afresh.
 	const thumbnail = backend && artifactViewKind(artifact) === "image" ? backend.imageSource(sessionId, artifact.path, artifact.updatedAt) : undefined;
 	const [failedUri, setFailedUri] = useState<string>();
-	const picture = thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
+	// Requested once the poster first comes near the screen, then kept, so a
+	// long thread or gallery does not fetch every picture up front and one
+	// scrolled past and back does not blank and reload.
+	const [reached, setReached] = useState(visible);
+	if (visible && !reached) setReached(true);
+	const picture = reached && thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
 	// A card that previews its contents shows a plain tile while the preview
 	// loads, and its icon only if the preview cannot load: until the file
 	// changes or the preview is retried.
