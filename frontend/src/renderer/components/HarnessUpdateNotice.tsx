@@ -1,21 +1,25 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle } from "@/components/app-icons";
 import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { useAgentAuthPlans } from "../hooks/useAgentAuth";
-import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
+import { agentAuthPlansQueryOptions } from "../hooks/useAgentAuth";
+import { agentReadinessQueryOptionsForHost, cacheAgentReadiness, ensureAgentReadiness, useEnsuredReadinessHosts } from "../hooks/useAgentReadinessQuery";
 import { CLOUD_HARNESS_HOST, CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions, type CloudHarnessDetails } from "../hooks/useCloudHarnessVersions";
-import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
+import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKeyForHost, installersQueryOptions, installJobsQueryKeyForHost, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdatesOnHosts, useStartHarnessUpdateOnHost, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
 import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
+import { useConnectedHosts } from "../hooks/useHostConnection";
 import { useLiveBrowserViewportRect, type ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { useCenterPanelBox } from "../hooks/useCenterPanelBox";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
 import { aoBridge } from "../lib/bridge";
+import { labelForHost } from "../lib/host-clients";
+import { isLocal, LOCAL_HOST, refKey, type HostId } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -29,41 +33,78 @@ function readDismissals(): Set<string> {
 	} catch { return new Set(); }
 }
 
+/** One harness on one host: the same harness on two hosts never shares state. */
+type UpdateTarget = { hostId: HostId; agentId: AgentId };
+
+function targetKey({ hostId, agentId }: UpdateTarget): string {
+	return refKey({ host: hostId, id: agentId });
+}
+
+/** The host argument the API helpers take, which is none for this computer. */
+function apiHost(hostId: HostId): string | undefined {
+	return isLocal(hostId) ? undefined : hostId;
+}
+
+function without<T>(current: ReadonlySet<T>, value: T): Set<T> {
+	const next = new Set(current);
+	next.delete(value);
+	return next;
+}
+
 /** Always mounted in the shell, not in a route or Settings. Read-only checks
- * and updates share the Harness page's queries; a login hands off to that page. */
+ * and updates share the Harness page's queries; a login hands off to that page.
+ * It covers this computer and every connected remote host, each checked by its
+ * own daemon, and an update runs on the host it names. */
 export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const { t, i18n } = useTranslation();
 	const queryClient = useQueryClient();
-	const readiness = useAgentReadinessQuery(enabled);
-	const readinessComplete = useEnsureAgentReadiness({ enabled, retryOnError: true });
-	const installed = useMemo(() => installedAgentIds(readiness.data), [readiness.data]);
-	const advisories = useHarnessUpdates(installed, undefined, readinessComplete && !readiness.isError);
-	const installers = useQuery({ ...installersQueryOptions(), enabled });
-	const authPlans = useAgentAuthPlans(undefined, enabled);
-	const jobs = useQuery({ ...installJobsQueryOptions(), enabled });
-	const startHarnessUpdate = useStartHarnessUpdate();
+	const remotes = useConnectedHosts();
+	// Each connected remote in the order it connected, then this computer: a
+	// long local list would otherwise bury the remotes at the bottom of the stack.
+	const hostIds = useMemo(() => [...remotes.filter((hostId) => !isLocal(hostId)), LOCAL_HOST], [remotes]);
+	const ensured = useEnsuredReadinessHosts(hostIds, { enabled, retryOnError: true });
+	const readinessQueries = useQueries({ queries: hostIds.map((hostId) => ({ ...agentReadinessQueryOptionsForHost(apiHost(hostId)), enabled })) });
+	const installerQueries = useQueries({ queries: hostIds.map((hostId) => ({ ...installersQueryOptions(apiHost(hostId)), enabled })) });
+	const authPlanQueries = useQueries({ queries: hostIds.map((hostId) => ({ ...agentAuthPlansQueryOptions(apiHost(hostId)), enabled })) });
+	const jobQueries = useQueries({ queries: hostIds.map((hostId) => ({ ...installJobsQueryOptions(apiHost(hostId)), enabled })) });
+	const installedByHost = hostIds.map((_, index) => installedAgentIds(readinessQueries[index].data));
+	const advisoriesByHost = useHarnessUpdatesOnHosts(hostIds.map((hostId, index) => ({
+		hostId: apiHost(hostId), installed: installedByHost[index], enabled: ensured.has(hostId) && Boolean(readinessQueries[index].data),
+	})));
+	const hosts = hostIds.map((hostId, index) => ({
+		hostId,
+		readiness: readinessQueries[index],
+		installers: installerQueries[index],
+		authPlans: authPlanQueries[index],
+		jobs: jobQueries[index],
+		installed: installedByHost[index],
+		advisories: advisoriesByHost[index],
+	}));
+	const hostById = new Map(hosts.map((host) => [host.hostId, host]));
+	const startHarnessUpdate = useStartHarnessUpdateOnHost();
+	// Everything below is keyed by targetKey, so equal harnesses on two hosts stay apart.
 	const observedJobs = useRef(new Set<string>());
 	const [dismissed, setDismissed] = useState(readDismissals);
 	const [expanded, setExpanded] = useState(false);
 	// Updates started from a notice run right here; the notice shows progress
 	// and any failure instead of sending the user to Settings.
-	const [starting, setStarting] = useState<ReadonlySet<AgentId>>(new Set());
+	const [starting, setStarting] = useState<ReadonlySet<string>>(new Set());
 	// Harnesses whose finished job is still refreshing its advisory: until the
 	// refresh lands, the old advisory would offer Update again for a moment.
-	const [settling, setSettling] = useState<ReadonlySet<AgentId>>(new Set());
-	const startingRef = useRef(new Set<AgentId>());
+	const [settling, setSettling] = useState<ReadonlySet<string>>(new Set());
+	const startingRef = useRef(new Set<string>());
 	const updateAllInFlight = useRef(false);
 	const [startingAll, setStartingAll] = useState(false);
-	const [errors, setErrors] = useState<Partial<Record<AgentId, string>>>({});
+	const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
 	const [updateAllSummary, setUpdateAllSummary] = useState<string | null>(null);
 	// Updates started here that succeeded, by the version they moved to: shown
 	// as done for a moment once the advisory stops offering them, so success
 	// never looks like the notice simply vanishing.
-	const [updated, setUpdated] = useState<ReadonlyMap<AgentId, string>>(new Map());
-	const startedJobs = useRef(new Set<AgentId>());
+	const [updated, setUpdated] = useState<ReadonlyMap<string, UpdateTarget & { version: string }>>(new Map());
+	const startedJobs = useRef(new Set<string>());
 	// The advisory each update started here acted on, so its failure can still
 	// be shown after a refresh stops reporting a newer release.
-	const startedUpdates = useRef(new Map<AgentId, AgentUpdateAdvisory>());
+	const startedUpdates = useRef(new Map<string, AgentUpdateAdvisory>());
 	const stackId = useId();
 	// The expanded stack scrolls; fade its lower edge while more cards sit below.
 	const stackRef = useRef<HTMLDivElement>(null);
@@ -78,8 +119,14 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	});
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
 	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
+	const hostLabel = (hostId: HostId) => isLocal(hostId) ? t("settings.harness.thisComputer") : labelForHost(hostId) ?? hostId;
+	// Names the host only off this computer, so a local update reads as it always has.
+	const targetLabel = ({ hostId, agentId }: UpdateTarget) => isLocal(hostId) ? agentLabel(agentId)
+		: t("settings.harness.agentOnHost", { agent: agentLabel(agentId), host: hostLabel(hostId) });
 	// AO Cloud is one more place a harness runs: its update joins that
-	// harness's entry, for someone who may change it, never a card of its own.
+	// harness's entry for this computer, for someone who may change it, never
+	// a card of its own. Its state is keyed by harness: only this computer's
+	// entry carries it.
 	const cloud = useCloudHarnessVersions(enabled);
 	const [cloudStarting, setCloudStarting] = useState<ReadonlySet<AgentId>>(new Set());
 	const cloudStartingRef = useRef(new Set<AgentId>());
@@ -89,75 +136,78 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 
 	// Refresh even on failure: a command can change the binary before
 	// failing verification. Never keep advertising an obsolete version.
-	const refreshAfterJob = (agentId: string) => {
-		setSettling((current) => new Set([...current, agentId as AgentId]));
-		void ensureAgentReadiness([agentId]).then(async (result) => {
-			cacheAgentReadiness(queryClient, result);
-			await queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(agentId as AgentId) });
+	const refreshAfterJob = (target: UpdateTarget) => {
+		const key = targetKey(target);
+		const host = apiHost(target.hostId);
+		setSettling((current) => new Set([...current, key]));
+		void ensureAgentReadiness([target.agentId], "display", host).then(async (result) => {
+			cacheAgentReadiness(queryClient, result, host);
+			await queryClient.invalidateQueries({ queryKey: updateAdvisoryQueryKey(target.agentId, host) });
 		}).catch(() => undefined).finally(() => {
-			setSettling((current) => {
-				const next = new Set(current);
-				next.delete(agentId as AgentId);
-				return next;
-			});
+			setSettling((current) => without(current, key));
 		});
-		void queryClient.invalidateQueries({ queryKey: installerQueryKey });
+		void queryClient.invalidateQueries({ queryKey: installerQueryKeyForHost(host) });
 	};
-	const showUpdated = (agentId: AgentId, job: InstallJob) => {
-		const version = startedUpdates.current.get(agentId)?.latestVersion;
-		if (job.status !== "succeeded" || !startedJobs.current.has(agentId) || !version) return;
-		setUpdated((current) => new Map(current).set(agentId, version));
+	const showUpdated = (target: UpdateTarget, job: InstallJob) => {
+		const key = targetKey(target);
+		const version = startedUpdates.current.get(key)?.latestVersion;
+		if (job.status !== "succeeded" || !startedJobs.current.has(key) || !version) return;
+		setUpdated((current) => new Map(current).set(key, { ...target, version }));
 		window.setTimeout(() => setUpdated((current) => {
 			const next = new Map(current);
-			next.delete(agentId);
+			next.delete(key);
 			return next;
 		}), UPDATED_MS);
 	};
+	// Runs after every render: a job is acted on once, when it stops running,
+	// so a pass that finds nothing new does nothing.
 	useEffect(() => {
 		if (!enabled) return;
-		for (const job of jobs.data ?? []) {
-			if (isActiveInstallJob(job)) { observedJobs.current.add(job.target); continue; }
-			if (observedJobs.current.delete(job.target)) {
-				refreshAfterJob(job.target);
-				showUpdated(job.target as AgentId, job);
+		for (const { hostId, jobs } of hosts) {
+			for (const job of jobs.data ?? []) {
+				const target = { hostId, agentId: job.target as AgentId };
+				const key = targetKey(target);
+				if (isActiveInstallJob(job)) { observedJobs.current.add(key); continue; }
+				if (observedJobs.current.delete(key)) {
+					refreshAfterJob(target);
+					showUpdated(target, job);
+				}
 			}
 		}
-	}, [enabled, jobs.data, queryClient]);
+	});
 
 	/** Resolves to the sessions that kept the update from starting, if any. */
-	const startUpdate = async (agentId: AgentId, advisory: AgentUpdateAdvisory, methodId: string): Promise<HarnessInUse | undefined> => {
-		if (startingRef.current.has(agentId) || isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(installJobsQueryKey)?.find((job) => job.target === agentId))) return undefined;
-		startedUpdates.current.set(agentId, advisory);
-		startingRef.current.add(agentId);
-		setStarting((current) => new Set([...current, agentId]));
-		setErrors((current) => ({ ...current, [agentId]: undefined }));
+	const startUpdate = async (target: UpdateTarget, advisory: AgentUpdateAdvisory, methodId: string): Promise<HarnessInUse | undefined> => {
+		const { hostId, agentId } = target;
+		const key = targetKey(target);
+		if (startingRef.current.has(key) || isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(installJobsQueryKeyForHost(apiHost(hostId)))?.find((job) => job.target === agentId))) return undefined;
+		startedUpdates.current.set(key, advisory);
+		startingRef.current.add(key);
+		setStarting((current) => new Set([...current, key]));
+		setErrors((current) => ({ ...current, [key]: undefined }));
 		try {
-			const result = await startHarnessUpdate({ agentId, methodId });
+			const result = await startHarnessUpdate(apiHost(hostId), { agentId, methodId });
 			if (result.inUse) {
 				// The notice only updates; a refusal is explained, never a session list.
 				const refusal = result.inUse.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) })
 					: t("settings.harness.inUseBlocked", { count: result.inUse.count, agent: agentLabel(agentId) });
-				setErrors((current) => ({ ...current, [agentId]: refusal }));
+				setErrors((current) => ({ ...current, [key]: refusal }));
 				return result.inUse;
 			}
 			// The click-time check may have moved the target to a newer release.
-			if (result.advisory) startedUpdates.current.set(agentId, result.advisory);
-			if (result.error) setErrors((current) => ({ ...current, [agentId]: result.error }));
+			if (result.advisory) startedUpdates.current.set(key, result.advisory);
+			if (result.error) setErrors((current) => ({ ...current, [key]: result.error }));
 			if (!result.job) return undefined;
-			startedJobs.current.add(agentId);
+			startedJobs.current.add(key);
 			// A job that already finished never shows up as running, so refresh it now.
 			if (!isActiveInstallJob(result.job)) {
-				refreshAfterJob(agentId);
-				showUpdated(agentId, result.job);
+				refreshAfterJob(target);
+				showUpdated(target, result.job);
 			}
 			return undefined;
 		} finally {
-			startingRef.current.delete(agentId);
-			setStarting((current) => {
-				const next = new Set(current);
-				next.delete(agentId);
-				return next;
-			});
+			startingRef.current.delete(key);
+			setStarting((current) => without(current, key));
 		}
 	};
 
@@ -177,10 +227,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				setCloudErrors((current) => ({ ...current, [agentId]: result.error }));
 			} else if (result.entry?.advisory.currentVersion && alone) {
 				const version = result.entry.advisory.currentVersion;
-				setUpdated((current) => new Map(current).set(agentId, version));
+				const key = targetKey({ hostId: LOCAL_HOST, agentId });
+				setUpdated((current) => new Map(current).set(key, { hostId: LOCAL_HOST, agentId, version }));
 				window.setTimeout(() => setUpdated((current) => {
 					const next = new Map(current);
-					next.delete(agentId);
+					next.delete(key);
 					return next;
 				}), UPDATED_MS);
 			}
@@ -192,36 +243,43 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 
 	// Settings is a modal that blocks pointer and focus outside it; its Harness
 	// page offers the same updates there.
-	if (settingsOpen || !readinessComplete || readiness.isError) return null;
+	if (settingsOpen) return null;
 	// Only advertise updates AO can run without a login or manual maintenance.
-	// Wait for these checks so ineligible harnesses never flash in the stack. A
-	// failed background refetch keeps the cached data, so an update in flight
-	// or its failure stays visible.
-	if (!authPlans.data || !installers.data) return null;
-	// Let the first batch settle so a fast, seldom-used harness cannot jump
-	// ahead of the most-used one. Failed lookups don't block the other results.
-	if (AGENT_OPTIONS.some((id) => installed.has(id) && advisories.get(id)?.isPending)) return null;
-	// AO Cloud's answer joins the same first batch, so a harness never gains
-	// its cloud target after the notice is up.
-	if (cloud.isPending) return null;
-	const readinessById = new Map(readiness.data?.agents.map((agent) => [agent.id, agent]));
+	// Each host joins once its own checks are in, so ineligible harnesses never
+	// flash in the stack and a slow or offline remote never holds back this
+	// computer's updates. A failed background refetch keeps the cached data, so
+	// an update in flight or its failure stays visible: readiness included, a
+	// host is judged on the data it has, never on a later refetch's error.
+	// Within a host, let the first batch settle so a fast, seldom-used harness
+	// cannot jump ahead of the most-used one; failed lookups don't block the
+	// other results. AO Cloud's answer joins this computer's first batch, so a
+	// harness never gains its cloud target after its entry is up.
+	const settled = hosts.filter((host) => ensured.has(host.hostId) && host.readiness.data && host.authPlans.data && host.installers.data
+		&& !AGENT_OPTIONS.some((id) => host.installed.has(id) && host.advisories.get(id)?.isPending)
+		&& !(isLocal(host.hostId) && cloud.isPending));
+	const readinessByHost = new Map(hosts.map(({ hostId, readiness }) => [hostId, new Map(readiness.data?.agents.map((agent) => [agent.id, agent]))]));
+	const readinessFor = ({ hostId, agentId }: UpdateTarget) => readinessByHost.get(hostId)?.get(agentId);
+	const planFor = ({ hostId, agentId }: UpdateTarget) => hostById.get(hostId)?.installers.data?.find((plan) => plan.agentId === agentId);
+	const methodFor = (target: UpdateTarget, advisory: AgentUpdateAdvisory) => planFor(target)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
+	const authPlanFor = ({ hostId, agentId }: UpdateTarget) => hostById.get(hostId)?.authPlans.data?.find((plan) => plan.agentId === agentId);
+	const needsLoginFor = (target: UpdateTarget) => needsHarnessLogin(authPlanFor(target), readinessFor(target)?.authentication.state);
+	const jobFor = ({ hostId, agentId }: UpdateTarget) => hostById.get(hostId)?.jobs.data?.find((candidate) => candidate.target === agentId);
 	// An update started here that failed stays explained until it is dismissed,
 	// even once a refresh reports the harness current: an updater can replace
 	// the binary and still exit with an error.
-	const failedUpdateAdvisory = (agentId: AgentId) => {
-		const advisory = startedUpdates.current.get(agentId);
-		const job = jobs.data?.find((candidate) => candidate.target === agentId);
-		return advisory && (errors[agentId] || (startedJobs.current.has(agentId) && isFailedInstallJob(job))) ? advisory : undefined;
+	const failedUpdateAdvisory = (target: UpdateTarget) => {
+		const key = targetKey(target);
+		const advisory = startedUpdates.current.get(key);
+		return advisory && (errors[key] || (startedJobs.current.has(key) && isFailedInstallJob(jobFor(target)))) ? advisory : undefined;
 	};
-	const localUpdate = (agentId: AgentId) => {
-		const query = advisories.get(agentId);
-		const confirmed = installed.has(agentId) && !query?.isError && hasConfirmedHarnessUpdate(query?.data) ? query?.data : undefined;
-		const advisory = confirmed ?? failedUpdateAdvisory(agentId);
+	const hostUpdate = (host: (typeof hosts)[number], target: UpdateTarget) => {
+		const query = host.advisories.get(target.agentId);
+		const confirmed = host.installed.has(target.agentId) && !query?.isError && hasConfirmedHarnessUpdate(query?.data) ? query?.data : undefined;
+		const advisory = confirmed ?? failedUpdateAdvisory(target);
 		if (!advisory) return undefined;
-		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
-		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
-		if (!method?.available || !method.updateAvailable || needsLogin) return undefined;
-		const key = harnessUpdateNoticeKey(agentId, advisory.latestVersion!);
+		const method = methodFor(target, advisory);
+		if (!method?.available || !method.updateAvailable || needsLoginFor(target)) return undefined;
+		const key = harnessUpdateNoticeKey(target.agentId, advisory.latestVersion!, target.hostId);
 		return dismissed.has(key) ? undefined : { advisory, key };
 	};
 	// Only an update the person can make: someone who may not change AO
@@ -234,20 +292,30 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		const key = harnessUpdateNoticeKey(agentId, details.latestVersion, CLOUD_HARNESS_HOST);
 		return dismissed.has(key) ? undefined : { details, key };
 	};
-	const updates = AGENT_OPTIONS.flatMap((agentId) => {
-		const local = localUpdate(agentId);
-		const cloudTarget = cloudUpdate(agentId);
-		if (!local && !cloudTarget) return [];
-		return [{ agentId, advisory: local?.advisory, key: local?.key ?? cloudTarget!.key, keys: [local?.key, cloudTarget?.key].filter((key): key is string => Boolean(key)), cloud: cloudTarget?.details }];
+	const updates = settled.flatMap((host) => AGENT_OPTIONS.flatMap((agentId) => {
+		const target = { hostId: host.hostId, agentId };
+		const own = hostUpdate(host, target);
+		const cloudTarget = isLocal(host.hostId) ? cloudUpdate(agentId) : undefined;
+		if (!own && !cloudTarget) return [];
+		return [{ ...target, id: targetKey(target), advisory: own?.advisory, key: own?.key ?? cloudTarget!.key,
+			keys: [own?.key, cloudTarget?.key].filter((key): key is string => Boolean(key)), cloud: cloudTarget?.details }];
 	}).sort((left, right) => {
-		const a = readinessById.get(left.agentId);
-		const b = readinessById.get(right.agentId);
+		const a = readinessFor(left);
+		const b = readinessFor(right);
 		const usage = (b?.usageCount ?? 0) - (a?.usageCount ?? 0);
 		const recent = (Date.parse(b?.lastUsedAt ?? "") || 0) - (Date.parse(a?.lastUsedAt ?? "") || 0);
 		return usage || recent || agentLabel(left.agentId).localeCompare(agentLabel(right.agentId)) || left.agentId.localeCompare(right.agentId);
-	});
-	const updatedCards = [...updated].filter(([agentId]) => !updates.some((update) => update.agentId === agentId));
+	}));
+	const updatedCards = [...updated].filter(([key]) => !updates.some((update) => update.id === key));
 	if (updates.length === 0 && updatedCards.length === 0) return null;
+	// The hosts with updates, in the stack's order. A list that spans several is
+	// grouped under host headings; one remote alone is named on the stack.
+	const groups = hostIds.flatMap((hostId) => {
+		const items = updates.filter((update) => update.hostId === hostId);
+		return items.length > 0 ? [{ hostId, items }] : [];
+	});
+	const grouped = groups.length > 1;
+	const soleRemote = groups.length === 1 && !isLocal(groups[0].hostId) ? groups[0].hostId : undefined;
 	const dismiss = (...keys: string[]) => {
 		setDismissed((current) => {
 			const next = new Set([...current, ...keys].slice(-100));
@@ -257,18 +325,21 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		if (updates.length <= 2) setExpanded(false);
 	};
 	const isExpanded = expanded && updates.length > 1;
-	const ready = !authPlans.isPending && !authPlans.isError && !installers.isPending && !installers.isError && !jobs.isPending && !jobs.isError;
+	const hostReady = (hostId: HostId) => {
+		const host = hostById.get(hostId);
+		return Boolean(host && !host.authPlans.isPending && !host.authPlans.isError && !host.installers.isPending && !host.installers.isError && !host.jobs.isPending && !host.jobs.isError);
+	};
 	const cloudUpdateAllTargets = updates.flatMap(({ agentId, advisory, cloud: details }) =>
 		details?.actionable && !cloudStarting.has(agentId) ? [{ agentId, details, alone: !advisory }] : []);
-	const updateAllTargets = ready ? updates.flatMap(({ agentId, advisory }) => {
+	const updateAllTargets = updates.flatMap((update) => {
+		const { advisory } = update;
 		if (!advisory) return [];
-		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
-		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
-		if (!method?.available || !method.updateAvailable || needsLogin || starting.has(agentId) || settling.has(agentId)
-			|| isActiveInstallJob(jobs.data?.find((job) => job.target === agentId))) return [];
-		return [{ agentId, advisory, methodId: method.id }];
-	}) : [];
-	const runAllUpdates = async (targets: typeof updateAllTargets, skipped: Array<{ agentId: AgentId; count: number }>) => {
+		const method = methodFor(update, advisory);
+		if (!hostReady(update.hostId) || !method?.available || !method.updateAvailable || needsLoginFor(update) || starting.has(update.id) || settling.has(update.id)
+			|| isActiveInstallJob(jobFor(update))) return [];
+		return [{ target: { hostId: update.hostId, agentId: update.agentId }, advisory, methodId: method.id }];
+	});
+	const runAllUpdates = async (targets: typeof updateAllTargets, skipped: Array<{ target: UpdateTarget; count: number }>) => {
 		if (updateAllInFlight.current) return;
 		updateAllInFlight.current = true;
 		setStartingAll(true);
@@ -279,11 +350,17 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		for (const target of cloudUpdateAllTargets) void startCloudUpdate(target.agentId, target.details, target.alone);
 		try {
 			// Each notice keeps its existing target/owner recheck and error display.
-			for (const target of targets) {
-				const refused = await startUpdate(target.agentId, target.advisory, target.methodId);
-				if (refused) skipped.push({ agentId: target.agentId, count: refused.count });
-				else started += 1;
-			}
+			// Hosts start side by side, so a slow remote never holds back another
+			// host's updates; within a host they start one after another.
+			const targetsByHost = new Map<HostId, typeof targets>();
+			for (const target of targets) targetsByHost.set(target.target.hostId, [...(targetsByHost.get(target.target.hostId) ?? []), target]);
+			await Promise.all([...targetsByHost.values()].map(async (hostTargets) => {
+				for (const target of hostTargets) {
+					const refused = await startUpdate(target.target, target.advisory, target.methodId);
+					if (refused) skipped.push({ target: target.target, count: refused.count });
+					else started += 1;
+				}
+			}));
 		} finally {
 			updateAllInFlight.current = false;
 			setStartingAll(false);
@@ -291,24 +368,23 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		if (skipped.length > 0) {
 			setUpdateAllSummary(t("settings.harness.updateAllSummary", {
 				count: started,
-				skipped: skipped.map(({ agentId, count }) => t("settings.harness.updateAllSkipped", { agent: agentLabel(agentId), count })).join(", "),
+				skipped: skipped.map(({ target, count }) => t("settings.harness.updateAllSkipped", { agent: targetLabel(target), count })).join(", "),
 			}));
 		}
 	};
 	// Harnesses whose sessions must end first are skipped and named in the summary.
 	const startAllUpdates = () => {
 		if (updateAllInFlight.current || (updateAllTargets.length === 0 && cloudUpdateAllTargets.length === 0)) return;
-		const skipped: Array<{ agentId: AgentId; count: number }> = [];
-		const runnable = updateAllTargets.filter(({ agentId, advisory }) => {
+		const skipped: Array<{ target: UpdateTarget; count: number }> = [];
+		const runnable = updateAllTargets.filter(({ target, advisory }) => {
 			const sessions = advisoryInUse(advisory);
 			if (!sessions) return true;
-			skipped.push({ agentId, count: sessions.count });
+			skipped.push({ target, count: sessions.count });
 			return false;
 		});
 		void runAllUpdates(runnable, skipped);
 	};
 
-	const jobFor = (agentId: AgentId) => jobs.data?.find((candidate) => candidate.target === agentId);
 	// While updates start the button stays solid: it reports progress, not an
 	// unavailable action.
 	const updateAllButton = <Button type="button" size="sm" className={cn("min-w-20 shrink-0", startingAll && "disabled:opacity-100")}
@@ -319,28 +395,33 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			: t("settings.harness.updateAll")}</span>
 	</Button>;
 	const help = t("settings.harness.updateNoticeHelp");
-	const updateItem = ({ agentId, advisory, key, keys, cloud: cloudDetails }: (typeof updates)[number], variant: "card" | "row") => {
-		const plan = installers.data?.find((candidate) => candidate.agentId === agentId);
-		const job = jobFor(agentId);
-		const method = advisory ? plan?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory)) : undefined;
-		const authPlan = authPlans.data?.find((candidate) => candidate.agentId === agentId);
-		const needsLogin = Boolean(advisory) && needsHarnessLogin(authPlan, readinessById.get(agentId)?.authentication.state);
+	const updateItem = (update: (typeof updates)[number], variant: "card" | "row") => {
+		const { hostId, agentId, advisory, key, keys, id, cloud: cloudDetails } = update;
+		const plan = planFor(update);
+		const job = jobFor(update);
+		const method = advisory ? methodFor(update, advisory) : undefined;
+		const authPlan = authPlanFor(update);
+		const needsLogin = Boolean(advisory) && needsLoginFor(update);
 		const canUpdate = Boolean(method?.available && method.updateAvailable) || Boolean(cloudDetails?.actionable);
-		const busy = isActiveInstallJob(job) || starting.has(agentId) || settling.has(agentId) || cloudStarting.has(agentId);
+		// Cloud's state is per harness, so only the entry carrying it reads it.
+		const busy = isActiveInstallJob(job) || starting.has(id) || settling.has(id) || (Boolean(cloudDetails) && cloudStarting.has(agentId));
+		const ready = hostReady(hostId);
 		// A job this notice started that failed stays explained here.
-		const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
-		const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined) ?? cloudErrors[agentId];
+		const failed = startedJobs.current.has(id) && isFailedInstallJob(job);
+		const error = errors[id] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined) ?? (cloudDetails ? cloudErrors[agentId] : undefined);
 		// A start error means this attempt made no job; any retained job is an older one.
-		const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
+		const failedJobStartedAt = errors[id] === undefined && failed ? job?.startedAt ?? undefined : undefined;
+		// The Harness page opens on the host this update belongs to.
+		const harnessPage = { focusAgentId: agentId, hostId, harnessView: "local", preserveProject: true } as const;
 		const requestAction = () => {
 			if (cloudDetails?.actionable) void startCloudUpdate(agentId, cloudDetails, !advisory);
 			if (!advisory) return;
 			if (!needsLogin && method) {
-				void startUpdate(agentId, advisory, method.id);
+				void startUpdate(update, advisory, method.id);
 				return;
 			}
 			// A login runs in a terminal on the Harness page, which starts it once on open.
-			openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, startLogin: true });
+			openSettings("harness", { ...harnessPage, startLogin: true });
 		};
 		// Which places one Update covers, with each one's versions on hover.
 		const targets = cloudDetails ? <Tooltip>
@@ -352,13 +433,15 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				: t("settings.harness.cloud.versionAvailable", { version: versionLabel(cloudDetails.latestVersion!) })}</TooltipContent>
 		</Tooltip> : null;
 		const versions = advisory ? <VersionChange from={advisory.currentVersion!} to={advisory.latestVersion!} /> : <VersionChange from={cloudDetails!.currentVersion} to={cloudDetails!.latestVersion!} />;
-		return <SwipeCard key={key} variant={variant} label={agentLabel(agentId)} onDismiss={() => dismiss(...keys)}
-			dismissLabel={t("settings.harness.dismissAgentUpdate", { agent: agentLabel(agentId) })}
+		return <SwipeCard key={key} variant={variant} label={targetLabel(update)} onDismiss={() => dismiss(...keys)}
+			dismissLabel={t("settings.harness.dismissAgentUpdate", { agent: targetLabel(update) })}
 			icon={<AgentAvatar className="size-icon-xl shrink-0" decorative provider={agentId} />}
 			title={variant === "row" ? agentLabel(agentId) : t("settings.harness.updateCardTitle", { agent: agentLabel(agentId) })}
 			help={variant === "card" ? help : undefined}>
 			{targets}
 			<div className="mt-2 flex items-center gap-2">
+				{/* Rows sit under a host heading or a stack that names the host. */}
+				{variant === "card" && !isLocal(hostId) ? <HostTag label={hostLabel(hostId)} /> : null}
 				{versions}
 				{/* One width for every label, so Updating… never pushes the versions around. */}
 				{busy ? <Button size="sm" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-icon-2xs animate-spin" aria-hidden="true" />{t("settings.harness.updating")}</Button>
@@ -368,28 +451,31 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					<TooltipTrigger asChild><Button size="sm" variant="secondary" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
 					<TooltipContent side="top" className="max-w-64">{method?.updateReason || t("settings.harness.ownershipUnknown")}</TooltipContent>
 				</Tooltip>
-				: <Button size="sm" variant="secondary" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
+				: <Button size="sm" variant="secondary" onClick={() => openSettings("harness", harnessPage)}>{t("settings.harness.viewDetails")}</Button>}
 			</div>
 			{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
 			{error && !busy ? <div className="mt-2 flex flex-col items-start gap-1.5">
 				<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
-				<Button type="button" size="sm" variant="secondary" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
+				<Button type="button" size="sm" variant="secondary" onClick={() => openSettings("harness", { ...harnessPage, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 			</div> : null}
 		</SwipeCard>;
 	};
-	const updatedItems = updatedCards.map(([agentId, version]) => <SwipeCard key={`updated:${agentId}`} variant="card" label={agentLabel(agentId)} role="status"
+	const updatedItems = updatedCards.map(([key, target]) => <SwipeCard key={`updated:${key}`} variant="card" label={targetLabel(target)} role="status"
 		onDismiss={() => setUpdated((current) => {
 			const next = new Map(current);
-			next.delete(agentId);
+			next.delete(key);
 			return next;
 		})}
-		dismissLabel={t("settings.harness.dismissAgentUpdate", { agent: agentLabel(agentId) })}
+		dismissLabel={t("settings.harness.dismissAgentUpdate", { agent: targetLabel(target) })}
 		icon={<span className="relative shrink-0">
-			<AgentAvatar className="size-icon-xl" decorative provider={agentId} />
+			<AgentAvatar className="size-icon-xl" decorative provider={target.agentId} />
 			<CircleCheck className="absolute -bottom-1 -right-1 size-icon-2xs rounded-full bg-settings-menu text-success" aria-hidden="true" />
 		</span>}
-		title={t("settings.harness.updatedCardTitle", { agent: agentLabel(agentId) })}>
-		<p className="mt-2 text-caption text-muted-foreground">{t("settings.harness.updatedTo", { version: friendlyVersion(version, i18n.resolvedLanguage ?? i18n.language) })}</p>
+		title={t("settings.harness.updatedCardTitle", { agent: agentLabel(target.agentId) })}>
+		<div className="mt-2 flex items-center gap-2">
+			{!isLocal(target.hostId) ? <HostTag label={hostLabel(target.hostId)} /> : null}
+			<p className="min-w-0 text-caption text-muted-foreground">{t("settings.harness.updatedTo", { version: friendlyVersion(target.version, i18n.resolvedLanguage ?? i18n.language) })}</p>
+		</div>
 	</SwipeCard>);
 	const stackTitle = t("settings.harness.updateStackTitle", { count: updates.length });
 	const dismissAll = () => dismiss(...updates.flatMap((update) => update.keys));
@@ -401,7 +487,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			dismissLabel={t("settings.harness.dismissAllUpdates")}
 			// Overlapping marks, each cut out of the one beneath by a halo in the card's colour.
 			icon={<span className="flex shrink-0 items-center -space-x-1.5">
-				{updates.slice(0, 3).map(({ agentId }) => <AgentAvatar key={agentId} className="relative size-icon-xl [filter:drop-shadow(0_0_1px_var(--color-bg-settings-menu))_drop-shadow(0_0_1px_var(--color-bg-settings-menu))_drop-shadow(0_0_2px_var(--color-bg-settings-menu))_drop-shadow(0_0_3px_var(--color-bg-settings-menu))]" decorative provider={agentId} />)}
+				{updates.slice(0, 3).map(({ agentId, id }) => <AgentAvatar key={id} className="relative size-icon-xl [filter:drop-shadow(0_0_1px_var(--color-bg-settings-menu))_drop-shadow(0_0_1px_var(--color-bg-settings-menu))_drop-shadow(0_0_2px_var(--color-bg-settings-menu))_drop-shadow(0_0_3px_var(--color-bg-settings-menu))]" decorative provider={agentId} />)}
 			</span>}
 			title={stackTitle}
 			// The Update all summary takes the help line's place while it is shown.
@@ -416,6 +502,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				<span className="flex-1" />
 				{updateAllButton}
 			</>}>
+			{grouped || soleRemote ? <div className="mt-2 flex">
+				<HostTag label={soleRemote ? hostLabel(soleRemote) : t("settings.harness.updateHostCount", { count: groups.length })} />
+			</div> : null}
 			{/* Mounted while closed, so opening only animates: building every row on
 			    the click would stall the first frames. */}
 			<div inert={!isExpanded} aria-hidden={!isExpanded || undefined}
@@ -424,13 +513,21 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				<div id={stackId} ref={stackRef} onScroll={updateStackCue}
 					className={cn("mt-2 max-h-[min(280px,calc(100dvh-240px))] divide-y divide-(--color-border-overlay) overflow-x-hidden overflow-y-auto overscroll-contain border-y border-(--color-border-overlay)",
 						stackOverflows && "[mask-image:linear-gradient(to_bottom,black_calc(100%-32px),transparent)]")}>
-					{updates.map((update) => updateItem(update, "row"))}
+					{grouped ? groups.map(({ hostId, items }) => <section key={hostId} aria-label={hostLabel(hostId)}>
+						<h3 className="truncate px-3 pt-2 text-caption font-medium text-muted-foreground">{hostLabel(hostId)}</h3>
+						<div className="divide-y divide-(--color-border-overlay)">{items.map((update) => updateItem(update, "row"))}</div>
+					</section>) : updates.map((update) => updateItem(update, "row"))}
 				</div>
 			</div>
 		</SwipeCard> : updates.map((update) => updateItem(update, "card"))}
 		{updatedItems}
 		</div>
 	</NoticeFrame>, document.body);
+}
+
+/** The host an update belongs to, named the way the sidebar names a session's host. */
+function HostTag({ label }: { label: string }) {
+	return <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{label}</span></Badge>;
 }
 
 /** A notice card, or a row in the expanded list: swipe it right (two fingers

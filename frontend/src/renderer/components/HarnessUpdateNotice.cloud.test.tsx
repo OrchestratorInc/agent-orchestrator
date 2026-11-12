@@ -17,6 +17,21 @@ vi.mock("../hooks/useCloudHarnessVersions", async (importOriginal) => ({
 	useCloudHarnessVersions: () => cloud.value!,
 }));
 
+// One fake remote host; a test connects it by listing it in remote.hosts.
+const remote = vi.hoisted(() => ({ hosts: [] as string[], GET: vi.fn(), POST: vi.fn() }));
+vi.mock("../lib/host-clients", async (importOriginal) => {
+	const { apiClient: local } = await import("../lib/api-client");
+	const client = { GET: (...args: unknown[]) => remote.GET(...args), POST: (...args: unknown[]) => remote.POST(...args) };
+	return {
+		...(await importOriginal<typeof import("../lib/host-clients")>()),
+		connectedHosts: () => remote.hosts,
+		subscribeConnectedHosts: () => () => undefined,
+		labelForHost: (hostId: string) => (hostId === "host-vm" ? "my-vm" : undefined),
+		clientForHost: () => client,
+		clientForSessionHost: (hostId?: string) => (hostId && hostId !== "local" ? client : local),
+	};
+});
+
 function mountNotice() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 	return render(<QueryClientProvider client={client}><TooltipProvider><HarnessUpdateNotice enabled /></TooltipProvider></QueryClientProvider>);
@@ -54,7 +69,7 @@ describe("AO Cloud in the startup update notice", () => {
 		useUiStore.setState({ settingsModal: null });
 		cloud.value = undefined;
 	});
-	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+	afterEach(() => { cleanup(); vi.restoreAllMocks(); remote.hosts = []; });
 
 	it("folds Cloud into the harness's entry, and one Update covers both", async () => {
 		mockLocal(true);
@@ -128,5 +143,36 @@ describe("AO Cloud in the startup update notice", () => {
 			JSON.stringify(["local", "claude-code", "2.1.322"]),
 			JSON.stringify(["ao-cloud", "claude-code", "2.1.322"]),
 		]));
+	});
+
+	it("joins Cloud to this computer's entry only, never a remote host's", async () => {
+		mockLocal(false);
+		cloud.value = cloudClaude(true);
+		remote.hosts = ["host-vm"];
+		const remoteReadiness = { agents: [agentReadiness("claude-code", "Claude Code")] };
+		remote.GET.mockReset().mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness") return { data: remoteReadiness };
+			if (path === "/api/v1/agents/installers") return { data: { agents: [{ agentId: "claude-code", methods: [{ id: "official-installer", available: true, updateAvailable: true }] }] } };
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } };
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "claude-code", action: "login", available: true }] } };
+			if (path === "/api/v1/agents/{agent}/update-advisory") return { data: {
+				agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.300", latestVersion: "2.1.322",
+				maintenanceMethod: "official-installer", source: "official-release", checkedAt: "2026-11-10T00:00:00Z",
+			} };
+			return { data: undefined };
+		});
+		remote.POST.mockReset().mockImplementation(async (path: string) => path === "/api/v1/agents/{agent}/install"
+			? { data: { target: "claude-code", status: "installing" } } : { data: remoteReadiness });
+		mountNotice();
+		const stack = await screen.findByRole("group", { name: "Agent updates available" });
+		await userEvent.click(within(stack).getByRole("button", { name: "Show all (2)" }));
+		// This computer's entry carries Cloud's update; the remote's is its own alone.
+		const here = within(within(stack).getByRole("region", { name: "This computer" })).getByRole("article", { name: "Claude Code" });
+		expect(here).toHaveTextContent("Cloud");
+		const vm = within(within(stack).getByRole("region", { name: "my-vm" })).getByRole("article", { name: "Claude Code on my-vm" });
+		expect(vm).not.toHaveTextContent("Cloud");
+		await userEvent.click(within(vm).getByRole("button", { name: "Update" }));
+		await waitFor(() => expect(remote.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ params: { path: { agent: "claude-code" } } })));
+		expect(cloud.value!.startUpdate).not.toHaveBeenCalled();
 	});
 });

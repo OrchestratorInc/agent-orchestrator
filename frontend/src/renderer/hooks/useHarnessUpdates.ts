@@ -98,19 +98,29 @@ export function updateAdvisoryRefreshInterval(hasError = false): number {
 	return hasError ? 5 * 60_000 : 15 * 60_000;
 }
 
-export function useHarnessUpdates(installed: ReadonlySet<AgentId>, hostId?: string, enabled = true) {
-	const queryClient = useQueryClient();
-	const queries = useQueries({ queries: AGENT_OPTIONS.map((agentId) => queryOptions({
+function updateAdvisoryQueryOptions(queryClient: QueryClient, agentId: AgentId, hostId: string | undefined, enabled: boolean) {
+	return queryOptions({
 		queryKey: updateAdvisoryQueryKey(agentId, hostId),
 		queryFn: async () => syncInstallerMethods(queryClient, await fetchUpdateAdvisory(agentId, hostId), hostId),
-		enabled: enabled && installed.has(agentId),
+		enabled,
 		staleTime: (query) => updateAdvisoryRefreshInterval(query.state.status === "error"),
 		refetchInterval: (query) => updateAdvisoryRefreshInterval(query.state.status === "error"),
 		// Keep the update badge current while the window is hidden or minimized.
 		refetchIntervalInBackground: true,
 		retry: false,
-	})) });
-	return new Map(AGENT_OPTIONS.map((agentId, index) => [agentId, queries[index]] as const));
+	});
+}
+
+export function useHarnessUpdates(installed: ReadonlySet<AgentId>, hostId?: string, enabled = true) {
+	return useHarnessUpdatesOnHosts([{ hostId, installed, enabled }])[0];
+}
+
+/** useHarnessUpdates for several hosts at once, one advisory map per host in the order given. */
+export function useHarnessUpdatesOnHosts(hosts: ReadonlyArray<{ hostId?: string; installed: ReadonlySet<AgentId>; enabled: boolean }>) {
+	const queryClient = useQueryClient();
+	const queries = useQueries({ queries: hosts.flatMap(({ hostId, installed, enabled }) => AGENT_OPTIONS.map((agentId) =>
+		updateAdvisoryQueryOptions(queryClient, agentId, hostId, enabled && installed.has(agentId)))) });
+	return hosts.map((_, hostIndex) => new Map(AGENT_OPTIONS.map((agentId, index) => [agentId, queries[hostIndex * AGENT_OPTIONS.length + index]] as const)));
 }
 
 /**
@@ -179,6 +189,13 @@ export function harnessInUseFromError(error: unknown): HarnessInUse | undefined 
 	};
 }
 
+export type HarnessUpdateRequest = {
+	agentId: AgentId;
+	methodId: string;
+	/** Checked after the click-time probe, e.g. so an unmounted page starts nothing. */
+	canStart?: () => boolean;
+};
+
 /**
  * Starts an update the user saw, shared by the notice and the Harness page.
  * The advisory is re-checked at click time, and its latest release is
@@ -187,14 +204,15 @@ export function harnessInUseFromError(error: unknown): HarnessInUse | undefined 
  * The started job lands in the shared jobs query.
  */
 export function useStartHarnessUpdate(hostId?: string) {
+	const start = useStartHarnessUpdateOnHost();
+	return useCallback((request: HarnessUpdateRequest) => start(hostId, request), [hostId, start]);
+}
+
+/** useStartHarnessUpdate with the host chosen per call, for a view that spans hosts. */
+export function useStartHarnessUpdateOnHost() {
 	const queryClient = useQueryClient();
 	const { t } = useTranslation();
-	return useCallback(async ({ agentId, methodId, canStart }: {
-		agentId: AgentId;
-		methodId: string;
-		/** Checked after the click-time probe, e.g. so an unmounted page starts nothing. */
-		canStart?: () => boolean;
-	}): Promise<HarnessUpdateStart> => {
+	return useCallback(async (hostId: string | undefined, { agentId, methodId, canStart }: HarnessUpdateRequest): Promise<HarnessUpdateStart> => {
 		try {
 			const key = updateAdvisoryQueryKey(agentId, hostId);
 			await queryClient.cancelQueries({ queryKey: key });
@@ -215,7 +233,7 @@ export function useStartHarnessUpdate(hostId?: string) {
 		} catch (error) {
 			return { error: error instanceof Error ? error.message : t("settings.harness.updateFailed") };
 		}
-	}, [hostId, queryClient, t]);
+	}, [queryClient, t]);
 }
 
 export function maintenanceMethodId(advisory?: AgentUpdateAdvisory): string {

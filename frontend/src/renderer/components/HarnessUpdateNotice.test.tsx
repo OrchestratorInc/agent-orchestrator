@@ -12,6 +12,21 @@ import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 import type { AgentReadiness } from "../hooks/useAgentReadinessQuery";
 
+// One fake remote host; tests connect it by listing it in remote.hosts.
+const remote = vi.hoisted(() => ({ hosts: [] as string[], GET: vi.fn(), POST: vi.fn() }));
+vi.mock("../lib/host-clients", async (importOriginal) => {
+	const { apiClient: local } = await import("../lib/api-client");
+	const client = { GET: (...args: unknown[]) => remote.GET(...args), POST: (...args: unknown[]) => remote.POST(...args) };
+	return {
+		...(await importOriginal<typeof import("../lib/host-clients")>()),
+		connectedHosts: () => remote.hosts,
+		subscribeConnectedHosts: () => () => undefined,
+		labelForHost: (hostId: string) => (hostId === "host-vm" ? "my-vm" : undefined),
+		clientForHost: () => client,
+		clientForSessionHost: (hostId?: string) => (hostId && hostId !== "local" ? client : local),
+	};
+});
+
 function mountNotice(enabled = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })) {
 	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessUpdateNotice enabled={enabled} /></TooltipProvider></QueryClientProvider>);
 	return { client, ...view };
@@ -741,6 +756,135 @@ describe("harness updates while sessions run", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+});
+
+describe("harness updates on remote hosts", () => {
+	const readiness = { agents: [agentReadiness("claude-code", "Claude Code")] };
+	const behind = (currentVersion: string, latestVersion: string) => ({ agentId: "claude-code", status: "behind_latest", currentVersion, latestVersion, maintenanceMethod: "official-installer", source: "official-release", checkedAt: "2026-10-07T00:00:00Z" });
+	const current = { agentId: "claude-code", status: "current", currentVersion: "2.1.292", latestVersion: "2.1.292", source: "official-release", checkedAt: "2026-10-07T00:00:00Z" };
+	let localAdvisory: unknown;
+	let remoteAdvisory: unknown;
+	// Both daemons answer alike; only their advisories differ.
+	const daemon = (advisory: () => unknown) => async (path: string) => {
+		if (path === "/api/v1/agents/readiness") return { data: readiness };
+		if (path === "/api/v1/agents/installers") return { data: { agents: [{ agentId: "claude-code", methods: [{ id: "official-installer", available: true, updateAvailable: true }] }] } };
+		if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } };
+		if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "claude-code", action: "login", available: true }] } };
+		if (path === "/api/v1/agents/{agent}/update-advisory") return { data: advisory() };
+		return { data: undefined };
+	};
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		localStorage.clear();
+		useUiStore.setState({ settingsModal: null, remoteHosts: true });
+		remote.hosts = ["host-vm"];
+		localAdvisory = current;
+		remoteAdvisory = behind("2.4.1", "2.5.0");
+		vi.spyOn(apiClient, "GET").mockImplementation(daemon(() => localAdvisory) as never);
+		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: readiness } as never);
+		remote.GET.mockReset().mockImplementation(daemon(() => remoteAdvisory));
+		remote.POST.mockReset().mockImplementation(async (path: string) => path === "/api/v1/agents/{agent}/install"
+			? { data: { target: "claude-code", status: "installing" } } : { data: readiness });
+	});
+	afterEach(() => {
+		cleanup();
+		vi.restoreAllMocks();
+		remote.hosts = [];
+	});
+
+	it("shows a remote host's update tagged with its host, with none on this computer", async () => {
+		mountNotice();
+		const card = await screen.findByRole("article", { name: "Claude Code on my-vm" });
+		expect(within(card).getByText("my-vm")).toBeInTheDocument();
+		expect(within(card).getByText("v2.4.1")).toBeInTheDocument();
+		expect(within(card).getByText("v2.5.0")).toBeInTheDocument();
+		expect(screen.queryByRole("article", { name: "Claude Code" })).toBeNull();
+	});
+
+	it("runs a remote card's update on that host, never on this computer", async () => {
+		mountNotice();
+		const card = await screen.findByRole("article", { name: "Claude Code on my-vm" });
+		await userEvent.click(within(card).getByRole("button", { name: "Update" }));
+		await waitFor(() => expect(remote.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "claude-code" } },
+			body: { method: "official-installer", operation: "update", expectedVersion: "2.5.0" },
+		}));
+		expect(remote.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/update-advisory", expect.objectContaining({ params: expect.objectContaining({ query: { refresh: true } }) }));
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+		expect(await within(card).findByRole("button", { name: "Updating…" })).toBeDisabled();
+	});
+
+	it("groups a stack that spans hosts under each host's name, remotes first", async () => {
+		localAdvisory = behind("2.1.291", "2.1.292");
+		mountNotice();
+		const stack = await screen.findByRole("group", { name: "Agent updates available" });
+		expect(within(stack).getByText("2 agent updates")).toBeInTheDocument();
+		expect(within(stack).getByText("2 machines")).toBeInTheDocument();
+		await userEvent.click(within(stack).getByRole("button", { name: "Show all (2)" }));
+		// A long local list must not bury a remote's updates at the bottom.
+		expect(within(stack).getAllByRole("region").map((section) => section.getAttribute("aria-label"))).toEqual(["my-vm", "This computer"]);
+		const here = within(stack).getByRole("region", { name: "This computer" });
+		const vm = within(stack).getByRole("region", { name: "my-vm" });
+		expect(within(here).getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
+		expect(within(vm).getByRole("article", { name: "Claude Code on my-vm" })).toBeInTheDocument();
+	});
+
+	it("dismisses a release on one host without hiding the same release on another", async () => {
+		localAdvisory = behind("2.4.1", "2.5.0");
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Show all (2)" }));
+		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
+		await waitFor(() => expect(screen.queryByRole("article", { name: "Claude Code" })).toBeNull());
+		expect(screen.getByRole("article", { name: "Claude Code on my-vm" })).toBeInTheDocument();
+		expect(JSON.parse(localStorage.getItem("ao.harness-update-dismissals.v1") ?? "[]")).toEqual([JSON.stringify(["local", "claude-code", "2.5.0"])]);
+	});
+
+	it("keeps a host's update shown when a later readiness refetch fails", async () => {
+		const { client } = mountNotice();
+		await screen.findByRole("article", { name: "Claude Code on my-vm" });
+		const get = remote.GET.getMockImplementation()!;
+		remote.GET.mockImplementation(async (path: string, ...rest: unknown[]) => path === "/api/v1/agents/readiness"
+			? { error: { message: "Remote readiness unavailable" } } : get(path, ...rest));
+		await act(async () => { await client.refetchQueries({ queryKey: ["agent-readiness", "host-vm"] }); });
+		await waitFor(() => expect(client.getQueryState(["agent-readiness", "host-vm"])?.status).toBe("error"), { timeout: 5000 });
+		// The cached readiness still describes the host, so its update stays.
+		expect(screen.getByRole("article", { name: "Claude Code on my-vm" })).toBeInTheDocument();
+	});
+
+	it("starts this computer's updates from Update all without waiting on a slow remote", async () => {
+		localAdvisory = behind("2.1.291", "2.1.292");
+		const stalled = deferred<unknown>();
+		const get = remote.GET.getMockImplementation()!;
+		// The remote's click-time advisory check hangs until released.
+		remote.GET.mockImplementation((path: string, options?: { params?: { query?: { refresh?: boolean } } }) =>
+			path === "/api/v1/agents/{agent}/update-advisory" && options?.params?.query?.refresh ? stalled.promise : get(path, options));
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ params: { path: { agent: "claude-code" } } })));
+		expect(remote.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+		await act(async () => stalled.resolve({ data: behind("2.4.1", "2.5.0") }));
+		await waitFor(() => expect(remote.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ body: expect.objectContaining({ expectedVersion: "2.5.0" }) })));
+	});
+
+	it("leaves out a remote whose checks fail, keeping this computer's update", async () => {
+		localAdvisory = behind("2.1.291", "2.1.292");
+		remote.POST.mockRejectedValue(new Error("offline"));
+		mountNotice();
+		expect(await screen.findByRole("article", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.queryByText("my-vm")).toBeNull();
+		expect(remote.GET).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/update-advisory", expect.anything());
+	});
+
+	it("opens the remote's Harness page from a failed remote update", async () => {
+		remote.POST.mockImplementation(async (path: string) => path === "/api/v1/agents/{agent}/install"
+			? { error: { message: "Remote update refused" } } : { data: readiness });
+		mountNotice();
+		const card = await screen.findByRole("article", { name: "Claude Code on my-vm" });
+		await userEvent.click(within(card).getByRole("button", { name: "Update" }));
+		expect(await within(card).findByRole("alert")).toHaveTextContent("Remote update refused");
+		await userEvent.click(within(card).getByRole("button", { name: "Show diagnostics" }));
+		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", hostId: "host-vm" });
 	});
 });
 
