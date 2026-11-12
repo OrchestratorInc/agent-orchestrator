@@ -176,7 +176,8 @@ import {
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
-import { ChatEntrance, createChatEntranceGate } from "./chat-entrance";
+import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
+import { pageHidden } from "../../lib/page-hidden";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
@@ -1041,6 +1042,18 @@ function ChatWorkspaceContent({
 	// session temporarily becomes terminated and later returns.
 	const reviewerActive = reviewerChatSelected || Boolean(reviewerTarget && session);
 	const shellActive = Boolean(shellTarget && session);
+	// When the conversation panel was last shown again after a terminal or reviewer
+	// tab covered it. The transcript is held while covered (HoldWhileHidden), so rows
+	// written meanwhile reach it only on return, and must not read as arrivals the
+	// reader watched. Adjusted during render, so the held transcript sees it in the
+	// same render that catches it up; only a tab change pays for the extra pass.
+	const panelCovered = reviewerActive || shellActive;
+	const [panelWasCovered, setPanelWasCovered] = useState(panelCovered);
+	const [panelShownAt, setPanelShownAt] = useState<number>();
+	if (panelCovered !== panelWasCovered) {
+		setPanelWasCovered(panelCovered);
+		if (!panelCovered) setPanelShownAt(Date.now());
+	}
 	const splitHiddenTabKeys = useSplitHiddenTabKeys();
 	const closeFocusedSplitPane = useSplitCloseFocused();
 	const auxiliaryTabs = useMemo<ChatAuxiliaryTab[]>(
@@ -2108,6 +2121,7 @@ function ChatWorkspaceContent({
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
 								<Timeline
+									shownAt={panelShownAt}
 							onAddToSideChat={onAddToSideChat}
 									checkingSideChatAvailability={checkingSideChatAvailability}
 									workerUpdates={sessionRole === "orchestrator"}
@@ -2977,9 +2991,12 @@ export function Timeline({
 	openingStartedAt,
 	openingStartupLabel,
 	controllerStopped = false,
+	shownAt,
 }: {
 	/** The agent controller is really gone; a turn still marked running settles with an unknown outcome. */
 	controllerStopped?: boolean;
+	/** When the panel holding this transcript was last shown again after being covered (epoch ms). */
+	shownAt?: number;
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
@@ -3044,10 +3061,13 @@ export function Timeline({
 	// Rows above the newest sequence this chat opened with arrived while it was on
 	// screen; only they play an entrance (chat-entrance.ts). Taken from the first
 	// render with a transcript, so a placeholder or loading frame does not count.
+	// Rows the reader did not watch arrive (written while they were away, or landing
+	// while the window is hidden) raise the floor before they mount, and the view
+	// lands on them without a glide (the gate's catchUpAt).
 	const [entranceGate] = useState(createChatEntranceGate);
-	if (entranceGate.floor === undefined && sourceSnapshot.items.length > 0) {
-		entranceGate.floor = sourceSnapshot.items.reduce((floor, item) => Math.max(floor, item.sequence), sourceSnapshot.latestSequence);
-	}
+	// Shown again after a terminal or reviewer tab covered it: the reader watches from then.
+	if (shownAt !== undefined && shownAt > entranceGate.watchingSince) entranceGate.watchingSince = shownAt;
+	admitArrivals(entranceGate, sourceSnapshot);
 	useEffect(() => {
 		entranceGate.settled = true;
 	}, [entranceGate]);
@@ -3090,6 +3110,7 @@ export function Timeline({
 		markWritten,
 		isOwnScroll,
 		isFlying,
+		isGliding,
 		reaim,
 		endFlight,
 	} = useScrollFollow(getScroller);
@@ -3970,6 +3991,13 @@ export function Timeline({
 					(item) =>
 						!seenHumanMessageIds.current?.has(itemKey(item)) &&
 						item.sequence > (lastSeenLatestSequence.current ?? -Infinity) &&
+						// A prompt the reader did not watch arrive (sent from another device
+						// while they were away, or while the window was hidden) is history.
+						item.sequence > (entranceGate.floor ?? -Infinity) &&
+						// A local echo can appear while hidden with no new snapshot to raise
+						// the floor (a send that resolved after the reader left); it is seen
+						// here, so it never enters on their return.
+						!pageHidden() &&
 						// The brief that started the chat made its entrance on the new chat page.
 						!(openingTurnId && item.turnId === openingTurnId),
 				)
@@ -4388,14 +4416,30 @@ export function Timeline({
 			reaim();
 			return;
 		}
-		if (viewportResize.current || !initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
+		// The same goes for rows the reader did not watch arrive (a catch-up after they
+		// return, or anything landing while the window is hidden, where a glide would
+		// only start once they are back), and for the moments after the window is seen
+		// again while rows that landed hidden measure.
+		const now = performance.now();
+		const hidden = pageHidden();
+		const opening = !initialLayoutDone.current || now - initialLayoutAt.current < INITIAL_SNAP_MS;
+		if (viewportResize.current || opening || now - entranceGate.catchUpAt < INITIAL_SNAP_MS || hidden) {
+			if (!viewportResize.current && !opening && isFlying()) {
+				// The reader's own send or Jump to latest keeps on course to the new end;
+				// an automatic follow glide stops and lands. Hidden, neither could play.
+				if (!hidden && isGliding()) {
+					reaim();
+					return;
+				}
+				cancelScrollFollow();
+			}
 			if (viewportResize.current) cancelScrollFollow();
 			node.scrollTop = node.scrollHeight;
 			markWritten(node.scrollTop);
 			return;
 		}
 		followEnd();
-	}, [followEnd, markWritten, cancelScrollFollow, isFlying, reaim]);
+	}, [followEnd, markWritten, cancelScrollFollow, isFlying, isGliding, reaim]);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
@@ -4591,7 +4635,8 @@ export function Timeline({
 		}
 		for (const row of liveRows) row.style.display = "";
 		updateScrollbar();
-		if (reducedMotionRef.current || typeof Element.prototype.animate !== "function") return;
+		// A hidden window would hold the slide until the reader returns, then play it.
+		if (reducedMotionRef.current || pageHidden() || typeof Element.prototype.animate !== "function") return;
 		rows.forEach((row, at) => {
 			// The row the hold keeps in place is measured on every re-place, so it must not move.
 			if (row === held || !row.isConnected || row.parentElement !== turn) return;
@@ -4623,6 +4668,31 @@ export function Timeline({
 	useEffect(() => {
 		syncScrollLayout();
 	}, [pinned, snapshot.latestSequence, groups.length, messageEdit?.turnId, syncScrollLayout]);
+	// The window is seen again: the reader starts watching from now. What landed
+	// while it was hidden is history, so a glide queued then (it cannot play without
+	// frames) is dropped, a reader at the end stays at the end, and the rows that
+	// landed hidden measure in place instead of being chased down the log.
+	// Read through a ref so streamed chunks (new layout callbacks) never re-register it.
+	const onPageShown = useRef(() => {});
+	onPageShown.current = () => {
+		entranceGate.watchingSince = Date.now();
+		entranceGate.catchUpAt = performance.now();
+		if (isFlying()) cancelScrollFollow();
+		const node = scroller.current;
+		if (!node || !initialLayoutDone.current) return;
+		if (pinnedRef.current) {
+			syncPromptSpacer();
+			followOrSnapToEnd(node);
+		}
+		updateScrollbar();
+	};
+	useEffect(() => {
+		const onVisibilityChange = () => {
+			if (!pageHidden()) onPageShown.current();
+		};
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+	}, []);
 	useLayoutEffect(() => {
 		restoreViewportResize();
 	}, [virtualHeight, restoreViewportResize]);
@@ -5598,7 +5668,9 @@ const TurnGroup = memo(function TurnGroup({
 			{outcome && showsWorked ? (
 				<motion.div
 					key="turn-worked-summary"
-					initial={{ opacity: 0 }}
+					// A turn that settled while the window was hidden is already settled
+					// when the reader returns; its fade would only start then.
+					initial={pageHidden() ? false : { opacity: 0 }}
 					animate={{ opacity: 1 }}
 					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
 					data-turn-worked=""

@@ -5628,7 +5628,8 @@ describe("ChatWorkspace message actions", () => {
 
 	it("plays the entrance on the newest human message only, send after send", () => {
 		const base = idleSnapshot();
-		const at = "2026-08-11T10:05:00Z";
+		// Written now: a prompt that arrives while the reader watches.
+		const at = new Date().toISOString();
 		const send = (snapshot: ConversationSnapshot, turnId: string, text: string): ConversationSnapshot => {
 			const sequence = snapshot.latestSequence + 1;
 			return {
@@ -5655,6 +5656,75 @@ describe("ChatWorkspace message actions", () => {
 			expect(node).toHaveTextContent("Then open a PR");
 			expect(node).not.toHaveTextContent("Now run the tests");
 		}
+	});
+
+	describe("rows the reader did not watch arrive", () => {
+		const sendAt = (snapshot: ConversationSnapshot, turnId: string, text: string, at: string): ConversationSnapshot => {
+			const sequence = snapshot.latestSequence + 1;
+			return {
+				...snapshot,
+				latestSequence: sequence,
+				turns: [...snapshot.turns, { id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: at }],
+				items: [...snapshot.items, {
+					kind: "message", id: `prompt-${turnId}`, turnId, sequence, revision: 0,
+					role: "user", origin: "human", text, streaming: false, createdAt: at,
+				}],
+			};
+		};
+		const entering = () => [...document.querySelectorAll(".chat-human-message-enter")];
+		const setVisibility = (state: DocumentVisibilityState) => {
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+			act(() => {
+				document.dispatchEvent(new Event("visibilitychange"));
+			});
+		};
+		afterEach(() => {
+			Reflect.deleteProperty(document, "visibilityState");
+		});
+
+		it("does not replay entrances for rows written while the reader was away (a stale copy catching up)", () => {
+			const base = idleSnapshot();
+			const view = render(<ChatWorkspace snapshot={base} />);
+			// The refetch after returning to the chat brings rows written ten minutes ago.
+			const away = new Date(Date.now() - 10 * 60_000).toISOString();
+			const caughtUp = sendAt(base, "turn-3", "Sent from my phone", away);
+			view.rerender(<ChatWorkspace snapshot={caughtUp} />);
+			expect(screen.getAllByText("Sent from my phone").length).toBeGreaterThan(0);
+			expect(entering()).toHaveLength(0);
+			// A prompt that then arrives while the reader watches still enters.
+			view.rerender(<ChatWorkspace snapshot={sendAt(caughtUp, "turn-4", "Now run the tests", new Date().toISOString())} />);
+			expect(entering().length).toBeGreaterThan(0);
+			for (const node of entering()) expect(node).toHaveTextContent("Now run the tests");
+		});
+
+		it("does not queue entrances for rows that land while the window is hidden", () => {
+			const base = idleSnapshot();
+			const view = render(<ChatWorkspace snapshot={base} />);
+			setVisibility("hidden");
+			const hidden = sendAt(base, "turn-3", "Arrived while hidden", new Date().toISOString());
+			view.rerender(<ChatWorkspace snapshot={hidden} />);
+			expect(screen.getAllByText("Arrived while hidden").length).toBeGreaterThan(0);
+			expect(entering()).toHaveLength(0);
+			// Back on screen: rows written before the return are history, newer ones enter.
+			setVisibility("visible");
+			view.rerender(<ChatWorkspace snapshot={sendAt(hidden, "turn-4", "Arrived on return", new Date().toISOString())} />);
+			for (const node of entering()) expect(node).toHaveTextContent("Arrived on return");
+			expect(entering().length).toBeGreaterThan(0);
+		});
+
+		it("does not enter a local echo that appears while the window is hidden", () => {
+			const base = idleSnapshot();
+			const view = render(<ChatWorkspace snapshot={base} />);
+			setVisibility("hidden");
+			// A send that resolved after the reader left: no new snapshot, only the echo.
+			const localEchos = [{ clientMessageId: "sent-before-leaving", text: "Echo while hidden", createdAt: new Date().toISOString() }];
+			view.rerender(<ChatWorkspace snapshot={base} localEchos={localEchos} />);
+			expect(screen.getAllByText("Echo while hidden").length).toBeGreaterThan(0);
+			expect(entering()).toHaveLength(0);
+			setVisibility("visible");
+			view.rerender(<ChatWorkspace snapshot={base} localEchos={localEchos} />);
+			expect(entering()).toHaveLength(0);
+		});
 	});
 
 	it("hides editing while another turn is active", () => {
@@ -6168,6 +6238,35 @@ describe("ChatWorkspace shell tabs", () => {
 			title: shell.title,
 		};
 	};
+
+	it("does not replay entrances for rows written while a shell covered the conversation", () => {
+		const opened = Date.now();
+		const now = vi.spyOn(Date, "now").mockReturnValue(opened);
+		try {
+			const base = idleSnapshot();
+			const common = { session: chatSession, shellTerminals: shells, onSelectChat: vi.fn() };
+			const view = render(<ChatWorkspace {...common} snapshot={base} />);
+			// A minute into the shell, a prompt lands; the held transcript only sees it on return.
+			const written = new Date(opened + 60_000).toISOString();
+			const sequence = base.latestSequence + 1;
+			const covered: ConversationSnapshot = {
+				...base,
+				latestSequence: sequence,
+				turns: [...base.turns, { id: "turn-shell", state: "completed", requestedAt: written, startedAt: written, completedAt: written }],
+				items: [...base.items, {
+					kind: "message", id: "prompt-turn-shell", turnId: "turn-shell", sequence, revision: 0,
+					role: "user", origin: "human", text: "Sent while the shell was open", streaming: false, createdAt: written,
+				}],
+			};
+			view.rerender(<ChatWorkspace {...common} snapshot={covered} shellTarget={shellTarget("shell-1")} />);
+			now.mockReturnValue(opened + 120_000);
+			view.rerender(<ChatWorkspace {...common} snapshot={covered} />);
+			expect(screen.getAllByText("Sent while the shell was open").length).toBeGreaterThan(0);
+			expect(document.querySelectorAll(".chat-human-message-enter")).toHaveLength(0);
+		} finally {
+			now.mockRestore();
+		}
+	});
 
 	// Shells are tabs inside the chat surface (#4033): opening one must not cost
 	// the conversation — the conversation panel hides instead of unmounting,
