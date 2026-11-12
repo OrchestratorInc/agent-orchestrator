@@ -3671,7 +3671,8 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	flex: 0 0 auto;
 	margin-inline: calc(-1 * var(--gap-topbar-control)) 0;
 	opacity: 0;
-	background: color-mix(in srgb, var(--color-border) 50%, transparent);
+	/* Spacer only: the line itself is not drawn. */
+	background: transparent;
 }
 
 .session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
