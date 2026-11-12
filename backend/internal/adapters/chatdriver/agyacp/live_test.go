@@ -221,7 +221,7 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 					time.Sleep(4 * time.Second)
 					_, err := steerer.Steer(ctx, ref.ProviderTurnID, ports.ChatUserMessage{
 						Text: "STEER-ME: change of plan, edit staging.yaml instead of prod.yaml. " +
-							"Include the word STAGING in your final reply.",
+							"End your final reply with the marker STEER-ACK-STAGING.",
 						ClientMessageID: "live-steer", Origin: domain.MessageOriginHuman,
 					})
 					steered <- err
@@ -241,7 +241,8 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 		t.Fatalf("Steer: %v", err)
 	}
 	answer := reply.String()
-	if !strings.Contains(strings.ToLower(answer), "staging.yaml") || !strings.Contains(strings.ToUpper(answer), "STAGING") {
+	// The marker exists only in the steer, so the reply shows the model read it.
+	if !strings.Contains(answer, "STEER-ACK-STAGING") || !strings.Contains(strings.ToLower(answer), "staging.yaml") {
 		t.Fatalf("the turn did not take the guidance: reply=%q", answer)
 	}
 	t.Logf("reply: %q", answer)
@@ -283,6 +284,9 @@ func staysInTestFolders(summary, workspace string) bool {
 			}
 		}
 		return false
+	}
+	if strings.ContainsAny(summary, "\r\n") {
+		return false // a second line would be a second command
 	}
 	if file, ok := strings.CutPrefix(summary, "File "); ok {
 		return under(strings.TrimSpace(file))
