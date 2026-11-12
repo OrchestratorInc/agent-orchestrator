@@ -635,8 +635,10 @@ export interface CloudCpSession {
 	 * after its agent started and the agent does not run with them yet:
 	 * "restart" when restarting the agent (restartSessionAgent with
 	 * applyInstructions) applies them and keeps the conversation, "next_start"
-	 * when its worker applies them only the next time its agent starts.
-	 * Absent when current, for a session in Chat, and on older control planes.
+	 * when its worker cannot apply them while it runs: they reach the agent
+	 * only after the session's worker restarts (a pause and resume). Absent
+	 * when current, for a session in Chat whose worker applies them to its
+	 * next message, and on older control planes.
 	 */
 	outdatedInstructions?: CloudCpOutdatedInstructions;
 	interfaceMode: CloudCpInterfaceMode;

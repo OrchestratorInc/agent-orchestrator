@@ -280,8 +280,9 @@ export type WorkspaceSession = {
 		/**
 		 * Set while the project's instructions for the session's role changed
 		 * after its agent started: "restart" when restarting the agent applies
-		 * them (keeping the conversation), "next_start" when they apply the next
-		 * time its agent starts.
+		 * them (keeping the conversation), "next_start" when its worker cannot
+		 * apply them while it runs (they reach the agent only after the
+		 * session's worker restarts, such as a pause and resume).
 		 */
 		outdatedInstructions?: "restart" | "next_start";
 	};

@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import type { CloudCpSession } from "../lib/cloud-cp/types";
 import { toCloudWorkspaceSession } from "../hooks/useWorkspaceQuery";
 import { orchestratorHealth, type WorkspaceSession } from "../types/workspace";
@@ -67,8 +68,60 @@ describe("outdated project instructions", () => {
 
 	it("says when a worker that cannot restart in place applies them, without a restart", () => {
 		renderNotice(session({ kind: "worker", outdatedInstructions: "next_start" }), "terminal");
-		expect(screen.getByRole("status")).toHaveTextContent("They apply the next time the agent starts.");
+		expect(screen.getByRole("status")).toHaveTextContent(
+			"This session's worker can't apply them while it runs. They reach the agent only after the session is paused and resumed.",
+		);
 		expect(screen.queryByRole("button")).toBeNull();
+	});
+
+	it.each(["waiting_input", "blocked"])("waits for an agent that is %s, rather than ending what it waits on", (activityState) => {
+		renderNotice(session({ kind: "worker", outdatedInstructions: "restart", activityState }), "terminal");
+		expect(screen.getByRole("status")).toHaveTextContent(
+			"Worker instructions changed after this agent started. Answer what the agent is waiting on, then restart it to apply them.",
+		);
+		expect(screen.getByRole("button", { name: "Restart agent" })).toBeDisabled();
+	});
+
+	it("restarts once when both the board and the terminal offer it, and shows it on both", async () => {
+		let finish: (value: { requested: boolean }) => void = () => {};
+		mocks.restart.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+		const subject = session({ outdatedInstructions: "restart" });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<OutdatedInstructionsNotice session={subject} variant="board" />
+				<OutdatedInstructionsNotice session={subject} variant="terminal" />
+			</QueryClientProvider>,
+		);
+		const [board, terminal] = screen.getAllByRole("button", { name: "Restart agent" });
+		fireEvent.click(board);
+		fireEvent.click(board);
+		fireEvent.click(terminal);
+		await waitFor(() => expect(terminal).toBeDisabled());
+		expect(board).toBeDisabled();
+		expect(mocks.restart).toHaveBeenCalledOnce();
+		finish({ requested: false });
+		expect(await screen.findAllByText("The agent did not restart. Try again in a moment.")).toHaveLength(2);
+	});
+
+	it("says a restart the control plane stopped waiting for may still complete, and reads the session again", async () => {
+		mocks.restart.mockRejectedValue(new CloudCpError("The worker did not complete the request in time.", { status: 504, code: "WORKER_TIMEOUT" }));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			render(<QueryClientProvider client={client}><OutdatedInstructionsNotice session={session({ outdatedInstructions: "restart" })} variant="board" /></QueryClientProvider>);
+			fireEvent.click(screen.getByRole("button", { name: "Restart agent" }));
+			expect(await screen.findByText(
+				"The restart is taking longer than expected. The agent may still be restarting; this notice clears once it runs with them.",
+			)).toBeInTheDocument();
+			expect(screen.queryByText("The worker did not complete the request in time.")).toBeNull();
+			const settled = invalidate.mock.calls.length;
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(invalidate.mock.calls.length).toBeGreaterThan(settled);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("says when the agent did not restart", async () => {

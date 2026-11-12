@@ -193,7 +193,7 @@ it("says when changed instructions reach sessions that are already running", asy
 	renderWith(<CloudProjectInstructionsSettings projectId="p" cloudOrgId="org-1" />);
 	await screen.findByLabelText("Worker instructions");
 	expect(screen.getAllByText(
-		"New sessions start with these instructions. Running sessions pick up changes with their next Chat message, or when their terminal agent restarts.",
+		"New sessions start with these instructions. Running sessions pick up changes with their next Chat message, or when their terminal agent restarts. A session on an older worker picks them up only after it is paused and resumed.",
 	)).toHaveLength(2);
 });
 
