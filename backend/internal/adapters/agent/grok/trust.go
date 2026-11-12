@@ -60,9 +60,15 @@ func (p *Plugin) PreLaunch(ctx context.Context, cfg ports.LaunchConfig) error {
 func ensureGrokFolderTrusted(trustPath, workspacePath string, now time.Time) error {
 	grokTrustMu.Lock()
 	defer grokTrustMu.Unlock()
-	// A trust file linked from a dotfiles repo is updated there, not replaced.
+	// A trust file linked from a dotfiles repo is updated there, not replaced,
+	// even when the link's target does not exist yet.
 	if target, err := filepath.EvalSymlinks(trustPath); err == nil {
 		trustPath = target
+	} else if link, lerr := os.Readlink(trustPath); lerr == nil {
+		if !filepath.IsAbs(link) {
+			link = filepath.Join(filepath.Dir(trustPath), link)
+		}
+		trustPath = link
 	}
 	folder, err := filepath.Abs(workspacePath)
 	if err != nil {

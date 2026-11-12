@@ -176,3 +176,26 @@ func TestPreLaunchWithoutWorkspaceIsNoop(t *testing.T) {
 		t.Fatalf("trust file stat err = %v, want not exist", err)
 	}
 }
+
+func TestPreLaunchWritesThroughDanglingGrokTrustSymlink(t *testing.T) {
+	grokHome := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "ws")
+	trustPath := filepath.Join(grokHome, grokTrustedFoldersFile)
+	target := filepath.Join(grokHome, "dotfiles", "grok-trust.toml")
+	if err := os.Symlink(filepath.Join("dotfiles", "grok-trust.toml"), trustPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	preLaunchGrok(t, grokHome, workspace)
+
+	info, err := os.Lstat(trustPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("trust file mode = %v, want the symlink kept", info.Mode())
+	}
+	if !readGrokTrust(t, target).Folders[workspace].Trusted {
+		t.Fatalf("workspace not trusted in the link target %s", target)
+	}
+}
