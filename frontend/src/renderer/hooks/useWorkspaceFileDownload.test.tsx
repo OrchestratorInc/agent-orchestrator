@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
-import { downloadWorkspaceFile, MAX_FILE_DOWNLOAD_BYTES, useWorkspaceFileDownload } from "./useWorkspaceFileDownload";
+import { downloadWorkspaceFile, FileTooLargeError, MAX_FILE_DOWNLOAD_BYTES, useWorkspaceFileDownload } from "./useWorkspaceFileDownload";
 
 const { connection } = vi.hoisted(() => ({ connection: vi.fn() }));
 vi.mock("./useHostConnection", () => ({ useHostConnection: connection }));
@@ -23,11 +23,22 @@ describe("downloadWorkspaceFile", () => {
 
 	it("refuses a file over the limit before reading its body", async () => {
 		const huge = new Response(bytes, { headers: { "content-length": String(MAX_FILE_DOWNLOAD_BYTES + 1) } });
-		const read = vi.spyOn(huge, "arrayBuffer");
+		const read = vi.spyOn(huge.body!, "getReader");
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(huge);
 		const save = vi.spyOn(aoBridge.chatImage, "save");
 		await expect(downloadWorkspaceFile(base, "s1", "big.bin")).rejects.toThrow();
 		expect(read).not.toHaveBeenCalled();
+		expect(save).not.toHaveBeenCalled();
+	});
+
+	it("stops reading a body without Content-Length at the limit", async () => {
+		const chunk = new Uint8Array(1024 * 1024);
+		let pulled = 0;
+		const endless = new ReadableStream<Uint8Array>({ pull(controller) { pulled += 1; controller.enqueue(chunk); } });
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(endless));
+		const save = vi.spyOn(aoBridge.chatImage, "save");
+		await expect(downloadWorkspaceFile(base, "s1", "data.json")).rejects.toBeInstanceOf(FileTooLargeError);
+		expect(pulled).toBeLessThan(MAX_FILE_DOWNLOAD_BYTES / chunk.byteLength + 8);
 		expect(save).not.toHaveBeenCalled();
 	});
 
