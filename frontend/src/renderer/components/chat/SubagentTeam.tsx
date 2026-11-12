@@ -15,11 +15,11 @@
 
 import { createContext, Fragment, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronRight, Loader2, Square } from "@/components/app-icons";
+import { ChevronRight, Square } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
-import { ActivityTransition } from "./ChatTimelineItems";
+import { ActivityTransition, ResponseSpinner } from "./ChatTimelineItems";
 import { SubagentTranscript } from "./SubagentTranscript";
 import {
 	latestSubagentLine,
@@ -379,7 +379,8 @@ export function SubagentAvatar({ harness, state, centered = false }: { harness?:
 }
 
 /**
- * The status slot: a spinner while working, then a glyph and a word for anything
+ * The status slot: the chat's working mark (the lattice the live row shows) while
+ * working, then a glyph and a word for anything
  * that did not simply finish, so the state never rests on color alone. Done shows
  * nothing: the report under the name and the header's count already say it, so a
  * check on every row is noise. Screen readers still hear it.
@@ -390,10 +391,9 @@ export function StateGlyph({ state }: { state: SubagentState }) {
 	let glyph: ReactNode;
 	if (state === "working") {
 		glyph = (
-			<Loader2
-				aria-label={t("chat.subagent.state.working")}
-				className="size-3 animate-spin text-muted-foreground/70 motion-reduce:animate-none"
-			/>
+			<span role="img" aria-label={t("chat.subagent.state.working")} className="flex">
+				<ResponseSpinner />
+			</span>
 		);
 	} else if (state === "done") {
 		glyph = undefined;
