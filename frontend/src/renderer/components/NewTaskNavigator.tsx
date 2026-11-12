@@ -22,15 +22,25 @@ export function NewTaskNavigator() {
 	const newTaskRequest = useUiStore((state) => state.newTaskRequest);
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
 	const [dialog, setDialog] = useState<{ open: boolean; projectId?: string; hostId?: string }>({ open: false });
-	const cloudProjects = useCloudProjectsQuery().data;
-	const sharedWorkspaces = useSharedCloudWorkspacesQuery().data;
+	const cloudProjectsQuery = useCloudProjectsQuery();
+	const sharedWorkspacesQuery = useSharedCloudWorkspacesQuery();
+	const cloudProjects = cloudProjectsQuery.data;
+	const sharedWorkspaces = sharedWorkspacesQuery.data;
+	// Whether the Cloud lists that tell a project from a standalone agent are
+	// still on their first read. Disabled (Cloud not ready) or settled, failed
+	// included, they are not: a request then goes by what they hold.
+	const classifying = cloudProjectsQuery.isLoading || sharedWorkspacesQuery.isLoading;
 	const cloudOffering = useCloudOffering();
 
 	useEffect(() => {
 		if (!newTaskRequest || newTaskRequest.nonce === lastNonce.current) return;
-		lastNonce.current = newTaskRequest.nonce;
 		const { projectId, hostId } = newTaskRequest;
 		const cloudProject = hostId ? undefined : cloudProjects?.find((project) => project.id === projectId);
+		// A request for a project the lists can't place yet waits for them, so it
+		// never opens a new task in an agent (the shortcut on an agent's session
+		// right after start-up); the effect runs again once they settle.
+		if (!hostId && projectId !== STANDALONE_WORKSPACE_ID && !cloudProject && classifying) return;
+		lastNonce.current = newTaskRequest.nonce;
 		// A Cloud standalone agent runs one session: a new task beside the person's
 		// own is another agent, and one beside an agent shared with them starts
 		// outside it (neither takes a new session).
@@ -51,7 +61,7 @@ export function NewTaskNavigator() {
 			// A new task from the new chat page replaces it rather than stacking history.
 			replace: Boolean(matchRoute({ to: "/new" })),
 		});
-	}, [cloudOffering, cloudProjects, matchRoute, navigate, newTaskRequest, sharedWorkspaces]);
+	}, [classifying, cloudOffering, cloudProjects, matchRoute, navigate, newTaskRequest, sharedWorkspaces]);
 
 	const handleCreated = async (sessionId: string) => {
 		if (!dialog.projectId) return;

@@ -5,10 +5,12 @@ import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { NewTaskNavigator } from "./NewTaskNavigator";
 
-const { navigateMock, route, dialog } = vi.hoisted(() => ({
+const { navigateMock, route, dialog, cloudLists } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
 	route: { onNewChat: false },
 	dialog: { props: undefined as { open: boolean; projectId?: string } | undefined },
+	// The Cloud lists' first read: loading, or settled.
+	cloudLists: { loading: false },
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -21,16 +23,16 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		{ id: "cloud-1", kind: CLOUD_PROJECT_KIND, sessions: [] },
 	] }),
 	useRemoteWorkspaces: () => ({ data: [] }),
-	useCloudProjectsQuery: () => ({ data: [
+	useCloudProjectsQuery: () => cloudLists.loading ? { data: undefined, isLoading: true } : { isLoading: false, data: [
 		{ id: "cloud-1", config: { sandboxProvider: "freestyle" } },
 		{ id: "coder-1", config: { sandboxProvider: "coder" } },
 		// A standalone agent's project on an organization that defaults to Coder.
 		{ id: "agent-1", config: {}, standaloneAgent: true },
-	] }),
-	useSharedCloudWorkspacesQuery: () => ({ data: [
+	] },
+	useSharedCloudWorkspacesQuery: () => cloudLists.loading ? { data: undefined, isLoading: true } : { isLoading: false, data: [
 		{ id: "shared-1", kind: CLOUD_PROJECT_KIND, sessions: [], shared: { source: "link" } },
 		{ id: "agent-shared", kind: CLOUD_PROJECT_KIND, sessions: [], shared: { source: "link" }, standaloneAgent: true },
-	] }),
+	] },
 	workspaceQueryKeyForHost: () => ["workspaces"],
 }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "freestyle", loaded: true }) }));
@@ -46,13 +48,16 @@ vi.mock("./NewTaskDialog", () => ({
 }));
 
 function renderNavigator() {
-	render(<QueryClientProvider client={new QueryClient()}><NewTaskNavigator /></QueryClientProvider>);
+	const client = new QueryClient();
+	const view = render(<QueryClientProvider client={client}><NewTaskNavigator /></QueryClientProvider>);
+	return { rerender: () => view.rerender(<QueryClientProvider client={client}><NewTaskNavigator /></QueryClientProvider>) };
 }
 
 beforeEach(() => {
 	navigateMock.mockReset();
 	route.onNewChat = false;
 	dialog.props = undefined;
+	cloudLists.loading = false;
 	useUiStore.setState({ newTaskRequest: null, provisioningProjectIds: new Set() });
 });
 
@@ -94,6 +99,21 @@ describe("NewTaskNavigator", () => {
 		expect(navigateMock).toHaveBeenLastCalledWith(expect.objectContaining({ to: "/new", search: { project: undefined, host: undefined } }));
 		act(() => useUiStore.getState().requestNewTask("shared-1"));
 		expect(navigateMock).toHaveBeenLastCalledWith(expect.objectContaining({ to: "/new", search: { project: "shared-1", host: undefined } }));
+	});
+
+	it("waits for the Cloud lists' first read before placing a request, so it never opens a new task in a shared agent", () => {
+		cloudLists.loading = true;
+		const view = renderNavigator();
+		act(() => useUiStore.getState().requestNewTask("agent-shared"));
+		expect(navigateMock).not.toHaveBeenCalled();
+		// The Scratchpad needs no Cloud list.
+		act(() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID));
+		expect(navigateMock).toHaveBeenCalledTimes(1);
+		act(() => useUiStore.getState().requestNewTask("agent-shared"));
+		cloudLists.loading = false;
+		view.rerender();
+		expect(navigateMock).toHaveBeenLastCalledWith(expect.objectContaining({ to: "/new", search: { project: undefined, host: undefined } }));
+		expect(navigateMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("opens the new chat page for cloud projects too", () => {

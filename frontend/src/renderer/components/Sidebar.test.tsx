@@ -1275,23 +1275,31 @@ describe("Sidebar", () => {
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
 	});
 
-	it("shows the Scratchpad section for a Cloud standalone agent only while it lists one of its sessions", () => {
+	it("never leaves the Scratchpad an empty header: an archived-only Cloud agent shows the way to its archive", async () => {
+		const user = userEvent.setup();
 		const agent = (sessions: WorkspaceSession[]): WorkspaceSummary => ({
 			id: "agent-1", name: "Fix the flake", kind: "cloud", cloudOrgId: "org-1", standaloneAgent: true, path: "", sessions,
 		});
 		const agentSession = { ...session, id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake", cloud: { orgId: "org-1" } };
 
-		// Archived, its only session is not a row: no section.
+		// Archived, its only session is not a row, but the section keeps one row:
+		// the archive, where it can be opened and restored.
 		renderSidebar({ workspaces: [workspace, agent([{ ...agentSession, isTerminated: true }])] });
-		expect(document.querySelector("[data-scratchpad-section]")).toBeNull();
+		const section = document.querySelector("[data-scratchpad-section]") as HTMLElement;
+		expect(section).not.toBeNull();
+		expect(within(section).queryByText("Fix the flake")).toBeNull();
+		await user.click(within(section).getByRole("button", { name: "Archive, 1 session" }));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions" });
 		cleanup();
 
-		// Active, it is.
+		// Active, the session is the row, and there is no archive row.
 		renderSidebar({ workspaces: [workspace, agent([agentSession])] });
-		expect(document.querySelector("[data-scratchpad-section]")).not.toBeNull();
+		const active = document.querySelector("[data-scratchpad-section]") as HTMLElement;
+		expect(within(active).getByText("Fix the flake")).toBeInTheDocument();
+		expect(within(active).queryByRole("button", { name: /^Archive, / })).toBeNull();
 		cleanup();
 
-		// A local Scratchpad still shows beside an archived agent.
+		// A local Scratchpad still shows its sessions beside an archived agent.
 		renderSidebar({
 			workspaces: [
 				workspace,
@@ -1305,8 +1313,9 @@ describe("Sidebar", () => {
 				agent([{ ...agentSession, isTerminated: true }]),
 			],
 		});
-		const section = document.querySelector("[data-scratchpad-section]")!;
-		expect(section).toContainElement(screen.getByText("baby"));
+		const local = document.querySelector("[data-scratchpad-section]") as HTMLElement;
+		expect(local).toContainElement(screen.getByText("baby"));
+		expect(within(local).queryByRole("button", { name: /^Archive, / })).toBeNull();
 	});
 
 	it("shows no Scratchpad section for Cloud standalone agents that hold no session", () => {

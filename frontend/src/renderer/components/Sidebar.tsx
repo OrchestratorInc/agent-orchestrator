@@ -943,10 +943,11 @@ export const Sidebar = memo(function Sidebar({
 	const standaloneWorkspace = useMemo((): WorkspaceSummary | undefined => {
 		const scratchpads = ownScratchpadWorkspaces(workspaces);
 		const local = scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND);
-		// Cloud standalone agents alone make a section only when it would list one of
-		// their sessions: an agent with none (a refused start) or only an archived
-		// one has no row to show.
-		if (!local && !scratchpads.some((workspace) => workspace.sessions.some(scratchpadListsSession))) return undefined;
+		// Cloud standalone agents alone make a section only when it has a row for
+		// them: one of their sessions, or the entry to their archived ones. An agent
+		// with no session at all (a refused start) has none.
+		if (!local && !scratchpads.some((workspace) => workspace.sessions.some((session) =>
+			scratchpadListsSession(session) || scratchpadArchivesSession(session)))) return undefined;
 		if (scratchpads.length === 1 && local) return local;
 		return {
 			...(local ?? scratchpadSummary(t("standalone.workspaceName"))),
@@ -2360,6 +2361,11 @@ function scratchpadListsSession(session: WorkspaceSession): boolean {
 	return !isOrchestratorSession(session) && session.isTerminated !== true;
 }
 
+/** Whether the session is in the Scratchpad's archive (the /sessions page). */
+function scratchpadArchivesSession(session: WorkspaceSession): boolean {
+	return !isOrchestratorSession(session) && isArchivedSession(session);
+}
+
 /** The Scratchpad section's own fields, for when it holds Cloud standalone agents alone. */
 function scratchpadSummary(name: string): Pick<WorkspaceSummary, "id" | "name" | "kind" | "path"> {
 	return { id: STANDALONE_WORKSPACE_ID, name, kind: STANDALONE_PROJECT_KIND, path: "" };
@@ -2407,6 +2413,10 @@ function ScratchpadSection({
 	} = useShowMoreCap(sessions, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeSessionId, isCollapsed);
 	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
 	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
+	// With every session archived, the section keeps one row: the way to them,
+	// rather than a header with nothing under it.
+	const archivedCount = useMemo(() => workspace.sessions.filter(scratchpadArchivesSession).length, [workspace.sessions]);
+	const showArchivedRow = listedSessions.length === 0 && archivedCount > 0;
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
@@ -2516,7 +2526,7 @@ function ScratchpadSection({
 					</ContextMenuItem>
 				</ContextMenuContent>
 			</ContextMenu>
-			<AnimatedSectionBody open={open && listedSessions.length > 0} className="min-h-0 flex-1">
+			<AnimatedSectionBody open={open && (listedSessions.length > 0 || showArchivedRow)} className="min-h-0 flex-1">
 				<SidebarSectionScroller
 					className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 					testId="sidebar-scratchpad-scroller"
@@ -2542,6 +2552,19 @@ function ScratchpadSection({
 						label={showAll ? t("shell.showLessAgents") : t("shell.showMoreAgents", { count: hiddenSessionCount })}
 						onClick={toggleShowAll}
 					/>
+				) : null}
+				{showArchivedRow ? (
+					<button
+						type="button"
+						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
+						className={cn(SECTION_ROW_CLASS, NAV_ROW_HIGHLIGHT_HOST_CLASS, "mb-1 shrink-0 rounded-lg text-left text-muted-foreground")}
+						data-scratchpad-archived-row=""
+						onClick={selection.goStandaloneBoard}
+					>
+						<Archive aria-hidden="true" className="size-icon-sm shrink-0" />
+						<span className="min-w-0 flex-1 truncate">{t("shell.archivedSessions")}</span>
+						<span className="tabular-nums">{archivedCount}</span>
+					</button>
 				) : null}
 			</AnimatedSectionBody>
 		</div>
