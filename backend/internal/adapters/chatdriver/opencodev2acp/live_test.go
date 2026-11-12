@@ -121,8 +121,9 @@ func TestLiveOpenCodeV2ACPSteering(t *testing.T) {
 			Text:    "STEER-ME: look at this screenshot too",
 			Content: []ports.ChatContent{{Type: "image", MIMEType: "image/png", Data: base64.StdEncoding.EncodeToString(tinyPNG())}},
 		})
-		if request := model.request(index); !request.imageInLastUser {
-			t.Fatalf("the steered image did not reach the model: %+v", request)
+		request := model.request(index)
+		if len(request.images) != 1 || !bytes.Equal(request.images[0], tinyPNG()) {
+			t.Fatalf("the steered PNG did not reach the model intact: got %d image(s) in the guidance message", len(request.images))
 		}
 	})
 
@@ -143,7 +144,9 @@ func TestLiveOpenCodeV2ACPSteering(t *testing.T) {
 type scriptedRequest struct {
 	lastUser           string
 	toolBeforeLastUser bool
-	imageInLastUser    bool
+	// images holds the decoded bytes of each image_url data URL in the newest
+	// user message, so a test can require the exact PNG it sent.
+	images [][]byte
 }
 
 type scriptedModel struct {
@@ -193,7 +196,7 @@ func newScriptedModel(t *testing.T) *scriptedModel {
 		toolAfterLastUser := false
 		if last >= 0 {
 			request.lastUser = string(body.Messages[last].Content)
-			request.imageInLastUser = strings.Contains(request.lastUser, "image")
+			request.images = dataURLImages(body.Messages[last].Content)
 			request.toolBeforeLastUser = last > 0 && body.Messages[last-1].Role == "tool"
 			for _, message := range body.Messages[last+1:] {
 				toolAfterLastUser = toolAfterLastUser || message.Role == "tool"
@@ -340,6 +343,35 @@ func waitForTurnEnd(ctx context.Context, t *testing.T, conversation ports.ChatCo
 	for nextLiveEvent(ctx, t, conversation).Kind != ports.ChatEventTurnCompleted {
 		continue
 	}
+}
+
+// dataURLImages decodes the base64 payload of every image_url part in an
+// OpenAI chat message's content. A part that is not a base64 data URL, or
+// whose payload does not decode, contributes an empty entry, so a lost or
+// corrupted image never matches the PNG a test sent.
+func dataURLImages(content json.RawMessage) [][]byte {
+	var parts []struct {
+		Type     string `json:"type"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if json.Unmarshal(content, &parts) != nil {
+		return nil // plain string content has no images
+	}
+	var images [][]byte
+	for _, part := range parts {
+		if part.Type != "image_url" {
+			continue
+		}
+		_, payload, ok := strings.Cut(part.ImageURL.URL, ";base64,")
+		decoded, err := base64.StdEncoding.DecodeString(payload)
+		if !ok || err != nil {
+			decoded = nil
+		}
+		images = append(images, decoded)
+	}
+	return images
 }
 
 // tinyPNG is a valid 8x8 red PNG.

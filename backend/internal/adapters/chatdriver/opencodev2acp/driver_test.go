@@ -457,6 +457,9 @@ func TestOpenCodeV2SteeringFollowsTheHandshake(t *testing.T) {
 					t.Fatalf("StartDeferredTurn: %v", err)
 				}
 			}
+			// StartDeferredTurn sends session/prompt from a goroutine. Steer only
+			// once the fake has logged it, so the steer cannot overtake the prompt.
+			waitForCall(ctx, t, calls, "session/prompt:")
 			steerer := conversation.(ports.ChatSteerer)
 			if _, err := steerer.Steer(ctx, ref.ProviderTurnID, ports.ChatUserMessage{Text: "too late"}); !errors.Is(err, ports.ErrChatNoSteerableTurn) {
 				t.Fatalf("promptRequired steer error = %v, want ErrChatNoSteerableTurn", err)
@@ -497,5 +500,26 @@ func TestOpenCodeV2SteeringFollowsTheHandshake(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// waitForCall waits until the fake OpenCode has logged a request whose line
+// starts with prefix. The fake reads requests in order, so anything sent after
+// this returns reaches it after that request.
+func waitForCall(ctx context.Context, t *testing.T, calls, prefix string) {
+	t.Helper()
+	for {
+		if data, err := os.ReadFile(calls); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, prefix) {
+					return
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("fake OpenCode never received %q", prefix)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
