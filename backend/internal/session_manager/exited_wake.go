@@ -25,13 +25,15 @@ func (m *Manager) wakeExitedAgent(ctx context.Context, id domain.SessionID) erro
 	if !ok || rec.IsTerminated || rec.Activity.State != domain.ActivityExited {
 		return nil
 	}
-	m.wakeFailedMu.Lock()
-	failedAt, failed := m.wakeFailedAt[id]
-	m.wakeFailedMu.Unlock()
-	if failed && m.clock().Sub(failedAt) < wakeRetryAfterFailure {
-		return fmt.Errorf("%w: the last restart failed less than a minute ago", ErrAgentExited)
-	}
 	for {
+		// Checked before every attempt: a resume another sender was running
+		// while this one waited may have just failed.
+		m.wakeFailedMu.Lock()
+		failedAt, failed := m.wakeFailedAt[id]
+		m.wakeFailedMu.Unlock()
+		if failed && m.clock().Sub(failedAt) < wakeRetryAfterFailure {
+			return fmt.Errorf("%w: the last restart failed less than a minute ago", ErrAgentExited)
+		}
 		_, err = m.ResumeAgentWithMode(ctx, id)
 		if !errors.Is(err, ErrResumeInProgress) {
 			break
