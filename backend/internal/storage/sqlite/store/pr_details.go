@@ -53,6 +53,15 @@ func writePRDetails(ctx context.Context, q *gen.Queries, prURL string, providerU
 	return nil
 }
 
+// SavePRDetails stores details read for a PR outside an observation, as for a
+// PR that merged or closed before the observer read them. The PR's row is left
+// as it is, so nothing else about the PR changes.
+func (s *Store) SavePRDetails(ctx context.Context, prURL string, providerUpdatedAt time.Time, details domain.PullRequestDetails) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return writePRDetails(ctx, s.qw, prURL, providerUpdatedAt, &details)
+}
+
 // GetPRDetails returns a PR's stored details. ok is false until an
 // observation has carried them, which is not the same as a PR with none.
 func (s *Store) GetPRDetails(ctx context.Context, prURL string) (domain.PullRequestDetails, bool, error) {

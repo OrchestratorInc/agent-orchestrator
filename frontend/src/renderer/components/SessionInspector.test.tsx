@@ -798,6 +798,10 @@ describe("SessionInspector PR section", () => {
 
     const mergeButton = screen.getByRole("button", { name: "Squash and merge: PR #7" });
     await waitFor(() => expect(mergeButton).toBeEnabled());
+    // The raised button draws its face, edge, hover and press from one color,
+    // so the merge green must set that color rather than paint over the fill.
+    expect(mergeButton).toHaveClass("[--button-color:var(--color-success)]");
+    expect(mergeButton).not.toHaveClass("[--button-color:var(--primary)]", "bg-success");
     fireEvent.click(mergeButton);
 
     await waitFor(() =>
@@ -932,6 +936,23 @@ describe("SessionInspector PR section", () => {
     );
   };
 
+  // The observer reads details only for the open PRs it follows, so a PR merged
+  // before then asks the daemon for them once, and says so if that fails.
+  it("reads a merged PR's missing details once, and stops showing them as loading when that fails", async () => {
+    const merged = prSummary(9, "merged", { url: "https://example.com/pr/9" });
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/details"
+      ? { data: undefined, error: { error: "internal", code: "INTERNAL", message: "GitHub is down" } }
+      : { data: { ok: true }, error: undefined });
+    servePRTab(merged);
+
+    const pane = within(await screen.findByTestId("pr-tab-pane"));
+    await waitFor(() => expect(pane.getAllByText("Couldn't load this PR's details.").length).toBeGreaterThan(0));
+    expect(postCallsFor("/api/v1/prs/{id}/details")).toEqual([
+      ["/api/v1/prs/{id}/details", { params: { path: { id: "9" } }, body: { prUrl: "https://example.com/pr/9" } }],
+    ]);
+    expect(pane.queryByText("Details load on the next sync.")).not.toBeInTheDocument();
+  });
+
   it("merges with the method picked in the PR's action menu", async () => {
     servePR(prSummary(7, "open", { url: "https://example.com/pr/7", headSha: "head-7" }));
 
@@ -1045,7 +1066,7 @@ describe("SessionInspector PR section", () => {
     expect(within(comments.getByTestId("pr-comments-resolved")).getByRole("button", { name: "Resolved · 1" })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("keeps a short version in the summary: the newest comments and the description's opening, with the rest in the PR's tab", async () => {
+  it("keeps comments out of the summary: the card shows the description's opening, and the PR's tab holds the comments", async () => {
     function OpenTabs() {
       const tabs = usePRTabs(sessionUiKey("sess-1"));
       return <output data-testid="pr-tabs">{`${tabs.active ?? ""}|${tabs.request?.section ?? ""}`}</output>;
@@ -1061,19 +1082,10 @@ describe("SessionInspector PR section", () => {
     const card = within(await screen.findByTestId("pr-card"));
     expect(card.getByText("Adds the search box.")).toBeInTheDocument();
 
-    // The two newest cards, and the way to all of them.
-    const section = (await screen.findByText("Comments (4)")).closest("[data-testid='inspector-section']") as HTMLElement;
-    const comments = within(within(section).getByTestId("pr-comments"));
-    expect(within(comments.getByTestId("pr-comments-main")).getAllByRole("article").map((c) => c.getAttribute("aria-label"))).toEqual(["src/search.ts:12", "ci-bot"]);
-    expect(comments.queryByTestId("pr-comments-resolved")).not.toBeInTheDocument();
-    // The comment box stays out of the way here until asked for, and opens over the cards.
-    expect(comments.queryByTestId("pr-comment-composer")).not.toBeInTheDocument();
-    await userEvent.click(comments.getByTestId("pr-comments-new"));
-    expect(comments.getByTestId("pr-comment-composer").compareDocumentPosition(comments.getByTestId("pr-comments-main")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    await userEvent.click(comments.getByRole("button", { name: "Cancel" }));
-    expect(comments.queryByTestId("pr-comment-composer")).not.toBeInTheDocument();
-    await userEvent.click(comments.getByRole("button", { name: /View all comments \(4\)/ }));
-    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(`${summary.url}|comments`);
+    // No comments section in the sidebar: it would push the artifacts down, and the PR's tab has them all.
+    expect(screen.queryByText("Comments (4)")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pr-comments")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pr-comment-composer")).not.toBeInTheDocument();
 
     await userEvent.click(card.getByRole("button", { name: /^PR #7/ }));
     expect(screen.getByTestId("pr-tabs")).toHaveTextContent(`${summary.url}|summary`);
@@ -1974,17 +1986,6 @@ describe("SessionInspector PR section", () => {
     view.unmount();
     renderWithQuery(<SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />);
     expect(card().getByText("PR #42")).toBeInTheDocument();
-  });
-
-  it("starts a fresh comment for each PR, so a draft never posts on another PR", async () => {
-    renderWithQuery(<SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />);
-    const comments = () => within(screen.getByTestId("pr-comments"));
-    await userEvent.click(comments().getByTestId("pr-comments-new"));
-    await userEvent.type(comments().getByRole("textbox", { name: "Leave a comment" }), "Only for 41");
-
-    await userEvent.click(within(screen.getByTestId("pr-pills")).getByRole("button", { name: /^#42/ }));
-    expect(within(screen.getByTestId("pr-card")).getByText("PR #42")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("Only for 41")).not.toBeInTheDocument();
   });
 
   it("opens a merged PR from behind the earlier pill and gives it its own pill while it is on screen", async () => {

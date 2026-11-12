@@ -1022,6 +1022,7 @@ func Run(buildVersion string) error {
 			Refresher:     reviewRefresher,
 			Attachments:   prReader,
 			Stacker:       prReader,
+			Details:       store,
 			Lifecycle:     lcStack.LCM,
 			Logger:        log,
 		})

@@ -23,6 +23,14 @@ describe("markdown edits", () => {
 });
 
 describe("linkedAttachments", () => {
+	it("leaves a link inside code alone, as the daemon does", () => {
+		const a = new File(["a"], "a.png");
+		expect(linkedAttachments("![a](attachment:4)\n```\n![x](attachment:4)\n```\n`[y](attachment:4)`", new Map([[4, a]]))).toEqual({
+			body: "![a](attachment:0)\n```\n![x](attachment:4)\n```\n`[y](attachment:4)`",
+			files: [a],
+		});
+	});
+
 	it("keeps the linked files in link order, renumbered, and leaves unknown links alone", () => {
 		const a = new File(["a"], "a.png"), b = new File(["b"], "b.png");
 		const files = new Map([[3, a], [7, b]]);
@@ -133,6 +141,35 @@ describe("PRCommentComposer", () => {
 		expect(screen.getByRole("button", { name: "Attach" })).toBeDisabled();
 		fireEvent.drop(screen.getByTestId("pr-comment-composer"), { dataTransfer: { files: [png("late.png")], types: ["Files"] } });
 		expect(box.value).toBe("");
+	});
+
+	it("takes up to ten files, and a deleted link frees its file's room", async () => {
+		const { box } = renderComposer({ attachments: {} });
+		const many = Array.from({ length: 11 }, (_, i) => png(`f${i}.png`));
+		await userEvent.upload(screen.getByTestId("pr-comment-file"), many);
+		expect(await screen.findByText("A comment can have up to 10 files.")).toBeInTheDocument();
+		expect(box.value.match(/attachment:/g)).toHaveLength(10);
+
+		// Two deleted links make room for two more.
+		fireEvent.change(box, { target: { value: box.value.split("\n").slice(2).join("\n") } });
+		await userEvent.upload(screen.getByTestId("pr-comment-file"), [png("g0.png"), png("g1.png")]);
+		await waitFor(() => expect(box.value).toContain("![g1.png](attachment:11)"));
+		expect(box.value.match(/attachment:/g)).toHaveLength(10);
+	});
+
+	it("posts once, however often Comment is pressed, and keeps Cancel off while it posts", async () => {
+		let finish: () => void = () => {};
+		const onSubmit = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+		const { box } = renderComposer({ onSubmit, onCancel: vi.fn() });
+		await userEvent.type(box, "ship it");
+		const comment = screen.getByRole("button", { name: "Comment" });
+		fireEvent.click(comment);
+		fireEvent.click(comment);
+		fireEvent.keyDown(box, { key: "Enter", metaKey: true });
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled());
+		finish();
+		await waitFor(() => expect(box.value).toBe(""));
 	});
 
 	it("has no Attach without attachments", () => {

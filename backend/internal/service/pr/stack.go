@@ -22,6 +22,9 @@ type StackLayer struct {
 	CI             string
 	ReviewDecision string
 	Mergeability   string
+	// NoChecks says the layer's CI is unknown because nothing checks its
+	// head (see hasNoChecks), not because its checks weren't read.
+	NoChecks bool
 	// SessionID is the AO session tracking this layer, when one does.
 	SessionID domain.SessionID
 }
@@ -161,6 +164,7 @@ func (s *ActionService) stackView(ctx context.Context, repo ports.SCMRepo, stack
 			out.Title = observation.PR.Title
 			out.URL = observation.PR.URL
 			out.CI = observation.CI.Summary
+			out.NoChecks = hasNoChecks(observation.CI)
 			out.ReviewDecision = observation.Review.Decision
 			out.Mergeability = observation.Mergeability.State
 		}

@@ -1,5 +1,6 @@
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { withoutRawHtml } from "../lib/pr-description";
 import { cn } from "../lib/utils";
 import { AppLink } from "./AppLink";
 import { linksOnlyImages, PRDescriptionImage } from "./PRDescriptionImage";
@@ -23,11 +24,15 @@ const markdownComponents: Components = {
 	img: ({ alt, src }) => <PRDescriptionImage alt={alt} src={typeof src === "string" ? src : undefined} />,
 };
 
-/** A PR comment's markdown. Provider content: react-markdown never renders raw HTML. */
+/**
+ * A PR comment's markdown. Provider content: react-markdown never renders raw
+ * HTML and would print it as text, so bots' markup (CodeRabbit's comments,
+ * <details> and badges) is reduced to its text and images first.
+ */
 export function PRMarkdown({ body, className }: { body: string; className?: string }) {
 	return (
 		<div className={cn(bodyClass, className)}>
-			<ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+			<ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm]}>{withoutRawHtml(body)}</ReactMarkdown>
 		</div>
 	);
 }

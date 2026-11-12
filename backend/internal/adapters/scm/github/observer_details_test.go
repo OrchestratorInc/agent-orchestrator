@@ -342,4 +342,8 @@ func TestFetchPullRequestsKeepsTheObservationWhenTheDetailsReadFails(t *testing.
 	if len(obs) != 1 || !obs[0].Fetched || obs[0].PR.Details != nil || len(obs[0].CI.Checks) != 1 {
 		t.Fatalf("observation = %+v, want fetched state and CI with Details nil", obs)
 	}
+	// The details are still owed, so the observer retries them.
+	if !obs[0].PR.DetailsPending {
+		t.Fatal("details read failed, but the observation isn't marked pending")
+	}
 }

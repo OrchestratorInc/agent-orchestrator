@@ -26,6 +26,7 @@ export function stackBlocker(layers: PRStackLayer[], number: number): { number: 
 			ci: layer.ci ?? "unknown",
 			mergeability: layer.mergeability ?? "unknown",
 			review: layer.reviewDecision ?? "none",
+			noChecks: layer.noChecks,
 		});
 		if (reason) return { number: layer.number, reason };
 	}

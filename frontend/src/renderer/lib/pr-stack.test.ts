@@ -29,6 +29,11 @@ describe("stackBlocker", () => {
 	it("waits on a layer whose facts haven't arrived", () => {
 		expect(stackBlocker([layer(1, "open", { ci: undefined }), layer(2, "open")], 2)).toEqual({ number: 1, reason: "checking" });
 	});
+
+	it("doesn't wait on a layer nothing checks", () => {
+		expect(stackBlocker([layer(1, "open", { ci: "unknown", noChecks: true }), layer(2, "open")], 2)).toBeUndefined();
+		expect(stackBlocker([layer(1, "open", { ci: "unknown" }), layer(2, "open")], 2)).toEqual({ number: 1, reason: "checking" });
+	});
 });
 
 describe("canStackOn", () => {

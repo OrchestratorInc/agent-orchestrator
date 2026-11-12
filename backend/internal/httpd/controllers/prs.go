@@ -32,6 +32,7 @@ func (c *PRsController) Register(r chi.Router) {
 	r.Get("/prs/{id}/stack", c.stack)
 	r.Post("/prs/{id}/stack", c.addToStack)
 	r.Post("/prs/{id}/stack/merge", c.mergeStack)
+	r.Post("/prs/{id}/details", c.loadDetails)
 }
 
 func writeStackResult(w http.ResponseWriter, res prsvc.StackResult) {
@@ -49,6 +50,7 @@ func writeStackResult(w http.ResponseWriter, res prsvc.StackResult) {
 				CI:             layer.CI,
 				ReviewDecision: layer.ReviewDecision,
 				Mergeability:   layer.Mergeability,
+				NoChecks:       layer.NoChecks,
 				SessionID:      layer.SessionID,
 			})
 		}
@@ -104,6 +106,34 @@ func (c *PRsController) addToStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeStackResult(w, res)
+}
+
+// loadDetails reads a tracked PR's details from its provider when none are
+// stored, as for a PR that merged before the observer read them.
+func (c *PRsController) loadDetails(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/prs/{id}/details")
+		return
+	}
+	prID := chi.URLParam(r, "id")
+	if !prIDPattern.MatchString(prID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
+		return
+	}
+	var in LoadPRDetailsRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if strings.TrimSpace(in.PRURL) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "PR URL is required", nil)
+		return
+	}
+	if err := c.Svc.LoadDetails(r.Context(), prID, in.PRURL); err != nil {
+		writePRError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (c *PRsController) mergeStack(w http.ResponseWriter, r *http.Request) {

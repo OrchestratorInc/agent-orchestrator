@@ -306,14 +306,18 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 	for i := range out {
 		out[i].PR.Details = details[i]
 	}
+	// Details that were needed but not read stay owed until a poll stores them.
+	for _, i := range stale {
+		out[i].PR.DetailsPending = details[i] == nil
+	}
 	return out, nil
 }
 
 // fetchPullRequestDetails reads, in one query, the details of the PRs at the
 // stale indexes of refs into details. Details are view-only, so a failed read
 // is logged and leaves them nil: the observation still carries the PR's state
-// and CI, the stored details are kept, and the next poll reads them again
-// because their recorded updatedAt has not moved.
+// and CI, the stored details are kept, and the observation is marked
+// DetailsPending so the next poll reads them again.
 func (p *Provider) fetchPullRequestDetails(ctx context.Context, refs []ports.SCMPRRef, stale []int, details []*domain.PullRequestDetails) {
 	if len(stale) == 0 {
 		return

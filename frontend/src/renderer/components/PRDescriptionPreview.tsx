@@ -47,7 +47,13 @@ const footerLinkClass = "ml-auto inline-flex items-center gap-1 font-medium tran
  * Cloud one has no tab). It reads the body the daemon already stored, so none
  * of this calls the provider.
  */
-export function PRDescriptionPreview({ cloud, pr, sessionKey }: { cloud: boolean; pr: SessionPRSummary; sessionKey: string }) {
+export function PRDescriptionPreview({ cloud, detailsFailed, pr, sessionKey }: {
+	cloud: boolean;
+	/** The one read of a PR's missing details failed (see usePRDetailsLoad). */
+	detailsFailed?: boolean;
+	pr: SessionPRSummary;
+	sessionKey: string;
+}) {
 	const { t } = useTranslation();
 	const [overflows, setOverflows] = useState(false);
 	const [imageIndex, setImageIndex] = useState<number | null>(null);
@@ -70,7 +76,7 @@ export function PRDescriptionPreview({ cloud, pr, sessionKey }: { cloud: boolean
 	let empty: string | undefined;
 	if (!pr.detailsObservedAt) {
 		// Only the local GitHub observer fetches details; elsewhere they never arrive.
-		empty = pr.provider === "github" && !cloud ? t("pr.description.pending") : t("pr.description.unsupported");
+		empty = detailsFailed ? t("pr.description.unavailable") : pr.provider === "github" && !cloud ? t("pr.description.pending") : t("pr.description.unsupported");
 	} else if (!description) {
 		empty = t("pr.description.none");
 	}

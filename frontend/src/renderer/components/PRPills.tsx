@@ -1,7 +1,7 @@
 import { ChevronDown, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { prCanMerge } from "../lib/pr-display";
+import { prCanMerge, prHasNoChecks } from "../lib/pr-display";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 
@@ -33,7 +33,7 @@ export function prStatusDot(pr: SessionPRSummary): { className: string; labelKey
 	if (pr.mergeability.state === "conflicting") return { className: "bg-error", labelKey: "pr.card.mergeConflict" };
 	if (pr.ci.state === "failing") return { className: "bg-error", labelKey: "pr.card.checksFailing" };
 	if (pr.review.decision === "changes_requested") return { className: "bg-warning", labelKey: "pr.review.changesRequested" };
-	if (prCanMerge(pr)) return { className: "bg-success", labelKey: "pr.card.readyToMerge" };
+	if (prCanMerge(pr, { noChecks: prHasNoChecks(pr) })) return { className: "bg-success", labelKey: "pr.card.readyToMerge" };
 	if (pr.ci.state === "pending") return { className: "bg-muted-foreground", labelKey: "pr.card.checksPending", breathe: true };
 	if (pr.review.decision === "review_required") return { className: "bg-passive", labelKey: "pr.card.reviewRequired" };
 	return { className: "bg-passive", labelKey: "pr.state.open" };

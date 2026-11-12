@@ -210,7 +210,9 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 					className={cn(
 						"gap-1 rounded-r-none px-2 text-xs",
 						"min-w-0 flex-1",
-						primary.tone === "go" ? "bg-success text-on-foreground hover:bg-success/80" : "",
+						// The raised button draws its face, edge, hover and press from
+						// --button-color, so the merge green sets that, not just the fill.
+						primary.tone === "go" ? "[--button-color:var(--color-success)] text-on-foreground" : "",
 					)}
 					disabled={primary.disabled}
 					onClick={primary.run}
@@ -229,7 +231,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 							className={cn(
 								"rounded-l-none border-l px-1",
 								"w-control-md px-0",
-								primary.tone === "go" ? "border-on-foreground/25 bg-success text-on-foreground hover:bg-success/80" : "border-border",
+								primary.tone === "go" ? "[--button-color:var(--color-success)] border-l-on-foreground/25 text-on-foreground" : "border-border",
 							)}
 							disabled={busy || Boolean(git?.pending)}
 							size="sm"

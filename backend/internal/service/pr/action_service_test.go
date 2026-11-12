@@ -275,6 +275,33 @@ func TestActionServiceMerge_FailsClosedForStaleHeadOrReadiness(t *testing.T) {
 	}
 }
 
+// GitHub reports no status rollup for a head nothing checks, so its CI reads
+// as unknown. That PR merges; one whose checks weren't read, or whose run was
+// cancelled, still doesn't.
+func TestActionServiceMerge_MergesAPRNothingChecks(t *testing.T) {
+	pr, scm := mergeableActionFixture()
+	scm.observation.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: pr.HeadSHA}
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm})
+	if _, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA}); err != nil || scm.mergeCalls != 1 {
+		t.Fatalf("no-checks merge err = %v, calls = %d", err, scm.mergeCalls)
+	}
+
+	pr, scm = mergeableActionFixture()
+	scm.observation.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: pr.HeadSHA, FailedChecks: []ports.SCMCheckObservation{{Name: "test", Status: "cancelled"}}}
+	svc = NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm})
+	if _, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA}); !errors.Is(err, ErrPRPreconditions) || scm.mergeCalls != 0 {
+		t.Fatalf("cancelled-run merge err = %v, calls = %d", err, scm.mergeCalls)
+	}
+
+	pr, scm = mergeableActionFixture()
+	scm.observation.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: pr.HeadSHA}
+	scm.observation.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked)}
+	svc = NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm})
+	if _, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA}); err == nil || scm.mergeCalls != 0 {
+		t.Fatalf("blocked no-checks merge err = %v, calls = %d", err, scm.mergeCalls)
+	}
+}
+
 func TestScmRepoForPR_NestedNamespace(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -259,8 +259,6 @@ export function SessionInspectorSummaryView({
 	artifactCards,
 	artifactTitle,
 	branch,
-	comments,
-	commentsTitle,
 	completion,
 	context,
 	pullRequestCards,
@@ -276,9 +274,6 @@ export function SessionInspectorSummaryView({
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
 	branch?: ReactNode;
-	/** The PR's conversation, as its own section under the PR. Omit alongside {@link commentsTitle} to skip it. */
-	comments?: ReactNode;
-	commentsTitle?: string;
 	completion?: ReactNode;
 	context?: ReactNode;
 	/** Omit alongside {@link pullRequestTitle} to skip the PR section entirely (e.g. no known PR output). */
@@ -299,7 +294,6 @@ export function SessionInspectorSummaryView({
 			{workers}
 			{context}
 			{branch}
-			{commentsTitle ? <InspectorSection title={commentsTitle}>{comments}</InspectorSection> : null}
 			{pullRequestTitle ? (
 				<InspectorSection surface={false} title={pullRequestTitle}>
 					<div className="flex flex-col gap-1.5">{pullRequestCards}</div>

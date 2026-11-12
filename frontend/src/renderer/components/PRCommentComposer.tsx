@@ -40,6 +40,18 @@ export function readAsBase64(file: File): Promise<string> {
 
 /** A comment body's link to one of its files: "](attachment:0)". */
 const ATTACHMENT_LINK = /\]\(attachment:(\d+)\)/g;
+/** Fenced and inline code, where an attachment link is an example, not a file. */
+const MARKDOWN_CODE = /```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`/g;
+/** Most files one comment takes, as the daemon counts them. */
+export const PR_ATTACHMENTS_MAX_FILES = 10;
+
+/** The text's attachment links outside code, as the daemon reads them. */
+function attachmentLinks(text: string): { start: number; end: number; index: number }[] {
+	const code = [...text.matchAll(MARKDOWN_CODE)].map((match) => [match.index, match.index + match[0].length] as const);
+	return [...text.matchAll(ATTACHMENT_LINK)]
+		.map((match) => ({ start: match.index, end: match.index + match[0].length, index: Number(match[1]) }))
+		.filter((link) => !code.some(([start, end]) => link.start >= start && link.end <= end));
+}
 
 /**
  * The files a comment links, in the order the text first links them, with the
@@ -47,15 +59,19 @@ const ATTACHMENT_LINK = /\]\(attachment:(\d+)\)/g;
  * never leaves this machine.
  */
 export function linkedAttachments(text: string, files: ReadonlyMap<number, File>): { body: string; files: File[] } {
+	const links = attachmentLinks(text);
 	const order: number[] = [];
-	for (const match of text.matchAll(ATTACHMENT_LINK)) {
-		const index = Number(match[1]);
+	for (const { index } of links) {
 		if (files.has(index) && !order.includes(index)) order.push(index);
 	}
-	const body = text.replace(ATTACHMENT_LINK, (link, index: string) => {
-		const position = order.indexOf(Number(index));
-		return position < 0 ? link : `](attachment:${position})`;
-	});
+	let body = "";
+	let last = 0;
+	for (const link of links) {
+		const position = order.indexOf(link.index);
+		body += text.slice(last, link.start) + (position < 0 ? text.slice(link.start, link.end) : `](attachment:${position})`);
+		last = link.end;
+	}
+	body += text.slice(last);
 	return { body, files: order.map((index) => files.get(index)!) };
 }
 
@@ -123,17 +139,29 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 	const code = () => apply((v, s, e) => (v.slice(s, e).includes("\n") ? wrapSelection(v, s, e, "\n```\n", "") : wrapSelection(v, s, e, "`", t("pr.comments.format.codePlaceholder"))));
 	const link = () => apply((v, s, e) => insertLink(v, s, e, t("pr.comments.format.linkPlaceholder")));
 
+	// Set before the first await, so a second click or ⌘↵ can't post twice
+	// while the parent is still asking or posting.
+	const submittingRef = useRef(false);
+	const [submitting, setSubmitting] = useState(false);
+	const posting = busy || submitting;
 	const attach = (picked: File[]) => {
 		// While a comment posts, its text is already sent: a file added now would be lost.
-		if (!attachments || picked.length === 0 || busy) return;
+		if (!attachments || picked.length === 0 || posting) return;
 		if (attachments.blockedReason) {
 			setUploadError(attachments.blockedReason);
 			return;
 		}
 		setUploadError(null);
-		let total = [...files.values()].reduce((sum, file) => sum + file.size, 0);
+		// Only files the text still links count: a deleted link frees its room.
+		const linked = linkedAttachments(value, files).files;
+		let total = linked.reduce((sum, file) => sum + file.size, 0);
+		let count = linked.length;
 		const accepted: File[] = [];
 		for (const file of picked) {
+			if (count >= PR_ATTACHMENTS_MAX_FILES) {
+				setUploadError(t("pr.comments.attach.tooMany", { count: PR_ATTACHMENTS_MAX_FILES }));
+				break;
+			}
 			if (file.size > PR_ATTACHMENT_MAX_BYTES) {
 				setUploadError(t("pr.comments.attach.tooLarge", { name: file.name }));
 				continue;
@@ -143,6 +171,7 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 				continue;
 			}
 			total += file.size;
+			count += 1;
 			accepted.push(file);
 		}
 		if (accepted.length === 0) return;
@@ -159,7 +188,9 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 	};
 
 	const submit = async () => {
-		if (!value.trim() || busy) return;
+		if (!value.trim() || posting || submittingRef.current) return;
+		submittingRef.current = true;
+		setSubmitting(true);
 		const linked = linkedAttachments(value.trim(), files);
 		try {
 			await onSubmit(linked.body, linked.files);
@@ -168,6 +199,9 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 			nextFile.current = 0;
 		} catch {
 			// The mutation shows the error; the draft stays so nothing typed is lost.
+		} finally {
+			submittingRef.current = false;
+			setSubmitting(false);
 		}
 	};
 	const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -178,7 +212,7 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 		} else if (mod && !event.shiftKey && (event.key === "b" || event.key === "i" || event.key === "k" || event.key === "e")) {
 			event.preventDefault();
 			({ b: bold, i: italic, k: link, e: code })[event.key]();
-		} else if (event.key === "Escape" && onCancel) {
+		} else if (event.key === "Escape" && onCancel && !posting) {
 			event.preventDefault();
 			event.stopPropagation();
 			onCancel();
@@ -193,7 +227,7 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 	const onDrop = (event: DragEvent<HTMLDivElement>) => {
 		setDragging(false);
 		const dropped = Array.from(event.dataTransfer.files);
-		if (!attachments || dropped.length === 0 || busy) return;
+		if (!attachments || dropped.length === 0 || posting) return;
 		event.preventDefault();
 		attach(dropped);
 	};
@@ -234,7 +268,7 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 						aria-label={placeholder}
 						// Grows with what is written, up to a cap, then scrolls.
 						className="max-h-64 min-h-6 min-w-0 resize-none border-0 bg-transparent p-0 leading-6 text-foreground [field-sizing:content] placeholder:text-muted-foreground focus-visible:outline-none"
-						disabled={busy}
+						disabled={posting}
 						onChange={(event) => setValue(event.target.value)}
 						onKeyDown={onKeyDown}
 						onPaste={onPaste}
@@ -243,17 +277,17 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 						value={value}
 					/>
 					<div className="flex min-w-0 items-center gap-1.5 text-xs">
-						<Button className="h-7 gap-1 rounded-full px-3 text-xs" disabled={busy || !value.trim()} onClick={() => void submit()} size="sm" type="button">
-							{busy ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
+						<Button className="h-7 gap-1 rounded-full px-3 text-xs" disabled={posting || !value.trim()} onClick={() => void submit()} size="sm" type="button">
+							{posting ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : null}
 							{submitLabel}
 						</Button>
 						{attachments ? (
-							<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50" aria-disabled={attachments.blockedReason ? true : undefined} disabled={busy} onClick={() => (attachments.blockedReason ? setUploadError(attachments.blockedReason) : fileRef.current?.click())} onMouseDown={(event) => event.preventDefault()} title={attachments.blockedReason ?? t("pr.comments.simpleHint")} type="button">
+							<button className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2 font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50" aria-disabled={attachments.blockedReason ? true : undefined} disabled={posting} onClick={() => (attachments.blockedReason ? setUploadError(attachments.blockedReason) : fileRef.current?.click())} onMouseDown={(event) => event.preventDefault()} title={attachments.blockedReason ?? t("pr.comments.simpleHint")} type="button">
 								<Paperclip aria-hidden="true" className="size-icon-xs" />
 								{t("pr.comments.attach.short")}
 							</button>
 						) : null}
-						{onCancel || value ? <Button className="h-7 rounded-full px-2.5 text-xs" onClick={clear} onMouseDown={(event) => event.preventDefault()} size="sm" type="button" variant="ghost">{t("pr.comments.cancel")}</Button> : null}
+						{onCancel || value ? <Button className="h-7 rounded-full px-2.5 text-xs" disabled={posting} onClick={clear} onMouseDown={(event) => event.preventDefault()} size="sm" type="button" variant="ghost">{t("pr.comments.cancel")}</Button> : null}
 					</div>
 				</div>
 			</div>

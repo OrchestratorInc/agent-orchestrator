@@ -205,6 +205,11 @@ type SCMPRObservation struct {
 	// which the hash already covers, so a pass that skipped them must not look
 	// like a change.
 	Details *domain.PullRequestDetails `json:"-"`
+	// DetailsPending is set when the provider needed the details (none were
+	// stored, or the PR's updatedAt moved) but could not read them. The
+	// observer then keeps the PR's refresh incomplete, so the repository's
+	// cursor doesn't advance past it and the next poll reads them again.
+	DetailsPending bool `json:"-"`
 }
 
 // SCMCIObservation carries aggregate CI state plus failing-check details.

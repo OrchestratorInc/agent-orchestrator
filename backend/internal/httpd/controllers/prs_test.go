@@ -39,6 +39,8 @@ type fakePRService struct {
 	stackMergeReq prsvc.StackMergeRequest
 	stackErr      error
 	stackCalls    []string
+	detailsErr    error
+	detailsCalls  []string
 }
 
 func (f *fakePRService) AttachmentAccess(_ context.Context, prID, prURL string) (prsvc.AttachmentAccessResult, error) {
@@ -49,6 +51,11 @@ func (f *fakePRService) AttachmentAccess(_ context.Context, prID, prURL string) 
 func (f *fakePRService) Stack(_ context.Context, prID, prURL string) (prsvc.StackResult, error) {
 	f.stackCalls = append(f.stackCalls, prID+" "+prURL)
 	return f.stackResult, f.stackErr
+}
+
+func (f *fakePRService) LoadDetails(_ context.Context, prID, prURL string) error {
+	f.detailsCalls = append(f.detailsCalls, prID+" "+prURL)
+	return f.detailsErr
 }
 
 func (f *fakePRService) AddToStack(_ context.Context, prID, prURL string) (prsvc.StackResult, error) {
@@ -237,7 +244,7 @@ func TestPRsRoutes_ResolveComments_InvalidPRID(t *testing.T) {
 func TestPRStack_ReturnsLayersBottomFirst(t *testing.T) {
 	svc := &fakePRService{stackResult: prsvc.StackResult{Stack: &prsvc.Stack{
 		Number: 7, URL: "https://github.com/a/b/stack/7", BaseBranch: "main", Open: true,
-		Layers: []prsvc.StackLayer{{Number: 1, Title: "Base", State: domain.PRStateMerged}, {Number: 2, Title: "Top", State: domain.PRStateOpen, SessionID: "s-2"}},
+		Layers: []prsvc.StackLayer{{Number: 1, Title: "Base", State: domain.PRStateMerged}, {Number: 2, Title: "Top", State: domain.PRStateOpen, CI: "unknown", NoChecks: true, SessionID: "s-2"}},
 	}}}
 	srv := newPRTestServer(t, svc)
 	resp, err := http.Get(srv.URL + "/api/v1/prs/2/stack?prUrl=https%3A%2F%2Fgithub.com%2Fa%2Fb%2Fpull%2F2")
@@ -254,6 +261,7 @@ func TestPRStack_ReturnsLayersBottomFirst(t *testing.T) {
 			Layers []struct {
 				Number    int
 				State     string
+				NoChecks  bool
 				SessionID string
 			}
 		}
@@ -261,11 +269,46 @@ func TestPRStack_ReturnsLayersBottomFirst(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Stack.Number != 7 || len(out.Stack.Layers) != 2 || out.Stack.Layers[0].State != "merged" || out.Stack.Layers[1].SessionID != "s-2" {
+	if out.Stack.Number != 7 || len(out.Stack.Layers) != 2 || out.Stack.Layers[0].State != "merged" || out.Stack.Layers[1].SessionID != "s-2" || out.Stack.Layers[0].NoChecks || !out.Stack.Layers[1].NoChecks {
 		t.Fatalf("stack = %#v", out.Stack)
 	}
 	if len(svc.stackCalls) != 1 || svc.stackCalls[0] != "2 https://github.com/a/b/pull/2" {
 		t.Fatalf("calls = %v", svc.stackCalls)
+	}
+}
+
+func TestPRDetails_LoadsThroughTheService(t *testing.T) {
+	svc := &fakePRService{}
+	srv := newPRTestServer(t, svc)
+	resp, err := http.Post(srv.URL+"/api/v1/prs/7/details", "application/json", strings.NewReader(`{"prUrl":"https://github.com/a/b/pull/7"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if len(svc.detailsCalls) != 1 || svc.detailsCalls[0] != "7 https://github.com/a/b/pull/7" {
+		t.Fatalf("calls = %v", svc.detailsCalls)
+	}
+
+	svc.detailsErr = prsvc.ErrPRNotFound
+	resp, err = http.Post(srv.URL+"/api/v1/prs/7/details", "application/json", strings.NewReader(`{"prUrl":"https://github.com/a/b/pull/7"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown PR status = %d", resp.StatusCode)
+	}
+
+	resp, err = http.Post(srv.URL+"/api/v1/prs/7/details", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing URL status = %d", resp.StatusCode)
 	}
 }
 

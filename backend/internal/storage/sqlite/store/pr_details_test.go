@@ -194,3 +194,38 @@ func TestPRDescriptionKeepsMarkdownAndNonASCII(t *testing.T) {
 		t.Fatalf("description round-trip: err=%v equal=%v", err, got.Description == body)
 	}
 }
+
+// Details read outside an observation (a PR merged before the observer read
+// them) are stored on their own, with their updatedAt, and the PR's row is
+// left as it was.
+func TestSavePRDetailsStoresThemWithoutTouchingThePR(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{URL: "https://github.com/o/r/pull/1", SessionID: r.ID, Number: 1, Title: "Split panes", Merged: true, UpdatedAt: now}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	before, _, err := s.GetPR(ctx, pr.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	providerUpdated := now.Add(-time.Hour)
+	if err := s.SavePRDetails(ctx, pr.URL, providerUpdated, *detailsFixture(now)); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetPRDetails(ctx, pr.URL)
+	if err != nil || !ok || got.Description != detailsFixture(now).Description || len(got.RequestedReviewers) != 2 {
+		t.Fatalf("details = %+v ok=%v err=%v", got, ok, err)
+	}
+	if at, ok, err := s.PRDetailsUpdatedAt(ctx, pr.URL); err != nil || !ok || !at.Equal(providerUpdated) {
+		t.Fatalf("details updatedAt = %v ok=%v err=%v, want %v", at, ok, err, providerUpdated)
+	}
+	after, _, err := s.GetPR(ctx, pr.URL)
+	if err != nil || after.Title != before.Title || !after.Merged || !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("pr after saving details = %+v err=%v, want it unchanged", after, err)
+	}
+}

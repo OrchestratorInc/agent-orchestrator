@@ -4,9 +4,12 @@ import type { PullRequestFacts, SessionBranchState, WorkspaceSession } from "../
 import {
 	noPRDetails,
 	prBrowserUrl,
+	prCanMerge,
 	prCardPresentation,
 	prCheckedOut,
 	prDiffSummary,
+	prHasNoChecks,
+	prSummaryBlockReason,
 	prThreadDiffUrl,
 	prStatusRows,
 	prSummaryParts,
@@ -1141,5 +1144,35 @@ describe("pull request repositories", () => {
 		const { prsSpanRepositories } = await import("./pr-display");
 		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/a/pull/2" }])).toBe(false);
 		expect(prsSpanRepositories([{ url: "https://github.com/acme/a/pull/1" }, { url: "https://github.com/acme/b/pull/1" }])).toBe(true);
+	});
+});
+
+// GitHub reports no status rollup for a head nothing checks, which reaches the
+// client as CI "unknown", the same as checks not read yet.
+describe("a PR nothing checks", () => {
+	const unknownCI = { autoInjectCI: true, state: "unknown" as const, failingChecks: [], checks: [] };
+	const unchecked = (overrides: Partial<SessionPRSummary> = {}) => summary({ ci: unknownCI, detailsObservedAt: "2026-06-15T00:00:00Z", ...overrides });
+
+	it("is told apart from unread checks only by details that loaded with none", () => {
+		expect(prHasNoChecks(unchecked())).toBe(true);
+		expect(prHasNoChecks(unchecked({ detailsObservedAt: undefined }))).toBe(false);
+		expect(prHasNoChecks(unchecked({ ci: { ...unknownCI, failingChecks: [{ name: "test", status: "cancelled", conclusion: "cancelled" }] } }))).toBe(false);
+		expect(prHasNoChecks(summary({ detailsObservedAt: "2026-06-15T00:00:00Z" }))).toBe(false);
+	});
+
+	it("can merge from the PR view, while the classic card still waits for checks", () => {
+		expect(prSummaryBlockReason(unchecked())).toBeUndefined();
+		expect(prCanMerge(unchecked(), { noChecks: true })).toBe(true);
+		expect(prCanMerge(unchecked())).toBe(false);
+		expect(prSummaryBlockReason(unchecked({ detailsObservedAt: undefined }))).toBe("checking");
+		expect(prSummaryBlockReason(unchecked({ mergeability: { state: "unknown", reasons: [], prUrl: "" } }))).toBe("checking");
+	});
+
+	it("reads as mergeable with no checks on the PR view card", () => {
+		const view = prCardPresentation(unchecked(), { noChecks: true });
+		expect(view.readiness?.label).toBe("Mergeable");
+		expect(view.readinessRows?.map((row) => row.label)).toContain("No checks reported");
+		expect(view.statusRows?.map((row) => row.label)).toEqual(["Review status"]);
+		expect(prCardPresentation(unchecked()).readiness?.label).toBe("Checking merge readiness");
 	});
 });

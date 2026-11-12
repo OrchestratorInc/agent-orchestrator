@@ -149,6 +149,26 @@ func TestStack_DescribesEveryLayer(t *testing.T) {
 	}
 }
 
+// GitHub reports no status rollup for a head nothing checks, so its CI reads
+// as unknown. Only a layer read with no checks at all says so; one whose
+// checks weren't read, or whose run was cancelled, is still unknown.
+func TestStack_SaysWhichLayersHaveNoChecks(t *testing.T) {
+	f := newStackFixture(2)
+	unchecked := readyLayer(1, headA)
+	unchecked.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: headA}
+	cancelled := readyLayer(2, headB)
+	cancelled.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: headB, FailedChecks: []ports.SCMCheckObservation{{Name: "test", Status: "cancelled"}}}
+	f.reader.byNumber = map[int]ports.SCMObservation{1: unchecked, 2: cancelled, 3: {}}
+	got, err := f.svc.Stack(context.Background(), "2", "https://github.com/acme/widgets/pull/2")
+	if err != nil || got.Stack == nil {
+		t.Fatalf("got=%#v err=%v", got, err)
+	}
+	noChecks := []bool{got.Stack.Layers[0].NoChecks, got.Stack.Layers[1].NoChecks, got.Stack.Layers[2].NoChecks}
+	if !noChecks[0] || noChecks[1] || noChecks[2] {
+		t.Fatalf("noChecks = %v, want only the layer read with no checks", noChecks)
+	}
+}
+
 func TestStack_OffersTheParentOnlyWhenItCanTakeALayer(t *testing.T) {
 	ref := ports.SCMPRRef{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}
 	for name, tc := range map[string]struct {
@@ -206,6 +226,19 @@ func TestAddToStack_MapsRefusal(t *testing.T) {
 	f.stacker.registerErr = ports.ErrSCMRejected
 	if _, err := f.svc.AddToStack(context.Background(), "2", "https://github.com/acme/widgets/pull/2"); !errors.Is(err, ErrPRRejected) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMergeStack_LandsLayersNothingChecks(t *testing.T) {
+	f := newStackFixture(2)
+	for number, head := range map[int]string{1: headA, 2: headB} {
+		layer := readyLayer(number, head)
+		layer.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: head}
+		f.reader.byNumber[number] = layer
+	}
+	got, err := f.svc.MergeStack(context.Background(), StackMergeRequest{PRID: "2", PRURL: "https://github.com/acme/widgets/pull/2", ExpectedHeads: headsThrough(1, 2)})
+	if err != nil || len(got.Numbers) != 2 || len(f.stacker.merge) != 1 {
+		t.Fatalf("got = %#v, err = %v, merge = %#v", got, err, f.stacker.merge)
 	}
 }
 

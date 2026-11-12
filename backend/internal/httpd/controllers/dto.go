@@ -2917,8 +2917,16 @@ type PRStackLayerResponse struct {
 	CI             string         `json:"ci,omitempty"`
 	ReviewDecision string         `json:"reviewDecision,omitempty"`
 	Mergeability   string         `json:"mergeability,omitempty"`
+	// NoChecks says an unknown ci means nothing checks the layer's head, not
+	// that its checks weren't read.
+	NoChecks bool `json:"noChecks,omitempty"`
 	// SessionID is the AO session tracking this layer, when one does.
 	SessionID domain.SessionID `json:"sessionId,omitempty"`
+}
+
+// LoadPRDetailsRequest names the tracked PR whose details to read.
+type LoadPRDetailsRequest struct {
+	PRURL string `json:"prUrl"`
 }
 
 // PRStackResponse is a provider-native stack, bottom layer first.

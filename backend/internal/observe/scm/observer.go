@@ -708,13 +708,17 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			// with no other change are ones the store lacks (a PR stored before
 			// details existed, or by a path that writes none). Store them; there
 			// is nothing new for lifecycle.
+			// Details still owed (a failed read or write) keep the refresh
+			// incomplete, so the repository cursor waits and they are retried.
+			refreshed := !prepared.PR.DetailsPending
 			if prepared.PR.Details != nil {
 				pr, _, _, _, _ := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
 				if err := o.store.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 					o.logger.Warn("scm observer: PR details write failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
+					refreshed = false
 				}
 			}
-			prRefreshOK[key] = true
+			prRefreshOK[key] = refreshed
 			continue
 		}
 		finalPR, finalChecks, finalReviews, finalThreads, finalComments := domainFromObservation(subj.session.ID, subj.session, prepared, local, opts, now)
@@ -773,7 +777,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		// this branch (it returns at the unchanged-hashes check above), so
 		// its repo stays refresh-incomplete and the ETag/cursor stay pinned.
 		markRepoRefreshOK(subj.repo)
-		prRefreshOK[key] = true
+		prRefreshOK[key] = !prepared.PR.DetailsPending
 	}
 	for key, ok := range prRefreshOK {
 		if !ok {

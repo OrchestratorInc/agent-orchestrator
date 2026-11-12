@@ -252,7 +252,6 @@ func TestPostComment_FilesMustMatchTheBodysLinks(t *testing.T) {
 		want  error
 	}{
 		{name: "a link to no file", body: "![x](attachment:1)", files: []CommentAttachment{png}, want: ErrInvalidAttachment},
-		{name: "a link with no files", body: "![x](attachment:0)", want: ErrInvalidAttachment},
 		{name: "a file never linked", body: "no links", files: []CommentAttachment{png}, want: ErrInvalidAttachment},
 		{name: "too many files", body: "![x](attachment:0)", files: eleven, want: ErrInvalidAttachment},
 		{name: "too large together", body: "[a](attachment:0)[b](attachment:1)[c](attachment:2)", files: big, want: ErrAttachmentTooLarge},
@@ -269,6 +268,36 @@ func TestPostComment_FilesMustMatchTheBodysLinks(t *testing.T) {
 				t.Fatalf("stored %d batches, posted %d comments", len(files.batches), len(scm.commentRequests))
 			}
 		})
+	}
+}
+
+func TestPostComment_LeavesAttachmentLinksInCodeAlone(t *testing.T) {
+	pr := openPRFixture()
+	// With no files, a comment that shows the syntax posts as written.
+	scm := &fakeStateCommentSCM{commentResult: ports.SCMCommentResult{ID: "IC_1"}}
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: allowedStore()})
+	plain := "Link a file with `![shot.png](attachment:0)`."
+	if _, err := svc.PostComment(context.Background(), CommentRequest{PRID: "42", PRURL: pr.URL, Body: plain}); err != nil {
+		t.Fatal(err)
+	}
+	if scm.commentRequests[0].Body != plain {
+		t.Fatalf("posted body = %q", scm.commentRequests[0].Body)
+	}
+	// With files, only links outside code are files; the examples stay as text.
+	scm = &fakeStateCommentSCM{commentResult: ports.SCMCommentResult{ID: "IC_2"}}
+	files := allowedStore()
+	files.stored.URLs = files.stored.URLs[:1]
+	svc = NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
+	body := "![shot](attachment:0)\n\n```md\n![example](attachment:3)\n```\nand `[x](attachment:0)`"
+	if _, err := svc.PostComment(context.Background(), CommentRequest{
+		PRID: "42", PRURL: pr.URL, Body: body,
+		Attachments: []CommentAttachment{{Name: "shot.png", ContentType: "image/png", Data: pngBytes}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := "![shot](" + files.stored.URLs[0] + ")\n\n```md\n![example](attachment:3)\n```\nand `[x](attachment:0)`"
+	if scm.commentRequests[0].Body != want {
+		t.Fatalf("posted body = %q", scm.commentRequests[0].Body)
 	}
 }
 

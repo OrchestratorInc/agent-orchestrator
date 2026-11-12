@@ -44,7 +44,12 @@ function InlineImage({ alt, onOpen, src }: { alt?: string; onOpen: () => void; s
  * A PR's whole description, in its tab: the body at a readable width, images
  * full size (each opens the gallery). Says why when there is no body to show.
  */
-export function PRDescriptionBody({ cloud, pr }: { cloud: boolean; pr: SessionPRSummary }) {
+export function PRDescriptionBody({ cloud, detailsFailed, pr }: {
+	cloud: boolean;
+	/** The one read of a PR's missing details failed (see usePRDetailsLoad). */
+	detailsFailed?: boolean;
+	pr: SessionPRSummary;
+}) {
 	const { t } = useTranslation();
 	const [imageIndex, setImageIndex] = useState<number | null>(null);
 	const markdown = descriptionMarkdown(pr);
@@ -63,7 +68,7 @@ export function PRDescriptionBody({ cloud, pr }: { cloud: boolean; pr: SessionPR
 	let empty: string | undefined;
 	if (!pr.detailsObservedAt) {
 		// Only the local GitHub observer fetches details; elsewhere they never arrive.
-		empty = pr.provider === "github" && !cloud ? t("pr.description.pending") : t("pr.description.unsupported");
+		empty = detailsFailed ? t("pr.description.unavailable") : pr.provider === "github" && !cloud ? t("pr.description.pending") : t("pr.description.unsupported");
 	} else if (!markdown) {
 		empty = t("pr.description.none");
 	}

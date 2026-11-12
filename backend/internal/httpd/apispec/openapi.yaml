@@ -5432,6 +5432,54 @@ paths:
       summary: Post a pull request conversation comment or review-thread reply
       tags:
       - prs
+  /api/v1/prs/{id}/details:
+    post:
+      operationId: loadPRDetails
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoadPRDetailsRequest'
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read a tracked pull request's details from its provider when none are
+        stored
+      tags:
+      - prs
   /api/v1/prs/{id}/merge:
     post:
       operationId: mergePR
@@ -19983,6 +20031,13 @@ components:
       - entries
       - truncated
       type: object
+    LoadPRDetailsRequest:
+      properties:
+        prUrl:
+          type: string
+      required:
+      - prUrl
+      type: object
     MarkAllNotificationsReadRequest:
       properties:
         ids:
@@ -20495,6 +20550,8 @@ components:
           type: string
         mergeability:
           type: string
+        noChecks:
+          type: boolean
         number:
           type: integer
         reviewDecision:

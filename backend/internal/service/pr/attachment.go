@@ -261,10 +261,38 @@ const MaxCommentAttachmentsBytes = 25 << 20
 // "![shot.png](attachment:0)" or "[log.txt](attachment:1)".
 var attachmentLink = regexp.MustCompile(`\]\(attachment:(\d+)\)`)
 
+// markdownCode is fenced code and inline code, where an attachment link is an
+// example to show, not a file to store.
+var markdownCode = regexp.MustCompile("(?s)```.*?```|~~~.*?~~~|`[^`\n]*`")
+
+// attachmentLinks finds the body's attachment links outside code, as
+// [start, end, indexStart, indexEnd] offsets.
+func attachmentLinks(body string) [][]int {
+	code := markdownCode.FindAllStringIndex(body, -1)
+	var links [][]int
+	for _, link := range attachmentLink.FindAllStringSubmatchIndex(body, -1) {
+		inCode := false
+		for _, span := range code {
+			if link[0] >= span[0] && link[1] <= span[1] {
+				inCode = true
+				break
+			}
+		}
+		if !inCode {
+			links = append(links, link)
+		}
+	}
+	return links
+}
+
 // commentAttachments validates a comment's files against its body: each file
 // passes validateAttachment, together they stay under the cap, and the body
 // links every file and no file it doesn't have.
 func commentAttachments(body string, inputs []CommentAttachment) ([]ports.SCMAttachmentFile, error) {
+	// A comment with no files is posted as written, attachment-like text included.
+	if len(inputs) == 0 {
+		return nil, nil
+	}
 	if len(inputs) > maxCommentAttachments {
 		return nil, fmt.Errorf("%w: a comment takes at most %d files", ErrInvalidAttachment, maxCommentAttachments)
 	}
@@ -282,8 +310,8 @@ func commentAttachments(body string, inputs []CommentAttachment) ([]ports.SCMAtt
 		return nil, fmt.Errorf("%w: a comment's files exceed %d bytes together", ErrAttachmentTooLarge, MaxCommentAttachmentsBytes)
 	}
 	linked := make([]bool, len(inputs))
-	for _, match := range attachmentLink.FindAllStringSubmatch(body, -1) {
-		i, err := strconv.Atoi(match[1])
+	for _, link := range attachmentLinks(body) {
+		i, err := strconv.Atoi(body[link[2]:link[3]])
 		if err != nil || i >= len(inputs) {
 			return nil, fmt.Errorf("%w: the comment links a file it doesn't have", ErrInvalidAttachment)
 		}
@@ -297,12 +325,19 @@ func commentAttachments(body string, inputs []CommentAttachment) ([]ports.SCMAtt
 	return files, nil
 }
 
-// linkAttachments points the body's attachment links at the stored files.
+// linkAttachments points the body's attachment links, outside code, at the
+// stored files.
 func linkAttachments(body string, urls []string) string {
-	return attachmentLink.ReplaceAllStringFunc(body, func(link string) string {
-		i, _ := strconv.Atoi(attachmentLink.FindStringSubmatch(link)[1])
-		return "](" + urls[i] + ")"
-	})
+	var out strings.Builder
+	last := 0
+	for _, link := range attachmentLinks(body) {
+		i, _ := strconv.Atoi(body[link[2]:link[3]])
+		out.WriteString(body[last:link[0]])
+		out.WriteString("](" + urls[i] + ")")
+		last = link[1]
+	}
+	out.WriteString(body[last:])
+	return out.String()
 }
 
 // AttachmentAccess says whether files can be attached to this PR's comments

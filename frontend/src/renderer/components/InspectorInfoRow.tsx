@@ -68,10 +68,10 @@ export function InfoRowButton({ action, icon: Icon, iconClassName, label, onClic
 	);
 }
 
-/** A compact external link with the row hover, for a row's `action` slot. */
+/** A compact external link with the row hover, for a row's `action` slot: a square, like an icon button. */
 export function InfoRowLink({ ariaLabel, href, icon }: { ariaLabel: string; href: string; icon?: ReactNode }) {
 	return (
-		<ProductExternalLink ariaLabel={ariaLabel} className={cn("flex min-h-8 shrink-0 items-center rounded-md px-1.5", interactiveRowClass)} href={href}>
+		<ProductExternalLink ariaLabel={ariaLabel} className={cn("flex size-8 shrink-0 items-center justify-center rounded-md", interactiveRowClass)} href={href}>
 			<NavRowHighlight />
 			<span className="relative z-[1] flex items-center">
 				{icon ?? <ArrowUpRight aria-hidden="true" className="size-icon-sm shrink-0 text-passive" />}

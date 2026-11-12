@@ -1667,6 +1667,51 @@ func TestPoll_StoresDetailsReadForAnOtherwiseUnchangedPR(t *testing.T) {
 	}
 }
 
+// Details still owed after a poll, because the read or the write failed, keep
+// the repository's cursor where it was, so the next poll comes back for them.
+func TestPoll_OwedDetailsKeepTheRepoCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pending  bool
+		details  *domain.PullRequestDetails
+		writeErr error
+	}{
+		{name: "read failed", pending: true},
+		{name: "write failed", details: &domain.PullRequestDetails{Description: "body"}, writeErr: errors.New("db down")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obsValue := testObs(1)
+			obsValue.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+			store, provider, _ := detailsPollFixture(obsValue)
+			read := obsValue
+			read.PR.Details, read.PR.DetailsPending = tc.details, tc.pending
+			provider.observations[prKey(testRepo, 1)] = read
+			store.writeErr = tc.writeErr
+			obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(100, 0).UTC())
+			if err := obs.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; ok {
+				t.Fatalf("repo ETag advanced to %q with details still owed", got)
+			}
+		})
+	}
+	// Once they are stored, the cursor moves on.
+	obsValue := testObs(1)
+	obsValue.PR.UpdatedAtProvider = time.Unix(50, 0).UTC()
+	store, provider, _ := detailsPollFixture(obsValue)
+	read := obsValue
+	read.PR.Details = &domain.PullRequestDetails{Description: "body"}
+	provider.observations[prKey(testRepo, 1)] = read
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(100, 0).UTC())
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := obs.Cache.RepoPRListETag[prKey(testRepo, 0)]; got != "repo" {
+		t.Fatalf("repo ETag = %q after the details were stored, want repo", got)
+	}
+}
+
 // A PR whose updatedAt moved gets its new details written with the change,
 // so the stored details and their updatedAt move together.
 func TestPoll_MovedUpdatedAtWritesTheNewDetails(t *testing.T) {

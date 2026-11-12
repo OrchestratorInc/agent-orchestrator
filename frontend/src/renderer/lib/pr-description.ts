@@ -12,7 +12,7 @@ import type { DescriptionImage } from "../components/PRImageGallery";
  * pasted screenshot) becomes a markdown image, and other tags drop to their
  * text. Code spans and fenced blocks are left exactly as written.
  */
-function withoutRawHtml(markdown: string): string {
+export function withoutRawHtml(markdown: string): string {
 	return markdown
 		.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/)
 		.map((part, index) => index % 2 === 1 ? part : part

@@ -223,8 +223,12 @@ export function prStatusRows(pr: SessionPRSummary): PRStatusRow[] {
  * Reduces provider facts to one next-action headline for compact PR cards.
  * The detailed three-row presentation remains available for dense reports,
  * but cards should not repeat the same blocker under Merge and Review.
+ * `noChecks` (see prHasNoChecks) stops a PR that nothing checks from
+ * waiting on checks; the classic card leaves it unset.
  */
-export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
+export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: boolean } = {}): PRCardPresentation {
+	// CI "unknown" means checks are still being read, unless the PR has none.
+	const awaitingChecks = pr.ci.state === "unknown" && !options.noChecks;
 	let primary: PRCardStatus;
 	if (pr.state === "merged") {
 		primary = cardStatus("lifecycle", "pr.card.merged", "success");
@@ -242,7 +246,7 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 		primary = cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], prChecksUrl(pr), true);
 	} else if (ciCancelled(pr)) {
 		primary = cardStatus("ci", "pr.card.checksCancelled", "passive", undefined, [], prChecksUrl(pr));
-	} else if (pr.ci.state === "unknown") {
+	} else if (awaitingChecks) {
 		primary = cardStatus("ci", "pr.card.checksLoading", "passive", undefined, [], prChecksUrl(pr), true);
 	} else if (pr.mergeability.state === "blocked" || pr.mergeability.state === "unstable") {
 		primary = cardStatus(
@@ -270,7 +274,7 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			supporting.push(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], prChecksUrl(pr), true));
 		} else if (ciCancelled(pr)) {
 			supporting.push(cardStatus("ci", "pr.card.checksCancelled", "passive", undefined, [], prChecksUrl(pr)));
-		} else if (pr.ci.state === "unknown") {
+		} else if (awaitingChecks) {
 			supporting.push(cardStatus("ci", "pr.card.checksLoading", "passive", undefined, [], prChecksUrl(pr), true));
 		}
 	}
@@ -287,12 +291,12 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			statusRows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning", undefined, [], prChecksUrl(pr)));
 		} else if (ciCancelled(pr)) {
 			statusRows.push(cardStatus("ci", "pr.card.checksCancelled", "neutral", undefined, [], prChecksUrl(pr)));
-		} else if (pr.ci.state === "pending" || pr.ci.state === "unknown") {
+		} else if (pr.ci.state === "pending" || awaitingChecks) {
 			statusRows.push(cardStatus("ci", pr.ci.state === "pending" ? "pr.card.checksPending" : "pr.card.checksLoading", "neutral", undefined, [], prChecksUrl(pr), true));
 		}
 		statusRows.push(cardStatus("review", "pr.card.reviewStatus", reviewTone(pr.review.decision, pr.review.hasUnresolvedHumanComments), reviewStatusDetail(pr)));
-		const readinessRows = mergeReadinessRows(pr);
-		const mergeable = prCanMerge(pr);
+		const readinessRows = mergeReadinessRows(pr, options);
+		const mergeable = prCanMerge(pr, options);
 		if (mergeReasons(pr).includes("github_checks_unavailable")) {
 			return { primary, supporting, statusRows, readinessRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
@@ -314,7 +318,7 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 				tone: "neutral",
 			} };
 		}
-		const checkingReadiness = pr.ci.state === "pending" || pr.ci.state === "unknown" || pr.mergeability.state === "unknown";
+		const checkingReadiness = pr.ci.state === "pending" || awaitingChecks || pr.mergeability.state === "unknown";
 		// A failing check or a conflict says it can't merge, and a green Merge button says it can.
 		// A passing row ("No conflicts") doesn't say why readiness is unknown.
 		const readinessExplained = checkingReadiness
@@ -333,7 +337,7 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
  * What the merge-readiness line is made of: conflicts, checks and review,
  * always in that order so each keeps its place.
  */
-function mergeReadinessRows(pr: SessionPRSummary): PRCardStatus[] {
+function mergeReadinessRows(pr: SessionPRSummary, options: { noChecks?: boolean }): PRCardStatus[] {
 	const merge = pr.mergeability.state;
 	const conflictsKnown = merge !== "unknown";
 	const rows: PRCardStatus[] = [
@@ -351,7 +355,7 @@ function mergeReadinessRows(pr: SessionPRSummary): PRCardStatus[] {
 	} else if (pr.ci.state === "pending") {
 		rows.push(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], checksUrl, true));
 	} else {
-		rows.push(cardStatus("ci", "pr.card.checksUnknown", "passive", undefined, [], checksUrl));
+		rows.push(cardStatus("ci", options.noChecks && pr.ci.state === "unknown" ? "pr.tab.noChecks" : "pr.card.checksUnknown", "passive", undefined, [], checksUrl));
 	}
 	rows.push(reviewReadinessRow(pr));
 	return rows;
@@ -418,6 +422,7 @@ function cardStatus(
 		| "pr.card.checksLoading"
 		| "pr.card.checksUnavailable"
 		| "pr.card.checksUnknown"
+		| "pr.tab.noChecks"
 		| "pr.merge.noConflicts"
 		| "pr.merge.conflictsUnknown"
 		| "pr.card.checksCancelled"
@@ -461,14 +466,17 @@ export function prReviewers(pr: SessionPRSummary): PRReviewer[] {
 /** Why a PR can't merge, most fundamental first. */
 export type PRBlockReason = "draft" | "conflict" | "checks" | "cancelled" | "checking" | "changes" | "review" | "threads";
 
-/** The first thing stopping these facts merging; undefined when none is known. */
-export function prBlockReason(facts: { state: string; ci: string; mergeability: string; review: string; threads?: boolean; cancelled?: boolean }): PRBlockReason | undefined {
+/**
+ * The first thing stopping these facts merging; undefined when none is known.
+ * `noChecks` says CI "unknown" means the PR has no checks, not checks unread.
+ */
+export function prBlockReason(facts: { state: string; ci: string; mergeability: string; review: string; threads?: boolean; cancelled?: boolean; noChecks?: boolean }): PRBlockReason | undefined {
 	if (facts.state === "draft") return "draft";
 	if (facts.mergeability === "conflicting") return "conflict";
 	if (facts.ci === "failing") return "checks";
 	// A cancelled run with no replacement is settled: it needs a re-run, not a wait.
 	if (facts.cancelled) return "cancelled";
-	if (facts.ci === "pending" || facts.ci === "unknown" || facts.mergeability === "unknown") return "checking";
+	if (facts.ci === "pending" || (facts.ci === "unknown" && !facts.noChecks) || facts.mergeability === "unknown") return "checking";
 	if (facts.review === "changes_requested") return "changes";
 	if (facts.review === "review_required") return "review";
 	if (facts.threads) return "threads";
@@ -482,7 +490,18 @@ export const prSummaryBlockReason = (pr: SessionPRSummary) => prBlockReason({
 	review: pr.review.decision,
 	threads: pr.review.hasUnresolvedHumanComments,
 	cancelled: ciCancelled(pr),
+	noChecks: prHasNoChecks(pr),
 });
+
+/**
+ * Whether a PR's loaded details show no checks at all. GitHub reports no
+ * status rollup for a commit nothing checks, which reaches here as CI
+ * "unknown", the same as checks not read yet. Only details that have loaded
+ * and list no checks tell the two apart.
+ */
+export function prHasNoChecks(pr: SessionPRSummary): boolean {
+	return pr.ci.state === "unknown" && Boolean(pr.detailsObservedAt) && (pr.ci.checks ?? []).length === 0 && pr.ci.failingChecks.length === 0;
+}
 
 // A run cancelled with no replacement: the backend reports unknown and lists the
 // cancelled checks. It is settled, so it must not read as still loading.
@@ -490,10 +509,15 @@ function ciCancelled(pr: SessionPRSummary): boolean {
 	return pr.ci.state === "unknown" && pr.ci.failingChecks.some((check) => check.status === "cancelled");
 }
 
-export function prCanMerge(pr: SessionPRSummary): boolean {
+/**
+ * Whether the PR can merge now. `noChecks` (see prHasNoChecks) lets a PR that
+ * nothing checks merge on mergeability and review alone; the classic card
+ * leaves it unset and keeps waiting for checks.
+ */
+export function prCanMerge(pr: SessionPRSummary, options: { noChecks?: boolean } = {}): boolean {
 	return (
 		pr.state === "open" &&
-		pr.ci.state === "passing" &&
+		(pr.ci.state === "passing" || (pr.ci.state === "unknown" && options.noChecks === true)) &&
 		pr.mergeability.state === "mergeable" &&
 		reviewAllowsMerge(pr.review.decision) &&
 		!pr.review.hasUnresolvedHumanComments

@@ -101,6 +101,8 @@ type ActionDeps struct {
 	Attachments   ports.SCMAttachmentStore
 	// Stacker is nil where no provider supports stacks.
 	Stacker ports.SCMStacker
+	// Details stores details read on demand; when nil, Store is used if it can.
+	Details detailsStore
 }
 
 // ActionService validates current pull request state before applying mutations.
@@ -124,6 +126,7 @@ type ActionService struct {
 	refresher     ReviewRefresher
 	attachments   ports.SCMAttachmentStore
 	stacker       ports.SCMStacker
+	details       detailsStore
 }
 
 var _ ActionManager = (*ActionService)(nil)
@@ -148,6 +151,10 @@ func NewActionService(deps ActionDeps) *ActionService {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	details := deps.Details
+	if details == nil {
+		details, _ = deps.Store.(detailsStore)
+	}
 	return &ActionService{
 		store:         deps.Store,
 		resolve:       resolve,
@@ -166,6 +173,7 @@ func NewActionService(deps ActionDeps) *ActionService {
 		refresher:     deps.Refresher,
 		attachments:   deps.Attachments,
 		stacker:       deps.Stacker,
+		details:       details,
 	}
 }
 
@@ -315,15 +323,29 @@ func readyToMerge(o ports.SCMObservation, review ports.SCMReviewObservation) boo
 	if o.PR.HeadSHA == "" || o.CI.HeadSHA != o.PR.HeadSHA || review.Partial {
 		return false
 	}
+	ci := domain.CIState(o.CI.Summary)
+	if hasNoChecks(o.CI) {
+		// Nothing checks this head, so there is nothing to wait for. The
+		// provider's mergeability still enforces any checks a branch requires.
+		ci = domain.CIPassing
+	}
 	return domain.MergeReadiness{
 		Draft:              o.PR.Draft,
 		Merged:             o.PR.Merged,
 		Closed:             o.PR.Closed,
-		CI:                 domain.CIState(o.CI.Summary),
+		CI:                 ci,
 		Review:             domain.ReviewDecision(review.Decision),
 		Mergeability:       domain.Mergeability(o.Mergeability.State),
 		UnresolvedComments: hasUnresolvedHumanComments(review.Threads),
 	}.ReadyToMerge()
+}
+
+// hasNoChecks says CI reads as unknown because nothing checks the head, not
+// because its checks weren't read: GitHub reports no status rollup for such a
+// commit, and the summary can't tell the two apart. A cancelled run still lists
+// its checks, so it never counts.
+func hasNoChecks(ci ports.SCMCIObservation) bool {
+	return ci.Summary == string(domain.CIUnknown) && len(ci.Checks) == 0 && len(ci.FailedChecks) == 0
 }
 
 func hasUnresolvedHumanComments(threads []ports.SCMReviewThreadObservation) bool {

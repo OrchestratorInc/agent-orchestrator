@@ -43,6 +43,7 @@ import {
 } from "@/components/app-icons";
 import { InfoRow, InfoRowButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
+import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
@@ -68,7 +69,6 @@ import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import { PRActionButton } from "./PRActions";
-import { prCommentCount, PRComments } from "./PRComments";
 import { PRDescriptionPreview } from "./PRDescriptionPreview";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksList, PRLabelsAndReviewers, prChecksNeedingLook } from "./PRCardDetails";
@@ -85,7 +85,7 @@ import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prHasNoChecks, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionBranchPR, sessionPRDisplaySummaries } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -569,18 +569,6 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			)}
-			comments={prView && focusedPR && !session.cloud ? (
-				<PRComments
-					hostId={hostId}
-					// A draft belongs to its PR: picking another PR starts a new one.
-					key={prFocusKey(focusedPR)}
-					onViewInDiff={onOpenReviewFile}
-					pr={focusedPR}
-					preview={{ count: SUMMARY_COMMENTS_SHOWN, onViewAll: () => openPRTab(sessionUiKey(session.id, hostId), focusedPR.url, "comments") }}
-					session={session}
-				/>
-			) : undefined}
-			commentsTitle={prView && focusedPR && !session.cloud ? t("pr.comments.sectionTitle", { count: prCommentCount(focusedPR) }) : undefined}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
@@ -1006,9 +994,6 @@ function updateSessionMergePolicy(
 	}));
 }
 
-/** Comments the summary shows; the PR's tab holds every one. */
-const SUMMARY_COMMENTS_SHOWN = 2;
-
 /** The PR each session's card shows, once the person picked one; outlives the card's unmount. */
 const prFocus = new Map<string, string>();
 
@@ -1076,8 +1061,10 @@ function PRViewSummaryCard({
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
-	const presentation = prCardPresentation(pr);
-	const canMerge = prCanMerge(pr) && Boolean(pr.url && pr.headSha);
+	const noChecks = prHasNoChecks(pr);
+	const detailsFailed = usePRDetailsLoad(pr, sessionId, hostId, !cloudOrgId);
+	const presentation = prCardPresentation(pr, { noChecks });
+	const canMerge = prCanMerge(pr, { noChecks }) && Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
 		// Cloud sessions merge from here; a local session merges from its action button.
 		mutationFn: async () => {
@@ -1114,7 +1101,7 @@ function PRViewSummaryCard({
 			compact
 			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
 			headerless={layout === "focus"}
-			description={<PRDescriptionPreview cloud={Boolean(cloudOrgId)} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
+			description={<PRDescriptionPreview cloud={Boolean(cloudOrgId)} detailsFailed={detailsFailed} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={
@@ -1142,7 +1129,7 @@ function PRViewSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80 active:bg-success/70"
+						className="gap-1 px-2 text-on-foreground [--button-color:var(--color-success)]"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"

@@ -17,6 +17,7 @@ type ActionManager interface {
 	Stack(ctx context.Context, prID, prURL string) (StackResult, error)
 	AddToStack(ctx context.Context, prID, prURL string) (StackResult, error)
 	MergeStack(ctx context.Context, request StackMergeRequest) (StackMergeResult, error)
+	LoadDetails(ctx context.Context, prID, prURL string) error
 }
 
 // MergeRequest identifies the tracked PR and pins the mutation to the exact

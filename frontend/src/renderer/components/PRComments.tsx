@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileCode2, Loader2, MessageSquare, MoreHorizontal, Plus, Reply } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileCode2, Loader2, MoreHorizontal, Reply } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -49,8 +49,6 @@ const foldHeaderClass = "flex min-h-8 w-full min-w-0 items-center gap-2 rounded-
 const iconActionClass = "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 // A card's action is a quiet word under its text.
 const footActionClass = "inline-flex h-6 items-center gap-1.5 rounded-md font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60";
-// The list's own buttons (new comment, view all) read as buttons, not as footnotes.
-const listActionClass = "inline-flex h-6 items-center gap-1 rounded-md border border-(--color-border-settings-input) px-2 font-medium text-muted-foreground transition-colors hover:border-border-strong hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-60";
 const showMoreClass = "inline-flex items-center rounded-sm font-medium text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
 /** Quotes a comment as markdown for the chat: who, where, and what they wrote. */
@@ -264,8 +262,8 @@ function Card({ author, at, body, bot, children, foot, label, location, menu, mu
 /**
  * The PR's conversation as cards: reviews, top-level comments and open review
  * threads (bots among them). The PR's tab reads it in order, oldest first, with
- * resolved threads folded after it and the comment box at the end; the
- * summary's preview shows the newest few. Each card's text is there to read;
+ * resolved threads folded after it and the comment box at the end. Each
+ * card's text is there to read;
  * Reply (on other people's comments, as on GitHub) opens the comment box at
  * the card, and its menu holds Resolve, Add to chat (the comment quoted in the
  * session's chat, with room for your own words), View in diff, Send to agent
@@ -326,13 +324,10 @@ function useAttachmentConsent(location: string) {
 	return { confirm, dialog };
 }
 
-export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
+export function PRComments({ detailsFailed, hostId, onViewInDiff, pr, session }: {
+	/** The one read of a PR's missing details failed (see usePRDetailsLoad). */
+	detailsFailed?: boolean;
 	hostId?: string;
-	/**
-	 * The summary's short list: the newest few cards and a way to the rest in
-	 * the PR's tab, which shows them all (resolved threads included).
-	 */
-	preview?: { count: number; onViewAll: () => void };
 	/** Opens a review thread's file in the diff at its line. */
 	onViewInDiff?: (target: { line?: number; path: string }) => void;
 	pr: SessionPRSummary;
@@ -349,8 +344,6 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 		const confirmed = new Set((pr.threads ?? []).filter((thread) => thread.resolved).map((thread) => thread.id));
 		setResolvedHere((current) => [...current].some((id) => confirmed.has(id)) ? new Set([...current].filter((id) => !confirmed.has(id))) : current);
 	}, [pr.threads]);
-	// In the preview, the new-comment box stays out of the way until "＋ Comment" asks for it.
-	const [composing, setComposing] = useState(false);
 	const [sent, setSent] = useState<Set<string>>(() => new Set());
 	// "Added to chat" is a moment's confirmation, not a lock: once it fades the
 	// comment can be added again (after the draft was sent or cleared, say).
@@ -520,10 +513,9 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 	const resolved = items.filter((item) => item.kind === "thread" && item.thread.resolved);
 	const main = items.filter((item) => !nested.has(item.key) && !(item.kind === "thread" && item.thread.resolved));
 
-	const roomy = !preview;
-	const myAvatar = login ? <PRAvatar name={login} size={roomy ? "lg" : "md"} /> : undefined;
+	const myAvatar = login ? <PRAvatar name={login} size="lg" /> : undefined;
 	const closeReply = () => { setReplying(null); post.reset(); };
-	const openReply = (key: string) => { post.reset(); setComposing(false); setReplying(key); };
+	const openReply = (key: string) => { post.reset(); setReplying(key); };
 	// The same simple box as a new comment, opened in place under the card it answers.
 	const replyFor = (item: Item, threadId?: string, initial?: string) => canWrite && replying === item.key ? (
 		<PRCommentComposer
@@ -534,7 +526,7 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 			onCancel={closeReply}
 			onSubmit={(body, files) => postWithFiles({ body, threadId, files })}
 			placeholder={t("pr.comments.replyPlaceholder")}
-			roomy={roomy}
+			roomy
 			submitLabel={t("pr.comments.reply")}
 			attachments={attachments}
 		/>
@@ -559,12 +551,12 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 	// A thread's replies as they are; a quote reply without the quote and the @mention of `answering`.
 	const replyList = (replies: { id: string; author: string; isBot: boolean; body: string; createdAt?: string | null }[], answering?: string) => replies.map((reply) => (
 		<div className="flex min-w-0 flex-col gap-1 border-l-2 border-border-strong pl-2.5" data-testid="pr-comment-reply" key={reply.id}>
-			<span className={cn("flex min-w-0 items-center gap-1.5", roomy ? "text-control" : "text-micro")}>
+			<span className="flex min-w-0 items-center gap-1.5 text-control">
 				<PRAvatar bot={reply.isBot} name={reply.author} size="sm" />
 				<span className="truncate font-semibold text-foreground">{reply.author}</span>
 				{reply.createdAt ? <span className="text-muted-foreground">{formatTimeCompact(reply.createdAt)}</span> : null}
 			</span>
-			<Body body={answering ? ownWords(reply.body, answering) || reply.body : reply.body} roomy={roomy} />
+			<Body body={answering ? ownWords(reply.body, answering) || reply.body : reply.body} roomy />
 		</div>
 	));
 	const card = (item: Item) => {
@@ -594,7 +586,7 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 						]}
 						note={errorFor(item.key)}
 						reply={replyFor(item, thread.id)}
-						roomy={roomy}
+						roomy
 						sent={sent.has(item.key)}
 						status={thread.resolved ? <span className="shrink-0 text-micro text-success">{t("pr.comments.resolvedTag")}</span> : null}
 					>
@@ -622,7 +614,7 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 						]}
 						note={errorFor(item.key)}
 						reply={replyFor(item, undefined, replyQuote(review.reviewerId, review.body ?? ""))}
-						roomy={roomy}
+						roomy
 						sent={sent.has(item.key)}
 						status={verdict === "commented" ? null : (
 							<span className={cn("inline-flex shrink-0 items-center gap-0.5 text-micro font-medium", verdict === "approved" ? "text-success" : "text-status-in-review")}>
@@ -653,7 +645,7 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 					]}
 					note={errorFor(item.key)}
 					reply={replyFor(item, undefined, replyQuote(comment.author, comment.body))}
-					roomy={roomy}
+					roomy
 					sent={sent.has(item.key)}
 				>
 					{replyList(quoteReplies.get(item.key) ?? [], comment.author)}
@@ -662,64 +654,27 @@ export function PRComments({ hostId, onViewInDiff, pr, preview, session }: {
 		);
 	};
 
-	const heading = (
-		<div className="flex min-w-0 items-center gap-1.5 px-0.5">
-			<h4 className="m-0 flex min-w-0 flex-1 items-center gap-1 text-xs font-medium text-muted-foreground">
-				<MessageSquare aria-hidden="true" className="size-icon-2xs shrink-0" />
-				{t("pr.comments.onPR", { number: pr.number })}
-			</h4>
-			{canWrite ? (
-				<span className="text-micro">
-					<button
-						aria-expanded={composing}
-						className={listActionClass}
-						data-testid="pr-comments-new"
-						onClick={() => { post.reset(); setReplying(null); setComposing(!composing); }}
-						type="button"
-					>
-						<Plus aria-hidden="true" className="size-icon-2xs" />
-						{t("pr.comments.comment")}
-					</button>
-				</span>
-			) : null}
-		</div>
-	);
-
 	const newComment = (
 		<PRCommentComposer
-			autoFocus={Boolean(preview)}
 			avatar={myAvatar}
 			busy={post.isPending && replying === null}
 			error={replying === null && post.error instanceof Error ? post.error.message : null}
-			onCancel={preview ? () => { post.reset(); setComposing(false); } : undefined}
-			onSubmit={async (body, files) => { await postWithFiles({ body, files }); setComposing(false); }}
+			onSubmit={(body, files) => postWithFiles({ body, files })}
 			placeholder={t("pr.comments.leaveComment")}
-			roomy={roomy}
+			roomy
 			submitLabel={t("pr.comments.comment")}
 			attachments={attachments}
 		/>
 	);
-	const shown = preview ? main.slice(0, preview.count) : [...main].reverse();
-
 	return (
-		<div className={cn("flex min-w-0 flex-col", roomy ? "gap-3 text-sm" : "gap-2 text-xs")} data-testid="pr-comments">
+		<div className="flex min-w-0 flex-col gap-3 text-sm" data-testid="pr-comments">
 			{consent.dialog}
-			{preview ? heading : null}
-			{/* In the preview a new comment is written in place, above the list: the cards below move down while it is open, and the posted comment lands first. */}
-			{preview && canWrite && composing ? newComment : null}
 			{items.length === 0 ? (
-				<p className="m-0 px-0.5 text-xs text-passive">{pr.detailsObservedAt ? t("pr.comments.none") : t("pr.description.pending")}</p>
+				<p className="m-0 px-0.5 text-xs text-passive">{pr.detailsObservedAt ? t("pr.comments.none") : detailsFailed ? t("pr.description.unavailable") : t("pr.description.pending")}</p>
 			) : null}
-			{main.length > 0 ? <div className={cn("flex min-w-0 flex-col", roomy ? "gap-3" : "gap-2")} data-testid="pr-comments-main">{shown.map(card)}</div> : null}
-			{preview ? (
-				items.length > 0 ? (
-					<button className={cn(listActionClass, "self-start")} data-testid="pr-comments-view-all" onClick={preview.onViewAll} type="button">
-						{t("pr.comments.viewAll", { count: items.length })}
-						<ChevronRight aria-hidden="true" className="size-icon-2xs" />
-					</button>
-				) : null
-			) : <Fold count={resolved.length} defaultOpen={false} label={t("pr.comments.resolvedThreads")} testId="pr-comments-resolved">{resolved.map(card)}</Fold>}
-			{!preview && canWrite ? newComment : null}
+			{main.length > 0 ? <div className="flex min-w-0 flex-col gap-3" data-testid="pr-comments-main">{[...main].reverse().map(card)}</div> : null}
+			<Fold count={resolved.length} defaultOpen={false} label={t("pr.comments.resolvedThreads")} testId="pr-comments-resolved">{resolved.map(card)}</Fold>
+			{canWrite ? newComment : null}
 		</div>
 	);
 }

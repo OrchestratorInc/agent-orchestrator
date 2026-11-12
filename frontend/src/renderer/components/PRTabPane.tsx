@@ -1,10 +1,11 @@
 import { ArrowRight, ArrowUpRight, Circle, CircleAlert, CircleCheck, CircleDashed, CircleMinus, CircleX, Contrast, FileText, MessageSquare, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
 import { usePRStack } from "../hooks/usePRStack";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { formatTimeCompact } from "../lib/format-time";
-import { prBrowserUrl, prCanMerge, prChecksUrl, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prChecksUrl, prHasNoChecks, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
 import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
 import type { PRTabSection } from "../lib/pr-tabs";
 import { cn } from "../lib/utils";
@@ -133,7 +134,7 @@ const SideLoading = () => <Skeleton aria-hidden="true" className="my-1 h-4 w-32 
  * column of a wide tab, and a stacked block under the title of a narrow one
  * (with the inspector open beside it).
  */
-function PRTabSide({ hostId, pr, session }: { hostId?: string; pr: SessionPRSummary; session: WorkspaceSession }) {
+function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: boolean; hostId?: string; pr: SessionPRSummary; session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const stack = usePRStack(pr, hostId, !session.cloud).data;
 	const stackSection = usePRStackSection(pr, session, stack);
@@ -156,7 +157,7 @@ function PRTabSide({ hostId, pr, session }: { hostId?: string; pr: SessionPRSumm
 		: pr.mergeability.state === "conflicting" ? { icon: CircleX, className: resultMark("fill-error"), label: t("pr.card.mergeConflict") }
 			: pr.state === "draft" || pr.mergeability.state === "unknown" ? undefined
 				: lowerBlock ? { icon: CircleAlert, className: resultMark("fill-warning"), label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) }) }
-					: prCanMerge(pr) ? { icon: CircleCheck, className: resultMark("fill-success"), label: t("pr.card.readyToMerge") }
+					: prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) ? { icon: CircleCheck, className: resultMark("fill-success"), label: t("pr.card.readyToMerge") }
 						: { icon: CircleAlert, className: resultMark("fill-warning"), label: blockReason === "checks" && failedChecks(checks) > 0 ? t("pr.blocker.checksFailing", { count: failedChecks(checks) }) : t(blockReason ? blockReasonLabel[blockReason] : "pr.card.mergeBlocked") };
 	const stackGroup = stackSection ? (
 		<SideGroup label={stackSection.label}>
@@ -181,7 +182,7 @@ function PRTabSide({ hostId, pr, session }: { hostId?: string; pr: SessionPRSumm
 							);
 						})}
 					</ul>
-				) : loaded ? <SideEmpty>{t("pr.tab.noReviewers")}</SideEmpty> : <SideLoading />}
+				) : loaded ? <SideEmpty>{t("pr.tab.noReviewers")}</SideEmpty> : detailsFailed ? <SideEmpty>{t("pr.description.unavailable")}</SideEmpty> : <SideLoading />}
 			</SideGroup>
 			<SideGroup label={t("pr.tab.checks")} note={checksNote}>
 				{checks.length > 0 ? (
@@ -203,7 +204,7 @@ function PRTabSide({ hostId, pr, session }: { hostId?: string; pr: SessionPRSumm
 							</li>
 						) : null}
 					</ul>
-				) : loaded ? <SideEmpty>{t("pr.tab.noChecks")}</SideEmpty> : <SideLoading />}
+				) : loaded ? <SideEmpty>{t("pr.tab.noChecks")}</SideEmpty> : detailsFailed ? <SideEmpty>{t("pr.description.unavailable")}</SideEmpty> : <SideLoading />}
 			</SideGroup>
 			{merge ? (
 				<SideGroup>
@@ -254,6 +255,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 }) {
 	const { t } = useTranslation();
 	const pr = useSessionPR(session, url, hostId);
+	const detailsFailed = usePRDetailsLoad(pr, session.id, hostId, !session.cloud);
 	const [section, setSection] = useState<PRTabSection>(request?.section ?? "summary");
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const stripRef = useRef<HTMLDivElement>(null);
@@ -265,6 +267,29 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 		setSection(requestSection);
 		if (scrollerRef.current) scrollerRef.current.scrollTop = 0;
 	}, [requestKey, requestSection]);
+	const ready = Boolean(pr);
+	// The tabs stick over the body as it scrolls. In a translucent window the
+	// pane's background is clear, so the body would show through them: it is
+	// clipped at the tabs' lower edge instead, which holds in every theme.
+	useEffect(() => {
+		const scroller = scrollerRef.current;
+		const strip = stripRef.current;
+		const body = bodyRef.current;
+		if (!ready || !scroller || !strip || !body) return;
+		const clip = () => {
+			const under = strip.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
+			body.style.clipPath = under > 0 ? `inset(${under}px 0 0 0)` : "";
+		};
+		clip();
+		scroller.addEventListener("scroll", clip, { passive: true });
+		const resize = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(clip);
+		resize?.observe(scroller);
+		resize?.observe(body);
+		return () => {
+			scroller.removeEventListener("scroll", clip);
+			resize?.disconnect();
+		};
+	}, [ready]);
 	// Past the top, the tabs are stuck under the window's edge: the other tab starts at its own top.
 	const show = (next: string) => {
 		setSection(next as PRTabSection);
@@ -301,7 +326,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 							<h2 className="m-0 min-w-0 flex-1 text-heading font-medium leading-tight text-foreground [overflow-wrap:anywhere]">{pr.title}</h2>
 							{(pr.state === "open" || pr.state === "draft") && !session.cloud ? (
 								<div className="max-w-full shrink-0">
-									<PRActionButton canMerge={prCanMerge(pr) && Boolean(pr.url && pr.headSha)} hostId={hostId} pr={pr} sessionId={session.id} />
+									<PRActionButton canMerge={prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) && Boolean(pr.url && pr.headSha)} hostId={hostId} pr={pr} sessionId={session.id} />
 								</div>
 							) : null}
 						</div>
@@ -317,7 +342,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 							) : null}
 						</div>
 					</header>
-					<PRTabSide hostId={hostId} pr={pr} session={session} />
+					<PRTabSide detailsFailed={detailsFailed} hostId={hostId} pr={pr} session={session} />
 					<div className="sticky top-0 z-10 border-b border-border bg-background" ref={stripRef}>
 						<TabsList aria-label={t("pr.tab.label", { number: pr.number })} className="flex h-auto w-full justify-start gap-5 rounded-none bg-transparent p-0">
 							<TabsTrigger className={tabClass} value="summary">
@@ -333,10 +358,10 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 					</div>
 					<div className="min-w-0 py-5" ref={bodyRef}>
 						<TabsContent className="min-w-0 data-[state=inactive]:hidden" forceMount value="summary">
-							<PRDescriptionBody cloud={false} pr={pr} />
+							<PRDescriptionBody cloud={false} detailsFailed={detailsFailed} pr={pr} />
 						</TabsContent>
 						<TabsContent className="min-w-0 data-[state=inactive]:hidden" forceMount value="comments">
-							<PRComments hostId={hostId} onViewInDiff={onViewInDiff} pr={pr} session={session} />
+							<PRComments detailsFailed={detailsFailed} hostId={hostId} onViewInDiff={onViewInDiff} pr={pr} session={session} />
 						</TabsContent>
 					</div>
 				</Tabs>
