@@ -1221,6 +1221,32 @@ async function createWindowInternal(): Promise<void> {
 			}),
 		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
+		// A session this daemon does not know (remote host, cloud) counts as
+		// working, so its hidden Browser tabs are never closed.
+		isAgentWorking: async (sessionId) => {
+			if (daemonStatus.state !== "ready" || !daemonStatus.port) return true;
+			const response = await fetch(
+				`http://127.0.0.1:${daemonStatus.port}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+				{ signal: AbortSignal.timeout(DAEMON_PROBE_TIMEOUT_MS) },
+			);
+			if (!response.ok) return true;
+			const body = (await response.json()) as { session?: { activity?: { state?: string } } };
+			const state = body.session?.activity?.state;
+			return state === undefined || state === "active";
+		},
+		onHiddenTabs: ({ kind, sessionId, tabs, osProcessIds, panelShown }) => {
+			if (kind === "restored") {
+				console.log(`AO: rebuilt ${tabs} browser tab(s) of ${sessionId}`);
+				return;
+			}
+			const workingSetKB = app
+				.getAppMetrics()
+				.filter((metric) => osProcessIds.includes(metric.pid))
+				.reduce((sum, metric) => sum + metric.memory.workingSetSize, 0);
+			console.log(
+				`AO: closed ${tabs} hidden browser tab(s) of ${sessionId}, ${Math.round(workingSetKB / 1024)} MB working set, panel ${panelShown ? "was" : "never"} shown`,
+			);
+		},
 	});
 	browserProfileImporter = profileImporter;
 	browserProfileIpc = registerBrowserProfileIpc({
