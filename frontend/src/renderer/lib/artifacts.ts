@@ -176,10 +176,12 @@ export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "shared"
  * or undefined when it cannot be told. Only a local session's files carry
  * their link (the daemon reads it from this computer's publish records); a
  * cloud session's file list says nothing about publishing, so its state is
- * unknown rather than "not shared".
+ * unknown rather than "not shared". A published file is unknown too until the
+ * link list says who its link opens for: until then, or when the list cannot
+ * be read, it is neither called public nor counted as such.
  */
 export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud">): ArtifactSharing | undefined {
-	if (row.shareUrl) return row.shareAccess === "restricted" ? "shared" : "public";
+	if (row.shareUrl) return row.shareAccess === "restricted" ? "shared" : row.shareAccess === "anyone" ? "public" : undefined;
 	return row.cloud ? undefined : "private";
 }
 

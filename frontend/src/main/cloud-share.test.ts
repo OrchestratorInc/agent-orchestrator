@@ -235,6 +235,14 @@ describe("share request time limits", () => {
 		await expect(shareLinksAvailable(silentControlPlane(), "https://cp.test")).resolves.toBeNull();
 	});
 
+	it("counts a token refresh that stalls against the request's limit", async () => {
+		const fetch = vi.fn();
+		const stalledToken: CloudShareApi = { getToken: () => new Promise<string | null>(() => undefined), fetch };
+		await expect(listShareLinks(stalledToken, "https://cp.test")).rejects.toMatchObject({ code: "timeout" });
+		await expect(shareLinksAvailable(stalledToken, "https://cp.test")).resolves.toBeNull();
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
 	it("keeps a cancel a cancel, not a timeout", async () => {
 		const snapshot = await snapshotOf("0123456789");
 		Object.assign(SHARE_TIMEOUTS, { api: 60_000 });

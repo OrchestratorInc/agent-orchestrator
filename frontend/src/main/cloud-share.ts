@@ -318,6 +318,20 @@ async function fetchWithin<T>(
 	}
 }
 
+/**
+ * `promise`, or the signal's abort as soon as it comes. For a step that takes
+ * no signal, such as reading the session token, which may refresh it over
+ * the network, so it counts against the request's own time limit.
+ */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const stop = () => reject(signal.reason);
+		promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+		if (signal.aborted) return stop();
+		signal.addEventListener("abort", stop, { once: true });
+	});
+}
+
 async function callApi<T>(
 	api: CloudShareApi,
 	baseUrl: string,
@@ -327,9 +341,9 @@ async function callApi<T>(
 	signal?: AbortSignal,
 	timeoutMs: number = SHARE_TIMEOUTS.api,
 ): Promise<T> {
-	const token = await api.getToken();
-	if (!token) throw new CloudShareError("signed_out", "Sign in to share.");
 	return fetchWithin(timeoutMs, signal, async (limited) => {
+		const token = await untilAborted(api.getToken(), limited);
+		if (!token) throw new CloudShareError("signed_out", "Sign in to share.");
 		const response = await api.fetch(apiUrl(baseUrl, apiPath), {
 			method,
 			headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
@@ -353,12 +367,14 @@ async function callApi<T>(
  * when the control plane could not be reached.
  */
 export async function shareLinksAvailable(api: CloudShareApi, baseUrl: string): Promise<boolean | null> {
-	const token = await api.getToken();
+	// The token read (which may refresh it) and the request share one limit.
+	const limited = AbortSignal.timeout(SHARE_TIMEOUTS.probe);
 	try {
+		const token = await untilAborted(api.getToken(), limited);
 		const response = await api.fetch(apiUrl(baseUrl, "/me/artifact-shares"), {
 			method: "GET",
 			headers: token ? { Authorization: `Bearer ${token}` } : {},
-			signal: AbortSignal.timeout(SHARE_TIMEOUTS.probe),
+			signal: limited,
 		});
 		await response.body?.cancel().catch(() => undefined);
 		return response.status !== 404;

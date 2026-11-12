@@ -193,7 +193,7 @@ describe("filterArtifactGroups", () => {
 	});
 
 	it("keeps only public artifacts, or only ones not shared", () => {
-		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}` } : row) }));
+		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}`, shareAccess: "anyone" as const } : row) }));
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["public"] }))).toEqual(["notes.md", "chart.png"]);
 		expect(names(filterArtifactGroups(shared, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html"]);
 		expect(names(filterArtifactGroups(shared, { query: "", projectIds: ["ao"], sharings: ["public"] }))).toEqual(["notes.md"]);
@@ -201,12 +201,15 @@ describe("filterArtifactGroups", () => {
 
 	it("tells a private link apart from a public one, once the link list says who it opens for", () => {
 		const shared = groups.map((group) => ({ ...group, rows: group.rows.map((row) => row.name === "notes.md" || row.name === "chart.png" ? { ...row, shareUrl: `https://share.test/${row.name}` } : row) }));
-		const withAccess = withShareAccess(shared, new Map([["https://share.test/notes.md", "restricted" as const]]));
+		const withAccess = withShareAccess(shared, new Map([["https://share.test/notes.md", "restricted" as const], ["https://share.test/chart.png", "anyone" as const]]));
 		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["shared"] }))).toEqual(["notes.md"]);
 		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public"] }))).toEqual(["chart.png"]);
 		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public", "shared"] }))).toEqual(["notes.md", "chart.png"]);
-		// Before the list is read, a published file reads as public, as it always has.
+		// Before the list is read, who a published file's link opens for is not
+		// known: it counts under neither Public nor Shared privately.
 		expect(withShareAccess(shared, new Map())).toEqual(shared);
+		expect(filterArtifactGroups(shared, { query: "", sharings: ["public", "shared"] })).toEqual([]);
+		expect(artifactSharing({ shareUrl: "https://share.test/x" })).toBeUndefined();
 		expect(artifactSharing({ shareUrl: "https://share.test/x", shareAccess: "anyone" })).toBe("public");
 		expect(artifactSharing({ shareUrl: "https://share.test/x", shareAccess: "restricted" })).toBe("shared");
 	});

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { InviteField, splitEmails } from "./InviteField";
@@ -23,6 +23,17 @@ describe("InviteField", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Invite" }));
 		expect(onSubmit).toHaveBeenCalledExactlyOnceWith(["maya@acme.co", "dev@acme.co"]);
 		expect(screen.queryByText("maya@acme.co")).toBeNull();
+	});
+
+	it("keeps an address added while the invite was on its way", async () => {
+		let finish: (taken: boolean) => void = () => undefined;
+		const { input } = renderField(vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; })));
+		await userEvent.type(input, "maya@acme.co{Enter}");
+		await userEvent.click(screen.getByRole("button", { name: "Invite" }));
+		await userEvent.type(input, "dev@acme.co{Enter}");
+		await act(async () => finish(true));
+		expect(screen.queryByText("maya@acme.co")).toBeNull();
+		expect(screen.getByText("dev@acme.co")).toBeTruthy();
 	});
 
 	it("keeps the chips when the invite is not taken", async () => {

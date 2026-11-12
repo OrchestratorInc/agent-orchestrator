@@ -49,11 +49,21 @@ type Phase =
 		inspection?: CloudShareInspection;
 		/** Who the link is shared with, once read. */
 		grants?: CloudShareGrant[];
+		/** Reading who the link is shared with failed: say so and offer to try again. */
+		grantsError?: boolean;
+		/** Anyone with the link was chosen for a file that looks like it holds a credential: confirm first. */
+		confirmPublic?: boolean;
+		/** The file changed while it was being republished: say so, and offer its newest version. */
+		changed?: boolean;
 		unpublishing?: "confirm" | "busy";
 		error?: string;
 		/** The link was just made private: say what that does to people without an invite. */
 		narrowed?: boolean;
-		/** A republish waits under the warning: the newer version looks like it holds a credential and the link is public. */
+		/**
+		 * The file changed since it was published to this link: Republish puts
+		 * the newer version on it. Under a credential warning on a public link,
+		 * the toolbar's Republish waits here too.
+		 */
 		republish?: { inspection: CloudShareInspection; links: CloudShareLinks };
 	}
 	| { kind: "unpublished" }
@@ -74,6 +84,8 @@ interface PendingShare {
 	share?: CloudShareLink;
 	access: CloudShareAccess;
 	invited: number;
+	/** The file as inspected for this publish, for the published link's credential warning. */
+	inspection: CloudShareInspection;
 }
 
 const pendingShares = new Map<string, PendingShare>();
@@ -102,6 +114,15 @@ function pendingKey(baseUrl: string, file: Pick<CloudShareFile, "sessionId" | "p
 /** The panel names a file without its extension: `report.html` is `report`. A dotfile keeps its name. */
 export function publishTitle(name: string): string {
 	return name.replace(/(?<=[^.])\.[^.]+$/, "");
+}
+
+/**
+ * What a link's file looks like it holds: the file now, and the copy last
+ * published to the link, which may still hold a credential since removed.
+ */
+function linkFindings(inspection: CloudShareInspection | undefined): string[] {
+	if (!inspection) return [];
+	return [...new Set([...inspection.secretFindings, ...(inspection.publishedSecretFindings ?? [])])];
 }
 
 /** An error's message, without the wrapper Electron puts around one thrown across IPC. */
@@ -228,6 +249,10 @@ export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" 
 }
 
 const POPOVER_CLASS = "w-[min(22rem,90vw)] p-4";
+/** How long after a menu opens the panel focus may still leave it as the menu finishes closing. */
+const MENU_HANDOFF_MS = 400;
+/** The most people one request may share a link with; a link holds more, added later. */
+export const MAX_INVITES_PER_REQUEST = 50;
 
 /**
  * Closes an open popover when focus moves into a framed page. A click inside
@@ -268,17 +293,28 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, inten
 	children: ReactElement;
 }) {
 	useCloseWhenFrameFocused(open, () => onOpenChange(false));
+	const anchorRef = useRef<HTMLDivElement>(null);
+	const openedAt = useRef(0);
+	useEffect(() => {
+		if (open) openedAt.current = performance.now();
+	}, [open]);
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
-			<PopoverAnchor asChild>{children}</PopoverAnchor>
+			<PopoverAnchor asChild ref={anchorRef}>{children}</PopoverAnchor>
 			<PopoverContent
 				align="end"
 				className={POPOVER_CLASS}
 				data-browser-native-overlay="true"
 				// The menu that opened this panel hands focus back as it finishes
 				// closing, a frame after the panel took it; that is not the person
-				// leaving. Escape, a click outside and a click in a preview still close it.
-				onFocusOutside={(event) => event.preventDefault()}
+				// leaving. Only that is ignored: focus going to the menu's own
+				// trigger, or anywhere just after opening. Tabbing away later,
+				// Escape, a click outside and a click in a preview still close it.
+				onFocusOutside={(event) => {
+					const target = event.target instanceof Node ? event.target : null;
+					const justOpened = performance.now() - openedAt.current < MENU_HANDOFF_MS;
+					if (justOpened || (target && anchorRef.current?.contains(target))) event.preventDefault();
+				}}
 			>
 				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} unpublishOnOpen={intent === "unpublish"} /> : null}
 			</PopoverContent>
@@ -299,10 +335,12 @@ interface PublishedShare {
  * changes.
  */
 function usePublishedShare(file: CloudShareFile | null, revision: string): PublishedShare {
-	const [state, setState] = useState<PublishedShare>({ outdated: false });
+	// Kept with the file it is for: a button reused for another file shows
+	// nothing published until that file is checked, never the last file's link.
+	const [state, setState] = useState<PublishedShare & { fileKey: string }>({ outdated: false, fileKey: "" });
 	const fileKey = file ? JSON.stringify(file) : "";
 	useEffect(() => {
-		if (!file) return setState({ outdated: false });
+		if (!file) return setState({ outdated: false, fileKey });
 		let cancelled = false;
 		void (async (): Promise<PublishedShare> => {
 			const inspection = await aoBridge.cloudShare.inspect(file);
@@ -315,13 +353,13 @@ function usePublishedShare(file: CloudShareFile | null, revision: string): Publi
 		})()
 			.catch((): PublishedShare => ({ outdated: false }))
 			.then((result) => {
-				if (!cancelled) setState(result);
+				if (!cancelled) setState({ ...result, fileKey });
 			});
 		return () => {
 			cancelled = true;
 		};
 	}, [fileKey, revision]); // eslint-disable-line react-hooks/exhaustive-deps
-	return state;
+	return state.fileKey === fileKey ? { share: state.share, outdated: state.outdated } : { outdated: false };
 }
 
 /**
@@ -502,6 +540,8 @@ function SharePanel({
 	// Who a file on this computer is for, set before its Publish uploads it.
 	const [stagedAccess, setStagedAccess] = useState<CloudShareAccess>("restricted");
 	const [staged, setStaged] = useState<string[]>([]);
+	// Adding past what one publish can share the link with: said under the field.
+	const [stagedOver, setStagedOver] = useState(false);
 	const [inviting, setInviting] = useState(false);
 	const [removing, setRemoving] = useState<string>();
 	const [changingAccess, setChangingAccess] = useState(false);
@@ -511,13 +551,23 @@ function SharePanel({
 	// A file on this computer is uploaded by the popover's own Publish.
 	const onThisComputer = file.source !== "cloud";
 
+	// Every read or change of who the link is shared with takes the next
+	// number. A full list (a read, or an invite's answer) is shown only if
+	// nothing started after it, so an older answer never replaces a newer one.
+	const grantsSeq = useRef(0);
+	const loadGrants = (share: CloudShareLink) => {
+		const seq = ++grantsSeq.current;
+		setPhase((current) => current.kind === "published" && current.share.id === share.id ? { ...current, grantsError: undefined } : current);
+		void aoBridge.cloudShare.grants(baseUrl, share.id)
+			.then((grants) => setPhase((current) => current.kind === "published" && current.share.id === share.id && seq === grantsSeq.current
+				? { ...current, grants, grantsError: undefined } : current))
+			.catch(() => setPhase((current) => current.kind === "published" && current.share.id === share.id && seq === grantsSeq.current
+				? { ...current, grantsError: true } : current));
+	};
 	const showPublished = (share: CloudShareLink, extra: Partial<Extract<Phase, { kind: "published" }>> = {}) => {
 		setPhase({ kind: "published", share, ...extra });
-		if (!isPrivateShare(share) && !share.grantCount) return;
 		// Who it is shared with; listed when it answers.
-		void aoBridge.cloudShare.grants(baseUrl, share.id)
-			.then((grants) => setPhase((current) => current.kind === "published" && current.share.id === share.id ? { ...current, grants } : current))
-			.catch(() => undefined);
+		if (isPrivateShare(share) || share.grantCount) loadGrants(share);
 	};
 
 	// Shows how a publish ended. Its own refusal is shown as it came, not
@@ -537,7 +587,7 @@ function SharePanel({
 			case "limit":
 				return setPhase({ kind: "limit", limit: links.limit });
 			case "changed":
-				if (share) return showPublished(share, { inspection: result.inspection });
+				if (share) return showPublished(share, { inspection: result.inspection, republish: { inspection: result.inspection, links }, changed: true });
 				return setPhase({ kind: "setup", inspection: result.inspection, links, changed: true });
 			case "unsupported":
 				return setPhase({ kind: "unsupported" });
@@ -566,7 +616,7 @@ function SharePanel({
 			setPrivateLinks(pending.links.privateLinks);
 			setPhase({ kind: "uploading", access: pending.access, invited: pending.invited });
 			pending.result
-				.then((result) => !cancelled && settle(result, pending.links, pending.share))
+				.then((result) => !cancelled && settle(result, pending.links, pending.share, pending.inspection))
 				.catch((error: unknown) => !cancelled && setPhase({ kind: "error", message: errorMessage(error) }));
 			return () => {
 				cancelled = true;
@@ -591,7 +641,8 @@ function SharePanel({
 						if (inspection.secretFindings.length > 0 && !isPrivateShare(current)) return showPublished(current, { inspection, republish: { inspection, links } });
 						return void publish(inspection, links, current);
 					}
-					return showPublished(current, { inspection });
+					// Changed since: Republish is offered on the link, wherever the panel was opened.
+					return showPublished(current, { inspection, ...(outdated ? { republish: { inspection, links } } : {}) });
 				}
 				// It was published from here, but its link is unpublished now,
 				// usually from somewhere else. Publishing gives it a new link.
@@ -647,6 +698,7 @@ function SharePanel({
 			share,
 			access,
 			invited,
+			inspection,
 		};
 		setPending(key, pending);
 		try {
@@ -671,7 +723,14 @@ function SharePanel({
 		}
 	};
 
-	const changeAccess = async (shown: Extract<Phase, { kind: "published" }>, access: CloudShareAccess) => {
+	const changeAccess = async (shown: Extract<Phase, { kind: "published" }>, access: CloudShareAccess, confirmed = false) => {
+		const findings = linkFindings(shown.republish?.inspection ?? shown.inspection);
+		// Making a link that looks like it holds a credential public waits for a confirm.
+		if (access === "anyone" && findings.length > 0 && !confirmed) {
+			setPhase({ ...shown, confirmPublic: true });
+			return;
+		}
+		setPhase((current) => current.kind === "published" ? { ...current, confirmPublic: undefined } : current);
 		setChangingAccess(true);
 		try {
 			const share = await aoBridge.cloudShare.setAccess(baseUrl, shown.share.id, access);
@@ -690,10 +749,11 @@ function SharePanel({
 	// The link is live: Invite gives access at once.
 	const invite = async (shown: Extract<Phase, { kind: "published" }>, emails: string[]): Promise<boolean> => {
 		setInviting(true);
+		const seq = ++grantsSeq.current;
 		try {
 			const grants = await aoBridge.cloudShare.invite(baseUrl, shown.share.id, emails);
-			setPhase((current) => current.kind === "published" && current.share.id === shown.share.id
-				? { ...current, grants, share: { ...current.share, grantCount: grants.length }, error: undefined }
+			setPhase((current) => current.kind === "published" && current.share.id === shown.share.id && seq === grantsSeq.current
+				? { ...current, grants, share: { ...current.share, grantCount: grants.length }, grantsError: undefined, error: undefined }
 				: current);
 			return true;
 		} catch (error) {
@@ -707,6 +767,8 @@ function SharePanel({
 	const removePerson = async (shown: Extract<Phase, { kind: "published" }>, person: ArtifactPerson) => {
 		if (!person.id) return;
 		setRemoving(person.email);
+		// A list read or invited before this is out of date once it lands.
+		++grantsSeq.current;
 		try {
 			await aoBridge.cloudShare.removeGrant(baseUrl, shown.share.id, person.id);
 			setPhase((current) => {
@@ -749,6 +811,8 @@ function SharePanel({
 	const meta = (text: string) => <span className="block truncate text-caption text-muted-foreground tabular-nums">{text}</span>;
 	const spinner = <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" />;
 	const ownerIdentity = { name: owner?.displayName, email: owner?.email };
+	// Under the email field: who the people added there are.
+	const viewersNote = <p className="-mt-2 text-caption leading-4 text-muted-foreground" data-share-viewers-note="">{t("artifacts.share.people.whoCanView")}</p>;
 
 	switch (phase.kind) {
 		case "loading":
@@ -790,12 +854,23 @@ function SharePanel({
 							<InviteField
 								actionLabel={t("artifacts.share.people.add")}
 								onSubmit={(emails) => {
-									setStaged((current) => [...current, ...emails.filter((email) => !current.includes(email.toLowerCase())).map((email) => email.toLowerCase())]);
+									const next = [...staged, ...emails.map((email) => email.toLowerCase()).filter((email, index, all) => !staged.includes(email) && all.indexOf(email) === index)];
+									// One publish shares the link with at most this many; more are added once it is live.
+									if (next.length > MAX_INVITES_PER_REQUEST) {
+										setStagedOver(true);
+										return false;
+									}
+									setStagedOver(false);
+									setStaged(next);
 									return true;
 								}}
 							/>
+							{stagedOver ? <p role="alert" className="-mt-2 text-caption leading-4 text-error">{t("artifacts.share.people.tooManyBeforePublish", { count: MAX_INVITES_PER_REQUEST })}</p> : viewersNote}
 							<ArtifactPeopleList
-								onRemove={(person) => setStaged((current) => current.filter((email) => email !== person.email))}
+								onRemove={(person) => {
+									setStagedOver(false);
+									setStaged((current) => current.filter((email) => email !== person.email));
+								}}
 								owner={ownerIdentity}
 								people={people}
 							/>
@@ -875,14 +950,41 @@ function SharePanel({
 				);
 			}
 			const people: ArtifactPerson[] = (grants ?? []).map((grant) => ({ email: grant.email, id: grant.id }));
-			const findings = (phase.republish?.inspection ?? inspection)?.secretFindings ?? [];
+			const findings = linkFindings(phase.republish?.inspection ?? inspection);
+			if (phase.confirmPublic) {
+				return (
+					<>
+						{heading(t("artifacts.share.access.confirmPublicTitle"))}
+						{status(t("artifacts.share.access.secretsPublic", { kinds: findings.join(", ") }), "alert")}
+						{footer(
+							null,
+							<>
+								<Button onClick={() => setPhase({ ...phase, confirmPublic: undefined })} size="sm" type="button" variant="ghost">
+									{t("artifacts.share.cancel")}
+								</Button>
+								<Button onClick={() => void changeAccess(phase, "anyone", true)} size="sm" type="button" variant="primary">
+									{t("artifacts.share.access.confirmPublic")}
+								</Button>
+							</>,
+						)}
+					</>
+				);
+			}
 			return (
 				<>
 					{titled(t("artifacts.share.title.published"))}
+					{phase.changed ? status(t("artifacts.share.changed"), "status") : null}
 					<div className="mt-3.5 flex flex-col gap-3.5">
 						{privateLinks ? (
 							<>
 								<InviteField actionLabel={t("artifacts.share.people.invite")} busy={inviting} onSubmit={(emails) => invite(phase, emails)} />
+								{viewersNote}
+								{phase.grantsError ? (
+									<div className="-mt-1 flex items-center justify-between gap-2" role="alert" data-share-grants-error="">
+										<p className="text-caption leading-4 text-error">{t("artifacts.share.people.loadFailed")}</p>
+										<Button onClick={() => loadGrants(share)} size="xs" type="button" variant="secondary">{t("artifacts.share.retry")}</Button>
+									</div>
+								) : null}
 								<ArtifactPeopleList
 									onRemove={(person) => void removePerson(phase, person)}
 									owner={ownerIdentity}
@@ -901,7 +1003,7 @@ function SharePanel({
 						/>
 						{phase.narrowed && access === "restricted" ? note(t("artifacts.share.access.narrowed")) : null}
 					</div>
-					{phase.republish ? status(t("artifacts.share.secrets", { kinds: findings.join(", ") }), "alert")
+					{phase.republish && access === "anyone" && findings.length > 0 ? status(t("artifacts.share.secrets", { kinds: findings.join(", ") }), "alert")
 						: findings.length > 0 ? status(t(access === "restricted" ? "artifacts.share.secretsPrivate" : "artifacts.share.secretsLink", { kinds: findings.join(", ") }), "alert")
 						: null}
 					{phase.error ? status(phase.error, "alert") : null}
@@ -925,7 +1027,7 @@ function SharePanel({
 								{copied ? <Check aria-hidden="true" className="size-3" /> : <Copy aria-hidden="true" className="size-3" />}
 								{t(copied ? "artifacts.share.copied" : "artifacts.share.copyLink")}
 							</Button>
-							{/* Only under a credential warning on a public link: the toolbar's Republish waits for this. */}
+							{/* The file changed since it was published here: put the newer version on the link. */}
 							{phase.republish ? (
 								<Button onClick={() => void publish(phase.republish!.inspection, phase.republish!.links, share)} size="sm" type="button" variant="primary">
 									{t("artifacts.share.republish")}

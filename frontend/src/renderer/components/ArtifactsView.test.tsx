@@ -688,6 +688,18 @@ describe("ArtifactsView", () => {
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Shared privately");
 	});
 
+	it("marks a published artifact with a muted link until the link list says who it opens for", async () => {
+		const published = session("ao-2", "Review pricing", [{ name: "pricing.md", updatedAt: "2026-10-10T10:00:00Z" }]);
+		published.artifactFiles![0].shareUrl = "https://share.test/pricing";
+		mocks.workspaces = [{ ...withArtifacts[0], sessions: [published] }];
+		useArtifactsViewStore.setState({ view: "list" });
+		renderView();
+		const mark = within(artifactList()).getByRole("img", { name: "Published" });
+		expect(mark).toHaveAttribute("data-artifact-share-mark", "published");
+		expect(mark).toHaveClass("text-muted-foreground");
+		expect(mark).not.toHaveClass("text-success");
+	});
+
 	it("filters to privately shared artifacts", async () => {
 		const user = userEvent.setup();
 		const published = session("ao-2", "Review pricing", [
@@ -696,7 +708,7 @@ describe("ArtifactsView", () => {
 		]);
 		published.artifactFiles![0].shareUrl = "https://share.test/pricing";
 		published.artifactFiles![1].shareUrl = "https://share.test/roadmap";
-		mocks.shareAccess = new Map([["https://share.test/pricing", "restricted"]]);
+		mocks.shareAccess = new Map([["https://share.test/pricing", "restricted"], ["https://share.test/roadmap", "anyone"]]);
 		mocks.workspaces = [{ ...withArtifacts[0], sessions: [withArtifacts[0].sessions[0], published] }, withArtifacts[1]];
 		renderView();
 		const rows = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");
@@ -712,6 +724,7 @@ describe("ArtifactsView", () => {
 		const user = userEvent.setup();
 		const published = session("ao-2", "Review pricing", [{ name: "pricing.md", updatedAt: "2026-10-10T10:00:00Z" }]);
 		published.artifactFiles![0].shareUrl = "https://share.test/pricing";
+		mocks.shareAccess = new Map([["https://share.test/pricing", "anyone"]]);
 		mocks.workspaces = [{ ...withArtifacts[0], sessions: [withArtifacts[0].sessions[0], published] }, withArtifacts[1]];
 		renderView();
 		const rows = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");

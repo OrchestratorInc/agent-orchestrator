@@ -167,11 +167,17 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	// A cloud session's file is named by its committed version: the
 	// fingerprint is its SHA-256, and the control plane refuses to share
 	// another version.
+	// What each cloud file version inspected this run looked like it held, by
+	// its record key and SHA-256: publishing names a version inspected before.
+	const scannedCloudVersions = new Map<string, string[]>();
 	const inspectCloudFile = async (file: CloudSessionShareFile): Promise<CloudShareInspection> => {
 		const found = await inspectCloudSessionArtifact(deps, file.baseUrl, file);
 		const key = await cloudRecordKey(deps.records, file.baseUrl, file);
+		if (scannedCloudVersions.size >= 200) scannedCloudVersions.clear();
+		scannedCloudVersions.set(JSON.stringify([key, found.sha256]), found.secretFindings);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
+		const publishedSecretFindings = shareId ? await deps.records.publishedSecretFindings(key) : undefined;
 		return {
 			name: found.name,
 			size: found.size,
@@ -180,6 +186,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			fingerprint: found.sha256,
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
+			...(publishedSecretFindings?.length ? { publishedSecretFindings } : {}),
 		};
 	};
 
@@ -192,7 +199,11 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// request, so there is nothing to cancel: stopping the wait could
 			// leave a public link the person was told was cancelled.
 			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
-			await deps.records.set(await cloudRecordKey(deps.records, file.baseUrl, file), result.share.id, file.fingerprint, artifactShareUrl(result.share));
+			// What the published version looked like it held when it was inspected,
+			// for the link's warning once the file changes.
+			const key = await cloudRecordKey(deps.records, file.baseUrl, file);
+			const findings = scannedCloudVersions.get(JSON.stringify([key, file.fingerprint]));
+			await deps.records.set(key, result.share.id, file.fingerprint, artifactShareUrl(result.share), findings);
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
@@ -210,6 +221,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
+		const publishedSecretFindings = shareId ? await deps.records.publishedSecretFindings(key) : undefined;
 		const { secretFindings, fingerprint } = await scanShareFile(resolved);
 		return {
 			name: resolved.name,
@@ -219,6 +231,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			fingerprint,
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
+			...(publishedSecretFindings?.length ? { publishedSecretFindings } : {}),
 		};
 	});
 
@@ -331,7 +344,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				access: file.access,
 				emails: file.emails,
 			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
-			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share));
+			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), taken.secretFindings);
 			return { status: "published", share: result.share, replaced: result.replaced };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };

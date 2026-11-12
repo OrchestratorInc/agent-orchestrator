@@ -55,7 +55,12 @@ export function InviteField({ actionLabel, busy = false, disabled = false, onSub
 		}
 		setChips(pending);
 		setTyped("");
-		if (await onSubmit(pending)) setChips([]);
+		// Only what was sent leaves the field: anything added while it was on
+		// its way stays, still to be sent.
+		if (await onSubmit(pending)) {
+			const sent = new Set(pending.map((email) => email.toLowerCase()));
+			setChips((current) => current.filter((chip) => !sent.has(chip.toLowerCase())));
+		}
 	};
 	const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
 		if (event.key === "Enter") {

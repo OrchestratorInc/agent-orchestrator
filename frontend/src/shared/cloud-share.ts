@@ -138,6 +138,13 @@ export interface CloudShareInspection {
 	 * not checked: a different value means the file changed since publishing.
 	 */
 	publishedFingerprint?: string;
+	/**
+	 * Kinds of credential the copy last published to shareId looked like it
+	 * held, when this computer recorded it. The link serves that copy until it
+	 * is republished, so making the link public is warned about for these too,
+	 * even once the file no longer holds them.
+	 */
+	publishedSecretFindings?: string[];
 }
 
 export type CloudSharePublishResult =

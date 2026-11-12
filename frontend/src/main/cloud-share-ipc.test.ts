@@ -186,6 +186,25 @@ describe("cloudShare IPC", () => {
 		expect(changed.fingerprint).not.toBe(published.fingerprint);
 	});
 
+	it("remembers what the published copy looked like it held, after the file no longer does", async () => {
+		const { invoke, publish, file } = setup();
+		await publish();
+		await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), "no credentials in here any more");
+		// The link still serves the copy with the key, until it is republished.
+		await expect(invoke("cloudShare:inspect", file)).resolves.toMatchObject({ secretFindings: [], publishedSecretFindings: ["AWS access key"] });
+		const clean = await invoke("cloudShare:inspect", file) as { fingerprint: string };
+		await invoke("cloudShare:publish", { ...file, fingerprint: clean.fingerprint, shareId: SHARE_ID });
+		const republished = await invoke("cloudShare:inspect", file) as Record<string, unknown>;
+		expect(republished).not.toHaveProperty("publishedSecretFindings");
+	});
+
+	it("remembers what a published cloud file version looked like it held", async () => {
+		const { invoke, cloudFile } = setup();
+		await invoke("cloudShare:inspect", cloudFile);
+		await invoke("cloudShare:publish", { ...cloudFile, fingerprint: CLOUD_SHA256 });
+		await expect(invoke("cloudShare:inspect", cloudFile)).resolves.toMatchObject({ publishedSecretFindings: ["AWS access key"] });
+	});
+
 	it("republishes a changed file to its link, which clears the change", async () => {
 		const { invoke, publish, file, bodies } = setup();
 		await publish();
