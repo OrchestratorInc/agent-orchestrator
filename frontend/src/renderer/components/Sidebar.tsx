@@ -515,8 +515,11 @@ type SidebarProps = {
 	onCloneProject: (input: CloneProjectInput) => Promise<void>;
 	onCreateProject: (input: CreateProjectInput) => Promise<void>;
 	onInitializeProject: (path: string) => Promise<void>;
-	/** Removes the project optimistically; the shell owns feedback and rollback. */
-	onRemoveProject: (projectId: string) => void;
+	/**
+	 * Removes the project optimistically; the shell owns feedback and rollback.
+	 * The kind tells a local project from a cloud project with the same id.
+	 */
+	onRemoveProject: (projectId: string, kind?: WorkspaceSummary["kind"]) => void;
 	/** Fixed shell chrome that also consumes the live sidebar width. */
 	resizeAuxiliaryTargetRef?: RefObject<HTMLElement | null>;
 };
@@ -1483,7 +1486,7 @@ type ProjectItemProps = {
 	projectDragInProgress: boolean;
 	consumeDragClick: (id: string) => boolean;
 	onToggle: (projectId: string) => void;
-	onRemoveProject: (projectId: string) => void;
+	onRemoveProject: (projectId: string, kind?: WorkspaceSummary["kind"]) => void;
 	suppressInitialExpandAnimation: boolean;
 	onProjectDragStart: (event: ReactDragEvent<HTMLElement>, projectId: string) => void;
 	onProjectDragEnd: () => void;
@@ -1886,7 +1889,7 @@ const ProjectItem = memo(function ProjectItem({
 	// and the shell reports the outcome with a toast.
 	const handleConfirmRemove = () => {
 		setConfirmOpen(false);
-		onRemoveProject(workspace.id);
+		onRemoveProject(workspace.id, workspace.kind);
 	};
 
 	return (

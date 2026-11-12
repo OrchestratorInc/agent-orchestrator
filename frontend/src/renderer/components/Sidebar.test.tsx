@@ -993,7 +993,8 @@ describe("Sidebar", () => {
 		expect(dialog).toHaveTextContent("Project One");
 
 		await user.click(screen.getByRole("button", { name: "Remove" }));
-		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledWith("proj-1"));
+		// The row's kind travels with it, so the shell can tell local from cloud.
+		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledWith("proj-1", workspace.kind));
 		// The shell leaves the project's page only when it is open (useRemoveProject).
 		expect(navigateMock).not.toHaveBeenCalled();
 	});

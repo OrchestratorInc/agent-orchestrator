@@ -12,7 +12,7 @@ import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { CommandPalette } from "../components/CommandPalette";
 import { useLatestCallback } from "../hooks/useStable";
-import { useRemoveProject } from "../hooks/useRemoveProject";
+import { isRemoveTarget, useRemoveProject } from "../hooks/useRemoveProject";
 import { clearOptimisticProjectRemoval } from "../hooks/optimistic-project-removals";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
@@ -1048,9 +1048,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 
 	// Removal is optimistic: the project leaves every list on confirm and the
 	// daemon's teardown runs in the background (see useRemoveProject).
-	const findWorkspaceToRemove = useCallback((projectId: string, hostId?: string) =>
+	const findWorkspaceToRemove = useCallback((projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]) =>
 		(hostId ? remoteWorkspacesRef.current ?? [] : workspacesRef.current)
-			.find((workspace) => workspace.id === projectId && workspace.hostId === hostId), []);
+			.find((workspace) => isRemoveTarget(workspace, projectId, hostId, kind)), []);
 	const isViewingProject = useCallback((workspace: WorkspaceSummary) => {
 		const route = routeParamsRef.current;
 		if (route.hostId !== workspace.hostId) return false;
@@ -1062,7 +1062,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		isViewing: isViewingProject,
 		cloud: { client: cloudClient, orgId: cloudOrg?.id },
 	});
-	const removeProject = useCallback((projectId: string) => removeProjectById(projectId), [removeProjectById]);
+	// The row's kind tells a local project from a cloud project with the same id.
+	const removeProject = useCallback(
+		(projectId: string, kind?: WorkspaceSummary["kind"]) => removeProjectById(projectId, undefined, kind),
+		[removeProjectById],
+	);
 	const removeRemoteProjectFromSidebar = useCallback(
 		(hostId: string, projectId: string) => removeProjectById(projectId, hostId),
 		[removeProjectById],

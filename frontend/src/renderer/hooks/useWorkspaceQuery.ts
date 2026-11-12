@@ -658,7 +658,7 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 			const response = await client.listProjects(orgId, { limit: 100 });
 			// The control plane archives a removed project after answering, so it
 			// can still list one the user just removed.
-			return response.items.filter((project) => !isOptimisticallyRemovedProject(project.id));
+			return response.items.filter((project) => !isOptimisticallyRemovedProject(project.id, undefined, true));
 		},
 	});
 }

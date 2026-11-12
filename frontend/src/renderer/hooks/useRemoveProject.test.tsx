@@ -32,7 +32,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useUiStore } from "../stores/ui-store";
 import { applyOptimisticProjectRemovals, clearOptimisticProjectRemoval, isOptimisticallyRemovedProject } from "./optimistic-project-removals";
-import { useRemoveProject } from "./useRemoveProject";
+import { isRemoveTarget, useRemoveProject } from "./useRemoveProject";
 import { cloudProjectsQueryKey, remoteProjectsQueryKey, remoteSessionsQueryKey, remoteWorkspaceQueryKey, sharedCloudWorkspacesQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
 
 const project = (id: string, name: string, extra: Partial<WorkspaceSummary> = {}): WorkspaceSummary => ({
@@ -73,10 +73,11 @@ function setup({ viewing = false, cloud = { client: {} as CloudCpClient, orgId: 
 	});
 	queryClient.setQueryData(workspaceQueryKey, serverLocal);
 	const isViewing = vi.fn(() => viewing);
-	const findWorkspace = (projectId: string, hostId?: string) =>
+	// Matches the way the shell finds the row, so the kind tells local from cloud.
+	const findWorkspace = (projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]) =>
 		[...(queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey) ?? []),
 			...(queryClient.getQueryData<WorkspaceSummary[]>(remoteWorkspaceQueryKey("box-a")) ?? [])]
-			.find((item) => item.id === projectId && item.hostId === hostId);
+			.find((item) => isRemoveTarget(item, projectId, hostId, kind));
 	const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 	const view = renderHook(() => useRemoveProject({ findWorkspace, isViewing, cloud }), { wrapper });
 	return { queryClient, remove: view.result.current, isViewing };
@@ -107,6 +108,7 @@ afterEach(() => {
 	for (const id of ["proj-1", "proj-2", "proj-3", "cloud-1"]) {
 		clearOptimisticProjectRemoval(id);
 		clearOptimisticProjectRemoval(id, "box-a");
+		clearOptimisticProjectRemoval(id, undefined, true);
 	}
 });
 
@@ -284,7 +286,7 @@ describe("useRemoveProject", () => {
 		await waitFor(() => expect(deleteProject).toHaveBeenCalledWith("org-1", "cloud-1"));
 		await waitFor(() => expect(toasts()).toEqual([expect.objectContaining({ title: "Removed cloudy", tone: "success" })]));
 		// Cloud ids are never reused, so the tombstone outlives the async archive.
-		expect(isOptimisticallyRemovedProject("cloud-1")).toBe(true);
+		expect(isOptimisticallyRemovedProject("cloud-1", undefined, true)).toBe(true);
 		expect(queryClient.getQueryData(rawKey)).toEqual([]);
 	});
 
@@ -301,7 +303,7 @@ describe("useRemoveProject", () => {
 
 		await waitFor(() => expect(toasts()[0]).toMatchObject({ title: "Could not remove cloudy", body: "control plane said no", tone: "error" }));
 		expect(queryClient.getQueryData(rawKey)).toEqual([{ id: "other", name: "other" }, { id: "cloud-1", name: "cloudy" }]);
-		expect(isOptimisticallyRemovedProject("cloud-1")).toBe(false);
+		expect(isOptimisticallyRemovedProject("cloud-1", undefined, true)).toBe(false);
 	});
 
 	it("puts a shared cloud project back when the control plane refuses to remove it", async () => {
@@ -320,8 +322,40 @@ describe("useRemoveProject", () => {
 		act(() => remove("cloud-1"));
 
 		await waitFor(() => expect(toasts()[0]).toMatchObject({ title: "Could not remove theirs", body: "Not the project owner", tone: "error" }));
-		expect(isOptimisticallyRemovedProject("cloud-1")).toBe(false);
+		expect(isOptimisticallyRemovedProject("cloud-1", undefined, true)).toBe(false);
 		expect(toasts()[0]?.action?.label).toBe("Retry");
+	});
+
+	it("removes the cloud row the user picked, not a local project with the same id", async () => {
+		const cloudTwin = project("proj-2", "cloud twin", { kind: "cloud" });
+		serverLocal = [first, doomed, last, cloudTwin];
+		const deleteProject = vi.fn().mockReturnValue(new Promise(() => undefined));
+		const { queryClient, remove } = setup({ cloud: { client: { deleteProject } as unknown as CloudCpClient, orgId: "org-1" } });
+
+		act(() => remove("proj-2", undefined, "cloud"));
+
+		await waitFor(() => expect(deleteProject).toHaveBeenCalledWith("org-1", "proj-2"));
+		expect(deleteMock).not.toHaveBeenCalled();
+		expect(isOptimisticallyRemovedProject("proj-2", undefined, true)).toBe(true);
+		// The local project keeps its row and its tombstone stays clear.
+		expect(isOptimisticallyRemovedProject("proj-2")).toBe(false);
+		expect(applyOptimisticProjectRemovals([doomed, cloudTwin])).toEqual([doomed]);
+		expect(localIds(queryClient)).toContain("proj-2");
+		expect(toasts()).toEqual([expect.objectContaining({ title: "Removed cloud twin" })]);
+	});
+
+	it("removes the local row the user picked, not a cloud project with the same id", async () => {
+		const cloudTwin = project("proj-2", "cloud twin", { kind: "cloud" });
+		serverLocal = [cloudTwin, first, doomed, last];
+		deleteMock.mockReturnValue(new Promise(() => undefined));
+		const deleteProject = vi.fn();
+		const { remove } = setup({ cloud: { client: { deleteProject } as unknown as CloudCpClient, orgId: "org-1" } });
+
+		act(() => remove("proj-2", undefined, "single_repo"));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/projects/{id}", { params: { path: { id: "proj-2" } } }));
+		expect(deleteProject).not.toHaveBeenCalled();
+		expect(applyOptimisticProjectRemovals([doomed, cloudTwin])).toEqual([cloudTwin]);
 	});
 
 	it("does not remove a cloud project while the control plane is not ready", async () => {
@@ -331,7 +365,7 @@ describe("useRemoveProject", () => {
 		act(() => remove("cloud-1"));
 
 		await waitFor(() => expect(toasts()[0]).toMatchObject({ title: "Could not remove cloudy", tone: "error" }));
-		expect(isOptimisticallyRemovedProject("cloud-1")).toBe(false);
+		expect(isOptimisticallyRemovedProject("cloud-1", undefined, true)).toBe(false);
 		expect(localIds(queryClient)).toEqual(["proj-1", "cloud-1"]);
 	});
 });

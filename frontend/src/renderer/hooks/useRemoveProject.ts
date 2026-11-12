@@ -50,6 +50,20 @@ function codedError(message: string, code?: string): Error & { code?: string } {
 	return Object.assign(new Error(message), code ? { code } : {});
 }
 
+/**
+ * Whether a listed project is the row the user removed. Local and cloud rows
+ * both have no host, so the row's kind tells them apart.
+ */
+export function isRemoveTarget(
+	workspace: WorkspaceSummary,
+	projectId: string,
+	hostId?: string,
+	kind?: WorkspaceSummary["kind"],
+): boolean {
+	return workspace.id === projectId && workspace.hostId === hostId &&
+		(kind === undefined || (workspace.kind === CLOUD_PROJECT_KIND) === (kind === CLOUD_PROJECT_KIND));
+}
+
 /** Put a removed item back at its old index, unless a newer read already has it. */
 function reinsert<T extends { id: string }>(current: T[] | undefined, item: T, index: number): T[] | undefined {
 	if (!current || current.some((candidate) => candidate.id === item.id)) return current;
@@ -107,22 +121,23 @@ async function refetchLists(queryClient: QueryClient, { cloud, workspace, cacheK
  * says so; the daemon's teardown runs in the background. A failed removal
  * puts the project back and offers Retry.
  *
- * `findWorkspace` reads the project as shown now; `isViewing` says whether the
+ * `findWorkspace` reads the project as shown now (match it with
+ * `isRemoveTarget`); `isViewing` says whether the
  * open route is the project or one of its sessions, which is left first so the
  * page never renders a project that is gone.
  */
 export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
-	findWorkspace: (projectId: string, hostId?: string) => WorkspaceSummary | undefined;
+	findWorkspace: (projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]) => WorkspaceSummary | undefined;
 	isViewing: (workspace: WorkspaceSummary) => boolean;
 	cloud: CloudContext;
-}): (projectId: string, hostId?: string) => void {
+}): (projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]) => void {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 
-	const remove = useLatestCallback((projectId: string, hostId?: string): void => {
-		const workspace = findWorkspace(projectId, hostId);
-		if (!workspace || isOptimisticallyRemovedProject(projectId, hostId)) return;
+	const remove = useLatestCallback((projectId: string, hostId?: string, kind?: WorkspaceSummary["kind"]): void => {
+		const workspace = findWorkspace(projectId, hostId, kind);
+		if (!workspace || isOptimisticallyRemovedProject(projectId, hostId, !hostId && workspace.kind === CLOUD_PROJECT_KIND)) return;
 		void removeOptimistically(workspace);
 	});
 
@@ -151,13 +166,13 @@ export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
 			cloud: isCloud,
 			cacheKey: hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey,
 		};
-		const toastKey = `project-remove:${refKey({ host: hostId ?? LOCAL_HOST, id: projectId })}`;
+		const toastKey = `project-remove:${isCloud ? `@cloud:${projectId}` : refKey({ host: hostId ?? LOCAL_HOST, id: projectId })}`;
 		const showFailure = (message: string) => showGlobalToast(t("shell.couldNotRemoveProjectNamed", { name }), message, {
 			tone: "error",
 			dismissible: true,
 			durationMs: PROJECT_REMOVE_ERROR_TOAST_MS,
 			dedupeKey: toastKey,
-			action: { label: t("shell.removeProjectRetry"), run: () => remove(projectId, hostId) },
+			action: { label: t("shell.removeProjectRetry"), run: () => remove(projectId, hostId, workspace.kind) },
 		});
 		if (!hostId) {
 			void addRendererExceptionStep("Project removal requested", telemetryContext(projectId));
@@ -185,11 +200,12 @@ export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
 		// Snapshot for rollback, then drop the project from every list. The
 		// tombstone keeps polls and events that land mid-teardown from bringing
 		// it back.
-		const previous = queryClient.getQueryData<WorkspaceSummary[]>(target.cacheKey);
+		// The local list never holds cloud projects; one with the same id is a different project.
+		const previous = isCloud ? undefined : queryClient.getQueryData<WorkspaceSummary[]>(target.cacheKey);
 		const snapshotIndex = previous?.findIndex((item) => item.id === projectId) ?? -1;
 		const snapshot = snapshotIndex >= 0 ? previous?.[snapshotIndex] : undefined;
 		const cloudSnapshots = isCloud ? queryClient.getQueriesData<CloudCpProject[]>({ queryKey: cloudProjectsQueryKey }) : [];
-		trackOptimisticProjectRemoval(projectId, hostId);
+		trackOptimisticProjectRemoval(projectId, hostId, isCloud);
 		queryClient.setQueryData<WorkspaceSummary[]>(target.cacheKey, (current) => current && applyOptimisticProjectRemovals(current));
 		// Pickers and settings read the cloud project list directly.
 		if (isCloud) {
@@ -209,7 +225,7 @@ export function useRemoveProject({ findWorkspace, isViewing, cloud }: {
 		} catch (cause) {
 			const failure = cause instanceof Error ? cause : new Error(t("shell.couldNotRemoveProject"));
 			if (!hostId) void captureRendererException(failure, telemetryContext(projectId));
-			clearOptimisticProjectRemoval(projectId, hostId);
+			clearOptimisticProjectRemoval(projectId, hostId, isCloud);
 			// The server decides: a teardown that finished after the request gave
 			// up has removed the project, and putting it back would be wrong.
 			const read = await refetchLists(queryClient, target);
