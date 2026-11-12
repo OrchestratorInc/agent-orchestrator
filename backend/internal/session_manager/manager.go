@@ -7242,15 +7242,25 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
+	blocked := false
 	for {
-		output, err := m.runtime.GetOutput(ctx, handle, lines)
-		if err == nil && promptOutputContains(output, hints.Patterns) {
-			return nil
+		output, err := m.promptReadinessOutput(ctx, handle, lines, hints.RenderedScreen)
+		if err == nil {
+			blocked = promptOutputContains(output, hints.BlockingPatterns)
+			if !blocked && promptOutputContains(output, hints.Patterns) {
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
+			if blocked {
+				// A startup dialog (for example a folder-trust prompt) still owns
+				// the terminal. Typing the prompt there would answer the dialog
+				// with arbitrary keys, so fail delivery instead.
+				return fmt.Errorf("prompt readiness: %w", errPromptBlockedByDialog)
+			}
 			// Prompt readiness is best-effort: a missing terminal marker must not
 			// block spawn forever or be treated as confirmed readiness. Fall back
 			// to delivering the prompt and make the degraded path observable.
@@ -7283,6 +7293,25 @@ func promptReadinessWaitTimeout(configured time.Duration, callerDeadline time.Ti
 // output ring, so a styled prompt such as Kimi's "│ >" arrives with a colour
 // code inside it and never matched until the readiness wait timed out.
 var promptOutputEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
+
+// errPromptBlockedByDialog reports that an agent's startup dialog was still on
+// screen when prompt readiness timed out.
+var errPromptBlockedByDialog = errors.New("agent is still showing a startup dialog; prompt not delivered")
+
+// promptReadinessOutput reads the terminal text readiness patterns are matched
+// against: the rendered current viewport when the adapter asks for it and the
+// runtime can provide it for this handle, otherwise the raw output ring.
+func (m *Manager) promptReadinessOutput(ctx context.Context, handle ports.RuntimeHandle, lines int, rendered bool) (string, error) {
+	if rendered {
+		if reader, ok := m.runtime.(ports.StyledTerminalOutputReader); ok {
+			output, err := reader.GetStyledOutput(ctx, handle, lines)
+			if !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+				return output, err
+			}
+		}
+	}
+	return m.runtime.GetOutput(ctx, handle, lines)
+}
 
 func promptOutputContains(output string, patterns []string) bool {
 	plain := promptOutputEscape.ReplaceAllString(output, "")
