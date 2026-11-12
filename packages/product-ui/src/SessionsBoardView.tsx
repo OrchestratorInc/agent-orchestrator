@@ -100,6 +100,25 @@ export type BoardPullRequestPresentation = {
 	url: string;
 };
 
+/**
+ * A PR the session reviews or contributes to without owning it. Display only:
+ * it is never counted in the card's PR progress and never changes its status.
+ */
+export type BoardRelatedPullRequestPresentation = {
+	/** Accessible name for the link, including the state when known, e.g. "Reviewing PR #8020, open". */
+	ariaLabel: string;
+	/** Optional, already-localized author phrase, e.g. "by alice". */
+	authorLabel?: string;
+	number: number;
+	/** Already-localized relation, e.g. "Reviewing". */
+	relationLabel: string;
+	state?: BoardPullRequestState;
+	/** Already-localized state, shown as text so it does not rely on the icon's color. */
+	stateLabel?: string;
+	title?: string;
+	url: string;
+};
+
 export type BoardPullRequestProgress = Record<BoardPullRequestState, number> & {
 	total: number;
 };
@@ -234,6 +253,8 @@ export type SessionCardViewProps = {
 	onOpen?: () => void;
 	overlay?: ReactNode;
 	prs?: BoardPullRequestPresentation[];
+	/** PRs the session reviews or contributes to without owning them. */
+	relatedPrs?: BoardRelatedPullRequestPresentation[];
 	renderAvatar: (provider: string) => ReactNode;
 	/** A static rendering of the card (a hover preview): no attention pulse. */
 	still?: boolean;
@@ -270,6 +291,7 @@ export function SessionCardView({
 	onOpen,
 	overlay,
 	prs = [],
+	relatedPrs = [],
 	renderAvatar,
 	renderUsage = (usage) => <SessionUsageMetricView usage={usage} />,
 	resource,
@@ -478,6 +500,16 @@ export function SessionCardView({
 					</div>
 				</div>
 			)}
+			{relatedPrs.length > 0 ? (
+				<div
+					className={cn("flex min-w-0 flex-col gap-y-1 pb-1 font-sans text-2xs text-muted-foreground", still || compact ? "px-3" : "px-3.5")}
+					data-testid="board-related-prs"
+				>
+					{relatedPrs.map((pr) => (
+						<BoardRelatedPullRequest externalLink={externalLink} key={pr.url} pr={pr} still={still} />
+					))}
+				</div>
+			) : null}
 			{artifacts ? <div className={cn("relative z-10 min-w-0 pb-2", compact ? "px-3" : "px-3.5")}>{artifacts}</div> : null}
 			{compact ? null : (
 				<div
@@ -626,6 +658,37 @@ function BoardPullRequestGroup({
 				);
 			})}
 		</div>
+	);
+}
+
+function BoardRelatedPullRequest({
+	externalLink: ExternalLink,
+	pr,
+	still,
+}: {
+	externalLink: ExternalLinkComponent;
+	pr: BoardRelatedPullRequestPresentation;
+	still: boolean;
+}) {
+	return (
+		<ExternalLink
+			ariaLabel={pr.ariaLabel}
+			className="pr-link inline-flex min-w-0 max-w-full items-center gap-x-1.5 py-0.5 hover:underline"
+			href={pr.url}
+			stopPropagation
+		>
+			<GitPullRequestIcon
+				aria-hidden="true"
+				className={cn("size-icon-sm shrink-0", pr.state ? lifecycleClassName(pr.state) : "text-passive")}
+			/>
+			<span className="shrink-0 rounded-full border border-border px-1.5 py-px text-2xs leading-none text-muted-foreground">
+				{pr.relationLabel}
+			</span>
+			<span className="shrink-0 font-sans text-xs font-medium text-foreground">#{pr.number}</span>
+			{pr.stateLabel ? <span className="shrink-0 text-passive">{pr.stateLabel}</span> : null}
+			{pr.title ? <span className="min-w-0 truncate">{pr.title}</span> : null}
+			{still && pr.authorLabel ? <span className="shrink-0 text-passive">{pr.authorLabel}</span> : null}
+		</ExternalLink>
 	);
 }
 

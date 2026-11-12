@@ -758,4 +758,56 @@ describe("SessionsBoardView", () => {
 		expect(status?.style.getPropertyValue("--session-status-tone")).toBe("");
 		expect(status?.querySelector(".rounded-full")).toBeNull();
 	});
+	it("shows related PRs apart from owned PRs and their progress", () => {
+		const related = [
+			{
+				ariaLabel: "Reviewing PR #8020, open",
+				authorLabel: "by contributor",
+				number: 8020,
+				relationLabel: "Reviewing",
+				state: "open" as const,
+				stateLabel: "open",
+				title: "Refactor sidebar update UI",
+				url: "https://github.com/acme/app/pull/8020",
+			},
+		];
+		const labels = {
+			formatTime: () => "5m ago",
+			intakeIssue: (id: string) => `Issue ${id}`,
+			pr: progressLabels,
+			updatedAt: (timestamp: string) => `Updated ${timestamp}`,
+		};
+		const { rerender } = render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={labels}
+				prs={[{ number: 10, state: "merged", url: "https://example.com/pull/10" }]}
+				relatedPrs={related}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{ ...baseSession, status: "merged", isTerminated: true }}
+			/>,
+		);
+
+		const row = within(screen.getByTestId("board-related-prs")).getByRole("link", { name: "Reviewing PR #8020, open" });
+		expect(row).toHaveAttribute("href", "https://github.com/acme/app/pull/8020");
+		// The state is text, not only the icon's color.
+		expect(row).toHaveTextContent("Reviewing#8020openRefactor sidebar update UI");
+		expect(row).not.toHaveTextContent("by contributor");
+		// Owned progress counts only the session's own PR.
+		expect(screen.getByTestId("session-pr-progress")).toHaveTextContent("1 of 1 PR merged");
+
+		// The hover card (still) also names the PR's author.
+		rerender(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={labels}
+				relatedPrs={related}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={baseSession}
+				still
+			/>,
+		);
+		expect(screen.getByRole("link", { name: "Reviewing PR #8020, open" })).toHaveTextContent("by contributor");
+		expect(screen.queryByTestId("session-pr-progress")).not.toBeInTheDocument();
+	});
 });

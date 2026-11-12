@@ -30,6 +30,7 @@ import {
 	type PRState,
 	type PullRequestFacts,
 	type SessionArtifact,
+	type SessionPRLink,
 	toAgentProvider,
 	toKanbanColumn,
 	toProjectKind,
@@ -54,6 +55,20 @@ function placeStandaloneWorkspaceLast(workspaces: WorkspaceSummary[]): Workspace
 	const standalone = workspaces.find((workspace) => workspace.id === STANDALONE_WORKSPACE_ID);
 	if (!standalone) return workspaces;
 	return [...workspaces.filter((workspace) => workspace.id !== STANDALONE_WORKSPACE_ID), standalone];
+}
+
+function toSessionPRLink(link: components["schemas"]["SessionPRLinkView"]): SessionPRLink {
+	return {
+		url: link.url,
+		provider: link.provider,
+		host: link.host,
+		repo: link.repo,
+		number: link.number,
+		relation: link.relation,
+		...(link.title ? { title: link.title } : {}),
+		...(link.state ? { state: link.state } : {}),
+		...(link.author ? { author: link.author } : {}),
+	};
 }
 
 function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRequestFacts {
@@ -161,6 +176,7 @@ export function toWorkspaceSession(
 		isPinned: session.isPinned ?? false,
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
+		...(session.prLinks?.length ? { prLinks: session.prLinks.map(toSessionPRLink) } : {}),
 		outputType: session.outputType,
 		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
@@ -269,6 +285,7 @@ function toLocalWorkspaceSession(
 		isPinned: session.isPinned ?? false,
 		pinnedAt: session.pinnedAt ?? undefined,
 		prs: (session.prs ?? []).map(toPullRequestFacts),
+		...(session.prLinks?.length ? { prLinks: session.prLinks.map(toSessionPRLink) } : {}),
 		outputType: session.outputType,
 		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),

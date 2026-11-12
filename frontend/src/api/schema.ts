@@ -3591,6 +3591,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/pr/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link a pull request the session reviews or contributes to, without taking ownership */
+        post: operations["linkSessionPR"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/pr/unlink": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove a related pull request from a session */
+        post: operations["unlinkSessionPR"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/preview": {
         parameters: {
             query?: never;
@@ -5899,6 +5933,7 @@ export interface components {
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
             /** Format: date-time */
             pinnedAt?: null | string;
+            prLinks?: components["schemas"]["SessionPRLinkView"][];
             /** Format: int64 */
             previewRevision?: number;
             previewUrl?: string;
@@ -6711,6 +6746,17 @@ export interface components {
             siteName?: string;
             title?: string;
             url: string;
+        };
+        LinkSessionPRRequest: {
+            /** @description PR/MR URL, or a number resolved against the project origin or canonical repository. */
+            pr: string;
+            /** @enum {string} */
+            relation: "reviewing" | "contributing";
+        };
+        LinkSessionPRResponse: {
+            link: components["schemas"]["SessionPRLinkView"];
+            ok: boolean;
+            sessionId: string;
         };
         ListAgentAuthPlansResponse: {
             plans: components["schemas"]["AgentAuthPlan"][];
@@ -7568,6 +7614,22 @@ export interface components {
             status: "failed" | "cancelled";
             url?: string;
         };
+        SessionPRLinkView: {
+            author?: string;
+            host: string;
+            /** Format: date-time */
+            linkedAt: string;
+            number: number;
+            /** @enum {string} */
+            provider: "github" | "gitlab";
+            /** @enum {string} */
+            relation: "reviewing" | "contributing";
+            repo: string;
+            /** @enum {string} */
+            state?: "draft" | "open" | "merged" | "closed";
+            title?: string;
+            url: string;
+        };
         SessionPRMergeabilitySummary: {
             conflictFiles?: components["schemas"]["SessionPRConflictFile"][];
             prUrl: string;
@@ -8333,6 +8395,15 @@ export interface components {
         };
         UnavailableChatAgentsResponse: {
             agents: components["schemas"]["UnavailableChatAgent"][];
+        };
+        UnlinkSessionPRRequest: {
+            /** @description Related PR URL, or its number when only one related PR has it. */
+            pr: string;
+        };
+        UnlinkSessionPRResponse: {
+            link: components["schemas"]["SessionPRLinkView"];
+            ok: boolean;
+            sessionId: string;
         };
         UnregisterPushDeviceResponse: {
             deleted: boolean;
@@ -21653,6 +21724,141 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    linkSessionPR: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkSessionPRRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkSessionPRResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    unlinkSessionPR: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnlinkSessionPRRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnlinkSessionPRResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

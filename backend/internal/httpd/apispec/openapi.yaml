@@ -10287,6 +10287,115 @@ paths:
       summary: Claim an existing pull request for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/pr/link:
+    post:
+      operationId: linkSessionPR
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkSessionPRRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkSessionPRResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Link a pull request the session reviews or contributes to, without
+        taking ownership
+      tags:
+      - sessions
+  /api/v1/sessions/{sessionId}/pr/unlink:
+    post:
+      operationId: unlinkSessionPR
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnlinkSessionPRRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnlinkSessionPRResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Remove a related pull request from a session
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/preview:
     delete:
       operationId: clearSessionPreview
@@ -17116,6 +17225,10 @@ components:
           type:
           - "null"
           - string
+        prLinks:
+          items:
+            $ref: '#/components/schemas/SessionPRLinkView'
+          type: array
         previewRevision:
           format: int64
           type: integer
@@ -19311,6 +19424,35 @@ components:
       required:
       - url
       type: object
+    LinkSessionPRRequest:
+      properties:
+        pr:
+          description: PR/MR URL, or a number resolved against the project origin
+            or canonical repository.
+          minLength: 1
+          type: string
+        relation:
+          enum:
+          - reviewing
+          - contributing
+          type: string
+      required:
+      - pr
+      - relation
+      type: object
+    LinkSessionPRResponse:
+      properties:
+        link:
+          $ref: '#/components/schemas/SessionPRLinkView'
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - ok
+      - sessionId
+      - link
+      type: object
     ListAgentAuthPlansResponse:
       properties:
         plans:
@@ -21501,6 +21643,49 @@ components:
       - status
       - conclusion
       type: object
+    SessionPRLinkView:
+      properties:
+        author:
+          type: string
+        host:
+          type: string
+        linkedAt:
+          format: date-time
+          type: string
+        number:
+          type: integer
+        provider:
+          enum:
+          - github
+          - gitlab
+          type: string
+        relation:
+          enum:
+          - reviewing
+          - contributing
+          type: string
+        repo:
+          type: string
+        state:
+          enum:
+          - draft
+          - open
+          - merged
+          - closed
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - provider
+      - host
+      - repo
+      - number
+      - relation
+      - linkedAt
+      type: object
     SessionPRMergeabilitySummary:
       properties:
         conflictFiles:
@@ -23416,6 +23601,29 @@ components:
           type: array
       required:
       - agents
+      type: object
+    UnlinkSessionPRRequest:
+      properties:
+        pr:
+          description: Related PR URL, or its number when only one related PR has
+            it.
+          minLength: 1
+          type: string
+      required:
+      - pr
+      type: object
+    UnlinkSessionPRResponse:
+      properties:
+        link:
+          $ref: '#/components/schemas/SessionPRLinkView'
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - ok
+      - sessionId
+      - link
       type: object
     UnregisterPushDeviceResponse:
       properties:

@@ -72,6 +72,8 @@ type sessionDTO struct {
 	PRs           []sessionPRDTO       `json:"prs"`
 	Mode          string               `json:"mode,omitempty"`
 	ArtifactFiles []sessionArtifactDTO `json:"artifactFiles,omitempty"`
+	// PRLinks are PRs the session reviews or contributes to without owning.
+	PRLinks []sessionPRLinkDTO `json:"prLinks,omitempty"`
 	// WorkspaceCleanup is the recorded teardown outcome of a terminated
 	// session's workspace, empty when none has been recorded.
 	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
@@ -246,6 +248,8 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionCleanupCommand(ctx))
 	cmd.AddCommand(newSessionDeleteCommand(ctx))
 	cmd.AddCommand(newSessionClaimPRCommand(ctx))
+	cmd.AddCommand(newSessionLinkPRCommand(ctx))
+	cmd.AddCommand(newSessionUnlinkPRCommand(ctx))
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
 	return cmd
 }
@@ -1187,6 +1191,9 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		if _, err := fmt.Fprintf(out, "updated: %s\n", sess.UpdatedAt.Format(time.RFC3339)); err != nil {
 			return err
 		}
+	}
+	if err := writeSessionPRLinks(out, sess.PRLinks); err != nil {
+		return err
 	}
 	if len(sess.ArtifactFiles) > 0 {
 		if _, err := fmt.Fprintln(out, "artifacts:"); err != nil {

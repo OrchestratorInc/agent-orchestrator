@@ -113,6 +113,10 @@ type fakeSessionService struct {
 	orchestratorMode           domain.SessionMode
 	orchestratorApproval       domain.PermissionMode
 	claimErr                   error
+	linkErr                    error
+	linkedRef                  string
+	linkedRelation             domain.SessionPRRelation
+	unlinkedRef                string
 	listPRErr                  error
 	linkedPRs                  []domain.ChangeRequestReference
 	workspaceErr               error
@@ -589,6 +593,34 @@ func (f *fakeSessionService) ListPRListing(ctx context.Context, id domain.Sessio
 		return sessionsvc.PRListing{}, err
 	}
 	return sessionsvc.PRListing{Tracked: prs, Linked: f.linkedPRs}, nil
+}
+
+func (f *fakeSessionService) LinkPR(_ context.Context, id domain.SessionID, ref string, relation domain.SessionPRRelation) (domain.SessionPRLink, error) {
+	if f.linkErr != nil {
+		return domain.SessionPRLink{}, f.linkErr
+	}
+	if _, ok := f.sessions[id]; !ok {
+		return domain.SessionPRLink{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	f.linkedRef, f.linkedRelation = ref, relation
+	parsed, err := domain.ParseChangeRequestURL(ref)
+	if err != nil {
+		return domain.SessionPRLink{}, sessionsvc.ErrInvalidPRRef
+	}
+	now := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	return domain.SessionPRLink{
+		SessionID: id, Ref: parsed, Relation: relation,
+		Title: "Refactor sidebar", State: domain.PRStateOpen, Author: "contributor", CreatedAt: now,
+	}, nil
+}
+
+func (f *fakeSessionService) UnlinkPR(_ context.Context, id domain.SessionID, ref string) (domain.SessionPRLink, error) {
+	if f.linkErr != nil {
+		return domain.SessionPRLink{}, f.linkErr
+	}
+	f.unlinkedRef = ref
+	parsed, _ := domain.ParseChangeRequestURL(ref)
+	return domain.SessionPRLink{SessionID: id, Ref: parsed}, nil
 }
 
 func (f *fakeSessionService) ClaimPR(_ context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error) {
@@ -5536,5 +5568,98 @@ func TestSessionsAPI_DeleteSessionRefusal(t *testing.T) {
 	body, status, _ := doRequest(t, srv, http.MethodDelete, "/api/v1/sessions/ao-1", "")
 	if status != http.StatusConflict || !strings.Contains(string(body), "WORKSPACE_NOT_RELEASED") {
 		t.Fatalf("delete = %d %s, want 409 WORKSPACE_NOT_RELEASED", status, body)
+	}
+}
+
+func TestSessionsAPI_LinkPRTakesNoOwnership(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/pr/link", `{"pr":"https://github.com/acme/repo/pull/8020","relation":"reviewing"}`)
+	if status != http.StatusOK {
+		t.Fatalf("link = %d body=%s", status, body)
+	}
+	var linked struct {
+		OK        bool   `json:"ok"`
+		SessionID string `json:"sessionId"`
+		Link      struct {
+			URL      string `json:"url"`
+			Number   int    `json:"number"`
+			Relation string `json:"relation"`
+			Title    string `json:"title"`
+			State    string `json:"state"`
+			Author   string `json:"author"`
+			Repo     string `json:"repo"`
+		} `json:"link"`
+	}
+	mustJSON(t, body, &linked)
+	if !linked.OK || linked.SessionID != "ao-1" || linked.Link.Number != 8020 || linked.Link.Relation != "reviewing" ||
+		linked.Link.State != "open" || linked.Link.Author != "contributor" || linked.Link.Repo != "acme/repo" {
+		t.Fatalf("link shape = %#v", linked)
+	}
+	if svc.linkedRelation != domain.SessionPRReviewing || svc.linkedRef != "https://github.com/acme/repo/pull/8020" {
+		t.Fatalf("service got ref=%q relation=%q", svc.linkedRef, svc.linkedRelation)
+	}
+
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/pr/unlink", `{"pr":"8020"}`)
+	if status != http.StatusOK || svc.unlinkedRef != "8020" {
+		t.Fatalf("unlink = %d body=%s ref=%q", status, body, svc.unlinkedRef)
+	}
+}
+
+func TestSessionsAPI_LinkPRErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		err  error
+		code int
+		want string
+	}{
+		{"bad json", `{`, nil, http.StatusBadRequest, "INVALID_JSON"},
+		{"missing pr", `{"relation":"reviewing"}`, nil, http.StatusBadRequest, "PR_REQUIRED"},
+		{"missing relation", `{"pr":"142"}`, nil, http.StatusBadRequest, "INVALID_PR_RELATION"},
+		{"owning is not a relation", `{"pr":"142","relation":"owned"}`, nil, http.StatusBadRequest, "INVALID_PR_RELATION"},
+		{"orchestrator", `{"pr":"142","relation":"reviewing"}`, sessionsvc.ErrSessionNotClaimable, http.StatusUnprocessableEntity, "SESSION_NOT_LINKABLE"},
+		{"pr missing", `{"pr":"142","relation":"reviewing"}`, sessionsvc.ErrPRNotFound, http.StatusNotFound, "PR_NOT_FOUND"},
+		{"mismatch", `{"pr":"142","relation":"reviewing"}`, sessionsvc.ErrProjectMismatch, http.StatusUnprocessableEntity, "PR_PROJECT_MISMATCH"},
+		{"owned", `{"pr":"142","relation":"reviewing"}`, apierr.Conflict("PR_ALREADY_TRACKED", "owned", nil), http.StatusConflict, "PR_ALREADY_TRACKED"},
+		{"scm", `{"pr":"142","relation":"contributing"}`, sessionsvc.ErrSCMUnavailable, http.StatusServiceUnavailable, "SCM_UNAVAILABLE"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			svc.linkErr = tc.err
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/pr/link", tc.body)
+			assertErrorCode(t, body, status, tc.code, tc.want)
+		})
+	}
+}
+
+func TestSessionsAPI_SessionViewListsRelatedPRsApartFromOwnedPRs(t *testing.T) {
+	svc := newFakeSessionService()
+	ref, err := domain.ParseChangeRequestURL("https://github.com/acme/repo/pull/8020")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := svc.sessions["ao-1"]
+	sess.PRLinks = []domain.SessionPRLink{{SessionID: "ao-1", Ref: ref, Relation: domain.SessionPRContributing, CreatedAt: time.Now().UTC()}}
+	svc.sessions["ao-1"] = sess
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	var response struct {
+		Session struct {
+			PRs     []json.RawMessage `json:"prs"`
+			PRLinks []struct {
+				URL      string `json:"url"`
+				Relation string `json:"relation"`
+			} `json:"prLinks"`
+		} `json:"session"`
+	}
+	mustJSON(t, body, &response)
+	if len(response.Session.PRs) != 0 || len(response.Session.PRLinks) != 1 || response.Session.PRLinks[0].Relation != "contributing" || response.Session.PRLinks[0].URL != ref.URL {
+		t.Fatalf("session view = %s", body)
 	}
 }

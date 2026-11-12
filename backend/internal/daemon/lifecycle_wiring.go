@@ -428,7 +428,10 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewsvc.WithReviewResolver(scmProvider),
 		)
 	}
-	reviewOpts = append(reviewOpts, reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}))
+	reviewOpts = append(reviewOpts,
+		reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}),
+		reviewsvc.WithReviewingPRs(sessionSvc),
+	)
 	if reviewRefresher != nil {
 		reviewOpts = append(reviewOpts, reviewsvc.WithThreadRefresher(reviewRefresher))
 	}

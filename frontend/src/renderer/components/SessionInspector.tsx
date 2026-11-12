@@ -54,6 +54,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { SessionRelatedPRCard } from "./SessionRelatedPRCard";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
@@ -421,12 +422,16 @@ const SummaryView = memo(function SummaryView({
 	});
 	const projectRepositories = session.cloud ? cloudProjectQuery.data : projectRepositoryUrls(projectQuery.data);
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
+	// PRs the session reviews or contributes to without owning them: shown in
+	// the PR section, but they never enable the session's PR controls.
+	const relatedPRs = session.prLinks ?? [];
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
 	const artifacts = sessionDeliverables(session);
 	const hasArtifacts = artifacts.length > 0;
 	const opensPR = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
-	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : opensPR ? t("inspector.pullRequest") : t("inspector.branch");
+	const prCardCount = prCount + relatedPRs.length;
+	const prSectionTitle = prCardCount > 1 ? t("inspector.pullRequests", { count: prCardCount }) : opensPR || prCardCount > 0 ? t("inspector.pullRequest") : t("inspector.branch");
 	const artifactSectionTitle = artifacts.length > 1
 		? t("inspector.artifacts", { count: artifacts.length })
 		: t("inspector.artifact");
@@ -465,7 +470,7 @@ const SummaryView = memo(function SummaryView({
 					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
-					pullRequests={hasPRs ? (
+					pullRequests={prCardCount > 0 ? (
 						<>
 							{prSummaries.map((pr) => (
 								<PRSummaryCard
@@ -482,6 +487,9 @@ const SummaryView = memo(function SummaryView({
 								/>
 							))}
 							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectRepositories)} key={pr.url} pr={pr} />)}
+							{relatedPRs.map((link) => (
+								<SessionRelatedPRCard key={link.url} link={link} />
+							))}
 						</>
 					) : null}
 					session={session}

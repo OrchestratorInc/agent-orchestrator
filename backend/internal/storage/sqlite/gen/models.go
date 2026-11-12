@@ -884,6 +884,20 @@ type SessionNumFloor struct {
 	MaxNum   int64
 }
 
+type SessionPRLink struct {
+	SessionID  string
+	URL        string
+	Provider   string
+	Host       string
+	Repository string
+	Number     int64
+	Relation   string
+	Title      string
+	State      string
+	Author     string
+	CreatedAt  time.Time
+}
+
 type SessionTelemetry struct {
 	SessionID         string
 	CreatedBy         string

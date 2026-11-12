@@ -73,6 +73,7 @@ var remoteCommandTokens = map[string]struct{}{
 	"help":             {},
 	"hooks":            {},
 	"import":           {},
+	"link-pr":          {},
 	"import-projects":  {},
 	"kill":             {},
 	"launch":           {},
@@ -100,6 +101,7 @@ var remoteCommandTokens = map[string]struct{}{
 	"submit":           {},
 	"supervise":        {},
 	"trigger":          {},
+	"unlink-pr":        {},
 	"version":          {},
 }
 

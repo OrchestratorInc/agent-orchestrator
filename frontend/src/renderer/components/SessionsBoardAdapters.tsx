@@ -25,6 +25,7 @@ import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { toBoardRelatedPR } from "../lib/related-prs";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId, sessionDeliverables } from "../types/workspace";
@@ -384,6 +385,7 @@ function DesktopSessionCard({
 				state: pr.state,
 				url: prBrowserUrl(pr),
 			}))}
+			relatedPrs={session.prLinks?.map((link) => toBoardRelatedPR(link, t))}
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
 			tag={session.cloud?.requestedBy ? <SessionOwnerTag session={session} /> : undefined}
 			session={

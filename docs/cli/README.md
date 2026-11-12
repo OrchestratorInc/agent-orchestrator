@@ -91,6 +91,8 @@ without a terminal runs it in the background and reads its output; see
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
 | `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}`                 |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
+| `ao session link-pr [<id>] <pr-ref> --as reviewing\|contributing` | `POST /api/v1/sessions/{id}/pr/link` (shows the PR; takes no ownership) |
+| `ao session unlink-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/unlink` |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
 | `ao report ...`                     | `POST /api/v1/reports`                         |

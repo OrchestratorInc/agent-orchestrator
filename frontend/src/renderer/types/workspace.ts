@@ -55,6 +55,23 @@ export type PullRequestFacts = {
 	updatedAt: string;
 };
 
+/**
+ * A pull request the session reviews or contributes to without owning it,
+ * mirroring the daemon's SessionPRLinkView. Display only: it never feeds the
+ * session's status, PR progress, CI, review, or merge controls.
+ */
+export type SessionPRLink = {
+	url: string;
+	provider: "github" | "gitlab";
+	host: string;
+	repo: string;
+	number: number;
+	relation: "reviewing" | "contributing";
+	title?: string;
+	state?: PRState;
+	author?: string;
+};
+
 /** What kind of durable output a session has produced, when known. */
 export type SessionOutputType = "none" | "pr" | "artifact" | "pr_artifact";
 
@@ -239,6 +256,8 @@ export type WorkspaceSession = {
 	 * done server-side, so {@link status} already reflects all of these.
 	 */
 	prs: PullRequestFacts[];
+	/** PRs the session reviews or contributes to without owning them. */
+	prLinks?: SessionPRLink[];
 	/** What kind of durable output this session has produced, when known. */
 	outputType?: SessionOutputType;
 	/** The deliverable requested at spawn; "artifact" for sessions started from Create artifact. */

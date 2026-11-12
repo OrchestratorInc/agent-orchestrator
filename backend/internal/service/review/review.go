@@ -92,6 +92,7 @@ type Service struct {
 	notifications      reviewNotificationSink
 	prRefresher        PRRefresher
 	reviewRefresher    ThreadRefresher
+	reviewingPRs       ReviewingPRRecorder
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
@@ -160,6 +161,18 @@ type Option func(*Service)
 // requested review, so the pass covers the commit actually on the PR.
 func WithPRRefresher(r PRRefresher) Option {
 	return func(s *Service) { s.prRefresher = r }
+}
+
+// ReviewingPRRecorder records, best effort, that a session reviews a PR it
+// does not own. It never takes ownership or routes anything to the session.
+type ReviewingPRRecorder interface {
+	RecordReviewingPR(ctx context.Context, id domain.SessionID, prURL string)
+}
+
+// WithReviewingPRs shows a PR on the session that asked for its review, so a
+// session reviewing someone else's PR has it on its card.
+func WithReviewingPRs(r ReviewingPRRecorder) Option {
+	return func(s *Service) { s.reviewingPRs = r }
 }
 
 // ThreadRefresher asks SCM observation to read one PR's review threads now
@@ -471,6 +484,10 @@ type TriggerRequest struct {
 	// EnableAutoInject turns on the worker session's review auto-inject once a
 	// pass has started, so the reviewer's PR review comments reach the worker.
 	EnableAutoInject bool
+	// Caller is the AO session that ran `ao review trigger`, empty for the
+	// desktop or a shell the user opened. It is shown as reviewing the PRs
+	// the pass covers that it does not own.
+	Caller domain.SessionID
 }
 
 // TriggerOutcome is the trigger result plus whether this request turned the
@@ -513,6 +530,7 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 		return TriggerOutcome{}, err
 	}
 	outcome := TriggerOutcome{TriggerResult: result}
+	s.recordCallerReviewing(ctx, req.Caller, workerID, strings.TrimSpace(req.PRURL), result)
 	if !req.EnableAutoInject {
 		return outcome, nil
 	}
@@ -535,6 +553,34 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	}
 	outcome.AutoInjectEnabled = updated
 	return outcome, nil
+}
+
+// recordCallerReviewing shows the PRs a started pass covers on the session
+// that asked for it, as reviewing. A session reviewing its own PR already owns
+// it (the refresh above attached it), so it gains nothing.
+func (s *Service) recordCallerReviewing(ctx context.Context, caller, workerID domain.SessionID, prURL string, result reviewcore.TriggerResult) {
+	if s.reviewingPRs == nil || caller == "" || caller == workerID {
+		return
+	}
+	urls := []string{prURL}
+	if prURL == "" {
+		// Only this pass's runs: result.Runs also carries the worker's stored
+		// runs for PRs this pass did not review.
+		urls = nil
+		if result.Created {
+			urls = append(urls, result.Run.PRURL)
+		}
+		for _, run := range result.CreatedRuns {
+			urls = append(urls, run.PRURL)
+		}
+	}
+	seen := map[string]bool{"": true}
+	for _, url := range urls {
+		if !seen[url] {
+			seen[url] = true
+			s.reviewingPRs.RecordReviewingPR(ctx, caller, url)
+		}
+	}
 }
 
 // refreshPRs fetches the worker's PRs fresh from the provider before a

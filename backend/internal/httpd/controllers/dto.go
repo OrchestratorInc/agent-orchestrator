@@ -543,6 +543,10 @@ type SessionView struct {
 	LastEventAt   time.Time             `json:"lastEventAt"`
 	PRs           []SessionPRFacts      `json:"prs"`
 	ArtifactFiles []SessionArtifactView `json:"artifactFiles,omitempty"`
+	// PRLinks are pull requests the session reviews or contributes to without
+	// owning them. Display only: they never affect status, CI or review
+	// routing, merge automation, or which session owns the PR.
+	PRLinks []SessionPRLinkView `json:"prLinks,omitempty"`
 }
 
 // SessionArtifactView is one inferred file artifact for a session.
@@ -1564,6 +1568,66 @@ type SessionPRReference struct {
 	Host     string `json:"host"`
 	Repo     string `json:"repo"`
 	Number   int    `json:"number"`
+}
+
+// SessionPRLinkView is a pull request a session reviews or contributes to
+// without owning it. title, state, and author are what the provider said when
+// the link was made; they are absent when it could not be fetched.
+type SessionPRLinkView struct {
+	URL      string                   `json:"url"`
+	Provider string                   `json:"provider" enum:"github,gitlab"`
+	Host     string                   `json:"host"`
+	Repo     string                   `json:"repo"`
+	Number   int                      `json:"number"`
+	Relation domain.SessionPRRelation `json:"relation" enum:"reviewing,contributing"`
+	Title    string                   `json:"title,omitempty"`
+	State    domain.PRState           `json:"state,omitempty" enum:"draft,open,merged,closed"`
+	Author   string                   `json:"author,omitempty"`
+	LinkedAt time.Time                `json:"linkedAt"`
+}
+
+// LinkSessionPRRequest is the body of POST /sessions/{sessionId}/pr/link.
+type LinkSessionPRRequest struct {
+	PR       string                   `json:"pr" minLength:"1" description:"PR/MR URL, or a number resolved against the project origin or canonical repository."`
+	Relation domain.SessionPRRelation `json:"relation" enum:"reviewing,contributing"`
+}
+
+// LinkSessionPRResponse is the body of POST /sessions/{sessionId}/pr/link.
+type LinkSessionPRResponse struct {
+	OK        bool              `json:"ok"`
+	SessionID domain.SessionID  `json:"sessionId"`
+	Link      SessionPRLinkView `json:"link"`
+}
+
+// UnlinkSessionPRRequest is the body of POST /sessions/{sessionId}/pr/unlink.
+type UnlinkSessionPRRequest struct {
+	PR string `json:"pr" minLength:"1" description:"Related PR URL, or its number when only one related PR has it."`
+}
+
+// UnlinkSessionPRResponse is the body of POST /sessions/{sessionId}/pr/unlink.
+type UnlinkSessionPRResponse struct {
+	OK        bool              `json:"ok"`
+	SessionID domain.SessionID  `json:"sessionId"`
+	Link      SessionPRLinkView `json:"link"`
+}
+
+// NewSessionPRLinkView maps a related PR to its wire shape.
+func NewSessionPRLinkView(link domain.SessionPRLink) SessionPRLinkView {
+	return SessionPRLinkView{
+		URL: link.Ref.URL, Provider: link.Ref.Provider, Host: link.Ref.Host, Repo: link.Ref.Repository, Number: link.Ref.Number,
+		Relation: link.Relation, Title: link.Title, State: link.State, Author: link.Author, LinkedAt: link.CreatedAt,
+	}
+}
+
+func sessionPRLinkViews(links []domain.SessionPRLink) []SessionPRLinkView {
+	if len(links) == 0 {
+		return nil
+	}
+	out := make([]SessionPRLinkView, len(links))
+	for i, link := range links {
+		out[i] = NewSessionPRLinkView(link)
+	}
+	return out
 }
 
 // ListSessionPRsResponse is the body of GET /sessions/{sessionId}/pr.

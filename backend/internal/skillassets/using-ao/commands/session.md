@@ -369,3 +369,62 @@ ao session claim-pr mer-3 88
 # Claim PR 88 for the current worker but refuse if another session owns it
 ao session claim-pr 88 --no-takeover
 ```
+
+---
+
+### ao session link-pr
+
+Show a PR on a session as one it reviews or contributes to, without taking
+ownership. Unlike `claim-pr`, a link does not make the session the PR's owner,
+does not deliver the PR's review comments or CI results to the session, does not
+change the session's status, and never takes the PR from another session. It is
+allowed for review-only work.
+
+**Syntax:**
+```
+ao session link-pr <pr-ref> --as reviewing|contributing [flags]
+ao session link-pr <session-id> <pr-ref> --as reviewing|contributing [flags]
+```
+
+Use `--as reviewing` when you start reviewing a PR you do not own. Use
+`--as contributing` right after you push commits to a PR whose branch is
+outside your session's branch namespace, such as another contributor's PR. The
+PR must be in the project's repositories and readable with the user's SCM
+credentials. Running it again is safe and sets the relation.
+
+Orchestrator also links on its own: a review started with
+`ao review trigger ... --pr <url>` from a session links that PR to it as
+reviewing.
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--as string` | `reviewing` or `contributing` | required |
+| `--json` | Output as JSON | - |
+| `-p, --project string` | Project id to scope the lookup | - |
+
+**Examples:**
+
+```bash
+# Reviewing someone else's PR from a review-only worker
+ao session link-pr https://github.com/acme/app/pull/88 --as reviewing
+```
+
+```bash
+# After pushing commits to another contributor's PR
+ao session link-pr https://github.com/acme/app/pull/88 --as contributing
+```
+
+---
+
+### ao session unlink-pr
+
+Remove a related PR from a session. It changes nothing on the PR and never
+releases a PR the session owns.
+
+**Syntax:**
+```
+ao session unlink-pr <pr-ref> [flags]
+ao session unlink-pr <session-id> <pr-ref> [flags]
+```

@@ -1296,3 +1296,72 @@ func TestTriggerRequestedNamedPRSkipsTheBranchLookup(t *testing.T) {
 		t.Fatalf("order = %v finds = %d, want the named PR attached and reviewed without a branch lookup", order, refresher.finds)
 	}
 }
+
+type recordedReview struct {
+	session domain.SessionID
+	url     string
+}
+
+type fakeReviewingPRs struct{ got []recordedReview }
+
+func (f *fakeReviewingPRs) RecordReviewingPR(_ context.Context, id domain.SessionID, url string) {
+	f.got = append(f.got, recordedReview{id, url})
+}
+
+// The session that starts a review of another session's PR shows it as
+// "reviewing". The target session, which owns the PR, is never touched.
+func TestTriggerRequestedLinksTheCallerAsReviewing(t *testing.T) {
+	const url = "https://github.com/o/r/pull/8020"
+	relations := &fakeReviewingPRs{}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(&fakePRRefresher{}), WithReviewingPRs(relations))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		// The stored run for another PR is history, not part of this pass.
+		return reviewcore.TriggerResult{
+			Created: true, Run: domain.ReviewRun{PRURL: url}, CreatedRuns: []domain.ReviewRun{{PRURL: url}},
+			Runs: []domain.ReviewRun{{PRURL: url}, {PRURL: "https://github.com/o/r/pull/1"}},
+		}, nil
+	}
+
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, PRURL: url, Caller: "mer-67"}); err != nil {
+		t.Fatal(err)
+	}
+	want := recordedReview{"mer-67", url}
+	if len(relations.got) != 1 || relations.got[0] != want {
+		t.Fatalf("relations = %+v, want %+v", relations.got, want)
+	}
+
+	// Without --pr the runs this pass created name the PRs; older runs do not.
+	relations.got = nil
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, Caller: "mer-67"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(relations.got) != 1 || relations.got[0].url != url {
+		t.Fatalf("relations from runs = %+v", relations.got)
+	}
+
+	// A user shell (no caller) and a session reviewing its own PR record nothing.
+	relations.got = nil
+	for _, caller := range []domain.SessionID{"", "mer-1"} {
+		if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, PRURL: url, Caller: caller}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(relations.got) != 0 {
+		t.Fatalf("relations = %+v, want none", relations.got)
+	}
+}
+
+// A rejected trigger links nothing.
+func TestTriggerRequestedFailureLinksNothing(t *testing.T) {
+	relations := &fakeReviewingPRs{}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(&fakePRRefresher{}), WithReviewingPRs(relations))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		return reviewcore.TriggerResult{}, errors.New("engine down")
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, PRURL: "https://github.com/o/r/pull/1", Caller: "mer-67"}); err == nil {
+		t.Fatal("want the engine error")
+	}
+	if len(relations.got) != 0 {
+		t.Fatalf("relations = %+v, want none", relations.got)
+	}
+}

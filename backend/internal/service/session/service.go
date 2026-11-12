@@ -214,6 +214,7 @@ type terminalTitleSource interface {
 type Service struct {
 	manager             commander
 	terminalTitles      terminalTitleSource
+	prLinks             prLinkStore
 	store               Store
 	prClaimer           ports.PRClaimer
 	scm                 scmProvider
@@ -361,6 +362,7 @@ func NewWithDeps(d Deps) *Service {
 	}
 	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter, artifactTracker: d.ArtifactTracker, shareLinks: d.ShareLinks}
 	s.terminalTitles, _ = d.Store.(terminalTitleSource)
+	s.prLinks, _ = d.Store.(prLinkStore)
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -1718,6 +1720,7 @@ func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.Ses
 		sess.TerminalTitle = presentedTerminalTitle(rec, titles[rec.ID])
 		out = append(out, sess)
 	}
+	s.applyPRLinks(ctx, out)
 	if s.statusRecoveryRevision() != recoveryRevision {
 		for i := range out {
 			out[i].StatusReadiness = "checking"
@@ -2224,7 +2227,9 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 		return domain.Session{}, err
 	}
 	sess.TerminalTitle = presentedTerminalTitle(rec, s.storedTerminalTitles(ctx, []domain.SessionID{rec.ID})[rec.ID])
-	return sess, nil
+	one := []domain.Session{sess}
+	s.applyPRLinks(ctx, one)
+	return one[0], nil
 }
 
 // storedTerminalTitles is cosmetic: a failed read falls back to existing labels

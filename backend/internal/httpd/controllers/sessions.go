@@ -113,6 +113,8 @@ type SessionService interface {
 	CancelTaskPreparation(ctx context.Context, token string) error
 	ListPRListing(ctx context.Context, id domain.SessionID) (sessionsvc.PRListing, error)
 	ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
+	LinkPR(ctx context.Context, id domain.SessionID, ref string, relation domain.SessionPRRelation) (domain.SessionPRLink, error)
+	UnlinkPR(ctx context.Context, id domain.SessionID, ref string) (domain.SessionPRLink, error)
 	StageAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error)
 	WorkspaceWatchPaths(ctx context.Context, id domain.SessionID) ([]string, error)
 	GetWorkspaceManifest(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceManifest, error)
@@ -264,6 +266,8 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/pr/{prNumber}/file/revision", c.getPRFileRevision)
 	r.Get("/sessions/{sessionId}/pr", c.listPRs)
 	r.Post("/sessions/{sessionId}/pr/claim", c.claimPR)
+	r.Post("/sessions/{sessionId}/pr/link", c.linkPR)
+	r.Post("/sessions/{sessionId}/pr/unlink", c.unlinkPR)
 	r.Patch("/sessions/{sessionId}", c.rename)
 	r.Delete("/sessions/{sessionId}", c.deleteSession)
 	r.Patch("/sessions/{sessionId}/merge-policy", c.setMergePolicy)
@@ -1918,6 +1922,69 @@ func (c *SessionsController) claimPR(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, ClaimPRResponse{OK: true, SessionID: sessionID(r), PRs: sessionPRFacts(res.PRs), BranchChanged: res.BranchChanged, TakenOverFrom: nonNilSessionIDs(res.TakenOverFrom)})
 }
 
+// linkPR records a PR the session reviews or contributes to without taking
+// ownership of it.
+func (c *SessionsController) linkPR(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/pr/link")
+		return
+	}
+	var in LinkSessionPRRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if strings.TrimSpace(in.PR) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PR_REQUIRED", "pr is required", nil)
+		return
+	}
+	if !in.Relation.Valid() {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR_RELATION", "relation must be reviewing or contributing", nil)
+		return
+	}
+	link, err := c.Svc.LinkPR(r.Context(), sessionID(r), in.PR, in.Relation)
+	if err != nil {
+		writeSessionPRLinkError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, LinkSessionPRResponse{OK: true, SessionID: sessionID(r), Link: NewSessionPRLinkView(link)})
+}
+
+// unlinkPR removes a related PR from the session. It never touches a PR the
+// session owns, or the PR itself.
+func (c *SessionsController) unlinkPR(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/pr/unlink")
+		return
+	}
+	var in UnlinkSessionPRRequest
+	if err := decodeJSON(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	if strings.TrimSpace(in.PR) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PR_REQUIRED", "pr is required", nil)
+		return
+	}
+	link, err := c.Svc.UnlinkPR(r.Context(), sessionID(r), in.PR)
+	if err != nil {
+		writeSessionPRLinkError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, UnlinkSessionPRResponse{OK: true, SessionID: sessionID(r), Link: NewSessionPRLinkView(link)})
+}
+
+func writeSessionPRLinkError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, sessionsvc.ErrSessionNotClaimable):
+		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "SESSION_NOT_LINKABLE", "Only worker sessions in a project with a repository can link PRs", nil)
+	case errors.Is(err, sessionsvc.ErrPRLinksUnavailable):
+		envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "PR_LINKS_UNAVAILABLE", "This daemon cannot store related PRs", nil)
+	default:
+		writeSessionPRError(w, r, err)
+	}
+}
+
 func (c *SessionsController) rename(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "PATCH", "/api/v1/sessions/{sessionId}")
@@ -3016,6 +3083,7 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		LastEventAt:   s.LastEventAt(),
 		PRs:           sessionPRFacts(s.PRs),
 		ArtifactFiles: sessionArtifactFiles(r, s),
+		PRLinks:       sessionPRLinkViews(s.PRLinks),
 	}
 	return view
 }
