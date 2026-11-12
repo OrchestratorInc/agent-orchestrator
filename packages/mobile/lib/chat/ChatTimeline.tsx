@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
 	FlatList,
 	Image,
@@ -37,7 +37,7 @@ import { artifactRenderRef, notifyRenderViewport, readArtifactRef, readRenderRef
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { userMessageSurfaceStyle } from "./chatChrome";
-import { useMenuRowWidth } from "../useMenuRowWidth";
+import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
@@ -118,7 +118,12 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
-export const ChatTimeline = memo(function ChatTimeline({
+/** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
+export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
+	return <MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope>;
+});
+
+function Timeline({
 	snapshot,
 	loadingOlder,
 	onLoadOlder,
@@ -464,7 +469,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</ConversationHarness.Provider>
 		</WorkerSessionsProvider>
 	);
-});
+}
 
 function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
