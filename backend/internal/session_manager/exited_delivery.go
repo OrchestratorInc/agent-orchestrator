@@ -40,11 +40,11 @@ const exitedWakeResumePoll = 200 * time.Millisecond
 type AgentWake string
 
 const (
-	// AgentWakeNone: the agent was running; the message went straight to it.
+	// AgentWakeNone means the agent was running and the message went straight to it.
 	AgentWakeNone AgentWake = ""
-	// AgentWakeResumed: the agent had exited; AO restarted it and handed it the message.
+	// AgentWakeResumed means the agent had exited and AO restarted it and handed it the message.
 	AgentWakeResumed AgentWake = "resumed"
-	// AgentWakeResuming: the message is queued and the restart is still running.
+	// AgentWakeResuming means the message is queued and the restart is still running.
 	AgentWakeResuming AgentWake = "resuming"
 )
 
@@ -109,14 +109,21 @@ func (m *Manager) beforeExitedDelivery(ctx context.Context, id domain.SessionID,
 		return exitedDeliveryNone, nil
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
-	if err != nil || !ok || rec.IsTerminated || rec.Activity.State != domain.ActivityExited ||
+	if err != nil {
+		return exitedDeliveryNone, fmt.Errorf("send %s: %w", id, err)
+	}
+	if !ok || rec.IsTerminated || rec.Activity.State != domain.ActivityExited ||
 		rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 		// Missing, terminated, and running sessions keep their usual answers.
 		return exitedDeliveryNone, nil
 	}
 	// An interface or account move stops the agent on purpose and queues
 	// sends in its own outbox; it starts the agent itself.
-	if active, transitionErr := m.hasActiveInterfaceTransition(ctx, id); transitionErr != nil || active {
+	active, err := m.hasActiveInterfaceTransition(ctx, id)
+	if err != nil {
+		return exitedDeliveryNone, fmt.Errorf("send %s: %w", id, err)
+	}
+	if active {
 		return exitedDeliveryNone, nil
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
@@ -144,17 +151,24 @@ func (m *Manager) afterExitedDelivery(ctx context.Context, id domain.SessionID, 
 		if !ok {
 			return SendResult{AgentWake: AgentWakeResuming}, nil
 		}
-		if err := awaiter.AwaitChatWake(ctx, id); err != nil {
-			if ctx.Err() != nil {
-				// Queued, and the restart continues without this caller.
-				return SendResult{AgentWake: AgentWakeResuming}, nil
-			}
-			return SendResult{}, fmt.Errorf("send %s: %w", id, &ports.AgentWakeError{Reason: err, Queued: true})
+		waitErr := awaiter.AwaitChatWake(ctx, id)
+		if waitErr == nil {
+			return SendResult{AgentWake: AgentWakeResumed}, nil
 		}
-		return SendResult{AgentWake: AgentWakeResumed}, nil
+		return chatWakeOutcome(ctx, id, waitErr)
 	default:
 		return SendResult{}, nil
 	}
+}
+
+// chatWakeOutcome answers a sender whose wait for a Chat restart ended
+// without one. The message is queued either way: a caller that stopped
+// waiting is told the restart continues, and a failed restart is reported.
+func chatWakeOutcome(ctx context.Context, id domain.SessionID, waitErr error) (SendResult, error) {
+	if ctx.Err() != nil {
+		return SendResult{AgentWake: AgentWakeResuming}, nil
+	}
+	return SendResult{}, fmt.Errorf("send %s: %w", id, &ports.AgentWakeError{Reason: waitErr, Queued: true})
 }
 
 // wakeExitedTerminal restarts a terminal session's exited agent once, however

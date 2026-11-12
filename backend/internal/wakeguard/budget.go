@@ -20,8 +20,9 @@ import (
 const (
 	// RetryAfterFailure is how long a failed automatic restart blocks the next one.
 	RetryAfterFailure = time.Minute
-	// Window and MaxPerWindow cap automatic restarts of one session.
-	Window       = 10 * time.Minute
+	// Window is the span over which MaxPerWindow counts restarts.
+	Window = 10 * time.Minute
+	// MaxPerWindow caps automatic restarts of one session within Window.
 	MaxPerWindow = 3
 )
 
@@ -53,11 +54,11 @@ func New(now func() time.Time) *Budget {
 }
 
 // NewWithLimits is New with explicit limits, for tests.
-func NewWithLimits(now func() time.Time, retryAfter, window time.Duration, max int) *Budget {
+func NewWithLimits(now func() time.Time, retryAfter, window time.Duration, maxStarts int) *Budget {
 	if now == nil {
 		now = time.Now
 	}
-	return &Budget{now: now, retryAfter: retryAfter, window: window, max: max, sessions: map[domain.SessionID]*entry{}}
+	return &Budget{now: now, retryAfter: retryAfter, window: window, max: maxStarts, sessions: map[domain.SessionID]*entry{}}
 }
 
 // Admit reserves one automatic restart of id, or says why it may not start.

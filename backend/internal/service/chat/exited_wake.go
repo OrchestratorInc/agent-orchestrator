@@ -80,12 +80,13 @@ func (s *Service) ensureExitedWake(ctx context.Context, id domain.SessionID) *ex
 	w := &exitedWake{done: make(chan struct{})}
 	s.exitedWakes[id] = w
 	s.wakeMu.Unlock()
-	go s.runExitedWake(id, w)
+	// The restart outlives the sender that started it: others wait on it, and
+	// the queued turns need it whether or not this caller stays.
+	go s.runExitedWake(context.WithoutCancel(ctx), id, w)
 	return w
 }
 
-func (s *Service) runExitedWake(id domain.SessionID, w *exitedWake) {
-	ctx := context.Background()
+func (s *Service) runExitedWake(ctx context.Context, id domain.SessionID, w *exitedWake) {
 	err := s.wakeSession(ctx, id, true)
 	if err == nil {
 		if drainErr := s.DrainQueued(ctx, id); drainErr != nil {
