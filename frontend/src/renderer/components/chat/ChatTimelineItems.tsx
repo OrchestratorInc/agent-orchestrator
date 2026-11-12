@@ -71,7 +71,6 @@ import {
 	Plug,
 	RotateCw,
 	Search,
-	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
 	ShieldX,
@@ -1640,7 +1639,8 @@ export function ActivityRow({
 	else if (activity.activityKind === "reasoning") content = <ReasoningBlock activity={activity} />;
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.activityKind === "ao_action") content = <AOActionRow activity={activity} />;
-	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
+	// The model picker already names the model that answered.
+	else if (isModelReroute(activity)) return null;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
 	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
@@ -3053,35 +3053,9 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 /* system events                                                               */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Where the provider swapped the model out.
- *
- * On the timeline as well as in the composer because it happened at a point in the
- * conversation: everything after this row was answered by a different model than
- * everything before it, and only a timeline entry can say where the line is.
- */
-function RerouteRow({ activity }: { activity: ConversationActivity }) {
-	const detail = activity.detail;
-	return (
-		<div className="flex items-start gap-2.5 rounded-md border border-border bg-surface/60 px-3 py-2">
-			<Shuffle aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-			<div className="flex min-w-0 flex-col gap-0.5">
-				<span className="text-xs text-foreground">
-					Answered by{" "}
-					<strong className="font-medium">{detail?.toModel ?? "another model"}</strong>
-					{detail?.fromModel ? (
-						<>
-							{" "}
-							instead of <span className="text-muted-foreground">{detail.fromModel}</span>
-						</>
-					) : null}
-				</span>
-				{detail?.reason ? (
-					<span className="text-xs leading-snug text-muted-foreground">{detail.reason}</span>
-				) : null}
-			</div>
-		</div>
-	);
+/** A provider's note that another model answered. Never drawn: the model picker already names that model. */
+export function isModelReroute(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.detail?.event === "model.rerouted";
 }
 
 /**
