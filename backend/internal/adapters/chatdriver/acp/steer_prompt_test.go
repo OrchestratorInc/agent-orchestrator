@@ -229,10 +229,10 @@ func TestACPSteerPromptRefusalLeavesTheEarlierPromptInCharge(t *testing.T) {
 		t.Fatalf("Steer error = %v, want a provider refusal", err)
 	}
 	conv.mu.Lock()
-	active, seq, segment := conv.activeTurn, conv.promptSeq, conv.steerSegment
+	active, running, segment := conv.activeTurn, len(conv.outstanding), conv.steerSegment
 	conv.mu.Unlock()
-	if active != turn || seq != 0 || segment != 0 {
-		t.Fatalf("after refusal active=%q seq=%d segment=%d, want %q, 0, 0", active, seq, segment, turn)
+	if active != turn || running != 1 || segment != 0 {
+		t.Fatalf("after refusal active=%q running prompts=%d segment=%d, want %q, 1, 0", active, running, segment, turn)
 	}
 
 	close(agent.release)

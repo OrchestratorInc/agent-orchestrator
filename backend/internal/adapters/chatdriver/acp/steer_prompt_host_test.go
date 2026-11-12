@@ -1,0 +1,394 @@
+package acp
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	acpsdk "github.com/coder/acp-go-sdk"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+// scriptedHost plays the persistent chat host on the other end of a pipe, so a
+// test decides exactly which answers the host gives, and in which order.
+type scriptedHost struct {
+	t      *testing.T
+	conn   net.Conn
+	frames chan map[string]json.RawMessage
+}
+
+func (h *scriptedHost) send(frame string) {
+	h.t.Helper()
+	if _, err := fmt.Fprintln(h.conn, frame); err != nil {
+		h.t.Fatalf("host write: %v", err)
+	}
+}
+
+// nextPrompt returns the id of the next session/prompt the conversation sends.
+func (h *scriptedHost) nextPrompt() string {
+	h.t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case frame := <-h.frames:
+			var method string
+			_ = json.Unmarshal(frame["method"], &method)
+			if method == "session/prompt" {
+				return string(frame["id"])
+			}
+		case <-deadline:
+			h.t.Fatal("timed out waiting for a session/prompt")
+			return ""
+		}
+	}
+}
+
+// startScriptedHostConversation reattaches to a scripted host. With adoptTurn
+// set, the host is mid-turn and the conversation adopts it as that turn.
+func startScriptedHostConversation(t *testing.T, adoptTurn string) (*conversation, *scriptedHost) {
+	t.Helper()
+	initialize, err := json.Marshal(acpsdk.InitializeResponse{
+		ProtocolVersion: acpsdk.ProtocolVersionNumber,
+		AgentInfo:       &acpsdk.Implementation{Name: "prompt-steerer", Version: "1.0.0"},
+		AgentCapabilities: acpsdk.AgentCapabilities{
+			SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := json.Marshal(acpsdk.NewSessionResponse{SessionId: "provider-session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon, hostEnd := net.Pipe()
+	host := &scriptedHost{t: t, conn: hostEnd, frames: make(chan map[string]json.RawMessage, 32)}
+	go func() {
+		reader := bufio.NewReader(hostEnd)
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var frame map[string]json.RawMessage
+			if json.Unmarshal(line, &frame) == nil {
+				host.frames <- frame
+			}
+		}
+	}()
+	driver := New(Config{
+		Harness: domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true, ports.ChatCapabilityInterrupt: true,
+		},
+		Launch:      func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SteerPrompt: testSteerPrompt(2 * time.Second),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.connectHost = func(context.Context, persistenthost.Config) (*persistenthost.Transport, error) {
+		return &persistenthost.Transport{
+			Stdin: daemon, Stdout: daemon, Reconnected: true,
+			ACPState: &persistenthost.ACPState{
+				InitializeResult: initialize, SessionResult: session,
+				SessionID: "provider-session", ActivePrompt: adoptTurn != "",
+			},
+		}, nil
+	}
+	opened, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "ao-session", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		ProviderConversationID: "provider-session", ProviderScopeID: "scope",
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	conv := opened.(*conversation)
+	t.Cleanup(func() {
+		_ = hostEnd.Close()
+		_ = conv.Close()
+	})
+	if !conv.Capabilities()[ports.ChatCapabilitySteer] {
+		t.Fatal("Steer not offered for an agent the binding supports")
+	}
+	if err := conv.ActivateLiveReconnect(context.Background(), adoptTurn); err != nil {
+		t.Fatalf("ActivateLiveReconnect: %v", err)
+	}
+	return conv, host
+}
+
+// startScriptedTurn starts a turn and returns its id and its prompt's id on the
+// wire.
+func startScriptedTurn(t *testing.T, conv *conversation, host *scriptedHost) (string, string) {
+	t.Helper()
+	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "edit prod.yaml"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conv.StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	return ref.ProviderTurnID, host.nextPrompt()
+}
+
+// steerAsync steers turn and returns the steer prompt's id on the wire and a
+// channel with Steer's outcome.
+func steerAsync(t *testing.T, conv *conversation, host *scriptedHost, turn string) (string, <-chan error) {
+	t.Helper()
+	outcome := make(chan error, 1)
+	go func() {
+		_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "edit staging.yaml instead"})
+		outcome <- err
+	}()
+	return host.nextPrompt(), outcome
+}
+
+func steerOutcome(t *testing.T, outcome <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-outcome:
+		return err
+	case <-time.After(3 * time.Second):
+		t.Fatal("Steer never returned")
+		return nil
+	}
+}
+
+// answerOrder holds the routing of one prompt's answer until another's has
+// been routed, so a test can pin the order the SDK happens to wake callers in.
+func answerOrder(conv *conversation, first, second int) {
+	firstDone := make(chan struct{})
+	var once sync.Once
+	conv.promptReturned = func(seq int) {
+		switch seq {
+		case second:
+			select {
+			case <-firstDone:
+			case <-time.After(2 * time.Second):
+			}
+		case first:
+			// finishTurnPrompt runs right after this returns; give it the lock.
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				once.Do(func() { close(firstDone) })
+			}()
+		}
+	}
+}
+
+// completionsOf collects the turn's terminal events until the conversation is
+// ready again.
+func completionsOf(t *testing.T, conv *conversation, turn string) []ports.ChatEvent {
+	t.Helper()
+	var done []ports.ChatEvent
+	for {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted && event.ProviderTurnID == turn {
+			done = append(done, event)
+		}
+		if len(done) > 0 && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerReady {
+			// Anything after this would be a second completion.
+			done = append(done, turnCompletions(t, conv.Events(), turn, 100*time.Millisecond)...)
+			return done
+		}
+	}
+}
+
+func receiptResult(id, eventID string) string {
+	return `{"jsonrpc":"2.0","id":` + id + `,"result":{"stopReason":"end_turn","_meta":{"` +
+		persistenthost.ACPEventIDMetaKey + `":"` + eventID + `"}}}`
+}
+
+func plainResult(id string) string {
+	return `{"jsonrpc":"2.0","id":` + id + `,"result":{"stopReason":"end_turn"}}`
+}
+
+// The turn's own prompt finishes before the steer prompt reaches the host. The
+// host's result is the turn's, whichever answer the SDK hands over first, and
+// the steer, which the agent never saw, can go as a new turn.
+func TestACPSteerPromptTurnEndingFirstKeepsTheHostResult(t *testing.T) {
+	for _, order := range []struct {
+		name          string
+		first, second int
+	}{
+		{"result routed first", 0, 1},
+		{"refusal routed first", 1, 0},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			conv, host := startScriptedHostConversation(t, "")
+			answerOrder(conv, order.first, order.second)
+			_ = nextEvent(t, conv.Events()) // controller.ready
+			turn, root := startScriptedTurn(t, conv, host)
+			steer, outcome := steerAsync(t, conv, host, turn)
+
+			host.send(receiptResult(root, "acp-host:1"))
+			host.send(`{"jsonrpc":"2.0","id":` + steer + `,"error":{"code":-32602,"message":"the turn ended before the steer prompt arrived","data":{"` +
+				persistenthost.ACPSteerTurnEndedDataKey + `":true}}}`)
+
+			if err := steerOutcome(t, outcome); !errors.Is(err, ports.ErrChatNoSteerableTurn) {
+				t.Fatalf("Steer = %v, want ErrChatNoSteerableTurn so the guidance goes as a new turn", err)
+			}
+			done := completionsOf(t, conv, turn)
+			if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:1" {
+				t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
+			}
+		})
+	}
+}
+
+// The host's result can be either prompt's answer, and the SDK can hand the
+// answers over in either order. The receipt-bearing one settles the turn.
+func TestACPSteerPromptSettlesWithTheHostResultInEitherOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// rootFirst sends the turn's own prompt's answer first on the wire;
+		// the last answer on the wire carries the receipt.
+		rootFirst     bool
+		first, second int
+	}{
+		{"handoff, then steer result", true, 0, 1},
+		{"handoff, then steer result, routed in reverse", true, 1, 0},
+		{"steer answer, then turn result", false, 1, 0},
+		{"steer answer, then turn result, routed in reverse", false, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv, host := startScriptedHostConversation(t, "")
+			answerOrder(conv, tc.first, tc.second)
+			_ = nextEvent(t, conv.Events()) // controller.ready
+			turn, root := startScriptedTurn(t, conv, host)
+			steer, outcome := steerAsync(t, conv, host, turn)
+
+			if tc.rootFirst {
+				host.send(plainResult(root))
+				host.send(receiptResult(steer, "acp-host:2"))
+			} else {
+				host.send(plainResult(steer))
+				host.send(receiptResult(root, "acp-host:2"))
+			}
+			if err := steerOutcome(t, outcome); err != nil {
+				t.Fatalf("Steer = %v, want delivered", err)
+			}
+			done := completionsOf(t, conv, turn)
+			if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:2" {
+				t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
+			}
+		})
+	}
+}
+
+// After a daemon restart mid-turn, the reattached conversation can steer the
+// turn it adopted. The earlier attachment's prompt answers through the host.
+func TestACPSteerPromptSteersAnAdoptedTurn(t *testing.T) {
+	t.Run("the adopted prompt hands off", func(t *testing.T) {
+		conv, host := startScriptedHostConversation(t, "durable-turn")
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		steer, outcome := steerAsync(t, conv, host, "durable-turn")
+		host.send(`{"jsonrpc":"2.0","method":"` + persistenthost.ACPPromptHandoffMethod + `","params":{"result":{"stopReason":"end_turn"}}}`)
+		if err := steerOutcome(t, outcome); err != nil {
+			t.Fatalf("Steer = %v, want delivered at the handoff", err)
+		}
+		host.send(receiptResult(steer, "acp-host:3"))
+		done := completionsOf(t, conv, "durable-turn")
+		if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:3" {
+			t.Fatalf("turn completions = %+v, want one completed with the steer prompt's receipt", done)
+		}
+	})
+	t.Run("the adopted prompt finishes the turn", func(t *testing.T) {
+		conv, host := startScriptedHostConversation(t, "durable-turn")
+		_ = nextEvent(t, conv.Events()) // controller.ready
+		steer, outcome := steerAsync(t, conv, host, "durable-turn")
+		host.send(plainResult(steer))
+		if err := steerOutcome(t, outcome); err != nil {
+			t.Fatalf("Steer = %v, want delivered", err)
+		}
+		// The steer prompt has returned, but the host still runs the turn.
+		if done := turnCompletions(t, conv.Events(), "durable-turn", 100*time.Millisecond); len(done) != 0 {
+			t.Fatalf("adopted turn completed before the host's result: %+v", done)
+		}
+		host.send(`{"jsonrpc":"2.0","method":"` + persistenthost.ACPPromptResultMethod + `","params":{"eventId":"acp-host:4","result":{"stopReason":"end_turn"}}}`)
+		done := completionsOf(t, conv, "durable-turn")
+		if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:4" {
+			t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
+		}
+	})
+}
+
+// A steer the agent has not answered by the wait is not reported delivered:
+// it may yet be refused.
+func TestACPSteerPromptUnansweredSteerIsUncertain(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+	}{
+		{"the wait runs out", func() (context.Context, context.CancelFunc) { return context.Background(), func() {} }},
+		{"the caller gives up", func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), 30*time.Millisecond)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv, host := startScriptedHostConversation(t, "")
+			conv.steering.prompt = testSteerPrompt(80 * time.Millisecond)
+			_ = nextEvent(t, conv.Events()) // controller.ready
+			turn, root := startScriptedTurn(t, conv, host)
+
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			outcome := make(chan error, 1)
+			go func() {
+				_, err := conv.Steer(ctx, turn, ports.ChatUserMessage{Text: "edit staging.yaml instead"})
+				outcome <- err
+			}()
+			steer := host.nextPrompt()
+			err := steerOutcome(t, outcome)
+			var refusal interface{ ChatRefusal() bool }
+			if !errors.Is(err, errSteerUnconfirmed) || errors.As(err, &refusal) || errors.Is(err, ports.ErrChatNoSteerableTurn) {
+				t.Fatalf("Steer = %v, want an uncertain delivery", err)
+			}
+			conv.mu.Lock()
+			segment := conv.steerSegment
+			conv.mu.Unlock()
+			if segment != 0 {
+				t.Fatalf("steer segment = %d, want 0 for guidance not known to have landed", segment)
+			}
+
+			// The agent refuses it after all; the turn's own prompt carries on.
+			host.send(`{"jsonrpc":"2.0","id":` + steer + `,"error":{"code":-32600,"message":"a prompt is already running"}}`)
+			if done := turnCompletions(t, conv.Events(), turn, 100*time.Millisecond); len(done) != 0 {
+				t.Fatalf("turn completed on the late refusal: %+v", done)
+			}
+			host.send(receiptResult(root, "acp-host:5"))
+			done := completionsOf(t, conv, turn)
+			if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:5" {
+				t.Fatalf("turn completions = %+v, want one completed", done)
+			}
+		})
+	}
+}
+
+// The host's stall watchdog answers every prompt of a steered turn. The turn
+// ends once, failed, with the host's receipt.
+func TestACPSteerPromptStallFailureEndsTheTurnOnce(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	steer, outcome := steerAsync(t, conv, host, turn)
+	host.send(`{"jsonrpc":"2.0","id":` + root + `,"error":{"code":-32603,"message":"provider stopped responding"}}`)
+	host.send(`{"jsonrpc":"2.0","id":` + steer + `,"error":{"code":-32603,"message":"provider stopped responding","data":{"` +
+		persistenthost.ACPEventIDMetaKey + `":"acp-host:6"}}}`)
+	if err := steerOutcome(t, outcome); err == nil || !strings.Contains(err.Error(), "stopped responding") {
+		t.Fatalf("Steer = %v, want the stall failure", err)
+	}
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].TurnState != domain.TurnStateFailed || done[0].ProviderEventID != "acp-host:6" {
+		t.Fatalf("turn completions = %+v, want one failed with the host's receipt", done)
+	}
+}
