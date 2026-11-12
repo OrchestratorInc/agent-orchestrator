@@ -943,7 +943,9 @@ export const Sidebar = memo(function Sidebar({
 	const standaloneWorkspace = useMemo((): WorkspaceSummary | undefined => {
 		const scratchpads = ownScratchpadWorkspaces(workspaces);
 		const local = scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND);
-		if (scratchpads.length === 0) return undefined;
+		// Cloud standalone agents alone make a section only when one holds a session:
+		// an agent project with none (a start that was refused) has nothing to show.
+		if (!local && !scratchpads.some((workspace) => workspace.sessions.length > 0)) return undefined;
 		if (scratchpads.length === 1 && local) return local;
 		return {
 			...(local ?? scratchpadSummary(t("standalone.workspaceName"))),
@@ -1827,6 +1829,14 @@ const ProjectItem = memo(function ProjectItem({
 		if (consumeDragClick(workspace.id)) return;
 		if (isStandalone) {
 			toggleDisclosure();
+			return;
+		}
+		// A Cloud standalone agent listed here (one shared with the person) has
+		// no board: its row opens its one session.
+		if (workspace.standaloneAgent) {
+			if (!expanded) toggleDisclosure();
+			const agentSession = workerSessions(workspace.sessions)[0];
+			if (agentSession) selection.goSession(workspace.id, agentSession.id);
 			return;
 		}
 		if (!expanded) {

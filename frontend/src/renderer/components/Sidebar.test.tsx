@@ -1201,6 +1201,45 @@ describe("Sidebar", () => {
 		});
 	});
 
+	it("opens a Cloud standalone agent shared with the person on its session, not on a board", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				workspace,
+				{
+					id: "agent-shared",
+					name: "Shared agent",
+					kind: "cloud",
+					cloudOrgId: "org-2",
+					standaloneAgent: true,
+					shared: { source: "link" },
+					path: "",
+					sessions: [{ ...session, id: "shared-agent", title: "Their work", workspaceId: "agent-shared", workspaceName: "Shared agent", cloud: { orgId: "org-2", shared: true } }],
+				},
+			],
+		});
+
+		const row = document.querySelector('li[data-project-id="agent-shared"]') as HTMLElement;
+		await user.click(within(row).getAllByText("Shared agent")[0]!);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "agent-shared", sessionId: "shared-agent" },
+		});
+		expect(navigateMock).not.toHaveBeenCalledWith(expect.objectContaining({ to: "/projects/$projectId" }));
+	});
+
+	it("shows no Scratchpad section for Cloud standalone agents that hold no session", () => {
+		renderSidebar({
+			workspaces: [
+				workspace,
+				{ id: "agent-refused", name: "Refused start", kind: "cloud", cloudOrgId: "org-1", standaloneAgent: true, path: "", sessions: [] },
+			],
+		});
+
+		expect(document.querySelector("[data-scratchpad-section]")).toBeNull();
+		expect(document.querySelector('li[data-project-id="agent-refused"]')).toBeNull();
+	});
+
 	it("collapses the Scratchpad section from its header", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
