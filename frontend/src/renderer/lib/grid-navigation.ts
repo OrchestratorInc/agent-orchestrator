@@ -65,3 +65,14 @@ export function measureVisibleRows(viewport: HTMLElement | null, grid: HTMLEleme
 	if (!(rowHeight > 0)) return 1;
 	return Math.max(1, Math.floor(viewport.clientHeight / rowHeight));
 }
+
+/**
+ * Bounds a move in a windowed grid: it may mount at most `maxMount` items past
+ * the `mountedCount` already mounted, so End in a huge list cannot mount every
+ * item in one update. Past that bound it stops on the furthest item it may
+ * mount, and pressing again goes on from there.
+ */
+export function boundedGridTarget(target: number, mountedCount: number, maxMount: number): number {
+	if (target < 0) return target;
+	return Math.min(target, Math.max(0, mountedCount) + Math.max(1, Math.floor(maxMount)) - 1);
+}

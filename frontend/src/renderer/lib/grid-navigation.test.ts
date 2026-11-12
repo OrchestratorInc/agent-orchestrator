@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { gridNavigationTarget, isGridNavigationKey, measureGridColumns, measureVisibleRows } from "./grid-navigation";
+import { boundedGridTarget, gridNavigationTarget, isGridNavigationKey, measureGridColumns, measureVisibleRows } from "./grid-navigation";
 
 describe("gridNavigationTarget", () => {
 	// 10 items, 4 columns:
@@ -53,6 +53,19 @@ describe("gridNavigationTarget", () => {
 	it("knows its keys", () => {
 		expect(isGridNavigationKey("PageDown")).toBe(true);
 		expect(isGridNavigationKey("Enter")).toBe(false);
+	});
+});
+
+describe("boundedGridTarget", () => {
+	it("lets a move mount at most a bounded number of items past those mounted", () => {
+		// End in 5,000 items with 24 mounted stops on the 120th, not the 5,000th.
+		expect(boundedGridTarget(4999, 24, 96)).toBe(119);
+		// Pressing End again goes on from the larger window.
+		expect(boundedGridTarget(4999, 144, 96)).toBe(239);
+		// Within the bound, the move is unchanged.
+		expect(boundedGridTarget(30, 24, 96)).toBe(30);
+		expect(boundedGridTarget(5, 24, 96)).toBe(5);
+		expect(boundedGridTarget(-1, 24, 96)).toBe(-1);
 	});
 });
 

@@ -19,7 +19,7 @@ import { useTranslation } from "react-i18next";
 import { Search } from "@/components/app-icons";
 import type { WorkspaceSession } from "../types/workspace";
 import { agentLabel } from "../lib/agent-options";
-import { gridNavigationTarget, isGridNavigationKey, measureGridColumns, measureVisibleRows, type GridNavigationKey } from "../lib/grid-navigation";
+import { boundedGridTarget, gridNavigationTarget, isGridNavigationKey, measureGridColumns, measureVisibleRows, type GridNavigationKey } from "../lib/grid-navigation";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { isMacPlatform } from "../lib/platform";
@@ -42,6 +42,12 @@ const PAGE_SIZE = 24;
  */
 const IDLE_BATCH = 6;
 const IDLE_LIMIT = 120;
+/**
+ * The most cards one key press may mount past those already mounted. End in a
+ * huge archive stops on the furthest card within it, and pressing End again
+ * goes on, so no single update mounts the whole archive.
+ */
+const MAX_MOUNT_PER_MOVE = 96;
 /** What Tab can reach inside a card: its own buttons and links. */
 const CARD_CONTROLS = "a[href], button:not(:disabled), input:not(:disabled), [tabindex]";
 
@@ -288,7 +294,11 @@ export function SessionArchiveModal({
 		const grid = gridRef.current;
 		const columns = measureGridColumns(grid);
 		const pageRows = measureVisibleRows(scrollerRef.current, grid, shown.length, columns);
-		const target = gridNavigationTarget(key, activePosition, results.length, columns, pageRows);
+		const target = boundedGridTarget(
+			gridNavigationTarget(key, activePosition, results.length, columns, pageRows),
+			shown.length,
+			MAX_MOUNT_PER_MOVE,
+		);
 		if (target < 0) return;
 		// Onto or near the last mounted row: mount up to the target and a page
 		// past it in this same render, so the selection never waits for a card.
@@ -314,7 +324,11 @@ export function SessionArchiveModal({
 		const order = [input, ...controls, ...(close ? [close] : [])];
 		const position = order.indexOf(target);
 		if (position < 0) return;
+		// The dialog's focus trap also handles Tab, ignoring preventDefault: on
+		// the dialog's last (or first) tabbable element it would wrap focus away
+		// from where this put it.
 		event.preventDefault();
+		event.stopPropagation();
 		const step = event.shiftKey ? -1 : 1;
 		order[(position + step + order.length) % order.length]?.focus();
 	};

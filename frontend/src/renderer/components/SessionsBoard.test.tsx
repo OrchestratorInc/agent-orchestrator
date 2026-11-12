@@ -1851,7 +1851,7 @@ describe("SessionsBoard", () => {
 		const archive = await expandArchive();
 		const archivedMergedRow = within(archive)
 			.getByText("archived merged worker")
-			.closest<HTMLElement>("[cmdk-item]");
+			.closest<HTMLElement>("[role='option']");
 		expect(archivedMergedRow).not.toBeNull();
 		expect(
 			within(archivedMergedRow!).queryByRole("button", { name: "Archive archived merged worker" }),
