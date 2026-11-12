@@ -238,3 +238,16 @@ it("names each organization when one email has accounts in several", async () =>
 	expect(document.querySelector('[data-agent-account="acct-a"]')).toHaveTextContent("a@example.com · Acme");
 	expect(document.querySelector('[data-agent-account="acct-p"]')).toHaveTextContent("a@example.com · Personal");
 });
+
+it("names the organization when signing in again lands in another one", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/{accountId}/login") return Promise.resolve({ data: login });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "mismatch", account: { ...saved, orgName: "Acme" } } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+	await user.click(await screen.findByRole("button", { name: "Check sign-in" }));
+	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This account is b@example.com · Acme. Sign in again with that login."));
+});

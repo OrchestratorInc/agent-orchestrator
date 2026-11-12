@@ -369,3 +369,73 @@ func TestListNamesEachAccountsOrganization(t *testing.T) {
 		t.Fatalf("signed-out team keeps its organization: %+v", v)
 	}
 }
+
+func TestSavedAccountKeepsItsOrganization(t *testing.T) {
+	ctx := context.Background()
+	t.Run("the folder switches organization outside AO", func(t *testing.T) {
+		svc, claude, _, root := newDuplicateFixture(t, "")
+		claude.orgOf, claude.orgNameOf = map[string]string{}, map[string]string{}
+		_, acme := startAdd(t, svc, claude, root, "a@example.com", "org-1")
+		claude.orgNameOf[acme.Account.Home] = "Acme"
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Fatal(err)
+		}
+		claude.orgOf[acme.Account.Home], claude.orgNameOf[acme.Account.Home] = "org-2", "Personal"
+		views, err := svc.List(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := viewByID(t, views, acme.Account.ID)
+		if v.SignedIn || v.IdentityErr == "" || v.OrgID != "org-1" || v.OrgName != "Acme" {
+			t.Fatalf("a folder now in another organization = %+v", v)
+		}
+	})
+	t.Run("sign in again to another organization is refused", func(t *testing.T) {
+		svc, claude, _, root := newDuplicateFixture(t, "")
+		claude.orgOf, claude.orgNameOf = map[string]string{}, map[string]string{}
+		_, acme := startAdd(t, svc, claude, root, "a@example.com", "org-1")
+		home := acme.Account.Home
+		delete(claude.signedInAs, home)
+		delete(claude.orgOf, home)
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Fatal(err)
+		}
+		signInAgain := func(org string) (LoginStatus, *AccountView) {
+			t.Helper()
+			start, err := svc.StartSignInAgain(ctx, acme.Account.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claude.signedInAs[home], claude.orgOf[home] = "a@example.com", org
+			status, view, err := svc.VerifyLogin(ctx, start.OperationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return status, view
+		}
+		if status, _ := signInAgain("org-2"); status != LoginMismatch {
+			t.Fatalf("sign in again to another organization = %q", status)
+		}
+		if _, signedIn := claude.signedInAs[home]; signedIn {
+			t.Fatal("the other organization's login stayed in the folder")
+		}
+		if status, view := signInAgain("org-1"); status != LoginComplete || view == nil || !view.SignedIn || view.OrgID != "org-1" {
+			t.Fatalf("sign in again to its own organization = %q %+v", status, view)
+		}
+	})
+	t.Run("an organization not seen since a restart is accepted", func(t *testing.T) {
+		svc, claude, store, root := newDuplicateFixture(t, "")
+		claude.orgOf = map[string]string{}
+		_, acme := startAdd(t, svc, claude, root, "a@example.com", "org-1")
+		delete(claude.signedInAs, acme.Account.Home)
+		restarted := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+		start, err := restarted.StartSignInAgain(ctx, acme.Account.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claude.signedInAs[acme.Account.Home], claude.orgOf[acme.Account.Home] = "a@example.com", "org-2"
+		if status, _, err := restarted.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
+			t.Fatalf("sign in again with no organization on record = %q, %v", status, err)
+		}
+	})
+}

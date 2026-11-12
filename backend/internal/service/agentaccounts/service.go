@@ -259,6 +259,13 @@ func sameOrg(a, b string) bool {
 	return a == "" || b == "" || a == b
 }
 
+func orgLabel(name, id string) string {
+	if name != "" {
+		return name
+	}
+	return id
+}
+
 func (s *Service) needsReading(id string, refresh bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -296,6 +303,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		}
 		s.mu.Unlock()
 	}
+	s.mu.Lock()
+	known := s.lastOrg[account.ID]
+	s.mu.Unlock()
 	switch {
 	case err != nil:
 	case !identity.SignedIn:
@@ -305,6 +315,10 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.identity.SignedIn = false
 		r.mismatch = true
 		r.identityErr = fmt.Sprintf("the folder is now signed in as %s, not %s", identity.Email, account.Email)
+	case !account.Device() && !sameOrg(known.id, identity.OrgID):
+		r.identity.SignedIn = false
+		r.mismatch = true
+		r.identityErr = fmt.Sprintf("the folder is now signed in to %s, not %s", orgLabel(identity.OrgName, identity.OrgID), orgLabel(known.name, known.id))
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
@@ -772,7 +786,10 @@ func (s *Service) finishSignInAgain(ctx context.Context, op *login, identity dom
 			saved = &views[i]
 		}
 	}
-	if op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email) {
+	s.mu.Lock()
+	known := s.lastOrg[op.account.ID]
+	s.mu.Unlock()
+	if (op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email)) || !sameOrg(known.id, identity.OrgID) {
 		s.endLogin(ctx, op, true)
 		return LoginMismatch, saved, nil
 	}

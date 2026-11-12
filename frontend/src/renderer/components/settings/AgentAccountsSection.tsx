@@ -82,7 +82,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 		else {
 			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
-			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: result.account?.email ?? "" }));
+			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
 		}
 	});
 	const closeLogin = (current: AgentAccountLogin) => {
