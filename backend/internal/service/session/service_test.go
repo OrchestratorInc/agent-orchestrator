@@ -2482,6 +2482,7 @@ func TestListWorkspaceFilesScratchUsesFilesystem(t *testing.T) {
 	writeWorkspaceFile(t, root, "README.md", "one\ntwo\n")
 	writeWorkspaceFile(t, root, ".env", "TOKEN=secret\n")
 	writeWorkspaceFile(t, root, "nested/task.txt", "do it")
+	writeWorkspaceFile(t, root, "notes/long.md", strings.Repeat("a line of notes\n", 3000))
 	writeWorkspaceFile(t, root, ".git/config", "[core]\n")
 	if err := os.WriteFile(filepath.Join(root, "image.bin"), []byte{0, 1, 2, 3}, 0o644); err != nil {
 		t.Fatal(err)
@@ -2507,15 +2508,19 @@ func TestListWorkspaceFilesScratchUsesFilesystem(t *testing.T) {
 			t.Fatalf("%s status = %q, want added", file.Path, file.Status)
 		}
 	}
-	wantPaths := []string{".env", "README.md", "image.bin", "nested/task.txt"}
+	wantPaths := []string{".env", "README.md", "image.bin", "nested/task.txt", "notes/long.md"}
 	if strings.Join(paths, "|") != strings.Join(wantPaths, "|") {
 		t.Fatalf("paths = %#v, want %#v", paths, wantPaths)
 	}
-	if byPath["README.md"].Additions != 0 || byPath["README.md"].Deletions != 0 {
-		t.Fatalf("README counts = +%d -%d, want +0 -0", byPath["README.md"].Additions, byPath["README.md"].Deletions)
+	// Every scratch file is new: the row counts its lines, as opening it does.
+	if byPath["README.md"].Additions != 2 || byPath["README.md"].Deletions != 0 {
+		t.Fatalf("README counts = +%d -%d, want +2 -0", byPath["README.md"].Additions, byPath["README.md"].Deletions)
 	}
-	if byPath["nested/task.txt"].Additions != 0 {
-		t.Fatalf("nested/task.txt additions = %d, want 0", byPath["nested/task.txt"].Additions)
+	if byPath["nested/task.txt"].Additions != 1 {
+		t.Fatalf("nested/task.txt additions = %d, want 1", byPath["nested/task.txt"].Additions)
+	}
+	if byPath["notes/long.md"].Additions != 3000 {
+		t.Fatalf("notes/long.md additions = %d, want 3000 past the binary sniff", byPath["notes/long.md"].Additions)
 	}
 	if !byPath["image.bin"].Binary || byPath["image.bin"].Additions != 0 || byPath["image.bin"].Deletions != 0 {
 		t.Fatalf("binary summary = %#v, want binary with zero counts", byPath["image.bin"])

@@ -1576,14 +1576,25 @@ func scratchWorkspaceFiles(root string) ([]WorkspaceFileSummary, bool, error) {
 			truncated = true
 			return filepath.SkipAll
 		}
-		_, binary, _, err := readWorkspaceTextFile(fullPath, 8192)
+		content, binary, sniffTruncated, err := readWorkspaceTextFile(fullPath, 8192)
 		if err != nil {
 			return err
+		}
+		// Every scratch file is new, so its additions are its line count, the
+		// same figure GetWorkspaceFile reports when the file is opened. The
+		// sniff already holds a small file whole; only larger text is reread.
+		additions := 0
+		if !binary {
+			if sniffTruncated {
+				additions, _ = countUntrackedTextLines(rootResolved, rel)
+			} else {
+				additions = textLineCount(content)
+			}
 		}
 		files = append(files, WorkspaceFileSummary{
 			Path:      rel,
 			Status:    WorkspaceFileAdded,
-			Additions: 0,
+			Additions: additions,
 			Deletions: 0,
 			Size:      info.Size(),
 			Binary:    binary,
