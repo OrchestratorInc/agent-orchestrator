@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
 	modelWarning: undefined as string | undefined,
 	modelWarningRetries: true,
 	offering: { ready: false, org: undefined as { id: string } | undefined, features: [] as string[] },
+	workspaces: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -73,7 +74,7 @@ vi.mock("./TaskComposer", () => ({
 }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => h.offering }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
-	useWorkspaceQuery: () => ({ data: [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }] }),
+	useWorkspaceQuery: () => ({ data: h.workspaces }),
 	useRemoteWorkspaces: () => ({ data: [] }),
 	workspaceQueryKeyForHost: () => ["workspaces"],
 }));
@@ -105,10 +106,25 @@ beforeEach(() => {
 	h.modelWarning = undefined;
 	h.modelWarningRetries = true;
 	h.offering = { ready: false, org: undefined, features: [] };
+	h.workspaces = [{ id: "proj-1", name: "Project", kind: "project", sessions: [] }];
 	window.localStorage.clear();
 });
 
 describe("NewChatPage", () => {
+	it("moves off a Cloud standalone agent's project once it knows it: a shared one to the Scratchpad, the person's own to a new agent", () => {
+		h.workspaces = [
+			{ id: "proj-1", name: "Project", kind: "project", sessions: [] },
+			{ id: "agent-shared", name: "Their agent", kind: "cloud", standaloneAgent: true, shared: { source: "link" }, sessions: [] },
+			{ id: "agent-1", name: "My agent", kind: "cloud", standaloneAgent: true, sessions: [] },
+		];
+		const page = renderPage();
+		expect(h.navigate).not.toHaveBeenCalled();
+		page.showProject("agent-shared");
+		expect(h.navigate).toHaveBeenLastCalledWith({ to: "/new", search: { project: undefined, host: undefined }, replace: true });
+		page.showProject("agent-1");
+		expect(h.navigate).toHaveBeenLastCalledWith({ to: "/new", search: { project: CLOUD_STANDALONE_WORKSPACE_ID, host: undefined }, replace: true });
+	});
+
 	it("offers Retry beside a model notice only when reading the list again can clear it", () => {
 		h.modelWarning = "Couldn't load Cloud's models for Codex.";
 		renderPage();

@@ -1,17 +1,23 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
-import { NewTaskNavigator } from "./NewTaskNavigator";
+import { CLOUD_CLASSIFY_WAIT_MS, NewTaskNavigator } from "./NewTaskNavigator";
 
 const { navigateMock, route, dialog, cloudLists } = vi.hoisted(() => ({
 	navigateMock: vi.fn(),
 	route: { onNewChat: false },
 	dialog: { props: undefined as { open: boolean; projectId?: string } | undefined },
-	// The Cloud lists' first read: loading, or settled.
-	cloudLists: { loading: false },
+	// The Cloud lists: answered, on their first read, or not started yet (as
+	// right after start-up); and whether the person is signed in to Cloud.
+	cloudLists: { state: "answered" as "answered" | "loading" | "notStarted", session: "authenticated" as "loading" | "authenticated" | "unauthenticated" },
 }));
+
+function cloudList<T>(data: T) {
+	if (cloudLists.state === "answered") return { status: "success", isLoading: false, data };
+	return { status: "pending", isLoading: cloudLists.state === "loading", data: undefined };
+}
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
@@ -23,18 +29,22 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		{ id: "cloud-1", kind: CLOUD_PROJECT_KIND, sessions: [] },
 	] }),
 	useRemoteWorkspaces: () => ({ data: [] }),
-	useCloudProjectsQuery: () => cloudLists.loading ? { data: undefined, isLoading: true } : { isLoading: false, data: [
+	useCloudProjectsQuery: () => cloudList([
 		{ id: "cloud-1", config: { sandboxProvider: "freestyle" } },
 		{ id: "coder-1", config: { sandboxProvider: "coder" } },
 		// A standalone agent's project on an organization that defaults to Coder.
 		{ id: "agent-1", config: {}, standaloneAgent: true },
-	] },
-	useSharedCloudWorkspacesQuery: () => cloudLists.loading ? { data: undefined, isLoading: true } : { isLoading: false, data: [
+	]),
+	useSharedCloudWorkspacesQuery: () => cloudList([
 		{ id: "shared-1", kind: CLOUD_PROJECT_KIND, sessions: [], shared: { source: "link" } },
 		{ id: "agent-shared", kind: CLOUD_PROJECT_KIND, sessions: [], shared: { source: "link" }, standaloneAgent: true },
-	] },
+	]),
+	workspaceQueryKey: ["workspaces"],
 	workspaceQueryKeyForHost: () => ["workspaces"],
 }));
+vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: cloudLists.session }) }));
+vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true, loading: false }) }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ error: undefined }) }));
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "freestyle", loaded: true }) }));
 vi.mock("../lib/cloud-offering", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/cloud-offering")>()),
@@ -47,8 +57,7 @@ vi.mock("./NewTaskDialog", () => ({
 	},
 }));
 
-function renderNavigator() {
-	const client = new QueryClient();
+function renderNavigator(client = new QueryClient()) {
 	const view = render(<QueryClientProvider client={client}><NewTaskNavigator /></QueryClientProvider>);
 	return { rerender: () => view.rerender(<QueryClientProvider client={client}><NewTaskNavigator /></QueryClientProvider>) };
 }
@@ -57,7 +66,8 @@ beforeEach(() => {
 	navigateMock.mockReset();
 	route.onNewChat = false;
 	dialog.props = undefined;
-	cloudLists.loading = false;
+	cloudLists.state = "answered";
+	cloudLists.session = "authenticated";
 	useUiStore.setState({ newTaskRequest: null, provisioningProjectIds: new Set() });
 });
 
@@ -102,7 +112,7 @@ describe("NewTaskNavigator", () => {
 	});
 
 	it("waits for the Cloud lists' first read before placing a request, so it never opens a new task in a shared agent", () => {
-		cloudLists.loading = true;
+		cloudLists.state = "loading";
 		const view = renderNavigator();
 		act(() => useUiStore.getState().requestNewTask("agent-shared"));
 		expect(navigateMock).not.toHaveBeenCalled();
@@ -110,10 +120,54 @@ describe("NewTaskNavigator", () => {
 		act(() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID));
 		expect(navigateMock).toHaveBeenCalledTimes(1);
 		act(() => useUiStore.getState().requestNewTask("agent-shared"));
-		cloudLists.loading = false;
+		cloudLists.state = "answered";
 		view.rerender();
 		expect(navigateMock).toHaveBeenLastCalledWith(expect.objectContaining({ to: "/new", search: { project: undefined, host: undefined } }));
 		expect(navigateMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("waits right after start-up too, before the Cloud lists have started, then places the request", () => {
+		cloudLists.state = "notStarted";
+		const view = renderNavigator();
+		act(() => useUiStore.getState().requestNewTask("agent-shared"));
+		expect(navigateMock).not.toHaveBeenCalled();
+		cloudLists.state = "loading";
+		view.rerender();
+		expect(navigateMock).not.toHaveBeenCalled();
+		cloudLists.state = "answered";
+		view.rerender();
+		expect(navigateMock).toHaveBeenCalledTimes(1);
+		expect(navigateMock).toHaveBeenLastCalledWith(expect.objectContaining({ to: "/new", search: { project: undefined, host: undefined } }));
+	});
+
+	it("places a request at once when Cloud lists will never answer (signed out), or for a local project", () => {
+		cloudLists.state = "notStarted";
+		cloudLists.session = "unauthenticated";
+		renderNavigator();
+		act(() => useUiStore.getState().requestNewTask("proj-1"));
+		expect(navigateMock).toHaveBeenLastCalledWith(expect.objectContaining({ search: { project: "proj-1", host: undefined } }));
+		cleanup();
+
+		cloudLists.session = "authenticated";
+		const client = new QueryClient();
+		client.setQueryData(["workspaces"], [{ id: "proj-1", kind: "single_repo", sessions: [] }]);
+		renderNavigator(client);
+		act(() => useUiStore.getState().requestNewTask("proj-1"));
+		expect(navigateMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("lets a request go as it is once its wait for the Cloud lists runs out", () => {
+		vi.useFakeTimers();
+		try {
+			cloudLists.state = "notStarted";
+			renderNavigator();
+			act(() => useUiStore.getState().requestNewTask("agent-shared"));
+			expect(navigateMock).not.toHaveBeenCalled();
+			act(() => vi.advanceTimersByTime(CLOUD_CLASSIFY_WAIT_MS));
+			expect(navigateMock).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("opens the new chat page for cloud projects too", () => {

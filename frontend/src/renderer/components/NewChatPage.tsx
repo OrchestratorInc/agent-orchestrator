@@ -177,6 +177,20 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			replace: true,
 		});
 	}, [hostId, navigate, pendingLaunch, projectId]);
+	// A request placed before the Cloud lists answered, or an old link, can name
+	// a Cloud standalone agent's project. An agent takes no new task: once the
+	// lists know it, the page moves to where one starts, another agent beside the
+	// person's own and the Scratchpad beside one shared with them.
+	const listedWorkspaces = useWorkspaceQuery({ enabled: !hostId }).data;
+	const agentWorkspace = hostId ? undefined : listedWorkspaces?.find((workspace) => workspace.id === projectId && workspace.standaloneAgent);
+	useEffect(() => {
+		if (!agentWorkspace || pendingLaunch) return;
+		void navigate({
+			to: "/new",
+			search: { project: agentWorkspace.shared ? undefined : CLOUD_STANDALONE_WORKSPACE_ID, host: undefined },
+			replace: true,
+		});
+	}, [agentWorkspace, navigate, pendingLaunch]);
 	const resolveLaunch = (clientMessageId: string) => {
 		clearPendingLaunch(hostKey, clientMessageId);
 		setLaunchRevision((revision) => revision + 1);
