@@ -2623,6 +2623,23 @@ func importOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
+		{
+			method: http.MethodGet, path: "/api/v1/imports/github-owners", id: "listImportGitHubOwners", tag: "import",
+			summary: "List the GitHub accounts gh on this machine can create a project's repository under",
+			resps: []respUnit{
+				{http.StatusOK, importsvc.GitHubOwnersResult{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/imports/github-availability", id: "checkImportGitHubAvailability", tag: "import",
+			summary: "Check whether a GitHub repository name is free to create for a project import",
+			pathParams: []any{importsvc.GitHubAvailabilityQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, importsvc.GitHubAvailabilityResult{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
 	}
 }
 

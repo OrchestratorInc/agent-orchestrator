@@ -2563,3 +2563,61 @@ func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *te
 		t.Fatal("marker not claimed")
 	}
 }
+
+func TestManager_InitializeRepositoryCreatesNewProjectFolder(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+
+	newFolder := func(t *testing.T) string {
+		t.Helper()
+		base := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", base)
+		return filepath.Join(base, "ao", "projects", "fresh")
+	}
+
+	t.Run("makes the folder and its parents, then it can be added", func(t *testing.T) {
+		dir := newFolder(t)
+		result, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		if err != nil {
+			t.Fatalf("InitializeRepository: %v", err)
+		}
+		if result.Path != dir {
+			t.Fatalf("Path = %q, want %q", result.Path, dir)
+		}
+		if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD").CombinedOutput(); err != nil {
+			t.Fatalf("expected initial commit: %v (%s)", err, out)
+		}
+		if _, err := m.Add(ctx, project.AddInput{Path: dir, ProjectID: ptr("fresh")}); err != nil {
+			t.Fatalf("Add after create: %v", err)
+		}
+	})
+
+	t.Run("refuses a folder that already exists and leaves it alone", func(t *testing.T) {
+		dir := isolatedPlainFolder(t)
+		keep := filepath.Join(dir, "keep.txt")
+		if err := os.WriteFile(keep, []byte("mine\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		wantCode(t, err, "PATH_EXISTS")
+		if _, err := os.Stat(keep); err != nil {
+			t.Fatalf("existing file touched: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
+			t.Fatalf("existing folder was initialized: %v", err)
+		}
+	})
+
+	t.Run("removes the new folder when setup fails", func(t *testing.T) {
+		dir := newFolder(t)
+		// No git on PATH: git init fails after the folder was made.
+		t.Setenv("PATH", t.TempDir())
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		if err == nil {
+			t.Fatal("expected failure without git")
+		}
+		if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+			t.Fatalf("new folder left behind after failure: %v", statErr)
+		}
+	})
+}

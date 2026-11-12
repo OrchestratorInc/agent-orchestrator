@@ -83,6 +83,10 @@ type ClonePreparationCleanupInput struct {
 // InitializeRepositoryInput is the body shape for POST /api/v1/projects/initialize.
 type InitializeRepositoryInput struct {
 	Path string `json:"path"`
+	// Create makes Path, which must not exist yet, before initializing it: a
+	// new, empty project. Missing parent folders are created too. The folder is
+	// removed again when initialization fails.
+	Create bool `json:"create,omitempty"`
 }
 
 // InitializeRepositoryResult reports the repository path initialized for onboarding.
