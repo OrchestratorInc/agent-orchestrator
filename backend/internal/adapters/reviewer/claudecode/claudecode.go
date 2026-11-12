@@ -58,12 +58,15 @@ func (r *Reviewer) ReviewChatHarness() domain.AgentHarness { return domain.Harne
 // through an AO-owned prompt file so only the short task-file reference is
 // terminal-visible.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
-	agentSessionID := workeragent.SessionUUID(inv.ReviewerID)
+	agentSessionID, err := r.freshSessionID(ctx, inv)
+	if err != nil {
+		return ports.ReviewCommandSpec{}, err
+	}
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config: inv.Config,
-		// Pin the same deterministic reviewer-native id we persist. Hooks can
-		// later replace it with Claude's reported id, but restore must never start
-		// from an id that the process was not launched with.
+		// Pin the same reviewer-native id we persist. Hooks can later replace
+		// it with Claude's reported id, but restore must never start from an id
+		// that the process was not launched with.
 		SessionID:        inv.ReviewerID,
 		NativeSessionID:  agentSessionID,
 		WorkspacePath:    inv.WorkspacePath,
@@ -119,6 +122,28 @@ func pinDefaultMode(argv []string) ([]string, error) {
 		extra = append(extra, "--settings", `{"permissions":{"defaultMode":"default"}}`)
 	}
 	return slices.Insert(argv, end, extra...), nil
+}
+
+// freshSessionID is the id a new reviewer conversation launches with. The id
+// derived from the reviewer is the same on every fresh launch for a worker, and
+// Claude Code exits with "Session ID ... is already in use" when --session-id
+// names a conversation that exists, so a taken id is replaced with a new one.
+func (r *Reviewer) freshSessionID(ctx context.Context, inv ports.ReviewInvocation) (string, error) {
+	derived := workeragent.SessionUUID(inv.ReviewerID)
+	probe, canProbe := r.agent.(ports.AgentInterfaceHandoffHistoryProbe)
+	minter, canMint := r.agent.(ports.AgentFreshNativeSessionIDProvider)
+	if !canProbe || !canMint {
+		return derived, nil
+	}
+	session := ports.SessionRef{ID: inv.ReviewerID, WorkspacePath: inv.WorkspacePath}
+	taken, err := probe.NativeConversationExists(ctx, session, derived, nil)
+	if err != nil {
+		return "", err
+	}
+	if taken {
+		return minter.NewNativeSessionID(), nil
+	}
+	return derived, nil
 }
 
 // PreLaunch runs reviewer-specific preflight. For Claude Code this installs the
