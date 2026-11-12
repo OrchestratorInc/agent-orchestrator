@@ -38,7 +38,7 @@ func (r *renderedReadinessRuntime) GetStyledOutput(context.Context, ports.Runtim
 
 const testTrustDialog = "Do you trust the contents of this directory?"
 
-func newRenderedReadinessManager(rt ports.Runtime, msg *fakeMessenger, hints ports.PromptReadinessHints) *Manager {
+func newRenderedReadinessManager(rt *renderedReadinessRuntime, msg *fakeMessenger, hints ports.PromptReadinessHints) *Manager {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	return New(Deps{
