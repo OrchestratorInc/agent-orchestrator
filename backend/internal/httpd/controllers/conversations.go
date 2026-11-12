@@ -1342,6 +1342,14 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_TITLE_REQUIRED", "title is required", nil)
 
+	// Checked before ErrProviderRefused: a steer into a lost session is wrapped
+	// as a refusal so its delivery handle settles, but the conversation is not
+	// fine, and the client needs the resume guidance.
+	case errors.Is(err, ports.ErrChatProviderSessionLost):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_PROVIDER_SESSION_LOST",
+			"the agent's process lost this conversation and was stopped; resume the agent to continue", nil)
+
 	case errors.Is(err, chatsvc.ErrProviderRefused):
 		// The provider declined and the conversation is fine. Its own explanation is
 		// carried through: it says something the user can act on, which a generic
@@ -1386,11 +1394,6 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 	case errors.Is(err, ports.ErrChatAuthRequired):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_AUTH_REQUIRED", "the agent is installed but not authenticated", nil)
-
-	case errors.Is(err, ports.ErrChatProviderSessionLost):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
-			"CHAT_PROVIDER_SESSION_LOST",
-			"the agent's process lost this conversation and was stopped; resume the agent to continue", nil)
 
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		// Deliberately not a silent recovery: the client must offer the user a

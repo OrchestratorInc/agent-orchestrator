@@ -193,6 +193,40 @@ func TestInterruptedPromptIntoLostSessionStillStopsProvider(t *testing.T) {
 	t.Fatalf("no turn completion: %+v", events)
 }
 
+func sessionNotFoundError() error {
+	return &acpsdk.RequestError{Code: -32603, Message: "Internal error",
+		Data: map[string]any{"details": "Session not found"}}
+}
+
+// A Close that detached first (daemon shutdown) consumed closeOnce. The lost
+// session must still terminate the host, or the next daemon reattaches to it.
+func TestLostSessionEscalatesAnEarlierDetach(t *testing.T) {
+	h := newLostSessionHost(t)
+	if err := h.conv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.terminations.Load(); got != 0 {
+		t.Fatalf("detach terminated the host: %d", got)
+	}
+	err := h.conv.providerSessionLost(fmt.Errorf("set ACP session option %q: %w", "model", sessionNotFoundError()))
+	if !errors.Is(err, ports.ErrChatProviderSessionLost) {
+		t.Fatalf("error = %v, want ErrChatProviderSessionLost", err)
+	}
+	if got := h.terminations.Load(); got != 1 {
+		t.Fatalf("provider terminations after lost session = %d, want 1", got)
+	}
+}
+
+func TestLostSessionReportsAFailedStop(t *testing.T) {
+	h := newLostSessionHost(t)
+	stopErr := errors.New("host shutdown timed out")
+	h.conv.proc.terminate = func() error { h.terminations.Add(1); return stopErr }
+	err := h.conv.providerSessionLost(sessionNotFoundError())
+	if !errors.Is(err, ports.ErrChatProviderSessionLost) || !errors.Is(err, stopErr) {
+		t.Fatalf("error = %v, want both the lost session and the failed stop", err)
+	}
+}
+
 func TestSteerIntoLostSessionIsARefusalAndStopsProvider(t *testing.T) {
 	h := newLostSessionHost(t)
 	h.conv.activeTurn = "durable-turn"

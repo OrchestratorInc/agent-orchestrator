@@ -1031,8 +1031,12 @@ func (c *conversation) finishPrompt(
 	if sessionLost {
 		// Ready would let the queue drain into a provider that cannot serve it.
 		// Stopping ends the stream after the failed turn above, so the controller
-		// settles it and reports the session exited.
-		c.stopLostProvider()
+		// settles it and reports the session exited. The failed turn is already
+		// on the stream, so a failed stop can only be logged.
+		if stopErr := c.stopLostProvider(); stopErr != nil {
+			c.log.Error("chat: failed to stop ACP provider after its session was lost",
+				"turn", turnID, "error", stopErr)
+		}
 		return
 	}
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerReady})
@@ -1321,7 +1325,9 @@ func (c *conversation) providerSessionLost(err error) error {
 		return err
 	}
 	lost := c.markSessionLost(err)
-	c.stopLostProvider()
+	if stopErr := c.stopLostProvider(); stopErr != nil {
+		return fmt.Errorf("%w; stopping the provider failed: %w", lost, stopErr)
+	}
 	return lost
 }
 
@@ -1340,7 +1346,25 @@ func (c *conversation) markSessionLost(err error) error {
 
 // stopLostProvider stops the provider without session/close: the agent has no
 // session to close, and the saved transcript must survive for resume.
-func (c *conversation) stopLostProvider() { _ = c.closeProvider(true, false) }
+//
+// A concurrent Close may already have used closeOnce to detach, which only
+// releases the transport and keeps a persistent host alive for the next
+// daemon. A detach assumes the host can still serve the conversation, which a
+// lost session rules out, so escalate it to termination. The host's terminate
+// is idempotent and reaches the host through its own shutdown channel, not the
+// detached transport.
+func (c *conversation) stopLostProvider() error {
+	if err := c.closeProvider(true, false); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	detached := c.detaching
+	c.mu.Unlock()
+	if detached && c.proc.terminate != nil {
+		return c.proc.terminate()
+	}
+	return nil
+}
 
 func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	var closeErr error
