@@ -2310,6 +2310,16 @@ textarea,
 	}
 }
 
+[data-host-offline] *,
+[data-host-offline] *::before,
+[data-host-offline] *::after {
+	animation: none;
+}
+
+[data-host-offline] .animate-attention-card-pulse::before {
+	opacity: 0.5;
+}
+
 @keyframes ao-startup-logo-breathe {
 	0%,
 	100% {
