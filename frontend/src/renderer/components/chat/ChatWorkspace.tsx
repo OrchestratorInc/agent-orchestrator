@@ -4418,9 +4418,20 @@ export function Timeline({
 		// only start once they are back), and for the moments after the window is seen
 		// again while rows that landed hidden measure.
 		const now = performance.now();
-		if (viewportResize.current || !initialLayoutDone.current || now - initialLayoutAt.current < INITIAL_SNAP_MS ||
-			now - entranceGate.catchUpAt < INITIAL_SNAP_MS || pageHidden()) {
-			if (viewportResize.current || isFlying()) cancelScrollFollow();
+		const hidden = pageHidden();
+		const opening = !initialLayoutDone.current || now - initialLayoutAt.current < INITIAL_SNAP_MS;
+		if (viewportResize.current || opening || now - entranceGate.catchUpAt < INITIAL_SNAP_MS || hidden) {
+			if (!viewportResize.current && !opening && isFlying()) {
+				// Nothing automatic glides in a catch-up (and returning drops a glide queued
+				// while hidden), so a glide in flight is the reader's own send or Jump to
+				// latest: keep it on course to the new end. Hidden, it could not play.
+				if (!hidden) {
+					reaim();
+					return;
+				}
+				cancelScrollFollow();
+			}
+			if (viewportResize.current) cancelScrollFollow();
 			node.scrollTop = node.scrollHeight;
 			markWritten(node.scrollTop);
 			return;
