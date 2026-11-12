@@ -2190,6 +2190,8 @@
 	"shell.moreArtifacts": "+{{count}} ещё",
 	"shell.openArtifactsInInspector": "Открыть в инспекторе",
 	"artifacts.sessionEmpty": "В этой сессии пока нет артефактов.",
+	"artifacts.newArtifact": "Новый артефакт: {{name}}",
+	"artifacts.openNew": "Открыть",
 	"artifacts.notListedYet": "{{name}} пока нет среди артефактов этой сессии. Файл откроется здесь, как только сессия его покажет.",
 	"artifacts.unavailable": "Этот файл больше недоступен.",
 	"artifacts.accessError": "Не удалось загрузить артефакты этой сессии. Повторите попытку.",

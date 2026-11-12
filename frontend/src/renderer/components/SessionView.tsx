@@ -2168,13 +2168,22 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const inspector = useUiStore.getState().inspectorSessions[uiSessionId];
 		const busy = filesPoppedOut || (browserPoppedOut && hasBrowserContent)
 			|| Boolean(inspector?.isOpen && (inspector.view === "files" || (inspector.view === "browser" && hasBrowserContent)));
+		const newest = added.reduce((latest, file) => ((Date.parse(file.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? file : latest));
 		if (busy) {
 			setArtifactsUnseen(uiSessionId, true);
+			// The badge sits on the rail, which a maximized Browser covers and a
+			// screen reader does not announce; the toast stays above overlays and
+			// is a polite status. One per session, so a burst of screenshots
+			// replaces it rather than stacking.
+			showGlobalToast(t("artifacts.newArtifact", { name: newest.name }), undefined, {
+				tone: "info",
+				dedupeKey: `artifact-registered:${uiSessionId}`,
+				action: { label: t("artifacts.openNew"), run: () => handleOpenArtifact({ path: newest.path }) },
+			});
 			return;
 		}
-		const newest = added.reduce((latest, file) => ((Date.parse(file.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? file : latest));
 		handleOpenArtifact({ path: newest.path });
-	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, artifactListUnsettled, hasInspector, setArtifactsUnseen, terminated, uiSessionId]);
+	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, artifactListUnsettled, hasInspector, setArtifactsUnseen, showGlobalToast, t, terminated, uiSessionId]);
 
 	// A file written moments ago, or one past the artifact list cap, is not in
 	// the cached session, and the Files inspector can only show listed

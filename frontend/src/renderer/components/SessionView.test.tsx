@@ -5890,7 +5890,14 @@ describe("SessionView", () => {
 
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
-
+			// The toast reaches a maximized Browser and screen readers; Open shows the file.
+			const toast = useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === "artifact-registered:sess-1");
+			expect(toast?.title).toContain("shot.png");
+			expect(toast?.action).toBeDefined();
+			act(() => toast?.action?.run());
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(screen.getByText("selected shot.png")).toBeInTheDocument();
+			act(() => useUiStore.getState().setInspectorView("sess-1", "files"));
 			act(() => useUiStore.getState().setInspectorView("sess-1", "artifacts"));
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(false);
 		} finally {
