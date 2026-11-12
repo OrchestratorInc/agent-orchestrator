@@ -79,6 +79,8 @@ export function useNewLocalProject({ onCreated }: {
 
 	const [source, setSource] = useState<LocalProjectSource>("folder");
 	const [folder, setFolder] = useState<string | null>(null);
+	const folderRef = useRef(folder);
+	useLayoutEffect(() => { folderRef.current = folder; }, [folder]);
 	const [remoteUrl, setRemoteUrl] = useState("");
 	const [destinationParent, setDestinationParent] = useState(DEFAULT_CLONE_PARENT);
 	const [name, setNameValue] = useState("");
@@ -432,8 +434,9 @@ export function useNewLocalProject({ onCreated }: {
 			haptics.error();
 			if (mounted.current) {
 				setError(localProjectErrorMessage(cause));
-				// What the daemon thinks now, so the form shows the steps still to run.
-				if (source === "folder" && folder) void runCheck(folder);
+				// What the daemon thinks now, so the form shows the steps still to run;
+				// only for the folder still chosen, never over a newer pick's check.
+				if (source === "folder" && folder && folderRef.current === folder) void runCheck(folder);
 			}
 		} finally {
 			if (mounted.current) {

@@ -187,7 +187,7 @@ function ChosenFolderSection({ project }: { project: NewLocalProject }) {
 		<SettingsSection title="Folder" footer={footer} modifiers={sectionModifiers(t)}>
 			<HStack spacing={space.md} modifiers={[accessibilityIdentifier("new-local-project-folder")]}>
 				<PathLabel title={placeTitle(folder, project.home)} detail={displayPath(folder, project.home)} systemImage={symbols.folder.ios} />
-				<Button label="Change" onPress={() => project.changeFolder("folder")} modifiers={[buttonStyle("borderless"), accessibilityLabel(`Change folder from ${baseName(folder)}`)]} />
+				<Button label="Change" onPress={() => project.changeFolder("folder")} modifiers={[buttonStyle("borderless"), disabledModifier(project.busy), accessibilityLabel(`Change folder from ${baseName(folder)}`)]} />
 			</HStack>
 		</SettingsSection>
 	);
@@ -280,7 +280,7 @@ function DestinationSection({ project }: { project: NewLocalProject }) {
 		<SettingsSection title={destinationTitle(project.source)} modifiers={sectionModifiers(t)}>
 			<HStack spacing={space.md} modifiers={[accessibilityIdentifier("new-local-project-destination")]}>
 				<PathLabel title={placeTitle(project.destinationParent, project.home)} detail={shown} systemImage={symbols.folder.ios} />
-				<Button label="Change" onPress={() => project.changeFolder("destination")} modifiers={[buttonStyle("borderless"), accessibilityLabel(`Change where the project is made, from ${shown}`)]} />
+				<Button label="Change" onPress={() => project.changeFolder("destination")} modifiers={[buttonStyle("borderless"), disabledModifier(project.busy), accessibilityLabel(`Change where the project is made, from ${shown}`)]} />
 			</HStack>
 		</SettingsSection>
 	);
@@ -369,7 +369,7 @@ function BrowserSection({ project, target }: { project: NewLocalProject; target:
 					{canCancel ? <Button label="Cancel" onPress={project.cancelBrowse} modifiers={[buttonStyle("borderless")]} /> : null}
 				</HStack>
 				<FolderFilterRow project={project} />
-				<Button onPress={() => { if (!project.listingBusy) project.choose(listing.path); }} modifiers={[disabledModifier(project.listingBusy)]} testID="new-local-project-choose-here">
+				<Button onPress={() => { if (!project.listingBusy && !project.busy) project.choose(listing.path); }} modifiers={[disabledModifier(project.listingBusy || project.busy)]} testID="new-local-project-choose-here">
 					<Label title={chooseHereLabel(target, project.source)} systemImage={symbols.checkmark.ios} />
 				</Button>
 				{project.entries.map((entry) => (

@@ -506,4 +506,29 @@ describe("useNewLocalProject", () => {
 		expect(fixtures.cleanupClone).not.toHaveBeenCalled();
 		expect(onCreated).toHaveBeenCalledWith("studio", "sample");
 	});
+
+	it("holds the destination while the clone is still being made, and removes nothing before the add", async () => {
+		let cloned!: () => void;
+		fixtures.prepareClone.mockImplementation((_cfg: unknown, input: { destinationParent: string }) => new Promise((resolve) => {
+			cloned = () => {
+				const path = `${input.destinationParent}/sample`;
+				fixtures.repos.set(path, { isRepo: true, hasCommit: true, hasOrigin: true });
+				resolve({ path, preparationId: "prep-1" });
+			};
+		}));
+		await mount();
+		await act_(() => project().chooseSource("clone"));
+		await act_(() => project().setRemoteUrl("https://x/sample"));
+		let pending!: Promise<void>;
+		await act(async () => { pending = project().create(); });
+		// prepareClone is still running.
+		await act_(() => project().changeFolder("destination"));
+		await act_(() => project().choose(`${HOME}/code`));
+		expect(project().browseTarget).toBeNull();
+		expect(project().destinationParent).toBe("~/ao/projects");
+		await act_(async () => { cloned(); await pending; });
+		expect(fixtures.cleanupClone).not.toHaveBeenCalled();
+		expect(fixtures.addFolderProject).toHaveBeenCalledWith(expect.anything(), { path: "~/ao/projects/sample", clonePreparationId: "prep-1" });
+		expect(onCreated).toHaveBeenCalledWith("studio", "sample");
+	});
 });

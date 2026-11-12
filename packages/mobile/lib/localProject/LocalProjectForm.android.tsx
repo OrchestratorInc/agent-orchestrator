@@ -300,7 +300,7 @@ function ChosenFolderSection({ project }: { project: NewLocalProject }) {
 				headline={placeTitle(folder, project.home)}
 				supporting={displayPath(folder, project.home)}
 				leading={<RowIcon name="folder" />}
-				trailing={<TextButton onClick={() => project.changeFolder("folder")}><ComposeText>Change</ComposeText></TextButton>}
+				trailing={<TextButton enabled={!project.busy} onClick={() => project.changeFolder("folder")}><ComposeText>Change</ComposeText></TextButton>}
 				testID="new-local-project-folder"
 			/>
 		</GroupedSection>
@@ -408,7 +408,7 @@ function DestinationSection({ project }: { project: NewLocalProject }) {
 				headline={placeTitle(project.destinationParent, project.home)}
 				supporting={shown}
 				leading={<RowIcon name="folder" />}
-				trailing={<TextButton onClick={() => project.changeFolder("destination")}><ComposeText>Change</ComposeText></TextButton>}
+				trailing={<TextButton enabled={!project.busy} onClick={() => project.changeFolder("destination")}><ComposeText>Change</ComposeText></TextButton>}
 				testID="new-local-project-destination"
 			/>
 		</GroupedSection>
@@ -448,7 +448,7 @@ function BrowserSection({ project, target }: { project: NewLocalProject; target:
 					onPress={project.atRoot ? undefined : () => project.openDirectory(listing.parent)}
 					testID="new-local-project-browse-path"
 				/>
-				<GroupedRow headline={chooseHereLabel(target, project.source)} leading={<RowIcon name="check" accent />} onPress={() => { if (!project.listingBusy) project.choose(listing.path); }} disabled={project.listingBusy} testID="new-local-project-choose-here" />
+				<GroupedRow headline={chooseHereLabel(target, project.source)} leading={<RowIcon name="check" accent />} onPress={() => { if (!project.listingBusy && !project.busy) project.choose(listing.path); }} disabled={project.listingBusy || project.busy} testID="new-local-project-choose-here" />
 				{project.entries.map((entry) => (
 					<GroupedRow
 						key={entry.path}
