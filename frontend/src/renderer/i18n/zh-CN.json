@@ -4192,6 +4192,8 @@
 	"automations.templates.setup": "需要所选项目的 GitHub 读取权限。",
 	"automations.templates.title": "从模板开始",
 	"automations.templates.description": "选择一个起点，按需调整，然后交给你的智能体。",
+	"automations.section.runIn": "运行位置",
+	"automations.templates.use": "使用模板",
 	"automations.templates.label": "模板",
 	"automations.filter.status": "状态",
 	"automations.filter.project": "项目",

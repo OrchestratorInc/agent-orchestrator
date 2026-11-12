@@ -643,17 +643,23 @@ describe("AutomationsView", () => {
 		renderView();
 		await openBlankCreate(userEvent);
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
-		expect(dialog).toHaveClass("border-(--color-border-overlay)", "bg-popover", "rounded-lg");
-		expect(dialog.querySelector(".border-b")).toBeNull();
-		expect(dialog.querySelector(".border-t")).toBeNull();
-		expect(within(dialog).getByRole("heading", { name: "Create automation" })).toHaveClass(
-			"settings-dialog-title",
-			"px-4",
-			"pt-3",
-		);
+		expect(dialog).toHaveClass("border-(--color-border-overlay)", "bg-popover", "rounded-panel");
+		expect(within(dialog).getByRole("heading", { name: "Create automation" })).toHaveClass("settings-dialog-title");
 		expect(dialog).toHaveClass("left-1/2", "top-1/2");
 		expect(dialog).not.toHaveClass("right-0", "h-dvh");
 		expect(within(dialog).queryByText(/purpose|more options/i)).not.toBeInTheDocument();
+	});
+
+	it("fills the create form from Use template without creating anything", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("button", { name: "Use template" }));
+		await user.click(await screen.findByRole("menuitem", { name: /Weekly release notes/ }));
+		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("Weekly release notes");
+		expect((within(dialog).getByRole("textbox", { name: "Prompt" }) as HTMLTextAreaElement).value).toMatch(/^Draft weekly release notes/);
+		expect(within(dialog).getByText("Requires GitHub read access for the selected project.")).toBeInTheDocument();
 	});
 
 	it("shows AO-styled inline feedback when required fields are missing", async () => {
