@@ -32,7 +32,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/termtheme"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
-	"github.com/aoagents/agent-orchestrator/backend/internal/wakeguard"
 )
 
 // Sentinel errors returned by the Session Manager; callers match them with
@@ -494,11 +493,8 @@ type Manager struct {
 	startupChatRetryDelays      []time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
-	// exitedWakes are terminal restarts started by a message for an exited
-	// agent; exitedWakeBudget limits them. See exited_delivery.go.
-	exitedWakeMu     sync.Mutex
-	exitedWakes      map[domain.SessionID]*terminalWake
-	exitedWakeBudget *wakeguard.Budget
+	wakeFailedMu                sync.Mutex
+	wakeFailedAt                map[domain.SessionID]time.Time
 	// launchStartWait bounds the wait to see a new supervised launch alive.
 	launchStartWait           time.Duration
 	interfaceRecoveryMu       sync.Mutex
@@ -3455,8 +3451,7 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 		if rec.HibernatedAt == nil && m.chat != nil && m.chat.HasLiveChatController(id) {
 			return nil
 		}
-		// Every wake caller drains the queue itself once the wake returns.
-		_, err = m.resumeAgentWithMode(ctx, id, false, true)
+		_, err = m.ResumeAgentWithMode(ctx, id)
 		if errors.Is(err, ErrResumeInProgress) {
 			m.agentOpMu.Lock()
 			operation = m.agentOperations[id]
@@ -3474,14 +3469,12 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
-	return m.resumeAgentWithMode(ctx, id, false, false)
+	return m.resumeAgentWithMode(ctx, id, false)
 }
 
 // resumeAgentWithMode preserves strict native-history intent for automatic
 // retries, including update stops that have no stale-binary failure marker.
-// callerDrains is set by callers that deliver the kept queue themselves after
-// the resume (a wake, a version move), so it is not drained twice.
-func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory, callerDrains bool) (result RestoreResult, err error) {
+func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool) (result RestoreResult, err error) {
 	defer func() { m.logRelaunchFailure("resume agent", id, err) }()
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
@@ -3620,23 +3613,14 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 			return RestoreResult{}, fmt.Errorf("resume agent %s: hibernation state changed: %w", id, ErrResumeInProgress)
 		}
 	}
-	chatResume := m.chat != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat
-	if chatResume {
-		// Messages may have queued while the agent was down: a failed version
-		// switch, or a send to the exited agent whose own restart failed. Every
-		// resume, the user's Resume button and resume-on-open included, keeps
-		// them for the new controller instead of settling them as orphaned.
-		if holder, ok := m.chat.(chatWakeHolder); ok {
-			release := holder.HoldChatWake(id)
-			defer release()
-		}
-	}
-	switchFailed := rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil
-	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec, requireNativeHistory || switchFailed)
-	if err == nil && chatResume && (!callerDrains || switchFailed) {
-		// Deliver what was kept, as a wake would.
+	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec,
+		requireNativeHistory || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil))
+	if err == nil && m.chat != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+		rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil {
+		// A failed move to a new release kept the user's queued messages for
+		// this start; deliver them now, as a wake would.
 		if drainErr := m.chat.DrainChatQueue(ctx, id); drainErr != nil {
-			m.logger.Warn("could not deliver messages queued while the agent was stopped", "sessionID", id, "error", drainErr)
+			m.logger.Warn("could not deliver messages queued before a failed version switch", "sessionID", id, "error", drainErr)
 		}
 	}
 	return result, err
@@ -5206,33 +5190,42 @@ func (m *Manager) Send(ctx context.Context, id domain.SessionID, message string,
 
 // SendWithOptions delivers a message with caller-supplied authorship facts that
 // are independent of the mechanism AO uses to carry it.
-// With options.WakeExitedAgent, an exited agent is restarted first; see
-// exited_delivery.go.
 func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
-	_, err := m.SendWithResult(ctx, id, message, attachment, options)
-	return err
+	if attachment != nil {
+		// Reuses StageAttachments rather than a bespoke writer: it already owns the
+		// empty-workspace guard (refusing beats writing under the daemon's cwd),
+		// randomized naming safe for a session sent to repeatedly, directory
+		// creation, and the git-exclude step.
+		refs, err := m.StageAttachments(ctx, id, []ports.SpawnAttachment{*attachment})
+		if err != nil {
+			return fmt.Errorf("send %s: attachment: %w", id, err)
+		}
+		message = appendAttachmentReferences(message, refs)
+	}
+	if options.WakeExitedAgent {
+		if err := m.wakeExitedAgent(ctx, id); err != nil {
+			return fmt.Errorf("send %s: %w", id, err)
+		}
+	}
+	options.InteractionAt = m.clock()
+	return m.send(ctx, id, message, "", options)
 }
 
 // SendSemantic delivers an internal message and returns only after the target
 // agent has accepted that exact message. Chat uses its native accepted-turn
 // boundary. Supported TUIs correlate the durable id through UserPromptSubmit;
 // a successful pane write alone never satisfies this method.
-//
-// Worker reports are a trusted sender: an orchestrator whose agent exited is
-// restarted to take them (exited_delivery.go).
 func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
-	options := ports.MessageDeliveryOptions{WakeExitedAgent: true}
-	// A terminal agent may have accepted this report and exited before the
-	// acceptance was read. The receipt is tied to that launch, so check it
-	// before a restart replaces the launch and the report goes out twice.
-	if prior, found, readErr := m.store.GetSession(ctx, id); readErr == nil && found &&
-		domain.NormalizeSessionMode(prior.Mode) != domain.SessionModeChat &&
-		semanticMessageAccepted(prior, clientMessageID) {
-		return nil
-	}
-	delivery, err := m.beforeExitedDelivery(ctx, id, options)
-	if err != nil {
-		return err
+	// Worker reports restart an orchestrator whose agent exited. A terminal
+	// agent that accepted this report just before exiting is not restarted to
+	// receive it again.
+	prior, found, readErr := m.store.GetSession(ctx, id)
+	acceptedBeforeExit := readErr == nil && found &&
+		domain.NormalizeSessionMode(prior.Mode) != domain.SessionModeChat && semanticMessageAccepted(prior, clientMessageID)
+	if !acceptedBeforeExit {
+		if err := m.wakeExitedAgent(ctx, id); err != nil {
+			return err
+		}
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -5242,14 +5235,10 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		return ErrNotFound
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, options)
+		handled, sendErr := m.sendChat(ctx, id, message, clientMessageID, ports.MessageDeliveryOptions{})
 		if !handled {
 			return ErrSemanticAcceptanceUnsupported
 		}
-		if sendErr != nil {
-			return sendErr
-		}
-		_, sendErr = m.afterExitedDelivery(ctx, id, delivery)
 		return sendErr
 	}
 	if !m.harnessSemanticAcceptance(rec.Harness) {

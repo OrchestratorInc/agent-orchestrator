@@ -1594,20 +1594,6 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	if errors.Is(err, sessionmanager.ErrComposerBusy) {
 		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
 	}
-	var wakeErr *ports.AgentWakeError
-	if errors.As(err, &wakeErr) {
-		if wakeErr.Queued {
-			// The batch is durably queued in the orchestrator's conversation and
-			// is delivered when its agent next starts. Acknowledge it rather than
-			// retrying into a duplicate of the same queued turn.
-			slog.Default().Warn("worker reports queued for an orchestrator whose agent could not be restarted",
-				"sessionID", id, "err", err)
-			return nil
-		}
-		// A terminal orchestrator has no durable queue: keep the batch pending
-		// and retry at the busy interval, not the short failure one.
-		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
-	}
 	return err
 }
 

@@ -80,13 +80,6 @@ type SteerOrSendResult struct {
 	Duplicate bool
 	Steer     SteerResult
 	Turn      domain.ConversationTurn
-	// Woke reports that the agent had exited and was restarted to take this
-	// message, which was queued and handed to it once it was ready.
-	Woke bool
-	// WakePending reports that the agent had exited and the message is queued
-	// for it, but the restart or the hand-off had not finished when the
-	// request returned.
-	WakePending bool
 }
 
 // resolveSteerSender enriches CLI-originated steering with the source session's
@@ -182,21 +175,6 @@ func (s *Service) SteerOrSend(
 	// targets render the same way.
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
-	}
-	// An exited agent has no turn to steer. Steering comes from the user or
-	// another AO session, both trusted to restart it: queue the message, restart
-	// the agent once, and report the restart instead of "no controller".
-	if !recoverOnly {
-		if record, err := s.requireChatSession(ctx, id); err == nil &&
-			exitedAwaitingWake(record) && !s.HasLiveChatController(id) {
-			turn, pending, queueErr := s.queueForExitedWake(ctx, record, msg)
-			if queueErr == nil {
-				return SteerOrSendResult{Turn: turn, Duplicate: turn.ID == "", Woke: !pending, WakePending: pending}, nil
-			}
-			if !errors.Is(queueErr, ErrNotProvisioning) {
-				return SteerOrSendResult{Turn: turn, Duplicate: turn.ID == ""}, queueErr
-			}
-		}
 	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {

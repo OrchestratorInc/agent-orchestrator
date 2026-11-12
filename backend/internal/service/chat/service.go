@@ -16,7 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
-	"github.com/aoagents/agent-orchestrator/backend/internal/wakeguard"
 )
 
 // ErrNoController reports a command for a session with no live Chat controller.
@@ -100,8 +99,6 @@ type Service struct {
 	waking                map[domain.SessionID]int
 	wakeRuns              map[domain.SessionID]*wakeRun
 	backgroundWakes       map[domain.SessionID]bool
-	exitedWakes           map[domain.SessionID]*exitedWake
-	wakeBudget            *wakeguard.Budget
 	autoResumeMu          sync.Mutex
 	autoResumeRetryAt     map[string]time.Time
 	autoResumeInFlight    map[string]bool
@@ -254,7 +251,6 @@ func New(opts Options) *Service {
 		waking:                 make(map[domain.SessionID]int),
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
 		backgroundWakes:        make(map[domain.SessionID]bool),
-		exitedWakes:            make(map[domain.SessionID]*exitedWake),
 		promptSuggestionSlots:  make(chan struct{}, 2),
 	}
 	svc.sides = newSideManager(svc, newMemorySideStore(), opts.AppRunID)
@@ -389,19 +385,10 @@ func cloneStartConfig(cfg StartConfig) StartConfig {
 // Best-effort by design: a failure here must not stop a session from coming back,
 // because a session the user cannot reopen is worse than a stale row. Both
 // failures are logged rather than swallowed.
-//
-// keepQueued is for a wake that kept the messages queued while the agent was
-// down (an exited agent restarted for a message, a resume, a failed version
-// switch). An agent that died mid-turn leaves that turn running; it settles as
-// failed, but the queued messages the wake exists to deliver are not orphans.
-func (s *Service) settleOrphanedWork(ctx context.Context, session domain.SessionID, conversationID string, keepQueued bool) {
+func (s *Service) settleOrphanedWork(ctx context.Context, session domain.SessionID, conversationID string) {
 	now := s.now()
-	settleTurns := s.store.SettleOrphanedTurns
-	if keepQueued {
-		settleTurns = s.store.SettleOrphanedRunningTurns
-	}
-	if err := settleTurns(ctx, session, now); err != nil {
-		s.log.Error("chat start: settle orphaned turns", "session", session, "keepQueued", keepQueued, "error", err)
+	if err := s.store.SettleOrphanedTurns(ctx, session, now); err != nil {
+		s.log.Error("chat start: settle orphaned turns", "session", session, "error", err)
 	}
 	// An approval left pending can never be answered: the provider call it was
 	// blocking died with the process that was holding it.
@@ -730,9 +717,6 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// survive a failed first drain.
 	queuedBeforeFirstController := false
 	preserveUndispatchedQueue := false
-	// keepQueueSettleRunning: a wake whose previous controller died mid-turn
-	// settles that orphaned turn but keeps the messages queued for the wake.
-	keepQueueSettleRunning := false
 	waking := s.isWaking(cfg.SessionID)
 	// A session whose move to a new harness release failed kept its queued
 	// messages for this start, the way a wake does (see versionSwitchFailed).
@@ -751,7 +735,6 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		}
 		queuedBeforeFirstController = firstController && len(running) == 0
 		preserveUndispatchedQueue = len(running) == 0 && (sessionRecord.ProvisionState.IsProvisioning() || waking)
-		keepQueueSettleRunning = len(running) > 0 && waking
 	}
 	providerBoundaryID := ""
 	if cfg.ProviderSwitch != nil {
@@ -1067,7 +1050,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if !liveReconnect && cfg.ProviderHandoff == nil &&
 		owner.Kind != domain.ConversationOwnerReview &&
 		!queuedBeforeFirstController && !preserveUndispatchedQueue {
-		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID, keepQueueSettleRunning)
+		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
 	}
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
@@ -2980,21 +2963,6 @@ func (s *Service) relayChatTurn(
 		record, err := s.requireChatSession(ctx, id)
 		if err != nil {
 			return "", err
-		}
-		// A trusted sender's message to an exited agent queues durably and
-		// restarts the agent in the background, the way a hibernated session
-		// wakes. The caller decides whether to wait (AwaitChatWake).
-		if options.WakeExitedAgent && exitedAwaitingWake(record) && !s.HasLiveChatController(id) {
-			turn, err := s.queueWithoutController(ctx, record, msg, false)
-			if err == nil {
-				// A duplicate still needs a running agent to deliver the first copy.
-				s.ensureExitedWake(ctx, id)
-				return turn.ID, nil
-			}
-			if !errors.Is(err, ErrNotProvisioning) {
-				return "", err
-			}
-			// The agent came back after the read; its controller takes the message.
 		}
 		if record.HibernatedAt != nil {
 			turn, err := s.queueWithoutController(ctx, record, msg, false)

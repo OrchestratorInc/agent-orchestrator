@@ -868,18 +868,6 @@ func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {
 	return c.svc.HasLiveChatController(id)
 }
 
-// AwaitChatWake restarts an exited Chat agent for a queued message, or joins
-// the restart in flight, and waits for it.
-func (c chatLauncher) AwaitChatWake(ctx context.Context, id domain.SessionID) error {
-	return c.svc.AwaitChatWake(ctx, id)
-}
-
-// HoldChatWake keeps messages queued while the agent was down through a
-// resume, so the new controller delivers them instead of failing them.
-func (c chatLauncher) HoldChatWake(id domain.SessionID) func() {
-	return c.svc.HoldChatWake(id)
-}
-
 func (c chatLauncher) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
 	return c.svc.HibernateChat(ctx, id)
 }

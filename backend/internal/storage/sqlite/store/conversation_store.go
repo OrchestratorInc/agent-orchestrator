@@ -1322,14 +1322,7 @@ func (s *Store) appendUserMessage(
 		if record.IsTerminated {
 			return false, domain.ErrSessionNotProvisioning
 		}
-		// An exited agent in an open Chat session queues like a hibernated one:
-		// the message waits here while AO restarts the agent. The check runs
-		// under writeMu, so a session that came back to life after the caller's
-		// read is refused and the caller hands the message to its controller.
-		exitedChat := record.ActivityState == domain.ActivityExited &&
-			domain.NormalizeSessionMode(record.SessionMode) == domain.SessionModeChat &&
-			record.ProvisionState.WithDefault() == domain.SessionProvisionReady
-		if !record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid && !exitedChat {
+		if !record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid {
 			move, moveErr := s.qw.GetActiveSessionInterfaceTransition(ctx, session)
 			if moveErr != nil && !errors.Is(moveErr, sql.ErrNoRows) {
 				return false, fmt.Errorf("check account move of %s: %w", session, moveErr)
@@ -1876,43 +1869,6 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 			HandledBySessionID: session,
 		}); err != nil {
 		return fmt.Errorf("settle orphaned turns for %s: %w", session, err)
-	}
-	return nil
-}
-
-// SettleOrphanedRunningTurns is SettleOrphanedTurns for a restart that keeps
-// the messages queued while the agent was down. Only what a dead controller
-// left running settles: its running turns fail and their running activities
-// with them. Queued turns are left for the new controller to deliver.
-func (s *Store) SettleOrphanedRunningTurns(ctx context.Context, session domain.SessionID, now time.Time) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	tx, err := s.writeDB.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin settle orphaned running turns for %s: %w", session, err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `
-UPDATE conversation_activities
-SET status = 'failed', revision = revision + 1, updated_at = ?
-WHERE status = 'running'
-  AND turn_id IN (
-      SELECT id FROM conversation_turns
-      WHERE handled_by_session_id = ? AND state = 'running'
-  )`, now, session); err != nil {
-		return fmt.Errorf("settle orphaned running activities for %s: %w", session, err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-UPDATE conversation_turns
-SET state = 'failed',
-    error_message = 'controller ended before the turn completed',
-    completed_at = ?
-WHERE handled_by_session_id = ? AND state = 'running'`,
-		sql.NullTime{Time: now, Valid: true}, session); err != nil {
-		return fmt.Errorf("settle orphaned running turns for %s: %w", session, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit settle orphaned running turns for %s: %w", session, err)
 	}
 	return nil
 }

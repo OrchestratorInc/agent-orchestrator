@@ -561,15 +561,6 @@ func (s *Service) admitController(ctx context.Context, id domain.SessionID, wake
 }
 
 func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error {
-	return s.wakeSession(ctx, id, false)
-}
-
-// wakeSession starts a cold session's agent once, however many callers ask.
-// allowExited also restarts an open session whose agent exited; only the
-// exited-agent wake passes it (exited_wake.go). Every other caller keeps the
-// rule below that a failed wake, which leaves the agent exited, is not retried
-// from a stale snapshot.
-func (s *Service) wakeSession(ctx context.Context, id domain.SessionID, allowExited bool) error {
 	if s.wakeChat == nil {
 		return ErrNoController
 	}
@@ -629,7 +620,7 @@ func (s *Service) wakeSession(ctx context.Context, id domain.SessionID, allowExi
 		s.wakeMu.Unlock()
 		return err
 	}
-	if rec.HibernatedAt == nil && (!allowExited || !exitedAwaitingWake(rec)) {
+	if rec.HibernatedAt == nil {
 		s.wakeMu.Unlock()
 		if s.HasLiveChatController(id) {
 			return nil

@@ -7388,8 +7388,6 @@ export interface components {
             userAuthored?: boolean;
         };
         SendSessionMessageResponse: {
-            /** @enum {string} */
-            agentWake?: "resumed" | "resuming";
             message: string;
             ok: boolean;
             sessionId: string;
@@ -8181,8 +8179,6 @@ export interface components {
         };
         SteerOrSendConversationResponse: {
             activityId?: string;
-            /** @enum {string} */
-            agentWake?: "resumed" | "resuming";
             duplicate: boolean;
             /** @enum {string} */
             outcome: "steered" | "sent";

@@ -21026,11 +21026,6 @@ components:
       type: object
     SendSessionMessageResponse:
       properties:
-        agentWake:
-          enum:
-          - resumed
-          - resuming
-          type: string
         message:
           type: string
         ok:
@@ -23043,11 +23038,6 @@ components:
     SteerOrSendConversationResponse:
       properties:
         activityId:
-          type: string
-        agentWake:
-          enum:
-          - resumed
-          - resuming
           type: string
         duplicate:
           type: boolean

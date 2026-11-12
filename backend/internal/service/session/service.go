@@ -1418,21 +1418,6 @@ func (s *Service) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 	return toAPIError(s.manager.SendWithOptions(ctx, id, message, attachment, options))
 }
 
-type sendResultCommander interface {
-	SendWithResult(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) (sessionmanager.SendResult, error)
-}
-
-// SendWithResult is SendWithOptions that also says whether an exited agent was
-// restarted to take the message. A manager without that report sends as before.
-func (s *Service) SendWithResult(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) (sessionmanager.SendResult, error) {
-	manager, ok := s.manager.(sendResultCommander)
-	if !ok {
-		return sessionmanager.SendResult{}, toAPIError(s.manager.SendWithOptions(ctx, id, message, attachment, options))
-	}
-	result, err := manager.SendWithResult(ctx, id, message, attachment, options)
-	return result, toAPIError(err)
-}
-
 // Rename updates the user-facing session display name.
 //
 // The project orchestrator is refused: the app labels it "Orchestrator" rather
@@ -1910,26 +1895,6 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 	}, nil
 }
 
-// agentWakeAPIError explains a failed automatic restart. The reason reuses the
-// message the same failure gets from resume-agent when one exists.
-func agentWakeAPIError(wakeErr *ports.AgentWakeError) *apierr.Error {
-	reason := "unknown error"
-	if wakeErr.Reason != nil {
-		reason = wakeErr.Reason.Error()
-		var known *apierr.Error
-		if errors.As(mapSessionError(wakeErr.Reason), &known) && known.Message != "" {
-			reason = known.Message
-		}
-	}
-	message := "The agent had exited and Orchestrator could not restart it: " + reason + "."
-	if wakeErr.Queued {
-		message += " The message is queued and will be delivered when the agent is resumed."
-	} else {
-		message += " The message was not delivered; resume the agent and send it again."
-	}
-	return apierr.Conflict("AGENT_WAKE_FAILED", message, map[string]any{"queued": wakeErr.Queued, "reason": reason})
-}
-
 // toAPIError maps the session engine's sentinel errors to their REST API
 // equivalents; an unrecognized error passes through and surfaces as a 500.
 func toAPIError(err error) error {
@@ -1940,12 +1905,9 @@ func toAPIError(err error) error {
 func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
 	var cleanupRefused *sessionmanager.CleanupRefusedError
-	var wakeErr *ports.AgentWakeError
 	switch {
 	case err == nil:
 		return nil
-	case errors.As(err, &wakeErr):
-		return agentWakeAPIError(wakeErr)
 	case errors.Is(err, sessionmanager.ErrNotFound):
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	case errors.Is(err, ErrPRNotOpen):
