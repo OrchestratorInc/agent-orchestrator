@@ -34,6 +34,11 @@ const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 /** At most this many avatars stack in the header; the count says the rest. */
 const STACKED_AVATARS = 3;
 /**
+ * How far the rows sit in under the header: one stacked mark's step (18px marks, 6px
+ * overlap). The same for one child or fifteen, so the list keeps one left edge.
+ */
+const ROW_INSET = 12;
+/**
  * Claude's default agent type. It says nothing a reader can act on, so a row names
  * only a specialized type, such as `Explore`, `Plan` or a project's own agent.
  */
@@ -50,7 +55,6 @@ export function SubagentTeam({
 	steps,
 	live,
 	harness,
-	folded = false,
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
@@ -61,8 +65,6 @@ export function SubagentTeam({
 	live: ReadonlySet<string>;
 	/** Whose agents these are, for the avatar. */
 	harness?: string;
-	/** A finished team under "Worked for": it starts closed, like the turn's other folded work. */
-	folded?: boolean;
 	disclosureKey?: string;
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
@@ -87,13 +89,9 @@ export function SubagentTeam({
 		else setLocalOpen((current) => ({ ...current, [key]: open }));
 	};
 	const teamKey = disclosureKey ?? "subagents";
-	// While the team works the list is the point of the card, so it starts open. Under
-	// "Worked for" it starts closed, like the turn's other folded work.
-	const open = isOpen(teamKey, !folded);
+	// The list starts closed, working or finished; the header opens it.
+	const open = isOpen(teamKey, false);
 	const counts = countStates(agents);
-	// Each mark after the first widens the header's stack by 12px (18px marks, 6px
-	// overlap). The rows sit in by that much, so their names line up under the team's.
-	const stackInset = (Math.min(agents.length, STACKED_AVATARS) - 1) * 12;
 
 	return (
 		<motion.div
@@ -153,7 +151,7 @@ export function SubagentTeam({
 					>
 						{/* Plain rows on the chat's canvas, working or finished: only the spinner and the
 						    live line tell a working child apart, so nothing changes shape as it ends. */}
-						<ul className="mt-1 flex min-w-0 flex-col" style={{ paddingLeft: stackInset }}>
+						<ul className="mt-1 flex min-w-0 flex-col" style={{ paddingLeft: ROW_INSET }}>
 							<AnimatePresence initial={false}>
 								{agents.map((agent) => {
 									const agentKey = `${teamKey}:agent:${agent.launch.id}`;
@@ -209,9 +207,6 @@ function countStates(agents: readonly Subagent[]): StateCounts {
 function TeamSummary({ counts }: { counts: StateCounts }) {
 	const { t } = useTranslation();
 	const parts: { key: string; text: string; className: string }[] = [];
-	if (counts.working) {
-		parts.push({ key: "working", text: t("chat.subagent.summary.working", { count: counts.working }), className: "text-status-working" });
-	}
 	if (counts.done) {
 		parts.push({ key: "done", text: t("chat.subagent.summary.done", { count: counts.done }), className: "text-muted-foreground" });
 	}

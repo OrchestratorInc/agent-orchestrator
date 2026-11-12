@@ -5529,7 +5529,6 @@ const TurnGroup = memo(function TurnGroup({
 					steps={subagentSteps}
 					live={subagentsLive}
 					harness={harness}
-					folded={Boolean(group.outcome) && !noticeRuns.includes(run)}
 					disclosureKey={`${group.key}:${run.key}`}
 					disclosureOverrides={activityDisclosureOverrides}
 					onDisclosureChange={onActivityDisclosureChange}
