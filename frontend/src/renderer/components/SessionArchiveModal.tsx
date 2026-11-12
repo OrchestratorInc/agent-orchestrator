@@ -203,6 +203,13 @@ export function SessionArchiveModal({
 	// An index into `results`; mounted, as `shown` is their first `limit`.
 	const activePosition = heldPosition >= 0 ? heldPosition : shown.length === 0 ? -1 : Math.min(active.index, shown.length - 1);
 	const activeSession = activePosition >= 0 ? results[activePosition] : undefined;
+	// Once the held session is gone from the archive (deleted), the card that
+	// took its place becomes the held one, so a later poll that adds sessions
+	// above it cannot move the selection. A session the search only hides is
+	// still held, and is selected again when the search clears.
+	if (heldPosition < 0 && active.id !== undefined && !sessions.some((session) => session.id === active.id)) {
+		setActive(activeSession ? { id: activeSession.id, index: activePosition } : { index: active.index });
+	}
 	const restoreAvailable = connected && restoringSessionId === undefined;
 	const canDelete = (session: WorkspaceSession) =>
 		// The control plane owns a cloud session's record; this daemon cannot delete it.
