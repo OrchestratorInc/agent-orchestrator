@@ -6,8 +6,9 @@ import { TooltipProvider } from "../ui/tooltip";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { PendingSideClose } from "../../../shared/side-close";
 
-const { get, post, put, remove, capture, confirmClose, pending, listeners, daemonListeners } = vi.hoisted(() => ({
+const { get, post, put, remove, capture, confirmClose, getPending, pending, listeners, daemonListeners } = vi.hoisted(() => ({
 	get: vi.fn(), post: vi.fn(), remove: vi.fn(), capture: vi.fn(), confirmClose: vi.fn(),
+	getPending: vi.fn(),
 	put: vi.fn(), listeners: new Set<() => void>(), daemonListeners: new Set<(status: { state: string; pid: number; port: number }) => void>(),
 	pending: [] as PendingSideClose[],
 }));
@@ -16,11 +17,12 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorMessage: () => "Close failed", getApiBaseUrl: () => "", subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: (listener: (status: { state: string; pid: number; port: number }) => void) => { daemonListeners.add(listener); return () => daemonListeners.delete(listener); } }, sideChats: {
-	capture, confirmClose, getPendingCloses: async (sessionId: string) => pending.filter(side => side.sessionId === sessionId), onPendingClosesChanged: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
+	capture, confirmClose, getPendingCloses: getPending, onPendingClosesChanged: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
 } } }));
 
 beforeEach(() => {
 	vi.resetAllMocks(); pending.length = 0; listeners.clear(); daemonListeners.clear();
+	getPending.mockImplementation(async (sessionId: string) => pending.filter(side => side.sessionId === sessionId));
 	put.mockResolvedValue({});
 	HTMLElement.prototype.scrollTo = vi.fn();
 	get.mockImplementation(async (path: string) => path.endsWith("/side-chats")
@@ -48,10 +50,10 @@ async function changed() {
 	await act(async () => { for (const listener of listeners) listener(); });
 }
 
-function Panel() {
-	const chat = useIndependentSideChats("session", [], [], async () => [], false);
+function Panel({ stage = async () => [] }: { stage?: () => Promise<string[]> } = {}) {
+	const chat = useIndependentSideChats("session", [], [], stage, false);
 	useEffect(() => chat.show("side"), []);
-	return <TooltipProvider>{chat.panel}</TooltipProvider>;
+	return <TooltipProvider>{chat.panel}<output data-testid="active-error">{chat.error}</output></TooltipProvider>;
 }
 
 async function deleteFromPanel() {
@@ -188,6 +190,57 @@ it("ignores an older list response after a newer response selected another side"
 	await waitFor(() => expect(hook.result.current.activeId).toBe("new"));
 	await act(async () => oldList.resolve({ data: { sides: [{ id: "side", sessionId: "session" }] } }));
 	expect(hook.result.current.activeId).toBe("new");
+});
+
+it("applies a slow list response even while a newer poll is pending", async () => {
+	const hook = await setup();
+	const first = deferred<object>(); const second = deferred<object>();
+	get.mockImplementationOnce(() => first.promise); await changed();
+	get.mockImplementationOnce(() => second.promise); await changed();
+	await act(async () => first.resolve({ data: { sides: [{ id: "new", sessionId: "session", label: "New" }] } }));
+	expect(hook.result.current.activeId).toBe("new");
+	await act(async () => second.resolve({ data: { sides: [{ id: "latest", sessionId: "session", label: "Latest" }] } }));
+	expect(hook.result.current.activeId).toBe("latest");
+});
+
+it("clears a recovered list error without clearing a create failure", async () => {
+	const hook = await setup();
+	get.mockResolvedValueOnce({ error: {} }); await changed();
+	expect(hook.result.current.error).toBe("Close failed");
+	await changed(); expect(hook.result.current.error).toBeUndefined();
+	post.mockRejectedValueOnce(new Error("Create failed"));
+	await act(async () => { await expect(hook.result.current.create(undefined, true)).rejects.toThrow(); });
+	await changed(); expect(hook.result.current.error).toBe("Close failed");
+});
+
+it("keeps a failed capture locked while pending-close reconciliation is delayed", async () => {
+	const hook = await setup(); const reconciliation = deferred<PendingSideClose[]>();
+	capture.mockRejectedValueOnce(new Error("Capture failed"));
+	getPending.mockClear(); getPending.mockReturnValueOnce(reconciliation.promise);
+	let closing!: Promise<void>;
+	act(() => { closing = hook.result.current.close("side").catch(() => undefined); });
+	await waitFor(() => expect(getPending).toHaveBeenCalledOnce());
+	await changed();
+	await act(async () => hook.result.current.send("side", "must stay blocked"));
+	expect(post).not.toHaveBeenCalled();
+	await act(async () => { reconciliation.resolve([]); await closing; });
+	expect(remove).not.toHaveBeenCalled();
+});
+
+it("does not display a late attachment failure on another selected side", async () => {
+	const normal = get.getMockImplementation()!;
+	get.mockImplementation((path: string, ...args: unknown[]) => path.endsWith("/side-chats") ? { data: { sides: [
+		{ id: "side", sessionId: "session", state: "ready", label: "Side" },
+		{ id: "other", sessionId: "session", state: "ready", label: "Other" },
+	] } } : normal(path, ...args));
+	const staged = deferred<string[]>(); const stage = vi.fn(() => staged.promise);
+	const view = render(<Panel stage={stage} />);
+	await screen.findByLabelText("Side chat question");
+	fireEvent.change(view.container.querySelector('input[type="file"]')!, { target: { files: [new File(["content"], "note.txt", { type: "text/plain" })] } });
+	await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+	await userEvent.click(screen.getByRole("tab", { name: "Other" }));
+	await act(async () => staged.reject(new Error("Staging failed")));
+	expect(screen.getByTestId("active-error")).toBeEmptyDOMElement();
 });
 
 it("does not write an old close completion into a replacement session", async () => {

@@ -426,6 +426,7 @@ export function useIndependentSideChats(
 	const timelineNavigationRef = useRef<((annotation: ChatAnnotationSummaryItem) => void) | null>(null);
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
+	const [listError, setListError] = useState<string>();
 	const [sideError, setSideError] = useState<{ id: string; message: string }>();
 	const [pending, setPending] = useState(false);
 	const [sendingRevision, setSendingRevision] = useState(0);
@@ -448,6 +449,7 @@ export function useIndependentSideChats(
 	const [closeRevision, setCloseRevision] = useState(0);
 	const lifecycleRevision = useRef(0);
 	const listRequests = useRef(0);
+	const appliedListRequest = useRef(0);
 	const localCreates = useRef(new Map<string, Side>());
 	const cleanupConfirmed = useRef(new Set<string>());
 	const sideRevisions = useRef(new Map<string, number>());
@@ -532,6 +534,7 @@ export function useIndependentSideChats(
 		setClosing(false);
 		setCloseWarnings({});
 		setError(undefined);
+		setListError(undefined);
 		setPending(false);
 	}, [sessionId, enabled]);
 
@@ -560,18 +563,21 @@ export function useIndependentSideChats(
 		const scope = creationScopeRef.current;
 		const revision = lifecycleRevision.current;
 		const request = ++listRequests.current;
-		const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === lifecycleRevision.current && request === listRequests.current;
+		const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === lifecycleRevision.current && request > appliedListRequest.current;
 		try {
 			const { data, error: requestError } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats", {
 				params: { path: { sessionId } },
 			});
 			if (!current()) return;
 			if (requestError) {
-				if (reportErrors) setError(apiErrorMessage(requestError));
+				appliedListRequest.current = request;
+				if (reportErrors) setListError(apiErrorMessage(requestError));
 				return;
 			}
 			const closes = await aoBridge.sideChats.getPendingCloses(sessionId);
 			if (!current()) return;
+			appliedListRequest.current = request;
+			setListError(undefined);
 			for (const pending of closes) if (pending.phase === "cleanup_pending") cleanupConfirmed.current.add(pending.id);
 			// Keep proof of logical closure until host-stop reconciliation finishes.
 			for (const id of cleanupConfirmed.current) {
@@ -600,7 +606,12 @@ export function useIndependentSideChats(
 			setActiveId((current) =>
 				current && nextSides.some((side) => side.id === current) ? current : nextSides.at(-1)?.id,
 			);
-		} catch (cause) { if (current() && reportErrors) setError(apiErrorMessage(cause)); }
+		} catch (cause) {
+			if (current()) {
+				appliedListRequest.current = request;
+				if (reportErrors) setListError(apiErrorMessage(cause));
+			}
+		}
 	}, [sessionId, enabled, removeSide, setSides, creationScope]);
 	useEffect(() => {
 		if (!enabled) return;
@@ -919,7 +930,7 @@ export function useIndependentSideChats(
 					[sideId]: [...(current[sideId] ?? []), ...files.map((file, index) => ({ file, path: paths[index] }))],
 				}));
 			} catch (cause) {
-				if (available()) setError(apiErrorMessage(cause));
+				if (available()) setSideError({ id: sideId, message: apiErrorMessage(cause) });
 			}
 		},
 		[stageAttachments, operationCurrent],
@@ -1272,51 +1283,53 @@ export function useIndependentSideChats(
 			let failure: unknown;
 			let rejected = false;
 			try {
-				await aoBridge.sideChats.capture(sideId);
-				if (!current()) return;
-				const { error: requestError, response } = await apiClient.DELETE(
-					"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}",
-					{ params: { path: { sessionId, sideId } } },
-				);
-				if (!current()) return;
-				if (!requestError) {
-					// HTTP success proves shutdown even if the follow-up IPC fails.
-					outcome = "closed";
-					await aoBridge.sideChats.confirmClose(sideId).catch(() => undefined);
-				} else if (response.status === 404) {
-					outcome = await aoBridge.sideChats.confirmClose(sideId, true);
-				} else {
-					if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
-						await aoBridge.sideChats.capture(sideId, true);
-						rejected = true;
-					} else await aoBridge.sideChats.capture().catch(() => undefined);
-					throw apiErrorException(requestError);
+				try {
+					await aoBridge.sideChats.capture(sideId);
+					if (!current()) return;
+					const { error: requestError, response } = await apiClient.DELETE(
+						"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}",
+						{ params: { path: { sessionId, sideId } } },
+					);
+					if (!current()) return;
+					if (!requestError) {
+						// HTTP success proves shutdown even if the follow-up IPC fails.
+						outcome = "closed";
+						await aoBridge.sideChats.confirmClose(sideId).catch(() => undefined);
+					} else if (response.status === 404) {
+						outcome = await aoBridge.sideChats.confirmClose(sideId, true);
+					} else {
+						if ([400, 401, 403, 405, 409, 422].includes(response.status)) {
+							await aoBridge.sideChats.capture(sideId, true);
+							rejected = true;
+						} else await aoBridge.sideChats.capture().catch(() => undefined);
+						throw apiErrorException(requestError);
+					}
+				} catch (cause) {
+					failure = cause;
 				}
-			} catch (cause) {
-				failure = cause;
+				if (!current()) return;
+				if (outcome === "closed") { removeSide(sideId); return; }
+				// Keep the request marker through reconciliation: a concurrent list
+				// refresh must not unlock a side whose capture failed before pinning.
+				let closes: PendingSideClose[] | undefined;
+				try { closes = await aoBridge.sideChats.getPendingCloses(sessionId); } catch { /* keep the local close intent */ }
+				if (!current()) return;
+				const pending = closes?.find(side => side.id === sideId);
+				if (closes) setPendingCloses(closes);
+				if (pending?.phase === "cleanup_pending") outcome = "cleanup_pending";
+				if (outcome === "cleanup_pending") cleanupConfirmed.current.add(sideId);
+				const stillOpen = rejected && closes !== undefined && !pending;
+				if (stillOpen) closingSidesRef.current.delete(sideId);
+				setCloseWarnings(warnings => ({ ...warnings, [sideId]: stillOpen ? "open" : outcome === "cleanup_pending" ? "cleanup_pending" : "unconfirmed" }));
+				throw failure ?? new Error("Side chat shutdown is not confirmed.");
 			} finally {
 				if (current()) {
 					closeRequests.current.delete(sideId);
 					lifecycleRevision.current++;
 					setCloseRevision(value => value + 1);
+					if (outcome !== "closed") void refreshList().catch(() => undefined);
 				}
 			}
-			if (!current()) return;
-			if (outcome === "closed") { removeSide(sideId); return; }
-			// Capture errors and ambiguous transport failures never reopen a writer.
-			let closes: PendingSideClose[] | undefined;
-			try { closes = await aoBridge.sideChats.getPendingCloses(sessionId); } catch { /* keep the local close intent */ }
-			if (!current()) return;
-			const pending = closes?.find(side => side.id === sideId);
-			if (closes) setPendingCloses(closes);
-			if (pending?.phase === "cleanup_pending") outcome = "cleanup_pending";
-			if (outcome === "cleanup_pending") cleanupConfirmed.current.add(sideId);
-			const stillOpen = rejected && closes !== undefined && !pending;
-			if (stillOpen) closingSidesRef.current.delete(sideId);
-			setCloseWarnings(warnings => ({ ...warnings, [sideId]: stillOpen ? "open" : outcome === "cleanup_pending" ? "cleanup_pending" : "unconfirmed" }));
-			setCloseRevision(value => value + 1);
-			void refreshList().catch(() => undefined);
-			throw failure ?? new Error("Side chat shutdown is not confirmed.");
 		},
 		[sessionId, refreshList, removeSide],
 	);
@@ -1455,7 +1468,7 @@ export function useIndependentSideChats(
 	);
 	const readOnly = Boolean(activeId && closingSidesRef.current.has(activeId));
 	const warning = activeId ? closeWarnings[activeId] : undefined;
-	const activeError = error || (sideError && sideError.id === activeId ? sideError.message : undefined);
+	const activeError = error || listError || (sideError && sideError.id === activeId ? sideError.message : undefined);
 	const conversation = useMemo(
 		() => (snapshot && snapshot.side.id === activeId ? sideConversationSnapshot(snapshot, readOnly ? retainedSnapshots.current.get(snapshot.side.id)?.olderPages ?? [] : olderPages) : undefined),
 		[snapshot, olderPages, activeId, readOnly],
@@ -1963,7 +1976,7 @@ export function useIndependentSideChats(
 					<p>
 						{enabled ? t("sideChat.noneOpen") : t("sideChat.sideChatsAreAvailableOnlyForLocalDesktopChatSessions")}
 					</p>
-					{error ? <p role="alert">{translateDraft(error)}</p> : null}
+					{activeError ? <p role="alert">{translateDraft(activeError)}</p> : null}
 				</div>
 			</div>
 		);
