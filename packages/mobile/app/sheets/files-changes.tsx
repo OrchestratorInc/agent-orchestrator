@@ -38,6 +38,8 @@ function FilesChangesSheet() {
 	const [manifest, setManifest] = useState<WorkspaceManifest | null>(() => cachedManifest(backend, sessionId));
 	const [history, setHistory] = useState<WorkspaceHistory>();
 	const [error, setError] = useState<string>();
+	// Apart from the commits' error: a history read that works says nothing about the counts.
+	const [manifestError, setManifestError] = useState<string>();
 	const [refreshing, setRefreshing] = useState(false);
 	// Only the newest read lands: a slow first one must not undo a pull to refresh.
 	const latest = useRef(0);
@@ -55,7 +57,14 @@ function FilesChangesSheet() {
 		// The worktree's scopes count what it holds, apart from the commits, so
 		// neither waits on the other.
 		if (checkedOut && (fresh || !cachedManifest(backend, sessionId))) {
-			void backend.manifest(sessionId, signal).then((next) => { if (current()) setManifest(next); }, () => {});
+			void backend.manifest(sessionId, signal).then(
+				(next) => {
+					if (!current()) return;
+					setManifest(next);
+					setManifestError(undefined);
+				},
+				(cause) => { if (current()) setManifestError(userFacingError(cause, "Couldn't refresh the working tree's counts.")); },
+			);
 		}
 		try {
 			const next = await branchGit.history(sessionId, signal);
@@ -89,6 +98,7 @@ function FilesChangesSheet() {
 			header={<>
 				{/* iOS titles the sheet in its native bar. */}
 				{Platform.OS === "ios" ? null : <SheetHeader title="Changes" />}
+				{manifestError ? <Text accessibilityRole="alert" style={styles.notice}>{manifestError}</Text> : null}
 				{error ? <Text accessibilityRole="alert" style={styles.notice}>{error}</Text> : null}
 				{loading ? <Spinner size="large" accessibilityLabel="Loading commits" style={styles.loading} /> : null}
 				{history?.commitsTruncated ? <Text style={styles.more}>Only the newest commits are listed.</Text> : null}
