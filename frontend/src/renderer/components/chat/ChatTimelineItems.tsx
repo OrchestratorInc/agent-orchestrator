@@ -26,6 +26,7 @@ import { ArtifactThumbnail } from "../ArtifactThumbnail";
 import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
 import type { ArtifactRow } from "../../lib/artifacts";
 import { useChatEntrance } from "./chat-entrance";
+import { pageHidden } from "../../lib/page-hidden";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -379,7 +380,9 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 		const grew = message.text !== targetRef.current && message.text.startsWith(targetRef.current);
 		targetRef.current = message.text;
 		targetGraphemesRef.current = targetGraphemes;
-		if (reducedMotion) {
+		// A hidden window draws no frames, so a reveal would stall and replay once the
+		// reader is back. Show what arrived now; the fade treats it as settled too.
+		if (reducedMotion || pageHidden()) {
 			showWhole();
 			return;
 		}
@@ -1676,6 +1679,8 @@ export function ActivityTransition({
 	useEffect(() => {
 		if (previousValue.current === value) return;
 		previousValue.current = value;
+		// A change made while the window is hidden would dip on the reader's return.
+		if (pageHidden()) return;
 		setSettling(true);
 	}, [value]);
 

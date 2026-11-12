@@ -1,5 +1,6 @@
 import { useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useRef } from "react";
+import { pageHidden } from "../lib/page-hidden";
 
 /** Writes this close to the current position are skipped. */
 const SETTLE_PX = 0.5;
@@ -32,7 +33,10 @@ type Flight = { from: number; to: number; aimedAt: number };
  * smooth scroll, which Chromium animates on the compositor, so it keeps moving
  * while the main thread is busy committing. Small streamed growth is followed with
  * instant writes. Every position along a smooth scroll in flight counts as ours;
- * reader input stops it in place (`cancel` / `hold`). Reduced motion snaps.
+ * reader input stops it in place (`cancel` / `hold`). Reduced motion snaps, and
+ * so does a hidden window: it draws no frames, so a smooth scroll started then
+ * would sit still and only play once the reader is back, gliding them down
+ * through content that arrived while they were away.
  */
 export function useScrollFollow(getNode: () => HTMLElement | null) {
 	const reducedMotion = useReducedMotion();
@@ -48,6 +52,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	const lastAimAt = useRef(0);
 	const holdUntil = useRef(0);
 
+	const instant = () => snap.current || pageHidden();
 	const endOf = (node: HTMLElement) => Math.max(0, node.scrollHeight - node.clientHeight);
 	const write = (node: HTMLElement, top: number) => {
 		if (Math.abs(node.scrollTop - top) <= SETTLE_PX) return;
@@ -113,8 +118,9 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	const followEnd = useCallback(() => {
 		const node = getNode();
 		if (!node || performance.now() < holdUntil.current) return;
-		if (snap.current) {
+		if (instant()) {
 			// The browser clamps to the real maximum; writing scrollHeight is the plain snap.
+			flight.current = null;
 			write(node, node.scrollHeight);
 			return;
 		}
@@ -143,7 +149,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		if (!node) return;
 		// A deliberate jump (send, Jump to latest) overrides any pending wheel hold.
 		holdUntil.current = 0;
-		if (snap.current) {
+		if (instant()) {
 			flight.current = null;
 			write(node, node.scrollHeight);
 			return;
@@ -160,7 +166,12 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	 */
 	const reaim = useCallback(() => {
 		const node = getNode();
-		if (!node || !flying() || snap.current) return;
+		if (!node || !flying()) return;
+		if (instant()) {
+			flight.current = null;
+			write(node, node.scrollHeight);
+			return;
+		}
 		if (Math.abs(flight.current!.to - endOf(node)) > REAIM_PX) smoothTo(node, endOf(node));
 	}, [getNode]);
 
