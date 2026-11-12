@@ -2127,6 +2127,8 @@
 	"shell.moreArtifacts": "+{{count}} more",
 	"shell.openArtifactsInInspector": "Open in inspector",
 	"artifacts.sessionEmpty": "No artifacts in this session yet.",
+	"artifacts.newArtifact": "New artifact: {{name}}",
+	"artifacts.openNew": "Open",
 	"artifacts.notListedYet": "{{name}} isn't in this session's artifacts yet. It opens here once the session lists it.",
 	"artifacts.unavailable": "This file is no longer available.",
 	"artifacts.accessError": "Couldn’t load this session’s artifacts. Try again.",

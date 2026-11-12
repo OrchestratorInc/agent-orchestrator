@@ -6528,9 +6528,10 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 				!strings.Contains(sp, "Do not create `.ao/launch.json` unless the user asks") {
 				t.Fatalf("%s: system prompt missing static-first preview safeguards:\n%s", tc.name, sp)
 			}
-			if !strings.Contains(sp, "immediately after creating or materially updating it") ||
-				!strings.Contains(sp, "do not replace an active application preview with a supporting asset") {
-				t.Fatalf("%s: system prompt missing automatic artifact handoff guidance:\n%s", tc.name, sp)
+			if !strings.Contains(sp, "Never open an artifact with `ao preview`, whatever its file type") ||
+				!strings.Contains(sp, "in the session's Artifacts tab") ||
+				strings.Contains(sp, "browser-displayable artifact") {
+				t.Fatalf("%s: system prompt missing Artifacts-tab handoff guidance:\n%s", tc.name, sp)
 			}
 		})
 	}

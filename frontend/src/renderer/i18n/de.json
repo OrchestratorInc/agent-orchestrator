@@ -1772,6 +1772,8 @@
 	"shell.moreArtifacts": "+{{count}} weitere",
 	"shell.openArtifactsInInspector": "Im Inspektor öffnen",
 	"artifacts.sessionEmpty": "Diese Sitzung hat noch keine Artefakte.",
+	"artifacts.newArtifact": "Neues Artefakt: {{name}}",
+	"artifacts.openNew": "Öffnen",
 	"artifacts.notListedYet": "{{name}} ist noch nicht unter den Artefakten dieser Sitzung. Die Datei öffnet sich hier, sobald die Sitzung sie aufführt.",
 	"artifacts.unavailable": "Diese Datei ist nicht mehr verfügbar.",
 	"artifacts.accessError": "Die Artefakte dieser Sitzung konnten nicht geladen werden. Versuche es erneut.",
