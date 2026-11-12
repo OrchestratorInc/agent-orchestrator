@@ -36,9 +36,14 @@ const (
 	githubLookupTimeout = 8 * time.Second
 )
 
-// githubSegment bounds owner and name to what GitHub allows, so neither can
-// reach gh as a flag or another API path.
-var githubSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+// githubOwnerSegment and githubNameSegment bound owner and name to what GitHub
+// allows, so neither can reach gh as a flag or another API path. Owners start
+// with a letter or digit; repository names may start with a period (.github),
+// but "." and ".." are refused because they would change the API path.
+var (
+	githubOwnerSegment = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+	githubNameSegment  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+)
 
 // GitHubOwners lists the accounts gh on this machine can create repositories
 // under, the user first. The same lookup the desktop app runs locally, so a
@@ -77,7 +82,7 @@ func (m *Manager) GitHubRepositoryAvailability(ctx context.Context, in GitHubAva
 	if owner == "" || name == "" {
 		return GitHubAvailabilityResult{Message: "Owner and repository name are required."}, nil
 	}
-	if !githubSegment.MatchString(owner) || !githubSegment.MatchString(name) {
+	if !githubOwnerSegment.MatchString(owner) || !githubNameSegment.MatchString(name) || name == "." || name == ".." {
 		return GitHubAvailabilityResult{Message: "Use letters, numbers, hyphens, underscores, or periods."}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, githubLookupTimeout)

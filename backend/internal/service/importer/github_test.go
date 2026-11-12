@@ -89,7 +89,7 @@ func TestGitHubRepositoryAvailability(t *testing.T) {
 
 func TestGitHubRepositoryAvailabilityRejectsUnsafeNamesWithoutAskingGh(t *testing.T) {
 	calls := stubGh(t, func([]string) (string, error) { return "", nil })
-	for _, in := range []GitHubAvailabilityQuery{{Owner: "", Name: "app"}, {Owner: "octo", Name: "../x"}, {Owner: "--help", Name: "app"}} {
+	for _, in := range []GitHubAvailabilityQuery{{Owner: "", Name: "app"}, {Owner: "octo", Name: "../x"}, {Owner: "--help", Name: "app"}, {Owner: "octo", Name: "."}, {Owner: "octo", Name: ".."}, {Owner: ".octo", Name: "app"}} {
 		got, _ := (&Manager{}).GitHubRepositoryAvailability(context.Background(), in)
 		if got.Available {
 			t.Fatalf("%+v reported available", in)
@@ -97,5 +97,19 @@ func TestGitHubRepositoryAvailabilityRejectsUnsafeNamesWithoutAskingGh(t *testin
 	}
 	if len(*calls) != 0 {
 		t.Fatalf("gh was called: %v", *calls)
+	}
+}
+
+func TestGitHubRepositoryAvailabilityAcceptsNamesStartingWithAPeriod(t *testing.T) {
+	calls := stubGh(t, func([]string) (string, error) { return "gh: Not Found (HTTP 404)", errors.New("exit 1") })
+	got, err := (&Manager{}).GitHubRepositoryAvailability(context.Background(), GitHubAvailabilityQuery{Owner: "acme", Name: ".github"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Available {
+		t.Fatalf("got %+v, want .github available", got)
+	}
+	if len(*calls) != 1 || (*calls)[0][1] != "repos/acme/.github" {
+		t.Fatalf("gh calls = %v, want one lookup of repos/acme/.github", *calls)
 	}
 }
