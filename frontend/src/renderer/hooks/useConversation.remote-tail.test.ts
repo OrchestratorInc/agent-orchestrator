@@ -5,7 +5,7 @@ import type { ConversationItem, ConversationSnapshot, ConversationTurn } from ".
 const { getMock, baseUrlMock } = vi.hoisted(() => ({ getMock: vi.fn(), baseUrlMock: vi.fn() }));
 vi.mock("../lib/host-clients", () => ({ baseUrlForHost: baseUrlMock, clientForSessionHost: () => ({ GET: getMock }) }));
 
-import { conversationQueryKey, mergeRemoteConversationTail, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
+import { conversationQueryKey, fetchActivityOutput, mergeRemoteConversationTail, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
 
 const turn = (id: string, state: ConversationTurn["state"], extra: Partial<ConversationTurn> = {}): ConversationTurn =>
 	({ id, state, requestedAt: `2026-11-03T00:00:0${id.slice(-1)}Z`, ...extra });
@@ -125,10 +125,20 @@ describe("refreshRemoteConversation", () => {
 		getMock.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4), wireMessage("r2", "t2", 6, "more")] }));
 		await refreshRemoteConversation(client, "s1", "box");
 		expect(getMock).toHaveBeenCalledOnce();
-		expect(getMock.mock.calls[0][1].params.query).toEqual({ afterSequence: 3, limit: 30, outputLimit: 512 });
+		expect(getMock.mock.calls[0][1].params.query).toEqual({ afterSequence: 3, limit: 30, outputLimit: 512, compactDetails: "1", dedupeBodies: "1" });
 		const live = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
 		expect(live.pages).toHaveLength(2);
 		expect(live.pages[0].items.map((item) => item.id)).toEqual(["m1", "a1", "r1", "m2", "r2"]);
+	});
+
+	it("requests complete output without compact page flags", async () => {
+		const output = "complete output\n".repeat(100);
+		getMock.mockResolvedValueOnce(wire({ activities: [{ id: "a2", detail: { output } }] }));
+		await expect(fetchActivityOutput("s1", "box", 5, "a2")).resolves.toBe(output);
+		expect(getMock.mock.calls[0][1].params.query).toEqual({
+			beforeSequence: 6, afterSequence: 4, limit: 1,
+			compactDetails: undefined, dedupeBodies: undefined,
+		});
 	});
 
 	it("reads the whole live page when the tail cannot be merged", async () => {
@@ -137,7 +147,7 @@ describe("refreshRemoteConversation", () => {
 			.mockResolvedValueOnce(wire({ oldestSequence: 4, turns: [wireTurn("t2", "completed")], messages: [wireMessage("m2", "t2", 4)] }));
 		await refreshRemoteConversation(client, "s1", "box");
 		expect(getMock).toHaveBeenCalledTimes(2);
-		expect(getMock.mock.calls[1][1].params.query).toEqual({ beforeSequence: undefined, limit: 30, outputLimit: 512 });
+		expect(getMock.mock.calls[1][1].params.query).toEqual({ beforeSequence: undefined, limit: 30, outputLimit: 512, compactDetails: "1", dedupeBodies: "1" });
 	});
 
 	it("starts over from the new page when it does not reach the cached one", async () => {

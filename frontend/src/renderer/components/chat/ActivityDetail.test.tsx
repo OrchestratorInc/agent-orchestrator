@@ -137,3 +137,43 @@ it.each(["command", "file_change"] as const)("keeps %s navigation hints usable b
 	await checkNavigation();
 	expect(get).toHaveBeenCalledTimes(1);
 });
+
+it("loads every grouped command only when the row expands", async () => {
+	const full = ["first", "second"].map((id, index): ConversationActivity => ({
+		kind: "activity", id, sequence: index + 1, revision: 1,
+		activityKind: "command", status: "completed", summary: "Ran command",
+		detail: { command: "echo result", output: `${id} complete output` }, createdAt: "",
+	}));
+	const previews = full.map((activity) => ({ ...activity, detailOmitted: true, detail: { command: "echo result", output: "preview" } }));
+	get.mockReset();
+	get.mockImplementation((_path, options) => Promise.resolve({ data: full.find((activity) => activity.id === options.params.path.activityId) }));
+	const view = render(<TooltipProvider><ActivityDetailProvider sessionId="grouped">
+		<ActivityRow activity={previews[1]} repeats={[previews[0]]} />
+	</ActivityDetailProvider></TooltipProvider>);
+	expect(get).not.toHaveBeenCalled();
+	fireEvent.click(view.container.querySelector("[aria-expanded='false']")!);
+	await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+	await waitFor(() => {
+		expect(view.container.textContent).toContain("first complete output");
+		expect(view.container.textContent).toContain("second complete output");
+	});
+	expect(view.container.textContent).not.toContain("preview");
+});
+
+it("loads complete text for an expanded AO tool summary", async () => {
+	const text = "Complete typed text. ".repeat(30);
+	const full: ConversationActivity = {
+		kind: "activity", id: "ao-type", sequence: 1, revision: 1,
+		activityKind: "mcp_tool", status: "completed", summary: "Typed text",
+		detail: { toolName: "mcp__ao__type_text", arguments: { text } }, createdAt: "",
+	};
+	get.mockReset();
+	get.mockResolvedValue({ data: full });
+	const view = render(<TooltipProvider><ActivityDetailProvider sessionId="ao-tool">
+		<ActivityRow activity={{ ...full, detailOmitted: true, detail: { ...full.detail, arguments: { text: text.slice(0, 128) } } }} />
+	</ActivityDetailProvider></TooltipProvider>);
+	expect(get).not.toHaveBeenCalled();
+	fireEvent.click(view.container.querySelector("[aria-expanded='false']")!);
+	await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+	await waitFor(() => expect(view.container.textContent).toContain(text));
+});

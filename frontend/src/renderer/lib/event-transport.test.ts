@@ -98,7 +98,7 @@ function fakeQueryClient(openChats: Array<[string, string]> = []) {
 }
 
 const remoteLivePage = (sessionId: string) => ({
-	params: { path: { sessionId }, query: { beforeSequence: undefined, limit: 30, outputLimit: 512 } },
+	params: { path: { sessionId }, query: { beforeSequence: undefined, limit: 30, outputLimit: 512, compactDetails: "1", dedupeBodies: "1" } },
 });
 
 function cdcSources() {
