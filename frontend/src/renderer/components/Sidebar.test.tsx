@@ -1228,6 +1228,85 @@ describe("Sidebar", () => {
 		expect(navigateMock).not.toHaveBeenCalledWith(expect.objectContaining({ to: "/projects/$projectId" }));
 	});
 
+	it("offers no board, orchestrator or project settings for a Cloud standalone agent, owned or shared", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				workspace,
+				{
+					id: "agent-1",
+					name: "Fix the flake",
+					kind: "cloud",
+					cloudOrgId: "org-1",
+					standaloneAgent: true,
+					path: "",
+					sessions: [{ ...session, id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake", cloud: { orgId: "org-1" } }],
+				},
+				{
+					id: "agent-shared",
+					name: "Shared agent",
+					kind: "cloud",
+					cloudOrgId: "org-2",
+					standaloneAgent: true,
+					shared: { source: "link" },
+					path: "",
+					sessions: [{ ...session, id: "shared-agent", title: "Their work", workspaceId: "agent-shared", workspaceName: "Shared agent", cloud: { orgId: "org-2", shared: true } }],
+				},
+			],
+		});
+
+		// The person's own agent is a Scratchpad row, with no project row or project menu.
+		expect(screen.queryByLabelText("Project actions for Fix the flake")).toBeNull();
+
+		// A shared one keeps its row, but its right-click menu opens no board.
+		const row = document.querySelector('li[data-project-id="agent-shared"]') as HTMLElement;
+		fireEvent.contextMenu(within(row).getAllByText("Shared agent")[0]!);
+		expect(await screen.findByRole("menuitem", { name: /New task/ })).toBeInTheDocument();
+		for (const name of [/Open dashboard/, /Project settings/, /Remove project/, /orchestrator/i]) {
+			expect(screen.queryByRole("menuitem", { name })).toBeNull();
+		}
+		await user.keyboard("{Escape}");
+
+		// A regular project still has its board.
+		await user.click(screen.getByLabelText("Project actions for Project One"));
+		await user.click(await screen.findByRole("menuitem", { name: /Open dashboard/ }));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-1" } });
+	});
+
+	it("shows the Scratchpad section for a Cloud standalone agent only while it lists one of its sessions", () => {
+		const agent = (sessions: WorkspaceSession[]): WorkspaceSummary => ({
+			id: "agent-1", name: "Fix the flake", kind: "cloud", cloudOrgId: "org-1", standaloneAgent: true, path: "", sessions,
+		});
+		const agentSession = { ...session, id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake", cloud: { orgId: "org-1" } };
+
+		// Archived, its only session is not a row: no section.
+		renderSidebar({ workspaces: [workspace, agent([{ ...agentSession, isTerminated: true }])] });
+		expect(document.querySelector("[data-scratchpad-section]")).toBeNull();
+		cleanup();
+
+		// Active, it is.
+		renderSidebar({ workspaces: [workspace, agent([agentSession])] });
+		expect(document.querySelector("[data-scratchpad-section]")).not.toBeNull();
+		cleanup();
+
+		// A local Scratchpad still shows beside an archived agent.
+		renderSidebar({
+			workspaces: [
+				workspace,
+				{
+					id: STANDALONE_WORKSPACE_ID,
+					name: "Scratchpad",
+					kind: STANDALONE_PROJECT_KIND,
+					path: "",
+					sessions: [{ ...session, id: "adhoc-1", title: "baby", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" }],
+				},
+				agent([{ ...agentSession, isTerminated: true }]),
+			],
+		});
+		const section = document.querySelector("[data-scratchpad-section]")!;
+		expect(section).toContainElement(screen.getByText("baby"));
+	});
+
 	it("shows no Scratchpad section for Cloud standalone agents that hold no session", () => {
 		renderSidebar({
 			workspaces: [
@@ -3770,6 +3849,35 @@ describe("Sidebar", () => {
 				params: { projectId: "proj-1", sessionId: "proj-1-1" },
 			}),
 		);
+	});
+
+	it("goes Home, not to a board, when archiving the active pinned Cloud standalone agent", async () => {
+		mockParams.projectId = "agent-1";
+		mockParams.sessionId = "cloud-agent";
+		renderSidebar({
+			workspaces: [
+				workspace,
+				{
+					id: "agent-1",
+					name: "Fix the flake",
+					kind: "cloud",
+					cloudOrgId: "org-1",
+					standaloneAgent: true,
+					path: "",
+					sessions: [{
+						...session, id: "cloud-agent", title: "Fix the flake", workspaceId: "agent-1", workspaceName: "Fix the flake",
+						cloud: { orgId: "org-1" }, isPinned: true, pinnedAt: "2026-06-30T01:00:00Z",
+					}],
+				},
+			],
+		});
+
+		const pinnedList = screen.getByTestId("pinned-session-list");
+		const row = within(pinnedList).getByLabelText("Open Fix the flake").closest<HTMLElement>("[data-session-row]")!;
+		await confirmArchiveFromRow(row);
+
+		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: "/" }));
+		expect(navigateMock).not.toHaveBeenCalledWith(expect.objectContaining({ to: "/projects/$projectId" }));
 	});
 
 	it("keeps pinned sessions with the same ID distinct across local and two hosts", () => {

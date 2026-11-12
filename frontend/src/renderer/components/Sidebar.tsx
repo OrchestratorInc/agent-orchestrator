@@ -943,9 +943,10 @@ export const Sidebar = memo(function Sidebar({
 	const standaloneWorkspace = useMemo((): WorkspaceSummary | undefined => {
 		const scratchpads = ownScratchpadWorkspaces(workspaces);
 		const local = scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND);
-		// Cloud standalone agents alone make a section only when one holds a session:
-		// an agent project with none (a start that was refused) has nothing to show.
-		if (!local && !scratchpads.some((workspace) => workspace.sessions.length > 0)) return undefined;
+		// Cloud standalone agents alone make a section only when it would list one of
+		// their sessions: an agent with none (a refused start) or only an archived
+		// one has no row to show.
+		if (!local && !scratchpads.some((workspace) => workspace.sessions.some(scratchpadListsSession))) return undefined;
 		if (scratchpads.length === 1 && local) return local;
 		return {
 			...(local ?? scratchpadSummary(t("standalone.workspaceName"))),
@@ -1082,6 +1083,9 @@ export const Sidebar = memo(function Sidebar({
 			const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id);
 			if (nextRoute.target === "session") {
 				selection.goSession(killedSession.workspaceId, nextRoute.sessionId);
+			} else if (workspace?.standaloneAgent) {
+				// A Cloud standalone agent has no board to fall back to.
+				selection.goHome();
 			} else {
 				selection.goProject(killedSession.workspaceId);
 			}
@@ -1611,6 +1615,9 @@ const ProjectItem = memo(function ProjectItem({
 	const { t } = useTranslation();
 	const nameWithHost = hostLabel ? `${workspace.name} · ${hostLabel}` : workspace.name;
 	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
+	// A Cloud standalone agent (here, one shared with the person) is one
+	// session: it has no board, orchestrator or project settings to offer.
+	const isAgent = workspace.standaloneAgent === true;
 	const prefersReducedMotion = useReducedMotion();
 	const activeProjectMatches = selection.activeProjectId === workspace.id;
 	const projectHeaderRef = useRef<HTMLDivElement>(null);
@@ -1726,7 +1733,7 @@ const ProjectItem = memo(function ProjectItem({
 		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
 		if (nextRoute.target === "session") {
 			selection.goSession(workspace.id, nextRoute.sessionId);
-		} else if (workspace.id === STANDALONE_WORKSPACE_ID) {
+		} else if (workspace.id === STANDALONE_WORKSPACE_ID || isAgent) {
 			selection.goHome();
 		} else {
 			selection.goProject(workspace.id);
@@ -1896,7 +1903,7 @@ const ProjectItem = memo(function ProjectItem({
 				disabled: isProjectRestarting,
 				onSelect: () => requestNewTask(workspace.id, workspace.hostId),
 			},
-			...(!isStandalone && (!workspace.shared || orchestrator)
+			...(!isStandalone && !isAgent && (!workspace.shared || orchestrator)
 				? [{
 					kind: "item" as const,
 					id: "orchestrator",
@@ -1906,7 +1913,7 @@ const ProjectItem = memo(function ProjectItem({
 					onSelect: () => void openOrchestrator(),
 				}]
 				: []),
-			...(!isStandalone
+			...(!isStandalone && !isAgent
 				? [{
 					kind: "item" as const,
 					id: "board",
@@ -1947,7 +1954,7 @@ const ProjectItem = memo(function ProjectItem({
 					onSelect: () => setProjectPinned(workspace.id, !isPinned),
 				}]
 				: []),
-			...(!isStandalone
+			...(!isStandalone && !isAgent
 				? [
 					{
 						kind: "item" as const,
@@ -2345,6 +2352,11 @@ const ProjectItem = memo(function ProjectItem({
 	);
 }, projectItemPropsEqual);
 
+/** Whether the Scratchpad section lists the session: a worker that is not archived. */
+function scratchpadListsSession(session: WorkspaceSession): boolean {
+	return !isOrchestratorSession(session) && session.isTerminated !== true;
+}
+
 /** The Scratchpad section's own fields, for when it holds Cloud standalone agents alone. */
 function scratchpadSummary(name: string): Pick<WorkspaceSummary, "id" | "name" | "kind" | "path"> {
 	return { id: STANDALONE_WORKSPACE_ID, name, kind: STANDALONE_PROJECT_KIND, path: "" };
@@ -2369,7 +2381,7 @@ function ScratchpadSection({
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const visibleSessions = useMemo(
-		() => sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true),
+		() => sortedWorkerSessions(workspace.sessions).filter(scratchpadListsSession),
 		[workspace.sessions],
 	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
