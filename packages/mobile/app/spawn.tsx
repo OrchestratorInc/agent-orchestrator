@@ -539,6 +539,12 @@ export default function SpawnScreen() {
 	// Pasting is a way to attach too, so it goes through the same gate as the
 	// menu. Native stops a paste at 8 images or 25 MB and says which.
 	const pasteImages = (assets: ComposerImageAsset[], overflow?: PasteOverflow) => {
+		// A paste can't wait for a pick still loading, and dropping it silently
+		// would look like paste doing nothing.
+		if (pickingAttachments.current) {
+			setAttachmentError("Wait for attachments to finish loading, then paste again.");
+			return;
+		}
 		const { picks, error } = pastedSpawnAttachments(assets, attachmentsRef.current.length);
 		const skipped = overflow === "count" ? `You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.` : overflow === "size" ? "Pasted images must total under 25 MB." : undefined;
 		void addAttachments(async () => picks, "Couldn't read the pasted image.", joinAttachmentErrors(error, skipped))
