@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -717,7 +718,7 @@ var otherWriterPoll = 2 * time.Second
 
 // ErrChatOpenElsewhere reports a send refused because another process writes
 // the chat and its provider could not be stopped yet.
-var ErrChatOpenElsewhere = errors.New("this chat is open in another Claude Code process; close it there, then send again")
+var ErrChatOpenElsewhere = apierr.Conflict("CHAT_OPEN_ELSEWHERE", "this chat is open in another Claude Code process; close it there, then send again", nil)
 
 func (s *Service) stopForOtherWriter(ctx context.Context, rec domain.SessionRecord) (bool, error) {
 	if s.otherWriter == nil || rec.HibernatedAt != nil {

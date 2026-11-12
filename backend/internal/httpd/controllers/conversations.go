@@ -1317,10 +1317,6 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 			"CHAT_INTERFACE_TRANSITION",
 			"the session is switching interfaces; send again after the handoff completes", nil)
 
-	case errors.Is(err, chatsvc.ErrChatOpenElsewhere):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
-			"CHAT_OPEN_ELSEWHERE", err.Error(), nil)
-
 	case errors.Is(err, chatsvc.ErrCompactionUnsupported):
 		// Permanent for this harness, and a 409 rather than a 500 because nothing
 		// failed: the provider simply has no way to reclaim context. A client should
