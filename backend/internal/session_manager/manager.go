@@ -1545,6 +1545,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnTransfer, err)
 		}
+		if git, ok := m.workspace.(ports.WorkspaceTransfer); ok {
+			if err := git.UnstageTransfer(ctx, ws); err != nil {
+				m.logger.Warn("spawn: moved work stays staged", "sessionID", id, "error", err)
+			}
+		}
 	}
 
 	// Everything above is shared: project, harness, prompts, seed row, worktree,

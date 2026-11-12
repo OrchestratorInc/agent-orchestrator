@@ -410,6 +410,8 @@ type WorkspaceTransfer interface {
 	// ReleaseTransferBranch detaches HEAD in a moved session's worktree so the
 	// branch can be checked out again. Files and index are kept.
 	ReleaseTransferBranch(ctx context.Context, info WorkspaceInfo) error
+	// UnstageTransfer unstages moved uncommitted work after ApplyPreserved.
+	UnstageTransfer(ctx context.Context, info WorkspaceInfo) error
 	// DeleteTransferRef removes a preserved ref from origin once it is no
 	// longer needed.
 	DeleteTransferRef(ctx context.Context, repoPath, remotePreservedRef string) error
