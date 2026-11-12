@@ -1,9 +1,12 @@
 package acp
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -23,26 +26,42 @@ func ackNote(text string) string {
 		`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + text + `"}}}}`
 }
 
-// The acknowledgement says the steer took. The turn settles with the host's
-// result, whichever of the two answers the SDK hands over first.
+// The acknowledgement says the steer took. The `/steer` prompt is marked as a
+// command, so the host gives the turn's result to the running prompt, and the
+// turn settles with it whichever answer arrives or is routed first.
 func TestACPSteerPromptAcknowledgedSteerKeepsTheHostResultInEitherOrder(t *testing.T) {
-	for _, order := range []struct {
+	for _, tc := range []struct {
 		name          string
+		steerFirst    bool
 		first, second int
 	}{
-		{"steer answer routed first", 1, 0},
-		{"turn result routed first", 0, 1},
+		{"steer answers first", true, 1, 0},
+		{"steer answers first, routed in reverse", true, 0, 1},
+		{"turn's prompt answers first", false, 0, 1},
+		{"turn's prompt answers first, routed in reverse", false, 1, 0},
 	} {
-		t.Run(order.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			conv, host := startScriptedAckConversation(t, "")
-			answerOrder(conv, order.first, order.second)
+			answerOrder(conv, tc.first, tc.second)
 			_ = nextEvent(t, conv.Events()) // controller.ready
 			turn, root := startScriptedTurn(t, conv, host)
 			steer, outcome := steerAsync(t, conv, host, turn)
+			var meta struct {
+				Meta map[string]any `json:"_meta"`
+			}
+			_ = json.Unmarshal(host.lastPrompt, &meta)
+			if meta.Meta[persistenthost.ACPSteerPromptMetaKey] != true || meta.Meta[persistenthost.ACPSteerKeepsTurnMetaKey] != true {
+				t.Fatalf("steer prompt _meta = %v, want it marked as a steer command", meta.Meta)
+			}
 
 			host.send(ackNote("ACK: queued for the active turn"))
-			host.send(plainResult(steer))
-			host.send(receiptResult(root, "acp-host:7"))
+			if tc.steerFirst {
+				host.send(plainResult(steer))
+				host.send(receiptResult(root, "acp-host:7"))
+			} else {
+				host.send(receiptResult(root, "acp-host:7"))
+				host.send(plainResult(steer))
+			}
 			if err := steerOutcome(t, outcome); err != nil {
 				t.Fatalf("Steer = %v, want delivered", err)
 			}
@@ -59,9 +78,9 @@ func TestACPSteerPromptAcknowledgedSteerKeepsTheHostResultInEitherOrder(t *testi
 func TestACPSteerPromptDeclinedAcknowledgementStaysARefusal(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		// steerLast makes the steer prompt the last to answer, so its answer
-		// carries the host's receipt.
-		steerLast bool
+		// rootFirst sends the turn's own prompt's answer, which carries the
+		// host's receipt, before the steer prompt's.
+		rootFirst bool
 		// noteLate sends the note after the turn's own prompt has answered.
 		noteLate      bool
 		first, second int
@@ -82,12 +101,12 @@ func TestACPSteerPromptDeclinedAcknowledgementStaysARefusal(t *testing.T) {
 			if !tc.noteLate {
 				host.send(ackNote("DECLINED: the turn is compacting"))
 			}
-			if tc.steerLast {
-				host.send(plainResult(root))
+			if tc.rootFirst {
+				host.send(receiptResult(root, "acp-host:8"))
 				if tc.noteLate {
 					host.send(ackNote("DECLINED: the turn is compacting"))
 				}
-				host.send(receiptResult(steer, "acp-host:8"))
+				host.send(plainResult(steer))
 			} else {
 				host.send(plainResult(steer))
 				host.send(receiptResult(root, "acp-host:8"))
@@ -102,6 +121,51 @@ func TestACPSteerPromptDeclinedAcknowledgementStaysARefusal(t *testing.T) {
 				t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
 			}
 		})
+	}
+}
+
+// The running prompt failing fails the turn, even though the `/steer` command
+// took and answered fine after it.
+func TestACPSteerPromptAcknowledgedSteerKeepsTheTurnsFailure(t *testing.T) {
+	conv, host := startScriptedAckConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	steer, outcome := steerAsync(t, conv, host, turn)
+
+	host.send(ackNote("ACK: queued for the active turn"))
+	host.send(`{"jsonrpc":"2.0","id":` + root + `,"error":{"code":-32603,"message":"model request failed","data":{"` +
+		persistenthost.ACPEventIDMetaKey + `":"acp-host:14"}}}`)
+	host.send(plainResult(steer))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("Steer = %v, want delivered", err)
+	}
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].TurnState != domain.TurnStateFailed || done[0].ProviderEventID != "acp-host:14" {
+		t.Fatalf("turn completions = %+v, want one failed with the host's receipt", done)
+	}
+}
+
+// A `/steer` answer that never comes does not hold a turn the host has ended.
+func TestACPSteerPromptMissingSteerAnswerDoesNotHoldTheTurn(t *testing.T) {
+	conv, host := startScriptedAckConversation(t, "")
+	conv.stragglerWait = 100 * time.Millisecond
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	steer, outcome := steerAsync(t, conv, host, turn)
+
+	host.send(ackNote("ACK: queued for the active turn"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("Steer = %v, want delivered", err)
+	}
+	host.send(receiptResult(root, "acp-host:15"))
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:15" {
+		t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
+	}
+	// The answer arriving after all does not complete the turn again.
+	host.send(plainResult(steer))
+	if again := turnCompletions(t, conv.Events(), turn, 200*time.Millisecond); len(again) != 0 {
+		t.Fatalf("a late steer answer completed the turn again: %+v", again)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -146,6 +147,8 @@ type conversation struct {
 	// refused, so one that arrives while Stop waits for the dispatch lock
 	// cannot join, or hold up, a turn the user is stopping.
 	stoppingTurn string
+	// nudging is set while a drain nudge is in flight; see steerByDrain.
+	nudging atomic.Bool
 	// steerSegment counts steers the running turn has taken. Text the agent
 	// streams without a message id after one goes to a new message, so it
 	// renders after the steer instead of growing the reply above it.
@@ -170,6 +173,8 @@ type conversation struct {
 	// steerSettledTurn is the last turn a steer prompt settled. An earlier
 	// prompt of that turn answering late is dropped, not a second completion.
 	steerSettledTurn string
+	// stragglerWait, when set by a test, replaces promptStragglerWait.
+	stragglerWait time.Duration
 	// promptReturned, when set by a test, runs as each of the turn's prompts
 	// returns and before its answer is routed, to fix the order in which
 	// overlapping answers are handled.

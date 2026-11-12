@@ -73,6 +73,11 @@ const (
 	// (acp.SteerPrompt). The host admits it while the turn's prompt is active,
 	// and the turn's result is the answer of the last of its prompts to return.
 	ACPSteerPromptMetaKey = "ao.steerPrompt"
+	// ACPSteerKeepsTurnMetaKey also marks a steer prompt that the agent answers
+	// at once while the turn's earlier prompt keeps the work, as Hermes'
+	// `/steer` command is. Its answer is never the turn's result: the turn
+	// ends with the answer of its last other prompt, success or failure.
+	ACPSteerKeepsTurnMetaKey = "ao.steerKeepsTurn"
 	// ACPSteerTurnEndedDataKey is set in the error data of a steer prompt the
 	// host refused because the turn it was meant for had already ended. The
 	// agent never saw it, so the guidance can go as a new turn.

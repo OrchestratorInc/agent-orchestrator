@@ -89,3 +89,57 @@ func TestInterruptWithdrawsASteerWaitingForTheAgent(t *testing.T) {
 		t.Fatalf("Steer error = %v, want ErrTurnNotSteerable", err)
 	}
 }
+
+// failingStopSteerer refuses to interrupt, as a provider whose cancel did not
+// get through does, and records whether Stop gave steering back.
+type failingStopSteerer struct {
+	*waitingSteerer
+	restored chan struct{}
+}
+
+func (f *failingStopSteerer) Interrupt(context.Context, string) error {
+	return errors.New("session/cancel did not reach the agent")
+}
+
+func (f *failingStopSteerer) RestoreSteering() {
+	select {
+	case <-f.restored:
+	default:
+		close(f.restored)
+	}
+}
+
+// Stop withdraws the turn's steers before it interrupts. When the interrupt
+// fails the turn keeps running, so Stop gives steering back.
+func TestInterruptThatFailsRestoresSteering(t *testing.T) {
+	provider := &failingStopSteerer{
+		waitingSteerer: &waitingSteerer{
+			steerRecorder: newSteerRecorder(),
+			parked:        make(chan struct{}),
+			withdrawn:     make(chan struct{}),
+		},
+		restored: make(chan struct{}),
+	}
+	h := newHarnessWithConversationAndStore(t, provider, func(st *store.Store) chatsvc.Store { return st })
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+
+	if err := h.svc.Interrupt(ctx, testSession); err == nil {
+		t.Fatal("Interrupt succeeded although the provider refused it")
+	}
+	select {
+	case <-provider.withdrawn:
+	default:
+		t.Fatal("Stop did not withdraw the turn's steers first")
+	}
+	select {
+	case <-provider.restored:
+	default:
+		t.Fatal("Stop that failed did not give steering back")
+	}
+}

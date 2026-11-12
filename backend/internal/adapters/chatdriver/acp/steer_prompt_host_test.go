@@ -27,6 +27,8 @@ type scriptedHost struct {
 	t      *testing.T
 	conn   net.Conn
 	frames chan map[string]json.RawMessage
+	// lastPrompt holds the params of the last session/prompt nextPrompt read.
+	lastPrompt json.RawMessage
 }
 
 func (h *scriptedHost) send(frame string) {
@@ -46,6 +48,7 @@ func (h *scriptedHost) nextPrompt() string {
 			var method string
 			_ = json.Unmarshal(frame["method"], &method)
 			if method == "session/prompt" {
+				h.lastPrompt = frame["params"]
 				return string(frame["id"])
 			}
 		case <-deadline:
@@ -415,5 +418,87 @@ func TestACPSteerPromptAfterStopBeganIsNotSent(t *testing.T) {
 			t.Fatalf("a steer prompt reached the host after Stop began: %v", frame)
 		}
 	default:
+	}
+}
+
+// With two steer prompts in flight, a handoff reaches only the next one. The
+// later steer still waits for its own answer, and a refusal of it stands.
+func TestACPSteerPromptHandoffSettlesOnlyTheNextSteer(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	first, firstOutcome := steerAsync(t, conv, host, turn)
+	second, secondOutcome := steerAsync(t, conv, host, turn)
+
+	host.send(plainResult(root)) // the turn's prompt hands off to the first steer
+	if err := steerOutcome(t, firstOutcome); err != nil {
+		t.Fatalf("first Steer = %v, want delivered at the handoff", err)
+	}
+	select {
+	case err := <-secondOutcome:
+		t.Fatalf("second Steer returned %v at a handoff that went to the first", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	host.send(`{"jsonrpc":"2.0","id":` + second + `,"error":{"code":-32600,"message":"a prompt is already running"}}`)
+	err := steerOutcome(t, secondOutcome)
+	var refusal interface{ ChatRefusal() bool }
+	if !errors.As(err, &refusal) || !refusal.ChatRefusal() {
+		t.Fatalf("second Steer = %v, want the agent's refusal", err)
+	}
+	host.send(receiptResult(first, "acp-host:11"))
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].TurnState != domain.TurnStateCompleted || done[0].ProviderEventID != "acp-host:11" {
+		t.Fatalf("turn completions = %+v, want one completed with the host's receipt", done)
+	}
+}
+
+// A steer prompt answered as cancelled was not shown to take: Stop got there
+// first. An earlier prompt's cancelled answer is no handoff either.
+func TestACPSteerPromptCancelledAnswerIsUncertain(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	steer, outcome := steerAsync(t, conv, host, turn)
+
+	host.send(`{"jsonrpc":"2.0","id":` + root + `,"result":{"stopReason":"cancelled"}}`)
+	select {
+	case err := <-outcome:
+		t.Fatalf("Steer returned %v on the turn's cancelled answer", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	host.send(`{"jsonrpc":"2.0","id":` + steer + `,"result":{"stopReason":"cancelled","_meta":{"` +
+		persistenthost.ACPEventIDMetaKey + `":"acp-host:12"}}}`)
+	err := steerOutcome(t, outcome)
+	var refusal interface{ ChatRefusal() bool }
+	if !errors.Is(err, errSteerUnconfirmed) || errors.As(err, &refusal) {
+		t.Fatalf("Steer = %v, want an uncertain delivery", err)
+	}
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].TurnState != domain.TurnStateInterrupted || done[0].ProviderEventID != "acp-host:12" {
+		t.Fatalf("turn completions = %+v, want one interrupted with the host's receipt", done)
+	}
+}
+
+// Stop does not wait out a steer prompt the agent has not answered: the Steer
+// returns at once, its delivery uncertain.
+func TestACPSteerPromptStopReleasesAWaitingSteer(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	conv.steering.prompt = testSteerPrompt(time.Minute)
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	steer, outcome := steerAsync(t, conv, host, turn)
+
+	started := time.Now()
+	conv.WithdrawPendingSteers()
+	err := steerOutcome(t, outcome)
+	if !errors.Is(err, errSteerUnconfirmed) || time.Since(started) > time.Second {
+		t.Fatalf("Steer after Stop began = %v after %s, want an uncertain delivery at once", err, time.Since(started))
+	}
+	host.send(`{"jsonrpc":"2.0","id":` + root + `,"result":{"stopReason":"cancelled"}}`)
+	host.send(`{"jsonrpc":"2.0","id":` + steer + `,"result":{"stopReason":"cancelled","_meta":{"` +
+		persistenthost.ACPEventIDMetaKey + `":"acp-host:13"}}}`)
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].TurnState != domain.TurnStateInterrupted {
+		t.Fatalf("turn completions = %+v, want one interrupted", done)
 	}
 }
