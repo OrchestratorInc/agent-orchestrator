@@ -37,7 +37,7 @@ const sessionIdOf = (options: unknown) => (options as { params?: { path?: { sess
 it("asks the local daemon about a local session's account, never a cloud session's", async () => {
 	getMock.mockImplementation((path: string) => Promise.resolve({ data: path === "/api/v1/agents/accounts" ? { accounts: [] } : {} }));
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	render(<QueryClientProvider client={queryClient}>
+	const { unmount } = render(<QueryClientProvider client={queryClient}>
 		<SessionAccountSummary session={session("s-cloud", { cloud: { orgId: "org-1" } })} />
 		<SessionAccountSummary session={session("s-local")} />
 	</QueryClientProvider>);
@@ -47,4 +47,11 @@ it("asks the local daemon about a local session's account, never a cloud session
 		expect(paths).toEqual(expect.arrayContaining(["/api/v1/agents/accounts/sessions/{sessionId}", "/api/v1/sessions/{sessionId}/interface-transition"]));
 	});
 	expect(getMock.mock.calls.filter(([, options]) => sessionIdOf(options) === "s-cloud")).toEqual([]);
+	// Let every query settle and React Query deliver its batched updates (on a
+	// timer) while the DOM still exists: one landing after the environment is
+	// torn down throws "window is not defined".
+	await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+	unmount();
+	queryClient.clear();
+	await new Promise((resolve) => setTimeout(resolve, 0));
 });
