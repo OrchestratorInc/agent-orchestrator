@@ -85,7 +85,7 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 			setCopyError(null);
 			return;
 		}
-		void captureRendererEvent("ao.renderer.support_opened");
+		void captureRendererEvent("ao.support.opened");
 		let cancelled = false;
 		void collectReportProblemDiagnostics().then((nextDiagnostics) => {
 			if (!cancelled) setDiagnostics(nextDiagnostics);
@@ -186,9 +186,8 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 											<DropdownMenuTrigger asChild>
 												<Button
 													type="button"
-													variant="ghost"
+													variant="quiet"
 													size="icon-sm"
-													className="text-settings-muted hover:text-settings-label"
 													disabled={!canSubmit}
 													aria-label={option.action}
 												>
@@ -217,9 +216,8 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 								<TooltipTrigger asChild>
 									<Button
 										type="button"
-										variant="ghost"
+										variant="quiet"
 										size="icon-sm"
-										className="text-settings-muted hover:text-settings-label"
 										disabled={!canSubmit}
 										aria-label={option.action}
 										onClick={() => {

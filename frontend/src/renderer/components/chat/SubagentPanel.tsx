@@ -8,7 +8,7 @@
  */
 
 import { useMemo } from "react";
-import { ArrowLeft, Lock } from "lucide-react";
+import { ArrowLeft, Lock } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";

@@ -108,3 +108,4 @@ pnpm-lock.yaml
 .serena/
 
 /frontend/wake-helper/
+/frontend/dictation-helper/

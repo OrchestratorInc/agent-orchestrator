@@ -43,6 +43,9 @@ type Manager interface {
 	// local repository as a project.
 	Clone(ctx context.Context, in CloneInput) (Project, error)
 	PrepareClone(ctx context.Context, in CloneInput) (ClonePreparationResult, error)
+	// PrepareCloneWithProgress is PrepareClone that reports each git step
+	// through onProgress as the clone reaches it.
+	PrepareCloneWithProgress(ctx context.Context, in CloneInput, onProgress func(CloneProgress)) (ClonePreparationResult, error)
 	CheckCloneDestination(ctx context.Context, in CloneInput) (CloneDestination, error)
 	CleanupPreparedClone(ctx context.Context, in ClonePreparationCleanupInput) error
 
@@ -71,6 +74,12 @@ type SessionTeardowner interface {
 	TeardownProject(ctx context.Context, project domain.ProjectID) error
 }
 
+// autoSpawnPauser is the session service's view of paused automatic starts.
+// Optional, so focused fakes need not implement it.
+type autoSpawnPauser interface {
+	AutoSpawnPauses(ctx context.Context, project domain.ProjectRecord) []domain.AutoSpawnPause
+}
+
 // Service implements project registration and lookup use-cases for controllers.
 type Service struct {
 	store          Store
@@ -80,6 +89,7 @@ type Service struct {
 	milestones     ports.InstallMilestones
 	defaultHarness domain.AgentHarness
 	logger         *slog.Logger
+	githubRepos    ports.GitHubRepositoryResolver
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
@@ -106,6 +116,9 @@ type Deps struct {
 	// Logger receives structured logs. Left nil, the service falls back to
 	// slog.Default, keeping service-focused tests logger-free.
 	Logger *slog.Logger
+	// GitHubRepos resolves a github.com origin to its current owner/name so
+	// Get can report CanonicalRepo after a rename. Left nil, it is omitted.
+	GitHubRepos ports.GitHubRepositoryResolver
 }
 
 // New returns a project service backed by the given durable store.
@@ -127,6 +140,7 @@ func NewWithDeps(d Deps) *Service {
 		milestones:     d.Milestones,
 		defaultHarness: defaultHarness,
 		logger:         d.Logger,
+		githubRepos:    d.GitHubRepos,
 	}
 	if s.clock == nil {
 		s.clock = time.Now
@@ -161,6 +175,9 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			OrchestratorAgent: row.Config.Orchestrator.Harness,
 			FolderMissing:     folderMissing,
 		})
+		if pauser, ok := m.sessions.(autoSpawnPauser); ok {
+			out[len(out)-1].AutoSpawnPauses = pauser.AutoSpawnPauses(ctx, row)
+		}
 	}
 	return out, nil
 }
@@ -185,7 +202,56 @@ func (m *Service) Get(ctx context.Context, id domain.ProjectID) (GetResult, erro
 		}
 		p.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
 	}
+	canonical := m.canonicalGitHubRepo(ctx, p.Repo)
+	p.CanonicalRepo, p.CanonicalOwnerAvatarURL = canonical.FullName, canonical.OwnerAvatarURL
 	return GetResult{Status: "ok", Project: &p}, nil
+}
+
+// WarmCanonicalRepos resolves every github.com project origin so the first
+// project read after startup already has CanonicalRepo. Run it in the
+// background: it makes one GitHub request per uncached origin.
+func (m *Service) WarmCanonicalRepos(ctx context.Context) {
+	if m.githubRepos == nil {
+		return
+	}
+	rows, err := m.store.ListProjects(ctx)
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			return
+		}
+		if id, err := domain.ParseRepositoryIdentity(row.RepoOriginURL); err == nil && id.Host == "github.com" {
+			_, _ = m.githubRepos.ResolveGitHubRepository(ctx, id.Namespace, id.Name)
+		}
+	}
+}
+
+// canonicalRepoWait bounds how long Get waits for GitHub on a cold cache. A
+// slower lookup keeps running and fills the cache for the next read.
+const canonicalRepoWait = 2 * time.Second
+
+// canonicalGitHubRepo returns GitHub's current identity for a github.com
+// origin, or the zero value when the origin is on any other host or the
+// lookup fails.
+// Only github.com origins are looked up: sending a self-hosted remote's host
+// or owner to a third party would leak internal names.
+func (m *Service) canonicalGitHubRepo(ctx context.Context, origin string) ports.GitHubRepository {
+	if m.githubRepos == nil || origin == "" {
+		return ports.GitHubRepository{}
+	}
+	id, err := domain.ParseRepositoryIdentity(origin)
+	if err != nil || id.Host != "github.com" {
+		return ports.GitHubRepository{}
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, canonicalRepoWait)
+	defer cancel()
+	repo, err := m.githubRepos.ResolveGitHubRepository(waitCtx, id.Namespace, id.Name)
+	if err != nil {
+		return ports.GitHubRepository{}
+	}
+	return repo
 }
 
 // Add registers a local git repository as a project.
@@ -350,10 +416,10 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	}()
 	probes.Wait()
 	if !isRepo {
-		return Project{}, apierr.Invalid("NOT_A_GIT_REPO", "AO needs a Git repository with an initial commit before it can create agent workspaces.", nil)
+		return Project{}, apierr.Invalid("NOT_A_GIT_REPO", "Orchestrator needs a Git repository with an initial commit before it can create agent workspaces.", nil)
 	}
 	if !hasCommit {
-		return Project{}, apierr.Invalid("PROJECT_UNBORN", "AO needs a Git repository with an initial commit before it can create agent workspaces.", map[string]any{
+		return Project{}, apierr.Invalid("PROJECT_UNBORN", "Orchestrator needs a Git repository with an initial commit before it can create agent workspaces.", map[string]any{
 			"path":         path,
 			"suggestedFix": "Run `git commit --allow-empty -m \"initial commit\"` in this folder, then try again.",
 		})
@@ -432,7 +498,7 @@ func classifyRepositorySetupTarget(ctx context.Context, path string) (repository
 	if isBareGitRepository(ctx, path) {
 		return repositorySetupPlainFolder, apierr.Invalid("PROJECT_BARE_REPOSITORY", "Selected folder must be a non-bare Git repository or a plain folder.", map[string]any{
 			"path":         path,
-			"suggestedFix": "Use a normal checkout, or select a plain folder for AO to initialize.",
+			"suggestedFix": "Use a normal checkout, or select a plain folder for Orchestrator to initialize.",
 		})
 	}
 
@@ -444,7 +510,7 @@ func classifyRepositorySetupTarget(ctx context.Context, path string) (repository
 	}
 
 	if hasGitMetadata(path) {
-		return repositorySetupPlainFolder, apierr.Invalid("UNSUPPORTED_GIT_REPO", "Selected folder contains Git metadata that AO could not inspect.", map[string]any{
+		return repositorySetupPlainFolder, apierr.Invalid("UNSUPPORTED_GIT_REPO", "Selected folder contains Git metadata that Orchestrator could not inspect.", map[string]any{
 			"path":         path,
 			"suggestedFix": "Repair the Git repository or select a plain folder.",
 		})
@@ -476,7 +542,7 @@ func validateRepositorySetupPathSafety(path string) error {
 
 	aoState := comparablePath(filepath.Join(home, ".ao"))
 	if samePath(clean, aoState) || isDescendantPath(clean, aoState) {
-		return unsafeRepositorySetupPathError(path, "AO state directory")
+		return unsafeRepositorySetupPathError(path, "Orchestrator state directory")
 	}
 	return nil
 }
@@ -635,7 +701,7 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 		return
 	}
 	m.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.onboarding.first_project_added",
+		Name:       "ao.projects.first_added",
 		Source:     "project_service",
 		OccurredAt: at,
 		Level:      ports.TelemetryLevelInfo,

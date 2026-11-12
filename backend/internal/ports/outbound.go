@@ -228,6 +228,11 @@ type RuntimeConfig struct {
 	// opened to look at: agents and scripted command terminals must start
 	// whether or not anyone is viewing. Runtimes that cannot defer ignore it.
 	StartOnAttach bool
+	// InitialCols and InitialRows, when both are set, start Argv immediately at
+	// that grid. They take precedence over StartOnAttach: a client that already
+	// knows the grid it will show need not wait for its own attach. Runtimes
+	// that cannot size at spawn ignore them.
+	InitialCols, InitialRows uint16
 	// LazyStyledOutput lets the runtime skip maintaining a rendered screen until
 	// GetStyledOutput is first called for this terminal. Rendering every byte
 	// costs CPU on heavy output; terminals nothing probes for styled output
@@ -487,11 +492,12 @@ var (
 	// this state after path-safety checks, while real preserve failures remain
 	// fatal.
 	ErrWorkspaceStale = errors.New("workspace: stale managed worktree")
-	// ErrWorkspaceLocked reports a registered git worktree whose directory is
-	// missing but whose registration is locked (`git worktree lock`). `git
-	// worktree prune` deliberately leaves a locked registration in place even
-	// when its directory is gone, and `git worktree add`/`remove` at the same
-	// path then fail with an opaque git error. Callers must not treat this as
+	// ErrWorkspaceLocked reports a registered git worktree whose registration
+	// is locked (`git worktree lock`): one whose directory is missing on
+	// restore, or one that Destroy cannot remove. `git worktree prune`
+	// deliberately leaves a locked registration in place even when its
+	// directory is gone, and `git worktree add`/`remove` at the same path then
+	// fail with an opaque git error. Callers must not treat this as
 	// recoverable on their own; the operator has to unlock or remove the
 	// registration first.
 	ErrWorkspaceLocked = errors.New("workspace: registered worktree is locked")
@@ -501,6 +507,10 @@ var (
 	// leftover of one. The adapter never moves or deletes such a path; the
 	// user has to clear it before the workspace can be created.
 	ErrWorkspacePathOccupied = errors.New("workspace: worktree path is occupied")
+	// ErrWorkspaceUnsafePath reports a workspace path that is not a clean
+	// absolute path inside the adapter's managed root. Adapters never create,
+	// move or remove such a path, so teardown leaves it for the user.
+	ErrWorkspaceUnsafePath = errors.New("workspace: unsafe workspace path")
 	// ErrWorkspaceDeferred reports that a recognized transient handle-release
 	// failure survived the workspace removal retry budget, even though git has
 	// already unregistered the worktree so nothing is being reconciled. Session
@@ -568,6 +578,9 @@ type WorkspaceConfig struct {
 	// BaseRef is the exact canonical ref selected before any best-effort fetch.
 	// Restore carries it forward without re-resolving repository defaults.
 	BaseRef string
+	// StartRef starts a FreshBranch at exactly this commit instead of the
+	// repository default. Only session import sets it.
+	StartRef string
 	// RepoPath optionally overrides ProjectID-based repo resolution.
 	RepoPath string
 	// Path optionally supplies an existing managed worktree path for restore.
@@ -607,8 +620,11 @@ type WorkspaceProjectConfig struct {
 	// to resolve that repository's default independently from every child.
 	BaseBranch string
 	BaseRef    string
-	Repos      []WorkspaceProjectRepoConfig
-	Assets     []WorkspaceProjectAssetConfig
+	// StartRef starts the root worktree at exactly this commit. Only session
+	// import sets it; child repositories already start from their BaseRef.
+	StartRef string
+	Repos    []WorkspaceProjectRepoConfig
+	Assets   []WorkspaceProjectAssetConfig
 }
 
 // WorkspaceProjectAssetConfig describes a non-repository child directory that

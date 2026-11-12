@@ -82,7 +82,7 @@ describe("SubagentTeam", () => {
 		expect(screen.getByText("Sent by the parent agent")).toBeInTheDocument();
 		expect(screen.getByText("Read-only. Audit: testing gaps.")).toBeInTheDocument();
 		// The child's one command renders as an ordinary activity row.
-		expect(screen.getByText("Ran command")).toBeInTheDocument();
+		expect(screen.getByText("Checked repository")).toBeInTheDocument();
 	});
 
 	it("opens a child in the chat's Subagents panel instead of inline when there is one", async () => {

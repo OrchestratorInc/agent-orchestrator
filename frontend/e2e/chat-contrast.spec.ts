@@ -18,8 +18,9 @@ async function contrast(target: Locator, selection = false) {
 			return r! * 0.2126 + g! * 0.7152 + b! * 0.0722;
 		}
 		const style = getComputedStyle(element, selection ? "::selection" : null);
+		// An icon button is measured by its icon, a text button by its label.
 		const svg = element.querySelector("svg");
-		const ink = rgba(selection ? style.color : getComputedStyle(svg!).stroke);
+		const ink = rgba(selection ? style.color : svg ? getComputedStyle(svg).stroke : style.color);
 		const background = rgba(style.backgroundColor);
 		const a = luminance(ink), b = luminance(background);
 		return { alpha: ink[3], ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) };
@@ -31,18 +32,18 @@ for (const theme of ["dark", "light"]) {
 		test(`@P0 chat icon and selection contrast: ${theme}, transparency ${transparency}`, async ({ page }, testInfo) => {
 			await page.setViewportSize({ width: 1100, height: 850 });
 			await page.goto(`/e2e/chat-contrast/harness.html?theme=${theme}&transparency=${transparency}`);
-			const cases = [
-				["Send and selected text", "Send message", "lucide-arrow-up"],
-				["Stop", "Stop turn", "lucide-square"],
-				["Continue", "Continue turn", "lucide-play"],
-				["Side-chat send", "Send message", "lucide-arrow-up"],
-				["Side-chat stop", "Stop turn", "lucide-square"],
-				["Message-edit send", "Send edited message", "lucide-arrow-up"],
+			const cases: [string, string, string | null][] = [
+				["Send and selected text", "Send message", "icon-arrow-up"],
+				["Stop", "Stop turn", "icon-square"],
+				["Continue", "Continue turn", "icon-play"],
+				["Side-chat send", "Send message", "icon-arrow-up"],
+				["Side-chat stop", "Stop turn", "icon-square"],
+				["Message-edit send", "Send edited message", null],
 			];
 			for (const [section, label, icon] of cases) {
 				const button = page.getByRole("region", { name: section, exact: true }).getByRole("button", { name: label, exact: true });
 				await expect(button).toBeEnabled();
-				await expect(button.locator(`svg.${icon}`)).toBeVisible();
+				if (icon) await expect(button.locator(`svg.${icon}`)).toBeVisible();
 				for (const hovered of [false, true]) {
 					if (hovered) await button.hover();
 					await expect.poll(async () => (await contrast(button)).alpha).toBe(1);

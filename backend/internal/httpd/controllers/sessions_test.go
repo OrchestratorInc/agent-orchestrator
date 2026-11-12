@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -44,6 +45,12 @@ import (
 )
 
 type fakeSessionService struct {
+	artifactsRegistered   []string
+	artifactsUnregistered []string
+	registerArtifactsErr  error
+	deleted               []domain.SessionID
+	deleteCleanup         []bool
+	deleteErr             error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
 	lastListFilter             sessionsvc.ListFilter
@@ -439,6 +446,19 @@ func (f *fakeSessionService) Kill(_ context.Context, id domain.SessionID) (bool,
 	s.Status = domain.StatusTerminated
 	f.sessions[id] = s
 	return true, nil
+}
+
+func (f *fakeSessionService) RegisterArtifacts(_ context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error) {
+	if f.registerArtifactsErr != nil {
+		return sessionsvc.ArtifactRegistration{}, f.registerArtifactsErr
+	}
+	f.artifactsRegistered = append(f.artifactsRegistered, references...)
+	return sessionsvc.ArtifactRegistration{Registered: references, OtherFiles: 2, OtherRootFiles: []string{"draft.md"}}, nil
+}
+
+func (f *fakeSessionService) UnregisterArtifact(_ context.Context, _ domain.SessionID, path string) error {
+	f.artifactsUnregistered = append(f.artifactsUnregistered, path)
+	return nil
 }
 
 func (f *fakeSessionService) DeleteArtifacts(_ context.Context, id domain.SessionID) error {
@@ -1149,7 +1169,7 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	s.Metadata = domain.SessionMetadata{Branch: "qa/modal-worker", WorkspacePath: "/tmp/private-worktree", RuntimeHandleID: "runtime-1", Prompt: "private prompt"}
 	s.SCMStatus = domain.StatusReviewPending
 	s.KanbanColumn = domain.KanbanNeedsReview
-	s.DisplayStatus = contract.DisplayNeedsHumanReview
+	s.DisplayStatus = contract.DisplayAwaitingReview
 	svc.sessions["ao-1"] = s
 	srv := newSessionTestServer(t, svc)
 
@@ -1167,7 +1187,7 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	if list.Sessions[0].KanbanColumn != string(domain.KanbanNeedsReview) {
 		t.Fatalf("kanbanColumn = %q, want the derived column on the wire", list.Sessions[0].KanbanColumn)
 	}
-	if list.Sessions[0].DisplayStatus != string(contract.DisplayNeedsHumanReview) {
+	if list.Sessions[0].DisplayStatus != string(contract.DisplayAwaitingReview) {
 		t.Fatalf("displayStatus = %q, want the derived phrase on the wire", list.Sessions[0].DisplayStatus)
 	}
 	if list.Sessions[0].Branch != "qa/modal-worker" {
@@ -2007,6 +2027,33 @@ func TestSessionsAPI_SpawnPassesParentSessionToService(t *testing.T) {
 	}
 	if svc.lastSpawn.ParentSessionID != "ao-1" {
 		t.Fatalf("service ParentSessionID = %q, want ao-1", svc.lastSpawn.ParentSessionID)
+	}
+}
+
+// `ao spawn` asks for the async start so the session reads as provisioning
+// with its prompt queued while it starts; a standalone worker has no project
+// to start in the background and stays synchronous.
+func TestSessionsAPI_SpawnAsyncOnlyForProjectSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"project", `{"projectId":"ao","kind":"worker","harness":"claude-code","prompt":"fix","async":true}`, true},
+		{"omitted", `{"projectId":"ao","kind":"worker","harness":"claude-code","prompt":"fix"}`, false},
+		{"standalone", `{"kind":"worker","harness":"claude-code","prompt":"fix","async":true}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newFakeSessionService()
+			srv := newSessionTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", tc.body)
+			if status != http.StatusCreated {
+				t.Fatalf("POST session = %d, want 201; body=%s", status, body)
+			}
+			if svc.lastSpawn.Async != tc.want {
+				t.Fatalf("service Async = %v, want %v", svc.lastSpawn.Async, tc.want)
+			}
+		})
 	}
 }
 
@@ -3009,6 +3056,82 @@ func TestSessionsAPI_SetPreviewAbsoluteWorkspaceFileUsesConfinedOrigin(t *testin
 	previewBody, previewStatus, _ := doPreviewOriginRequest(t, srv, resp.Session.PreviewURL, "/")
 	if previewStatus != http.StatusOK || string(previewBody) != `<html>workspace preview</html>` {
 		t.Fatalf("workspace preview = %d, %q; want 200 and workspace file", previewStatus, previewBody)
+	}
+}
+
+func TestSessionsAPI_SetPreviewAbsoluteArtifactFileUsesArtifactOrigin(t *testing.T) {
+	svc := newFakeSessionService()
+	workspace, artifacts := t.TempDir(), t.TempDir()
+	report := filepath.Join(artifacts, "q3", "report.html")
+	notes := filepath.Join(artifacts, "notes.md")
+	if err := os.MkdirAll(filepath.Dir(report), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(report, []byte(`<html>artifact report</html>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(notes, []byte("# Review notes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := svc.sessions["ao-1"]
+	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, ArtifactDir: artifacts}
+	svc.sessions["ao-1"] = s
+	srv := newSessionTestServer(t, svc)
+
+	setPreview := func(target string) string {
+		t.Helper()
+		body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/preview", `{"url":`+strconv.Quote(target)+`}`)
+		if status != http.StatusOK {
+			t.Fatalf("set preview %q = %d, want 200; body=%s", target, status, body)
+		}
+		var resp struct {
+			Session struct {
+				PreviewURL string `json:"previewUrl"`
+			} `json:"session"`
+		}
+		mustJSON(t, body, &resp)
+		return resp.Session.PreviewURL
+	}
+
+	reportURLPath := filepath.ToSlash(report)
+	if filepath.VolumeName(report) != "" {
+		reportURLPath = "/" + reportURLPath
+	}
+	for _, target := range []string{report, (&url.URL{Scheme: "file", Path: reportURLPath}).String()} {
+		previewURL := setPreview(target)
+		parsed, err := url.Parse(previewURL)
+		if err != nil {
+			t.Fatalf("parse preview url: %v", err)
+		}
+		if !strings.HasPrefix(parsed.Hostname(), "ao-preview-artifact.") || parsed.Path != "/q3/report.html" {
+			t.Fatalf("previewUrl for %q = %q, want artifact origin at /q3/report.html", target, previewURL)
+		}
+		body, status, _ := doPreviewOriginRequest(t, srv, previewURL, parsed.Path)
+		if status != http.StatusOK || string(body) != `<html>artifact report</html>` {
+			t.Fatalf("artifact preview = %d, %q; want 200 and the artifact file", status, body)
+		}
+	}
+
+	notesURL := setPreview(notes)
+	body, status, _ := doPreviewOriginRequest(t, srv, notesURL, "/notes.md")
+	if status != http.StatusOK || !bytes.Contains(body, []byte("Review notes</h1>")) {
+		t.Fatalf("markdown artifact preview = %d, %q; want rendered Markdown", status, body)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.html")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escape := filepath.Join(artifacts, "escape.html")
+	if err := os.Symlink(outside, escape); err != nil {
+		if runtime.GOOS == "windows" || errors.Is(err, os.ErrPermission) {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		t.Fatalf("create symlink escape: %v", err)
+	}
+	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/sessions/ao-1/preview", `{"url":`+strconv.Quote(escape)+`}`)
+	if status != http.StatusForbidden || !bytes.Contains(body, []byte(`"code":"PREVIEW_FILE_OUTSIDE_WORKSPACE"`)) {
+		t.Fatalf("set artifact symlink escape = %d, body=%s; want 403", status, body)
 	}
 }
 
@@ -4687,7 +4810,7 @@ func TestSessionsAPI_PreparesAndCancelsTaskWorkspace(t *testing.T) {
 func TestSessionsAPI_DelegateTaskAcceptsLongBrief(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
-	brief := strings.Repeat("a", 4097)
+	brief := strings.Repeat("a", 100<<10)
 	payload, err := json.Marshal(map[string]string{
 		"projectId": "ao",
 		"brief":     brief,
@@ -4708,7 +4831,7 @@ func TestSessionsAPI_DelegateTaskAcceptsLongBrief(t *testing.T) {
 func TestSessionsAPI_DelegateTaskRejectsBriefPastLaunchSafeLimit(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
-	brief := strings.Repeat("a", (16<<10)+1)
+	brief := strings.Repeat("a", (100<<10)+1)
 	payload, err := json.Marshal(map[string]string{
 		"projectId": "ao",
 		"brief":     brief,
@@ -4723,7 +4846,7 @@ func TestSessionsAPI_DelegateTaskRejectsBriefPastLaunchSafeLimit(t *testing.T) {
 		Message string `json:"message"`
 	}
 	mustJSON(t, body, &got)
-	if got.Message != "Task must be 16 KiB or fewer" {
+	if got.Message != "Task must be 100 KiB or fewer" {
 		t.Fatalf("error message = %q, want actionable size limit", got.Message)
 	}
 	if svc.delegationInput.ProjectID != "" {
@@ -4909,7 +5032,7 @@ func TestSessionsAPI_SendRejectsOversizedBody(t *testing.T) {
 func TestSessionsAPI_CleanupWithProjectFilter(t *testing.T) {
 	svc := newFakeSessionService()
 	svc.cleanupResult = []domain.SessionID{"ao-1"}
-	svc.cleanupSkipped = []sessionsvc.CleanupSkipped{{SessionID: "ao-2", Reason: "workspace has uncommitted changes"}}
+	svc.cleanupSkipped = []sessionsvc.CleanupSkipped{{SessionID: "ao-2", Code: domain.CleanupSkipDirty, Reason: "workspace has uncommitted changes"}}
 	srv := newSessionTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/cleanup?project=ao", "")
@@ -4921,6 +5044,7 @@ func TestSessionsAPI_CleanupWithProjectFilter(t *testing.T) {
 		Cleaned []string `json:"cleaned"`
 		Skipped []struct {
 			SessionID string `json:"sessionId"`
+			Code      string `json:"code"`
 			Reason    string `json:"reason"`
 		} `json:"skipped"`
 	}
@@ -4928,11 +5052,25 @@ func TestSessionsAPI_CleanupWithProjectFilter(t *testing.T) {
 	if !got.OK || len(got.Cleaned) != 1 || got.Cleaned[0] != "ao-1" {
 		t.Fatalf("cleanup response = %#v", got)
 	}
-	if len(got.Skipped) != 1 || got.Skipped[0].SessionID != "ao-2" || got.Skipped[0].Reason != "workspace has uncommitted changes" {
-		t.Fatalf("cleanup skipped = %#v, want preserved workspace with reason", got.Skipped)
+	if len(got.Skipped) != 1 || got.Skipped[0].SessionID != "ao-2" || got.Skipped[0].Code != "dirty" ||
+		got.Skipped[0].Reason != "workspace has uncommitted changes" {
+		t.Fatalf("cleanup skipped = %#v, want preserved workspace with code and reason", got.Skipped)
 	}
 	if len(svc.cleanupProjects) != 1 || svc.cleanupProjects[0] != "ao" {
 		t.Fatalf("cleanupProjects = %#v, want [ao]", svc.cleanupProjects)
+	}
+}
+
+// The schema's enum for a cleanup skip code must list exactly the codes the
+// session manager can report.
+func TestCleanupSkippedSessionCodeEnumMatchesDomain(t *testing.T) {
+	field, _ := reflect.TypeFor[controllers.CleanupSkippedSession]().FieldByName("Code")
+	want := make([]string, 0, len(domain.CleanupSkipCodes))
+	for _, code := range domain.CleanupSkipCodes {
+		want = append(want, string(code))
+	}
+	if got := strings.Split(field.Tag.Get("enum"), ","); !slices.Equal(got, want) {
+		t.Fatalf("enum = %q, want %q", got, want)
 	}
 }
 
@@ -5354,5 +5492,49 @@ func TestSessionsAPI_LegacyPreviewDocumentsHaveNoAPIOrigin(t *testing.T) {
 		if status != 200 || headers.Get("Content-Security-Policy") != "" {
 			t.Fatalf("isolated %s: status=%d headers=%v", name, status, headers)
 		}
+	}
+}
+
+func (f *fakeSessionService) Delete(_ context.Context, id domain.SessionID, cleanup bool) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.deleted = append(f.deleted, id)
+	f.deleteCleanup = append(f.deleteCleanup, cleanup)
+	return nil
+}
+
+func TestSessionsAPI_DeleteSession(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodDelete, "/api/v1/sessions/ao-1", "")
+	if status != http.StatusOK {
+		t.Fatalf("delete = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		OK        bool   `json:"ok"`
+		SessionID string `json:"sessionId"`
+	}
+	mustJSON(t, body, &got)
+	if !got.OK || got.SessionID != "ao-1" || len(svc.deleted) != 1 || svc.deleted[0] != "ao-1" {
+		t.Fatalf("delete response = %#v, deleted = %v", got, svc.deleted)
+	}
+	if _, status, _ := doRequest(t, srv, http.MethodDelete, "/api/v1/sessions/ao-1?cleanup=true", ""); status != http.StatusOK {
+		t.Fatalf("delete with cleanup = %d, want 200", status)
+	}
+	if !slices.Equal(svc.deleteCleanup, []bool{false, true}) {
+		t.Fatalf("cleanup flags = %v, want [false true]", svc.deleteCleanup)
+	}
+}
+
+func TestSessionsAPI_DeleteSessionRefusal(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.deleteErr = apierr.Conflict("WORKSPACE_NOT_RELEASED", "The session's worktree has not been cleaned up yet.", nil)
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodDelete, "/api/v1/sessions/ao-1", "")
+	if status != http.StatusConflict || !strings.Contains(string(body), "WORKSPACE_NOT_RELEASED") {
+		t.Fatalf("delete = %d %s, want 409 WORKSPACE_NOT_RELEASED", status, body)
 	}
 }

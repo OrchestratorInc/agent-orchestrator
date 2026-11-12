@@ -172,4 +172,21 @@ run: |
       "Repository variable VITE_WORKOS_CLIENT_ID is required",
     );
   });
+
+  it("marks artifacts as published builds and hands Sentry source maps to the conductor", async () => {
+    const contents = await readFile(artifactBuilder, "utf8");
+
+    expect(contents).toContain('AO_PUBLISHED_BUILD: "1"');
+    expect(contents).toContain("name: sentry-sourcemaps-${{ matrix.platform }}");
+    expect(contents).toContain("frontend/.vite/renderer/main_window/assets/*.js.map");
+  });
+
+  it("takes Teams for stable builds only from the VITE_AO_TEAMS repository variable", async () => {
+    const contents = await readFile(artifactBuilder, "utf8");
+
+    expect(contents).toContain("VITE_AO_TEAMS: ${{ vars.VITE_AO_TEAMS }}");
+    // Never forced on in the workflow itself: stable gets Teams only when
+    // someone sets the variable.
+    expect(contents).not.toMatch(/VITE_AO_TEAMS:\s*["']?on\b/);
+  });
 });

@@ -24,6 +24,9 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 
+# Copied from node_modules by metro.config.js (the diagram viewer's Mermaid engine)
+/assets/generated/
+
 # debug
 npm-debug.*
 yarn-debug.*

@@ -1,9 +1,9 @@
-import { access, link, mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { access, link, lstat, mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomInt, randomUUID } from "node:crypto";
 import type { TelemetryPolicySnapshot } from "./telemetry-policy";
-import { type CiSignal, detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
+import { detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
 
 /**
  * Segmentation the renderer cannot see for itself: CPU architecture, the real
@@ -17,12 +17,22 @@ export type TelemetryInstallContext = {
 	installSource: string;
 	installedAt?: string;
 	isCi: boolean;
-	ciSignal?: CiSignal;
+	isContainer: boolean;
 };
 
 export type TelemetryBootstrap = {
 	distinctId: string;
 	installId: string;
+	daysSinceInstall?: number;
+	/** Install ID file mtime, used to refresh event age in a long-lived renderer. */
+	installTimestampMs?: number;
+	lifetimeSessions?: number;
+	/**
+	 * The signed-in AO Cloud user ID, present only when the stored WorkOS session
+	 * belongs to the account the daemon recorded in telemetry_bound_user. The
+	 * renderer then starts identified as that ID instead of an anonymous one.
+	 */
+	cloudUserId?: string;
 	appVersion: string;
 	platform: NodeJS.Platform;
 	/**
@@ -70,7 +80,7 @@ export async function readTelemetryInstallContext(input: {
 		installSource: normalizeInstallSource(typeof state.installSource === "string" ? state.installSource : undefined),
 		...(installedAt ? { installedAt } : {}),
 		isCi: ci.isCi,
-		...(ci.ciSignal ? { ciSignal: ci.ciSignal } : {}),
+		isContainer: ci.isContainer,
 	};
 }
 
@@ -146,6 +156,47 @@ export async function loadOrAssignExperimentCohort(dataDir: string): Promise<num
 		}
 	}
 	return undefined;
+}
+
+const CLOUD_USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The AO Cloud user the daemon recorded as bound to this install, or null. A
+ * symlink, a non-file or a malformed value is ignored rather than trusted.
+ */
+export async function boundCloudUserId(dataDir: string): Promise<string | null> {
+	const file = path.join(dataDir, "telemetry_bound_user");
+	try {
+		if (!(await lstat(file)).isFile()) return null;
+		const value = (await readFile(file, "utf8")).trim();
+		return CLOUD_USER_ID_PATTERN.test(value) ? value : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Claims ao.app.first_opened for this install: true at most once, ever, and
+ * only for a fresh install (install day 0, no session yet). The marker is
+ * created exclusively under the data dir, so a reload, a second window or a
+ * cleared localStorage cannot claim it again. Installs that ran a build which
+ * sent ao.install.created already hold this file, so an upgrade never claims
+ * it. A marker that cannot be created is not claimed.
+ */
+export type FirstOpenClaim = "claimed" | "ineligible" | "unknown";
+
+export async function claimFirstOpen(dataDir: string, facts: Pick<TelemetryBootstrap, "daysSinceInstall" | "lifetimeSessions">): Promise<FirstOpenClaim> {
+	if (facts.daysSinceInstall !== 0) return "ineligible";
+	// An unreadable session count is not "no sessions": the CLI may already
+	// have started one. The caller asks again once the daemon answers.
+	if (facts.lifetimeSessions === undefined) return "unknown";
+	if (facts.lifetimeSessions > 0) return "ineligible";
+	try {
+		await writeFile(path.join(dataDir, "telemetry_first_open_emitted"), "", { mode: 0o600, flag: "wx" });
+		return "claimed";
+	} catch {
+		return "ineligible";
+	}
 }
 
 export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<string> {
@@ -275,9 +326,23 @@ export async function buildTelemetryBootstrap(
 	// product analytics retain their own packaged/env gate above.
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
 	const experimentCohort = await loadOrAssignExperimentCohort(dataDir);
+	const installId = await loadOrCreateTelemetryInstallId(dataDir);
+	let daysSinceInstall: number | undefined;
+	let installTimestampMs: number | undefined;
+	try {
+		const installedAt = (await stat(path.join(dataDir, "telemetry_install_id"))).mtimeMs;
+		if (installedAt > 0 && installedAt <= Date.now()) {
+			installTimestampMs = installedAt;
+			daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
+		}
+	} catch {
+		// An unreadable creation time is unknown.
+	}
 	return {
 		distinctId: await bootstrapDistinctId(dataDir),
-		installId: await loadOrCreateTelemetryInstallId(dataDir),
+		installId,
+		...(daysSinceInstall === undefined ? {} : { daysSinceInstall }),
+		...(installTimestampMs === undefined ? {} : { installTimestampMs }),
 		appVersion,
 		platform,
 		disabledEvents: parseDisabledEvents(env.AO_TELEMETRY_DISABLED_EVENTS),

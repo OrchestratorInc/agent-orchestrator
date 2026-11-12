@@ -5,11 +5,12 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { apiErrorMessage } from "../../lib/api-client";
+import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import {
-	selectionActionClass,
 	selectionRangesEqual,
 	selectionToolbarClass,
 } from "../../lib/selection-toolbar";
+import { Button } from "../ui/button";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 
 /** Geometry state stays here: scrolling must not render the conversation. */
@@ -29,6 +30,7 @@ export function ChatSelectionActions({
 	checkingSide?: boolean;
 }) {
 	const { t } = useTranslation();
+	const translateDraft = useChatDraftTranslation();
 	const buttonRef = useRef<HTMLDivElement>(null);
 	const position = useChatSelectionPosition(
 		selection.range,
@@ -128,31 +130,33 @@ export function ChatSelectionActions({
 			style={{ left: position?.left ?? 0, top: position?.top ?? 0 }}
 			onMouseDown={(event) => event.preventDefault()}
 		>
-			<button
+			<Button
 				type="button"
+				variant="quiet"
+				size="sm"
 				title={`${t("sideChat.addToChat")} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}
-				className={selectionActionClass}
 				disabled={pending}
 				onClick={() => void activate(false)}
 			>
 				{t("sideChat.addToChat")}
-			</button>
+			</Button>
 			{onSide || checkingSide ? (
-				<button
+				<Button
 					type="button"
-					className={selectionActionClass}
+					variant="quiet"
+					size="sm"
 					disabled={pending || checkingSide}
 					onClick={() => void activate(true)}
 				>
 					{t("sideChat.addToSideChat")}
-				</button>
+				</Button>
 			) : null}
 			{error ? (
 				<span
 					role="alert"
 					className="max-w-full px-2 text-xs text-destructive break-words"
 				>
-					{error}
+					{translateDraft(error)}
 				</span>
 			) : null}
 		</div>

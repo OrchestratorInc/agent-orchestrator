@@ -16,8 +16,8 @@ ao
 ├── agent ls                      List built-in agent adapters and readiness
 ├── project                       add, ls, get, set-config, rm
 ├── spawn                         Create a worker or orchestrator session
-├── session                       ls, get, kill, restore, rename, cleanup, claim-pr,
-│                                 exit-agent, resume-agent
+├── session                       ls, get, kill, restore, rename, cleanup, delete,
+│                                 claim-pr, exit-agent, resume-agent
 ├── automation                    create, list, get, update, delete, runs
 ├── cue                           create, list
 ├── report                        Report worker progress or artifacts
@@ -97,7 +97,7 @@ Agent adapters are compiled into Orchestrator. There is no plugin marketplace or
 | `ao project set-config <id>` | Update typed per-project configuration. |
 | `ao project rm <id>` | Remove a project registration. |
 
-`set-config` replaces the entire project config, even when you use a focused flag. Its JSON decoder ignores unknown keys, and it drops existing `effort` values; `ao project get --json` cannot show effort. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for safe alternatives and details. This command does not edit the old `agent-orchestrator.yaml` file.
+Focused `set-config` flags change only the fields they name and keep the rest of the saved config. `--config-json` replaces the entire project config, and its JSON decoder ignores unknown keys. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for safe alternatives and details. This command does not edit the old `agent-orchestrator.yaml` file.
 
 Use `ao automation create`, `list`, `get`, `update`, `delete`, and `runs` to manage recurring work. To create one, provide a project, name, prompt, and exactly one schedule: `--cron` or `--rrule`. Set `--timezone` to an IANA time-zone name such as `America/New_York`. Pause a definition with `ao automation update <id> --enabled=false`. See [schedule behavior](/configuration/lifecycle-automation#what-ao-handles).
 
@@ -145,7 +145,8 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session exit-agent <id>` | Stop the controller while retaining the session. |
 | `ao session resume-agent <id>` | Start the controller again in that session. |
 | `ao session rename <id> <name>` | Change its display name. The project orchestrator cannot be renamed. |
-| `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. |
+| `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. Workspaces already released are not listed again. |
+| `ao session delete <id>` | Permanently delete a terminated session and its AO history once its worktree is cleaned up; `--cleanup` cleans it up first, never forced. Branches, PRs and agent account usage totals are kept. |
 | `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
 
 Most lookup commands accept `--project` to disambiguate a session ID.
@@ -236,7 +237,10 @@ Lets your other devices use this machine through its authenticated remote listen
 
 | Command | Purpose |
 | --- | --- |
-| `ao remote-host status` | Show the host ID, addresses, and whether the address is fixed. It also prints the pairing password; treat the output as a credential. |
+| `ao remote-host status` | Show the host ID, addresses, and whether the address is fixed. Add `--show-password` to also print the pairing password; treat that output as a credential. |
+| `ao remote-host pair` | Print the address and a one-time pairing code. One device can use it, within 10 minutes, and gets its own token. |
+| `ao remote-host devices` | List the devices that can reach this machine. `devices revoke <ID>` revokes one; `devices revoke --all` revokes every device and unlinks the account. |
+| `ao remote-host require-device-credentials on\|off` | Stop accepting the pairing password, so each device needs its own token or the linked account's. |
 | `ao remote-host enable` | Turn on remote access. `--tunnel-only` serves it only through a Cloudflare tunnel; `--tunnel` keeps the LAN listener too. |
 | `ao remote-host disable` | Turn off remote access. Sessions keep running. |
 | `ao remote-host link` | Add this machine to your AO account: it prints a sign-in link and a QR code, and waits up to 5 minutes for you to sign in from any device. The machine then gets a fixed address and appears on every device signed in to the account. `--label` sets its name (default: the name the account already has for it, else the hostname); `--no-qr` prints only the link. On a LAN-only listener it adds a Cloudflare tunnel, as `--tunnel` does. |

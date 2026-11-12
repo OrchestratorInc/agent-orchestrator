@@ -1,3 +1,5 @@
+import { fileMediaKind } from "../../lib/file-media";
+
 // These are AO-owned prompt suffixes, not general markdown. Chat and spawn used
 // slightly different wording, and older conversations used "Attached images";
 // accepting every shipped form lets the transcript improve without rewriting
@@ -25,8 +27,53 @@ export function stagedAttachmentParts(text: string): { body: string; attachments
 	return { body: text.slice(0, match.index), attachments };
 }
 
+/**
+ * Tell the agent to open the attached files. Mirrors the wording spawn uses for a task
+ * brief, so the same instruction reaches the agent whether a file was attached at
+ * spawn or mid-conversation.
+ */
+export function withAttachmentReferences(text: string, paths: string[]): string {
+	if (paths.length === 0) return text;
+	const lead = text.trim() === "" ? "" : `${text}\n\n`;
+	return `${lead}Attached files (read these files in the workspace):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+}
+
 export function attachmentName(path: string): string {
 	return path.slice(path.lastIndexOf("/") + 1);
+}
+
+/** A file's type as its name gives it, for a chip whose name may truncate. */
+export function attachmentTypeLabel(name: string): string | undefined {
+	return /\.([A-Za-z0-9]{1,8})$/.exec(name)?.[1]?.toUpperCase();
+}
+
+export function formatAttachmentSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * One size for anything attached to a sent message, so a mixed row lines up: the
+ * height of an image tile and the width of the widest one. Text on top, a pill below.
+ */
+export const ATTACHMENT_TILE_CLASS = "relative flex h-16 w-32 min-w-0 select-none flex-col justify-between overflow-hidden break-all rounded-md border border-border bg-interactive-hover p-2 text-left text-caption leading-tight text-muted-foreground";
+
+/** A tile's type tag: a tiny control, so slightly rounded rather than a pill (DESIGN.md radius). */
+export const ATTACHMENT_TILE_PILL_CLASS = "inline-flex h-4 shrink-0 items-center rounded-xs border border-border px-1.5 text-micro whitespace-nowrap";
+
+/** The type pill laid over a preview: solid, so it reads on any frame. */
+export const ATTACHMENT_TILE_OVERLAY_PILL_CLASS = "pointer-events-none absolute bottom-1.5 left-1.5 bg-background text-foreground";
+
+export type AttachmentPreviewKind = "video" | "pdf" | "text";
+
+const TEXT_PREVIEW_PATH = /\.(?:txt|md|mdx|json|jsonl|yaml|yml|toml|ini|conf|log|xml|css|js|jsx|ts|tsx|sql|sh|py|go|rs|diff|patch|csv|tsv)$/i;
+
+/** How a file tile can preview this path, if it can. HTML keeps its name card: rendering it needs an isolated origin. */
+export function attachmentPreviewKind(path: string): AttachmentPreviewKind | undefined {
+	const media = fileMediaKind(path);
+	if (media === "video" || media === "pdf") return media;
+	return TEXT_PREVIEW_PATH.test(path) ? "text" : undefined;
 }
 
 export function attachmentURL(apiBaseUrl: string, sessionId: string, path: string): string {

@@ -29,13 +29,14 @@ import {
 	RefreshCw,
 	ChevronRight,
 	CornerDownRight,
-	type LucideIcon,
-} from "lucide-react";
+	type AppIcon,
+} from "@/components/app-icons";
 import { useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
 import { formatTime, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
@@ -371,7 +372,7 @@ function FileFeedbackBody({ comments }: { comments: readonly FileFeedback[] }) {
 	);
 }
 
-const GIT_ACTIONS: Record<GitAction, { icon: LucideIcon; label: MessageKey }> = {
+const GIT_ACTIONS: Record<GitAction, { icon: AppIcon; label: MessageKey }> = {
 	createPR: { icon: GitPullRequest, label: "inspector.git.createPR" },
 	createDraftPR: { icon: GitPullRequestDraft, label: "inspector.git.createDraftPR" },
 	commit: { icon: GitCommitHorizontal, label: "inspector.git.commit" },
@@ -423,7 +424,7 @@ function BrowserFeedbackBody({ annotations }: { annotations: ParsedBrowserAnnota
 	);
 }
 
-const NOTICES: Record<AutomationNotice, { icon: LucideIcon; label: MessageKey }> = {
+const NOTICES: Record<AutomationNotice, { icon: AppIcon; label: MessageKey }> = {
 	orchestratorReplaced: { icon: RefreshCw, label: "chat.automation.orchestratorReplaced" },
 	contextCarried: { icon: ArrowLeftRight, label: "chat.automation.contextCarried" },
 	reviewTask: { icon: ClipboardCheck, label: "chat.automation.reviewTask" },
@@ -549,14 +550,13 @@ function FailedCheckLine({ check }: { check: FailedCheck }) {
 					{check.name}
 				</ForgeLink>
 				{check.log ? (
-					<button
-						type="button"
+					<Pressable
 						aria-expanded={open}
 						onClick={() => setOpen((current) => !current)}
-						className="ml-1 shrink-0 rounded font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						className="ml-1 shrink-0 rounded font-medium text-muted-foreground transition-colors hover:text-foreground"
 					>
 						{t(open ? "chat.automation.hideLog" : "chat.automation.showLog")}
-					</button>
+					</Pressable>
 				) : null}
 			</div>
 			{open && check.log ? (

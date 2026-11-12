@@ -8,7 +8,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -27,10 +26,10 @@ type versionRefreshSettings interface {
 // release to the installed one, and removes Homebrew kegs kept for sessions
 // that have all moved. It runs whether or not idle hibernation is on, and a
 // moved chat is always started again right away on the new release.
-func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings versionRefreshSettings, sessions sessionLifecycle, installs *systeminstall.Service, telemetry ports.EventSink, log *slog.Logger) {
+func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings versionRefreshSettings, sessions sessionLifecycle, installs *systeminstall.Service, log *slog.Logger) {
 	ticker := time.NewTicker(versionRefreshSweepTick)
 	defer ticker.Stop()
-	gauge := staleSessionsGauge{sink: telemetry}
+	gauge := staleSessionsGauge{log: log}
 	for {
 		select {
 		case <-ctx.Done():
@@ -59,14 +58,10 @@ func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings ver
 	}
 }
 
-// EventStaleSessions reports, per harness, how many live sessions still run a
-// replaced release. The rollout target is about zero within an hour of an update.
-const EventStaleSessions = "ao.harness.stale_sessions"
-
 // staleSessionsGauge reports stale-session counts every staleSessionsEvery,
 // and only for harnesses that have some now or had some at the last report.
 type staleSessionsGauge struct {
-	sink     ports.EventSink
+	log      *slog.Logger
 	last     map[domain.AgentHarness]int64
 	reported time.Time
 }
@@ -74,7 +69,7 @@ type staleSessionsGauge struct {
 const staleSessionsEvery = 10 * time.Minute
 
 func (g *staleSessionsGauge) observe(ctx context.Context, sessions sessionLifecycle) {
-	if g.sink == nil || time.Since(g.reported) < staleSessionsEvery {
+	if g.log == nil || time.Since(g.reported) < staleSessionsEvery {
 		return
 	}
 	counts, err := sessions.CountStaleBinarySessions(ctx)
@@ -88,10 +83,7 @@ func (g *staleSessionsGauge) observe(ctx context.Context, sessions sessionLifecy
 		}
 	}
 	for harness, count := range counts {
-		g.sink.Emit(ctx, ports.TelemetryEvent{
-			Name: EventStaleSessions, Source: "daemon", OccurredAt: time.Now().UTC(), Level: ports.TelemetryLevelInfo,
-			Payload: map[string]any{"harness": string(harness), "sessions": count},
-		})
+		g.log.Info("harness stale sessions", "harness", string(harness), "sessions", count)
 	}
 	g.last = counts
 }

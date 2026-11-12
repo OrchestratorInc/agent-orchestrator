@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -37,7 +38,8 @@ type fakeStore struct {
 	checks         map[string][]domain.PullRequestCheck
 	writeErr       error
 
-	writes []fakeWrite
+	writes  []fakeWrite
+	renames []domain.RepositoryRename
 
 	listEntered chan struct{}
 	listRelease chan struct{}
@@ -114,6 +116,13 @@ func (s *fakeStore) WriteSCMObservation(_ context.Context, pr domain.PullRequest
 		return s.writeErr
 	}
 	s.writes = append(s.writes, fakeWrite{pr: pr, checks: append([]domain.PullRequestCheck(nil), checks...), reviews: append([]domain.PullRequestReview(nil), reviews...), threads: append([]domain.PullRequestReviewThread(nil), threads...), comments: append([]domain.PullRequestComment(nil), comments...), reviewMode: reviewMode})
+	return nil
+}
+
+func (s *fakeStore) RecordRepositoryRename(_ context.Context, r domain.RepositoryRename) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.renames = append(s.renames, r)
 	return nil
 }
 
@@ -1089,18 +1098,12 @@ func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
 	if len(store.writes) == 0 || store.writes[0].pr.SessionID != "p-1" {
 		t.Fatalf("renamed-repo PR must be attributed to p-1, got %#v", store.writes)
 	}
-	if got := store.writes[0].pr.URLAlias; got != "https://github.com/o/r/pull/1" {
-		t.Fatalf("discovered PR URLAlias = %q, want the listed old-name URL", got)
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestListedRepoAliasIsNormalized(t *testing.T) {
-	listed := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "Old-Org", Name: "R", Repo: "Old-Org/R"}
-	if got := listedRepoAlias("https://github.com/NewOrg/r/pull/1", listed); got != "https://github.com/old-org/r/pull/1" {
-		t.Fatalf("alias = %q, want the normalized old-name URL", got)
-	}
-	if got := listedRepoAlias("https://github.com/old-org/r/pull/1", listed); got != "" {
-		t.Fatalf("alias = %q, want none when only the case differs", got)
+	want := []domain.RepositoryRename{{Host: "github.com", OldName: "o/r", Name: "neworg/r"}}
+	if !reflect.DeepEqual(store.renames, want) {
+		t.Fatalf("renames after two polls = %#v, want the old name recorded once: %#v", store.renames, want)
 	}
 }
 
