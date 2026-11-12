@@ -159,7 +159,11 @@ describe("ChatWorkspace subagents", () => {
 		// and the header's counts still add up to the team.
 		expect(within(header).getByText("1 done")).toBeInTheDocument();
 		expect(within(header).getByText("1 no report")).toBeInTheDocument();
-		expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("No report")).toBeInTheDocument();
+		// Like the turn's other folded work, the team starts closed; its header opens it.
+		expect(header).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("button", { name: /Audit: info pages/ })).not.toBeInTheDocument();
+		await user.click(header);
+		expect(within(await screen.findByRole("button", { name: /Audit: info pages/ })).getByText("No report")).toBeInTheDocument();
 	});
 
 	it("keeps a report the reader opened still open when the settled team folds into Worked for", async () => {
@@ -177,7 +181,8 @@ describe("ChatWorkspace subagents", () => {
 		// the turn's work, and the reader's disclosure choice comes along.
 		await user.click(await screen.findByRole("button", { name: /Worked for/ }));
 		await waitFor(() => expect(screen.getAllByTestId("subagent-team")).toHaveLength(1));
-		expect(screen.getByRole("button", { name: /Audit: testing gaps/ })).toHaveAttribute("aria-expanded", "true");
+		await user.click(screen.getByRole("button", { name: /2 subagents/ }));
+		expect(await screen.findByRole("button", { name: /Audit: testing gaps/ })).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("Report")).toBeInTheDocument();
 		expect(screen.getAllByText("Ranked 5 tests to write first.")).toHaveLength(2);
 		await waitFor(() =>
@@ -221,6 +226,7 @@ describe("ChatWorkspace subagents", () => {
 		// Done: the report reaches the launch before the steer, and the finished team
 		// folds into that part's "Worked for".
 		fireEvent.click(screen.getByRole("button", { name: /Worked for/ }));
+		fireEvent.click(screen.getByRole("button", { name: /1 subagent/ }));
 		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 done")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
 		expect(screen.queryByText("SubagentHandback")).not.toBeInTheDocument();
@@ -264,6 +270,7 @@ describe("ChatWorkspace subagents", () => {
 		// Done, with the report that arrived outside any turn, and nothing loose left behind.
 		// The finished team folds into its launch's turn's "Worked for".
 		fireEvent.click(screen.getAllByRole("button", { name: /Worked for/ })[0]!);
+		fireEvent.click(screen.getByRole("button", { name: /1 subagent/ }));
 		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 done")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
 		expect(screen.queryByText("No report")).not.toBeInTheDocument();

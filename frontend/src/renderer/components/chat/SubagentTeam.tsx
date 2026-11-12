@@ -21,7 +21,6 @@ import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { ActivityTransition } from "./ChatTimelineItems";
 import { SubagentTranscript } from "./SubagentTranscript";
-import { ACTIVITY_SUMMARY_BUTTON_CLASS } from "./activity-command";
 import {
 	latestSubagentLine,
 	readSubagent,
@@ -88,9 +87,13 @@ export function SubagentTeam({
 		else setLocalOpen((current) => ({ ...current, [key]: open }));
 	};
 	const teamKey = disclosureKey ?? "subagents";
-	// The list is the point of the card, so it starts open; a click folds it.
-	const open = isOpen(teamKey, true);
+	// While the team works the list is the point of the card, so it starts open. Under
+	// "Worked for" it starts closed, like the turn's other folded work.
+	const open = isOpen(teamKey, !folded);
 	const counts = countStates(agents);
+	// Each mark after the first widens the header's stack by 12px (18px marks, 6px
+	// overlap). Folded rows sit in by that much, so their names line up under the team's.
+	const stackInset = (Math.min(agents.length, STACKED_AVATARS) - 1) * 12;
 
 	return (
 		<motion.div
@@ -104,7 +107,12 @@ export function SubagentTeam({
 				type="button"
 				onClick={() => setOpen(teamKey, !open)}
 				aria-expanded={open}
-				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle min-h-7")}
+				// One line: the count and the states beside it, and the chevron in the rows'
+				// column (inside the box's border and padding while it works).
+				className={cn(
+					"activity-summary-button group/run flex w-full min-w-0 select-none items-center gap-2 py-0.5 text-left outline-none",
+					folded ? "pr-0" : "pr-[13px]",
+				)}
 			>
 				{/* Overlapping marks, each cut back short of the one over it, so two agents read
 				    as two marks rather than one shape. A mask, not a halo: the chat's canvas is
@@ -115,18 +123,17 @@ export function SubagentTeam({
 							key={agent.launch.id}
 							decorative
 							provider={harness ?? "claude-code"}
-							className={cn(
-								"size-4",
-								// The next mark covers the last 6px (-space-x-1.5); 2px more is the gap.
-								index < stacked.length - 1 && "[mask-image:linear-gradient(to_right,#000_calc(100%-8px),transparent_calc(100%-8px))]",
-							)}
+							// The next mark covers the last 6px (-space-x-1.5); 2px more is the gap.
+							className={index < stacked.length - 1 ? "[mask-image:linear-gradient(to_right,#000_calc(100%-8px),transparent_calc(100%-8px))]" : undefined}
 						/>
 					))}
 				</span>
-				<span className="activity-summary-label shrink-0 text-xs font-medium text-foreground/85">
-					{t("chat.subagent.count", { count: agents.length })}
+				<span className="flex min-w-0 flex-1 items-baseline gap-2">
+					<span className="shrink-0 text-xs font-medium text-foreground/85 group-hover/run:text-foreground">
+						{t("chat.subagent.count", { count: agents.length })}
+					</span>
+					<TeamSummary counts={counts} />
 				</span>
-				<TeamSummary counts={counts} />
 				<ChevronRight
 					aria-hidden="true"
 					className={cn(
@@ -149,8 +156,9 @@ export function SubagentTeam({
 						<ul
 							className={cn(
 								"mt-1 flex min-w-0 flex-col",
-								folded ? "gap-0.5" : "cursor-chat-explore-box overflow-hidden rounded-lg border",
+								!folded && "cursor-chat-explore-box overflow-hidden rounded-lg border",
 							)}
+							style={folded ? { paddingLeft: stackInset } : undefined}
 						>
 							<AnimatePresence initial={false}>
 								{agents.map((agent) => {
@@ -255,10 +263,7 @@ export function SubagentRowButton({
 	now: number;
 	onClick: () => void;
 	expanded?: boolean;
-	/**
-	 * Under "Worked for": no box around it, the mark centred on the row's two lines,
-	 * and the time and chevron on the second line, beside the report.
-	 */
+	/** Under "Worked for": a plain row on the chat's canvas, packed tight. */
 	folded?: boolean;
 }) {
 	const elapsed = elapsedLabel(agent, now);
@@ -269,23 +274,33 @@ export function SubagentRowButton({
 			aria-expanded={expanded}
 			// A list row, not a raised button: `activity-summary-button` keeps the chat's
 			// press-scale off it, the same as the other timeline disclosures.
+			// The mark, the time and the chevron are centred on the row's two lines.
 			className={cn(
-				"activity-summary-button group/agent flex w-full min-w-0 select-none gap-2.5 py-2 text-left outline-none hover:bg-interactive-hover focus-visible:bg-interactive-hover",
-				folded ? "items-center rounded-md px-2" : "items-start px-3",
+				"activity-summary-button group/agent flex w-full min-w-0 select-none items-center text-left outline-none",
+				folded
+					// Like the turn's other folded steps, hover brightens the text rather than
+					// filling a slab the width of the chat. Keyboard focus still shows a fill.
+					? "gap-2 py-1.5 focus-visible:rounded-md focus-visible:bg-interactive-hover"
+					: "gap-2.5 px-3 py-2 hover:bg-interactive-hover focus-visible:bg-interactive-hover",
 			)}
 		>
-			<SubagentAvatar harness={harness} state={agent.state} centered={folded} />
-			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+			<SubagentAvatar harness={harness} state={agent.state} centered />
+			<span className={cn("flex min-w-0 flex-1 flex-col", !folded && "gap-0.5")}>
 				<span className="flex min-w-0 items-baseline gap-2">
-					<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={agent.title}>
+					<span
+						className={cn(
+							"min-w-0 truncate text-xs font-medium",
+							folded ? "text-foreground/85 group-hover/agent:text-foreground" : "text-foreground/90",
+						)}
+						title={agent.title}
+					>
 						{agent.title}
 					</span>
 					<SubagentTypeLabel agent={agent} />
 				</span>
 				<SubagentLineText agent={agent} />
 			</span>
-			{/* Folded, one caption line tall and at the row's foot: level with the report line. */}
-			<span className={cn("flex shrink-0 items-center gap-2", folded ? "self-end text-caption" : "pt-px")}>
+			<span className="flex shrink-0 items-center gap-2">
 				<StateGlyph state={agent.state} />
 				{elapsed ? <span className="text-caption tabular-nums text-muted-foreground/70">{elapsed}</span> : null}
 				<ChevronRight
@@ -337,7 +352,7 @@ function InlineSubagentRow({
 						className="overflow-hidden"
 					>
 						{/* Indented to the row's text: its padding, the mark, and the gap after it. */}
-						<div className={folded ? "pb-2.5 pl-[34px] pr-2" : "pb-2.5 pl-[38px] pr-3"}>
+						<div className={folded ? "pb-2.5 pl-6" : "pb-2.5 pl-[38px] pr-3"}>
 							<SubagentTranscript
 								agent={agent}
 								disclosureKey={disclosureKey}
