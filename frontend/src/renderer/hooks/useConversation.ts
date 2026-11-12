@@ -1567,6 +1567,7 @@ const DEFINITIVE_STEER_NON_ACCEPTANCE_CODES = new Set([
 	"SESSION_NOT_FOUND",
 	"CHAT_CONTROLLER_NOT_READY",
 	"CHAT_AUTH_REQUIRED",
+	"CHAT_OPEN_ELSEWHERE",
 ]);
 
 function steerNonAcceptance(error: unknown): ChatSteerOutcome | undefined {

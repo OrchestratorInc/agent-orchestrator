@@ -1216,6 +1216,18 @@ describe("steering refusals", () => {
 		});
 	});
 
+	it("treats a steer refused because the chat is open elsewhere as definitive non-acceptance", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_OPEN_ELSEWHERE");
+		apiErrorMessageMock.mockReturnValue("this chat is open in another Claude Code process; close it there, then send again");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_OPEN_ELSEWHERE" } });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await expect(result.current.steer("narrow the search", undefined, "elsewhere-steer-1")).resolves.toEqual({
+			status: "not-accepted",
+			reason: "this chat is open in another Claude Code process; close it there, then send again",
+		});
+	});
+
 	it("keeps an uncertain steer rejected so the composer remains fail-closed", async () => {
 		apiErrorCodeMock.mockReturnValue("CHAT_STEER_UNCERTAIN");
 		apiErrorMessageMock.mockReturnValue("the provider may have received this guidance");
