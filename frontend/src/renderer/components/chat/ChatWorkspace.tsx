@@ -4123,7 +4123,7 @@ export function Timeline({
 		rangeExtractor: (range) => {
 			const indexes = defaultRangeExtractor(range);
 			// Keep an in-progress inline edit mounted while its row leaves view.
-			const editing = messageEdit ? groups.findIndex((group) => group.turnId === messageEdit.turnId) : -1;
+			const editing = groups.findIndex((group) => turnEditing(group, messageEdit));
 			if (editing >= 0 && !indexes.includes(editing)) indexes.push(editing);
 			if (pinned && !indexes.includes(groups.length - 1)) indexes.push(groups.length - 1);
 			return indexes.sort((a, b) => a - b);
