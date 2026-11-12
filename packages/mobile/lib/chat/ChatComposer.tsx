@@ -590,11 +590,17 @@ export function ChatComposer({
 		opacity: interpolate(openness.value, [0.35, 1], [0, 1], "clamp"),
 		transform: [{ translateY: interpolate(openness.value, [0, 1], [space.sm, 0], "clamp") }],
 	}));
-	// The session's state as chips over the composer, open or not: its PR, what
-	// it changed, and how full the context and the account's quota are once that
-	// matters.
+	// The session's state as chips over the composer, open or not: the account's
+	// quota once that matters, its PR, what it changed, and how full the context
+	// is once that matters.
 	const chips = activeReviewPR || changes || contextMeter || quotaChip ? <Animated.View entering={FadeIn.duration(COMPOSER_FADE_MS)} exiting={FadeOut.duration(COMPOSER_FADE_MS)}>
 		<ScrollView key={fieldSize.fontScale} horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chips}>
+			{/* First: the row scrolls with no indicator, and this is the only quota
+			    warning, so it must not start off screen behind the PR and changes chips. */}
+			{quotaChip ? <ComposerChip accessibilityLabel={quotaChip.accessibilityLabel} accessibilityHint="Opens context and usage" onPress={onOpenUsage}>
+				<AppSymbol name="warning" size={iconSize.xs} color={quotaChip.severity === "critical" ? t.red : t.amber} />
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, styles.tabular, { color: quotaChip.severity === "critical" ? t.red : t.amber }]}>{quotaChip.label}</Text>
+			</ComposerChip> : null}
 			{activeReviewPR ? <ComposerChip accessibilityLabel={prChipAccessibilityLabel(activeReviewPR, reviewPRSummary)} accessibilityHint="Opens the pull request review" onPress={onOpenReview}>
 				<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />
 			</ComposerChip> : null}
@@ -611,10 +617,6 @@ export function ChatComposer({
 				</View>
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, { color: contextMeter.severity === "critical" ? t.red : t.amber }]}>{contextMeter.label}</Text>
 			</View> : null}
-			{quotaChip ? <ComposerChip accessibilityLabel={quotaChip.accessibilityLabel} accessibilityHint="Opens context and usage" onPress={onOpenUsage}>
-				<AppSymbol name="warning" size={iconSize.xs} color={quotaChip.severity === "critical" ? t.red : t.amber} />
-				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.contextText, styles.tabular, { color: quotaChip.severity === "critical" ? t.red : t.amber }]}>{quotaChip.label}</Text>
-			</ComposerChip> : null}
 		</ScrollView>
 	</Animated.View> : null;
 	return (

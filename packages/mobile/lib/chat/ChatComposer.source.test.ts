@@ -190,6 +190,20 @@ describe("composer chips", () => {
 		expect(composer).toContain('accessibilityHint="Opens context and usage" onPress={onOpenUsage}');
 	});
 
+	// The row scrolls sideways with no indicator, and the quota chip is the only
+	// quota warning: last, behind a PR and a changes chip, it starts off screen.
+	it("puts the quota chip first, ahead of the PR, changes and context chips", () => {
+		const at = (marker: string) => {
+			const index = composer.indexOf(marker);
+			expect(index, marker).toBeGreaterThan(-1);
+			return index;
+		};
+		const quota = at("{quotaChip ? <ComposerChip");
+		expect(quota).toBeLessThan(at("{activeReviewPR ? <ComposerChip"));
+		expect(quota).toBeLessThan(at("{changes ? <ComposerChip"));
+		expect(quota).toBeLessThan(at("{contextMeter ? <View"));
+	});
+
 	// Steering stays reachable from the open card. While a turn runs the field's
 	// placeholder says a message waits for it; the controls row repeats nothing.
 	it("keeps the steer action in the card, with no delivery note beside it", () => {
