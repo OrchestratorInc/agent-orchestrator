@@ -6425,6 +6425,296 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	mask-composite: exclude;
 }
 
+/* The first-run onboarding covers the whole window. It is a dialog for
+ * assistive tech, but visually it is the window's chrome, so in a translucent
+ * window it takes the chrome treatment (clear canvases, the one 70% tint) back
+ * from the floating-surface rule above, and the shell under it is hidden so
+ * the desktop blur shows through instead of the app. */
+html[data-window-translucent="true"]:has(.first-run-onboarding:not([data-aside])) .app-shell-root {
+	visibility: hidden;
+}
+
+html[data-window-translucent="true"] .first-run-onboarding {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
+}
+
+/* First-run onboarding previews draw the app window translucent over the
+ * onboarding page itself (the stage paints no background of its own, so copy
+ * and preview share one surface), with the same material model as above: the stage keeps solid copies
+ * of the theme, the window clears its canvases, blurs what is behind it
+ * (standing in for native vibrancy) and paints the tint, a little more
+ * opaque than the app's 70% so the preview reads clearly. */
+/* A translucent app window already holds these solid copies on :root (above),
+ * and its body has cleared the originals, so only an opaque one copies here. */
+html:not([data-window-translucent="true"]) .onboarding-preview-stage {
+	--solid-bg-primary: var(--color-bg-primary);
+	--solid-bg-secondary: var(--color-bg-secondary);
+	--solid-bg-tertiary: var(--color-bg-tertiary);
+	--solid-bg-sidebar: var(--color-bg-sidebar);
+	--solid-muted: var(--muted);
+	--solid-secondary: var(--secondary);
+	--solid-accent: var(--accent);
+	--solid-sidebar-accent: var(--sidebar-accent);
+}
+
+.onboarding-preview-window {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-terminal: transparent;
+	--color-bg-terminal-opaque: transparent;
+	--term-bg: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+	isolation: isolate;
+}
+
+/* The window's glass lives on its own plate that never fades: steps cross-fade
+ * only the window's contents above it. Fading the blurred layer itself would
+ * drop its backdrop and stack two tints mid-transition. */
+.onboarding-preview-plate {
+	background-color: color-mix(in srgb, var(--sidebar) 88%, transparent);
+	-webkit-backdrop-filter: blur(48px) saturate(1.6);
+	backdrop-filter: blur(48px) saturate(1.6);
+	/* An opaque stage (data-opaque) ramps the tint to solid and fills the
+	 * center panel with its own colour, as the app looks with transparency off.
+	 * Only these colours change, so the switch is one smooth ramp; the window's
+	 * contents keep the clear canvases throughout. */
+	transition: background-color 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.onboarding-preview-panel-backing {
+	border-radius: var(--radius-center-panel);
+	background-color: color-mix(in srgb, var(--background) 0%, transparent);
+	transition: background-color 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-plate {
+	background-color: color-mix(in srgb, var(--sidebar) 100%, transparent);
+}
+
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-panel-backing {
+	background-color: color-mix(in srgb, var(--background) 100%, transparent);
+}
+
+/* The onboarding's wallpaper covers the whole window, under the drawing and
+ * the copy, as a halftone: seen only through a grid of dots, edge to edge,
+ * that grows from small light dots on the right to heavy, nearly touching
+ * ones on the left. ::before is light + (bold x ramp); ::after adds the heavy
+ * dots on the left (heavy x ramp). Every grid shares one 7px pitch. Both are
+ * multiplied by a soft quiet zone where the copy sits, so its text reads over
+ * a few faint dots instead of the full pattern. */
+.onboarding-backdrop {
+	isolation: isolate;
+}
+
+.onboarding-backdrop::before,
+.onboarding-backdrop::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	/* Blue duotone over the wallpaper: multiply #7fb4f5, then screen #0a1428. */
+	background:
+		linear-gradient(#0a1428, #0a1428),
+		linear-gradient(#7fb4f5, #7fb4f5),
+		#0d0d0d url("./assets/onboarding-wallpaper.webp") center / cover no-repeat;
+	background-blend-mode: screen, multiply, normal;
+	/* A backdrop, not the subject: kept well under the drawing and the copy. */
+	opacity: 0.5;
+}
+
+/* Light theme inverts the wallpaper: its lightness flips and its blue stays,
+ * so the dots are pale on the light page instead of near-black. */
+:root[data-theme="light"] .onboarding-backdrop::before,
+:root[data-theme="light"] .onboarding-backdrop::after {
+	filter: invert(1) hue-rotate(180deg);
+}
+
+.onboarding-backdrop::before {
+	-webkit-mask-image: radial-gradient(ellipse 30% 44% at 77% 42%, rgb(0 0 0 / 0.150) 0%, rgb(0 0 0 / 0.164) 12%, rgb(0 0 0 / 0.238) 25%, rgb(0 0 0 / 0.384) 38%, rgb(0 0 0 / 0.575) 50%, rgb(0 0 0 / 0.766) 62%, rgb(0 0 0 / 0.912) 75%, rgb(0 0 0 / 0.986) 88%, rgb(0 0 0 / 1.000) 100%), radial-gradient(circle, rgb(0 0 0 / 0.6) 1.1px, transparent 1.7px), radial-gradient(circle, black 1.7px, transparent 2.3px), linear-gradient(to right, rgb(0 0 0 / 1.000) 10.0%, rgb(0 0 0 / 0.995) 15.8%, rgb(0 0 0 / 0.965) 21.7%, rgb(0 0 0 / 0.896) 27.5%, rgb(0 0 0 / 0.790) 33.3%, rgb(0 0 0 / 0.653) 39.2%, rgb(0 0 0 / 0.500) 45.0%, rgb(0 0 0 / 0.347) 50.8%, rgb(0 0 0 / 0.210) 56.7%, rgb(0 0 0 / 0.104) 62.5%, rgb(0 0 0 / 0.035) 68.3%, rgb(0 0 0 / 0.005) 74.2%, rgb(0 0 0 / 0.000) 80.0%);
+	mask-image: radial-gradient(ellipse 30% 44% at 77% 42%, rgb(0 0 0 / 0.150) 0%, rgb(0 0 0 / 0.164) 12%, rgb(0 0 0 / 0.238) 25%, rgb(0 0 0 / 0.384) 38%, rgb(0 0 0 / 0.575) 50%, rgb(0 0 0 / 0.766) 62%, rgb(0 0 0 / 0.912) 75%, rgb(0 0 0 / 0.986) 88%, rgb(0 0 0 / 1.000) 100%), radial-gradient(circle, rgb(0 0 0 / 0.6) 1.1px, transparent 1.7px), radial-gradient(circle, black 1.7px, transparent 2.3px), linear-gradient(to right, rgb(0 0 0 / 1.000) 10.0%, rgb(0 0 0 / 0.995) 15.8%, rgb(0 0 0 / 0.965) 21.7%, rgb(0 0 0 / 0.896) 27.5%, rgb(0 0 0 / 0.790) 33.3%, rgb(0 0 0 / 0.653) 39.2%, rgb(0 0 0 / 0.500) 45.0%, rgb(0 0 0 / 0.347) 50.8%, rgb(0 0 0 / 0.210) 56.7%, rgb(0 0 0 / 0.104) 62.5%, rgb(0 0 0 / 0.035) 68.3%, rgb(0 0 0 / 0.005) 74.2%, rgb(0 0 0 / 0.000) 80.0%);
+	-webkit-mask-size: 100% 100%, 7px 7px, 7px 7px, 100% 100%;
+	mask-size: 100% 100%, 7px 7px, 7px 7px, 100% 100%;
+	-webkit-mask-repeat: no-repeat, repeat, repeat, no-repeat;
+	mask-repeat: no-repeat, repeat, repeat, no-repeat;
+	-webkit-mask-composite: source-in, source-over, source-in, source-over;
+	mask-composite: intersect, add, intersect, add;
+}
+
+.onboarding-backdrop::after {
+	-webkit-mask-image: radial-gradient(circle, black 2px, transparent 2.6px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
+	mask-image: radial-gradient(circle, black 2px, transparent 2.6px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
+	-webkit-mask-size: 7px 7px, 100% 100%;
+	mask-size: 7px 7px, 100% 100%;
+	-webkit-mask-repeat: repeat, no-repeat;
+	mask-repeat: repeat, no-repeat;
+	-webkit-mask-composite: source-in, source-over;
+	mask-composite: intersect, add;
+}
+
+/* Guided tour (GuidedTour): the rest of the window fades back toward the page
+ * rather than greying out, and a thin focus-coloured ring marks what's lit. */
+:root {
+	--tour-scrim: color-mix(in oklch, var(--background) 68%, transparent);
+	--tour-ring: color-mix(in oklch, var(--ring) 80%, transparent);
+}
+
+/* Onboarding illustration style: a black-and-white line drawing. Strokes
+ * only: every fill is clear, so the drawing sits on the onboarding page, and
+ * one thin line weight in the page's own foreground draws every edge (white
+ * on black in dark theme, black on white in light). No glow or
+ * shadow; labels are monospace. Scoped to the stage, so the real app is
+ * untouched. Utilities read the leaf tokens directly (@theme inline), so the
+ * leaves are set here. */
+.first-run-onboarding {
+	/* Resolved here, outside the stage's overrides: the page's real colours.
+	 * --schematic-solid stays opaque in a translucent window too (its canvas
+	 * colour is cleared there), for parts that must hide what is behind them. */
+	--schematic-page: var(--color-bg-primary);
+	--schematic-solid: var(--solid-bg-primary, var(--color-bg-primary));
+	--schematic-fg: var(--foreground);
+	/* The drawing's only colour, on AO Cloud's sessions: a diff's added and
+	 * removed lines, and the agent's live activity. */
+	--schematic-add: var(--color-success);
+	--schematic-del: var(--color-error);
+	--schematic-live: var(--color-status-working);
+	--schematic-add-tint: color-mix(in srgb, var(--color-success) 14%, transparent);
+	--schematic-del-tint: color-mix(in srgb, var(--color-error) 14%, transparent);
+	/* The cloud cut into AO Cloud's platform: its lit far wall and its floor. */
+	--schematic-wall: color-mix(in srgb, var(--foreground) 14%, var(--schematic-solid));
+	--schematic-floor: color-mix(in srgb, var(--schematic-solid) 60%, black);
+}
+
+.onboarding-preview-stage {
+	--schematic-line: color-mix(in srgb, var(--schematic-fg) 28%, transparent);
+	--schematic-line-strong: color-mix(in srgb, var(--schematic-fg) 40%, transparent);
+	--schematic-text: var(--schematic-fg);
+	--schematic-text-muted: color-mix(in srgb, var(--schematic-fg) 60%, transparent);
+	--schematic-text-passive: color-mix(in srgb, var(--schematic-fg) 42%, transparent);
+
+	--background: transparent;
+	--foreground: var(--schematic-text);
+	--card: transparent;
+	--popover: var(--schematic-page);
+	--sidebar: transparent;
+	--primary: transparent;
+	--primary-foreground: var(--schematic-text);
+	--muted: transparent;
+	--secondary: transparent;
+	--accent: transparent;
+	--sidebar-accent: transparent;
+	--muted-foreground: var(--schematic-text-muted);
+	--border: var(--schematic-line);
+	--input: var(--schematic-line-strong);
+	--sidebar-border: var(--schematic-line);
+	--color-bg-primary: transparent;
+	--color-bg-secondary: transparent;
+	--color-bg-tertiary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-elevated: var(--schematic-page);
+	--color-text-primary: var(--schematic-text);
+	--color-text-muted: var(--schematic-text-muted);
+	--color-text-passive: var(--schematic-text-passive);
+	--color-border: var(--schematic-line);
+	--color-border-strong: var(--schematic-line-strong);
+	--color-status-working: var(--schematic-text);
+	--color-status-needs-you: var(--schematic-text);
+	--color-status-validating: var(--schematic-text);
+	--color-status-in-review: var(--schematic-text);
+	--color-status-ready: var(--schematic-text);
+	--color-status-merged: var(--schematic-text);
+	--color-status-idle: var(--schematic-text-passive);
+	--font-family-base: var(--font-family-mono);
+	--font-sans: var(--font-family-mono);
+	font-family: var(--font-family-mono);
+}
+
+.onboarding-preview-stage * {
+	font-family: var(--font-family-mono);
+}
+
+.onboarding-preview-stage .onboarding-preview-window {
+	--color-bg-secondary: transparent;
+	--color-bg-tertiary: transparent;
+	--muted: transparent;
+	--secondary: transparent;
+	--accent: transparent;
+	--sidebar-accent: transparent;
+}
+
+/* No glass, tint or shadow: the window is only its outline. */
+.onboarding-preview-stage .onboarding-preview-plate,
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-plate {
+	background-color: transparent;
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+.onboarding-preview-stage .onboarding-preview-panel-backing,
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-panel-backing {
+	background-color: transparent;
+	box-shadow: 0 0 0 1px var(--schematic-line);
+}
+
+/* Status dots: plain foreground dots, no colour or glow. */
+.onboarding-preview-stage [class*="bg-status-"] {
+	background-color: var(--schematic-text);
+}
+
+.onboarding-preview-stage .bg-status-idle {
+	background-color: var(--schematic-text-passive);
+}
+
+/* The preview board never scrolls; letting its lanes overflow means a card
+ * moving between lanes stays visible for the whole trip instead of being
+ * clipped at its lane's edge. */
+.onboarding-preview-board :is(.board-horizontal-scrollbar, .board-horizontal-scrollbar > .grid > *, .board-scrollbar) {
+	overflow: visible;
+}
+
+.onboarding-preview-window :is(.z-overlay, [role="dialog"], [role="tooltip"]) {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--sidebar-accent: var(--solid-sidebar-accent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+}
+
+.onboarding-preview-window :is(.text-background, .hover\:text-background:hover) {
+	color: var(--solid-bg-primary);
+}
+
 /* Nightly build-info tooltip: a fixed deep-indigo card (theme independent) with a
    purple-blue mist and a few stars, so the nightly channel reads as its own place. */
 .build-info-nightly {

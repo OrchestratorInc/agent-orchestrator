@@ -9,6 +9,7 @@ import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
+import { onComposerSent } from "../../lib/guided-tour-signals";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -6681,5 +6682,45 @@ describe("sent message recall", () => {
 		expect(composerText()).toBe("Beta ask");
 		expect(press("ArrowUp")).toBe(false);
 		expect(readChatSessionDraft("recall-alpha").composer.text).toBe("");
+	});
+});
+
+describe("ChatWorkspace guided tour signal", () => {
+	const holding = (snapshot: ConversationSnapshot, clientMessageId: string): ConversationSnapshot => {
+		const next = structuredClone(snapshot);
+		next.items.push({
+			kind: "message",
+			id: `durable-${clientMessageId}`,
+			sequence: 1,
+			revision: 0,
+			role: "user",
+			origin: "human",
+			clientMessageId,
+			text: "Fix the flaky test",
+			streaming: false,
+			createdAt: "2026-09-09T00:00:00Z",
+		} as ConversationMessage);
+		return next;
+	};
+
+	it.each([
+		["the send's answer came back", (onSend: ReturnType<typeof vi.fn>) => onSend.mockResolvedValue(undefined)],
+		["the send's answer was lost", (onSend: ReturnType<typeof vi.fn>) => onSend.mockRejectedValue(new Error("network"))],
+	])("tells the tour once the chat holds the message, when %s", async (when, answer) => {
+		const sent = vi.fn();
+		const stop = onComposerSent(sent);
+		const onSend = vi.fn();
+		answer(onSend);
+		const snapshot = idleSnapshot({ ...chatFixtureEmpty, sessionId: `tour-signal-${when.replace(/\W+/g, "-")}` });
+		const view = render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Fix the flaky test");
+		fireEvent.keyDown(screen.getByRole("combobox", { name: "Message the agent" }), { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalled());
+		const clientMessageId = onSend.mock.calls[0]![2] as string;
+		// Sending isn't arriving: nothing yet.
+		expect(sent).not.toHaveBeenCalled();
+		view.rerender(<ChatWorkspace snapshot={holding(snapshot, clientMessageId)} onSend={onSend} />);
+		expect(sent).toHaveBeenCalledOnce();
+		stop();
 	});
 });

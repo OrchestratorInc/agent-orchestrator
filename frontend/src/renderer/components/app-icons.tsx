@@ -150,6 +150,10 @@ import {
 	Music as MynaMusic,
 	Database as MynaDatabase,
 	ChartBar as MynaChartBar,
+	Menu as MynaMenu,
+	DotsVertical as MynaDotsVertical,
+	LayersThree as MynaLayersThree,
+	Edit as MynaEdit,
 } from "@mynaui/icons-react";
 import {
 	ArrowDownUp as LucideArrowDownUp,
@@ -502,3 +506,12 @@ export const Ungroup = fromLucide(LucideUngroup, "ungroup");
 export const UserPlus = fromMyna(MynaUserPlus, "user-plus");
 export const ZoomIn = fromMyna(MynaSearchPlus, "zoom-in");
 export const ZoomOut = fromMyna(MynaSearchMinus, "zoom-out");
+
+// The onboarding illustrations' icons.
+export const CircleCheckBig = fromMyna(MynaCheckCircle, "circle-check-big");
+export const ListFilter = fromMyna(MynaFilter, "list-filter");
+export const Menu = fromMyna(MynaMenu, "menu");
+export const EllipsisVertical = fromMyna(MynaDotsVertical, "ellipsis-vertical");
+export const Cog = fromMyna(MynaCog, "cog");
+export const Layers = fromMyna(MynaLayersThree, "layers");
+export const SquarePen = fromMyna(MynaEdit, "square-pen");

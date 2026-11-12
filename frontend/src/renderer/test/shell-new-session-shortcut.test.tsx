@@ -314,6 +314,10 @@ vi.mock("../lib/shell-context", () => ({
 		return children;
 	},
 }));
+// First-run onboarding and the guided tour after it load their own queries;
+// this harness has no query provider and doesn't exercise them.
+vi.mock("../components/onboarding/FirstRunOnboarding", () => ({ FirstRunOnboarding: () => null }));
+vi.mock("../components/onboarding/GuidedTour", () => ({ GuidedTour: () => null }));
 vi.mock("../components/ui/sidebar", () => ({
 	SidebarProvider: ({ children, open }: PropsWithChildren<{ open?: boolean }>) => (
 		<div data-open={open ? "true" : "false"} data-testid="sidebar-provider">

@@ -165,6 +165,7 @@ export function CreateProjectFlow({
 	onSelectHost,
 	openSignal,
 	sourceSignal,
+	autoAgent,
 }: {
 	children?: (state: { choosePath: () => void; disabled: boolean; error: string | null; label: string }) => ReactNode;
 	connected?: boolean;
@@ -198,7 +199,12 @@ export function CreateProjectFlow({
 	// create-project flow instead of a separate delegating component.
 	openSignal?: number;
 	// Home-page action cards: each new nonce jumps straight to its source.
-	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number } | null;
+	/** `cloneDetails` prefills Clone Repository (first-run onboarding collects the URL inline). */
+	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number; cloneDetails?: Partial<CloneRepositoryDetails> } | null;
+	/** Create with this agent as both worker and orchestrator without asking
+	 * (first-run onboarding). The agent sheet still opens when the folder needs
+	 * repository setup or creating fails, so those keep their recovery. */
+	autoAgent?: string;
 }) {
 	const { t } = useTranslation();
 	const resolvedIdleLabel = idleLabel ?? t("createProject.newProject");
@@ -306,7 +312,7 @@ export function CreateProjectFlow({
 		transitionToChild(open);
 	};
 
-	const selectSource = async (source: ProjectSource) => {
+	const selectSource = async (source: ProjectSource, cloneDetailsPreset?: Partial<CloneRepositoryDetails>) => {
 		if (preparedClone.current() && !(await abandonPreparedClone())) return;
 		const presetPath = pendingDropPath;
 		setPendingDropPath(null);
@@ -314,7 +320,7 @@ export function CreateProjectFlow({
 		setValidationScan(null);
 		resetProjectImportState();
 		if (source === "clone") {
-			setCloneDetails(initialCloneDetails(hostId));
+			setCloneDetails({ ...initialCloneDetails(hostId), ...cloneDetailsPreset });
 			setCloneSelection(null);
 			if (firstRunClone) setCloneDialogOpen(true);
 			else transitionToChild(() => setCloneDialogOpen(true));
@@ -507,7 +513,7 @@ export function CreateProjectFlow({
 			if (cloudEnabled) startFlow(undefined, "cloud");
 			return;
 		}
-		void selectSource(sourceSignal.source);
+		void selectSource(sourceSignal.source, sourceSignal.cloneDetails);
 	}, [sourceSignal]);
 
 	const createProject = async (selection: CreateProjectAgentSelection) => {
@@ -602,6 +608,21 @@ export function CreateProjectFlow({
 			setIsInitializing(false);
 		}
 	};
+
+	// With an agent chosen up front, a picked folder or finished clone goes
+	// straight to create, once per path.
+	const autoSubmittedPath = useRef<string | null>(null);
+	useEffect(() => {
+		if (!autoAgent || selectedPath === null) {
+			if (selectedPath === null) autoSubmittedPath.current = null;
+			return;
+		}
+		if (autoSubmittedPath.current === selectedPath || repositorySetup !== null || isCreating || isInitializing || error !== null) return;
+		autoSubmittedPath.current = selectedPath;
+		void createProject({ workerAgent: autoAgent, orchestratorAgent: autoAgent });
+	});
+
+
 
 	const prepareClone = async (next: CloneRepositorySelection) => {
 		if (hostId && !connected) {
@@ -1033,7 +1054,7 @@ export function CreateProjectFlow({
 						: undefined
 				}
 				onSubmit={createProject}
-				open={selectedPath !== null}
+				open={selectedPath !== null && (!autoAgent || repositorySetup !== null || error !== null)}
 				path={selectedPath}
 				repositorySetupNeeded={repositorySetup !== null}
 				repositorySetupWarning={repositorySetupWarning}

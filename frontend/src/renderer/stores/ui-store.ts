@@ -241,6 +241,12 @@ export type UiState = {
 	// running in the background. The board renders a progress banner and gates
 	// session actions until the spawn settles, instead of blocking navigation.
 	provisioningProjectIds: ReadonlySet<string>;
+	// Full-window first-run onboarding is showing; transient shell notices wait.
+	firstRunOnboardingOpen: boolean;
+	setFirstRunOnboardingOpen: (open: boolean) => void;
+	/** Bumped by Developer mode's Replay onboarding; the flow reopens on each change. */
+	onboardingReplayRequest: number;
+	requestOnboardingReplay: () => void;
 	projectCreationPending: boolean;
 	// Freestyle cloud projects just created, whose board starts the orchestrator
 	// on its own instead of waiting for the Orchestrator button.
@@ -265,9 +271,6 @@ export type UiState = {
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
-	/** True while the first-run project prompt is pending, so shell notices wait for it. */
-	firstRunPromptActive: boolean;
-	setFirstRunPromptActive: (active: boolean) => void;
 	// Transient "a folder was dropped onto the app window — open the
 	// create-project flow for this path" signal, mirroring newTaskRequest: the
 	// nonce always bumps so dropping the same folder twice in a row still
@@ -508,6 +511,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
+	firstRunOnboardingOpen: false,
+	setFirstRunOnboardingOpen: (open) => set({ firstRunOnboardingOpen: open }),
+	onboardingReplayRequest: 0,
+	requestOnboardingReplay: () => set((state) => ({ onboardingReplayRequest: state.onboardingReplayRequest + 1 })),
 	projectCreationPending: false,
 	autoStartOrchestratorProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
@@ -517,8 +524,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToastSequence: 0,
 	newTaskRequest: null,
 	archiveModal: null,
-	firstRunPromptActive: false,
-	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,

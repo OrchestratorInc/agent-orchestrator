@@ -66,7 +66,7 @@ describe("clone repository input", () => {
 			onOpenLocalFolder,
 			onStartStandaloneAgent,
 		});
-		expect(screen.getByRole("dialog", { name: "Welcome to Agent Orchestrator" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "Welcome to Orchestrator" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Get started" }));
 
 		expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();

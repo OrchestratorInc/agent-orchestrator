@@ -10,6 +10,7 @@ import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
+import { notifyComposerSent } from "../../lib/guided-tour-signals";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useEdgeFadeRef } from "../../hooks/useEdgeFade";
@@ -1289,6 +1290,9 @@ function ChatWorkspaceContent({
 		},
 		[queueEdit, stableCancelQueuedTurn, updateQueueDraft],
 	);
+	// Messages and steers this composer sent that the guided tour waits to see
+	// arrive (GuidedTour): the chat holding one is what counts as delivered.
+	const tourAwaitedIds = useRef(new Set<string>());
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
@@ -1343,6 +1347,7 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
+			if (clientMessageId) tourAwaitedIds.current.add(clientMessageId);
 			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
@@ -1402,6 +1407,7 @@ function ChatWorkspaceContent({
 			recoverOnly?: boolean,
 		) => {
 			const id = clientMessageId ?? crypto.randomUUID();
+			tourAwaitedIds.current.add(id);
 			// A recovery re-asks about a steer sent before; the daemon may already have it.
 			const target = recoverOnly ? undefined : steerEchoTarget();
 			if (target) {
@@ -1446,6 +1452,19 @@ function ChatWorkspaceContent({
 			),
 		[snapshot.items],
 	);
+	// Tell the tour once the chat holds something this composer sent, whether
+	// its answer came back, was lost and recovered, or it went in as a steer.
+	// A send the chat never shows (a refused steer, a bare /btw) doesn't count.
+	useEffect(() => {
+		const awaited = tourAwaitedIds.current;
+		let arrived = false;
+		for (const id of awaited) {
+			if (!acceptedClientMessageIds.has(id)) continue;
+			awaited.delete(id);
+			arrived = true;
+		}
+		if (arrived) notifyComposerSent();
+	}, [acceptedClientMessageIds]);
 	// The turn a confirmation is open for. Undo is not reversible and it changes what
 	// the agent knows, so it is never one click.
 	const [confirming, setConfirming] = useState<string | undefined>(undefined);
@@ -2184,7 +2203,13 @@ function ChatWorkspaceContent({
 									artifact={artifactSession}
 									onPick={(text) => { if (!pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
-								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
+								{/* The guided tour's last stop (GuidedTour). */}
+								<div
+									ref={composerBoxRef}
+									className="relative z-10"
+									data-composer-tray={conversationEmpty && composerTray ? "" : undefined}
+									data-tour="composer"
+								>
 									{welcomeLeaving ? (
 										<h1
 											aria-hidden="true"
@@ -2324,7 +2349,7 @@ function ChatWorkspaceContent({
 										parkUnsentSends={parkUnsentSends}
 									/>}
 								</div>
-								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
+								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center" data-tour="composer-tray">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
 								{draftNotice}
 							</div>
@@ -6510,7 +6535,8 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 					// padding inside, so it collapses with the height instead of snapping.
 					className="-mb-2 overflow-hidden"
 				>
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4">
+					{/* Lit with the composer on the guided tour's last stop (GuidedTour). */}
+					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4" data-tour="composer-prompts">
 						{prompts.map(({ prompt, chip, icon: Icon }) => (
 							<li key={prompt}>
 								<Button

@@ -2,14 +2,11 @@ import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "@/components/app-icons";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
-import { useMigrationOffer } from "../hooks/useMigrationOffer";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
-import { firstRunPromptVariant, type FirstRunPromptAction, type FirstRunPromptVariant } from "../lib/experiments";
-import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { getProjectLastOpenedAt } from "../lib/project-history";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -84,7 +81,7 @@ function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[
 		.sort((left, right) => latestProjectTimestamp(right).localeCompare(latestProjectTimestamp(left)));
 }
 
-function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string }) {
+function ProjectRow({ project, onClick, emptyTimeLabel, tourTarget }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string; tourTarget?: string }) {
 	const { t } = useTranslation();
 	const lastOpenedAt = getProjectLastOpenedAt(project.id);
 	const latestProjectFact = latestProjectTimestamp(project) || lastOpenedAt;
@@ -97,6 +94,7 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 				NAV_ROW_HIGHLIGHT_HOST_CLASS,
 			)}
 			onClick={onClick}
+			data-tour={tourTarget}
 		>
 			<NavRowHighlight className="bg-card" />
 			<span className={cn(HOME_PROJECT_ICON_CLASS, "relative z-[1]")} aria-hidden="true">
@@ -163,23 +161,8 @@ function HomePageContent() {
 	const { blocked: requirementsBlocked } = useSystemRequirementsGate();
 	const { cloudEnabled } = useCloudGate();
 	const workspaceQuery = useWorkspaceQuery();
-	const migrationOffer = useMigrationOffer();
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
-	const [firstRunStatus, setFirstRunStatus] = useState<"loading" | "pending" | "seen">("loading");
-	const [firstRunPromptOpen, setFirstRunPromptOpen] = useState(false);
-	// True once we know whether this launch shows the prompt, so the agent-updates notice only waits for that decision.
-	const [firstRunDecided, setFirstRunDecided] = useState(false);
-	const firstRunOfferedThisMount = useRef(false);
-	const firstRunVariant = useRef<FirstRunPromptVariant | null>(null);
-	const firstRunActionRecorded = useRef(false);
 	const projects = workspaceQuery.data ?? [];
-	useEffect(() => {
-		let mounted = true;
-		void aoBridge.appState.getFirstRunProjectPrompt()
-			.then((status) => { if (mounted) setFirstRunStatus(status); })
-			.catch(() => { if (mounted) setFirstRunStatus("seen"); });
-		return () => { mounted = false; };
-	}, []);
 	const recentProjects = useMemo(
 		() =>
 			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND)).slice(
@@ -197,60 +180,6 @@ function HomePageContent() {
 			workspaceStartupState === "loading" ||
 			(!workspaceQuery.isSuccess && !workspaceQuery.isError) ||
 			requirementsBlocked);
-	useEffect(() => {
-		if (showStartup || !workspaceQuery.isSuccess || firstRunStatus !== "pending") return;
-		if (!usesPreviewWorkspaceData && migrationOffer.isPending) return;
-		if (projects.length > 0 || migrationOffer.data?.show) {
-			setFirstRunDecided(true);
-			void aoBridge.appState.markFirstRunProjectPromptSeen().then(() => setFirstRunStatus("seen")).catch(() => undefined);
-			return;
-		}
-		if (firstRunOfferedThisMount.current) return;
-		let cancelled = false;
-		void aoBridge.appState.getExperimentCohort().catch(() => null).then((cohort) => {
-			if (cancelled) return;
-			const variant = firstRunPromptVariant(cohort);
-			firstRunOfferedThisMount.current = true;
-			firstRunVariant.current = variant;
-			setFirstRunDecided(true);
-			void aoBridge.appState.claimFirstRunExperimentExposure().then((claimed) => {
-				if (claimed) void captureRendererEvent("ao.onboarding.first_run_experiment_exposed", { variant });
-			}).catch(() => undefined);
-			if (variant === "prompt") {
-				setFirstRunPromptOpen(true);
-				setSourceSignal({ source: "clone", nonce: Date.now() });
-			} else {
-				setFirstRunStatus("seen");
-				void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => undefined);
-			}
-		});
-		return () => { cancelled = true; };
-	}, [firstRunStatus, migrationOffer.data?.show, migrationOffer.isPending, projects.length, showStartup, workspaceQuery.isSuccess]);
-
-	const setFirstRunPromptActive = useUiStore((state) => state.setFirstRunPromptActive);
-	// Shell notices wait while the prompt is showing or still being decided. Once the
-	// user starts a clone the prompt closes, so a failed or abandoned clone cannot
-	// hold them back for the rest of the session.
-	const firstRunBlocksNotices = firstRunStatus === "loading" || firstRunPromptOpen || (firstRunStatus === "pending" && !firstRunDecided);
-	useEffect(() => {
-		setFirstRunPromptActive(firstRunBlocksNotices);
-		return () => setFirstRunPromptActive(false);
-	}, [firstRunBlocksNotices, setFirstRunPromptActive]);
-
-	const recordFirstRunPromptAction = (action: FirstRunPromptAction) => {
-		if (firstRunVariant.current !== "prompt" || firstRunActionRecorded.current) return;
-		firstRunActionRecorded.current = true;
-		void captureRendererEvent("ao.onboarding.first_run_prompt_action", { action });
-	};
-	const finishFirstRunPrompt = (action: FirstRunPromptAction = "dismissed") => {
-		recordFirstRunPromptAction(action);
-		setFirstRunPromptOpen(false);
-		setFirstRunStatus("seen");
-		void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => {
-			// A failed write leaves the durable offer pending for the next launch.
-		});
-	};
-
 	if (showStartup) return <DaemonStartupLoader />;
 
 	const requestSource = (source: ProjectSource | "cloud") => {
@@ -277,7 +206,8 @@ function HomePageContent() {
 		<div ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
-					<section className="space-y-3 px-3" style={firstRunPromptOpen ? { visibility: "hidden" } : undefined}>
+					{/* The guided tour's first stop, add actions and recent projects together (GuidedTour). */}
+					<section className="space-y-3 px-3" data-tour="add-project">
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
 							{/* Quiet text link — not filled button / accent. Dashed underline only on hover. */}
@@ -327,10 +257,12 @@ function HomePageContent() {
 						{/* Same section as the grid so the gap matches the grid's gap-3. */}
 						{recentProjects.length > 0 && (
 							<div>
-								{recentProjects.map((project) => (
+								{recentProjects.map((project, index) => (
 									<ProjectRow
 										key={project.id}
 										project={project}
+										// Tells the guided tour there are projects to open (GuidedTour).
+										tourTarget={index === 0 ? "recent-project" : undefined}
 										onClick={() => {
 										if (project.kind === STANDALONE_PROJECT_KIND) {
 											const session = project.sessions.find((candidate) => candidate.kind === "worker");
@@ -353,20 +285,11 @@ function HomePageContent() {
 				</div>
 
 				<CreateProjectFlow
-					firstRunClone={firstRunPromptOpen}
-					onFirstRunDismiss={finishFirstRunPrompt}
-					onFirstRunProgress={() => {
-						recordFirstRunPromptAction("clone");
-						setFirstRunPromptOpen(false);
-					}}
 					existingProjectNames={projects.map((project) => project.name)}
 					existingProjectPaths={projects.map((project) => project.path)}
 					mode="choose"
 					onCloneProject={cloneProject}
-					onCreateProject={async (input) => {
-						await createProject(input);
-						if (firstRunStatus === "pending") finishFirstRunPrompt("clone");
-					}}
+					onCreateProject={createProject}
 					onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 					onInitializeProject={initializeProjectRepository}
 					onOpenExistingProject={openExistingProject}
