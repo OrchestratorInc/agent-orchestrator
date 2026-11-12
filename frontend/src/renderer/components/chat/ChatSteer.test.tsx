@@ -862,6 +862,37 @@ describe("ChatWorkspace steering", () => {
 		expect(sentFirst.compareDocumentPosition(sentSecond) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it("keeps a carried message's own turn for editing after the carrying turn completes", async () => {
+		const user = userEvent.setup();
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		const onEditMessage = vi.fn(async () => undefined);
+		render(
+			<ChatWorkspace
+				onEditMessage={onEditMessage}
+				snapshot={{
+					...chatFixture,
+					controller: { state: "ready" },
+					hasMoreBefore: false,
+					latestSequence: 14,
+					turns: [{ id: "run", state: "completed", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0), completedAt: at(5) }],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the review comments", streaming: false, editAvailable: true, createdAt: at(0) },
+						{ kind: "message", id: "queued", turnId: "carried", sequence: 11, revision: 0, role: "user", origin: "human", text: "Also bump the version", streaming: false, editAvailable: true, createdAt: at(1) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "Write the explainer", detail: { event: "steer", origin: "human", text: "Write the explainer", clientMessageId: "steer-1" }, createdAt: at(3) },
+						{ kind: "message", id: "answer", turnId: "run", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Done.", streaming: false, createdAt: at(4) },
+					],
+					batchedDeliveries: [{ turnId: "carried", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+				}}
+			/>,
+		);
+		const edits = screen.getAllByRole("button", { name: "Edit user message" });
+		expect(edits).toHaveLength(1);
+		await user.click(edits[0]!);
+		expect(screen.getAllByRole("textbox", { name: "Edit message" })).toHaveLength(1);
+		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("Fix the review comments");
+		expect(screen.getByText("Also bump the version")).toBeVisible();
+	});
+
 	it("keeps a carried row above a steer sent right after the steer that carried it", async () => {
 		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
 		render(

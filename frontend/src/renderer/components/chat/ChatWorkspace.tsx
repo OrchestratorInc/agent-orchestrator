@@ -6256,7 +6256,8 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 	const groupForTurn = new Map<string, TimelineGroup>();
 
 	for (const item of snapshot.items) {
-		if (item.turnId === undefined) {
+		const turnId = carriedInto.get(item) ?? item.turnId;
+		if (turnId === undefined) {
 			// Consecutive turn-less items share one group rather than getting one each.
 			// A provider can run a turn AO never dispatched — a compaction, or a turn
 			// resumed inside the provider's own history — and every item it emits then
@@ -6277,20 +6278,20 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 			});
 			continue;
 		}
-		const existing = groupForTurn.get(item.turnId);
+		const existing = groupForTurn.get(turnId);
 		if (existing) {
 			existing.items.push(item);
 			continue;
 		}
 		const group: TimelineGroup = {
 			// A turn opened by a keyed human message keeps the key its echo had.
-			key: itemKey(item) === item.id ? byTurn.get(item.turnId)?.groupKey ?? `${item.turnId}-${item.sequence}` : itemKey(item),
-			turnId: item.turnId,
+			key: itemKey(item) === item.id ? byTurn.get(turnId)?.groupKey ?? `${turnId}-${item.sequence}` : itemKey(item),
+			turnId,
 			// A turn that began above the loaded history sorts where it began.
-			anchor: byTurn.get(item.turnId)?.anchorSequence ?? item.sequence,
+			anchor: byTurn.get(turnId)?.anchorSequence ?? item.sequence,
 			items: [item],
 		};
-		groupForTurn.set(item.turnId, group);
+		groupForTurn.set(turnId, group);
 		groups.push(group);
 	}
 
@@ -6457,6 +6458,7 @@ function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): 
 }
 
 const carriedRows = new WeakMap<ConversationItem, ConversationItem>();
+const carriedInto = new WeakMap<ConversationItem, string>();
 
 function atCarryingSteer(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
 	if (deliveries.length === 0) return items;
@@ -6489,9 +6491,10 @@ function atCarryingSteer(items: ConversationItem[], deliveries: readonly Batched
 			const sequence = place.get(item);
 			if (!steer || sequence === undefined) return item;
 			const cached = carriedRows.get(item);
-			if (cached && cached.turnId === steer.turnId && cached.sequence === sequence) return cached;
-			const row = { ...item, turnId: steer.turnId, sequence };
+			if (cached && carriedInto.get(cached) === steer.turnId && cached.sequence === sequence) return cached;
+			const row = { ...item, sequence };
 			carriedRows.set(item, row);
+			carriedInto.set(row, steer.turnId!);
 			return row;
 		})
 		.sort((a, b) => a.sequence - b.sequence);
