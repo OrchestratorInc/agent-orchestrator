@@ -1756,7 +1756,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 
 	return {
 		options: query.data ?? [],
-		loaded: query.isSuccess,
+		loaded: query.data !== undefined,
 		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
 			(await mutation.mutateAsync({ optionId, value })).options,
 		pending: mutation.isPending,

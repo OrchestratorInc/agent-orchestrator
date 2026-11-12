@@ -726,6 +726,23 @@ describe("provider catalog controller epochs", () => {
 
 		expect(queryClient.getQueryData(queryKey)).toBeUndefined();
 	});
+
+	it("keeps loaded options usable when a later poll fails", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const queryKey = conversationConfigOptionsQueryKey("ao-1");
+		getMock.mockResolvedValueOnce({ data: { options: [{ id: "model", currentValue: "a" }] }, error: undefined });
+		const Wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+
+		getMock.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } });
+		await act(async () => { await queryClient.refetchQueries({ queryKey }); });
+		await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+		expect(queryClient.getQueryState(queryKey)?.status).toBe("error");
+		expect(result.current).toMatchObject({ loaded: true, error: undefined, options: [{ id: "model", currentValue: "a" }] });
+	});
 });
 
 describe("useConversation snapshot mapping", () => {
