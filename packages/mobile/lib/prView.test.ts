@@ -350,7 +350,7 @@ describe("prRowStatus", () => {
 
 	it("reports running checks quietly and a mergeable approval in green", () => {
 		expect(prRowStatus(pr(), rich({ ci: { state: "pending", failingChecks: [] } }))).toEqual({ text: "Checks running", tone: "neutral" });
-		expect(prRowStatus(pr(), rich({ review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] }, mergeability: { state: "mergeable", reasons: [] } }))).toEqual({ text: "Ready to merge", tone: "success" });
+		expect(prRowStatus(pr({ mergeability: { state: "mergeable", mergeable: true } }), rich({ review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] }, mergeability: { state: "mergeable", reasons: [] } }))).toEqual({ text: "Ready to merge", tone: "success" });
 		expect(prRowStatus(pr({ reviewDecision: "approved" }))).toEqual({ text: "Approved", tone: "success" });
 	});
 
@@ -375,10 +375,23 @@ describe("prRowStatus", () => {
 		expect(prRowStatus(pr({ ciStatus: "failing" }), rich())).toEqual({ text: "Checks failed", tone: "error" });
 	});
 
+	// A repo that requires up-to-date branches: another PR merges, GitHub says
+	// BEHIND, the board turns "unknown" and not mergeable, and the row leaves
+	// Ready to merge. It must not keep saying so from the summary.
+	it("says Approved, not Ready to merge, once the board finds the branch behind", () => {
+		const approved = { decision: "approved" as const, hasUnresolvedHumanComments: false, unresolvedBy: [] };
+		const staleMergeable = rich({ review: approved, mergeability: { state: "mergeable", reasons: [] } });
+		const behind = pr({ ciStatus: "passing", reviewDecision: "approved", mergeability: { state: "unknown", mergeable: false } });
+		expect(prRowStatus(behind, staleMergeable)).toEqual({ text: "Approved", tone: "success" });
+	});
+
 	it("falls back to a summary fact only where the board has none", () => {
 		const conflicted = rich({ mergeability: { state: "conflicting", reasons: [] } });
-		expect(prRowStatus(pr({ mergeability: { state: "unknown", mergeable: false } }), conflicted)).toEqual({ text: "Merge conflicts", tone: "error" });
+		// The board's "unknown" is a fact: the summary derives its state from the
+		// same source, so a different answer there is only older.
+		expect(prRowStatus(pr({ mergeability: { state: "unknown", mergeable: false } }), conflicted)).toBeNull();
 		expect(prRowStatus(pr({ mergeability: { state: "blocked" } }), conflicted)).toBeNull();
+		expect(prRowStatus(pr(), conflicted)).toEqual({ text: "Merge conflicts", tone: "error" });
 		// Cloud's board rows carry no unresolved-thread count.
 		const commented = rich({ review: { decision: "review_required", hasUnresolvedHumanComments: true, unresolvedBy: [] } });
 		expect(prRowStatus(pr(), commented)).toEqual({ text: "Unresolved comments", tone: "warning" });

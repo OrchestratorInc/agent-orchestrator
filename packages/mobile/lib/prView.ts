@@ -239,10 +239,13 @@ export function prRowStatus(pr: DashboardPR, summary?: SessionPRSummary): { text
 	if (life === "merged" || life === "closed") return null;
 
 	const ci = pr.ciStatus ?? summary?.ci?.state;
-	const boardMerge = pr.mergeability?.state && pr.mergeability.state !== "unknown"
-		? pr.mergeability.state
-		: pr.mergeability?.noConflicts === false ? "conflicting" : undefined;
-	const merge = boardMerge ?? summary?.mergeability?.state;
+	// The board's "unknown" is an answer, not a gap: the summary derives its
+	// state from the same source, so a different one there is only older. A
+	// branch behind its base reads "unknown" on the board while a summary from
+	// before still says mergeable.
+	const merge = pr.mergeability
+		? pr.mergeability.state ?? (pr.mergeability.noConflicts === false ? "conflicting" : undefined)
+		: summary?.mergeability?.state;
 	const review = pr.reviewDecision ?? summary?.review?.decision;
 	// Cloud's board rows carry no unresolved-thread count.
 	const unresolved = pr.unresolvedThreads !== undefined ? pr.unresolvedThreads > 0 : Boolean(summary?.review?.hasUnresolvedHumanComments);
@@ -256,9 +259,10 @@ export function prRowStatus(pr: DashboardPR, summary?: SessionPRSummary): { text
 	if (review === "changes_requested") return { text: "Changes requested", tone: "warning" };
 	if (unresolved) return { text: "Unresolved comments", tone: "warning" };
 	if (ci === "pending") return { text: "Checks running", tone: "neutral" };
+	// Ready exactly when the row's section says so: prListSectionKey reads the
+	// same board flag.
 	if (review === "approved") {
-		const mergeable = merge && merge !== "unknown" ? merge === "mergeable" : pr.mergeability?.mergeable === true;
-		return mergeable ? { text: "Ready to merge", tone: "success" } : { text: "Approved", tone: "success" };
+		return pr.mergeability?.mergeable === true ? { text: "Ready to merge", tone: "success" } : { text: "Approved", tone: "success" };
 	}
 	return null;
 }
