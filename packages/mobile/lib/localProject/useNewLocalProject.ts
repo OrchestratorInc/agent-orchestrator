@@ -360,7 +360,7 @@ export function useNewLocalProject({ onCreated }: {
 	 * says the folder can be added, stopping on a failed step or a folder that
 	 * turns out blocked. Returns the last validation.
 	 */
-	const runSetup = async (cfg: NonNullable<typeof config>, start: ImportValidation, on: string): Promise<ImportValidation> => {
+	const runSetup = async (cfg: NonNullable<typeof config>, start: ImportValidation, on: string, target: string): Promise<ImportValidation> => {
 		let current = start;
 		const sending = resuming && resume ? resume.request : outgoing;
 		while (current.nextStep === "prepare_git") {
@@ -379,7 +379,9 @@ export function useNewLocalProject({ onCreated }: {
 				// so the next Create resends it and retries the push.
 				if (failed.action === "create_remote_repository" && sending.githubRepository
 					&& validation.root.hasOrigin && validation.root.requiredActions.includes("create_remote_repository") && mounted.current) {
-					setResume({ hostId: on, path: validation.root.repoPath, request: { remoteUrl: sending.remoteUrl, githubRepository: sending.githubRepository } });
+					// The path as this form named it, as targetPath does: the daemon's is
+					// absolute (`~` expanded) and would never match `~/ao/projects/…`.
+					setResume({ hostId: on, path: target, request: { remoteUrl: sending.remoteUrl, githubRepository: sending.githubRepository } });
 				}
 				throw new Error(preparationFailureMessage(failed));
 			}
@@ -439,7 +441,7 @@ export function useNewLocalProject({ onCreated }: {
 				}
 				// The checkout needs a remote of its own: the form asks for it, and Create goes on.
 				if (needsRemote(validation.root.requiredActions) && !remote.ready) return;
-				await runSetup(config, validation, createdOn);
+				await runSetup(config, validation, createdOn, clone.path);
 				// Its removal started meanwhile: the checkout may be going, so it isn't registered.
 				if (retired.current.has(clone)) throw new Error("The clone was removed before it could be added. Try again.");
 				const id = await addFolderProject(config, { path: clone.path, clonePreparationId: clone.preparationId, ...(request.input.name ? { name: request.input.name } : {}) });
@@ -459,12 +461,12 @@ export function useNewLocalProject({ onCreated }: {
 					if (createUnsupported(cause)) throw new Error(UNSUPPORTED_NEW_PROJECT);
 					throw cause;
 				}
-				await runSetup(config, await validated(config, request.input.path, createdOn), createdOn);
+				await runSetup(config, await validated(config, request.input.path, createdOn), createdOn, request.input.path);
 				await finish(createdOn, await addFolderProject(config, request.input), { destination: destinationParent.trim() });
 				return;
 			}
 			const validation = checkFor?.validation ?? await validated(config, request.input.path, createdOn);
-			const done = await runSetup(config, validation, createdOn);
+			const done = await runSetup(config, validation, createdOn, request.input.path);
 			await finish(createdOn, await addFolderProject(config, { ...request.input, path: done.root.repoPath }), { folder: request.input.path });
 		} catch (cause) {
 			haptics.error();

@@ -15,6 +15,8 @@ const fixtures = vi.hoisted(() => ({
 	failAction: null as ImportAction | null,
 	// The next GitHub creation makes the repository but its push fails, as the daemon's partial success.
 	failPushOnce: false,
+	// Report repoPath as the daemon does: `~` expanded to the machine user's home.
+	expandHome: false,
 	githubSent: [] as unknown[],
 	remote: { ready: true, request: { remoteUrl: "https://github.com/octo/app.git", githubRepository: { owner: "octo", name: "app", private: true } } },
 	remoteActive: [] as boolean[],
@@ -73,7 +75,7 @@ function validationFor(path: string): ImportValidation {
 		isValid: blocking.length === 0,
 		blockingErrors: blocking,
 		nextStep: blocking.length ? "error" : !repo.isRepo && repo.children ? "choose_import_kind" : required.length ? "prepare_git" : "continue",
-		root: { repoPath: path, isRepo: repo.isRepo, hasCommit: repo.hasCommit, hasOrigin: repo.hasOrigin, requiredActions: required, blockingErrors: blocking },
+		root: { repoPath: fixtures.expandHome ? path.replace(/^~(?=\/|$)/, HOME) : path, isRepo: repo.isRepo, hasCommit: repo.hasCommit, hasOrigin: repo.hasOrigin, requiredActions: required, blockingErrors: blocking },
 	};
 }
 
@@ -146,6 +148,7 @@ beforeEach(() => {
 	]);
 	fixtures.failAction = null;
 	fixtures.failPushOnce = false;
+	fixtures.expandHome = false;
 	fixtures.githubSent = [];
 	fixtures.remote = { ready: true, request: { remoteUrl: "https://github.com/octo/app.git", githubRepository: { owner: "octo", name: "app", private: true } } };
 	fixtures.remoteActive = [];
@@ -169,6 +172,8 @@ beforeEach(() => {
 	});
 	fixtures.validateImport.mockReset().mockImplementation(async (_cfg: unknown, path: string) => validationFor(path));
 	fixtures.prepareImportGit.mockReset().mockImplementation(async (_cfg: unknown, input: { path: string; approvedActions: ImportAction[] }) => {
+		// The daemon's absolute path back to the name the fake machine keeps.
+		if (fixtures.expandHome && input.path.startsWith(`${HOME}/`)) input = { ...input, path: `~${input.path.slice(HOME.length)}` };
 		const before = validationFor(input.path);
 		const action = before.root.requiredActions[0]!;
 		if (fixtures.failAction === action) return { events: [{ action, repoPath: input.path, state: "error", error: "gh: not logged in" }], validation: before };
@@ -571,5 +576,23 @@ describe("useNewLocalProject", () => {
 		await act_(() => renderer?.update(<Probe />));
 		expect(project().remoteResuming).toBe(false);
 		expect(project().canCreate).toBe(false);
+	});
+
+	it("retries the push for a new project under ~/ao/projects, whose path the daemon reports expanded", async () => {
+		fixtures.expandHome = true;
+		fixtures.failPushOnce = true;
+		await mount();
+		await act_(() => project().chooseSource("new"));
+		await act_(() => project().setName("My App"));
+		await act_(() => project().create());
+		expect(project().error).toMatch(/push initial commit: network failed/);
+		fixtures.remote.ready = false;
+		await act_(() => renderer?.update(<Probe />));
+		expect(project().remoteResuming).toBe(true);
+		expect(project().canCreate).toBe(true);
+		await act_(() => project().create());
+		expect(fixtures.githubSent).toHaveLength(2);
+		expect(fixtures.addFolderProject).toHaveBeenCalledWith(expect.anything(), { path: "~/ao/projects/My-App", name: "My App" });
+		expect(onCreated).toHaveBeenCalledWith("studio", "My-App");
 	});
 });
