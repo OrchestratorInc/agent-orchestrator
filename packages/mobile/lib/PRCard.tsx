@@ -1,10 +1,10 @@
 import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
-import { memo, useRef } from "react";
+import { memo, useRef, useState } from "react";
 import { Feather } from "./icons";
 import { useOpenPage } from "./pageNavigation";
-import { Platform, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent, type GestureResponderEvent } from "react-native";
 import { sessionTitle, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { rowDividerWidth } from "./divider";
 import { haptics } from "./haptics";
@@ -68,6 +68,9 @@ export const PRCard = memo(function PRCard({
 	const router = useRouter();
 	const menu = useRef<MenuComponentRef>(null);
 	const menuWidth = useMenuRowWidth();
+	// Android: where the finger came down, and the menu's anchor placed there.
+	const touch = useRef({ x: 0, y: 0 });
+	const [anchor, setAnchor] = useState({ x: 0, y: 0 });
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	// The repository's own name, without its owner: the line ends in an
@@ -109,8 +112,13 @@ export const PRCard = memo(function PRCard({
 				openPage(reviewRouteForPR(session.id, pr, hostId));
 			}}
 			// The row claims the touch, so on Android its long press opens the
-			// menu itself; iOS's context menu takes the gesture natively.
-			onLongPress={Platform.OS === "android" ? () => menu.current?.show() : undefined}
+			// menu itself, at the finger; iOS's context menu takes the gesture natively.
+			onPressIn={Platform.OS === "android" ? (event: GestureResponderEvent) => { touch.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY }; } : undefined}
+			onLongPress={Platform.OS === "android" ? () => {
+				setAnchor(touch.current);
+				// Opened once the anchor has moved under the finger.
+				requestAnimationFrame(() => menu.current?.show());
+			} : undefined}
 			style={({ pressed }) => [styles.row, menuWidth.style, pressed && feedback.pressed]}
 		>
 			<View style={styles.eyebrow}>
@@ -127,6 +135,27 @@ export const PRCard = memo(function PRCard({
 			{blockers ? <Text style={styles.blockers} numberOfLines={1}>{blockers}</Text> : null}
 		</Pressable>
 	);
+
+	// On Android the menu sits beside the row, anchored where the finger is, as
+	// a worker row's does: wrapped around the row, its Compose host laid the
+	// eyebrow out past the row's right padding and clipped the status.
+	if (Platform.OS === "android") {
+		return (
+			<View>
+				{row}
+				<MenuView
+					ref={menu}
+					colorScheme={scheme}
+					actions={menuActions}
+					onPressAction={(event: NativeActionEvent) => run(event.nativeEvent.event)}
+					style={[styles.menuAnchor, { left: anchor.x, top: anchor.y }]}
+					testID="pr-card-menu"
+				>
+					<View pointerEvents="none" style={styles.menuPoint} />
+				</MenuView>
+			</View>
+		);
+	}
 
 	return (
 		<View onLayout={menuWidth.onLayout}>
@@ -163,5 +192,8 @@ const makeStyles = (t: Theme) =>
 		copy: { gap: space.hair },
 		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
 		details: { color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
+		// Takes no touches: the row under it has them all.
+		menuAnchor: { position: "absolute", pointerEvents: "none" },
+		menuPoint: { width: 1, height: 1 },
 		blockers: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
 	});

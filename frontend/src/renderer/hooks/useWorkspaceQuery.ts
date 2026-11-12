@@ -1,6 +1,5 @@
 import { markApiError } from "../lib/reported-errors";
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
-import { useUiStore } from "../stores/ui-store";
 import { useRemoteUnpinStore, withRemoteUnpins } from "../stores/remote-unpin-store";
 import { cleanUpLegacyPreparedCloudSessions } from "../lib/cloud-session-prestart";
 import type { TraySessionEntry } from "../../shared/tray";
@@ -87,11 +86,6 @@ function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): 
 	};
 }
 
-// Program titles label sessions only in Developer Mode while they are previewed.
-function developerTerminalTitle(terminalTitle: string | undefined): string | undefined {
-	return useUiStore.getState().developerMode ? terminalTitle : undefined;
-}
-
 export function toWorkspaceSession(
 	session: components["schemas"]["ControllersSessionView"],
 	project: Pick<WorkspaceSummary, "id" | "name">,
@@ -111,7 +105,7 @@ export function toWorkspaceSession(
 		terminalGeneration: session.terminalGeneration,
 		workspaceId: project.id,
 		workspaceName: project.name,
-		title: developerTerminalTitle(session.terminalTitle) ?? session.displayName ?? session.issueId ?? session.id,
+		title: session.terminalTitle ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
@@ -219,7 +213,7 @@ function toLocalWorkspaceSession(
 		terminalGeneration: session.terminalGeneration,
 		workspaceId,
 		workspaceName,
-		title: developerTerminalTitle(session.terminalTitle) ?? session.displayName ?? session.issueId ?? session.id,
+		title: session.terminalTitle ?? session.displayName ?? session.issueId ?? session.id,
 		issueId: session.issueId,
 		provider: toAgentProvider(session.harness),
 		reviewerHarness: toReviewerHarnessId(session.reviewerHarness),
@@ -565,6 +559,7 @@ export function toCloudWorkspaceSession(
 			registered: file.registered,
 			...(file.previousPaths?.length ? { previousPaths: file.previousPaths } : {}),
 		})),
+		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles && !session.isTerminated ? { artifactFilesPending: true } : {}),
 	};
 }
 
@@ -931,15 +926,13 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 	// Every render of the shell would otherwise hand out new lists, which
 	// re-renders the sidebar and its rows even with no remote hosts. Rebuild
 	// them only when something the mapping reads changed: a host's data, a
-	// pending unpin, Developer Mode (terminal titles), the language (the
-	// Scratchpad name) or an in-flight kill (a remote row hides at once).
-	const developerMode = useUiStore((state) => state.developerMode);
+	// pending unpin, the language (the Scratchpad name) or an in-flight kill
+	// (a remote row hides at once).
 	const language = useTranslation().i18n.language;
 	const killVersion = useSyncExternalStore(subscribeOptimisticSessionKills, optimisticSessionKillsVersion);
 	const dataInputs = useStableArray([
 		hostIds,
 		unpins,
-		developerMode,
 		language,
 		killVersion,
 		...projects.map((query) => query.data),
@@ -950,7 +943,7 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions & {
 			? toRemoteWorkspaces(hostId, projects[index].data, sessions[index]?.data ?? []).map((workspace) => withRemoteUnpins(workspace, unpins))
 			: []),
 		// dataInputs holds every value read here, including the ones the mapping
-		// reads outside React (Developer Mode, the language, in-flight kills).
+		// reads outside React (the language, in-flight kills).
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 		[dataInputs],
 	);

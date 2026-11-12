@@ -450,6 +450,18 @@ describe("send keys", () => {
 		expect(field).toHaveClass("min-h-[4.5rem]");
 	});
 
+	it("insets the draft and the toolbar's ends the same from both sides", () => {
+		const { field } = renderComposer();
+		// Equal padding on both sides, and any classic scrollbar's gutter reserved on both edges.
+		expect(field).toHaveClass("px-[7px]", "[scrollbar-gutter:stable_both-edges]");
+		expect(field.className).not.toMatch(/(^|\s)(pl|pr|ps|pe)-/);
+		// The placeholder reserves the same gutter, so typing starts where it began.
+		const placeholder = field.parentElement?.querySelector<HTMLElement>(".pointer-events-none.text-muted-foreground");
+		expect(placeholder).toHaveClass("px-[7px]", "overflow-hidden", "chat-composer-scrollbar", "[scrollbar-gutter:stable_both-edges]");
+		// The send circle sits as far in from the right as the + glyph's ink does from the left.
+		expect(screen.getByRole("group", { name: "Send message controls" })).toHaveClass("me-2.5");
+	});
+
 	it("uses a circular primary send control that enables when armed", async () => {
 		const { field } = renderComposer();
 		const send = screen.getByRole("button", { name: "Send message" });

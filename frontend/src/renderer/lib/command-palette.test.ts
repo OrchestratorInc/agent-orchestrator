@@ -18,6 +18,7 @@ import {
 } from "./command-palette";
 import type { PRReviewState } from "./session-reviews";
 import {
+	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 	type PullRequestFacts,
@@ -73,6 +74,37 @@ function workspaces(): WorkspaceSummary[] {
 }
 
 const byId = (items: CommandItem[]) => new Map(items.map((item) => [item.id, item]));
+
+describe("session import commands", () => {
+	it("offers folder import on home and finds it by agent or session history", () => {
+		const items = buildCommands({ workspaces: workspaces() });
+		const command = byId(items).get("global-import-sessions");
+		expect(command?.action).toEqual({ kind: "open-session-import" });
+		expect(filterCommands(items, "")).toContain(command);
+		for (const query of ["import", "resume claude code", "import codex sessions", "existing terminal chats"]) {
+			expect(filterCommands(items, query)).toContain(command);
+		}
+	});
+
+	it("offers import for the current local project", () => {
+		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" });
+		const command = byId(items).get("current-import-sessions");
+		expect(command).toMatchObject({ group: "current", emphasis: "app", action: { kind: "open-session-import", projectId: "proj-1" } });
+		expect(filterCommands(items, "import app")).toContain(command);
+	});
+
+	it.each([
+		["Scratch", { id: STANDALONE_WORKSPACE_ID, kind: STANDALONE_PROJECT_KIND }],
+		["Cloud", { kind: CLOUD_PROJECT_KIND }],
+		["shared", { shared: {} }],
+		["connected host", { hostId: "host-a" }],
+	] satisfies [string, Partial<WorkspaceSummary>][])("omits project import for %s", (_name, overrides) => {
+		const workspace = { ...workspaces()[0]!, ...overrides };
+		const items = byId(buildCommands({ workspaces: [workspace], currentProjectId: workspace.id, currentHostId: workspace.hostId }));
+		expect(items.has("current-import-sessions")).toBe(false);
+		expect(items.get("global-import-sessions")?.action).toEqual({ kind: "open-session-import" });
+	});
+});
 
 describe("findSession", () => {
 	it("returns the workspace and session together", () => {

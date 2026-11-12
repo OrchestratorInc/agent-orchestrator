@@ -206,6 +206,7 @@ import {
 	Split as LucideSplit,
 	StickyNote as LucideStickyNote,
 	Strikethrough as LucideStrikethrough,
+	WifiOff as LucideWifiOff,
 	Workflow as LucideWorkflow,
 	WrapText as LucideWrapText,
 	Ungroup as LucideUngroup,
@@ -429,6 +430,7 @@ export const Pin = fromMyna(MynaPin, "pin");
 export const PinOff = fromLucide(LucidePinOff, "pin-off");
 export const Play = fromLucide(LucidePlay, "play");
 export const Plug = fromLucide(LucidePlug, "plug");
+export const WifiOff = fromLucide(LucideWifiOff, "wifi-off");
 export const Plus = fromMyna(MynaPlus, "plus");
 export const Presentation = fromMyna(MynaPresentation, "presentation");
 export const QrCode = fromLucide(LucideQrCode, "qr-code");

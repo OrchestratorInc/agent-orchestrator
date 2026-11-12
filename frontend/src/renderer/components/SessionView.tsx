@@ -603,6 +603,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const initializeInspectorSession = useUiStore((state) => state.initializeInspectorSession);
 	const setBrowserContentRevealed = useUiStore((state) => state.setBrowserContentRevealed);
 	const setBrowserUnseen = useUiStore((state) => state.setBrowserUnseen);
+	const setArtifactsUnseen = useUiStore((state) => state.setArtifactsUnseen);
 	const { daemonStatus } = useShell();
 	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
 	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
@@ -1009,7 +1010,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Split panes are a Developer mode preview; off, no split is shown and
 	// turning it off mid-split puts every tab back in the strip.
 	const splitPanes = useSplitPanesEnabled();
-	const developerMode = useUiStore((state) => state.developerMode);
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -1901,9 +1901,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				};
 			}
 			const shell = shellTerminals.find((candidate) => candidate.handleId === key);
-			// Like a strip tab, a local shell shows the agent running in it (a
-			// Developer Mode preview); the group tab looks the agent up.
-			const tracksAgent = developerMode && shell && !shell.optimistic && !shell.cloud && !shell.hostId;
+			// Like a strip tab, a local shell shows the agent running in it; the
+			// group tab looks the agent up.
+			const tracksAgent = shell && !shell.optimistic && !shell.cloud && !shell.hostId;
 			return {
 				key,
 				onSelect,
@@ -1952,7 +1952,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [
 		centerFileRequestsBySession,
 		closePane,
-		developerMode,
 		groups,
 		hostId,
 		isOrchestrator,
@@ -2140,6 +2139,72 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
+
+	// A deliverable the agent registers with `ao artifact add` while the user
+	// watches opens in the Artifacts tab, whatever its file type; agents no
+	// longer hand artifacts to the Browser panel. Artifacts already registered
+	// when the session is entered are the baseline and never reveal anything.
+	// While the user is watching a live page in Browser or reviewing Files,
+	// docked or popped out, a registration only badges Artifacts instead of
+	// taking the view, so an agent registering screenshots as it iterates on a
+	// UI does not steal the running app.
+	// A remote host's session can first show what the sidebar kept from an
+	// earlier read, which can predate artifacts registered since. Fresh data is
+	// authoritative at once; stale data is refetched on mount, and until that
+	// read lands the baseline keeps absorbing what it sees. A cloud session's
+	// artifact list loads after the session itself, so it waits for that too.
+	// A local session whose listing failed reads as having none; the next good
+	// read can then open an existing artifact, which is harmless.
+	const registeredArtifactsBaselineRef = useRef<{ sessionId: string; keys: Set<string>; settled: boolean } | null>(null);
+	const artifactFiles = session?.artifactFiles;
+	const artifactListUnsettled = (Boolean(hostId) && remoteSessionQuery.isStale) || Boolean(session?.artifactFilesPending);
+	useEffect(() => {
+		if (!hasInspector) return;
+		const registered = (artifactFiles ?? []).filter((file) => file.registered);
+		const keyOf = (file: SessionArtifact) => file.id ?? file.path;
+		const baseline = registeredArtifactsBaselineRef.current;
+		if (!baseline || baseline.sessionId !== uiSessionId) {
+			registeredArtifactsBaselineRef.current = { sessionId: uiSessionId, keys: new Set(registered.map(keyOf)), settled: !artifactListUnsettled };
+			return;
+		}
+		if (!baseline.settled) {
+			for (const file of registered) baseline.keys.add(keyOf(file));
+			baseline.settled = !artifactListUnsettled;
+			return;
+		}
+		// A rename keeps its id; a file without one counts as known under an old path.
+		const added = registered.filter(
+			(file) => !baseline.keys.has(keyOf(file)) && !(file.previousPaths ?? []).some((previous) => baseline.keys.has(previous)),
+		);
+		for (const file of registered) baseline.keys.add(keyOf(file));
+		if (added.length === 0 || terminated) return;
+		const inspector = useUiStore.getState().inspectorSessions[uiSessionId];
+		const busy = filesPoppedOut || (browserPoppedOut && hasBrowserContent)
+			|| Boolean(inspector?.isOpen && (inspector.view === "files" || (inspector.view === "browser" && hasBrowserContent)));
+		const newest = added.reduce((latest, file) => ((Date.parse(file.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? file : latest));
+		if (busy) {
+			setArtifactsUnseen(uiSessionId, true);
+			// The badge sits on the rail, which a maximized Browser covers and a
+			// screen reader does not announce; the toast stays above overlays and
+			// is a polite status. One per session, so a burst of screenshots
+			// replaces it rather than stacking.
+			showGlobalToast(t("artifacts.newArtifact", { name: newest.name }), undefined, {
+				tone: "info",
+				dedupeKey: `artifact-registered:${uiSessionId}`,
+				action: { label: t("artifacts.openNew"), run: () => handleOpenArtifact({ path: newest.path }) },
+			});
+			return;
+		}
+		handleOpenArtifact({ path: newest.path });
+	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, artifactListUnsettled, hasInspector, setArtifactsUnseen, showGlobalToast, t, terminated, uiSessionId]);
+
+	// The toast's Open writes this session's inspector state through its own
+	// closure, so it must not outlive the session it was raised for.
+	useEffect(() => () => {
+		const dedupeKey = `artifact-registered:${uiSessionId}`;
+		const { dismissGlobalToast, globalToasts } = useUiStore.getState();
+		for (const toast of globalToasts) if (toast.dedupeKey === dedupeKey) dismissGlobalToast(toast.nonce);
+	}, [uiSessionId]);
 
 	// A file written moments ago, or one past the artifact list cap, is not in
 	// the cached session, and the Files inspector can only show listed

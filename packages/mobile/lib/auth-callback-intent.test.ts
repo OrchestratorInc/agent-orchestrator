@@ -23,4 +23,9 @@ describe("redirectSystemPath", () => {
 			expect(redirectSystemPath({ path, initial: true })).toBe(path);
 		}
 	});
+
+	it("drops a coding-agent sign-in's return link the same way", () => {
+		expect(redirectSystemPath({ path: "ao-app://agent-login", initial: false })).toBeNull();
+		expect(redirectSystemPath({ path: "ao-app://agent-login", initial: true })).toBe("/");
+	});
 });

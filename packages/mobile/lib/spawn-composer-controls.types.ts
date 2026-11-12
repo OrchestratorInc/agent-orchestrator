@@ -5,8 +5,12 @@ import type { VoiceState } from "./voice/types";
 export type SpawnComposerOption = {
 	id: string;
 	label: string;
-	/** A project row's glyph: a folder, or the standalone agent's new-conversation mark. */
-	icon?: "folder" | "message-square-plus";
+	/**
+	 * A project row's glyph: a folder, the standalone agent's new-conversation
+	 * mark, or a folder with a plus for creating a project. A machine's: a
+	 * computer, or a cloud for Orchestrator Cloud.
+	 */
+	icon?: "folder" | "message-square-plus" | "folder-plus" | "cloud";
 	sectionBreakBefore?: boolean;
 	/** The name where the whole label has no room, such as a control's face. */
 	shortLabel?: string;

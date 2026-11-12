@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { formatFileAnnotationMessage } from "../../shared/files/file-annotations";
 import {
+	artifactCacheEntry,
+	artifactCacheEvictions,
 	artifactCommentTarget,
 	artifactExtensionLabel,
+	artifactFormatLabel,
+	contentRangeTotal,
+	OPEN_CLOUD_FILE_HINT,
+	openOnMachineHint,
 	artifactFilePath,
 	artifactMenuActions,
 	artifactPageAt,
@@ -16,7 +22,6 @@ import {
 	isTextArtifact,
 	MAX_SHOWN_TEXT_CHARS,
 	shownText,
-	showsInWebView,
 	looksBinary,
 	parseArtifacts,
 	sortArtifacts,
@@ -85,9 +90,29 @@ describe("artifactViewKind", () => {
 		expect(artifactViewKind({ path: "notes.md", kind: "markdown" })).toBe("markdown");
 		expect(artifactViewKind({ path: "README.markdown", kind: "file" })).toBe("markdown");
 		expect(artifactViewKind({ path: "chart.PNG", kind: "file" })).toBe("image");
-		expect(artifactViewKind({ path: "logo.svg", kind: "file" })).toBe("web-media");
-		expect(artifactViewKind({ path: "demo.mp4", kind: "file" })).toBe("web-media");
-		expect(artifactViewKind({ path: "data.csv", kind: "file" })).toBe("text");
+		expect(artifactViewKind({ path: "logo.svg", kind: "file" })).toBe("svg");
+		expect(artifactViewKind({ path: "demo.mp4", kind: "file" })).toBe("video");
+		expect(artifactViewKind({ path: "data.csv", kind: "file" })).toBe("table");
+		expect(artifactViewKind({ path: "src/app.tsx", kind: "file" })).toBe("text");
+	});
+
+	it("previews the formats the desktop previews", () => {
+		for (const path of ["a.apng", "a.avif", "a.bmp", "a.gif", "a.ico", "a.jpg", "a.JPEG", "a.png", "a.webp"]) expect(artifactViewKind({ path, kind: "file" })).toBe("image");
+		for (const path of ["clip.m4v", "clip.mov", "clip.MP4", "clip.ogv", "clip.webm"]) expect(artifactViewKind({ path, kind: "file" })).toBe("video");
+		for (const path of ["a.aac", "a.flac", "a.m4a", "a.mp3", "a.oga", "a.ogg", "a.opus", "a.wav"]) expect(artifactViewKind({ path, kind: "file" })).toBe("audio");
+		expect(artifactViewKind({ path: "spec.PDF", kind: "file" })).toBe("pdf");
+		expect(artifactViewKind({ path: "rows.tsv", kind: "file" })).toBe("table");
+		expect(artifactViewKind({ path: "flow.mmd", kind: "file" })).toBe("diagram");
+		expect(artifactViewKind({ path: "flow.mermaid", kind: "file" })).toBe("diagram");
+	});
+
+	it("draws an iPhone photo, which the phone decodes and the desktop does not", () => {
+		expect(artifactViewKind({ path: "IMG_0001.HEIC", kind: "file" })).toBe("image");
+		expect(artifactViewKind({ path: "photo.heif", kind: "file" })).toBe("image");
+	});
+
+	it("says a known binary format has no preview instead of reading it", () => {
+		for (const path of ["bundle.zip", "report.docx", "sheet.xlsx", "app.sqlite", "font.woff2"]) expect(artifactViewKind({ path, kind: "file" })).toBe("binary");
 	});
 
 	it("offers Copy only for files whose contents are text", () => {
@@ -108,10 +133,134 @@ describe("artifactViewKind", () => {
 		}
 	});
 
-	it("does not draw a PDF in an Android WebView, which has no PDF renderer", () => {
-		expect(showsInWebView("spec.pdf", "android")).toBe(false);
-		expect(showsInWebView("spec.PDF", "ios")).toBe(true);
-		expect(showsInWebView("demo.mp4", "android")).toBe(true);
+	it("takes an SVG, a table and a diagram as text, and media as not", () => {
+		for (const path of ["logo.svg", "rows.csv", "rows.tsv", "flow.mmd"]) {
+			expect(isTextArtifact({ path, kind: "file" })).toBe(true);
+			expect(canCopyArtifact({ path, kind: "file" })).toBe(true);
+		}
+		for (const path of ["clip.mp4", "song.mp3", "spec.pdf", "IMG_1.heic"]) expect(isTextArtifact({ path, kind: "file" })).toBe(false);
+	});
+});
+
+describe("artifactFormatLabel", () => {
+	it("names the format and size of a file the viewer cannot draw", () => {
+		expect(artifactFormatLabel({ path: "out/bundle.zip", size: 2.4 * 1024 * 1024 })).toBe("ZIP file · 2.4 MB");
+		expect(artifactFormatLabel({ path: "LICENSE", size: 300 })).toBe("File · 300 B");
+	});
+
+	it("leaves out a size that is not known", () => {
+		expect(artifactFormatLabel({ path: "clip.webm", size: 0 })).toBe("WEBM file");
+	});
+});
+
+describe("contentRangeTotal", () => {
+	it("reads the whole size from a range response", () => {
+		expect(contentRangeTotal("bytes 0-0/4182")).toBe(4182);
+		expect(contentRangeTotal("bytes 0-0/3145728 ")).toBe(3145728);
+	});
+
+	it("gives nothing when the size is not stated", () => {
+		expect(contentRangeTotal("bytes 0-0/*")).toBeUndefined();
+		expect(contentRangeTotal(null)).toBeUndefined();
+		expect(contentRangeTotal("")).toBeUndefined();
+	});
+});
+
+describe("openOnMachineHint", () => {
+	it("names the desktop's Show in action for the machine's platform", () => {
+		expect(openOnMachineHint("Studio Mac", "darwin")).toBe("Open it on Studio Mac with “Show\u00a0in\u00a0Finder” in the desktop app.");
+		expect(openOnMachineHint("Build Box", "win32")).toBe("Open it on Build Box with “Show\u00a0in\u00a0File\u00a0Explorer” in the desktop app.");
+		expect(openOnMachineHint("Server", "linux")).toBe("Open it on Server with “Show\u00a0in\u00a0File\u00a0Manager” in the desktop app.");
+	});
+
+	it("points to the artifact menu when the platform is not known", () => {
+		expect(openOnMachineHint("Studio Mac", "")).toBe("Open it on Studio Mac from the artifact's ⋯ menu in the desktop app.");
+	});
+
+	it("names no machine for a Cloud session's file", () => {
+		expect(OPEN_CLOUD_FILE_HINT).toBe("Open it from the session's artifacts in the desktop app.");
+		expect(OPEN_CLOUD_FILE_HINT).not.toMatch(/machine|Finder/);
+	});
+
+	it("says the machine when its name is not known", () => {
+		expect(openOnMachineHint(undefined, "darwin")).toBe("Open it on the machine with “Show\u00a0in\u00a0Finder” in the desktop app.");
+		expect(openOnMachineHint("  ", undefined)).toBe("Open it on the machine from the artifact's ⋯ menu in the desktop app.");
+	});
+});
+
+describe("artifactCacheEntry", () => {
+	it("names one version of a file, and keeps its extension", () => {
+		const entry = artifactCacheEntry("host.a", "ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z");
+		expect(entry).toEqual(artifactCacheEntry("host.a", "ao-1", "docs/spec.pdf", "2026-11-10T10:00:00Z"));
+		expect(entry.name.startsWith(`${entry.prefix}-`)).toBe(true);
+		expect(entry.name).toMatch(/\.pdf$/);
+	});
+
+	it("shares its prefix with the file's other versions only", () => {
+		const entry = artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v1");
+		const rewritten = artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v2");
+		expect(rewritten.prefix).toBe(entry.prefix);
+		expect(rewritten.name).not.toBe(entry.name);
+		expect(artifactCacheEntry("host.a", "ao-2", "spec.pdf", "v1").prefix).not.toBe(entry.prefix);
+		expect(artifactCacheEntry("host.a", "ao-1", "other.pdf", "v1").prefix).not.toBe(entry.prefix);
+	});
+
+	it("names a file with 128 bits and a version with 64", () => {
+		const entry = artifactCacheEntry("host.a", "ao-1", "docs/spec.pdf", "v1");
+		expect(entry.prefix).toMatch(/^[0-9a-f]{32}$/);
+		expect(entry.name).toMatch(/^[0-9a-f]{32}-[0-9a-f]{16}\.pdf$/);
+	});
+
+	it("gives near-identical paths unrelated names", () => {
+		const prefixes = new Set(Array.from({ length: 2000 }, (_, index) => artifactCacheEntry("host.a", "ao-1", `out/report-${index}.pdf`, "v1").prefix));
+		expect(prefixes.size).toBe(2000);
+	});
+
+	it("keeps the same session and path on two paired machines apart", () => {
+		const onA = artifactCacheEntry("host.a", "standalone-1", "report.pdf", "2026-11-10T10:00:00Z");
+		const onB = artifactCacheEntry("host.b", "standalone-1", "report.pdf", "2026-11-10T10:00:00Z");
+		expect(onB.prefix).not.toBe(onA.prefix);
+		expect(onB.name).not.toBe(onA.name);
+		// Downloading B's copy never evicts A's.
+		expect(artifactCacheEvictions([{ name: onA.name, size: 10, modified: 1 }, { name: onB.name, size: 10, modified: 2 }], onB, () => false)).toEqual([]);
+	});
+});
+
+describe("artifactCacheEvictions", () => {
+	const v1 = artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v1");
+	const v2 = artifactCacheEntry("host.a", "ao-1", "spec.pdf", "v2");
+	const other = artifactCacheEntry("host.a", "ao-1", "other.pdf", "v1");
+	const file = (name: string, size = 10, modified = 1) => ({ name, size, modified });
+	const idle = () => false;
+
+	it("drops a file's older copies once a new version is in place", () => {
+		expect(artifactCacheEvictions([file(v1.name), file(v2.name), file(other.name)], v2, idle)).toEqual([v1.name]);
+	});
+
+	it("drops an interrupted download of an older version", () => {
+		expect(artifactCacheEvictions([file(`${v1.name}.part`), file(v2.name)], v2, idle)).toEqual([`${v1.name}.part`]);
+	});
+
+	it("keeps a download still in progress", () => {
+		expect(artifactCacheEvictions([file(`${v1.name}.part`), file(v2.name)], v2, (name) => name === v1.name)).toEqual([]);
+	});
+
+	it("keeps one copy of an unlisted file opened again and again", () => {
+		const opens = ["2026-11-10T10:00:00Z", "2026-11-10T10:05:00Z", "2026-11-10T10:09:00Z"].map((openedAt) => artifactCacheEntry("host.a", "ao-1", "report/spec.pdf", openedAt));
+		const latest = opens[opens.length - 1];
+		expect(artifactCacheEvictions(opens.map((entry) => file(entry.name)), latest, idle).sort()).toEqual(opens.slice(0, -1).map((entry) => entry.name).sort());
+	});
+
+	it("drops the least recently written other files while over the cap", () => {
+		const a = artifactCacheEntry("host.a", "ao-1", "a.pdf", "v1");
+		const b = artifactCacheEntry("host.a", "ao-1", "b.pdf", "v1");
+		const files = [file(a.name, 60, 1), file(b.name, 60, 2), file(v2.name, 60, 3)];
+		expect(artifactCacheEvictions(files, v2, idle, 130)).toEqual([a.name]);
+		expect(artifactCacheEvictions(files, v2, idle, 200)).toEqual([]);
+	});
+
+	it("never drops the copy just downloaded, even alone over the cap", () => {
+		expect(artifactCacheEvictions([file(v2.name, 500)], v2, idle, 100)).toEqual([]);
 	});
 });
 

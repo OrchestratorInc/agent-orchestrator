@@ -50,6 +50,11 @@ const mocks = vi.hoisted(() => ({
 	cloudArtifacts: undefined as boolean | undefined,
 }));
 
+// These tests are about the live preview a card falls back to; the cached image path has its own tests.
+vi.mock("./ArtifactSnapshotThumbnail", async () => {
+	const { ArtifactThumbnail } = await import("./ArtifactThumbnail");
+	return { ArtifactSnapshotThumbnail: ArtifactThumbnail };
+});
 vi.mock("./PdfPreview", () => ({
 	PdfPreview: ({ firstPageOnly, path, src }: { firstPageOnly?: boolean; path: string; src: string }) => <div data-testid="pdf-thumbnail" data-first-page-only={firstPageOnly} data-src={src}>{path}</div>,
 }));
