@@ -2162,6 +2162,37 @@ func TestDiscoverClaudePathRejectsGlobMetadata(t *testing.T) {
 	}
 }
 
+func TestDiscoverClaudePathPicksNewestProjectMatch(t *testing.T) {
+	const nativeID = "11111111-1111-4111-8111-111111111111"
+	root := t.TempDir()
+	older := filepath.Join(root, "project-a", nativeID+".jsonl")
+	newer := filepath.Join(root, "project-b", nativeID+".jsonl")
+	writeUsageFixture(t, older, "{}\n")
+	writeUsageFixture(t, newer, "{}\n")
+	writeUsageFixture(t, filepath.Join(root, "project-c", "other.jsonl"), "{}\n")
+	writeUsageFixture(t, filepath.Join(root, "not-a-dir"), "x")
+	if err := os.MkdirAll(filepath.Join(root, "project-d", nativeID+".jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	mustNoError(t, os.Chtimes(older, now.Add(-time.Hour), now.Add(-time.Hour)))
+	mustNoError(t, os.Chtimes(newer, now, now))
+	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
+
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, nativeID, "")
+	mustNoError(t, err)
+	if path != newer {
+		t.Fatalf("discovered %q, want newest match %q", path, newer)
+	}
+
+	missing := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: filepath.Join(root, "missing")}, nil)
+	path, err = missing.discoverPath(context.Background(), domain.HarnessClaudeCode, nativeID, "")
+	mustNoError(t, err)
+	if path != "" {
+		t.Fatalf("missing projects root discovered %q", path)
+	}
+}
+
 func TestReconcileCodexRootAcceptsScalarSourceMetadata(t *testing.T) {
 	const nativeID = "11111111-1111-4111-8111-111111111111"
 	store := collectorTestStore(t)
