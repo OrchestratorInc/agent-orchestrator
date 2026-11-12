@@ -37,7 +37,12 @@ import {
 	useStageAttachments,
 	useWorkspaceFilePaths,
 } from "../../hooks/useConversation";
-import { useConversationPromptSuggestion } from "../../hooks/useConversationPromptSuggestion";
+import {
+	localPromptOptimizationRequest,
+	settledSuggestionTurnId,
+	useConversationPromptSuggestion,
+	usePromptOptimization,
+} from "../../hooks/useConversationPromptSuggestion";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
@@ -418,7 +423,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hostId,
 	);
 	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
-	const { skills } = useConversationSkills(
+	const {
+		skills,
+		loaded: skillsLoaded,
+		error: skillsError,
+		retry: retrySkills,
+	} = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
@@ -577,7 +587,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			}
 		}
 	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
-	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
+	const promptSuggestionState = useConversationPromptSuggestion(snapshot, Boolean(
 		controllerCatalogsEnabled && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
 		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
@@ -585,6 +595,19 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		!controllerTransitioning && !agentResuming && !newWorkDisabled && !arriving &&
 		chatInFront,
 	), hostId);
+	const promptSuggestion = promptSuggestionState.suggestion;
+	// The composer's control is offered only while the daemon has a settled turn
+	// to read and a ready controller to isolate the model call on.
+	const optimizeTurnId = settledSuggestionTurnId(snapshot);
+	const optimizationRequest = useMemo(() => localPromptOptimizationRequest(hostId), [hostId]);
+	const optimization = usePromptOptimization({
+		enabled: Boolean(optimizeTurnId && controllerCatalogsEnabled && !newWorkDisabled && chatInFront),
+		request: optimizationRequest,
+	});
+	const optimizeDraft = useCallback(async (draft: string) => {
+		if (!optimizeTurnId || !snapshot) return undefined;
+		return optimization.optimize(snapshot.sessionId, optimizeTurnId, draft);
+	}, [optimization, optimizeTurnId, snapshot]);
 	const renderShellFallback = Boolean(shellTarget && session);
 	// A switch from the terminal shows the chat before the daemon has a
 	// conversation to read. The starting snapshot stands in for the whole
@@ -706,6 +729,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
+				onRefreshPromptSuggestion={promptSuggestionState.refresh}
+				onOptimizeDraft={optimizeDraft}
+				optimizeFailure={optimization.failure}
+				optimizing={optimization.pending}
 				newWorkDisabled={newWorkDisabled}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
@@ -890,6 +917,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				activateBranchPending={commands.activateBranchPending}
 				activateBranchError={commands.activateBranchError}
 				skills={sideCreationEnabled ? [...(["btw"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw")] : skills}
+				skillsLoaded={skillsLoaded || sideCreationEnabled}
+				skillsError={skillsError}
+				onRetrySkills={retrySkills}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}

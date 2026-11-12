@@ -52,7 +52,7 @@ describe("promptSuggestionMessages", () => {
 describe("useCloudPromptSuggestion", () => {
 	it("asks the control plane with the settled turn and recent transcript", async () => {
 		const { result } = renderHook(() => useCloudPromptSuggestion(session, settled, true), { wrapper });
-		await waitFor(() => expect(result.current?.text).toBe("Add a regression test."));
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Add a regression test."));
 		expect(suggestChatPrompt).toHaveBeenCalledWith("org-1", "session-1", {
 			turnId: "turn-1",
 			messages: [{ role: "user", text: "Fix the race." }, { role: "assistant", text: "Fixed it." }],
@@ -63,7 +63,7 @@ describe("useCloudPromptSuggestion", () => {
 		suggestChatPrompt.mockRejectedValue(new Error("unsupported worker transport request"));
 		const { result } = renderHook(() => useCloudPromptSuggestion(session, settled, true), { wrapper });
 		await waitFor(() => expect(suggestChatPrompt).toHaveBeenCalled());
-		expect(result.current).toBeUndefined();
+		expect(result.current.suggestion).toBeUndefined();
 		suggestChatPrompt.mockClear();
 		renderHook(() => useCloudPromptSuggestion({ ...session, runtimeConnected: false }, settled, true), { wrapper });
 		expect(suggestChatPrompt).not.toHaveBeenCalled();
@@ -72,7 +72,7 @@ describe("useCloudPromptSuggestion", () => {
 	it("asks a busy worker again instead of giving up", async () => {
 		suggestChatPrompt.mockRejectedValueOnce(new CloudCpError("A prompt suggestion is already running.", { status: 429, code: "CHAT_PROMPT_SUGGESTION_BUSY" }));
 		const { result } = renderHook(() => useCloudPromptSuggestion(session, settled, true), { wrapper });
-		await waitFor(() => expect(result.current?.text).toBe("Add a regression test."), { timeout: 3500 });
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Add a regression test."), { timeout: 3500 });
 		expect(suggestChatPrompt).toHaveBeenCalledTimes(2);
 	});
 
@@ -80,6 +80,6 @@ describe("useCloudPromptSuggestion", () => {
 		suggestChatPrompt.mockResolvedValue({ turnId: "turn-0", prompt: "Old" });
 		const { result } = renderHook(() => useCloudPromptSuggestion(session, settled, true), { wrapper });
 		await waitFor(() => expect(suggestChatPrompt).toHaveBeenCalled());
-		expect(result.current).toBeUndefined();
+		expect(result.current.suggestion).toBeUndefined();
 	});
 });

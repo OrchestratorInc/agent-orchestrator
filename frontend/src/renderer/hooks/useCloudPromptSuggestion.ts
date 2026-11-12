@@ -1,6 +1,6 @@
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useCloudCp } from "./useCloudCp";
-import { promptSuggestionBusy, usePromptSuggestion } from "./useConversationPromptSuggestion";
+import { promptSuggestionBusy, usePromptSuggestion, type PromptSuggestionState } from "./useConversationPromptSuggestion";
 import type { ConversationSnapshot } from "../types/conversation";
 import type { WorkspaceSession } from "../types/workspace";
 
@@ -28,7 +28,7 @@ export function useCloudPromptSuggestion(
 	session: WorkspaceSession,
 	snapshot: ConversationSnapshot | undefined,
 	enabled: boolean,
-): { id: string; text: string; onDismiss: () => void } | undefined {
+): PromptSuggestionState {
 	const { client, ready, baseUrl } = useCloudCp();
 	const orgId = session.cloud?.orgId;
 	return usePromptSuggestion(

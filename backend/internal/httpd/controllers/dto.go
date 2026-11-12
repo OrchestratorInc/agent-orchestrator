@@ -2778,6 +2778,9 @@ type UnregisterPushDeviceResponse struct {
 // ConversationPromptSuggestionRequest identifies the latest completed turn.
 type ConversationPromptSuggestionRequest struct {
 	TurnID string `json:"turnId"`
+	// Draft is the composer text to polish. Omitted or blank asks for the next
+	// message instead, which is the original behavior.
+	Draft string `json:"draft,omitempty"`
 }
 
 // ConversationPromptSuggestionResponse offers one optional next human message.

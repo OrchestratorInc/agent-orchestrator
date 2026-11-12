@@ -6896,6 +6896,7 @@ export interface components {
             text: string;
         };
         ConversationPromptSuggestionRequest: {
+            draft?: string;
             turnId: string;
         };
         ConversationPromptSuggestionResponse: {

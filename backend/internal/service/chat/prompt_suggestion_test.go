@@ -223,6 +223,153 @@ func TestPromptSuggestionAcceptsStructuredJSONAndSingleFences(t *testing.T) {
 	}
 }
 
+func TestPromptDraftSuggestionPolishesANonemptyDraftWithItsOwnPrompt(t *testing.T) {
+	h := newHarness(t)
+	turnID := settledSuggestionTurn(t, h)
+	var gotSystem, gotTask string
+	h.svc.SetPromptSuggestionRunner(func(_ context.Context, id domain.SessionID, sourceTurnID, systemPrompt, prompt string) (string, error) {
+		if id != testSession || sourceTurnID != turnID {
+			t.Fatalf("runner context: id=%s turn=%s", id, sourceTurnID)
+		}
+		gotSystem, gotTask = systemPrompt, prompt
+		return `{"prompt":"Fix the login error.\n\nScope: the auth handler only.\nAcceptance: the auth tests pass."}`, nil
+	})
+	prompt, err := h.svc.PromptDraftSuggestion(context.Background(), testSession, turnID, "  fix the login error\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A polished draft is multi-line, so paragraph breaks survive while the
+	// answer is still bounded by the draft limit rather than the 240-char hint.
+	want := "Fix the login error.\n\nScope: the auth handler only.\nAcceptance: the auth tests pass."
+	if prompt != want {
+		t.Fatalf("polished prompt = %q, want %q", prompt, want)
+	}
+	if !strings.Contains(gotSystem, "Never add a requirement") || strings.Contains(gotSystem, "Suggest the single most useful next message") {
+		t.Fatalf("polish request used the wrong system prompt: %q", gotSystem)
+	}
+	// The draft travels as delimited reference text after the transcript, so the
+	// model can tell the human's own words from the conversation.
+	if !strings.Contains(gotTask, "Draft to polish:\nfix the login error\n\nEnd of draft.") ||
+		!strings.Contains(gotTask, "Recent transcript:\nuser: Fix the error") {
+		t.Fatalf("polish task lost its draft or transcript framing: %q", gotTask)
+	}
+}
+
+func TestPromptDraftSuggestionKeepsEmptyDraftsOnTheNextMessagePath(t *testing.T) {
+	h := newHarness(t)
+	turnID := settledSuggestionTurn(t, h)
+	for _, draft := range []string{"", "   ", "\n\t "} {
+		var gotSystem, gotTask string
+		h.svc.SetPromptSuggestionRunner(func(_ context.Context, _ domain.SessionID, _, systemPrompt, prompt string) (string, error) {
+			gotSystem, gotTask = systemPrompt, prompt
+			return `{"prompt":"Add a regression test."}`, nil
+		})
+		prompt, err := h.svc.PromptDraftSuggestion(context.Background(), testSession, turnID, draft)
+		if err != nil || prompt != "Add a regression test." {
+			t.Fatalf("draft %q: prompt=%q err=%v", draft, prompt, err)
+		}
+		// The next-message instruction, not the polish one, and no draft framing.
+		if !strings.Contains(gotSystem, "Suggest the single most useful next message") || strings.Contains(gotSystem, "Never add a requirement") ||
+			strings.Contains(gotTask, "Draft to polish:") {
+			t.Fatalf("draft %q took the polish path: system=%q task=%q", draft, gotSystem, gotTask)
+		}
+	}
+}
+
+func TestPromptDraftSuggestionRejectsAnOversizedDraftBeforeTheProviderCall(t *testing.T) {
+	h := newHarness(t)
+	turnID := settledSuggestionTurn(t, h)
+	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) {
+		t.Fatal("provider was called for an oversized draft")
+		return "", nil
+	})
+	if _, err := h.svc.PromptDraftSuggestion(context.Background(), testSession, turnID,
+		strings.Repeat("界", chatsvc.PromptSuggestionDraftLimit+1)); !errors.Is(err, chatsvc.ErrPromptDraftTooLong) {
+		t.Fatalf("oversized draft error = %v, want %v", err, chatsvc.ErrPromptDraftTooLong)
+	}
+	// The limit is characters, not bytes: a draft at the boundary is accepted.
+	h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) {
+		return `{"prompt":"界"}`, nil
+	})
+	if prompt, err := h.svc.PromptDraftSuggestion(context.Background(), testSession, turnID,
+		strings.Repeat("界", chatsvc.PromptSuggestionDraftLimit)); err != nil || prompt != "界" {
+		t.Fatalf("draft at the limit: prompt=%q err=%v", prompt, err)
+	}
+}
+
+func TestPromptDraftSuggestionDropsAnUnusablePolishAnswer(t *testing.T) {
+	h := newHarness(t)
+	turnID := settledSuggestionTurn(t, h)
+	for _, raw := range []string{
+		`{"prompt":""}`, "",
+		"getaddrinfo ENOTFOUND llm.substrate.dev",
+		`{"error":"provider unavailable"}`,
+		"Here is the polished draft: too much prose",
+		// A polish is still bounded by the draft limit; a runaway rewrite is not a
+		// usable suggestion.
+		`{"prompt":"` + strings.Repeat("界", chatsvc.PromptSuggestionDraftLimit+1) + `"}`,
+	} {
+		h.svc.SetPromptSuggestionRunner(func(context.Context, domain.SessionID, string, string, string) (string, error) { return raw, nil })
+		if prompt, err := h.svc.PromptDraftSuggestion(context.Background(), testSession, turnID, "fix the bug"); err != nil || prompt != "" {
+			t.Fatalf("answer %q: prompt=%q err=%v", raw, prompt, err)
+		}
+	}
+}
+
+func TestPromptDraftSuggestionSharesCapacityAndStalenessWithNextMessageSuggestions(t *testing.T) {
+	h := newHarness(t)
+	turnID := settledSuggestionTurn(t, h)
+	// The isolating model-call capacity is shared, not per-feature: with both
+	// slots taken by next-message suggestions, a polish is refused rather than
+	// starting a third provider call.
+	started := make(chan struct{}, 2)
+	h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _, _ string) (string, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := h.svc.PromptSuggestion(ctx, testSession, turnID)
+			done <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("suggestion runner did not start")
+		}
+	}
+	if prompt, err := h.svc.PromptDraftSuggestion(ctx, testSession, turnID, "fix the bug"); prompt != "" || !errors.Is(err, chatsvc.ErrPromptSuggestionBusy) {
+		t.Fatalf("polish during full capacity = %q, %v", prompt, err)
+	}
+	cancel()
+	for range 2 {
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel error = %v", err)
+		}
+	}
+
+	// A conversation that moves under the polish request invalidates its answer,
+	// exactly as it does for a next-message suggestion.
+	h.svc.SetPromptSuggestionRunner(func(ctx context.Context, _ domain.SessionID, _, _, _ string) (string, error) {
+		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "I already chose", Origin: domain.MessageOriginHuman}); err != nil {
+			t.Fatal(err)
+		}
+		return `{"prompt":"Fix the login error."}`, nil
+	})
+	if prompt, err := h.svc.PromptDraftSuggestion(context.Background(), testSession, turnID, "fix the login error"); prompt != "" || !errors.Is(err, chatsvc.ErrPromptSuggestionStale) {
+		t.Fatalf("stale polish = %q, %v", prompt, err)
+	}
+}
+
 func TestPromptSuggestionOmitsExpectedOptionalRunnerFailures(t *testing.T) {
 	h := newHarness(t)
 	turnID := settledSuggestionTurn(t, h)

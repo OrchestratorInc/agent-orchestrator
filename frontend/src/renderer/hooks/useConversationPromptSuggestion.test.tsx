@@ -37,19 +37,19 @@ describe("useConversationPromptSuggestion", () => {
 		const { result, rerender } = renderHook(({ snapshot }: { snapshot: ConversationSnapshot }) => useConversationPromptSuggestion(snapshot, true), {
 			wrapper: wrapperFor(), initialProps: { snapshot: initial },
 		});
-		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
-		const firstId = result.current?.id;
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Explain the fix."));
+		const firstId = result.current?.suggestion?.id;
 		rerender({ snapshot: { ...initial, items: [{ ...message, revision: 2 }, {
 			kind: "activity", id: "usage-1", sequence: 2, revision: 1, activityKind: "usage",
 			status: "completed", summary: "Updated usage", createdAt: "",
 		}] } });
-		expect(result.current?.id).toBe(firstId);
+		expect(result.current?.suggestion?.id).toBe(firstId);
 		expect(post).toHaveBeenCalledOnce();
 		post.mockResolvedValue({ data: { turnId: "turn-1", prompt: "Fix the remaining race." } });
 		rerender({ snapshot: { ...initial, items: [{ ...message, revision: 3, text: "The race is still present." }] } });
-		expect(result.current).toBeUndefined();
-		await waitFor(() => expect(result.current?.text).toBe("Fix the remaining race."));
-		expect(result.current?.id).not.toBe(firstId);
+		expect(result.current.suggestion).toBeUndefined();
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Fix the remaining race."));
+		expect(result.current?.suggestion?.id).not.toBe(firstId);
 		expect(post).toHaveBeenCalledTimes(2);
 	});
 
@@ -62,14 +62,14 @@ describe("useConversationPromptSuggestion", () => {
 		const { result, rerender } = renderHook(({ snapshot }) => useConversationPromptSuggestion(snapshot, true), {
 			wrapper: wrapperFor(client), initialProps: { snapshot: { ...settled, items: [reply] } },
 		});
-		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Explain the fix."));
 		expect(JSON.stringify(client.getQueryCache().getAll()[0].queryKey).length).toBeLessThan(300);
 		expect(client.getQueryCache().getAll()[0].gcTime).toBeLessThan(Infinity);
-		const firstId = result.current?.id;
+		const firstId = result.current?.suggestion?.id;
 		rerender({ snapshot: { ...settled, items: [{ ...reply, text: `Corrected beginning${"😀".repeat(20_000)}`, revision: 2 }] } });
-		expect(result.current).toBeUndefined();
-		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
-		expect(result.current?.id).not.toBe(firstId);
+		expect(result.current.suggestion).toBeUndefined();
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Explain the fix."));
+		expect(result.current?.suggestion?.id).not.toBe(firstId);
 		expect(post).toHaveBeenCalledTimes(2);
 	});
 
@@ -90,14 +90,14 @@ describe("useConversationPromptSuggestion", () => {
 	it("requests once per settled context and reuses it when the chat returns", async () => {
 		const wrapper = wrapperFor();
 		const first = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
-		await waitFor(() => expect(first.result.current?.text).toBe("Explain the fix."));
+		await waitFor(() => expect(first.result.current?.suggestion?.text).toBe("Explain the fix."));
 		expect(post).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation/prompt-suggestion", {
 			params: { path: { sessionId: "session-1" } }, body: { turnId: "turn-1" }, signal: expect.any(AbortSignal),
 		});
 		first.rerender();
 		first.unmount();
 		const second = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
-		expect(second.result.current?.text).toBe("Explain the fix.");
+		expect(second.result.current?.suggestion?.text).toBe("Explain the fix.");
 		expect(post).toHaveBeenCalledTimes(1);
 	});
 
@@ -114,7 +114,7 @@ describe("useConversationPromptSuggestion", () => {
 		{ ...settled, items: [{ kind: "message", id: "reply-1", role: "assistant", origin: "provider", turnId: "turn-1", sequence: 1, revision: 1, text: "Working", streaming: true, createdAt: "" }] },
 	])("omits suggestions before a settled active conversation is available %#", (snapshot) => {
 		const { result } = renderHook(() => useConversationPromptSuggestion(snapshot, true), { wrapper: wrapperFor() });
-		expect(result.current).toBeUndefined();
+		expect(result.current.suggestion).toBeUndefined();
 		expect(post).not.toHaveBeenCalled();
 	});
 
@@ -124,7 +124,7 @@ describe("useConversationPromptSuggestion", () => {
 			turns: [...settled.turns, { id: "discarded", state: "completed", rolledBack: true, requestedAt: "" }],
 		};
 		const { result } = renderHook(() => useConversationPromptSuggestion(snapshot, true), { wrapper: wrapperFor() });
-		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Explain the fix."));
 		expect(post.mock.calls[0][1].body).toEqual({ turnId: "turn-1" });
 	});
 
@@ -143,10 +143,10 @@ describe("useConversationPromptSuggestion", () => {
 		await waitFor(() => expect(post).toHaveBeenCalledOnce());
 		rerender({ enabled: false });
 		expect(signal?.aborted).toBe(false);
-		expect(result.current).toBeUndefined();
+		expect(result.current.suggestion).toBeUndefined();
 		await act(async () => resolve({ data: { turnId: "turn-1", prompt: "Explain the fix." } }));
 		rerender({ enabled: true });
-		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Explain the fix."));
 		expect(post).toHaveBeenCalledOnce();
 	});
 
@@ -154,17 +154,17 @@ describe("useConversationPromptSuggestion", () => {
 		const client = new QueryClient();
 		const wrapper = wrapperFor(client);
 		const first = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
-		await waitFor(() => expect(first.result.current?.text).toBe("Explain the fix."));
-		act(() => first.result.current?.onDismiss());
-		await waitFor(() => expect(first.result.current).toBeUndefined());
+		await waitFor(() => expect(first.result.current?.suggestion?.text).toBe("Explain the fix."));
+		act(() => first.result.current?.suggestion?.onDismiss());
+		await waitFor(() => expect(first.result.current.suggestion).toBeUndefined());
 		first.unmount();
 		client.removeQueries({ queryKey: ["conversation-prompt-suggestion"] });
 		const second = renderHook(({ snapshot }) => useConversationPromptSuggestion(snapshot, true), { wrapper, initialProps: { snapshot: settled } });
-		expect(second.result.current).toBeUndefined();
+		expect(second.result.current.suggestion).toBeUndefined();
 		expect(post).toHaveBeenCalledOnce();
 		post.mockResolvedValue({ data: { turnId: "turn-2", prompt: "Review the new reply." } });
 		second.rerender({ snapshot: { ...settled, turns: [...settled.turns, { id: "turn-2", state: "completed", requestedAt: "" }] } });
-		await waitFor(() => expect(second.result.current?.text).toBe("Review the new reply."));
+		await waitFor(() => expect(second.result.current?.suggestion?.text).toBe("Review the new reply."));
 		expect(post).toHaveBeenCalledTimes(2);
 	});
 
@@ -175,12 +175,12 @@ describe("useConversationPromptSuggestion", () => {
 		const first = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
 		await waitFor(() => expect(post).toHaveBeenCalledTimes(3), { timeout: 3500 });
 		await waitFor(() => expect(client.isFetching()).toBe(0));
-		expect(first.result.current).toBeUndefined();
+		expect(first.result.current.suggestion).toBeUndefined();
 		expect(client.getQueryCache().getAll()[0].state.status).toBe("error");
 		first.unmount();
 		post.mockResolvedValue({ data: { turnId: "turn-1", prompt: "Retry succeeded." } });
 		const second = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
-		await waitFor(() => expect(second.result.current?.text).toBe("Retry succeeded."));
+		await waitFor(() => expect(second.result.current?.suggestion?.text).toBe("Retry succeeded."));
 		expect(post).toHaveBeenCalledTimes(4);
 	});
 
@@ -191,12 +191,12 @@ describe("useConversationPromptSuggestion", () => {
 			wrapper: wrapperFor(client), initialProps: { snapshot: settled },
 		});
 		await waitFor(() => expect(client.getQueryCache().getAll().find((query) => query.queryKey[1] === "local")?.state.status).toBe("error"));
-		expect(result.current).toBeUndefined();
+		expect(result.current.suggestion).toBeUndefined();
 		expect(post).toHaveBeenCalledOnce();
 		rerender({ snapshot: { ...settled, controller: { state: "connecting" } } });
 		expect(post).toHaveBeenCalledOnce();
 		rerender({ snapshot: settled });
-		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Explain the fix."));
 		expect(post).toHaveBeenCalledTimes(2);
 	});
 
@@ -213,9 +213,9 @@ describe("useConversationPromptSuggestion", () => {
 		await waitFor(() => expect(post).toHaveBeenCalledOnce());
 		rerender({ snapshot: { ...settled, turns: [...settled.turns, { id: "turn-2", state: "completed", requestedAt: "" }] } });
 		expect(firstSignal?.aborted).toBe(true);
-		await waitFor(() => expect(result.current?.text).toBe("Review the tests."));
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Review the tests."));
 		await act(async () => resolveFirst({ data: { turnId: "turn-1", prompt: "Obsolete." } }));
-		expect(result.current?.text).toBe("Review the tests.");
+		expect(result.current?.suggestion?.text).toBe("Review the tests.");
 		expect(clientForSessionHost).toHaveBeenCalledWith("host-2");
 	});
 
@@ -223,8 +223,8 @@ describe("useConversationPromptSuggestion", () => {
 		const { result, rerender } = renderHook(({ snapshot, hostId }) => useConversationPromptSuggestion(snapshot, true, hostId), {
 			wrapper: wrapperFor(), initialProps: { snapshot: settled, hostId: "host-1" },
 		});
-		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
-		const ids = new Set([result.current?.id]);
+		await waitFor(() => expect(result.current?.suggestion?.text).toBe("Explain the fix."));
+		const ids = new Set([result.current?.suggestion?.id]);
 		for (const props of [
 			{ snapshot: { ...settled, sessionId: "session-2" }, hostId: "host-1" },
 			{ snapshot: { ...settled, conversationId: "conversation-2" }, hostId: "host-1" },
@@ -232,9 +232,9 @@ describe("useConversationPromptSuggestion", () => {
 			{ snapshot: settled, hostId: "host-2" },
 		]) {
 			rerender(props);
-			expect(result.current).toBeUndefined();
-			await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
-			ids.add(result.current?.id);
+			expect(result.current.suggestion).toBeUndefined();
+			await waitFor(() => expect(result.current?.suggestion?.text).toBe("Explain the fix."));
+			ids.add(result.current?.suggestion?.id);
 		}
 		expect(post).toHaveBeenCalledTimes(5);
 		expect(ids.size).toBe(5);
@@ -253,10 +253,10 @@ describe("useConversationPromptSuggestion", () => {
 		const wrapper = wrapperFor(client);
 		const first = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
 		await waitFor(() => expect(client.isFetching()).toBe(0));
-		expect(first.result.current).toBeUndefined();
+		expect(first.result.current.suggestion).toBeUndefined();
 		first.unmount();
 		const second = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
-		expect(second.result.current).toBeUndefined();
+		expect(second.result.current.suggestion).toBeUndefined();
 		expect(post).toHaveBeenCalledOnce();
 	});
 });

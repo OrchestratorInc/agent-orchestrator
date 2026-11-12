@@ -2,6 +2,7 @@ import { $getRoot, type LexicalEditor } from "lexical";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { appI18n } from "../../i18n";
 import { readChatSessionDraft, writeChatComposerText } from "../../lib/chat-drafts";
 import { lexicalEditorText, typeAndPressInLexicalEditor, typeInLexicalEditor } from "../../test/lexical";
 import { TooltipProvider } from "../ui/tooltip";
@@ -194,5 +195,167 @@ describe("next-message suggestion", () => {
 		await userEvent.keyboard("{Control>}z{/Control}");
 		expect(lexicalEditorText(field)).toBe("");
 		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(suggestion.text);
+	});
+});
+
+describe("draft optimization", () => {
+	const polished = "Fix the login bug.\n\nAcceptance: the auth tests pass.";
+
+	function renderOptimizer(props: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
+		const onSend = vi.fn();
+		const onOptimizeDraft = vi.fn(async () => polished);
+		const view = render(
+			<ChatComposer onSend={onSend} onOptimizeDraft={onOptimizeDraft} {...props} />,
+			{ wrapper: TooltipProvider },
+		);
+		return { ...view, onSend, onOptimizeDraft, field: screen.getByRole("combobox") };
+	}
+
+	it("offers the polish as a proposal without touching the draft", async () => {
+		const { field, onOptimizeDraft, onSend } = renderOptimizer();
+		await typeInLexicalEditor(field, "fix login bug");
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.polishAction") }));
+		await waitFor(() => expect(screen.getByTestId("optimized-draft").textContent).toBe(polished));
+		expect(onOptimizeDraft).toHaveBeenCalledWith("fix login bug");
+		// The user's words are still the draft: an offer, not an edit.
+		expect(lexicalEditorText(field)).toBe("fix login bug");
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("replaces the draft only after the proposal is accepted", async () => {
+		const { field } = renderOptimizer();
+		await typeInLexicalEditor(field, "fix login bug");
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.polishAction") }));
+		await waitFor(() => expect(screen.getByTestId("optimized-draft")).toBeInTheDocument());
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.useDraft") }));
+		expect(lexicalEditorText(field)).toBe(polished);
+		expect(screen.queryByTestId("optimized-draft")).not.toBeInTheDocument();
+	});
+
+	it("accepts the proposal with Tab and cancels it with Escape", async () => {
+		const { field } = renderOptimizer();
+		await typeInLexicalEditor(field, "fix login bug");
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.polishAction") }));
+		await waitFor(() => expect(screen.getByTestId("optimized-draft")).toBeInTheDocument());
+		await userEvent.keyboard("{Tab}");
+		expect(lexicalEditorText(field)).toBe(polished);
+
+		await typeInLexicalEditor(field, "!");
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.polishAction") }));
+		await waitFor(() => expect(screen.getByTestId("optimized-draft")).toBeInTheDocument());
+		fireEvent.keyDown(field, { key: "Escape" });
+		expect(screen.queryByTestId("optimized-draft")).not.toBeInTheDocument();
+		expect(lexicalEditorText(field)).toBe(`${polished}!`);
+	});
+
+	it("drops the proposal when the draft is edited, so Tab cannot replace newer words", async () => {
+		const { field } = renderOptimizer();
+		await typeInLexicalEditor(field, "fix login bug");
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.polishAction") }));
+		await waitFor(() => expect(screen.getByTestId("optimized-draft")).toBeInTheDocument());
+		await typeInLexicalEditor(field, " now");
+		expect(screen.queryByTestId("optimized-draft")).not.toBeInTheDocument();
+		await userEvent.keyboard("{Tab}");
+		expect(lexicalEditorText(field)).toBe("fix login bug now");
+	});
+
+	it("keeps the draft and reports a retryable failure when the request fails", async () => {
+		const onOptimizeDraft = vi.fn(async () => undefined);
+		render(
+			<ChatComposer onSend={vi.fn()} onOptimizeDraft={onOptimizeDraft} optimizeFailure="unavailable" />,
+			{ wrapper: TooltipProvider },
+		);
+		const field = screen.getByRole("combobox");
+		await typeInLexicalEditor(field, "fix login bug");
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.polishAction") }));
+		await waitFor(() => expect(onOptimizeDraft).toHaveBeenCalled());
+		expect(lexicalEditorText(field)).toBe("fix login bug");
+		expect(screen.getByRole("status")).toHaveTextContent(/Your draft is unchanged/);
+	});
+
+	it("disables the control while a request is pending or the composer cannot send", () => {
+		// An empty composer advertises the next-message action, which is what the
+		// label says; the disable rule is the same for both actions.
+		const pending = renderOptimizer({ optimizing: true });
+		expect(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.suggestAction") })).toBeDisabled();
+		pending.unmount();
+		renderOptimizer({ disabled: true });
+		expect(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.suggestAction") })).toBeDisabled();
+	});
+
+	it("drops an in-flight polish when the session switches under it", async () => {
+		// Two sessions can hold the same words, so text alone cannot prove the
+		// answer still belongs to the draft on screen.
+		const sessionA = "optimize-scope-switch-a";
+		const sessionB = "optimize-scope-switch-b";
+		writeChatComposerText(sessionB, "fix login bug");
+		const pendingPolish = Promise.withResolvers<string>();
+		const onOptimizeDraft = vi.fn(() => pendingPolish.promise);
+		const view = render(
+			<ChatComposer onSend={vi.fn()} onOptimizeDraft={onOptimizeDraft} draftSessionId={sessionA} />,
+			{ wrapper: TooltipProvider },
+		);
+		const field = screen.getByRole("combobox");
+		await typeInLexicalEditor(field, "fix login bug");
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.polishAction") }));
+		expect(onOptimizeDraft).toHaveBeenCalledWith("fix login bug");
+
+		view.rerender(
+			<ChatComposer onSend={vi.fn()} onOptimizeDraft={onOptimizeDraft} draftSessionId={sessionB} />,
+		);
+		await act(async () => {
+			pendingPolish.resolve(polished);
+		});
+		expect(screen.queryByTestId("optimized-draft")).not.toBeInTheDocument();
+		expect(lexicalEditorText(field)).toBe("fix login bug");
+	});
+
+	it("asks for a next-message suggestion from an empty composer", async () => {
+		const onRefreshPromptSuggestion = vi.fn();
+		const onOptimizeDraft = vi.fn(async () => polished);
+		render(
+			<ChatComposer onSend={vi.fn()} onOptimizeDraft={onOptimizeDraft} onRefreshPromptSuggestion={onRefreshPromptSuggestion} />,
+			{ wrapper: TooltipProvider },
+		);
+		const field = screen.getByRole("combobox");
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.promptSuggestion.suggestAction") }));
+		expect(onRefreshPromptSuggestion).toHaveBeenCalledOnce();
+		expect(onOptimizeDraft).not.toHaveBeenCalled();
+		expect(lexicalEditorText(field)).toBe("");
+	});
+});
+
+describe("slash command catalog states", () => {
+	it("reports an agent that really has no commands", async () => {
+		const { field } = renderComposer({ skills: [], skillsLoaded: true });
+		await typeInLexicalEditor(field, "/");
+		expect(await screen.findByTestId("slash-catalog-status")).toHaveTextContent(appI18n.t("chat.slashCatalog.empty"));
+	});
+
+	it("says it is still loading rather than claiming there are none", async () => {
+		const { field } = renderComposer({ skills: [], skillsLoaded: false });
+		await typeInLexicalEditor(field, "/");
+		expect(await screen.findByTestId("slash-catalog-status")).toHaveTextContent(appI18n.t("chat.slashCatalog.loading"));
+	});
+
+	it("shows a failure with a retry instead of an empty catalog", async () => {
+		const onRetrySkills = vi.fn();
+		const { field } = renderComposer({ skills: [], skillsLoaded: true, skillsError: "controller not ready", onRetrySkills });
+		await typeInLexicalEditor(field, "/");
+		expect(await screen.findByTestId("slash-catalog-status")).toHaveTextContent(appI18n.t("chat.slashCatalog.errorDetail", { message: "controller not ready" }));
+		await userEvent.click(screen.getByRole("button", { name: appI18n.t("chat.slashCatalog.retry") }));
+		expect(onRetrySkills).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the ordinary menu, and never invents /goal, when commands exist", async () => {
+		const { field } = renderComposer({
+			skills: [{ name: "review", displayName: "review", description: "Review changes", source: "user" }],
+			skillsLoaded: true,
+		});
+		await typeInLexicalEditor(field, "/");
+		const menu = await screen.findByRole("listbox");
+		expect(menu).toHaveTextContent("review");
+		expect(screen.queryByTestId("slash-catalog-status")).not.toBeInTheDocument();
+		expect(menu).not.toHaveTextContent("/goal");
 	});
 });

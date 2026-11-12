@@ -1463,8 +1463,9 @@ export function CloudSessionChatSurface({
 	useChatMessageFocus(sessionUiKey(session.id), undefined, eventsQuery.isSuccess, focusMessage);
 	// A next-message suggestion once a turn settles, as a local chat offers, only
 	// while this person can send and the chat is in front.
-	const promptSuggestion = useCloudPromptSuggestion(session, snapshot,
+	const promptSuggestionState = useCloudPromptSuggestion(session, snapshot,
 		chatInFront && !send.isPending && !activeTurn && !startStopped && !readOnly && !lease.locked && !newWorkDisabled && !controllerTransitioning);
+	const promptSuggestion = promptSuggestionState.suggestion;
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
 		onConversationWorkChange?.({
@@ -1726,6 +1727,7 @@ export function CloudSessionChatSurface({
 			onOpenReviewerChat={onOpenReviewerChat}
 			reviewerChatSelected={reviewerChatSelected}
 			promptSuggestion={promptSuggestion}
+			onRefreshPromptSuggestion={promptSuggestionState.refresh}
 			annotationNavigationRequest={annotationNavigation.request}
 			onAnnotationNavigationHandled={annotationNavigation.handled}
 			reviewerTarget={reviewerTarget}

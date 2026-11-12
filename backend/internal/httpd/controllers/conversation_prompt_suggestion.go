@@ -3,8 +3,10 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
@@ -14,6 +16,12 @@ import (
 
 type promptSuggestionService interface {
 	PromptSuggestion(context.Context, domain.SessionID, string) (string, error)
+}
+
+// draftPromptSuggestionService is the optional draft-aware form. A service that
+// only offers next-message suggestions still serves the empty-draft case.
+type draftPromptSuggestionService interface {
+	PromptDraftSuggestion(context.Context, domain.SessionID, string, string) (string, error)
 }
 
 func (c *ConversationsController) promptSuggestion(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +38,31 @@ func (c *ConversationsController) promptSuggestion(w http.ResponseWriter, r *htt
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_TURN_ID_INVALID", "turnId must be a nonempty identifier of at most 128 bytes", nil)
 		return
 	}
-	prompt, err := svc.PromptSuggestion(r.Context(), sessionID(r), req.TurnID)
+	// The draft is the composer's text. It is bounded before the provider is
+	// asked, so an oversized draft is a validation error rather than a slow
+	// round trip that discards its own answer.
+	if utf8.RuneCountInString(req.Draft) > chatsvc.PromptSuggestionDraftLimit {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_PROMPT_DRAFT_TOO_LONG",
+			fmt.Sprintf("draft must be at most %d characters", chatsvc.PromptSuggestionDraftLimit), nil)
+		return
+	}
+	var prompt string
+	var err error
+	if strings.TrimSpace(req.Draft) != "" {
+		// A draft can only be polished by a service that accepts one. Falling back
+		// to PromptSuggestion here would answer with a next-message suggestion the
+		// caller never asked for, about text it never sent: a wrong answer is worse
+		// than a clear refusal, so an unsupported draft is reported, not degraded.
+		draftSvc, ok := c.Svc.(draftPromptSuggestionService)
+		if !ok {
+			envelope.WriteAPIError(w, r, http.StatusNotImplemented, "not_implemented", "CHAT_PROMPT_DRAFT_UNSUPPORTED",
+				"This daemon cannot polish a draft; retry with an empty draft to get a next-message suggestion", nil)
+			return
+		}
+		prompt, err = draftSvc.PromptDraftSuggestion(r.Context(), sessionID(r), req.TurnID, req.Draft)
+	} else {
+		prompt, err = svc.PromptSuggestion(r.Context(), sessionID(r), req.TurnID)
+	}
 	if err != nil {
 		if r.Context().Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			return

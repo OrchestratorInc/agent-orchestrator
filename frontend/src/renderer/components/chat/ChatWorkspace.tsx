@@ -350,6 +350,13 @@ export interface ChatWorkspaceProps {
 	onAnnotationNavigationHandled?: (id: string) => void;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
+	/** Ask again for a next-message suggestion on an empty composer. */
+	onRefreshPromptSuggestion?: () => void;
+	/** Ask the provider to polish the composer's draft; absent means no control. */
+	onOptimizeDraft?: (draft: string) => Promise<string | undefined>;
+	optimizeFailure?: "busy" | "stale" | "unavailable" | "too-long";
+	/** One polish request is in flight. */
+	optimizing?: boolean;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
 	uiSessionId?: string;
 	/** Durable draft owner for a conversation that is not a worker session. */
@@ -551,6 +558,10 @@ export interface ChatWorkspaceProps {
 	activateBranchError?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	/** The catalog read's state, so an empty list can be told from an unread one. */
+	skillsLoaded?: boolean;
+	skillsError?: string;
+	onRetrySkills?: () => void;
 	/** Worktree paths offered for `@`. */
 	filePaths?: string[];
 	/** Told what follows "@" in the composer, for files that are searched rather than listed (see ChatComposer). */
@@ -702,6 +713,10 @@ function ChatWorkspaceContent({
 	onAnnotationNavigationHandled,
 	snapshot,
 	promptSuggestion,
+	onRefreshPromptSuggestion,
+	onOptimizeDraft,
+	optimizeFailure,
+	optimizing,
 	sessionTitle,
 	sessionRole = "worker",
 	assetBaseUrl,
@@ -800,6 +815,9 @@ function ChatWorkspaceContent({
 	activateBranchPending,
 	activateBranchError,
 	skills,
+	skillsLoaded,
+	skillsError,
+	onRetrySkills,
 	filePaths,
 	filePathsTruncated,
 	onFileQuery,
@@ -2026,6 +2044,12 @@ function ChatWorkspaceContent({
 										sentMessages={sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
+										onRefreshPromptSuggestion={onRefreshPromptSuggestion}
+										onOptimizeDraft={!queueEdit && !composerApproval && !composerElicitation && !newWorkDisabled &&
+											!controllerTransitioning && !agentInputDisabled && snapshot.controller.state === "ready"
+											? onOptimizeDraft : undefined}
+										optimizeFailure={optimizeFailure}
+										optimizing={optimizing}
 										promptSuggestion={!queueEdit && !composerApproval && !composerElicitation && !turn &&
 											!busy && !sendPending && !steerPending && !agentInputDisabled && !newWorkDisabled &&
 											!controllerTransitioning && !loadingQuietly && !agentResuming &&
@@ -2095,6 +2119,9 @@ function ChatWorkspaceContent({
 										// look like a regression.
 										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
 										skills={skills}
+										skillsLoaded={skillsLoaded}
+										skillsError={skillsError}
+										onRetrySkills={onRetrySkills}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onFileQuery={onFileQuery}

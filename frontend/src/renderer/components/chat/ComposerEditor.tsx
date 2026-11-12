@@ -70,7 +70,22 @@ export type ComposerEditorSnapshot = {
 	caret?: number;
 };
 
-export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
+/**
+ * A text the composer offers without putting it in the draft.
+ *
+ * `replacesDraft` marks a polished version of what the user already wrote: it is
+ * shown as a proposal, and only Tab (or an explicit accept) replaces the draft
+ * with it. Without it the suggestion is the next message, shown as ghost text in
+ * an empty composer.
+ */
+export type ComposerPromptSuggestion = {
+	id: string;
+	text: string;
+	onDismiss?: () => void;
+	/** Called once the draft has been replaced with the proposal. */
+	onAccept?: () => void;
+	replacesDraft?: boolean;
+};
 
 export type ComposerEditorHandle = {
 	focus(): void;
@@ -570,22 +585,33 @@ const EditorBridge = forwardRef<
 			if (event?.isComposing || event?.keyCode === 229 || event?.shiftKey || editor.isComposing()) return false;
 			if (key === "Enter" && !enterSends && !event?.metaKey && !event?.ctrlKey) return false;
 			const snapshot = editorSnapshot();
-			if (
-				key === "Tab" && promptSuggestion && !snapshot.text &&
-				!event?.altKey && !event?.ctrlKey && !event?.metaKey
-			) {
-				const selection = $getSelection();
-				if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
-				$addUpdateTag(HISTORY_PUSH_TAG);
-				// End a generated @path or /skill with a boundary, including after draft
-				// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
-				const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
-				selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
-				if (event) {
-					completionHandledEvents.add(event);
-					event.preventDefault();
+			if (key === "Tab" && !event?.altKey && !event?.ctrlKey && !event?.metaKey) {
+				// A polished proposal replaces what the user wrote. Tab is the accept
+				// gesture for both kinds of suggestion, so it must not be needed twice.
+				if (promptSuggestion?.replacesDraft) {
+					$addUpdateTag(HISTORY_PUSH_TAG);
+					$replaceEditorText(promptSuggestion.text);
+					promptSuggestion.onAccept?.();
+					if (event) {
+						completionHandledEvents.add(event);
+						event.preventDefault();
+					}
+					return true;
 				}
-				return true;
+				if (promptSuggestion && !snapshot.text) {
+					const selection = $getSelection();
+					if (!$isRangeSelection(selection) || !selection.isCollapsed()) return false;
+					$addUpdateTag(HISTORY_PUSH_TAG);
+					// End a generated @path or /skill with a boundary, including after draft
+					// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
+					const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
+					selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
+					if (event) {
+						completionHandledEvents.add(event);
+						event.preventDefault();
+					}
+					return true;
+				}
 			}
 			const value = onComplete(snapshot, key);
 			if (snapshot.trigger && value) {
@@ -621,7 +647,10 @@ const EditorBridge = forwardRef<
 			COMMAND_PRIORITY_HIGH,
 		);
 		const removeEscape = editor.registerCommand(KEY_ESCAPE_COMMAND, (event) => {
-			if (!promptSuggestion || $serializeComposer() || event.isComposing || editor.isComposing()) return false;
+			if (!promptSuggestion || event.isComposing || editor.isComposing()) return false;
+			// Ghost text only exists over an empty composer; a proposal sits over the
+			// draft it would replace, so Escape must reach it while text is present.
+			if (!promptSuggestion.replacesDraft && $serializeComposer()) return false;
 			onDismissSuggestion();
 			completionHandledEvents.add(event);
 			event.preventDefault();
@@ -708,9 +737,14 @@ export const ComposerEditor = forwardRef<
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
 	const [empty, setEmpty] = useState(true);
-	const suggestion = empty && !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+	const visibleSuggestion = !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
+	// A polished version of a draft the user already wrote is a proposal: the
+	// editor keeps their words until Tab or an explicit accept replaces them.
+	// Everything else is the next message, which only applies to an empty draft.
+	const proposal = visibleSuggestion?.replacesDraft ? visibleSuggestion : undefined;
+	const suggestion = !proposal && empty ? visibleSuggestion : undefined;
 	const dismissSuggestion = useCallback(() => {
 		if (promptSuggestion) {
 			setDismissedSuggestionId(promptSuggestion.id);
@@ -756,7 +790,7 @@ export const ComposerEditor = forwardRef<
 						<ContentEditable
 							aria-label={label}
 							aria-placeholder={placeholder}
-							aria-describedby={suggestion ? suggestionDescriptionId : undefined}
+							aria-describedby={suggestion || proposal ? suggestionDescriptionId : undefined}
 							placeholder={placeholderNode}
 							aria-disabled={disabled || undefined}
 							role="combobox"
@@ -765,7 +799,7 @@ export const ComposerEditor = forwardRef<
 							aria-activedescendant={
 								menuOpen ? `${menuId}-option-${activeIndex}` : undefined
 							}
-							aria-autocomplete={suggestion ? "both" : "list"}
+							aria-autocomplete={suggestion || proposal ? "both" : "list"}
 							onCompositionStart={() => onCompositionChange(true)}
 							onCompositionEnd={() => onCompositionChange(false)}
 							onKeyDown={(event) => {
@@ -785,9 +819,11 @@ export const ComposerEditor = forwardRef<
 					ErrorBoundary={LexicalErrorBoundary}
 				/>
 				{concealed ? <div aria-hidden="true">{placeholderNode()}</div> : null}
-				{suggestion ? (
+				{suggestion || proposal ? (
 					<span id={suggestionDescriptionId} className="sr-only">
-						{t("chat.promptSuggestion.description", { prompt: suggestion.text })}
+						{proposal
+							? t("chat.promptSuggestion.polishedDescription", { prompt: proposal.text })
+							: t("chat.promptSuggestion.description", { prompt: suggestion!.text })}
 					</span>
 				) : null}
 				<HistoryPlugin />
@@ -795,7 +831,7 @@ export const ComposerEditor = forwardRef<
 					ref={ref}
 					disabled={disabled}
 					enterSends={enterSends}
-					promptSuggestion={suggestion}
+					promptSuggestion={proposal ?? suggestion}
 					onDismissSuggestion={dismissSuggestion}
 					onEmptyChange={setEmpty}
 					attachedImages={attachedImages}

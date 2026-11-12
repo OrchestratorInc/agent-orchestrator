@@ -1673,7 +1673,19 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 			return (data?.skills ?? []) as ChatSkill[];
 		},
 	});
-	return { skills: query.data ?? [], isLoading: query.isLoading };
+	return {
+		skills: query.data ?? [],
+		isLoading: query.isLoading,
+		/**
+		 * The catalog was actually read. An empty list is a real answer the
+		 * composer must be able to tell from "not asked yet", so `/` only reports
+		 * "this agent reported no commands" once this is true.
+		 */
+		loaded: query.isSuccess,
+		/** Why the last read failed, already turned into display text. */
+		error: query.error ? apiErrorMessage(query.error) : undefined,
+		retry: () => void query.refetch(),
+	};
 }
 
 /**

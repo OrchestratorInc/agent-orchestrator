@@ -50,7 +50,8 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, WandSparkles, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
@@ -209,6 +210,9 @@ export const ChatComposer = memo(function ChatComposer({
 	approval,
 	elicitation,
 	skills = [],
+	skillsLoaded,
+	skillsError,
+	onRetrySkills,
 	filePaths = [],
 	filePathsTruncated,
 	onFileQuery,
@@ -251,6 +255,10 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds,
 	emptyPlaceholder,
 	promptSuggestion,
+	onOptimizeDraft,
+	optimizeFailure,
+	optimizing,
+	onRefreshPromptSuggestion,
 	onSelectAnnotation,
 	sentMessages,
 	sentMessagesScope,
@@ -303,8 +311,26 @@ export const ChatComposer = memo(function ChatComposer({
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
 	promptSuggestion?: ComposerPromptSuggestion;
+	/**
+	 * Ask the provider to polish the current draft. Absent means the composer
+	 * offers no prediction/optimization control at all.
+	 */
+	onOptimizeDraft?: (draft: string) => Promise<string | undefined>;
+	/** Why the last optimization produced nothing; shown until the next attempt. */
+	optimizeFailure?: "busy" | "stale" | "unavailable" | "too-long";
+	/** A polish request is in flight. */
+	optimizing?: boolean;
+	/** Ask again for a next-message suggestion on an empty composer. */
+	onRefreshPromptSuggestion?: () => void;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	/**
+	 * The catalog read's own state. Without it an empty `skills` is ambiguous:
+	 * "this agent has none" and "it has not answered yet" need different words.
+	 */
+	skillsLoaded?: boolean;
+	skillsError?: string;
+	onRetrySkills?: () => void;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/**
@@ -400,6 +426,7 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
 	const translateDraft = useChatDraftTranslation();
+	const { t } = useTranslation();
 	const draftScope = useMemo<ChatDraftScope | undefined>(
 		() =>
 			draftSessionId
@@ -411,6 +438,13 @@ export const ChatComposer = memo(function ChatComposer({
 		[draftSessionId, draftSessionIncarnation],
 	);
 	const draftScopeKey = draftScope ? chatDraftScopeKey(draftScope) : undefined;
+	/**
+	 * Read at resolution time by an in-flight polish. Comparing draft text alone
+	 * cannot tell two sessions holding the same words apart, so the scope key is
+	 * what proves the answer still belongs to the draft on screen.
+	 */
+	const draftScopeKeyRef = useRef(draftScopeKey);
+	draftScopeKeyRef.current = draftScopeKey;
 	const attachmentScopeKey = queuedDraftScope
 		? chatQueuedAttachmentScopeKey(queuedDraftScope, draftSeed?.id ?? "undefined")
 		: draftScopeKey;
@@ -454,6 +488,14 @@ export const ChatComposer = memo(function ChatComposer({
 			: undefined,
 	);
 	const [steerNextRequest, setSteerNextRequest] = useState(0);
+	/**
+	 * A polished version of the draft, waiting for the user to accept it.
+	 *
+	 * Held separately from the draft: the request is an offer, not an edit. Tab or
+	 * the accept button replaces the draft; Escape or typing something else drops
+	 * the offer, and a failed request changes the draft in no way.
+	 */
+	const [optimizeProposal, setOptimizeProposal] = useState<{ id: string; text: string } | undefined>(undefined);
 	// Cmd/Ctrl held anywhere in the window turns a send-button click into a steer.
 	const [modifierHeld, setModifierHeld] = useState(false);
 	// The DOM event is the source of truth while React catches up with the draft
@@ -608,6 +650,9 @@ export const ChatComposer = memo(function ChatComposer({
 		setDeliveryUncertain(currentDraft?.composer.delivery?.state === "dispatching");
 		setAttachmentDraftPersistenceError(null);
 		automaticDeliveryRecoveryAttempted.current = undefined;
+		// A polish belongs to the draft it was requested for. Switching sessions
+		// leaves a different draft under the offer, so it must not survive the move.
+		setOptimizeProposal(undefined);
 	}, [draftScope, draftScopeKey]);
 	const fileAttachments = useFileAttachments({
 		initialAttachments: restoredAttachments,
@@ -658,6 +703,23 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [fileQuery, onFileQuery]);
 
 	const menuOpen = suggestions.length > 0;
+	/**
+	 * Why `/` has nothing to offer.
+	 *
+	 * An empty catalog is only trustworthy once the read succeeded: before that
+	 * the menu says it is still asking, and a failed read says what failed and
+	 * offers a retry rather than pretending the agent has no commands. `slashCommands`
+	 * includes AO's own `/compact`, so it is the catalog actually offered.
+	 */
+	const slashStatus: "loading" | "empty" | "error" | undefined =
+		trigger?.kind !== "skill" || suggestions.length > 0
+			? undefined
+			// A query that simply matched nothing is a filtered menu, not a catalog
+			// state: it keeps today's behavior and stays closed.
+			: skillsError ? "error"
+				: !skillsLoaded ? "loading"
+					: slashCommands.length === 0 ? "empty"
+						: undefined;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
 	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
@@ -1162,6 +1224,44 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [draftScope]);
 
 	const draftCaretRef = useRef<number | undefined>(undefined);
+	/**
+	 * The prediction/optimization control.
+	 *
+	 * Empty composer: it asks for the next message, which lands as the existing
+	 * ghost text and is still accepted with Tab. Non-empty composer: it asks the
+	 * daemon to polish what is there and offers the answer as a proposal, so the
+	 * user's own words are never replaced without their consent.
+	 */
+	const optimizeAvailable = Boolean(onOptimizeDraft);
+	const canOptimize = optimizeAvailable && !optimizing && !controlsDisabled && !queuedEditRecovery &&
+		!draftMutationPending && !submitting && !editingQueuedTurnId;
+	const runOptimize = useCallback(async () => {
+		if (!canOptimize) return;
+		// An empty composer has nothing to polish: the button is the voluntary form
+		// of the next-message hint, which stays out of the draft until Tab.
+		if (!textRef.current.trim()) {
+			onRefreshPromptSuggestion?.();
+			editor.current?.focus();
+			return;
+		}
+		const draft = textRef.current;
+		const scope = draftScopeKeyRef.current;
+		const text = await onOptimizeDraft?.(draft);
+		if (!text) return;
+		// A session change leaves a different draft (possibly with identical words)
+		// under the offer, so the scope key, not the text, decides ownership.
+		if (draftScopeKeyRef.current !== scope) return;
+		// A draft that changed while the request ran is no longer what was polished,
+		// so the answer is dropped rather than offered against the wrong text.
+		if (textRef.current !== draft) return;
+		setOptimizeProposal({ id: `optimize-${Date.now()}`, text });
+		editor.current?.focus();
+	}, [canOptimize, onOptimizeDraft, onRefreshPromptSuggestion]);
+	const dismissOptimizeProposal = useCallback(() => setOptimizeProposal(undefined), []);
+	// Tab acceptance replaces the editor text inside the editor itself, so this
+	// only retires the offer; running the button's path here would rewrite the
+	// same text a second time.
+	const clearOptimizeProposal = useCallback(() => setOptimizeProposal(undefined), []);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
@@ -1169,6 +1269,9 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
+		// A proposal answers the text that was sent for polishing. Editing the draft
+		// makes it stale, and Tab must never replace newer words with it.
+		if (snapshot.text !== previousText) setOptimizeProposal(undefined);
 		onQueuedDraftChange?.(snapshot.text);
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
@@ -1199,6 +1302,18 @@ export const ChatComposer = memo(function ChatComposer({
 			setDismissedKey(null);
 		}
 	}, [onDraftInput, onQueuedDraftChange, optimisticSend, persistComposerText]);
+	// The button's accept writes the proposal into the editor itself, which is a
+	// programmatic update: the editor suppresses its own change notification for
+	// those, so the draft state is published here instead.
+	const acceptOptimizeProposal = useCallback(() => {
+		const proposal = optimizeProposal;
+		if (!proposal) return;
+		setOptimizeProposal(undefined);
+		editor.current?.setText(proposal.text);
+		const snapshot = editor.current?.getSnapshot();
+		if (snapshot) onEditorChange(snapshot);
+		editor.current?.focus();
+	}, [onEditorChange, optimizeProposal]);
 	// A walk holds one branch's prompts. Once another branch or conversation is
 	// active they are abandoned history, so put the user's own draft back.
 	const walkedScope = useRef(sentMessagesScope);
@@ -1924,6 +2039,31 @@ export const ChatComposer = memo(function ChatComposer({
 					/>
 				) : null}
 
+				{/* `/` with nothing to show says which of the three reasons applies
+				    rather than drawing an empty panel or typing a bare slash. */}
+				{slashStatus ? (
+					<div
+						role="status"
+						data-testid="slash-catalog-status"
+						className="mx-1.5 flex items-start gap-2 rounded-md border border-border/60 bg-interactive-hover/40 px-2 py-1.5 text-xs text-muted-foreground"
+					>
+						<span className="min-w-0 flex-1 leading-snug">
+							{slashStatus === "loading"
+								? t("chat.slashCatalog.loading")
+								: slashStatus === "empty"
+									? t("chat.slashCatalog.empty")
+									: skillsError
+										? t("chat.slashCatalog.errorDetail", { message: skillsError })
+										: t("chat.slashCatalog.error")}
+						</span>
+						{slashStatus === "error" && onRetrySkills ? (
+							<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={onRetrySkills}>
+								{t("chat.slashCatalog.retry")}
+							</Button>
+						) : null}
+					</div>
+				) : null}
+
 				{editingQueuedTurnId ? (
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
 						<span>Editing queued message</span>
@@ -2050,10 +2190,36 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 
+				{optimizeProposal ? (
+					<div
+						role="group"
+						aria-label={t("chat.promptSuggestion.polishedDraftLabel")}
+						className="mx-1.5 rounded-md border border-border/60 bg-interactive-hover/40 p-2 text-xs"
+					>
+						<p className="mb-1 text-[11px] font-medium text-muted-foreground">{t("chat.promptSuggestion.polishedDraftLabel")}</p>
+						<p className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-foreground" data-testid="optimized-draft">
+							{optimizeProposal.text}
+						</p>
+						<div className="mt-1.5 flex items-center gap-1.5">
+							<Button type="button" size="sm" variant="secondary" onClick={acceptOptimizeProposal}>
+								{t("chat.promptSuggestion.useDraft")}
+							</Button>
+							<Button type="button" size="sm" variant="ghost" onClick={dismissOptimizeProposal}>
+								{t("chat.promptSuggestion.keepMine")}
+							</Button>
+							<span className="ml-auto text-[11px] text-muted-foreground">{t("chat.promptSuggestion.acceptHint")}</span>
+						</div>
+					</div>
+				) : null}
+
 				<ComposerEditor
 					ref={editor}
 					images={composerImages}
-					promptSuggestion={willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion}
+					promptSuggestion={
+						optimizeProposal
+							? { id: optimizeProposal.id, text: optimizeProposal.text, replacesDraft: true, onAccept: clearOptimizeProposal, onDismiss: dismissOptimizeProposal }
+							: willQueue || starting || editingQueuedTurnId || staged ? undefined : promptSuggestion
+					}
 					disabled={Boolean(disabled || queuedEditRecovery || (!optimisticSend && (submitting || draftMutationPending)))}
 					enterSends={enterSends}
 					concealed={sendConcealed && !optimisticSend}
@@ -2076,6 +2242,17 @@ export const ChatComposer = memo(function ChatComposer({
 					onPaste={onPaste}
 				/>
 
+				{optimizeFailure ? (
+					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
+						{optimizeFailure === "busy"
+							? t("chat.promptSuggestion.failure.busy")
+							: optimizeFailure === "stale"
+								? t("chat.promptSuggestion.failure.stale")
+								: optimizeFailure === "too-long"
+									? t("chat.promptSuggestion.failure.tooLong")
+									: t("chat.promptSuggestion.failure.unavailable")}
+					</p>
+				) : null}
 				{attachmentError ? (
 					<p role="alert" className="px-1.5 text-xs leading-snug text-destructive">
 						{translateDraft(attachmentError)}
@@ -2184,6 +2361,37 @@ export const ChatComposer = memo(function ChatComposer({
 							</>
 						) : null}
 						{settings}
+						{optimizeAvailable ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											disabled={!canOptimize}
+											onClick={() => void runOptimize()}
+											aria-label={hasText ? t("chat.promptSuggestion.polishAction") : t("chat.promptSuggestion.suggestAction")}
+											aria-busy={optimizing || undefined}
+											className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+										>
+											{optimizing ? (
+												<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+											) : (
+												<WandSparkles aria-hidden="true" className="size-3.5" />
+											)}
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">
+									{optimizing
+										? t("chat.promptSuggestion.polishing")
+										: hasText
+											? t("chat.promptSuggestion.polishAction")
+											: t("chat.promptSuggestion.suggestAction")}
+								</TooltipContent>
+							</Tooltip>
+						) : null}
 					</div>
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
