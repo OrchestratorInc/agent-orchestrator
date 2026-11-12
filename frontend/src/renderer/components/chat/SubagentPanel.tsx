@@ -7,7 +7,7 @@
  * subagent takes its instructions from the parent agent, not from the reader.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { InspectorSection } from "@aoagents/product-ui";
 import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, Plus } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
@@ -73,9 +73,35 @@ export function SubagentPanel({
 	);
 	const now = useNow(agents.some((agent) => agent.state === "working"));
 	const open = openId ? agents.find((agent) => agent.launch.id === openId) : undefined;
+	// The list and a conversation replace each other, so the focused control leaves the
+	// page with them. Opening a row from this list moves focus to Back, and Back returns
+	// it to the row it left. A child opened from the chat leaves focus in the chat.
+	const rootRef = useRef<HTMLDivElement>(null);
+	const [focusBackFor, setFocusBackFor] = useState<string>();
+	const returnFocusTo = useRef<string | undefined>(undefined);
+	const openFromList = useCallback(
+		(launchId: string) => {
+			setFocusBackFor(launchId);
+			onOpen(launchId);
+		},
+		[onOpen],
+	);
+	const back = useCallback(() => {
+		returnFocusTo.current = openId;
+		setFocusBackFor(undefined);
+		onBack();
+	}, [onBack, openId]);
+	useEffect(() => {
+		const launchId = returnFocusTo.current;
+		if (open || !launchId) return;
+		returnFocusTo.current = undefined;
+		const rows = rootRef.current?.querySelectorAll<HTMLElement>("[data-subagent-row]") ?? [];
+		Array.from(rows).find((row) => row.dataset.subagentRow === launchId)?.focus();
+	}, [open]);
 
 	return (
 		<div
+			ref={rootRef}
 			data-testid="subagent-panel"
 			className="cursor-chat-surface flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-background [font-size:14px]"
 		>
@@ -86,12 +112,13 @@ export function SubagentPanel({
 					harness={harness}
 					models={models}
 					now={now}
-					onBack={onBack}
+					onBack={back}
+					autoFocusBack={focusBackFor === open.launch.id}
 					disclosureOverrides={disclosureOverrides}
 					onDisclosureChange={onDisclosureChange}
 				/>
 			) : (
-				<SubagentList agents={agents} harness={harness} now={now} onOpen={onOpen} />
+				<SubagentList agents={agents} harness={harness} now={now} onOpen={openFromList} />
 			)}
 		</div>
 	);
@@ -195,6 +222,7 @@ function SubagentListRow({
 	const elapsed = elapsedLabel(agent, now);
 	return (
 		<Pressable
+			data-subagent-row={agent.launch.id}
 			className="group/agent flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover"
 			onClick={onClick}
 		>
@@ -220,6 +248,7 @@ function SubagentConversation({
 	models,
 	now,
 	onBack,
+	autoFocusBack,
 	disclosureOverrides,
 	onDisclosureChange,
 }: {
@@ -228,12 +257,18 @@ function SubagentConversation({
 	models: ChatModel[];
 	now: number;
 	onBack: () => void;
+	/** Opened from the list: focus starts on Back, where the reader's row was. */
+	autoFocusBack: boolean;
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
 	const { t } = useTranslation();
 	const elapsed = elapsedLabel(agent, now);
 	const backLabel = t("chat.subagent.panel.back");
+	const backButton = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (autoFocusBack) backButton.current?.focus();
+	}, [autoFocusBack]);
 	// The control reads "Choose a model", never the catalog's default: which model the
 	// child ran is not recorded, and naming the parent's would claim it was that one.
 	const composerModels = useMemo(
@@ -246,7 +281,7 @@ function SubagentConversation({
 			<div className="flex min-w-0 shrink-0 items-center gap-2 border-b border-border py-1.5 pl-1.5 pr-3">
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<Button type="button" variant="ghost" size="icon-sm" aria-label={backLabel} onClick={onBack}>
+						<Button ref={backButton} type="button" variant="ghost" size="icon-sm" aria-label={backLabel} onClick={onBack}>
 							<ArrowLeft aria-hidden="true" className="size-3.5" />
 						</Button>
 					</TooltipTrigger>
