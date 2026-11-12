@@ -4100,6 +4100,12 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	// handshake as pendingFolderPath below.
 	if (isSessionDeepLink(url)) {
 		const contents = getShellWebContents();
+		// The newest link wins: one queued for the readiness handshake is stale
+		// once a newer link arrives, so clear it here either way. Dropping it on
+		// the direct-send path keeps the handshake from navigating the stale
+		// link after this one; replacing it on the queue path keeps the newest
+		// click last.
+		pendingSessionDeepLink = null;
 		if (contents && !contents.isLoading()) {
 			contents.send(OPEN_SESSION_DEEP_LINK_CHANNEL, url);
 		} else {
