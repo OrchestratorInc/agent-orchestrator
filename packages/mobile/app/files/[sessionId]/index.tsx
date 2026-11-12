@@ -171,8 +171,9 @@ function SessionFilesContent() {
 	if (tab === "changes") {
 		// The list stays mounted while loading: under the clear glass bar only a
 		// scroll view insets itself below the header and its search field, and a
-		// plain view there drew the tabs under the search field.
-		const busy = loading || (!list.groups && !list.error);
+		// plain view there drew the tabs under the search field. A failed manifest
+		// read leaves a worktree pick without groups; show its error, not the spinner.
+		const busy = loading || (!list.groups && !list.error && !(error && fromManifest));
 		body = (
 			<SectionList
 				sections={busy ? [] : groups.map((group) => ({ key: group.key, title: group.title, data: group.files }))}

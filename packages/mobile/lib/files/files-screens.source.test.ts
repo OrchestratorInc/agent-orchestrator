@@ -28,6 +28,14 @@ describe("the Files list", () => {
 	});
 });
 
+describe("the Files list's loading state", () => {
+	// A worktree pick has no groups until a manifest arrives, so a failed first
+	// read must end the spinner and show its error with Try again.
+	it("shows a failed manifest read instead of loading forever", () => {
+		expect(source("../../app/files/[sessionId]/index.tsx")).toContain("!(error && fromManifest)");
+	});
+});
+
 describe("the file viewer", () => {
 	const file = source("../../app/files/[sessionId]/file.tsx");
 
