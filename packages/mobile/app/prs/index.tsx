@@ -11,6 +11,9 @@ import { Spinner } from "../../lib/Spinner";
 import { StackRootBack } from "../../lib/StackRootBack";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { useApp } from "../../lib/store";
+import { useCloud } from "../../lib/cloud/CloudProvider";
+import { isCloudHost } from "../../lib/cloud/mapping";
+import { useCloudPRSummaries } from "../../lib/cloud/useCloudPRSummaries";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../lib/usePRSummaries";
 import { useBoardFailure } from "../../lib/useBoardFailure";
@@ -32,9 +35,15 @@ export default function PRsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<PRsParams>();
-	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId } = useApp();
+	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId, cloud } = useApp();
+	const { sessionsLoaded: cloudSessionsLoaded } = useCloud();
 	const visibleHosts = useMemo(() => routeHostId ? hostStates.filter((host) => host.hostId === routeHostId) : hostStates, [hostStates, routeHostId]);
-	const projectFilter = routeHostId ? (routeProjectId ?? "all") : hostStates.length === 1 ? activeProjectId : "all";
+	// Orchestrator Cloud is one more environment beside the paired machines: a
+	// lone machine's project switcher would hide its pull requests.
+	const environmentCount = hostStates.length + (cloud ? 1 : 0);
+	const singleMachine = hostStates.length === 1 && !cloud;
+	const cloudShown = Boolean(cloud) && (!routeHostId || isCloudHost(routeHostId));
+	const projectFilter = routeHostId ? (routeProjectId ?? "all") : singleMachine ? activeProjectId : "all";
 	const prs = useMemo(() => {
 		// Hosted rows are structurally shared across sync/notification updates.
 		// Keep those identities, and deduplicate PRs within each machine only.
@@ -47,9 +56,11 @@ export default function PRsScreen() {
 		}
 		return [...byHost.values()].flatMap(sessions => collectPRs(sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter));
 	}, [allSessions, routeHostId, projectFilter]);
-	const configured = hostStates.length > 0;
-	const loading = visibleHosts.some((host) => host.loading);
-	const error = visibleHosts.every((host) => host.connection !== "open") ? visibleHosts.find((host) => host.error)?.error : null;
+	const configured = hostStates.length > 0 || Boolean(cloud);
+	const loading = visibleHosts.some((host) => host.loading) || (cloudShown && !cloudSessionsLoaded);
+	// A machine's failure fills the page only when nothing answers: with
+	// Orchestrator Cloud listed, an empty filter is just empty.
+	const error = !cloudShown && visibleHosts.every((host) => host.connection !== "open") ? visibleHosts.find((host) => host.error)?.error : null;
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshing, setRefreshing] = useState(false);
 	const toast = useToast();
@@ -74,6 +85,18 @@ export default function PRsScreen() {
 		return config ? [{ config, sessionId: session.id }] : [];
 	}), [filtered, configForHost]);
 	const summaries = usePRSummaries(summaryTargets);
+	// A cloud session's detail comes from Orchestrator Cloud, not a daemon,
+	// stamped with its pull requests' states: one merged or closed in Cloud
+	// reads afresh rather than keeping its open card until the reuse runs out.
+	const cloudSummaryTargets = useMemo(() => {
+		const states = new Map<string, string[]>();
+		for (const { pr, session } of prs) {
+			if (!isCloudHost(session.hostId)) continue;
+			states.set(session.id, [...(states.get(session.id) ?? []), `${pr.number}:${prLifecycle(pr)}`]);
+		}
+		return filtered.flatMap(({ session }) => isCloudHost(session.hostId) ? [{ sessionId: session.id, stamp: (states.get(session.id) ?? []).sort().join(",") }] : []);
+	}, [filtered, prs]);
+	const cloudSummaries = useCloudPRSummaries(cloudSummaryTargets);
 	// The page loads its details as it opens. Coming back to it from a PR or a
 	// worker reloads them once they are old, not on every return.
 	const lastSummaryRefresh = useRef(Date.now());
@@ -81,7 +104,8 @@ export default function PRsScreen() {
 		if (Date.now() - lastSummaryRefresh.current < PR_SUMMARY_REUSE_MS) return;
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
-	}, [summaries.reload]));
+		cloudSummaries.reload();
+	}, [summaries.reload, cloudSummaries.reload]));
 	const failure = useBoardFailure();
 
 	// No haptic of its own: each platform's refresh control gives the feedback
@@ -90,6 +114,7 @@ export default function PRsScreen() {
 		setRefreshing(true);
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
+		cloudSummaries.reload();
 		await refreshAll();
 		setRefreshing(false);
 	};
@@ -110,9 +135,9 @@ export default function PRsScreen() {
 	// platform puts a segmented control.
 	const listHeader = (
 		<>
-			{hostStates.length === 1 && !routeHostId ? <ProjectSwitcher /> : null}
+			{singleMachine && !routeHostId ? <ProjectSwitcher /> : null}
 			<PRFilterControl filter={filter} counts={counts} onChange={setFilter} />
-			{hostStates.length === 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
+			{singleMachine ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
 		</>
 	);
 
@@ -140,8 +165,8 @@ export default function PRsScreen() {
 						pr={pr}
 						session={session}
 						hostId={session.hostId}
-						hostName={hostStates.length > 1 ? session.hostName : undefined}
-						summary={config ? summaries.summaryFor(config, session.id, pr.number) : undefined}
+						hostName={environmentCount > 1 ? session.hostName : undefined}
+						summary={isCloudHost(session.hostId) ? cloudSummaries.summaryFor(session.id, pr.number) : config ? summaries.summaryFor(config, session.id, pr.number) : undefined}
 						onLinkCopied={linkCopied}
 					/>;
 				}}

@@ -179,9 +179,10 @@ jobs:
         with:
           # Pinned for reproducibility: bump intentionally rather than letting an
           # upstream release change CI. Must be built with Go >= the module's
-          # (go.mod is 1.27); v2.13.2 is built with go1.27 — older v2 tags
+          # (go.mod is 1.27); v2.14.0 is built with go1.27 — older v2 tags
           # (e.g. v2.1.x) are built with go1.24 and refuse to analyze 1.27 code.
-          version: v2.13.2
+          # v2.13.2 cannot read packages compiled by Go 1.27.3 or later.
+          version: v2.14.0
           working-directory: backend
           # Blocking on the full ruleset: the tree is clean at zero findings, so
           # any new issue fails CI rather than being grandfathered.

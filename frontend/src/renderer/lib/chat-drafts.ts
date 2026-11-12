@@ -1,3 +1,4 @@
+import { isExcerptSnapshot, isFlowchartOnlySnapshot, type ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 import type { ConversationContentSummary } from "../types/conversation";
 import { isCloudAttachmentReference } from "./cloud-attachment-reference";
@@ -105,6 +106,7 @@ export interface ChatComposerDelivery {
 }
 
 export interface ChatDraftExcerptReference {
+ snapshot?: ChatExcerptSnapshot;
 	order?: number;
 	id: string;
 	conversationId: string;
@@ -748,7 +750,8 @@ function isExcerptReference(value: unknown): value is ChatDraftExcerptReference 
 		typeof excerpt.conversationId === "string" && excerpt.conversationId.length > 0 &&
 		typeof excerpt.messageId === "string" && excerpt.messageId.length > 0 &&
 		typeof excerpt.revision === "number" && Number.isSafeInteger(excerpt.revision) && excerpt.revision >= 0 &&
-		typeof excerpt.text === "string" && excerpt.text.trim().length > 0 &&
+		typeof excerpt.text === "string" && (excerpt.text.trim().length > 0 || isFlowchartOnlySnapshot(excerpt.snapshot)) &&
+		(excerpt.snapshot === undefined || isExcerptSnapshot(excerpt.snapshot)) &&
 		(excerpt.role === "user" || excerpt.role === "assistant")
 	);
 }

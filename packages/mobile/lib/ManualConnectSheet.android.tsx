@@ -67,7 +67,7 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 							label="Password"
 							value={cfg.password}
 							onChangeText={form.setField("password")}
-							placeholder="Connection password"
+							placeholder="Pairing code or password"
 							returnKeyType="go"
 							onSubmitEditing={() => { if (form.canConnect && !form.busy) void form.connect(); }}
 							error={failure?.field === "password" ? failure.message : undefined}

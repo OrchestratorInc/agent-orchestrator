@@ -85,6 +85,26 @@ describe("resolveSpawnProject", () => {
 	it("prefers a valid route project when the sheet has no selection", () => {
 		expect(resolveSpawnProject(null, "scratch", ALL_PROJECTS, listed, true)).toBe("scratch");
 	});
+
+	it("starts in the project last worked in when nothing is routed", () => {
+		expect(resolveSpawnProject(null, undefined, ALL_PROJECTS, listed, true, "scratch")).toBe("scratch");
+		expect(resolveSpawnProject(null, undefined, "ao", listed, true, "scratch")).toBe("scratch");
+		expect(resolveSpawnProject(null, "ao", ALL_PROJECTS, listed, true, "scratch")).toBe("ao");
+	});
+
+	it("skips a last project the daemon no longer lists", () => {
+		expect(resolveSpawnProject(null, undefined, ALL_PROJECTS, listed, true, "removed")).toBeNull();
+		expect(resolveSpawnProject("removed", undefined, "ao", listed, true, "removed")).toBe("ao");
+	});
+
+	it("prefers the route and last project over the board filter before the project list is known", () => {
+		expect(resolveSpawnProject(null, undefined, "ao", [], false, "scratch")).toBe("scratch");
+		expect(resolveSpawnProject(null, "scratch", "ao", [], false, "ao")).toBe("scratch");
+	});
+
+	it("drops a routed project the list turns out not to name", () => {
+		expect(resolveSpawnProject("removed", "removed", "ao", listed, true)).toBe("ao");
+	});
 });
 
 describe("activeProjectLabel", () => {

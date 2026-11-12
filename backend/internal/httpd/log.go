@@ -154,6 +154,11 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					if capErr != nil && errorCode == "LINK_PREVIEW_FETCH_FAILED" && ww.Status() == http.StatusBadGateway {
 						captureSentry = false
 					}
+					// An unfinished Codex sign-in is user setup state, even when
+					// its staging step hit a deadline.
+					if errorCode == "CODEX_ACCOUNT_SETUP_INCOMPLETE" {
+						captureSentry = false
+					}
 					if captureSentry {
 						err := capErr
 						if err == nil {

@@ -17,6 +17,7 @@ export function formatCapturedFileReferences(text: string, references: readonly 
 
 /** Durable user-supplied selection; source hints never authorize filesystem access. */
 export interface ChatFileReference extends Omit<FileCodeReference, "source"> {
+	referenceFormat?: "numbered-v1";
 	id: string;
 	order: number;
 	sessionId: string;
@@ -27,6 +28,7 @@ export interface ChatFileReference extends Omit<FileCodeReference, "source"> {
 
 /** Portable path and row restrictions mirror the daemon; source identity is never rewritten. */
 export function isSupportedFileReference(ref: ChatFileReference): boolean {
+	if (ref.referenceFormat !== undefined && ref.referenceFormat !== "numbered-v1") return false;
 	const bytes = (text: string) => new TextEncoder().encode(text).length;
 	const validPath = (value: string) => value !== "" && bytes(value) <= 1024 && !/[\\\\:\0\r\n]/.test(value) &&
 		!value.startsWith("/") && value.split("/").every(part => part !== "" && part !== "." && part !== "..");
@@ -59,6 +61,7 @@ export function captureFileReference(selection: FileCodeReference, sessionId: st
 	}
 	return {
 		...selection,
+		referenceFormat: "numbered-v1",
 		id: crypto.randomUUID(),
 		order: Date.now(),
 		sessionId,

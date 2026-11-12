@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -17,10 +19,12 @@ type remoteHostStatus struct {
 	AccountLinked bool `json:"accountLinked"`
 	// AccountLinkRefused: AO Cloud refused the machine's address under its
 	// account token, so the account's devices may not list it.
-	AccountLinkRefused bool   `json:"accountLinkRefused"`
-	HostID             string `json:"hostId"`
-	Password           string `json:"password"`
-	Tunnel             struct {
+	AccountLinkRefused       bool       `json:"accountLinkRefused"`
+	HostID                   string     `json:"hostId"`
+	Password                 string     `json:"password"`
+	RequireDeviceCredentials bool       `json:"requireDeviceCredentials"`
+	PasswordLastUsedAt       *time.Time `json:"passwordLastUsedAt"`
+	Tunnel                   struct {
 		Supported  bool   `json:"supported"`
 		Installing bool   `json:"installing"`
 		Running    bool   `json:"running"`
@@ -37,7 +41,7 @@ type remoteHostStatus struct {
 
 func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 	root := &cobra.Command{Use: "remote-host", Short: "Manage this machine's remote listener"}
-	var tunnel, tunnelOnly bool
+	var tunnel, tunnelOnly, showPassword bool
 	for _, action := range []struct {
 		name, method, path string
 	}{
@@ -137,6 +141,35 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						return err
 					}
 				}
+				if status.RequireDeviceCredentials {
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "The pairing password is off. Run `ao remote-host pair` for a code to pair a device.")
+					return err
+				}
+				if action.name == "enable" {
+					// Only a daemon without pairing codes prints the password.
+					var pairing remoteHostPairingCode
+					err := ctx.doJSON(cmd.Context(), http.MethodPost, "mobile/pairing-code", nil, &pairing)
+					var apiErr apiResponseError
+					unsupported := errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusNotFound || apiErr.StatusCode == http.StatusNotImplemented)
+					switch {
+					case unsupported:
+					case err != nil:
+						return remoteHostDaemonError(err)
+					case pairing.Code == "":
+						return errors.New("the daemon returned an empty pairing code; run `ao remote-host pair`")
+					default:
+						return printPairingCode(cmd, pairing)
+					}
+				}
+				if status.Password != "" && action.name == "status" && !showPassword {
+					if status.PasswordLastUsedAt != nil {
+						if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Pairing password last used: %s\n", status.PasswordLastUsedAt.Local().Format("2006-01-02 15:04")); err != nil {
+							return err
+						}
+					}
+					_, err := fmt.Fprintln(cmd.OutOrStdout(), "Pairing password hidden; run `ao remote-host status --show-password` to show it, or `ao remote-host pair` for a one-time code.")
+					return err
+				}
 				if status.Password != "" {
 					_, err := fmt.Fprintf(cmd.OutOrStdout(), "Password: %s\n", status.Password)
 					return err
@@ -149,9 +182,15 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 			cmd.Flags().BoolVar(&tunnelOnly, "tunnel-only", false, "Bind only to loopback and start Orchestrator's managed Cloudflare tunnel")
 			cmd.MarkFlagsMutuallyExclusive("tunnel", "tunnel-only")
 		}
+		if action.name == "status" {
+			cmd.Flags().BoolVar(&showPassword, "show-password", false, "Print the pairing password")
+		}
 		root.AddCommand(cmd)
 	}
 	root.AddCommand(newRemoteHostLinkCommand(ctx))
+	root.AddCommand(newRemoteHostPairCommand(ctx))
+	root.AddCommand(newRemoteHostDevicesCommand(ctx))
+	root.AddCommand(newRemoteHostRequireDeviceCredentialsCommand(ctx))
 	return root
 }
 

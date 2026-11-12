@@ -248,6 +248,7 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
 	--spacing-agent-shell-tab-max: var(--size-agent-shell-tab-max);
+	--spacing-session-tab-max: var(--size-session-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
 	--spacing-preview-max: var(--size-preview-max);
@@ -825,6 +826,12 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 .session-inspector__tab-button[aria-selected="true"]:hover,
 .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]:hover::before {
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
+}
+
+/* Light: the selected tab's fill leans toward the panel's surface, keeps the
+ * control edge, and does not darken on hover. */
+html[data-theme="light"] .center-panel-shell--floating-topbar [data-terminal-tab-frame][data-active]::before {
+	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
 }
 
 .center-panel-shell--floating-topbar [data-terminal-tab-frame]:has(> button:focus-visible)::before {
@@ -1609,12 +1616,10 @@ body {
 	user-select: none;
 }
 
-button,
-input,
-textarea,
-select {
-	font: inherit;
-}
+/* Form controls inherit their font from Tailwind's preflight, inside
+ * `@layer base`. Do not repeat that rule here: unlayered CSS beats every
+ * layered utility, so `text-*` and `font-*` on buttons and inputs would be
+ * ignored. */
 
 /* Error copy stays copyable under the app-wide `user-select: none` (#4268). */
 input,
@@ -2204,6 +2209,11 @@ textarea,
 	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size, 24px));
 }
 
+/* Where a scroller sits as it mounts is not a change: no fade-in on open. */
+.edge-fade[data-fade-instant] {
+	transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.edge-fade {
 		transition: none;
@@ -2300,6 +2310,16 @@ textarea,
 	}
 }
 
+[data-host-offline] *,
+[data-host-offline] *::before,
+[data-host-offline] *::after {
+	animation: none;
+}
+
+[data-host-offline] .animate-attention-card-pulse::before {
+	opacity: 0.5;
+}
+
 @keyframes ao-startup-logo-breathe {
 	0%,
 	100% {
@@ -2337,14 +2357,6 @@ textarea,
 .ao-startup-logo {
 	animation: ao-startup-logo-breathe 3.2s ease-in-out infinite;
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
-}
-
-.ao-mascot-eyes {
-	fill: transparent;
-}
-
-:root[data-theme="light"] .ao-mascot-eyes {
-	fill: #000;
 }
 
 /* Startup requirements checklist — each row fades/slides in on its own
@@ -3026,6 +3038,11 @@ html.sidebar-reordering * {
 	animation: queue-dock-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* A question already waiting when its chat opens is drawn in place (ChatComposer's useDockEntrance). */
+[data-dock-quiet] .elicitation-dock {
+	animation: none;
+}
+
 /* The parent reserves one compact footprint; the expanded dock floats above it. */
 .cursor-chat-composer-queue {
 	--queue-dock-header-height: 2rem;
@@ -3042,6 +3059,12 @@ html.sidebar-reordering * {
 	right: 0;
 	bottom: 0;
 	left: 0;
+}
+
+/* On a translucent window bg-surface is a 5% tint, so the transcript under the
+   open dock showed through it. The queue box keeps its solid fill there. */
+html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue-dock-body) {
+	background-color: var(--solid-bg-secondary);
 }
 
 /* Clip-height collapse: one row stays visible when folded; up to five when open. */
@@ -3648,7 +3671,8 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 	margin-inline: calc(-1 * var(--gap-topbar-control)) 0;
 	opacity: 0;
-	background: color-mix(in srgb, var(--color-border) 50%, transparent);
+	/* Spacer only: the line itself is not drawn. */
+	background: transparent;
 }
 
 .session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
@@ -4980,13 +5004,15 @@ html.sidebar-reordering * {
    hides the shell topbar; windowed mode reserves the native traffic-light band,
    while native fullscreen keeps a 0px top inset. Linux keeps its ShellTopbar
    offset below. */
-/* Maximized files use the same geometry as the maximized browser (backdrop,
-   titlebar band, inset frame) but their own rules, so the native-view
-   composition overrides for the browser never reach the files overlay. */
+/* Maximized files share the maximized browser's overlay geometry (backdrop,
+   titlebar band, full-width frame) but keep their own frame and composition
+   rules, so the native-view overrides for the browser never reach files.
+   Browser maximize switches geometry atomically. A live WebContentsView cannot
+   share a compositor timeline with DOM layout; animating its box would resize
+   Chromium over IPC every frame and make the controls visibly trail the page. */
+.browser-popout-overlay,
 .files-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
-	/* Maximized files use the window's full width: no inset strip beside the frame. */
-	--browser-popout-inline-inset: 0px;
 	box-sizing: border-box;
 	position: fixed;
 	inset: var(--browser-popout-top) 0 0;
@@ -4996,21 +5022,6 @@ html.sidebar-reordering * {
 	/* The macOS shell has a separate traffic-light drag strip. Keep the
 	   maximized surface interactive even if those regions overlap while the
 	   window is transitioning between layouts. */
-	-webkit-app-region: no-drag;
-}
-
-/* Browser maximize switches geometry atomically. A live WebContentsView cannot
-   share a compositor timeline with DOM layout; animating its box would resize
-   Chromium over IPC every frame and make the controls visibly trail the page. */
-.browser-popout-overlay {
-	--browser-popout-top: env(titlebar-area-height, 0px);
-	--browser-popout-inline-inset: var(--size-center-panel-inline-inset);
-	box-sizing: border-box;
-	position: fixed;
-	inset: var(--browser-popout-top) 0 0;
-	z-index: 40;
-	overflow: hidden;
-	background: transparent;
 	-webkit-app-region: no-drag;
 }
 
@@ -5026,8 +5037,8 @@ html.sidebar-reordering * {
 .browser-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
@@ -5046,8 +5057,8 @@ html.sidebar-reordering * {
 .files-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
@@ -5100,15 +5111,6 @@ html[data-shell-windows] body > .files-popout-overlay {
 	background: var(--bg);
 	border-bottom: 1px solid var(--border);
 	pointer-events: none;
-}
-
-.browser-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
-}
-
-/* Maximized files keep the full width on macOS too (see .files-popout-overlay). */
-.files-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: 0px;
 }
 
 .browser-popout-overlay .browser-panel__toolbar,
@@ -6041,6 +6043,7 @@ html[data-native-browser-composition="true"][data-browser-popout-open] #root [da
 
 html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session,
 html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface,
+html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface::before,
 html[data-native-browser-composition="true"][data-browser-native-live] [data-testid="session-detail"],
 html[data-native-browser-composition="true"][data-browser-native-live] .session-split {
 	background: transparent;
@@ -6500,6 +6503,19 @@ html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-pane
 	opacity: 1;
 }
 .group\/nav-row[data-preview-open] {
+	color: var(--color-foreground);
+}
+
+/* Keep a nav-row menu trigger (sidebar footer account and Mobile) lit while its
+   menu is open. Keyed on aria-expanded, not data-state: a Tooltip wrapped around
+   the trigger overwrites data-state with its own value. aria-haspopup keeps
+   collapsible rows, which also set aria-expanded, out of it. */
+.group\/nav-row[aria-haspopup="menu"][aria-expanded="true"] [data-nav-row-highlight-idle] {
+	width: 100%;
+	height: 100%;
+	opacity: 1;
+}
+.group\/nav-row[aria-haspopup="menu"][aria-expanded="true"] {
 	color: var(--color-foreground);
 }
 

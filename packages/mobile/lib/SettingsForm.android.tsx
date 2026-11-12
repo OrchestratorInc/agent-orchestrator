@@ -7,6 +7,7 @@ import {
 	Host,
 	Icon,
 	LazyColumn,
+	LinearProgressIndicator,
 	ListItem,
 	OutlinedButton,
 	RadioButton,
@@ -38,6 +39,7 @@ import { StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
 	settingsIcons,
+	settingsMeterColor,
 	settingsStatusDotColor,
 	settingsToneColor,
 	type SettingsButtonRowProps,
@@ -45,6 +47,7 @@ import {
 	type SettingsFormProps,
 	type SettingsIconName,
 	type SettingsLinkRowProps,
+	type SettingsMeterRowProps,
 	type SettingsPickerRowProps,
 	type SettingsSectionProps,
 	type SettingsStatusRowProps,
@@ -296,12 +299,43 @@ export function SettingsButtonRow({ icon, label, value, tone, destructive = fals
 	);
 }
 
-/** A link row with its live status under the name, behind a dot in its tone. */
-export function SettingsStatusRow({ icon, label, status, tone, onPress, testID }: SettingsStatusRowProps) {
+/**
+ * A measured amount. Material lists put a value under its name, so the amount
+ * comes first under the label, then Material's linear progress indicator and
+ * the detail.
+ */
+export function SettingsMeterRow({ icon, label, value, fraction, severity, tone, detail, testID }: SettingsMeterRowProps) {
 	const t = useTheme();
 	return (
 		<Row
 			icon={icon}
+			label={label}
+			supporting={
+				<Column verticalArrangement={{ spacedBy: space.sm }} modifiers={[fillMaxWidth()]}>
+					<Supporting color={settingsToneColor(t, tone)}>{value}</Supporting>
+					{fraction !== undefined ? (
+						<LinearProgressIndicator
+							progress={Math.min(1, Math.max(0, fraction))}
+							color={settingsMeterColor(t, severity)}
+							trackColor={t.bgSubtle}
+							modifiers={[fillMaxWidth(), padding(0, space.xxs, 0, space.xxs)]}
+						/>
+					) : null}
+					{detail ? <Supporting color={t.textSecondary}>{detail}</Supporting> : null}
+				</Column>
+			}
+			testID={testID}
+		/>
+	);
+}
+
+/** A link row with its live status under the name, behind a dot in its tone. */
+export function SettingsStatusRow({ icon, label, status, tone, leading, onPress, testID }: SettingsStatusRowProps) {
+	const t = useTheme();
+	return (
+		<Row
+			icon={icon}
+			leading={leading ? <RNHostView matchContents>{leading}</RNHostView> : undefined}
 			label={label}
 			supporting={
 				<ComposeRow horizontalArrangement={{ spacedBy: space.sm }} verticalAlignment="center">

@@ -117,15 +117,19 @@ export function SpawnComposerControls({
 			    trigger's touch target carries its own air above and below the
 			    text, so the rows need no gap. Compact and left-anchored: a
 			    max-width frame would make a Menu fill the row, which centers its
-			    popup over the whole screen. */}
-			<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.host}>
+			    popup over the whole screen. The dock rises over the keyboard by a
+			    transform, so SwiftUI places this host under the keyboard and
+			    would lift its rows by the overlap, over whatever the page shows
+			    above them (a notice, a button); it keeps out of the safe area. */}
+			<Host matchContents={{ vertical: true }} ignoreSafeArea="all" colorScheme={scheme} style={styles.host}>
 				<VStack alignment="leading" spacing={space.none} modifiers={[padding({ horizontal: space.xs })]}>
 					<HStack>
 						<Menu
-							label={<SelectorLabel icon={<SelectorGlyph name="laptopcomputer" />} title={hostLabel} />}
+							label={<SelectorLabel icon={<SelectorGlyph name={hostSystemImage(hosts.find((host) => host.id === hostId))} />} title={hostLabel} />}
 							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityLabel(`Run on ${hostLabel}`), accessibilityIdentifier("spawn-host")]}
 						>
-							{hosts.map((host) => <Choice key={host.id} label={host.label} selected={host.id === hostId} onChoose={() => onSelectHost(host.id)} />)}
+							{/* Each machine with its glyph, as each project has its folder: a computer, or Cloud's cloud. */}
+							{hosts.map((host) => <Choice key={host.id} label={host.label} systemImage={hostSystemImage(host)} selected={host.id === hostId} onChoose={() => onSelectHost(host.id)} />)}
 						</Menu>
 						<Spacer minLength={0} />
 					</HStack>
@@ -146,14 +150,13 @@ export function SpawnComposerControls({
 				</VStack>
 			</Host>
 
-			{attachments}
-
 			{/* The effort slider floats just above the composer, over the rows. */}
 			{effortSlider.open ? <EffortSliderOverlay choices={effortChoices} onChoose={onSelectEffort} bottom={composerHeight} /> : null}
 
 			<View onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}>
 				<SpawnComposer
 					prompt={prompt}
+					attachments={attachments}
 					onChangePrompt={onChangePrompt}
 					placeholder={placeholder}
 					onChoosePhoto={onChoosePhoto}
@@ -239,8 +242,12 @@ function SelectorGlyph({ name, indicator = false }: { name: IOSSymbol; indicator
 	return <Image systemName={name} modifiers={[font(indicator ? { textStyle: "caption2", weight: "semibold" } : { textStyle: "body" })]} />;
 }
 
-function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder" {
-	return project?.icon === "message-square-plus" ? "plus.bubble" : "folder";
+function hostSystemImage(host?: SpawnComposerOption): "cloud" | "laptopcomputer" {
+	return host?.icon === "cloud" ? "cloud" : "laptopcomputer";
+}
+
+function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder.badge.plus" | "folder" {
+	return project?.icon === "message-square-plus" ? "plus.bubble" : project?.icon === "folder-plus" ? "folder.badge.plus" : "folder";
 }
 
 const styles = StyleSheet.create({

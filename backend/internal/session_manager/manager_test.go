@@ -70,7 +70,13 @@ type fakeStore struct {
 	worktrees map[domain.SessionID][]domain.SessionWorktreeRecord
 	// sharedLog, when non-nil, receives an ordered call entry for each
 	// UpsertSessionWorktree invocation so ordering tests can compare across fakes.
-	sharedLog *[]string
+	sharedLog    *[]string
+	loginDemands []string
+}
+
+func (s *fakeStore) RequireSessionLogin(_ context.Context, id domain.SessionID, reason string, _ time.Time) error {
+	s.loginDemands = append(s.loginDemands, string(id)+": "+reason)
+	return nil
 }
 
 func newFakeStore() *fakeStore {
@@ -486,6 +492,12 @@ func (l *fakeLCM) MarkSpawned(_ context.Context, id domain.SessionID, metadata d
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}
 	rec.FirstSignalAt = time.Now()
 	rec.Metadata = preserveCheckpointOnFakeMarkSpawned(rec.Metadata, metadata)
+	if metadata.RuntimeHandleID == "" {
+		rec.Metadata.RuntimeHandleID = l.store.sessions[id].Metadata.RuntimeHandleID
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && metadata.ControllerGeneration != "" {
+		rec.Metadata.RuntimeHandleID, rec.Metadata.RuntimeLaunchID = "", ""
+	}
 	l.store.sessions[id] = rec
 	return nil
 }
@@ -6516,9 +6528,10 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 				!strings.Contains(sp, "Do not create `.ao/launch.json` unless the user asks") {
 				t.Fatalf("%s: system prompt missing static-first preview safeguards:\n%s", tc.name, sp)
 			}
-			if !strings.Contains(sp, "immediately after creating or materially updating it") ||
-				!strings.Contains(sp, "do not replace an active application preview with a supporting asset") {
-				t.Fatalf("%s: system prompt missing automatic artifact handoff guidance:\n%s", tc.name, sp)
+			if !strings.Contains(sp, "Never open an artifact with `ao preview`, whatever its file type") ||
+				!strings.Contains(sp, "in the session's Artifacts tab") ||
+				strings.Contains(sp, "browser-displayable artifact") {
+				t.Fatalf("%s: system prompt missing Artifacts-tab handoff guidance:\n%s", tc.name, sp)
 			}
 		})
 	}
@@ -6544,6 +6557,9 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
 	wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-7"))
+	if !strings.Contains(sp, "Run `ao artifact add <path>`") {
+		t.Fatal("artifact guidance does not say how to register a deliverable")
+	}
 	if !strings.Contains(sp, "## Session Artifacts") {
 		t.Fatalf("system prompt missing artifacts section:\n%s", sp)
 	}
@@ -6576,6 +6592,36 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 	if !strings.Contains(chatPrompt, inThread) {
 		t.Fatalf("chat session prompt missing %q", inThread)
+	}
+	// A kept render is not registered, and only a chat session can keep one.
+	const keptRender = "`ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns"
+	if !strings.Contains(chatPrompt, keptRender) {
+		t.Fatalf("chat session prompt missing %q", keptRender)
+	}
+	if strings.Contains(sp, "ao render --artifact") {
+		t.Fatalf("terminal session prompt names ao render:\n%s", sp)
+	}
+}
+
+// An orchestrator's files are listed by the same rule as a worker's, so its
+// prompt must name its own artifact directory and tell it to register them.
+func TestSystemPrompt_OrchestratorGetsArtifactGuidance(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
+
+	for _, chat := range []bool{false, true} {
+		sp, err := m.buildSystemPrompt(ctx, domain.KindOrchestrator, "mer", "mer-orchestrator-2", "", chat)
+		if err != nil {
+			t.Fatalf("buildSystemPrompt chat=%v: %v", chat, err)
+		}
+		wantDir := filepath.ToSlash(filepath.Join(m.dataDir, "artifacts", "mer-orchestrator-2"))
+		for _, want := range []string{"## Session Artifacts", wantDir, "Run `ao artifact add <path>`"} {
+			if !strings.Contains(sp, want) {
+				t.Fatalf("orchestrator prompt (chat=%v) missing %q:\n%s", chat, want, sp)
+			}
+		}
 	}
 }
 
@@ -6711,7 +6757,10 @@ func TestRestore_OrchestratorRederivesSystemPrompt(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: cfg}
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: true,
-		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x",
+			NativeTranscriptPath: "/ao/data/pi/sessions/agent-x.jsonl",
+		},
 	}
 	agent := &recordingAgent{}
 	dataDir := t.TempDir()
@@ -6726,6 +6775,9 @@ func TestRestore_OrchestratorRederivesSystemPrompt(t *testing.T) {
 	}
 	if !strings.Contains(agent.lastRestore.SystemPrompt, "Use workers for implementation.") {
 		t.Fatalf("restore system prompt missing project rules:\n%s", agent.lastRestore.SystemPrompt)
+	}
+	if got := agent.lastRestore.Session.Metadata[ports.MetadataKeyNativeTranscriptPath]; got != "/ao/data/pi/sessions/agent-x.jsonl" {
+		t.Fatalf("restore transcript path = %q", got)
 	}
 	wantPath := filepath.Join(dataDir, "prompts", "mer-1", "system.md")
 	if agent.lastRestore.SystemPromptFile != wantPath {
@@ -12230,4 +12282,22 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime" {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
 	}
+}
+
+func (f *fakeStore) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	return f.SetSessionImportWorkspace(ctx, id, expected, next, workspace, now)
+}
+
+func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.IsTerminated || !rec.NeedsImportResume() || *rec.Metadata.ImportSource != *expected || rec.Metadata.WorkspacePath != "" && rec.Metadata.WorkspacePath != workspace.WorkspacePath {
+		return false, nil
+	}
+	copied := *next
+	rec.Metadata.ImportSource = &copied
+	rec.Metadata.Branch, rec.Metadata.WorkspacePath, rec.Metadata.WorkspaceRepoPath = workspace.Branch, workspace.WorkspacePath, workspace.WorkspaceRepoPath
+	rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef = workspace.DiffBaseSHA, workspace.DiffBaseRef
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
 }

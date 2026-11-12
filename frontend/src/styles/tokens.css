@@ -135,6 +135,9 @@
 	--color-danger: var(--destructive);
 	--color-purple: var(--chart-4);
 
+	--agent-tone-lightness: 0.65;
+	--agent-tone-chroma: 0.15;
+
 	/* Interactive overlays */
 	--color-interactive-hover: color-mix(in oklch, var(--foreground) 4%, transparent);
 	--color-interactive-active: color-mix(in oklch, var(--foreground) 7%, transparent);
@@ -382,6 +385,8 @@
 	--size-shell-tab-max: 140px;
 	/* Agent names and their status glyph need more room in Developer Mode. */
 	--size-agent-shell-tab-max: 192px;
+	/* The session's own tab carries its title and an always-visible ⋮, so it reads the most text. */
+	--size-session-tab-max: 260px;
 	--size-dialog-md: 420px;
 	--size-dialog-lg: 440px;
 	--size-dialog-orchestrator: 460px;
@@ -768,6 +773,9 @@
 	--color-status-in-review: #d97706;
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;
+
+	--agent-tone-lightness: 0.6;
+	--agent-tone-chroma: 0.15;
 	--color-status-idle: var(--muted-foreground);
 	--color-status-exited: var(--destructive);
 	--color-status-terminated: var(--color-text-passive);

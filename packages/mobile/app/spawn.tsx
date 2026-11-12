@@ -14,14 +14,22 @@ import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
+import { rememberLastProject, useLastProject } from "../lib/lastProject";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { claudeAliasModel, defaultEffortModel, menuModelName, menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
-import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
+import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { ComposerAttachmentTray } from "../lib/chat/ComposerAttachmentTray";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { spawnEffortChoices, spawnEffortToSend } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
+import { useCloud } from "../lib/cloud/CloudProvider";
+import { connectedAgents } from "../lib/cloud/agents";
+import { CLOUD_HOST_ID, CLOUD_HOST_NAME, isCloudHost } from "../lib/cloud/mapping";
+import { cloudPlanBlock, cloudSessionBilled } from "../lib/cloud/plan";
+import { useCloudPlan } from "../lib/cloud/planStore";
+import { agentModelCatalog } from "../lib/cloud/modelCatalog";
+import { cloudAgentCatalog, cloudModelCatalog, cloudProjectDetail, NEW_CLOUD_PROJECT } from "../lib/cloud/spawnSource";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -42,16 +50,31 @@ export default function SpawnScreen() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { hostStates, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
-	const connectedHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
+	const { hostStates, cloud, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
+	const cloudState = useCloud();
+	// Orchestrator Cloud is the picker's last choice, after the connected machines, while signed in.
+	const machineHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
+	const connectedHosts = useMemo(() => cloud ? [...machineHosts, { id: CLOUD_HOST_ID, label: CLOUD_HOST_NAME, icon: "cloud" as const }] : machineHosts, [cloud, machineHosts]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const hostSelectionInitialized = useRef(false);
 	const catalogGeneration = useRef(0);
 	const selectedHost = hostStates.find((host) => host.hostId === selectedHostId);
-	const config = selectedHostId ? configForHost(selectedHostId) : null;
-	const projects = selectedHost?.projects ?? [];
-	const projectsKnown = selectedHost?.projectsKnown ?? false;
-	const connection = selectedHost?.connection ?? "closed";
+	const cloudSelected = isCloudHost(selectedHostId);
+	const config = selectedHostId && !cloudSelected ? configForHost(selectedHostId) : null;
+	const projects = cloudSelected ? cloud?.projects ?? [] : selectedHost?.projects ?? [];
+	// Cloud's list is known once it loaded, not as soon as Cloud is signed in:
+	// before that, an empty list would ask to create a project that exists.
+	const projectsKnown = cloudSelected ? Boolean(cloud) && cloudState.projectsLoaded : selectedHost?.projectsKnown ?? false;
+	const connection = cloudSelected ? (cloud ? "open" : "closed") : selectedHost?.connection ?? "closed";
+	const cloudAgentsKey = connectedAgents(cloudState.connections).join(",");
+	// Known before anything is typed: a Free organization runs no cloud agents,
+	// and a spent session-hour window starts none until it resets. The control
+	// plane still decides on send; this only spares writing a task it would refuse.
+	const cloudPlan = useCloudPlan(cloudState.client, cloud ? cloudState.org?.id : undefined);
+	const reloadCloudPlan = cloudPlan?.reload;
+	useEffect(() => {
+		if (cloudSelected) void reloadCloudPlan?.();
+	}, [cloudSelected, reloadCloudPlan]);
 	const unreachable = Boolean(selectedHost && selectedHost.connection === "closed");
 	const hostOptions = useMemo(() => {
 		if (!selectedHostId || connectedHosts.some((host) => host.id === selectedHostId)) return connectedHosts;
@@ -62,12 +85,17 @@ export default function SpawnScreen() {
 	useEffect(() => {
 		if (hostSelectionInitialized.current) return;
 		const routed = routeHostId ? hostStates.find((host) => host.hostId === routeHostId) : undefined;
-		if ((routeHostId && routed?.loading) || (!routeHostId && connectedHosts.length === 0 && hostStates.some((host) => host.loading))) return;
+		// A machine still connecting is waited for before Cloud can become the default.
+		if ((routeHostId && routed?.loading) || (!routeHostId && machineHosts.length === 0 && hostStates.some((host) => host.loading))) return;
 		hostSelectionInitialized.current = true;
 		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: currentHostId ?? undefined, hosts: connectedHosts }));
-	}, [connectedHosts, currentHostId, hostStates, routeHostId]);
+	}, [connectedHosts, currentHostId, hostStates, machineHosts, routeHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
+	// Only a session the plan pays for is the plan's to stop: Coder the
+	// organization runs free still starts on Free.
+	const cloudProjectProvider = cloudState.projects.find((item) => item.id === projectId)?.config.sandboxProvider;
+	const planBlock = cloudSelected ? cloudPlanBlock(cloudPlan?.summary, Date.now(), cloudSessionBilled(cloudProjectProvider, cloudState.org?.offering)) : undefined;
 	const [harness, setHarness] = useState("");
 	const [agentTouched, setAgentTouched] = useState(false);
 	const [mode, setMode] = useState<SessionMode>("chat");
@@ -77,6 +105,9 @@ export default function SpawnScreen() {
 	const attachmentsRef = useRef<SpawnAttachment[]>([]);
 	const pickingAttachments = useRef(false);
 	const [attachmentError, setAttachmentError] = useState<string>();
+	// Keyed by place and name: picked files carry no id of their own, and the
+	// same file can be picked twice.
+	const trayItems = useMemo(() => attachments.map((item, index) => ({ key: `${index}-${item.name}`, name: item.name, previewUri: spawnAttachmentPreview(item) })), [attachments]);
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
 	// An effort picked here; until then the model runs at its own default.
@@ -122,20 +153,36 @@ export default function SpawnScreen() {
 		if (holding.current) event.preventDefault();
 	}), [navigation]);
 
-	// Seed from this machine's routed project, or the selected machine's active
-	// project. A project id is never carried across machines.
+	// Seed from this machine's routed project, the project last worked in on it,
+	// or the selected machine's active project. A project id is never carried
+	// across machines. Waits for the stored last project, or a board filter
+	// seeded first would stick.
+	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
+		if (!lastProject.loaded) return;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
 			routeHostId === selectedHostId ? routeProjectId : undefined,
 			selectedHostId === currentHostId ? activeProjectId : ALL_PROJECTS,
 			projects,
 			projectsKnown,
+			lastProject.projectId,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, currentHostId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+	}, [activeProjectId, currentHostId, lastProject.loaded, lastProject.projectId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
+
+	// Orchestrator Cloud's catalog: every cloud agent, the connected ones usable.
+	useEffect(() => {
+		if (!cloudSelected) return;
+		setCatalog(cloudAgentCatalog(cloudState.connections));
+		setChatHarnesses([...cloudState.chatHarnesses]);
+		setCatalogError(cloudState.connectionsLoaded && !cloudAgentsKey ? "Connect a coding agent first: Settings → Orchestrator Cloud." : null);
+		setLoading(!cloudState.connectionsLoaded);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- cloudAgentsKey covers the connections read here
+	}, [cloudAgentsKey, cloudSelected, cloudState.chatHarnesses, cloudState.connectionsLoaded]);
 
 	useEffect(() => {
+		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
 		if (!config || !requestedHostId) { setCatalog(null); setChatHarnesses([]); setLoading(false); return; }
 		let cancelled = false;
@@ -159,7 +206,7 @@ export default function SpawnScreen() {
 		return () => {
 			cancelled = true;
 		};
-	}, [config, reloadKey, selectedHostId]);
+	}, [cloudSelected, config, reloadKey, selectedHostId]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -202,7 +249,11 @@ export default function SpawnScreen() {
 	const hostNotices = selectedHostId === null && hostSelectionInitialized.current
 		? [routeHostId ? "That machine is not connected." : "No connected machines are available."]
 		: [];
-	const notices = [...hostNotices, ...spawnNotices({
+	const cloudNotices = [
+		...(planBlock ? [planBlock.message] : []),
+		...(cloudSelected && projectsKnown && projects.length === 0 ? ["Create a cloud project first: choose New cloud project from the project menu."] : []),
+	];
+	const notices = [...hostNotices, ...cloudNotices, ...spawnNotices({
 		// Only when a reconnect can fix it: a rejected password stops the poll for
 		// good, and its catalog error already says to re-scan the pairing code.
 		offline: unreachable,
@@ -223,6 +274,14 @@ export default function SpawnScreen() {
 	);
 
 	useEffect(() => {
+		if (!cloudSelected) return;
+		const project = cloudState.projects.find((item) => item.id === projectId);
+		setProjectDetail(project ? cloudProjectDetail(project) : undefined);
+		setProjectDetailLoadedFor(project ? project.id : null);
+	}, [cloudSelected, cloudState.projects, projectId]);
+
+	useEffect(() => {
+		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
 		if (!config || !requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
 		let cancelled = false;
@@ -233,7 +292,7 @@ export default function SpawnScreen() {
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [config, projectId, reloadKey, selectedHostId]);
+	}, [cloudSelected, config, projectId, reloadKey, selectedHostId]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
@@ -249,7 +308,24 @@ export default function SpawnScreen() {
 	// Each agent's machine-wide models, for the agent menu's lists. Failures
 	// leave that agent's list empty; the picked agent's own load reports errors.
 	const agentIds = agents.filter((agent) => agent.selectable).map((agent) => agent.id).join("|");
+	// Orchestrator Cloud's model lists, one per connected agent, from its catalog.
+	const cloudOrgId = cloudState.org?.id;
 	useEffect(() => {
+		if (!cloudSelected) return;
+		if (!cloudOrgId || !agentIds) { setAgentModelLists({}); return; }
+		let cancelled = false;
+		void Promise.all(agentIds.split("|").map(async (id) => {
+			try {
+				return [id, cloudModelCatalog(id, await agentModelCatalog(cloudState.client, cloudOrgId, id)).models] as const;
+			} catch {
+				return [id, []] as const;
+			}
+		})).then((entries) => { if (!cancelled) setAgentModelLists(Object.fromEntries(entries)); });
+		return () => { cancelled = true; };
+	}, [agentIds, cloudOrgId, cloudSelected, cloudState.client]);
+
+	useEffect(() => {
+		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
 		if (!config || !requestedHostId || !agentIds) { setAgentModelLists({}); return; }
 		let cancelled = false;
@@ -265,9 +341,23 @@ export default function SpawnScreen() {
 			if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setAgentModelLists(Object.fromEntries(entries));
 		});
 		return () => { cancelled = true; polling.abort(); };
-	}, [agentIds, config, reloadKey, selectedHostId]);
+	}, [agentIds, cloudSelected, config, reloadKey, selectedHostId]);
+
+	// A new cloud task's models come from Orchestrator Cloud's catalog for the agent.
+	useEffect(() => {
+		if (!cloudSelected) return;
+		if (!cloudOrgId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		let cancelled = false;
+		setModelLoading(true);
+		agentModelCatalog(cloudState.client, cloudOrgId, harness)
+			.then((catalog) => { if (!cancelled) { setModelCatalog(cloudModelCatalog(harness, catalog)); setModelError(undefined); } })
+			.catch(() => { if (!cancelled) setModelCatalog(undefined); })
+			.finally(() => { if (!cancelled) setModelLoading(false); });
+		return () => { cancelled = true; };
+	}, [cloudOrgId, cloudSelected, cloudState.client, harness]);
 
 	useEffect(() => {
+		if (cloudSelected) return;
 		const requestedHostId = selectedHostId;
 		// The machine's own catalog loads before a project is chosen, so the
 		// model menu is never just the default; choosing a project swaps in its.
@@ -281,7 +371,7 @@ export default function SpawnScreen() {
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
 		return () => { cancelled = true; polling.abort(); };
-	}, [config, harness, projectId, reloadKey, selectedHostId]);
+	}, [cloudSelected, config, harness, projectId, reloadKey, selectedHostId]);
 
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
@@ -315,10 +405,17 @@ export default function SpawnScreen() {
 		setError(null);
 		setOfferTUI(false);
 		requestRef.current = undefined;
-		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: switchHost })
+		// Cloud is never the default machine: choosing it here leaves that alone.
+		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
 			.catch(() => setError("Could not make that machine the default. Try again."));
 	};
 	const changeProject = (nextProjectId: string | null) => {
+		if (nextProjectId === NEW_CLOUD_PROJECT) {
+			// A cloud project starts from a repository, on its own sheet over this
+			// page; the project menu offers it once it exists.
+			router.push("/cloud/new-project");
+			return;
+		}
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
 		resetModelSource();
 		setProjectDetail(undefined);
@@ -371,12 +468,18 @@ export default function SpawnScreen() {
 			agentId,
 			projectId: projectId && projectId !== STANDALONE_PROJECT ? projectId : "",
 			selected: agentId === harness && modelTouched ? model : "",
+			// A cloud task browses Orchestrator Cloud's catalog, not the machine's.
+			...(cloudSelected ? { hostId: CLOUD_HOST_ID } : {}),
 			// The sheet's default row answers "".
 			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
 		}));
 	};
 	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string) => {
 		if (pickingAttachments.current) return;
+		if (cloudSelected) {
+			setAttachmentError("Cloud tasks can't take attachments yet. Start the task, then add files in its chat.");
+			return;
+		}
 		pickingAttachments.current = true;
 		setAttachmentError(undefined);
 		try {
@@ -429,7 +532,7 @@ export default function SpawnScreen() {
 	}, "Couldn't open your photo library.");
 
 	const onSpawn = async () => {
-		if (!selectedHostId || !config) {
+		if (!selectedHostId || (!config && !cloudSelected)) {
 			setError("Choose a connected machine before starting this task.");
 			return;
 		}
@@ -466,6 +569,7 @@ export default function SpawnScreen() {
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
+			else rememberLastProject(selectedHostId, projectId);
 			holding.current = false;
 			// Covered while the request ran (a notification or link can still
 			// open a page over this one): the worker shows up on the board, and
@@ -504,6 +608,12 @@ export default function SpawnScreen() {
 	}, [busy, navigation]);
 
 	const harnessLabel = agents.find((item) => item.id === harness)?.label;
+	// Before the list lands the seed can name a project the picker doesn't list
+	// yet. It shows under its id, the name it was created with, so Start never
+	// sends a task somewhere the picker calls "Choose project".
+	const unlistedProject = projectId && projectId !== STANDALONE_PROJECT && projectId !== NEW_CLOUD_PROJECT && !projects.some((item) => item.id === projectId)
+		? [{ id: projectId, label: projectId, icon: "folder" as const }]
+		: [];
 
 	return (
 		<KeyboardAvoidingView
@@ -522,13 +632,17 @@ export default function SpawnScreen() {
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
 					{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 					{offerTUI ? <Button title="Create as Terminal UI instead" variant="secondary" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
+					{planBlock ? <Button title="See plan" variant="secondary" icon="info" onPress={() => router.push("/sheets/cloud-plan")} /> : null}
 				</View> : null}
 
 				<SpawnComposerControls
 					hosts={hostOptions}
 					hostId={selectedHostId}
 					onSelectHost={chooseHost}
-					projects={[...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
+					projects={cloudSelected
+						// Cloud sessions always run in a project; a new one is created from here.
+						? [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: NEW_CLOUD_PROJECT, label: "New cloud project", icon: "folder-plus" as const, sectionBreakBefore: unlistedProject.length + projects.length > 0 }]
+						: [...unlistedProject, ...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={changeProject}
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
@@ -553,16 +667,18 @@ export default function SpawnScreen() {
 					prompt={prompt}
 					onChangePrompt={setPrompt}
 					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
-					attachments={<SpawnAttachmentRow
-						attachments={attachments}
-						onRemove={(item) => {
+					attachments={<ComposerAttachmentTray
+						items={trayItems}
+						onRemove={(key) => {
+							const item = attachments[trayItems.findIndex((candidate) => candidate.key === key)];
+							if (!item) return;
 							attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
 							setAttachments(attachmentsRef.current);
 						}}
 					/>}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
+					disabled={!selectedHostId || (!config && !cloudSelected) || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing" || Boolean(planBlock)}
 				/>
 			</Animated.View>
 		</KeyboardAvoidingView>

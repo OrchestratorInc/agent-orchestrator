@@ -105,7 +105,7 @@ describe("saving a machine", () => {
 
 	it("puts a rejected password against the password field", async () => {
 		fixtures.persist.mockRejectedValue(new (ApiError as unknown as new (status: number) => Error)(401));
-		await expect(saveEnvironmentMachine(a, draft({ password: "wrong" }), "ios")).rejects.toEqual(new MachineSaveError("That password was rejected. Check it and try again.", "password"));
+		await expect(saveEnvironmentMachine(a, draft({ password: "wrong" }), "ios")).rejects.toEqual(new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password"));
 	});
 
 	it("puts another machine answering, or nothing answering, against the address", async () => {

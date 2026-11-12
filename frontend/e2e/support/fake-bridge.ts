@@ -164,6 +164,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					unpublish: async () => undefined,
 					onProgress: () => () => undefined,
 				},
+				artifactSnapshot: {
+					request: async () => false,
+				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
 					openFolder: async () => undefined,
@@ -209,6 +212,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onAnalyticsOptOut: () => () => undefined,
 					setCloudUser: async () => false,
 					getGithubLogin: async () => null,
+					getLifetimeSessions: async () => null,
+					claimFirstOpen: async () => "ineligible" as const,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -404,9 +409,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				},
 				remotes: {
 					list: async () => [],
-					importAccountHost: async () => undefined,
-					pruneAccountHosts: async () => undefined,
-					issueAccountToken: async () => ({ token: "" }),
+					syncAccountHosts: async () => undefined,
+					linkAccountHost: async () => undefined,
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
@@ -429,6 +433,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
+					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");
@@ -1113,6 +1119,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					unpublish: async () => undefined,
 					onProgress: () => () => undefined,
 				},
+				artifactSnapshot: {
+					request: async () => false,
+				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
 					openFolder: async () => undefined,
@@ -1158,6 +1167,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onAnalyticsOptOut: () => () => undefined,
 					setCloudUser: async () => false,
 					getGithubLogin: async () => null,
+					getLifetimeSessions: async () => null,
+					claimFirstOpen: async () => "ineligible" as const,
 					getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "e2e", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 					onPolicy: () => () => false,
@@ -1341,9 +1352,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				},
 				remotes: {
 					list: async () => [],
-					importAccountHost: async () => undefined,
-					pruneAccountHosts: async () => undefined,
-					issueAccountToken: async () => ({ token: "" }),
+					syncAccountHosts: async () => undefined,
+					linkAccountHost: async () => undefined,
 					add: async () => "offline" as const,
 					update: async () => "offline" as const,
 					remove: async () => undefined,
@@ -1366,6 +1376,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
+					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");

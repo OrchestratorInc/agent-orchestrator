@@ -1,7 +1,7 @@
 ---
 name: using-ao
-description: "Catalog of the Orchestrator `ao` CLI: spawning workers, managing sessions and projects, creating reusable Cues, sending messages, controlling the shared browser, previewing pages, and daemon control. Use when using the ao CLI, creating Cues, spawning workers, or managing Orchestrator-managed sessions in an Orchestrator workspace."
-trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning workers, managing sessions/projects, sending messages, controlling or previewing pages."
+description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers importing existing agent sessions."
+trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
 ---
 
 # Orchestrator CLI Catalog
@@ -21,6 +21,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 | `review` | Start, list, cancel, or submit Orchestrator's native reviewer for a worker's PR (default: this session) | Reviewing implementation PRs owned by workers. Use a normal review-only worker for someone else's PR | [commands/review.md](commands/review.md) |
 | `send` | Send a message to a running agent session | Messaging a live agent; use `--steer` to correct it mid-turn | [commands/send.md](commands/send.md) |
 | `report` | Persist a meaningful worker report | Checkpoints, blockers, decisions, outputs, and completion | [commands/report.md](commands/report.md) |
+| `artifact` | Register files in the artifact directory as deliverables | Making a finished file appear as one of the session's artifacts | [commands/artifact.md](commands/artifact.md) |
 | `preview` | Start a session-owned app or open an exact URL/file | Running and showing the worker's relevant app, Markdown, HTML, PDF, or image | [commands/preview.md](commands/preview.md) |
 | `render` | Show a self-contained HTML page inline in a chat thread | Answering with a chart, table, diagram, or mockup | [commands/render.md](commands/render.md) |
 | `browser` | Inspect and control the session's shared live browser | Verifying a web app through snapshots, interactions, waits, screenshots, console, and errors | [commands/browser.md](commands/browser.md) |
@@ -36,6 +37,7 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
 
 ## Conventions
 
+- For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
@@ -44,11 +46,14 @@ trigger: "Using the ao CLI in an Orchestrator workspace: creating Cues, spawning
   [commands/session.md](commands/session.md) for identity, encoding, and safety
   rules before constructing one.
 - When the user asks to save a repeatable task as a Cue, use `ao cue list --json` to check existing definitions, then `ao cue create`. An agent Cue stores a reusable instruction; a command Cue stores an exact shell command. This agent-facing command can create and read Cues, but cannot edit or delete them. Direct the user to project settings for changes to existing Cues.
+- When the user asks to bring a repository's Conductor settings (scripts, run actions, environment variables, prompt) into Orchestrator, read [commands/conductor.md](commands/conductor.md) first.
 - `--agent` is an alias for `--harness` on `ao spawn`.
 - Every command accepts `-h / --help` for the full flag list.
-- For frontend launch, preview selection, or artifact handoff, read
+- For frontend launch or preview selection, read
   [commands/preview.md](commands/preview.md) before acting. Its static-file,
-  project-runtime, and automatic-handoff rules are load-bearing.
+  project-runtime, and artifact rules are load-bearing: artifacts render in the
+  Artifacts tab after `ao artifact add`, never through `ao preview` unless the
+  user explicitly asks to see one in the Browser panel.
 - For page inspection, interaction, or request diagnosis, read
   [commands/browser.md](commands/browser.md). It defines shared-tab behavior
   and the opt-in network policy.

@@ -6,6 +6,7 @@ import type { WorkspaceSummary } from "../types/workspace";
 import { LOCAL_HOST } from "./hosts";
 import { isRasterImagePath, isSvgPath } from "./image-files";
 import { queryClient } from "./query-client";
+import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
 import { parseArtifactLink, type ArtifactLinkTarget } from "./session-links";
 
 // Long enough that links scrolled past or streamed in partially never fetch.
@@ -57,7 +58,7 @@ function findLocalArtifact(target: ArtifactLinkTarget) {
 	const workspace = workspaces?.find((candidate) => candidate.id === target.projectId);
 	const session = workspace?.sessions.find((candidate) => candidate.id === target.sessionId);
 	if (!session || session.cloud || (session.hostId && session.hostId !== LOCAL_HOST)) return undefined;
-	const artifact = session.artifactFiles?.find((candidate) => candidate.path === target.path);
+	const artifact = artifactAtPath(session.artifactFiles, target.path);
 	return artifact ? { artifact, session } : undefined;
 }
 
