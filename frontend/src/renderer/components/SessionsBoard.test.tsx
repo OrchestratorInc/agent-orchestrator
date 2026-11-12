@@ -146,6 +146,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 
 import { isMacPlatform } from "../lib/platform";
 import { useUiStore } from "../stores/ui-store";
+import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { ArchiveModalHost } from "./ArchiveModalHost";
 import { SessionsBoard } from "./SessionsBoard";
 import { latestSessionArtifacts, toBoardSessionPresentation } from "./SessionsBoardAdapters";
@@ -1274,6 +1275,24 @@ describe("SessionsBoard", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Restore dead worker" }));
 
 		expect(await screen.findByText("Session can no longer be restored")).toBeInTheDocument();
+	});
+
+	it("shows the archive's cards without fetching a PR summary for each", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions(Array.from({ length: 5 }, (_, index) => terminatedSession({ id: `s-${index}`, title: `archived ${index}` })))],
+			isError: false,
+			isSuccess: true,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderBoardWithClient(queryClient, "p1");
+
+		const archive = await expandArchive();
+		expect(within(archive).getAllByTestId("session-archive-card")).toHaveLength(5);
+		// Each card shows the PRs its session recorded; none starts its own
+		// request (or a poll) for a live summary.
+		const summaries = queryClient.getQueryCache().findAll({ queryKey: sessionScmSummaryQueryKey() });
+		expect(summaries.every((query) => query.state.fetchStatus === "idle" && query.state.dataUpdateCount === 0 && query.state.errorUpdateCount === 0)).toBe(true);
+		expect(within(archive).getAllByRole("link", { name: /^PR #\d+/ }).length).toBeGreaterThan(0);
 	});
 
 	it("shows an archive row error when restore fails", async () => {

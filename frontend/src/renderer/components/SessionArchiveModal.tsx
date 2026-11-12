@@ -185,6 +185,14 @@ export function SessionArchiveModal({
 		() => (open ? sessions.map((session) => ({ session, text: searchText(session) })) : []),
 		[open, sessions],
 	);
+	// A new search mounts its first page again, but only once its results
+	// arrive: resetting on the keystroke itself would unmount the mounted cards
+	// in the urgent render and then remount them a few at a time.
+	const [pagedQuery, setPagedQuery] = useState(deferredQuery);
+	if (pagedQuery !== deferredQuery) {
+		setPagedQuery(deferredQuery);
+		setLimit(PAGE_SIZE);
+	}
 	const results = useMemo(() => {
 		const tokens = deferredQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
 		if (tokens.length === 0) return sessions;
@@ -314,7 +322,10 @@ export function SessionArchiveModal({
 		if (activePosition < 0) return;
 		const grid = gridRef.current;
 		const columns = measureGridColumns(grid);
-		const pageRows = measureVisibleRows(scrollerRef.current, grid, activePosition, columns, key === "PageUp" ? -1 : 1);
+		// Only a page key needs the rows' laid-out heights.
+		const pageRows = key === "PageUp" || key === "PageDown"
+			? measureVisibleRows(scrollerRef.current, grid, activePosition, columns, key === "PageUp" ? -1 : 1)
+			: 1;
 		const target = boundedGridTarget(
 			gridNavigationTarget(key, activePosition, results.length, columns, pageRows),
 			shown.length,
@@ -457,7 +468,6 @@ export function SessionArchiveModal({
 							data-slot="command-input"
 							onChange={(event) => {
 								setQuery(event.target.value);
-								setLimit(PAGE_SIZE);
 								// A new search starts at its first result.
 								setActive({ index: 0 });
 								scrollToActiveRef.current = true;

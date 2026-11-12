@@ -189,6 +189,10 @@ export function ArchivedSessionCardAdapter({
 	return (
 		<DesktopSessionCard
 			compact={compact}
+			// A grid of many archived cards shows the PRs each session recorded
+			// (and any summary already cached) instead of fetching and polling
+			// one SCM summary per card.
+			live={!compact}
 			selected={selected}
 			hidePullRequestProgress={hidePullRequestProgress}
 			hideTerminatedStatus={hideTerminatedStatus}
@@ -231,6 +235,7 @@ function DesktopSessionCard({
 	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	interactive = true,
+	live = true,
 	memory,
 	memoryTone,
 	onOpen,
@@ -248,6 +253,8 @@ function DesktopSessionCard({
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
+	/** Fetch and follow the session's PRs and archive state (on by default). */
+	live?: boolean;
 	memory?: SessionMemoryReading;
 	memoryTone?: ChipTone;
 	onOpen?: () => void;
@@ -266,9 +273,9 @@ function DesktopSessionCard({
 	const [renameOpen, setRenameOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(
 		session,
-		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
+		useSessionScmSummary(session.id, live, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
-	const termination = useTerminateSessionState(session.id, session.hostId);
+	const termination = useTerminateSessionState(session.id, session.hostId, live);
 	// Archiving is the owner workspace's; a guest's archive would always be refused.
 	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
