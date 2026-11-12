@@ -113,11 +113,12 @@ function SessionFilesContent() {
 
 	let body: React.ReactNode;
 	if (tab === "changes") {
-		body = loading ? (
-			<View style={styles.screen}>{header}<EmptyState busy title="Reading the worktree…" /></View>
-		) : (
+		// The list stays mounted while loading: under the clear glass bar only a
+		// scroll view insets itself below the header and its search field, and a
+		// plain view there drew the tabs under the search field.
+		body = (
 			<SectionList
-				sections={groups.map((group) => ({ key: group.key, title: group.title, data: group.files }))}
+				sections={loading ? [] : groups.map((group) => ({ key: group.key, title: group.title, data: group.files }))}
 				keyExtractor={(file) => file.path}
 				ListHeaderComponent={header}
 				contentInsetAdjustmentBehavior="automatic"
@@ -132,7 +133,9 @@ function SessionFilesContent() {
 				)}
 				renderItem={({ item }) => <ChangeRow file={item} comments={commentsByPath.get(item.path) ?? 0} onPress={openChange} onAction={changeAction} />}
 				ItemSeparatorComponent={FileRowDivider}
-				ListEmptyComponent={error ? (
+				ListEmptyComponent={loading ? (
+					<EmptyState busy title="Reading the worktree…" />
+				) : error ? (
 					<EmptyState icon="alert-triangle" title="Couldn't load changes" message={error} action={<Button title="Try again" icon="refresh-cw" onPress={() => void refresh()} />} />
 				) : (
 					<EmptyState icon="file-diff" title="No changes yet" message="When the agent edits files in this session, they show up here." action={<Button title="Browse all files" icon="list-tree" onPress={() => chooseTab("all")} />} />
