@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -25,7 +26,12 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	}, log)
 }
 
-func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	// Kimchi's entry point overwrites its config-dir env variable. Validate it
+	// against the effective child home before starting any native process.
+	if _, err := kimchi.New().NativeSessionConfigDir(ctx, cfg.Env); err != nil {
+		return nil, nil, err
+	}
 	args := []string{"--mode", "acp"}
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		args = append(args, "--model", model)

@@ -40,6 +40,9 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	if rec.Harness == target {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is already active"}
 	}
+	if rec.NeedsImportResume() {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "open the imported chat before switching providers"}
+	}
 	if active, err := m.hasActiveInterfaceTransition(ctx, id); err != nil {
 		return err
 	} else if active {

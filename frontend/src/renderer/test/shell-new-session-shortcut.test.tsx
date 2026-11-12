@@ -122,7 +122,7 @@ const shellMocks = vi.hoisted(() => {
 		queryClient: {
 			ensureQueryData: vi.fn(),
 			fetchQuery: vi.fn(),
-			getQueryCache: () => ({ findAll: () => [] }),
+			getQueryCache: () => ({ findAll: () => [], subscribe: () => () => undefined }),
 			getQueryData: vi.fn(),
 			getQueryState: vi.fn(),
 			invalidateQueries: vi.fn(),
@@ -238,7 +238,7 @@ vi.mock("../hooks/useDaemonStatus", () => ({
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
-	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() },
+	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn(), PUT: vi.fn() },
 	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
 	apiErrorMessage: (error: { message?: string } | undefined) => error?.message ?? "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -502,6 +502,7 @@ beforeEach(() => {
 	shellMocks.state.daemonStatus = { state: "error", code: "not_ready" };
 	shellMocks.state.shellValue = undefined;
 	vi.mocked(apiClient.PATCH).mockReset().mockResolvedValue({ error: undefined });
+	vi.mocked(apiClient.PUT).mockReset().mockResolvedValue({ error: undefined });
 	shellMocks.queryClient.fetchQuery.mockReset().mockResolvedValue(workspaces);
 	shellMocks.queryClient.getQueryData.mockReset().mockReturnValue(workspaces);
 	shellMocks.queryClient.getQueryState.mockReset().mockReturnValue({ dataUpdatedAt: 0 });
@@ -574,6 +575,9 @@ describe("shell workspace startup", () => {
 		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
 			body: { enabled: true },
 		});
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
+			body: { enabled: true },
+		}));
 
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
 		view.rerender(
@@ -590,6 +594,9 @@ describe("shell workspace startup", () => {
 		await renderShell();
 
 		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: false },
+		}));
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
 			body: { enabled: false },
 		}));
 	});
@@ -642,7 +649,7 @@ describe("shell workspace startup", () => {
 			params: { projectId: "proj-1", sessionId: "orch-existing" },
 		}));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
-			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex" },
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex", async: true },
 		});
 		expect(apiClient.POST).toHaveBeenCalledTimes(3);
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
@@ -795,6 +802,9 @@ describe("shell workspace startup", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-new", sessionId: "orch-new" },
 		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-new", kind: "orchestrator", harness: "codex", async: true },
+		});
 		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
 		expect(publish([{ ...workspaces[0], id: "proj-new", name: "New", sessions: [] }])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false);

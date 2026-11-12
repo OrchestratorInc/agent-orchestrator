@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -591,6 +592,65 @@ func TestCollectorReactivateSessionRejectsStaleLaunch(t *testing.T) {
 	}
 }
 
+func TestCollectorReactivateSessionWaitsForLockAndHonorsCancellation(t *testing.T) {
+	store := collectorTestStore(t)
+	session := collectorTestSession(t, store, domain.HarnessCodex, "native-contended", false)
+	session.Metadata.RuntimeLaunchID = "launch-current"
+	mustNoError(t, store.UpdateSession(context.Background(), session))
+	collector := NewCollector(store, SourceRoots{}, nil)
+
+	t.Run("waits and reports completion", func(t *testing.T) {
+		mustNoError(t, collector.mu.Acquire(context.Background(), 1))
+		done := make(chan error, 1)
+		go func() {
+			done <- collector.ReactivateSession(context.Background(), session.ID, "launch-current")
+		}()
+		select {
+		case err := <-done:
+			collector.mu.Release(1)
+			t.Fatalf("reactivation returned before serialized work ran: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+		collector.mu.Release(1)
+		mustNoError(t, <-done)
+	})
+
+	t.Run("canceled waiter returns context error", func(t *testing.T) {
+		mustNoError(t, collector.mu.Acquire(context.Background(), 1))
+		defer collector.mu.Release(1)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := collector.ReactivateSession(ctx, session.ID, "launch-current"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("ReactivateSession error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+func TestCollectorFinalizeSessionHonorsCancellationWhileWaitingForLock(t *testing.T) {
+	store := collectorTestStore(t)
+	session := collectorTestSession(t, store, domain.HarnessCodex, "native-contended", false)
+	collector := NewCollector(store, SourceRoots{}, nil)
+	mustNoError(t, collector.mu.Acquire(context.Background(), 1))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- collector.FinalizeSession(ctx, session.ID, "", session.Revision)
+	}()
+	select {
+	case err := <-done:
+		collector.mu.Release(1)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("FinalizeSession error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		collector.mu.Release(1)
+		<-done
+		t.Fatal("FinalizeSession did not observe cancellation while waiting for collector lock")
+	}
+}
+
 func TestCollectorHookLifecycleTransitions(t *testing.T) {
 	complete, active := domain.UsageSourceComplete, domain.UsageSourceActive
 	tests := []struct {
@@ -761,7 +821,6 @@ func TestCollectorCurrentActivityReactivatesBindingDuringReaperFinalization(t *t
 		t.Fatalf("binding during finalization=%s, want finalizing", during.State)
 	}
 
-	activityApplied := make(chan struct{})
 	hookDone := make(chan error, 1)
 	go func() {
 		err := manager.ApplyActivitySignal(context.Background(), session.ID, ports.ActivitySignal{
@@ -772,7 +831,6 @@ func TestCollectorCurrentActivityReactivatesBindingDuringReaperFinalization(t *t
 			AgentSessionID: "native-race",
 			LaunchID:       "launch-current",
 		})
-		close(activityApplied)
 		if err == nil {
 			err = collector.RecordHook(context.Background(), session.ID, HookSignal{
 				Event:           "post-tool-use",
@@ -782,10 +840,19 @@ func TestCollectorCurrentActivityReactivatesBindingDuringReaperFinalization(t *t
 		}
 		hookDone <- err
 	}()
-	select {
-	case <-activityApplied:
-	case <-time.After(2 * time.Second):
-		t.Fatal("current activity did not persist while finalizer was blocked")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		persisted, ok, err := store.GetSession(context.Background(), session.ID)
+		if err != nil || !ok {
+			t.Fatalf("session during contention ok=%v err=%v", ok, err)
+		}
+		if persisted.Activity.State == domain.ActivityActive {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("current activity did not persist while finalizer was blocked")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	close(release)
 	mustNoError(t, <-reaperDone)
@@ -2062,6 +2129,17 @@ func TestSourceKindForHarness(t *testing.T) {
 		{harness: domain.HarnessClaudeCode, want: domain.UsageSourceClaudeMain, ok: true},
 		{harness: domain.HarnessCodex, want: domain.UsageSourceCodexRollout, ok: true},
 		{harness: domain.HarnessKimi, want: domain.UsageSourceKimiWire, ok: true},
+		{harness: domain.HarnessPi, want: domain.UsageSourcePiSession, ok: true},
+		{harness: domain.HarnessQwen, want: domain.UsageSourceQwenMonthly, ok: true},
+		{harness: domain.HarnessOMP, want: domain.UsageSourceOMPSession, ok: true},
+		{harness: domain.HarnessKimchi, want: domain.UsageSourceKimchiSession, ok: true},
+		{harness: domain.HarnessGoose, want: domain.UsageSourceGooseLedger, ok: true},
+		{harness: domain.HarnessOpenCode, want: domain.UsageSourceOpenCodeDB, ok: true},
+		{harness: domain.HarnessKilocode, want: domain.UsageSourceKiloDB, ok: true},
+		{harness: domain.HarnessPrimeAgent, want: domain.UsageSourcePrimeAgentSession, ok: true},
+		{harness: domain.HarnessGrok, want: domain.UsageSourceGrokUsage, ok: true},
+		{harness: domain.HarnessDeepSeek, want: domain.UsageSourceDeepSeekSession, ok: true},
+		{harness: domain.HarnessAgy, want: domain.UsageSourceAgyConversation, ok: true},
 		{harness: domain.HarnessAider, ok: false},
 	}
 	for _, tt := range tests {
@@ -2077,7 +2155,7 @@ func TestDiscoverClaudePathRejectsGlobMetadata(t *testing.T) {
 	writeUsageFixture(t, filepath.Join(root, "project", "native-session.jsonl"), "{}\n")
 	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
 
-	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*")
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*", "")
 	mustNoError(t, err)
 	if path != "" {
 		t.Fatalf("invalid Claude native ID discovered %q", path)

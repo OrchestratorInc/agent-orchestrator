@@ -13,6 +13,7 @@ import (
 //
 // Deliberately left out: WORKSPACE_PROVISION_FAILED and
 // WORKSPACE_CLEANUP_FAILED (the user's own setup or cleanup script),
+// CODEX_ACCOUNT_SETUP_INCOMPLETE (the user has not finished Codex sign-in),
 // GIT_CLONE_FAILED and network codes (remote or connectivity), and anything
 // auth related (the user is signed out).
 var faultCodes = map[string]struct{}{
@@ -40,7 +41,6 @@ var faultCodes = map[string]struct{}{
 	"CLONE_CLEANUP_FAILED":              {},
 	"CLONE_PREPARATION_FAILED":          {},
 	// Codex account staging and Computer Use (503).
-	"CODEX_ACCOUNT_SETUP_INCOMPLETE":              {},
 	"CODEX_ACCOUNT_SWITCH_ACTIVATION_UNCONFIRMED": {},
 	"COMPUTER_USE_DAEMON_START_FAILED":            {},
 }
@@ -62,4 +62,18 @@ func IsFaultCode(code string) bool {
 // (a hung git, provider or exec call) rather than lock contention.
 func IsServerTimeout(status int, err error) bool {
 	return status == http.StatusServiceUnavailable && err != nil && errors.Is(err, context.DeadlineExceeded)
+}
+
+// spawnFailedSteps and spawnFailureCauses are the closed vocabularies spawn
+// telemetry reports as failed_step and cause (see the session service); only
+// these values may reach Sentry as tags.
+var spawnFailedSteps = map[string]struct{}{
+	"model_check": {}, "branch_fetch": {}, "worktree": {}, "setup": {},
+	"agent_start": {}, "prompt": {}, "other": {},
+}
+
+var spawnFailureCauses = map[string]struct{}{
+	"branch_exists": {}, "path_exists": {}, "locked": {}, "permission": {},
+	"path_too_long": {}, "not_a_repo": {}, "killed": {}, "exited": {},
+	"no_response": {}, "not_logged_in": {}, "timeout": {}, "other": {},
 }

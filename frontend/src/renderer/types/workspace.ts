@@ -1,3 +1,4 @@
+import { deliverableArtifacts, type Deliverable } from "../../../../packages/shared/artifacts/deliverables";
 import { attentionZone as presentationAttentionZone } from "../lib/session-presentation";
 import {
 	AGENT_OPTIONS,
@@ -70,6 +71,8 @@ export type ArtifactKind = "html" | "markdown" | "file";
  * never resolve to a workspace-relative file of the same path.
  */
 export type SessionArtifact = {
+	/** The artifact's identity, kept when its file is renamed. */
+	id?: string;
 	kind: ArtifactKind;
 	name: string;
 	path: string;
@@ -82,6 +85,12 @@ export type SessionArtifact = {
 	inlineUrl?: string;
 	size: number;
 	updatedAt: string;
+	/** Set on a file the agent registered with `ao artifact add`. */
+	registered?: boolean;
+	/** The paths the artifact had before it was renamed, latest last. */
+	previousPaths?: string[];
+	/** The file's public link while it is published from this computer. */
+	shareUrl?: string;
 };
 
 /** The daemon-committed controller currently responsible for the session. */
@@ -189,6 +198,8 @@ export type WorkspaceSession = {
 	/** Whether the cloud worker has a current control-plane connection. */
 	runtimeConnected?: boolean;
 	chatProviderPreserved?: boolean;
+	/** An imported chat not opened yet: it has no AO workspace until it resumes. */
+	needsResume?: boolean;
 	/** User preference to tear down this session when its PR set completes through a merge. */
 	terminateOnPrMerge?: boolean;
 	/** Whether SCM review feedback is automatically injected into the worker. */
@@ -326,12 +337,21 @@ export function primaryPR(session: WorkspaceSession): PullRequestFacts | undefin
 	return sortedPRs(session)[0];
 }
 
-/** Artifact files to show in the Summary panel, newest first, for sessions whose output includes artifacts. */
+/** Every artifact file of a session whose output includes artifacts, listed or not, newest first. */
 export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
 	if (session.outputType !== "artifact" && session.outputType !== "pr_artifact") return [];
 	return [...(session.artifactFiles ?? [])].sort(
 		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
 	);
+}
+
+/**
+ * The session's artifacts as the artifact lists show them. Use
+ * {@link sessionArtifacts} for anything that needs every file, such as a count
+ * of what a delete removes.
+ */
+export function sessionDeliverables(session: WorkspaceSession): Deliverable<SessionArtifact>[] {
+	return deliverableArtifacts(sessionArtifacts(session));
 }
 
 export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "kind">): boolean {
@@ -387,6 +407,7 @@ function sessionLastMessageTimestamp(session: WorkspaceSession): number {
 	return (
 		validTimestamp(session.lastInteractionAt) ??
 		validTimestamp(session.lastUserMessageAt) ??
+		(session.needsResume ? validTimestamp(session.activity?.lastActivityAt) : undefined) ??
 		validTimestamp(session.createdAt) ??
 		0
 	);
@@ -406,7 +427,7 @@ export function workerSessions(sessions: WorkspaceSession[]): WorkspaceSession[]
 	return sessions.filter((s) => !isOrchestratorSession(s));
 }
 
-/** Worker sessions ordered by the user's latest message (else creation), newest first. */
+/** Worker sessions ordered by the user's latest message (else an unopened import's source activity, else creation), newest first. */
 export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSession[] {
 	return workerSessions(sessions).sort((a, b) =>
 		sessionRecentlyMessagedNewer(b, a) ? 1 : sessionRecentlyMessagedNewer(a, b) ? -1 : 0,
@@ -434,13 +455,13 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
  * Not `sessionIsActive`, which reports row liveness and calls this state alive.
  */
 export function sessionAgentExited(session: WorkspaceSession | undefined): boolean {
-	return Boolean(session && session.activity?.state === "exited" && sessionIsActive(session));
+	return Boolean(session && !session.needsResume && session.activity?.state === "exited" && sessionIsActive(session));
 }
 
 /** Whether a session can accept a Cue from its topbar. The daemon makes the
  * final decision, including whether a command Cue's worktree still exists. */
 export function sessionCueTargetAvailable(session: WorkspaceSession | undefined): boolean {
-	return Boolean(session && sessionIsActive(session) && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
+	return Boolean(session && sessionIsActive(session) && !session.needsResume && session.activity?.state !== "exited" && session.activity?.state !== "blocked");
 }
 
 export function sessionNeedsAttention(session: WorkspaceSession): boolean {
@@ -488,9 +509,16 @@ export type WorkspaceSummary = {
 	 * `kind === CLOUD_PROJECT_KIND`.
 	 */
 	kind?: ProjectKind | typeof CLOUD_PROJECT_KIND | typeof STANDALONE_PROJECT_KIND;
+	/**
+	 * "workspace" on a cloud project laid out like a local workspace: every
+	 * repository (workspaceRepos) side by side in one folder.
+	 */
+	cloudLayout?: "workspace";
 	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
 	folderMissing?: boolean;
+	/** Automatic starts (tracker intake, schedules) the daemon paused after repeated identical failures. */
+	autoSpawnPauses?: import("../hooks/useAutoSpawnPauseNotice").AutoSpawnPause[];
 	workspaceRepos?: WorkspaceRepoSummary[];
 	type?: "main" | "worktree";
 	orchestratorAgent?: AgentProvider;

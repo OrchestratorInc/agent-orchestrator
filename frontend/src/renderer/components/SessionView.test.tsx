@@ -989,6 +989,7 @@ describe("SessionView", () => {
 			delete session.previewRevision;
 			delete session.isTerminated;
 			delete session.runtimeConnected;
+			delete session.needsResume;
 			delete session.cloud;
 			session.status = "working";
 			session.provider = "claude-code";
@@ -1077,6 +1078,7 @@ describe("SessionView", () => {
 		resumeAgentPostMock.mockResolvedValue({ data: {}, error: undefined });
 		chatViewPostMock.mockReset().mockResolvedValue({ error: undefined });
 		reviewGetMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [] }, error: undefined };
 			if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
 				return {
 					data: {
@@ -1124,6 +1126,44 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBeUndefined();
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
 		expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
+	});
+
+	it.each(["idle", "exited"] as const)("automatically resumes imported history once on opening when activity is %s", async (state) => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		session.needsResume = true;
+		session.status = "working";
+		session.activity = { state, lastActivityAt: "" };
+		const view = render(<StrictMode><SessionView sessionId="sess-1" /></StrictMode>);
+		expect(chatSurfaceTransitionRenders[0]).toBe(true);
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+		expect(resumeAgentPostMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "sess-1" } },
+		});
+		await waitFor(() => expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false"));
+		view.rerender(<StrictMode><SessionView sessionId="sess-1" /></StrictMode>);
+		await act(async () => {});
+		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+		session.needsResume = undefined;
+	});
+
+	it("connects each imported chat on navigation without flashing a stopped surface", async () => {
+		for (const id of ["sess-1", "sess-2"]) {
+			const session = workerSession(id);
+			session.mode = "chat";
+			session.needsResume = true;
+			session.activity = { state: "idle", lastActivityAt: "" };
+		}
+		const view = render(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(view.client.isMutating()).toBe(0));
+		chatSurfaceTransitionRenders.length = 0;
+		view.rerender(<SessionView sessionId="sess-2" />);
+		expect(chatSurfaceTransitionRenders[0]).toBe(true);
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(2));
+		expect(resumeAgentPostMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "sess-2" } },
+		});
 	});
 
 	it("resumes only the opened stopped session once, including in StrictMode", async () => {
@@ -1190,11 +1230,12 @@ describe("SessionView", () => {
 		expect(resumeAgentPostMock).not.toHaveBeenCalled();
 	});
 
-	it("leaves a failed automatic resume stopped for manual retry", async () => {
+	it.each([false, true])("leaves a failed automatic resume stopped for manual retry (imported=%s)", async (imported) => {
 		const session = workerSession("sess-1");
 		session.mode = "chat";
 		session.status = "exited";
 		session.activity = { state: "exited", lastActivityAt: "" };
+		session.needsResume = imported;
 		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
 		const priorToast = useUiStore.getState().globalToast;
 		const view = render(<SessionView sessionId="sess-1" />);
@@ -1696,6 +1737,30 @@ describe("SessionView", () => {
 		await waitFor(() => expect(chatViewPostMock.mock.calls.some(([, input]) => input.body.active === false)).toBe(true));
 		view.rerender(<SessionView sessionId="sess-1" />);
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
+	});
+
+	it("lets a hidden window's stalled Chat lease lapse and renews it on return", async () => {
+		workerSession("sess-1").mode = "chat";
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		let hidden = false;
+		Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+		const renewals = () => chatViewPostMock.mock.calls.filter(([, input]) => input.body.active).length;
+		try {
+			render(<SessionView sessionId="sess-1" />);
+			await waitFor(() => expect(renewals()).toBe(1));
+			hidden = true;
+			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+			expect(renewals()).toBe(2);
+			vi.setSystemTime(Date.now() + 60_000);
+			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+			expect(renewals()).toBe(2);
+			hidden = false;
+			act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+			await waitFor(() => expect(renewals()).toBe(3));
+		} finally {
+			Reflect.deleteProperty(document, "hidden");
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not wake Chat while restoring its selected shell tab", async () => {
@@ -2612,6 +2677,20 @@ describe("SessionView", () => {
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
 		});
+	});
+
+	it("shows a pending Terminal import archive and switches to Terminal after adoption", () => {
+		const session = workerSession("sess-1");
+		session.mode = "tui";
+		session.provider = "gemini";
+		session.needsResume = true;
+		session.status = "idle";
+		const view = render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
+		session.needsResume = undefined;
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-target")).toBeInTheDocument();
 	});
 
 	it("activates a new terminal opened while a file tab is selected", async () => {
@@ -4745,7 +4824,7 @@ describe("SessionView", () => {
 		settingsState.chatHarnesses = ["claude-code", "codex"];
 		interfaceTransitionState.status = status;
 		const session = workerSession("sess-1");
-		session.provider = "goose";
+		session.provider = "gemini";
 		session.mode = "tui";
 		if (terminated) session.isTerminated = true;
 

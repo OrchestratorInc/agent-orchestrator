@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { AgentLogo } from "./AgentLogo";
-import { listArtifactVersions, syncArtifactVersions } from "./api";
 import { formatVersionTime, restoredNote, versionAuthor, type ArtifactVersionSummary } from "./artifactVersions";
 import { userFacingError } from "./connectionError";
 import { haptics } from "./haptics";
 import { Feather } from "./icons";
 import { useApp } from "./store";
+import { useArtifactsBackend } from "./useArtifactsBackend";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { iconSize, space, type } from "./tokens";
@@ -18,13 +18,15 @@ const AVATAR = 24;
  * Every kept version of one artifact file, newest first, the first marked
  * Current: the phone's counterpart of the desktop viewer's History menu.
  * As there, the kept list shows at once while any edit the daemon has not
- * picked up yet is recorded behind it, then the list is replaced.
+ * picked up yet is recorded behind it, then the list is replaced (Orchestrator
+ * Cloud keeps its versions by itself, so its list is read once).
  * `onSelect` gets null for the current version, which is the live file.
  */
 export function ArtifactHistorySheet({ sessionId, path, name, onSelect }: { sessionId: string; path: string; name: string; onSelect(version: number | null): void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { config, sessions } = useApp();
+	const { sessions } = useApp();
+	const { backend } = useArtifactsBackend(sessionId);
 	const fallbackHarness = sessions.find((session) => session.id === sessionId)?.harness;
 	const [versions, setVersions] = useState<ArtifactVersionSummary[]>();
 	const [error, setError] = useState<string>();
@@ -32,19 +34,23 @@ export function ArtifactHistorySheet({ sessionId, path, name, onSelect }: { sess
 	const now = useRef(new Date()).current;
 
 	useEffect(() => {
-		if (!config) return;
+		if (!backend) return;
 		const controller = new AbortController();
 		const { signal } = controller;
 		let synced = false;
 		setError(undefined);
-		listArtifactVersions(config, sessionId, path, { signal })
+		const failed = (cause: unknown) => { if (!signal.aborted) setError(userFacingError(cause, "Couldn't load the version history.")); };
+		const sync = backend.syncVersions;
+		backend.versions(sessionId, path, signal)
 			.then((listed) => { if (!synced) setVersions(listed); })
-			.catch(() => {});
-		syncArtifactVersions(config, sessionId, path, { signal })
-			.then((latest) => { synced = true; setVersions(latest); })
-			.catch((cause) => { if (!signal.aborted) setError(userFacingError(cause, "Couldn't load the version history.")); });
+			.catch(sync ? () => {} : failed);
+		if (sync) {
+			sync(sessionId, path, signal)
+				.then((latest) => { synced = true; setVersions(latest); })
+				.catch(failed);
+		}
 		return () => controller.abort();
-	}, [attempt, config, path, sessionId]);
+	}, [attempt, backend, path, sessionId]);
 
 	const retry = useCallback(() => setAttempt((n) => n + 1), []);
 	const current = versions?.[0]?.version;

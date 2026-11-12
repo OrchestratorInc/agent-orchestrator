@@ -98,10 +98,16 @@ export function isSettingsPageOpen(): boolean {
 	return useUiStore.getState().settingsModal?.scope === "global";
 }
 
+/** True while the archive modal covers the routed page. */
+function isArchiveModalOpen(): boolean {
+	return Boolean(useUiStore.getState().archiveModal);
+}
+
 /**
  * For commands that act on the session on screen (archive, open in editor,
  * copy path, panel toggles). The session page stays mounted but hidden under
- * Settings, so these stand down there instead of acting on an invisible session.
+ * Settings or the archive modal, so these stand down there instead of acting
+ * on a session the user cannot see.
  */
 export function useSessionShortcut(
 	id: AppShortcutId,
@@ -111,7 +117,7 @@ export function useSessionShortcut(
 	useAppShortcut(
 		id,
 		(event) => {
-			if (!isSettingsPageOpen()) handler(event);
+			if (!isSettingsPageOpen() && !isArchiveModalOpen()) handler(event);
 		},
 		enabled,
 	);

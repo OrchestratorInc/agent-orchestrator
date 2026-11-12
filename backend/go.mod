@@ -1,6 +1,6 @@
 module github.com/aoagents/agent-orchestrator/backend
 
-go 1.27.1
+go 1.27.4
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
@@ -14,6 +14,7 @@ require (
 	github.com/getsentry/sentry-go v0.48.0
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/google/uuid v1.6.0
+	github.com/klauspost/compress v1.20.4
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/rivo/uniseg v0.4.7
@@ -25,9 +26,11 @@ require (
 	github.com/unixshells/vt-go v0.2.0
 	github.com/unreallabsai/unreal-agent v0.1.1
 	github.com/yuin/goldmark v1.8.2
-	golang.org/x/sync v0.23.0
-	golang.org/x/sys v0.48.0
-	golang.org/x/text v0.42.0
+	golang.org/x/net v0.62.0
+	golang.org/x/sync v0.24.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/text v0.43.0
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.51.0
 	rsc.io/qr v0.2.0
@@ -62,7 +65,7 @@ require (
 	github.com/u-root/u-root v0.16.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/image v0.46.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/libc v1.72.3 // indirect

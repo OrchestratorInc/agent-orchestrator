@@ -307,6 +307,43 @@ describe("general access", () => {
 		await waitFor(() => expect(mocks.client.getShareAccess).toHaveBeenCalledWith(ORG, "project", undefined));
 	});
 
+	it("shows Share the whole project instead as an action: a button with a dotted underline that the keyboard reaches", async () => {
+		renderDialog();
+		const cta = await screen.findByRole("button", { name: "Share the whole project instead" });
+		expect(cta.tagName).toBe("BUTTON");
+		expect(cta).toHaveAttribute("type", "button");
+		// Underlined at rest, dotted, so it reads as something to press, not as plain text.
+		expect(cta.className).not.toContain("no-underline");
+		expect(cta.className).toMatch(/(^|\s)underline(\s|$)/);
+		expect(cta.className).toContain("decoration-dotted");
+		// Hover and keyboard focus brighten it (the app draws no focus rings).
+		expect(cta.className).toContain("hover:text-foreground");
+		expect(cta.className).toContain("focus-visible:text-foreground");
+		cta.focus();
+		expect(cta).toHaveFocus();
+		await userEvent.keyboard("{Enter}");
+		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();
+		// The way back reads the same way.
+		expect((await screen.findByRole("button", { name: "Share only this session" })).className).toContain("decoration-dotted");
+	});
+
+	it("shares only the whole project when opened without a session, as Project settings does", async () => {
+		renderDialog({ sessionId: undefined, sessionName: undefined });
+		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();
+		expect(screen.getByText("Includes every session, also ones started later.")).toBeInTheDocument();
+		// No session to go back to.
+		expect(screen.queryByRole("button", { name: "Share only this session" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Share the whole project instead" })).toBeNull();
+		expect(await sentence()).toBe("Only people in Northwind and people added above can open this project.");
+		await waitFor(() => expect(mocks.client.getShareAccess).toHaveBeenCalledWith(ORG, "project", undefined));
+		expect(mocks.client.getShareAccess).not.toHaveBeenCalledWith(ORG, "project", expect.any(String));
+		// Turning link access on makes a link to the whole project, naming no session.
+		mocks.client.createShareLink.mockResolvedValue({ link: shareLink({ id: NEW_LINK, code: CODE, shortUrl: SHORT }) });
+		await chooseAudience("Anyone with the link");
+		await waitFor(() => expect(mocks.client.createShareLink).toHaveBeenCalledTimes(1));
+		expect(mocks.client.createShareLink.mock.calls[0]?.[2]).not.toHaveProperty("sessionId");
+	});
+
 	it("is General access and Copy link only in a build without Teams", async () => {
 		renderDialog({ people: false });
 		expect(await sentence()).toBe("Only people with access can open this session.");

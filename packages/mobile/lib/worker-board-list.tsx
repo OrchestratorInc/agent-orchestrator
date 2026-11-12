@@ -29,6 +29,8 @@ import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { ListSectionHeader } from "./ui";
+import { ARCHIVE_CLOUD_SESSION_CONFIRM } from "./cloud/sessionMenu";
+import { isCloudHost } from "./cloud/mapping";
 import { ARCHIVE_SESSION_CONFIRM } from "./worker-action-model";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
@@ -114,6 +116,7 @@ export function WorkerBoardList({
 	identityKey,
 	archiveSources = NO_ARCHIVE_SOURCES,
 	archiveFooter = false,
+	onEmptyChange,
 	onScroll,
 }: {
 	sessions: DashboardSession[];
@@ -166,6 +169,12 @@ export function WorkerBoardList({
 	 * yet" copy is not, so it keeps the plain Archive row.
 	 */
 	archiveFooter?: boolean;
+	/**
+	 * Told whether `ListEmptyComponent` is what the board shows (with Archive
+	 * beneath it or not), so a page whose empty state offers its own way to
+	 * start a task can leave its floating one out: one way at a time.
+	 */
+	onEmptyChange?(empty: boolean): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -433,12 +442,14 @@ export function WorkerBoardList({
 
 	const confirmDeleteSession = useCallback((session: DashboardSession) => {
 		haptics.warning();
+		// A cloud session's attached files go with it, which its copy says.
+		const copy = isCloudHost(sessionHostId(session)) ? ARCHIVE_CLOUD_SESSION_CONFIRM : ARCHIVE_SESSION_CONFIRM;
 		Alert.alert(
-			ARCHIVE_SESSION_CONFIRM.title,
-			ARCHIVE_SESSION_CONFIRM.message,
+			copy.title,
+			copy.message,
 			[
-				{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
-				{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
+				{ text: copy.cancel, style: "cancel" },
+				{ text: copy.confirm, style: "destructive", onPress: () => void kill(session.id, sessionHostId(session)).catch(() => {}) },
 			],
 		);
 	}, [kill]);
@@ -544,8 +555,10 @@ export function WorkerBoardList({
 	// bar; an offset there moved it a whole header lower, onto the rows, and
 	// jumped it as the bar's height changed during the pull.
 	const spinnerOffset = Platform.OS === "android" ? overlayTopInset : undefined;
+	const showsEmpty = listData.length === 0 || archiveOnly;
+	useEffect(() => { onEmptyChange?.(showsEmpty); }, [onEmptyChange, showsEmpty]);
 	// The Archive footer is sized the same way, so it rests just above the tab bar.
-	const contentContainerStyle = insetsForBars && visibleHeight && (listData.length === 0 || archiveOnly)
+	const contentContainerStyle = insetsForBars && visibleHeight && showsEmpty
 		? { minHeight: visibleHeight, paddingBottom: contentBottomInset }
 		: { flexGrow: 1, paddingBottom: contentBottomInset };
 

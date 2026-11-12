@@ -935,6 +935,12 @@ retryProjection:
 		(s.TranscriptPath != "" && rec.Metadata.NativeTranscriptPath != s.TranscriptPath) ||
 		checkpointChanged || subagentFacts != storedSubagentFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
+	nativeSessionChanged := s.AgentSessionID != "" &&
+		(rec.Metadata.AgentSessionID != s.AgentSessionID || rec.Metadata.AgentSessionIDLaunchID != s.LaunchID)
+	var usageReactivator sessionUsageReactivator
+	if nativeSessionChanged {
+		usageReactivator = m.usageReactivator
+	}
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
 	}
@@ -983,6 +989,9 @@ retryProjection:
 			goto retryProjection
 		}
 		m.mu.Unlock()
+		if nativeSessionChanged {
+			reactivateSessionUsage(ctx, id, rec.Metadata.RuntimeLaunchID, usageReactivator)
+		}
 		return nil
 	}
 	if metadataChanged {
@@ -1024,6 +1033,9 @@ retryProjection:
 				return nil
 			}
 			m.mu.Unlock()
+			if nativeSessionChanged {
+				reactivateSessionUsage(ctx, id, rec.Metadata.RuntimeLaunchID, usageReactivator)
+			}
 			return nil
 		}
 		m.mu.Unlock()
@@ -1071,6 +1083,9 @@ retryProjection:
 	resolutions := needsInputResolutions(rec, next, now)
 	waitingEvents := m.waitingInputEvents(next, prevState, prevAt, now)
 	m.mu.Unlock()
+	if nativeSessionChanged {
+		reactivateSessionUsage(ctx, id, next.Metadata.RuntimeLaunchID, usageReactivator)
+	}
 	if prevState != domain.ActivityIdle && next.Activity.State == domain.ActivityIdle {
 		m.operationGateMu.RLock()
 		gate := m.operationGate
@@ -1864,6 +1879,10 @@ func sameActivity(a, b domain.Activity) bool {
 }
 
 func mergeMetadata(base, in domain.SessionMetadata) domain.SessionMetadata {
+	if in.ImportSource != nil {
+		source := *in.ImportSource
+		base.ImportSource = &source
+	}
 	set := func(dst *string, v string) {
 		if v != "" {
 			*dst = v

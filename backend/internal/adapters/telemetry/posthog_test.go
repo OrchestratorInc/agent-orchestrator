@@ -659,6 +659,20 @@ func TestSanitizeRemotePayloadDropsUnlistedReviewKeys(t *testing.T) {
 	}
 }
 
+func TestSanitizeRemotePayloadKeepsWriteLockHolder(t *testing.T) {
+	got := sanitizeRemotePayload("ao.daemon.write_lock_held", map[string]any{
+		"caller":      "store.(*Store).DeleteTerminatedSession:933 | session.(*Service).DeleteExpired:1215",
+		"duration_ms": int64(110482),
+		"session_id":  "agent-orchestrator-1-374",
+	})
+	if got["caller"] != "store.(*Store).DeleteTerminatedSession:933 | session.(*Service).DeleteExpired:1215" || got["duration_ms"] != int64(110482) {
+		t.Fatalf("write lock fields were dropped: %#v", got)
+	}
+	if _, ok := got["session_id"]; ok {
+		t.Fatalf("session_id survived sanitization: %#v", got)
+	}
+}
+
 // Older renderer builds wrote per-build values to person profiles, and nothing
 // refreshed them, so a profile kept showing a months-old version. The one
 // identified update clears them on the wire; later events stay anonymous.

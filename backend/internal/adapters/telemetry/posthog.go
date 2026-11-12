@@ -104,7 +104,8 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
-	"ao.automation.created": {"use_case": {}, "template_id": {}},
+	"ao.automation.created":     {"use_case": {}, "template_id": {}},
+	"ao.daemon.write_lock_held": {"caller": {}, "duration_ms": {}},
 
 	// count is direct human Chat messages; steer_count and send_count are the
 	// other human sends; the surface counts split all three by client.
@@ -270,6 +271,42 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"harness":           {},
 		"kind":              {},
 		"operation":         {},
+		"created_by":        {},
+		"surface":           {},
+		"failed_step":       {},
+		"cause":             {},
+		"model_check_ms":    {},
+		"branch_fetch_ms":   {},
+		"worktree_ms":       {},
+		"setup_ms":          {},
+		"agent_start_ms":    {},
+		"mode":              {},
+		"async":             {},
+		"model":             {},
+	},
+	// A start cancelled on purpose; same props as spawn_failed.
+	"ao.sessions.spawn_cancelled": {
+		"component":         {},
+		"duration_ms":       {},
+		"spawn_duration_ms": {},
+		"error_code":        {},
+		"error_kind":        {},
+		"fingerprint":       {},
+		"harness":           {},
+		"kind":              {},
+		"operation":         {},
+		"created_by":        {},
+		"surface":           {},
+		"failed_step":       {},
+		"cause":             {},
+		"model_check_ms":    {},
+		"branch_fetch_ms":   {},
+		"worktree_ms":       {},
+		"setup_ms":          {},
+		"agent_start_ms":    {},
+		"mode":              {},
+		"async":             {},
+		"model":             {},
 	},
 	"ao.session.relaunch_failed": {
 		"cause_type":  {},
@@ -290,6 +327,14 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":              {},
 		"github_actor":      {},
 		"surface":           {},
+		"model_check_ms":    {},
+		"branch_fetch_ms":   {},
+		"worktree_ms":       {},
+		"setup_ms":          {},
+		"agent_start_ms":    {},
+		"mode":              {},
+		"async":             {},
+		"model":             {},
 	},
 	// Whether a session delivered: outcome is pr_opened, completed, killed,
 	// failed or abandoned (internal/deliverytelemetry).

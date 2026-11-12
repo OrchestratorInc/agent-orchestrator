@@ -91,7 +91,8 @@ export function groupConversationByTurn(
 			// The first loaded item can move backward when an older page arrives. The
 			// durable turn identity cannot, so use it as the React/FlatList key and
 			// preserve expanded rows and scroll measurements across pagination.
-			const group = { key: `turn-${item.turnId}`, turnId: item.turnId, anchor: item.sequence, items: [item], turn: turns.get(item.turnId) } satisfies ConversationGroup;
+			const turn = turns.get(item.turnId);
+			const group = { key: `turn-${item.turnId}`, turnId: item.turnId, anchor: turn?.anchorSequence ?? item.sequence, items: [item], turn } satisfies ConversationGroup;
 			byTurn.set(item.turnId, group);
 			groups.push(group);
 		}
