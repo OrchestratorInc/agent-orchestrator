@@ -1,0 +1,37 @@
+---
+title: Related projects
+description: Community tools that work with Orchestrator, and how to add yours to this page.
+---
+
+This page lists open-source projects by people outside the Orchestrator team that work with the current release: scripts and apps that drive the `ao` CLI, agent skills that hand work to Orchestrator, and packages for other installers. Built something? [Add it](#add-your-project).
+
+## Community projects
+
+No projects are listed yet. Yours can be the first.
+
+<Callout type="info" title="Built against an older version?">
+Projects written for the 0.2.x npm packages (`@aoagents/ao` and `@aoagents/ao-core`) don't work with the current release. Orchestrator no longer loads third-party npm plugins: its adapters are compiled into the app (see [Adapter development](/plugins/authoring)). If you maintain one of these projects, port it to the `ao` CLI and the current repository, then add it here.
+</Callout>
+
+## What you can build
+
+- **Scripts and apps that drive the `ao` CLI.** Commands such as `ao status`, `ao doctor` and `ao agent ls` take `--json`, so a script can read structured output. See the [CLI reference](/cli).
+- **Agent skills and prompts** that hand work to Orchestrator with `ao spawn`, so an agent in one tool can start workers in parallel worktrees.
+- **Packages** for an installer that Orchestrator doesn't ship to yet, such as a distribution's package manager or Nix.
+- **Starter projects:** a repository with project settings, setup scripts and agent rules for one stack, ready to add with `ao project add`.
+
+To add an agent CLI itself to Orchestrator, open a feature request instead: harness support lives in the main repository.
+
+## Add your project
+
+1. Check that it works with the current release and is open source.
+2. Add a link to [orchestrator.inc](https://orchestrator.inc) or to these docs in your README, for example with the [Built with Orchestrator badge](https://orchestrator.inc/badge/), so people who find your project can find Orchestrator too.
+3. Open a pull request that adds a row to the table below. Edit `frontend/src/docs/content/related-projects.mdx` in the [repository](https://github.com/OrchestratorInc/agent-orchestrator).
+
+The row format:
+
+| Project | What it does | Uses |
+| --- | --- | --- |
+| [name](https://github.com/you/project) | One sentence, under 15 words. | `ao` CLI, skill, package or starter |
+
+We review new rows like any other pull request. We remove projects that stop working with the current release or that go a year without an update.
