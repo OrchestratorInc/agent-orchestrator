@@ -276,7 +276,7 @@ const pkg = JSON.parse(readFileSync(join(dirname(entry), '..', 'package.json'), 
 if (pkg.name !== scope + '/pi-ai' && !(owner.name === 'prime-agent' && pkg.name === 'prime-agent-ai')) process.exit(1);
 const {MODELS} = await import(pathToFileURL(join(dirname(entry), 'models.generated.js')).href);
 const models = Object.values(MODELS).flatMap(group => Object.values(group)).map(m =>
- ({id: m.id, name: m.name, provider: m.provider, contextWindow: m.contextWindow, input: m.input}));
+ ({id: m.id, name: m.name, provider: m.provider, contextWindow: m.contextWindow, input: m.input, reasoning: m.reasoning, thinkingLevelMap: m.thinkingLevelMap}));
 process.stdout.write(JSON.stringify(models));
 `
 
