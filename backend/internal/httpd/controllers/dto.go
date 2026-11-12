@@ -1401,6 +1401,10 @@ type SendSessionMessageResponse struct {
 	OK        bool             `json:"ok"`
 	SessionID domain.SessionID `json:"sessionId"`
 	Message   string           `json:"message"`
+	// AgentWake is set when the agent had exited: "resumed" means AO
+	// restarted it and handed it the message; "resuming" means the message is
+	// queued and the restart is still running.
+	AgentWake string `json:"agentWake,omitempty" enum:"resumed,resuming"`
 }
 
 // DelegateTaskRequest is the body of POST /api/v1/orchestrators/delegate.
@@ -3166,6 +3170,9 @@ type SteerOrSendConversationResponse struct {
 	ActivityID     string           `json:"activityId,omitempty"`
 	State          domain.TurnState `json:"state,omitempty" enum:"queued,running,completed,recovered,interrupted,failed"`
 	Duplicate      bool             `json:"duplicate"`
+	// AgentWake is "resumed" when the agent had exited and AO restarted it to
+	// take this message, which it queued first.
+	AgentWake string `json:"agentWake,omitempty" enum:"resumed"`
 }
 
 // EditConversationMessageRequest changes the readable text of one durable human

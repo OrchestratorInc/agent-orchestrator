@@ -168,7 +168,9 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	// Terminal orchestrators queue typed input during a turn, and a Ctrl-C
 	// there cancels the running turn or a prompt that was just submitted, so
 	// stuck reports are delivered to them like any other report.
-	if batch.hasState(domain.ReportStuck) && domain.NormalizeSessionMode(target.Mode) == domain.SessionModeChat {
+	// An exited orchestrator has no turn to interrupt; delivery restarts it.
+	if batch.hasState(domain.ReportStuck) && domain.NormalizeSessionMode(target.Mode) == domain.SessionModeChat &&
+		target.Activity.State != domain.ActivityExited {
 		interrupted := false
 		var nextInterrupt time.Time
 		for _, worker := range batch.stuckWorkers() {
@@ -203,21 +205,33 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	return err
 }
 
+// activeOrchestrator picks the project's newest open orchestrator, preferring
+// one whose agent runs. An orchestrator whose agent exited is still the
+// target when it is the only one: delivery restarts its agent (worker reports
+// are a trusted sender), so reports no longer wait forever behind
+// "no active orchestrator" until someone resumes it by hand.
 func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.ProjectID) (domain.SessionRecord, bool, error) {
 	recs, err := c.store.ListSessions(ctx, projectID)
 	if err != nil {
 		return domain.SessionRecord{}, false, err
 	}
-	var selected domain.SessionRecord
+	var running, exited domain.SessionRecord
 	for _, rec := range recs {
-		if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+		if rec.Kind != domain.KindOrchestrator || rec.IsTerminated {
 			continue
 		}
+		selected := &running
+		if rec.Activity.State == domain.ActivityExited {
+			selected = &exited
+		}
 		if selected.ID == "" || rec.CreatedAt.After(selected.CreatedAt) {
-			selected = rec
+			*selected = rec
 		}
 	}
-	return selected, selected.ID != "", nil
+	if running.ID != "" {
+		return running, true, nil
+	}
+	return exited, exited.ID != "", nil
 }
 
 // PreparedBatch is a token-fenced durable batch awaiting acceptance.

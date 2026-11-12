@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 // steerPath is the one route this file owns, named once so the not-implemented
@@ -68,6 +69,9 @@ func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Req
 		recordUserMessage(r.Context(), c.UserMessages, domain.SessionID(chi.URLParam(r, "sessionId")), req.SenderSessionID, true)
 	}
 	response := SteerOrSendConversationResponse{Duplicate: result.Duplicate}
+	if result.Woke {
+		response.AgentWake = string(sessionmanager.AgentWakeResumed)
+	}
 	if result.Steered {
 		response.Outcome = "steered"
 		response.ProviderTurnID = result.Steer.ProviderTurnID
@@ -187,7 +191,18 @@ func writeQueuedTurnSteerError(w http.ResponseWriter, r *http.Request, err error
 // flight" needs to advise sending an ordinary message, which is the opposite of what
 // the same condition means to an interrupt.
 func writeSteerError(w http.ResponseWriter, r *http.Request, err error) {
+	var wakeErr *ports.AgentWakeError
 	switch {
+	case errors.As(err, &wakeErr):
+		reason := "unknown error"
+		if wakeErr.Reason != nil {
+			reason = wakeErr.Reason.Error()
+		}
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_WAKE_FAILED",
+			"The agent had exited and Orchestrator could not restart it: "+reason+
+				". The message is queued and will be delivered when the agent is resumed.",
+			map[string]any{"queued": wakeErr.Queued, "reason": reason})
+
 	case errors.Is(err, chatsvc.ErrSteerTextRequired):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_STEER_TEXT_REQUIRED", "steer text is required", nil)

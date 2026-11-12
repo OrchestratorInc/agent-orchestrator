@@ -501,7 +501,37 @@ type MessageDeliveryOptions struct {
 	// SenderSessionID is cooperative local identity, resolved from stored metadata.
 	SenderSessionID string
 	AuthoredByUser  bool
+	// WakeExitedAgent lets this message restart a session whose agent exited
+	// (the session itself still open), then deliver it. Only trusted senders
+	// set it: the user, another AO session through `ao send`, and worker
+	// reports. Lifecycle nudges, cues, and replacement notices leave it unset,
+	// so they never restart an agent the user stopped.
+	WakeExitedAgent bool
 }
+
+// ErrAgentWakeFailed reports that a message reached a session whose agent had
+// exited and AO could not restart it.
+var ErrAgentWakeFailed = errors.New("agent exited and could not be restarted")
+
+// AgentWakeError carries why an automatic restart failed and whether the
+// message stayed queued for the next start. A Chat session keeps it queued; a
+// terminal session has no durable queue, so the sender still holds it.
+type AgentWakeError struct {
+	Reason error
+	Queued bool
+}
+
+func (e *AgentWakeError) Error() string {
+	if e.Reason == nil {
+		return ErrAgentWakeFailed.Error()
+	}
+	return fmt.Sprintf("%s: %v", ErrAgentWakeFailed, e.Reason)
+}
+
+// Is matches ErrAgentWakeFailed only. The reason is deliberately not
+// unwrapped, so a resume failure such as "resume in progress" is never
+// mistaken for the same condition on the send itself.
+func (e *AgentWakeError) Is(target error) bool { return target == ErrAgentWakeFailed }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the
 // message text.

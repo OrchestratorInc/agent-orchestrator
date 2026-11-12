@@ -150,6 +150,12 @@ type sessionMessageOptionsSender interface {
 	SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error
 }
 
+// sessionMessageResultSender also reports whether an exited agent was
+// restarted to take the message.
+type sessionMessageResultSender interface {
+	SendWithResult(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) (sessionmanager.SendResult, error)
+}
+
 // ActivityRecorder applies an agent activity-state signal to a session. It is
 // satisfied directly by *lifecycle.Manager: an activity signal is a pure
 // lifecycle reduction (no runtime/workspace teardown), so it bypasses
@@ -2256,14 +2262,22 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		attachment = &decoded
 	}
 	message := domain.SanitizeControlChars(in.Message)
+	// Everything that reaches this endpoint is the user (the app, `ao send`
+	// outside a session) or another AO session (`ao send` from a worker or the
+	// orchestrator). Both may restart an exited agent to deliver the message;
+	// AO's own automated nudges never come through here.
+	options := ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID, WakeExitedAgent: true}
 	var err error
-	if in.UserAuthored || in.SenderSessionID != "" {
+	var result sessionmanager.SendResult
+	if sender, ok := c.Svc.(sessionMessageResultSender); ok {
+		result, err = sender.SendWithResult(r.Context(), sessionID(r), message, attachment, options)
+	} else if in.UserAuthored || in.SenderSessionID != "" {
 		sender, ok := c.Svc.(sessionMessageOptionsSender)
 		if !ok {
 			apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/send")
 			return
 		}
-		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID})
+		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, options)
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
@@ -2274,7 +2288,7 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	if recorder, ok := c.Svc.(UserMessageRecorder); ok {
 		recordUserMessage(r.Context(), recorder, sessionID(r), in.SenderSessionID, false)
 	}
-	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message})
+	envelope.WriteJSON(w, http.StatusOK, SendSessionMessageResponse{OK: true, SessionID: sessionID(r), Message: message, AgentWake: string(result.AgentWake)})
 }
 
 func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request) {

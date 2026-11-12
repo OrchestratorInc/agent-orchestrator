@@ -639,3 +639,98 @@ func TestSendCarriesCooperativeSessionIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestSend_ReportsRestartedExitedAgent(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "worker-67")
+	cfg := setConfigEnv(t)
+	srv, capture := sendServer(t, http.StatusOK,
+		`{"ok":true,"sessionId":"orch-48","message":"[from worker-67] done","agentWake":"resumed"}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "orch-48", "--message", "done")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/sessions/orch-48/send" {
+		t.Fatalf("path = %q", capture.path)
+	}
+	if !strings.Contains(out, "orch-48's agent had exited") || !strings.Contains(out, "restarted it and delivered") {
+		t.Errorf("output = %q, want the restart reported", out)
+	}
+}
+
+func TestSend_ReportsQueuedWhileAgentRestarts(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "worker-67")
+	cfg := setConfigEnv(t)
+	srv, _ := sendServer(t, http.StatusOK,
+		`{"ok":true,"sessionId":"orch-48","message":"m","agentWake":"resuming"}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "orch-48", "--message", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "is restarting it") || !strings.Contains(out, "queued") {
+		t.Errorf("output = %q, want queued-while-restarting", out)
+	}
+}
+
+func TestSend_RunningAgentPrintsNothing(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "")
+	cfg := setConfigEnv(t)
+	srv, _ := sendServer(t, http.StatusOK, `{"ok":true,"sessionId":"demo-1","message":"hi"}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "demo-1", "--message", "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("output = %q, want none for a running agent", out)
+	}
+}
+
+func TestSend_WakeFailureCarriesTheReason(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "worker-67")
+	cfg := setConfigEnv(t)
+	srv, _ := sendServer(t, http.StatusConflict,
+		`{"error":"conflict","code":"AGENT_WAKE_FAILED","message":"The agent had exited and Orchestrator could not restart it: claude is not installed. The message is queued and will be delivered when the agent is resumed."}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "orch-48", "--message", "m")
+	if err == nil {
+		t.Fatal("want the restart failure surfaced")
+	}
+	if !strings.Contains(err.Error(), "AGENT_WAKE_FAILED") || !strings.Contains(err.Error(), "claude is not installed") {
+		t.Errorf("error = %v, want code and reason", err)
+	}
+}
+
+func TestSend_SteerReportsRestartedExitedAgent(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "worker-67")
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"outcome":"sent","turnId":"turn-1","state":"queued","duplicate":false,"agentWake":"resumed"}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"send", "--session", "orch-48", "--steer", "--message", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "restarted it and delivered") || strings.Contains(out, "No active turn") {
+		t.Errorf("output = %q, want the restart reported instead of the idle-turn text", out)
+	}
+}

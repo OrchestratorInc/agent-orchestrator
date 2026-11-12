@@ -38,7 +38,13 @@ type conversationMessageAPIRequest struct {
 	RecoverOnly     bool   `json:"recoverOnly,omitempty"`
 }
 
+// sendAPIResponse is the part of the /send answer the CLI reports.
+type sendAPIResponse struct {
+	AgentWake string `json:"agentWake"`
+}
+
 type steerOrSendAPIResponse struct {
+	AgentWake      string `json:"agentWake"`
 	Outcome        string `json:"outcome"`
 	TurnID         string `json:"turnId"`
 	ProviderTurnID string `json:"providerTurnId"`
@@ -91,7 +97,12 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 	// from sanitized issue refs; keep the URL well-formed regardless.
 	path := "sessions/" + url.PathEscape(session)
 	if !opts.steer {
-		return c.postJSON(ctx, path+"/send", sendAPIRequest{Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")), UserAuthored: strings.TrimSpace(os.Getenv("AO_SESSION_ID")) == ""}, nil)
+		var result sendAPIResponse
+		if err := c.postJSON(ctx, path+"/send", sendAPIRequest{Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")), UserAuthored: strings.TrimSpace(os.Getenv("AO_SESSION_ID")) == ""}, &result); err != nil {
+			return err
+		}
+		c.reportAgentWake(session, result.AgentWake)
+		return nil
 	}
 	return c.steerMessage(ctx, path, message, strings.TrimSpace(opts.clientMessageID), opts.recoverOnly)
 }
@@ -139,6 +150,10 @@ func (c *commandContext) steerMessage(
 			result.ProviderTurnID, clientMessageID)
 		return nil
 	}
+	if result.AgentWake != "" {
+		c.reportAgentWake(strings.TrimPrefix(sessionPath, "sessions/"), result.AgentWake)
+		return nil
+	}
 	if result.Duplicate {
 		_, _ = fmt.Fprintln(c.deps.Out, "Message was already accepted; delivery state is unchanged.")
 		return nil
@@ -147,4 +162,18 @@ func (c *commandContext) steerMessage(
 		"No active turn to steer. Message accepted as a normal Chat turn in %s state with delivery handle %s; provider delivery is not confirmed.\n",
 		result.State, clientMessageID)
 	return nil
+}
+
+// reportAgentWake tells the sender that the target's agent had exited and
+// Orchestrator restarted it, so a sender does not mistake the wait for a hang
+// or assume the message was lost. A running agent prints nothing, as before.
+func (c *commandContext) reportAgentWake(session, wake string) {
+	switch wake {
+	case "resumed":
+		_, _ = fmt.Fprintf(c.deps.Out,
+			"%s's agent had exited. Orchestrator restarted it and delivered your message.\n", session)
+	case "resuming":
+		_, _ = fmt.Fprintf(c.deps.Out,
+			"%s's agent had exited. Orchestrator is restarting it; your message is queued and will be delivered once it is ready.\n", session)
+	}
 }

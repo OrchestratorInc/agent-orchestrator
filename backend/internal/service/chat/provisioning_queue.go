@@ -42,7 +42,8 @@ func (s *Service) queueWithoutController(
 			return domain.ConversationTurn{}, err
 		}
 	}
-	if !behindAccountMove && !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil {
+	if !behindAccountMove && !record.ProvisionState.IsProvisioning() && record.HibernatedAt == nil &&
+		!exitedAwaitingWake(record) {
 		return domain.ConversationTurn{}, ErrNotProvisioning
 	}
 	conversation, err := s.ensureConversation(ctx, record)

@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
+	"github.com/aoagents/agent-orchestrator/backend/internal/wakeguard"
 )
 
 // ErrNoController reports a command for a session with no live Chat controller.
@@ -99,6 +100,8 @@ type Service struct {
 	waking                map[domain.SessionID]int
 	wakeRuns              map[domain.SessionID]*wakeRun
 	backgroundWakes       map[domain.SessionID]bool
+	exitedWakes           map[domain.SessionID]*exitedWake
+	wakeBudget            *wakeguard.Budget
 	autoResumeMu          sync.Mutex
 	autoResumeRetryAt     map[string]time.Time
 	autoResumeInFlight    map[string]bool
@@ -251,6 +254,7 @@ func New(opts Options) *Service {
 		waking:                 make(map[domain.SessionID]int),
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
 		backgroundWakes:        make(map[domain.SessionID]bool),
+		exitedWakes:            make(map[domain.SessionID]*exitedWake),
 		promptSuggestionSlots:  make(chan struct{}, 2),
 	}
 	svc.sides = newSideManager(svc, newMemorySideStore(), opts.AppRunID)
@@ -2963,6 +2967,21 @@ func (s *Service) relayChatTurn(
 		record, err := s.requireChatSession(ctx, id)
 		if err != nil {
 			return "", err
+		}
+		// A trusted sender's message to an exited agent queues durably and
+		// restarts the agent in the background, the way a hibernated session
+		// wakes. The caller decides whether to wait (AwaitChatWake).
+		if options.WakeExitedAgent && exitedAwaitingWake(record) && !s.HasLiveChatController(id) {
+			turn, err := s.queueWithoutController(ctx, record, msg, false)
+			if err == nil {
+				// A duplicate still needs a running agent to deliver the first copy.
+				s.ensureExitedWake(ctx, id)
+				return turn.ID, nil
+			}
+			if !errors.Is(err, ErrNotProvisioning) {
+				return "", err
+			}
+			// The agent came back after the read; its controller takes the message.
 		}
 		if record.HibernatedAt != nil {
 			turn, err := s.queueWithoutController(ctx, record, msg, false)

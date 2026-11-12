@@ -1322,7 +1322,14 @@ func (s *Store) appendUserMessage(
 		if record.IsTerminated {
 			return false, domain.ErrSessionNotProvisioning
 		}
-		if !record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid {
+		// An exited agent in an open Chat session queues like a hibernated one:
+		// the message waits here while AO restarts the agent. The check runs
+		// under writeMu, so a session that came back to life after the caller's
+		// read is refused and the caller hands the message to its controller.
+		exitedChat := record.ActivityState == domain.ActivityExited &&
+			domain.NormalizeSessionMode(record.SessionMode) == domain.SessionModeChat &&
+			record.ProvisionState.WithDefault() == domain.SessionProvisionReady
+		if !record.ProvisionState.IsProvisioning() && !record.HibernatedAt.Valid && !exitedChat {
 			move, moveErr := s.qw.GetActiveSessionInterfaceTransition(ctx, session)
 			if moveErr != nil && !errors.Is(moveErr, sql.ErrNoRows) {
 				return false, fmt.Errorf("check account move of %s: %w", session, moveErr)
