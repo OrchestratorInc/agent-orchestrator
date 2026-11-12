@@ -629,6 +629,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/standalone-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Start a standalone agent: one worker session with no repository and no orchestrator, the caller's own. The control plane makes it a standalone project the caller owns (standaloneAgent) and starts its one session there, refused as a session create would be. Only its owner lists the agent or is a member of it; anyone else reaches it through a share. Offered when offering.features lists standalone_agents. */
+        post: operations["createStandaloneAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/chat-search": {
         parameters: {
             query?: never;
@@ -3451,6 +3470,8 @@ export interface components {
             githubRepositoryId?: string;
             /** @description True for a project with no repository; its repositoryUrl is a placeholder that is never cloned. */
             standalone?: boolean;
+            /** @description True for a standalone agent's project: its owner's one worker session, with no orchestrator. Only its owner lists it. */
+            standaloneAgent?: boolean;
             config: components["schemas"]["ProjectConfig"];
             /** Format: date-time */
             createdAt: string;
@@ -4798,6 +4819,37 @@ export interface components {
             /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
+        /** @description A session create's body without projectId and kind (POST /standalone-agents). */
+        CreateStandaloneAgentInput: {
+            harness: string;
+            displayName: string;
+            prompt: string;
+            /** @default trusted */
+            mode: components["schemas"]["SessionMode"];
+            /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
+            model?: string;
+            /**
+             * @description Reasoning effort the opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /**
+             * @description Approval mode the opening prompt's turn runs with in a session that starts in chat. Optional; empty lets the worker derive it from the session's mode, as for any turn sent without one.
+             * @enum {string}
+             */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /** @description Sandbox provider the session runs on, one the deployment offers (see /me). Optional; empty uses the organization's default. A project set up for a provider, or a worker linked to the project's orchestrator, runs there instead. */
+            provider?: string;
+            /** @default [] */
+            deniedCommands: string[];
+            /** Format: uuid */
+            sandboxProviderConnectionId?: string;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description Interface the session starts in. Optional; omitted resolves it from defaultInterfaceMode, else starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. A session that starts in chat queues its prompt as its first turn and launches its terminal without it. */
+            interfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
+            defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+        };
         UpdateSessionInput: {
             /** @description The session's new title, trimmed. */
             displayName: string;
@@ -6001,6 +6053,8 @@ export interface operations {
             query?: {
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
+                /** @description exclude lists the projects without the caller's standalone agents; only lists those agents alone. Omitted lists both. */
+                standaloneAgents?: "exclude" | "only";
             };
             header?: never;
             path: {
@@ -6736,6 +6790,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createStandaloneAgent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStandaloneAgentInput"];
+            };
+        };
+        responses: {
+            /** @description Standalone agent started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        project: components["schemas"]["Project"];
+                        session: components["schemas"]["Session"];
+                    };
                 };
             };
             default: components["responses"]["Error"];

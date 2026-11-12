@@ -327,6 +327,17 @@ describe("general access", () => {
 		expect((await screen.findByRole("button", { name: "Share only this session" })).className).toContain("decoration-dotted");
 	});
 
+	it("shares a Cloud standalone agent on its own: no whole project to switch to, and only its owner and people added can open it", async () => {
+		renderDialog({ standaloneAgent: true, projectName: "Fix flaky auth test" });
+		expect(await screen.findByRole("heading", { name: "Share “Fix flaky auth test”" })).toBeInTheDocument();
+		expect(screen.getByText("Standalone agent")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Share the whole project instead" })).toBeNull();
+		// Nobody else in the workspace can open it until added.
+		expect(await sentence()).toBe("Only you and people added above can open this session.");
+		expect(document.querySelector("[data-share-workspace-row]")).toBeNull();
+		await waitFor(() => expect(mocks.client.getShareAccess).toHaveBeenCalledWith(ORG, "project", "s1"));
+	});
+
 	it("shares only the whole project when opened without a session, as Project settings does", async () => {
 		renderDialog({ sessionId: undefined, sessionName: undefined });
 		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();

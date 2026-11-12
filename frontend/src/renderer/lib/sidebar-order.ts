@@ -3,7 +3,9 @@ import {
 	sessionNeedsAttention,
 	sortedWorkerSessions,
 	workerSessions,
+	ownScratchpadWorkspaces,
 	STANDALONE_PROJECT_KIND,
+	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
@@ -99,7 +101,8 @@ export function buildSidebarSessionOrder({
 		.sort((a, b) => pinnedTime(b.session) - pinnedTime(a.session));
 	for (const { workspace, session } of pinned) add(session, workspace);
 
-	const projects = workspaces.filter((workspace) => workspace.kind !== STANDALONE_PROJECT_KIND);
+	const scratchpads = ownScratchpadWorkspaces(workspaces);
+	const projects = workspaces.filter((workspace) => !scratchpads.includes(workspace));
 	const orderedProjects = pinnedFirst(applyOrder(projects, (item) => item.id, projectOrder, "start"), (item) => item.id, pinnedProjectIds);
 	for (const workspace of orderedProjects) {
 		for (const session of listedSessions(workspace, sessionOrders)) add(session, workspace);
@@ -107,9 +110,15 @@ export function buildSidebarSessionOrder({
 	for (const workspace of remoteWorkspaces) {
 		for (const session of listedSessions(workspace, sessionOrders)) add(session, workspace);
 	}
-	for (const workspace of workspaces.filter((item) => item.kind === STANDALONE_PROJECT_KIND)) {
-		for (const session of listedSessions(workspace, sessionOrders)) add(session, workspace);
-	}
+	// The Scratchpad lists its local sessions and the person's Cloud standalone
+	// agents as one list, in its own order; each agent still routes by its project.
+	const scratchpadOf = new Map(scratchpads.flatMap((workspace) => workspace.sessions.map((session) => [session.id, workspace] as const)));
+	const scratchpad: WorkspaceSummary = {
+		...(scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND) ??
+			{ id: STANDALONE_WORKSPACE_ID, name: "", kind: STANDALONE_PROJECT_KIND, path: "" }),
+		sessions: scratchpads.flatMap((workspace) => workspace.sessions),
+	};
+	for (const session of listedSessions(scratchpad, sessionOrders)) add(session, scratchpadOf.get(session.id) ?? scratchpad);
 	return entries;
 }
 

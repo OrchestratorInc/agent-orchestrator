@@ -301,6 +301,12 @@ export type ProjectKind = "single_repo" | "workspace" | "scratch";
 /** UI-only grouping for sessions that have no daemon project row. */
 export const STANDALONE_WORKSPACE_ID = "__standalone__" as const;
 export const STANDALONE_PROJECT_KIND = "standalone" as const;
+/**
+ * The new-chat target that starts a Cloud standalone agent: one worker session
+ * with no repository, its own (POST /orgs/{orgId}/standalone-agents). It names
+ * no project; the agent gets its own once created.
+ */
+export const CLOUD_STANDALONE_WORKSPACE_ID = "__cloud_standalone__" as const;
 
 /** Sentinel `kind` value for projects hosted by the AO cloud control plane. */
 export const CLOUD_PROJECT_KIND = "cloud" as const;
@@ -516,6 +522,12 @@ export type WorkspaceSummary = {
 	 * repository (workspaceRepos) side by side in one folder.
 	 */
 	cloudLayout?: "workspace";
+	/**
+	 * Set on a Cloud standalone agent's project: it holds that one agent, which
+	 * the Scratchpad lists beside local standalone sessions, and is not shown
+	 * as a project.
+	 */
+	standaloneAgent?: boolean;
 	/** Local checkout path; empty string for cloud projects (no local folder). */
 	path: string;
 	folderMissing?: boolean;
@@ -531,6 +543,25 @@ export type WorkspaceSummary = {
 	};
 	sessions: WorkspaceSession[];
 };
+
+/**
+ * Whether the workspace is the Scratchpad's rather than a project: the local
+ * group of standalone sessions, or a Cloud standalone agent's project. Neither
+ * has an orchestrator, a board, or project settings.
+ */
+export function isScratchpadWorkspace(workspace: Pick<WorkspaceSummary, "kind" | "standaloneAgent"> | undefined): boolean {
+	return workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.standaloneAgent === true;
+}
+
+/**
+ * The workspaces the Scratchpad lists: the local standalone sessions and the
+ * person's own Cloud standalone agents. A standalone agent someone shared with
+ * them stays with the other shared projects.
+ */
+export function ownScratchpadWorkspaces(workspaces: readonly WorkspaceSummary[]): WorkspaceSummary[] {
+	return workspaces.filter((workspace) =>
+		workspace.kind === STANDALONE_PROJECT_KIND || (workspace.standaloneAgent === true && !workspace.shared));
+}
 
 export function hasConfiguredOrchestratorAgent(
 	workspace: Pick<WorkspaceSummary, "orchestratorAgent"> | undefined,

@@ -191,6 +191,15 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("leaves a Cloud standalone agent's project for Home: it has no board", async () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{ id: "agent-1", name: "Fix the flake", kind: "cloud", standaloneAgent: true, path: "", sessions: [] }],
+			isSuccess: true,
+		});
+		renderBoard("agent-1");
+		await waitFor(() => expect(navigateMock).toHaveBeenCalledWith({ to: "/", replace: true }));
+	});
+
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);

@@ -411,6 +411,14 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
+        - name: standaloneAgents
+          in: query
+          description: >-
+            exclude lists the projects without the caller's standalone agents;
+            only lists those agents alone. Omitted lists both.
+          schema:
+            type: string
+            enum: [exclude, only]
       responses:
         "200":
           description: A page of projects in the tenant.
@@ -1010,6 +1018,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProjectResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/standalone-agents:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    post:
+      operationId: createStandaloneAgent
+      tags: [Sessions]
+      description: >-
+        Start a standalone agent: one worker session with no repository and no
+        orchestrator, the caller's own. The control plane makes it a standalone
+        project the caller owns (standaloneAgent) and starts its one session
+        there, refused as a session create would be. Only its owner lists the
+        agent or is a member of it; anyone else reaches it through a share.
+        Offered when offering.features lists standalone_agents.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStandaloneAgentInput"
+      responses:
+        "201":
+          description: Standalone agent started.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [project, session]
+                properties:
+                  project:
+                    $ref: "#/components/schemas/Project"
+                  session:
+                    $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/chat-search:
@@ -6051,6 +6096,11 @@ components:
         standalone:
           type: boolean
           description: True for a project with no repository; its repositoryUrl is a placeholder that is never cloned.
+        standaloneAgent:
+          type: boolean
+          description: >-
+            True for a standalone agent's project: its owner's one worker
+            session, with no orchestrator. Only its owner lists it.
         config:
           $ref: "#/components/schemas/ProjectConfig"
         createdAt:
@@ -8786,6 +8836,85 @@ components:
           format: uuid
         kind:
           $ref: "#/components/schemas/SessionKind"
+        harness:
+          type: string
+          minLength: 1
+          maxLength: 120
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        prompt:
+          type: string
+          maxLength: 65536
+        mode:
+          $ref: "#/components/schemas/SessionMode"
+          default: trusted
+        model:
+          type: string
+          maxLength: 200
+          description: >-
+            Coding-agent model the session launches with (harness-native id, e.g.
+            "anthropic/claude-opus-4-8"). Optional; empty uses the harness default.
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            Reasoning effort the opening prompt runs with. Optional; empty uses
+            the model's default.
+        approvalMode:
+          type: string
+          enum: [default, accept-edits, auto, bypass-permissions]
+          description: >-
+            Approval mode the opening prompt's turn runs with in a session that
+            starts in chat. Optional; empty lets the worker derive it from the
+            session's mode, as for any turn sent without one.
+        provider:
+          type: string
+          description: >-
+            Sandbox provider the session runs on, one the deployment offers
+            (see /me). Optional; empty uses the organization's default. A
+            project set up for a provider, or a worker linked to the project's
+            orchestrator, runs there instead.
+        deniedCommands:
+          type: array
+          items:
+            type: string
+          default: []
+        sandboxProviderConnectionId:
+          type: string
+          format: uuid
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: >-
+            Interface the session starts in. Optional; omitted resolves it
+            from defaultInterfaceMode, else starts in the terminal (tui). chat
+            needs a harness listed in the current account's chatHarnesses,
+            else the request is refused with SESSION_MODE_UNSUPPORTED. A
+            session that starts in chat queues its prompt as its first turn
+            and launches its terminal without it.
+        defaultInterfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: >-
+            The user's default session interface, for a create without
+            interfaceMode. The control plane resolves the session's interface
+            from it as the local daemon resolves a spawn: an orchestrator
+            starts in chat, a worker in this default, and chat only for a
+            harness listed in chatHarnesses (any other starts in tui without
+            an error). A create with neither field (from a desktop that
+            predates them) starts in tui, an orchestrator too. An
+            orchestrator keeps it for the workers it spawns, which resolve
+            from the default stored when the orchestrator was created, unlike
+            local spawns, which read the user's default at spawn time; a
+            changed default reaches them once a new orchestrator is created.
+    CreateStandaloneAgentInput:
+      type: object
+      additionalProperties: false
+      description: A session create's body without projectId and kind (POST /standalone-agents).
+      required: [harness, displayName, prompt]
+      properties:
         harness:
           type: string
           minLength: 1
