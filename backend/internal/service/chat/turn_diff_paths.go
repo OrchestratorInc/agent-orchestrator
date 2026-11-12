@@ -3,6 +3,8 @@ package chat
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/fspath"
 )
 
 // pathOutsideSession reports whether a turn-diff path names a file in neither
@@ -24,31 +26,13 @@ func pathOutsideSession(workspaceDir, artifactDir, path string) bool {
 	return true
 }
 
-// pathUnderRoot compares both paths as the filesystem resolves them, as the
-// session's workspace resolver does: a worktree reached by another spelling
-// (macOS /var and /private/var) still owns its files, and a link inside the
-// worktree that points out of it does not.
+// pathUnderRoot compares both paths as the filesystem resolves them, with the
+// session's workspace resolver: a worktree reached by another spelling (macOS
+// /var and /private/var) still owns its files, a link inside the worktree
+// that points out of it does not, a ".." applies after the link before it,
+// and a deleted file keeps the directories that no longer exist.
 func pathUnderRoot(root, path string) bool {
-	return within(resolveExistingPrefix(root), resolveExistingPrefix(path))
-}
-
-// resolveExistingPrefix resolves symlinks through the deepest ancestor that
-// still exists and keeps the rest as written, so a deleted file whose
-// directories went with it still resolves to the root that held it.
-func resolveExistingPrefix(path string) string {
-	path = filepath.Clean(path)
-	for dir := path; ; dir = filepath.Dir(dir) {
-		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-			rest, relErr := filepath.Rel(dir, path)
-			if relErr != nil {
-				return path
-			}
-			return filepath.Join(resolved, rest)
-		}
-		if filepath.Dir(dir) == dir {
-			return path
-		}
-	}
+	return within(fspath.ResolveInOrder(root), fspath.ResolveInOrder(path))
 }
 
 func within(root, path string) bool {

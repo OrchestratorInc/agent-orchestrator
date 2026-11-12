@@ -25,6 +25,15 @@ func TestPathOutsideSession(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(elsewhere, "shared.go"), []byte("package x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// A link outside the worktree into a nested worktree directory, so a ".."
+	// after it lands back inside the worktree, not beside the link.
+	if err := os.MkdirAll(filepath.Join(workspace, "src", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	aliasDir := t.TempDir()
+	if err := os.Symlink(filepath.Join(workspace, "src", "deep"), filepath.Join(aliasDir, "link")); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name, workspace, path string
@@ -42,6 +51,9 @@ func TestPathOutsideSession(t *testing.T) {
 		{"outside", workspace, filepath.Join(elsewhere, "memory", "MEMORY.md"), true},
 		{"through an outward link", workspace, filepath.Join(workspace, "external", "shared.go"), true},
 		{"new file through an outward link", workspace, filepath.Join(workspace, "external", "new.go"), true},
+		// Concatenated, not filepath.Join, which would collapse the ".." first.
+		{"parent of a link into the worktree", workspace, aliasDir + "/link/../app.go", false},
+		{"parent of a link out of the worktree", workspace, workspace + "/external/../app.go", true},
 		{"sibling with a shared prefix", workspace, workspace + "-other/a.go", true},
 		{"unknown worktree", "", filepath.Join(elsewhere, "a.go"), false},
 	} {
