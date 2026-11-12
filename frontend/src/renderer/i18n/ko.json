@@ -2619,8 +2619,6 @@
 	"settings.sideChatsHint": "인스펙터에서 별도의 사이드 대화를 열고 /btw로 질문합니다.",
 	"settings.splitPanes": "분할 창",
 	"settings.splitPanesHint": "탭을 가운데 창의 가장자리로 끌어 현재 탭 옆에 표시합니다.",
-	"settings.newSidebarDesign": "새 사이드바 디자인",
-	"settings.newSidebarDesignHint": "왼쪽 사이드바의 상태 아이콘, 호버 미리보기, 저장소 아바타와 이에 맞춘 보드 색상입니다. 끄면 이전 사이드바로 돌아갑니다.",
 	"settings.chromeAgents.label": "내 Chrome에서 에이전트 사용",
 	"settings.chromeAgents.hint": "에이전트가 로그인된 상태 그대로 내 Chrome에서 브라우징할 수 있습니다. 브라우저 설정에서 설정하세요.",
 	"settings.chromeAgents.goTo": "이동",

@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
 import { sessionUiKey } from "../lib/hosts";
@@ -229,13 +228,6 @@ export type UiState = {
 	renderMath: boolean;
 	/** Show each project's repository owner avatar in the sidebar instead of a folder. Default on. */
 	projectAvatars: boolean;
-	/**
-	 * The new left sidebar design (markers, hover preview, avatars, pink
-	 * Validating, settled board loaders). Default on. The switch lives in
-	 * Developer mode, and turning it off only takes effect there: read it
-	 * through `isNewSidebarDesign` (lib/new-sidebar-design).
-	 */
-	newSidebarDesign: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -307,7 +299,6 @@ export type UiState = {
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
 	setProjectAvatars: (enabled: boolean) => void;
-	setNewSidebarDesign: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -386,7 +377,9 @@ const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 const projectAvatarsStorageKey = "ao.projectAvatars";
-const newSidebarDesignStorageKey = "ao.newSidebarDesign";
+// The retired Developer Mode opt-out from the old left sidebar. Ignored, and
+// cleared at startup so a stored "false" leaves nothing behind.
+const retiredNewSidebarDesignStorageKey = "ao.newSidebarDesign";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -505,7 +498,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	projectAvatars: initialProjectAvatars(),
-	newSidebarDesign: getLocalStorage()?.getItem(newSidebarDesignStorageKey) !== "false",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -613,10 +605,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setProjectAvatars: (projectAvatars) => {
 		getLocalStorage()?.setItem(projectAvatarsStorageKey, String(projectAvatars));
 		set({ projectAvatars });
-	},
-	setNewSidebarDesign: (newSidebarDesign) => {
-		getLocalStorage()?.setItem(newSidebarDesignStorageKey, String(newSidebarDesign));
-		set({ newSidebarDesign });
 	},
 	setChatSendKeyMode: (chatSendKeyMode) => {
 		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
@@ -988,14 +976,11 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}),
 }));
 
-// With the new design off, status tokens fall back to the old palette
-// (yellow Validating). See --color-status-validating in tokens.css.
-function syncLegacyStatusColors(state: UiState) {
-	if (typeof document === "undefined") return;
-	document.documentElement.toggleAttribute("data-legacy-status-colors", !isNewSidebarDesign(state));
+try {
+	getLocalStorage()?.removeItem(retiredNewSidebarDesignStorageKey);
+} catch {
+	// Storage can be unavailable (private mode, quota); nothing to clean then.
 }
-syncLegacyStatusColors(useUiStore.getState());
-useUiStore.subscribe(syncLegacyStatusColors);
 
 // Hydration synchronizes legacy renderer-only Developer Mode state into the
 // main-process updater mirror. Until this completes, the updater is fail-closed.

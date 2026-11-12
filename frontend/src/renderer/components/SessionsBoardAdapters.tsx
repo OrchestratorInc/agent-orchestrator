@@ -36,9 +36,7 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
-import { useUiStore } from "../stores/ui-store";
 import { appI18n } from "../i18n";
-import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -334,7 +332,6 @@ function DesktopSessionCard({
 		/>
 	) : undefined;
 
-	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const card = (
 		<SessionCardView
 			action={action}
@@ -393,7 +390,6 @@ function DesktopSessionCard({
 			}
 			selected={selected}
 			still={still}
-			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
 	);
