@@ -243,3 +243,38 @@ func TestManagerStopsRetryingAnUnreachableHost(t *testing.T) {
 		t.Fatalf("dialed an unreachable host %d times, want %d then stop", got, maxWatchFailures)
 	}
 }
+
+func TestManagerRestartsAGivenUpWatchForANewSubscriber(t *testing.T) {
+	initialBefore, maxBefore := initialWatchRetryDelay, watchRetryMax
+	initialWatchRetryDelay, watchRetryMax = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { initialWatchRetryDelay, watchRetryMax = initialBefore, maxBefore })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := &unreachableRuntime{}
+	m := NewManager(ctx, rt, nil, nil)
+	t.Cleanup(m.SubscribeShellAgents(func(json.RawMessage) {}))
+	m.TrackShellTerminal("shell-1")
+	gaveUp := func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.tracked["shell-1"] == nil
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !gaveUp() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !gaveUp() {
+		t.Fatal("the watch never gave up on the unreachable host")
+	}
+
+	// Another client subscribes while the first is still connected.
+	t.Cleanup(m.SubscribeShellAgents(func(json.RawMessage) {}))
+	deadline = time.Now().Add(2 * time.Second)
+	for int(rt.dials.Load()) <= maxWatchFailures && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := int(rt.dials.Load()); got <= maxWatchFailures {
+		t.Fatalf("dials = %d after a new subscriber, want the watch restarted", got)
+	}
+}

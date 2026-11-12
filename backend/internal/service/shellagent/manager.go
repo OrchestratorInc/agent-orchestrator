@@ -48,10 +48,14 @@ var (
 	initialWatchRetryDelay = 500 * time.Millisecond
 	watchRetryMax          = 30 * time.Second
 	// maxWatchFailures ends a watch whose host keeps refusing connections:
-	// the host died while its record still resolves. A new subscription after
-	// every client left starts it again.
+	// the host died while its record still resolves. The next subscription
+	// starts it again.
 	maxWatchFailures = 6
 )
+
+// shellWatch is one running watch. Its pointer identifies the owner of a
+// tracked entry, so an ending watch cannot clear a newer one.
+type shellWatch struct{ cancel context.CancelFunc }
 
 // Manager remembers shell terminals and watches them while a client subscribes.
 // The terminal host pushes readings when the foreground program changes or
@@ -64,7 +68,7 @@ type Manager struct {
 	base   context.Context
 
 	mu      sync.Mutex
-	tracked map[string]context.CancelFunc
+	tracked map[string]*shellWatch // nil: tracked, not watched
 	current map[string]Agent
 	subs    map[int]func(json.RawMessage)
 	nextSub int
@@ -79,7 +83,7 @@ func NewManager(ctx context.Context, rt Runtime, agents ports.AgentResolver, log
 	styled, _ := rt.(ports.StyledTerminalOutputReader)
 	return &Manager{
 		rt: rt, styled: styled, agents: agents, log: log, base: ctx,
-		tracked: map[string]context.CancelFunc{},
+		tracked: map[string]*shellWatch{},
 		current: map[string]Agent{},
 		subs:    map[int]func(json.RawMessage){},
 	}
@@ -100,16 +104,17 @@ func (m *Manager) TrackShellTerminal(handleID string) {
 
 func (m *Manager) startWatchLocked(handleID string) {
 	ctx, cancel := context.WithCancel(m.base)
-	m.tracked[handleID] = cancel
-	go m.watch(ctx, handleID)
+	w := &shellWatch{cancel: cancel}
+	m.tracked[handleID] = w
+	go m.watch(ctx, handleID, w)
 }
 
 // UntrackShellTerminal stops following a terminal and forgets its agent.
 func (m *Manager) UntrackShellTerminal(handleID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if cancel := m.tracked[handleID]; cancel != nil {
-		cancel()
+	if w := m.tracked[handleID]; w != nil {
+		w.cancel()
 	}
 	delete(m.tracked, handleID)
 	m.setLocked(handleID, nil)
@@ -123,8 +128,10 @@ func (m *Manager) SubscribeShellAgents(fn func(json.RawMessage)) func() {
 	id := m.nextSub
 	m.nextSub++
 	m.subs[id] = fn
-	if len(m.subs) == 1 {
-		for handleID := range m.tracked {
+	// The first subscriber starts every watch; later ones restart watches
+	// that gave up on an unreachable host.
+	for handleID, w := range m.tracked {
+		if w == nil {
 			m.startWatchLocked(handleID)
 		}
 	}
@@ -133,9 +140,9 @@ func (m *Manager) SubscribeShellAgents(fn func(json.RawMessage)) func() {
 		m.mu.Lock()
 		delete(m.subs, id)
 		if len(m.subs) == 0 {
-			for handleID, cancel := range m.tracked {
-				if cancel != nil {
-					cancel()
+			for handleID, w := range m.tracked {
+				if w != nil {
+					w.cancel()
 				}
 				m.tracked[handleID] = nil
 			}
@@ -145,7 +152,7 @@ func (m *Manager) SubscribeShellAgents(fn func(json.RawMessage)) func() {
 	}
 }
 
-func (m *Manager) watch(ctx context.Context, handleID string) {
+func (m *Manager) watch(ctx context.Context, handleID string, self *shellWatch) {
 	defer m.apply(ctx, handleID, nil)
 	handle := ports.RuntimeHandle{ID: handleID}
 	failures := 0
@@ -164,6 +171,11 @@ func (m *Manager) watch(ctx context.Context, handleID string) {
 			failures++
 			if failures >= maxWatchFailures {
 				m.log.Debug("shell agent watch gave up on an unreachable host", "handleId", handleID, "err", err)
+				m.mu.Lock()
+				if m.tracked[handleID] == self {
+					m.tracked[handleID] = nil
+				}
+				m.mu.Unlock()
 				return
 			}
 		}
