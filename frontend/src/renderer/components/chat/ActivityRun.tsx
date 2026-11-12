@@ -14,12 +14,13 @@
  * Only a call that failed shows without being asked for, under the line that folds it.
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import { ActivityRow, ActivityTransition } from "./ChatTimelineItems";
+import { useChatEntrance } from "./chat-entrance";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandCategory,
@@ -51,6 +52,9 @@ export function ActivityRun({
 	};
 	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
+	// The group fades in when it forms while the chat is on screen, never when the
+	// chat opens onto it or it scrolls back into view.
+	const entering = useChatEntrance(`run:${activities[0]?.id ?? ""}`, newestSequence(activities));
 	const running = activities.some((a) => a.status === "running");
 	const nonzeroExits = activities.filter(isNonzeroCommandExit).length;
 	const failed = activities.filter(
@@ -82,7 +86,7 @@ export function ActivityRun({
 
 	return (
 		<motion.div
-			initial={reducedMotion ? false : { opacity: 0 }}
+			initial={reducedMotion || !entering ? false : { opacity: 0 }}
 			animate={{ opacity: 1 }}
 			transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 			className="flex flex-col"
@@ -93,7 +97,7 @@ export function ActivityRun({
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
 				<span className="activity-summary-label text-xs text-muted-foreground">
-					<ActivityTransition value={summary} inline>{summary}</ActivityTransition>
+					<ActivityTransition value={summary} inline enter={entering}>{summary}</ActivityTransition>
 				</span>
 				{nonzeroExits > 0 ? (
 					<span className="text-caption text-muted-foreground/70">
@@ -146,14 +150,7 @@ export function ActivityRun({
 					>
 						<div className="flex flex-col gap-1 pt-1">
 							{subgroups.length === 1
-								? subgroups[0]!.activities.map((activity) => {
-										const node = nodesByActivityID.get(activity.id);
-										return node ? (
-											<ActivityTree key={activity.id} node={node} />
-										) : (
-											<ActivityRow key={activity.id} activity={activity} />
-										);
-								  })
+								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
 										<ActivitySubgroup
 											key={group.activities.map((activity) => activity.id).join(":")}
@@ -194,6 +191,53 @@ function FailedCalls({ activities, folded }: { activities: ConversationActivity[
 			) : null}
 		</AnimatePresence>
 	);
+}
+
+function newestSequence(activities: readonly ConversationActivity[]): number {
+	return activities.reduce((newest, activity) => Math.max(newest, activity.sequence), 0);
+}
+
+/**
+ * The rows of a run. Back-to-back commands that finished and read the same
+ * ("Checked the browser console" twice) show as one row; opening it still
+ * shows every call.
+ */
+function renderActivityRows(
+	activities: readonly ConversationActivity[],
+	nodesByActivityID: ReadonlyMap<string, ActivityNode>,
+): ReactNode[] {
+	const rows: ReactNode[] = [];
+	let index = 0;
+	while (index < activities.length) {
+		const activity = activities[index]!;
+		const node = nodesByActivityID.get(activity.id);
+		if (node && node.children.length > 0) {
+			rows.push(<ActivityTree key={activity.id} node={node} />);
+			index += 1;
+			continue;
+		}
+		const label = repeatableLabel(activity);
+		let end = index + 1;
+		while (
+			label &&
+			end < activities.length &&
+			!nodesByActivityID.get(activities[end]!.id)?.children.length &&
+			repeatableLabel(activities[end]!) === label
+		) {
+			end += 1;
+		}
+		const last = activities[end - 1]!;
+		rows.push(<ActivityRow key={activity.id} activity={last} repeats={activities.slice(index, end - 1)} />);
+		index = end;
+	}
+	return rows;
+}
+
+/** The label two finished commands must share to fold into one row, or undefined. */
+function repeatableLabel(activity: ConversationActivity): string | undefined {
+	if (activity.activityKind !== "command" || activity.status !== "completed") return undefined;
+	const step = activityCommandStep(activity);
+	return [step.done, step.target].filter(Boolean).join(" ");
 }
 
 type ActivitySubgroupData = { key: string; activities: ConversationActivity[] };
@@ -238,6 +282,7 @@ function ActivitySubgroup({
 }) {
 	const [localOpen, setLocalOpen] = useState(false);
 	const reducedMotion = useReducedMotion();
+	const entering = useChatEntrance(`sub:${activities[0]?.id ?? ""}`, newestSequence(activities));
 	const open = disclosureKey ? disclosureOverrides[disclosureKey] ?? false : localOpen;
 	const updateOverride = (next: boolean) => {
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
@@ -250,14 +295,7 @@ function ActivitySubgroup({
 	if (activities.length === 1 || hasNestedAgent || isStructural) {
 		return (
 			<>
-				{activities.map((activity) => {
-					const node = nodesByActivityID.get(activity.id);
-					return node ? (
-						<ActivityTree key={activity.id} node={node} />
-					) : (
-						<ActivityRow key={activity.id} activity={activity} />
-					);
-				})}
+				{renderActivityRows(activities, nodesByActivityID)}
 			</>
 		);
 	}
@@ -271,7 +309,7 @@ function ActivitySubgroup({
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
 				<span className="activity-summary-label text-xs text-muted-foreground">
-					<ActivityTransition value={summary} inline>
+					<ActivityTransition value={summary} inline enter={entering}>
 						{summary}
 					</ActivityTransition>
 				</span>
@@ -287,14 +325,7 @@ function ActivitySubgroup({
 						className="overflow-hidden"
 					>
 						<div className="flex flex-col gap-1">
-							{activities.map((activity) => {
-								const node = nodesByActivityID.get(activity.id);
-								return node ? (
-									<ActivityTree key={activity.id} node={node} />
-								) : (
-									<ActivityRow key={activity.id} activity={activity} />
-								);
-							})}
+							{renderActivityRows(activities, nodesByActivityID)}
 						</div>
 					</motion.div>
 				) : null}

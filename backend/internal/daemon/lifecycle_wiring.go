@@ -367,7 +367,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 	if scmProvider != nil && telemetryEmitsSpawned(cfg) {
 		githubIdentity = scmProvider
 	}
-	sessionSvc := sessionsvc.NewWithDeps(sessionsvc.Deps{
+	deps := sessionsvc.Deps{
 		Manager:           mgr,
 		Store:             store,
 		PRClaimer:         store,
@@ -387,7 +387,12 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		OutputTypeReconciler: lcm,
 		ArtifactDeleter:      artifactVersions,
 		ShareLinks:           sessionartifacts.NewShareLinks(cfg.DataDir, cfg.CloudControlPlaneURL),
-	})
+	}
+	// Guard the typed nil some tests pass, so reads list files by path instead.
+	if artifactVersions != nil {
+		deps.ArtifactTracker = artifactVersions
+	}
+	sessionSvc := sessionsvc.NewWithDeps(deps)
 	// Triggering a review spawns a reviewer over the worker's worktree, resolved
 	// from the reviewer registry (distinct from the worker agent set). The
 	// reviewer posts its review to the PR itself, so the service needs no SCM

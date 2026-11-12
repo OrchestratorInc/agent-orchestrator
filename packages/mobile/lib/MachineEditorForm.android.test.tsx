@@ -73,10 +73,10 @@ const supporting = (node: ReactTestInstance) => node.findAllByType("OutlinedText
 describe("the Android machine editor", () => {
 	it("puts each error on the field it is about", () => {
 		act(() => {
-			renderer = create(<MachineEditorForm host={host} editor={editor({ failure: { message: "That password was rejected. Check it and try again.", field: "password" }, portError: "Enter a port from 1 to 65535." })} />);
+			renderer = create(<MachineEditorForm host={host} editor={editor({ failure: { message: "That code or password was rejected. Get a new code and try again.", field: "password" }, portError: "Enter a port from 1 to 65535." })} />);
 		});
 		expect(byTag("environment-password-a").props.isError).toBe(true);
-		expect(supporting(byTag("environment-password-a"))).toEqual(["That password was rejected. Check it and try again."]);
+		expect(supporting(byTag("environment-password-a"))).toEqual(["That code or password was rejected. Get a new code and try again."]);
 		expect(supporting(byTag("environment-port-a"))).toEqual(["Enter a port from 1 to 65535."]);
 		expect(byTag("environment-host-a").props.isError).toBe(false);
 	});

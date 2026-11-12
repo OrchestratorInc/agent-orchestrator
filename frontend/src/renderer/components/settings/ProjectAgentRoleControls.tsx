@@ -222,6 +222,7 @@ export function AgentModelField({
 	return (
 		<>
 			<AgentModelCombobox
+				hostId={hostId}
 				aria-label={label}
 				value={model}
 				models={models}

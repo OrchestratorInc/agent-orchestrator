@@ -46,7 +46,8 @@ export function ConversationUsageSheet({ sessionTitle, snapshot }: { sessionTitl
 	);
 }
 
-function UsageRow({ label, value, detail, detailLabel, meter }: {
+/** One measured line: label and value, an optional meter, and a detail under them. */
+export function UsageRow({ label, value, detail, detailLabel, meter }: {
 	label: string;
 	value?: string;
 	detail?: string;

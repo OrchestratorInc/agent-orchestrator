@@ -16,6 +16,7 @@ import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
+import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
 import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
 import { seedCloudOpening } from "../lib/cloud-opening";
@@ -843,6 +844,15 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const inheritedEffort = selectedAgent === configuredProjectAgent ? defaultWorkerEffort : "";
 	const implicitEffort = inheritedEffort || effortModel?.defaultEffort || "";
 	const selectedAgentLabel = availableAgents?.find((item) => item.id === selectedAgent)?.label || selectedAgent;
+	useResetStaleProjectTuning({
+		projectId: isCloudProject || isStandalone ? undefined : projectQuery.data?.id,
+		hostId,
+		agent: selectedAgent,
+		agentLabel: selectedAgentLabel,
+		projectAgent: configuredProjectAgent,
+		config: isCloudProject ? undefined : projectQuery.data?.config,
+		catalog: localCatalog,
+	});
 	// A cloud project's Chat-capable harnesses come from the control plane, as a
 	// local project's come from the daemon.
 	const chatHarnesses = isCloudProject ? cloudOffering.chatHarnesses : settings?.chatHarnesses;
@@ -1434,6 +1444,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		renderEffortControl: (control: TaskComposerEffortControl) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={cursorChoice ? undefined : inheritedEffort || effortModel?.defaultEffort} availability={cursorChoice ? "supported" : effortAvailability}
 			footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickCursorVariant({ thinking })} /> : undefined} />,
 		renderModelControl: (control: TaskComposerModelControl) => <TaskModelPicker {...control}
+			hostId={hostId}
 			onRefresh={isCloudProject && !cloudCatalogAgent ? undefined : refreshSelectedModels}
 			allowNativeSelection={isCloudProject}
 			footer={cloudModelSource}

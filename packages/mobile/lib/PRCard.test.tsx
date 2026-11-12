@@ -140,8 +140,14 @@ describe("PRCard", () => {
 		expect(row().props.onLongPress).toBeUndefined();
 		act(() => renderer!.unmount());
 		fixture.platform.OS = "android";
+		vi.stubGlobal("requestAnimationFrame", (callback: () => void) => { callback(); return 0; });
 		render();
+		act(() => row().props.onPressIn({ nativeEvent: { locationX: 120, locationY: 30 } }));
 		act(() => row().props.onLongPress());
 		expect(fixture.show).toHaveBeenCalledTimes(1);
+		// Opened at the finger, from an anchor beside the row rather than around it.
+		const menu = renderer!.root.findByType("MenuView" as never);
+		expect(menu.props.style).toEqual(expect.arrayContaining([{ left: 120, top: 30 }]));
+		expect(menu.findAllByType("Pressable" as never)).toHaveLength(0);
 	});
 });

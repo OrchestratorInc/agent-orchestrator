@@ -12,10 +12,11 @@ const mocks = vi.hoisted(() => ({
 	get: vi.fn(),
 	patch: vi.fn(),
 	listRepos: vi.fn(),
+	listProjects: vi.fn(),
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
-		client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listGitHubRepositories: mocks.listRepos },
+		client: { getProject: mocks.get, updateProjectSettings: mocks.patch, listGitHubRepositories: mocks.listRepos, listProjects: mocks.listProjects },
 		ready: true,
 		baseUrl: "https://cloud.test",
 	}),
@@ -41,6 +42,7 @@ beforeEach(() => {
 	mocks.get.mockReset().mockResolvedValue({ project: project({ repos: [{ url: "https://github.com/acme/11x" }] }) });
 	mocks.patch.mockReset().mockImplementation((_org: string, _id: string, body: { config: Record<string, unknown> }) =>
 		Promise.resolve({ project: project({ ...body.config }) }));
+	mocks.listProjects.mockReset().mockResolvedValue({ items: [], page: { hasMore: false } });
 	mocks.listRepos.mockReset().mockResolvedValue({
 		items: [repository("1", "alice"), repository("2", "11x"), repository("3", "voice-calling-ai")],
 		page: { hasMore: false },
@@ -73,6 +75,19 @@ it("keeps project settings open while a repository is picked, and saves the pick
 		config: { repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/voice-calling-ai" }] },
 	});
 	expect(useUiStore.getState().settingsModal).not.toBeNull();
+});
+
+it("names a Cloud workspace's repositories page from the project itself, without listing the org's projects", async () => {
+	// Not in the first page of the org's projects, nor in the active org: neither matters.
+	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos: [{ url: "https://github.com/acme/11x" }] }) });
+	useUiStore.getState().openProjectSettings("p", { section: "repositories", cloudOrgId: "org-2" });
+	renderSettings();
+
+	expect(await screen.findByRole("dialog", { name: "Workspace repositories" })).toBeInTheDocument();
+	expect(mocks.listProjects).not.toHaveBeenCalled();
+	// The page and the rail share one read of the project.
+	expect(mocks.get).toHaveBeenCalledOnce();
+	expect(mocks.get).toHaveBeenCalledWith("org-2", "p", expect.anything());
 });
 
 it("closes an open picker on Escape before the dialog, then the dialog", async () => {

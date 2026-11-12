@@ -30,6 +30,7 @@ import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
+import type { TerminalClickMode } from "../../lib/terminal-mouse";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -347,6 +348,12 @@ export function GeneralSettingsSection({
 	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+	const terminalClickMode = useUiStore((state) => state.terminalClickMode);
+	const setTerminalClickMode = useUiStore((state) => state.setTerminalClickMode);
+	const terminalClickOptions = [
+		{ value: "app", label: t("settings.terminalClicks.app") },
+		{ value: "select", label: t("settings.terminalClicks.select") },
+	] satisfies SettingsOption<TerminalClickMode>[];
 	const projectAvatars = useUiStore((state) => state.projectAvatars);
 	const setProjectAvatars = useUiStore((state) => state.setProjectAvatars);
 	const newSidebarDesign = useUiStore(isNewSidebarDesign);
@@ -466,6 +473,17 @@ export function GeneralSettingsSection({
 					/>
 				</SettingsRow>
 				<SettingsRow
+					label={t("settings.terminalClicks")}
+					description={isMacPlatform() ? t("settings.terminalClicks.description.mac") : t("settings.terminalClicks.description.other")}
+				>
+					<SettingsOptionMenu
+						aria-label={t("settings.terminalClicks")}
+						value={terminalClickMode}
+						options={terminalClickOptions}
+						onChange={setTerminalClickMode}
+					/>
+				</SettingsRow>
+				<SettingsRow
 					label={t("settings.soundNotifications")}
 					description={soundNotificationsSaveError ? <span role="alert" className="text-error">{t("settings.soundNotifications.saveFailed")}</span> : undefined}
 				>
@@ -502,7 +520,6 @@ export function GeneralSettingsSection({
 				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <NewSidebarDesignRow />}
-				{developerMode && <SimplifiedTopbarRow />}
 				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
@@ -627,18 +644,6 @@ function NewSidebarDesignRow() {
 	return (
 		<SettingsRow label={t("settings.newSidebarDesign")} description={t("settings.newSidebarDesignHint")}>
 			<Switch aria-label={t("settings.newSidebarDesign")} checked={newSidebarDesign} onCheckedChange={setNewSidebarDesign} />
-		</SettingsRow>
-	);
-}
-
-/** Developer Mode-only switch for the simplified, floating top bar. On by default. */
-function SimplifiedTopbarRow() {
-	const { t } = useTranslation();
-	const simplifiedTopbar = useUiStore((state) => state.simplifiedTopbar);
-	const setSimplifiedTopbar = useUiStore((state) => state.setSimplifiedTopbar);
-	return (
-		<SettingsRow label={t("settings.simplifiedTopbar")} description={t("settings.simplifiedTopbarHint")}>
-			<Switch aria-label={t("settings.simplifiedTopbar")} checked={simplifiedTopbar} onCheckedChange={setSimplifiedTopbar} />
 		</SettingsRow>
 	);
 }

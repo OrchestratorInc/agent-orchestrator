@@ -17,7 +17,7 @@ import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } 
 import { agentLabel } from "../lib/agent-options";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
-import { isStandaloneCloudProject, projectAdditionalRepos, projectConfigText } from "../lib/cloud-project-repos";
+import { isCloudWorkspaceProject, isStandaloneCloudProject, projectAdditionalRepos, projectConfigText, projectRepositoryUrls, repoDirName } from "../lib/cloud-project-repos";
 import type { CloudCpProject, CloudCpProjectCoderConfig } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
 import { AgentAvatar } from "./AgentAvatar";
@@ -65,6 +65,8 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 	const usesCoder = offering.hasCoder && projectSandboxProvider(project.config, offering) === CODER_PROVIDER;
 	const standalone = isStandaloneCloudProject(project);
 	const additionalRepos = projectAdditionalRepos(project.config);
+	// A workspace lists its repositories as equals, the way a local workspace lists its own.
+	const workspace = isCloudWorkspaceProject(project);
 	// The control plane runs issue intake for every Cloud project with a
 	// repository (the local daemon's AO_TRACKER_INTAKE gate is about its own
 	// poller); a project without a repository has no issues.
@@ -82,13 +84,14 @@ function CloudSettingsAdapter({ project, section, onSaveState }: { project: Clou
 		repository={standalone ? undefined : project.repositoryUrl}
 		details={[
 			{ label: t("settings.project.id"), value: project.id },
-			{ label: t("settings.project.kind"), value: standalone ? t("settings.project.kind.cloudStandalone", { defaultValue: "Cloud, without a repository" }) : t("settings.project.kind.cloud") },
+			{ label: t("settings.project.kind"), value: standalone ? t("settings.project.kind.cloudStandalone", { defaultValue: "Cloud, without a repository" }) : workspace ? t("settings.project.kind.cloudWorkspace", { defaultValue: "Cloud workspace" }) : t("settings.project.kind.cloud") },
 			// A standalone project's repository URL is only a placeholder.
-			standalone
+			...(workspace ? [] : [standalone
 				? { label: t("settings.project.repo"), value: t("settings.cloudProject.noRepository", { defaultValue: "No repository" }) }
 				: { label: t("settings.project.repo"), value: project.repositoryUrl, href: project.repositoryUrl },
-			...additionalRepos.map((repo, index) => ({ label: t("settings.cloudProject.additionalRepositoryN", { defaultValue: "Additional repository {{number}}", number: index + 1 }), value: repo.url, href: repo.url })),
+			...additionalRepos.map((repo, index) => ({ label: t("settings.cloudProject.additionalRepositoryN", { defaultValue: "Additional repository {{number}}", number: index + 1 }), value: repo.url, href: repo.url }))]),
 		]}
+		workspaceRepos={workspace ? projectRepositoryUrls(project).map((url) => ({ name: repoDirName(url), relativePath: repoDirName(url), repo: url })) : undefined}
 		generalExtra={usesCoder || intakeVisible ? <>
 			{intakeVisible ? <CloudIntakeStatus project={project} /> : null}
 			{usesCoder ? <CloudProjectCoderSettings project={project} /> : null}

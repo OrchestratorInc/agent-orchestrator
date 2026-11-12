@@ -484,9 +484,8 @@ if (typeof window !== "undefined") {
 		},
 		remotes: {
 			list: async () => [],
-			importAccountHost: async () => undefined,
-			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => ({ token: "" }),
+			syncAccountHosts: async () => undefined,
+			linkAccountHost: async () => undefined,
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
@@ -514,6 +513,8 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "not available in tests" }),
+			previewFolderUpload: async () => ({ status: "ok", source: "import", leftOut: [] }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {

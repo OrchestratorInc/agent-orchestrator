@@ -299,6 +299,26 @@ describe("useBrowserView", () => {
 		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "left", startObserved: false });
 	});
 
+	it("keeps the same model across renders until its state changes", async () => {
+		setupBridge();
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		await act(async () => {});
+		const settled = result.current;
+
+		// A parent render with nothing new hands the panel the same object.
+		rerender({ sessionId: "sess-1" });
+		expect(result.current).toBe(settled);
+
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		expect(result.current).not.toBe(settled);
+		expect(result.current.goBack).toBe(settled.goBack);
+	});
+
 	it("swaps straight to a session's cached native view when switching back", async () => {
 		const bridge = setupBridge();
 		const slot = createSlot();

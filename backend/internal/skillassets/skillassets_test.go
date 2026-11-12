@@ -270,3 +270,21 @@ func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
 		}
 	}
 }
+
+// AO_SESSION_ARTIFACTS_DIR is set only in cloud sandboxes, and these docs run on
+// local sessions too, where it would expand to nothing.
+func TestArtifactGuidanceUsesPathsThatWorkInLocalSessions(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/artifact.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "AO_SESSION_ARTIFACTS_DIR") {
+		t.Fatal("artifact guidance names a variable local sessions do not set")
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{"ao artifact add report.html", "`artifact: true` in `html_render`"} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("artifact guidance missing %q", want)
+		}
+	}
+}

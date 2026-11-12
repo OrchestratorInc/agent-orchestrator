@@ -11,17 +11,21 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
-import { ProviderMark } from "./ProviderMark";
-import { useChatSessionId } from "./chat-image-source";
+import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
+import { ArtifactThumbnail } from "../ArtifactThumbnail";
+import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
+import type { ArtifactRow } from "../../lib/artifacts";
+import { useChatEntrance } from "./chat-entrance";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -35,6 +39,7 @@ import {
 	CircleAlert,
 	CircleCheck,
 	CircleDot,
+	CircleHelp,
 	CircleStop,
 	Clock,
 	Copy,
@@ -126,7 +131,8 @@ import { getApiBaseUrl } from "../../lib/api-client";
 import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
-import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
+import { useComposerTokenRenderer } from "./sentComposerTokens";
+import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText, UserMarkdown } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
@@ -168,6 +174,7 @@ import {
 	type DiffStatus,
 	type FileChangeFile,
 	type ConversationItem,
+	type TurnArtifactChange,
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
@@ -496,7 +503,7 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 /** The remote host a chat's session runs on, whose catalogs name its models. */
 export const ChatHostId = createContext<string | undefined>(undefined);
 
-/** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
+/** One side of a handoff: its model by name when one was recorded, else the agent's name. */
 function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
 	const { t } = useTranslation();
 	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
@@ -505,7 +512,6 @@ function HandoffSide({ harness, model, effort, compactWindow, bright }: { harnes
 	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
 	return (
 		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
-			<ProviderMark provider={harness} />
 			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
 			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
 			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
@@ -600,6 +606,13 @@ const TURN_OUTCOME_COPY = {
 		tone: "font-medium text-destructive",
 		iconTone: "text-destructive",
 	},
+	// The controller went away mid-turn, so nothing reported how it ended.
+	unknown: {
+		label: "The agent stopped before this turn finished",
+		icon: CircleHelp,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
 } as const;
 
 /**
@@ -623,7 +636,7 @@ export function TurnOutcome({
 	rollbackDisabled,
 	timestamp,
 }: {
-	state: "recovered" | "interrupted" | "failed";
+	state: "recovered" | "interrupted" | "failed" | "unknown";
 	error?: string;
 	failureCode?: "provider_key_missing";
 	onConfigure?: () => void;
@@ -807,6 +820,49 @@ function formatTokens(tokens: number): string {
 }
 
 /**
+ * The bubble's text renderer: inline image chips when the message has images,
+ * nothing otherwise, so a message without them keeps UserMarkdown's memo.
+ */
+function inlineImageRenderer(attachments: string[], sessionId: string, apiBaseUrl: string | null) {
+	if (apiBaseUrl === null || !attachments.some((path) => IMAGE_ATTACHMENT_PATH.test(path))) return undefined;
+	return (text: string) => (
+		<ProseWithInlineImages text={text} attachments={attachments} sessionId={sessionId} apiBaseUrl={apiBaseUrl} renderText={(plain) => plain} />
+	);
+}
+
+/**
+ * The bubble's text renderer: skills and files it sent as chips in the accent
+ * color, and inline image chips. Undefined when neither applies, which keeps
+ * UserMarkdown's memo; stable while the message and its attachments are.
+ */
+function useUserTextRenderer(sessionId: string, body: string, attachments: string[], apiBaseUrl: string | null) {
+	const renderTokens = useComposerTokenRenderer(sessionId, body);
+	const attachmentKey = attachments.join("\n");
+	return useMemo(() => {
+		const renderImages = inlineImageRenderer(attachmentKey ? attachmentKey.split("\n") : [], sessionId, apiBaseUrl);
+		return renderTokens ? (text: string) => renderTokens(text, renderImages) : renderImages;
+	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl]);
+}
+
+// A list, quote or code block at either end of a message sits flush with the
+// bubble's padding instead of adding its own outer margin.
+const USER_BODY_CLASS = "break-words text-pretty [&>:first-child]:mt-0 [&>:last-child]:mb-0";
+
+const collapseWhitespace = (text: string) => text.replace(/\s+/g, "");
+
+/**
+ * Copying the whole of a rendered message gives back what the person typed, list
+ * markers and backticks included, as the Copy button does. A partial selection
+ * copies what it shows.
+ */
+function copyWholeMessageAsTyped(event: ClipboardEvent<HTMLDivElement>, typed: string) {
+	const selected = window.getSelection()?.toString() ?? "";
+	if (!selected.trim() || collapseWhitespace(selected) !== collapseWhitespace(event.currentTarget.textContent ?? "")) return;
+	event.preventDefault();
+	event.clipboardData.setData("text/plain", typed);
+}
+
+/**
  * Prose whose inline staged image paths (written by the composer's image chips)
  * render as chips that open the image. "Image N" counts images in attachment
  * order, the same label the attachment row and the composer use.
@@ -831,14 +887,22 @@ function ProseWithInlineImages({
 		segment.path === undefined ? (
 			<Fragment key={index}>{renderText(segment.text)}</Fragment>
 		) : (
-			<ChatImage
+			<InlineStagedImage
 				key={index}
-				inline
-				src={attachmentURL(apiBaseUrl, sessionId, segment.path)}
+				path={segment.path}
+				sessionId={sessionId}
+				apiBaseUrl={apiBaseUrl}
 				alt={t("chat.image.numbered", { index: images.indexOf(segment.path) + 1 })}
 			/>
 		),
 	);
+}
+
+/** An inline image chip, drawn from the composer's copy while the file was just sent. */
+function InlineStagedImage({ path, sessionId, apiBaseUrl, alt }: { path: string; sessionId: string; apiBaseUrl: string; alt: string }) {
+	// A local copy that fails to draw hands the chip to the daemon's copy.
+	const local = useSentAttachmentPreview(path);
+	return <ChatImage inline src={local.url ?? attachmentURL(apiBaseUrl, sessionId, path)} alt={alt} onError={local.onError} />;
 }
 
 /** Collapse the home directory so a long absolute path does not eat the row. */
@@ -1000,7 +1064,7 @@ export function HumanMessage({
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
-		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
+		(content) => (content.type === "excerpt" && (Boolean(content.text) || content.snapshot?.badgeOnly === true)) || Boolean(content.fileReference),
 	);
 	const annotationSummary = excerptReferences.length > 0 ? (
 		<ChatAnnotationSummary
@@ -1010,12 +1074,15 @@ export function HumanMessage({
 				conversationId: excerpt.sourceConversationId,
 				messageId: excerpt.sourceMessageId,
 				revision: excerpt.sourceRevision,
+				snapshot: excerpt.snapshot,
 			}))}
 			onSelect={onSelectAnnotation}
 			tile
 		/>
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
+	// The skills and files it sent as chips, drawn as colored text.
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
@@ -1091,15 +1158,12 @@ export function HumanMessage({
 						>
 							<CollapsibleHumanBody stateKey={visibleMessageText}>
 								{body ? (
-									<p data-chat-message-body="" className="break-words whitespace-pre-wrap text-pretty">
-										<ProseWithInlineImages
+									<div data-chat-message-body="" className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+										<UserMarkdown
 											text={body}
-											attachments={attachments}
-											sessionId={sessionId}
-											apiBaseUrl={apiBaseUrl}
-											renderText={(text) => <SessionLinkedText text={text} />}
+											renderText={renderText}
 										/>
-									</p>
+									</div>
 								) : null}
 							</CollapsibleHumanBody>
 						</div>
@@ -1347,7 +1411,9 @@ const LIVE_RECONNECT_CHIP =
  * when the turn settles this row fades out where it is and "Worked for" opens at the
  * top of the turn, so nothing appears to travel between the two.
  */
-export function LiveResponseStatus({ startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+	/** Names this row across remounts (windowing), so its label's entrance plays once. */
+	entranceKey?: string;
 	startedAt?: string;
 	/** Replaces the timer while the session is still being set up. */
 	startupLabel?: string;
@@ -1390,6 +1456,12 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 	// entrance, each time; keyed by kind it updates in place and crossfades only when
 	// the row changes what it is showing.
 	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
+	// A row that mounts with its chat (a switch to a working session) shows the
+	// label it opened with in place; any label after that fades in.
+	const labelEnters = useChatEntrance(entranceKey ?? labelId);
+	const quietLabelKind = useRef<string | null | undefined>(labelEnters ? null : labelKind);
+	if (quietLabelKind.current !== null && quietLabelKind.current !== labelKind) quietLabelKind.current = null;
+	const labelEntrance = quietLabelKind.current === null;
 	const rowClass = "-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0";
 	const row = (
 		<>
@@ -1405,7 +1477,7 @@ export function LiveResponseStatus({ startedAt, startupLabel, failed = false, ta
 				{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
 				    while the text inside updates in place. */}
 				{label && labelKind ? (
-					<span key={labelKind} className="chat-live-label min-w-0 truncate" data-testid="live-working-task">
+					<span key={labelKind} className={cn(labelEntrance && "chat-live-label", "min-w-0 truncate")} data-testid="live-working-task">
 						{reconnect && !startupLabel ? (
 							<span className={LIVE_RECONNECT_CHIP}>
 								<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
@@ -1540,7 +1612,17 @@ function DeliveryNote({ state }: { state: DeliveryState }) {
  * kind this build does not recognize still renders as a generic row — dropping it
  * would hide work the agent really did.
  */
-export function ActivityRow({ activity }: { activity: ConversationActivity }) {
+export function ActivityRow({
+	activity,
+	repeats,
+}: {
+	activity: ConversationActivity;
+	/** Earlier calls with the same label, folded into this row. */
+	repeats?: readonly ConversationActivity[];
+}) {
+	// A call already in the chat when it opened, or scrolled back into view, is
+	// drawn in place; only a call that arrives fades in.
+	const entering = useChatEntrance(`row:${activity.id}`, activity.sequence);
 	const toolActivity =
 		activity.activityKind === "command" ||
 		activity.activityKind === "file_change" ||
@@ -1565,11 +1647,11 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
-	else content = <GenericActivityRow activity={activity} />;
+	else content = <GenericActivityRow activity={activity} repeats={repeats} />;
 
 	if (!toolActivity) return content;
 	return (
-		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`}>
+		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`} enter={entering}>
 			{content}
 		</ActivityTransition>
 	);
@@ -1579,10 +1661,13 @@ export function ActivityTransition({
 	value,
 	children,
 	inline = false,
+	enter = true,
 }: {
 	value: string;
 	children: ReactNode;
 	inline?: boolean;
+	/** Fades in on mount. Off for content that was already on screen (see chat-entrance.ts). */
+	enter?: boolean;
 }) {
 	const reducedMotion = useReducedMotion();
 	const previousValue = useRef(value);
@@ -1597,7 +1682,7 @@ export function ActivityTransition({
 	const MotionElement = inline ? motion.span : motion.div;
 	return (
 		<MotionElement
-			initial={reducedMotion ? false : { opacity: 0 }}
+			initial={reducedMotion || !enter ? false : { opacity: 0 }}
 			animate={
 				reducedMotion || !settling
 					? { opacity: 1 }
@@ -1679,7 +1764,13 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * A `running` activity with no completion is a real terminal state here, not a
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
-function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
+function GenericActivityRow({
+	activity,
+	repeats = [],
+}: {
+	activity: ConversationActivity;
+	repeats?: readonly ConversationActivity[];
+}) {
 	// Closed until the reader opens it, and their choice sticks: auto-collapsing a log
 	// someone is reading is worse than leaving a finished row open. That goes for a
 	// choice made on the live row too, which the row starts from when the step moves
@@ -1839,7 +1930,13 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						<GenericActivityBody activity={activity} />
+						{repeats.length > 0 ? (
+							<div className="flex flex-col gap-1">
+								{[...repeats, activity].map((each) => <GenericActivityBody key={each.id} activity={each} />)}
+							</div>
+						) : (
+							<GenericActivityBody activity={activity} />
+						)}
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -3285,6 +3382,8 @@ export function SteerMessage({
 		: undefined;
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
 	const { body, attachments } = stagedAttachmentParts(visibleText);
+	// Only the person's own steer is marked; a steer from another session is not theirs.
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
@@ -3355,17 +3454,11 @@ export function SteerMessage({
 						</AttachmentStrip>
 					) : null}
 					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
-						<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 							{body ? (
-								<p>
-									<ProseWithInlineImages
-										text={body}
-										attachments={attachments}
-										sessionId={sessionId}
-										apiBaseUrl={apiBaseUrl}
-										renderText={(text) => text}
-									/>
-								</p>
+								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
+									<UserMarkdown text={body} renderText={renderText} />
+								</div>
 							) : null}
 						</div>
 					) : null}
@@ -3752,6 +3845,110 @@ function fileChangeIcon(status: DiffStatus): StepIcon {
 		default:
 			return "write";
 	}
+}
+
+/** Fills a 5:4 tile with a page laid out 1000 wide, as the Summary's previews do. */
+const TURN_ARTIFACT_PAGE_HEIGHT = 800;
+
+/**
+ * The end-of-turn results: deliverables the turn created or edited as preview
+ * cards, then every other changed file in the changed-files card. An artifact
+ * is the thing the reader asked for, not a code change to review, so it never
+ * appears in both.
+ */
+export function TurnResults({
+	diff,
+	reportedArtifacts,
+	items,
+	onReview,
+	onOpenFile,
+	onOpenArtifact,
+}: {
+	/** Absent for an agent that reports no diffs, or a turn that only wrote artifacts. */
+	diff?: TurnDiff;
+	/** The artifacts the daemon saw the turn create or edit. */
+	reportedArtifacts?: TurnArtifactChange[];
+	items?: ConversationItem[];
+	onReview?: () => void;
+	onOpenFile?: (path: string, line?: number) => void;
+	/** Opens an artifact in the inspector's Artifacts tab, by its artifact path. */
+	onOpenArtifact?: (target: { path: string }) => void;
+}) {
+	const source = useChatArtifactFiles();
+	const pathHints = useMemo(() => turnPathHints(items), [items]);
+	const split = useMemo(
+		() => splitTurnArtifacts(diff, source?.sessionId, source?.artifacts, (path) => resolveTurnFilePath(path, pathHints), reportedArtifacts),
+		[diff, source?.sessionId, source?.artifacts, pathHints, reportedArtifacts],
+	);
+	const files = useMemo<TurnDiff | undefined>(() => (diff ? { ...diff, files: split.files } : undefined), [diff, split.files]);
+	return (
+		<>
+			{split.artifacts.length > 0 && source ? (
+				<TurnArtifacts artifacts={split.artifacts} sessionId={source.sessionId} cloud={source.cloud} onOpenArtifact={onOpenArtifact} />
+			) : null}
+			{files ? <TurnChangedFiles diff={files} items={items} onReview={onReview} onOpenFile={onOpenFile} /> : null}
+		</>
+	);
+}
+
+/** Preview cards for the deliverables one turn created or edited. */
+export function TurnArtifacts({
+	artifacts,
+	sessionId,
+	cloud,
+	onOpenArtifact,
+}: {
+	artifacts: TurnArtifact[];
+	sessionId: string;
+	cloud?: ArtifactRow["cloud"];
+	/**
+	 * Opens the artifact by its artifact path. Not the workspace-file opener: a
+	 * cloud chat resolves that against workspace files, which never holds the
+	 * artifact, so a card would open the wrong file or none.
+	 */
+	onOpenArtifact?: (target: { path: string }) => void;
+}) {
+	return (
+		<section aria-label={artifacts.length === 1 ? "Artifact" : `${artifacts.length} Artifacts`} className="flex min-w-0 flex-col gap-2">
+			<span className="text-xs text-muted-foreground">
+				{artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`}
+			</span>
+			<ul className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2.5">
+				{artifacts.map(({ artifact, status }) => {
+					const row: ArtifactRow = { ...artifact, sessionId, sessionTitle: "", cloud };
+					const verb = fileChangeVerb(status);
+					const body = (
+						<>
+							<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+								<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={TURN_ARTIFACT_PAGE_HEIGHT} row={row} />
+							</span>
+							<span className="flex min-w-0 flex-col">
+								<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
+								<span className="truncate text-caption leading-4 text-passive">{verb}</span>
+							</span>
+						</>
+					);
+					const tileClass = "group flex w-full min-w-0 flex-col gap-1.5 rounded-md text-left focus-visible:ring-1 focus-visible:ring-ring";
+					return (
+						<li key={artifact.path} className="min-w-0">
+							{onOpenArtifact ? (
+								<Pressable
+									aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
+									className={tileClass}
+									onClick={() => onOpenArtifact({ path: artifact.path })}
+									title={artifact.path}
+								>
+									{body}
+								</Pressable>
+							) : (
+								<div className={tileClass} title={artifact.path}>{body}</div>
+							)}
+						</li>
+					);
+				})}
+			</ul>
+		</section>
+	);
 }
 
 /**

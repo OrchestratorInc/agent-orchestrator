@@ -405,8 +405,10 @@ type Manager struct {
 	workspace ports.Workspace
 	store     Store
 	// agentReadiness is late-bound by SetAgentReadiness.
-	agentReadiness ports.AgentReadinessProvider
-	importArchive  ImportArchiveRefresher
+	agentReadiness      ports.AgentReadinessProvider
+	backgroundTaskUsage BackgroundTaskUsage
+	usageFlusher        UsageFlusher
+	importArchive       ImportArchiveRefresher
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -648,6 +650,26 @@ func (m *Manager) SetTerminalInputGate(gate TerminalInputGate) {
 // SetAgentReadiness completes daemon wiring before request handling begins.
 func (m *Manager) SetAgentReadiness(provider ports.AgentReadinessProvider) {
 	m.agentReadiness = provider
+}
+
+// BackgroundTaskUsage counts the provider calls AO makes on a session's behalf.
+type BackgroundTaskUsage interface {
+	RecordBackgroundTask(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, workspace string) error
+}
+
+// SetBackgroundTaskUsage completes daemon wiring before request handling begins.
+func (m *Manager) SetBackgroundTaskUsage(usage BackgroundTaskUsage) {
+	m.backgroundTaskUsage = usage
+}
+
+// UsageFlusher stores the usage AO has not read yet.
+type UsageFlusher interface {
+	Flush(ctx context.Context)
+}
+
+// SetUsageFlusher completes daemon wiring before request handling begins.
+func (m *Manager) SetUsageFlusher(flusher UsageFlusher) {
+	m.usageFlusher = flusher
 }
 
 // SetAgentAccounts completes daemon wiring before request handling begins.
@@ -992,7 +1014,14 @@ func New(d Deps) *Manager {
 // workspace and runtime, then reports completion to the LCM. If workspace
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
-func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result domain.SessionRecord, promptSize, systemPromptSize int, resultErr error) {
+	// The Setup-extended budget is a child of ctx that expires just before it,
+	// so a stage killed by that deadline returns while ctx itself is still live.
+	requestCtx := ctx
+	var budget context.Context
+	defer func() {
+		resultErr = RelabelSpawnTimeout(resultErr, requestCtx, budget)
+	}()
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -1012,6 +1041,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	ctx, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancelBudget()
+	budget = ctx
 	standalone := cfg.ProjectID == ""
 	projectKind := project.Kind.WithDefault()
 	if standalone {
@@ -1116,7 +1146,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			mode = domain.SessionModeTUI
 		}
 		if mode == domain.SessionModeChat {
+			checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 			resolved, err := m.resolveAgentConfig(ctx, cfg, project.Config)
+			checked(err)
 			if err != nil {
 				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 			}
@@ -1125,7 +1157,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 	}
 	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
+		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
+		checked(err)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 		}
@@ -1134,6 +1168,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		agentConfig = resolved
 	}
 	cfg.RequestedMode = mode
+	NoteSpawnLaunch(ctx, mode, false)
 
 	// Adapters whose model picker is an agent-owned mode list (e.g. Amp) keep
 	// their selectable values in AgentConfig.Mode. Normalize a copy for the
@@ -1355,18 +1390,27 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	var ws ports.WorkspaceInfo
 	var workspaceProject *ports.WorkspaceProjectInfo
 	if prep != nil {
+		prepared := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.awaitTaskPreparation(ctx, prep)
 		if err != nil && ctx.Err() != nil {
+			prepared(err)
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			m.discardClaimedTaskPreparation(cleanupCtx, prep)
 			cancel()
 			m.cleanupArtifactDir(id)
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 		}
+		// A preparation that failed on its own is not the spawn's failure: the
+		// worktree is created afresh below, which records its own outcome.
+		prepared(nil)
 	}
 	if ws.Path == "" {
+		fetched := BeginSpawnStep(ctx, SpawnStepBranchFetch)
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, project)
+		fetched(nil)
+		created := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, project, cfg, id, branch, baseRefs)
+		created(err)
 	}
 	if err != nil {
 		if ws.Path != "" {
@@ -1380,7 +1424,10 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
-	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+	provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
+	err = m.provisionWorkspace(ctx, project, ws.Path)
+	provisioned(err)
+	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
 	}
@@ -1407,6 +1454,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// provisioning, attachments. From here the two modes launch different
 	// controllers, and exactly one of them runs.
 	if mode == domain.SessionModeChat {
+		started := BeginSpawnStep(ctx, SpawnStepAgentStart)
 		rec, err = m.launchChatController(ctx, chatSpawn{
 			cfg:              cfg,
 			project:          project,
@@ -1418,6 +1466,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			systemPrompt:     systemPrompt,
 			systemPromptFile: systemPromptFile,
 		})
+		started(err)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, err
 		}
@@ -1544,12 +1593,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
 	}
 	defer releaseCodexAdmission()
+	started := BeginSpawnStep(ctx, SpawnStepAgentStart)
 	handle, err := m.runtime.Create(ctx, ports.RuntimeConfig{
 		SessionID:     id,
 		WorkspacePath: ws.Path,
 		Argv:          argv,
 		Env:           env,
 	})
+	started(err)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrRuntimeCreate, agentlaunch.RedactError(err, project.Config.Env))
@@ -1703,19 +1754,26 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		return resolved, nil
 	}
-	// Validate against the saved catalog first so a launch does not wait on a
-	// live model discovery. Rediscover only when the saved catalog cannot answer:
-	// it failed, is stale or updating, or lacks the requested model or effort.
+	// A spawn never waits on live model discovery: it runs the agent's CLI and
+	// can take up to the catalog's load timeout, inside the spawn request.
+	// Validate against the saved catalog only. When it cannot answer (the read
+	// failed, or it is stale, updating, or does not list the model or effort),
+	// refresh it in the background and let the launch go ahead: the agent CLI
+	// has the final say, as it already does for Codex. Only what the saved
+	// catalog proves is refused here: a model that needs a newer Claude Code,
+	// and an effort the listed model does not support.
 	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false)
 	if err != nil || !savedCatalogCovers(catalog, modelID, resolved.Effort) {
-		catalog, err = m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+		m.refreshModelCatalogInBackground(cfg.Harness, cfg.ProjectID)
 	}
 	if err != nil {
+		// Only the spawn's own cancellation stops the launch here.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
+		}
+		NoteSpawnModel(ctx, modelID, false)
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
-		}
-		if validateClaudeModel || resolved.Effort != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w: %w", ports.ErrModelCapabilitiesUnavailable, err)
 		}
 		return resolved, nil
 	}
@@ -1727,18 +1785,6 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			}
 		}
 	}
-	// A catalog left stale only because the stored login's access token expired
-	// (its refresh token still in date) must not block the launch: Claude Code
-	// renews the token when it starts. The stale list still validates what it
-	// knows. Models it lacks are left to the CLI only when there is no
-	// account-scoped list (the built-in fallback); against the account's own
-	// last-known list an unlisted ID is more likely a typo than a new release.
-	renewableLogin := catalog.Stale && catalog.WarningCode == ports.ModelCatalogWarningAuthExpired &&
-		cfg.Harness == domain.HarnessClaudeCode
-	unlistedToCLI := renewableLogin && catalog.LastSuccessAt == nil
-	if catalog.Stale && validateClaudeModel && !renewableLogin {
-		return ports.AgentConfig{}, fmt.Errorf("%w for model %q: catalog is stale", ports.ErrModelCapabilitiesUnavailable, modelID)
-	}
 	var selected *ports.AgentModelInfo
 	for i := range catalog.Models {
 		if catalog.Models[i].ID == modelID {
@@ -1746,14 +1792,12 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 			break
 		}
 	}
-	if validateClaudeModel && selected == nil && !unlistedToCLI {
-		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
-	}
+	NoteSpawnModel(ctx, modelID, selected != nil ||
+		containsString(claudeFamilyAliases, strings.ToLower(strings.TrimSuffix(modelID, "[1m]"))))
 	if selected != nil && selected.RequiresVersion != "" {
 		// Launching would only fail on the first turn with the provider's
-		// claude_code_version_too_old rejection; say so before spawning. This runs
-		// for any listed model, not only when the model is validated: a model the
-		// catalog does not list (a gateway alias) has no known requirement.
+		// claude_code_version_too_old rejection; say so before spawning. A model
+		// the catalog does not list (a gateway alias) has no known requirement.
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q: %s", ErrUnsupportedModel, modelID, selected.UnavailableReason)
 	}
 	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {
@@ -1771,21 +1815,28 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if resolved.Effort == "" {
 		return resolved, nil
 	}
-	if unlistedToCLI && selected == nil {
-		// The CLI owns per-model capabilities, but a level no Claude model
-		// accepts can still be refused here rather than after the session starts.
-		if !containsString(claudeEffortLevels, resolved.Effort) {
+	if selected == nil {
+		// The saved catalog does not list the model, so the CLI owns its
+		// capabilities. A level no Claude model accepts is still certain.
+		if cfg.Harness == domain.HarnessClaudeCode && !containsString(claudeEffortLevels, resolved.Effort) {
 			return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 		}
 		return resolved, nil
 	}
-	if (catalog.Stale && !renewableLogin) || selected == nil {
-		return ports.AgentConfig{}, fmt.Errorf("%w for model %q", ports.ErrModelCapabilitiesUnavailable, modelID)
-	}
-	if resolved.Effort != "" && !containsString(selected.Efforts, resolved.Effort) {
+	if !containsString(selected.Efforts, resolved.Effort) {
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
+}
+
+// refreshModelCatalogInBackground rediscovers a harness's catalog without
+// holding up the spawn that found it stale. The catalog service coalesces
+// concurrent loads, so a burst of spawns starts one discovery.
+func (m *Manager) refreshModelCatalogInBackground(harness domain.AgentHarness, projectID domain.ProjectID) {
+	ctx, catalog := m.backgroundContext, m.modelCatalog
+	go func() {
+		_, _ = catalog.Models(ctx, string(harness), string(projectID), true)
+	}()
 }
 
 var (
@@ -2436,6 +2487,19 @@ func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) por
 		merged.Permissions = rec.Metadata.Permissions
 	}
 	return merged
+}
+
+// EffectiveSpawnAgentConfig merges project, role, and per-start tuning for
+// admission bookkeeping without running model discovery or changing settings.
+func EffectiveSpawnAgentConfig(cfg ports.SpawnConfig, project domain.ProjectConfig) ports.AgentConfig {
+	if cfg.AgentConfigResolved {
+		return cfg.AgentConfig
+	}
+	resolved := applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, project), cfg.AgentConfig)
+	if cfg.EffortOverride {
+		resolved.Effort = cfg.AgentConfig.Effort
+	}
+	return resolved
 }
 
 func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
@@ -6214,6 +6278,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if kind == domain.KindWorker && requestedOutput == domain.RequestedOutputArtifact {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactOutputPrompt)
 	}
+	cfg.TimeZone = userTimeZone(ctx, m.dataDir)
 	return buildSystemPromptText(cfg), nil
 }
 
@@ -6378,9 +6443,10 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 	if dir == "" {
 		return ""
 	}
-	inThread := ""
+	inThread, keptRender := "", ""
 	if chat {
 		inThread = "In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory.\n\n"
+		keptRender = " Neither does keeping a render with `ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns."
 	}
 	return "## Session Artifacts\n\n" +
 		"Write deliverables that are not part of a pull request to `" + dir + "`, never into the git workspace, even temporarily or under `docs/` or `notes/`.\n\n" +
@@ -6388,6 +6454,8 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 		"Everything produced along the way is working material and goes in the system temp directory unless the user asked for it: intermediate outputs such as frames or partial renders, drafts, downloaded inputs, caches, build output, logs, and the scripts that generate the deliverable. " +
 		"If a file is neither opened on its own nor needed by a deliverable, it is working material.\n\n" +
 		inThread +
+		"Only files you register appear as this session's artifacts. Run `ao artifact add <path>` once for each deliverable as soon as it exists, and again for a copy; edits, and renames or moves inside the directory, need no further command. " +
+		"Other files stay in the directory, so links between them keep working, but they are not listed. `ao report --artifact` does not register a file." + keptRender + "\n\n" +
 		"Create a deliverable only when the user asks for a durable output or the task needs a reviewable one; summaries, final answers, and validation results stay in chat or Orchestrator report notes. " +
 		"Prefer one consolidated deliverable, and revise it in place instead of adding copies. " +
 		"Saving a file here or attaching it to an Orchestrator report does not authorize external publishing. " +
@@ -7246,6 +7314,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, _ domain.AgentHarness, dataDir string, env map[string]string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	metadata := nativeRestoreMetadata(domain.SessionRecord{Metadata: meta})
 	metadata[ports.MetadataKeySessionMode] = string(domain.SessionModeTUI)
+	metadata[ports.MetadataKeyNativeTranscriptPath] = meta.NativeTranscriptPath
 	ref := ports.SessionRef{
 		ID:            string(id),
 		WorkspacePath: workspacePath,

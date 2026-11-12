@@ -2,19 +2,6 @@ import { useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 import {
-	getAgents,
-	getAgentModels,
-	getProject,
-	getSession,
-	getSessionPR,
-	getSessionReviews,
-	requestSessionRereview,
-	resolveSessionReviewComment,
-	sendMessage,
-	setSessionAutoInjectCI,
-	setSessionAutoInjectReview,
-	setSessionAutoReview,
-	switchSessionReviewer,
 	type AgentModelCatalog,
 	type ReviewerAgentConfig,
 	type PRReviewCommentLink,
@@ -31,7 +18,8 @@ import { formatExternalReviewMessage, formatInlineReviewCommentMessage } from ".
 import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { ReviewActionsSheet } from "../../lib/review-actions-sheet";
 import type { ReviewFeedbackItem, ReviewFeedbackSection, ReviewPolicyKey, ReviewPolicyRow } from "../../lib/review-actions-sheet.types";
-import { defaultReviewerHarness, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
+import { useReviewBackend, type ReviewSettings } from "../../lib/reviewBackend";
+import { reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
 import { pullRequestSummaryForURL } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -57,10 +45,14 @@ export default function ReviewActionsRoute() {
 
 function ReviewActionsContent() {
 	const styles = useThemedStyles(makeStyles);
-	const { config, currentHostId } = useApp();
+	const { currentHostId } = useApp();
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud worker;
+	// what Cloud cannot do (pick the reviewer's model, ask a GitHub reviewer
+	// again, resolve a comment) the backend leaves out, and so does the sheet.
+	const { backend } = useReviewBackend();
 	const { sessionId = "", prUrl = "", hostId: routeHostId } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string; hostId?: string }>();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const [agents, setAgents] = useState<ReturnType<typeof reviewerChoices>>([]);
+	const [agents, setAgents] = useState<ReviewSettings["reviewers"]>([]);
 	const [models, setModels] = useState<AgentModelCatalog>();
 	const [reviewerConfig, setReviewerConfig] = useState<ReviewerAgentConfig>({});
 	const [pr, setPR] = useState<SessionPRSummary>();
@@ -78,40 +70,36 @@ function ReviewActionsContent() {
 	const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
 
 	const load = useCallback(async () => {
-		if (!hostMatches || !config || !sessionId) return;
+		if (!hostMatches || !backend || !sessionId) return;
 		setError("");
 		try {
-			const [catalog, prs, session, reviewState] = await Promise.all([getAgents(config), getSessionPR(config, sessionId), getSession(config, sessionId), getSessionReviews(config, sessionId)]);
-			setAgents(reviewerChoices(catalog));
-			const project = session.projectId ? await getProject(config, session.projectId).catch(() => undefined) : undefined;
-			setReviewerOverride(session.reviewerHarness || "");
-			setProjectDefaultReviewer(defaultReviewerHarness(project?.config?.reviewers, session.harness ?? undefined));
-			setReviewerConfig(session.reviewerConfig ?? {});
+			const [settings, prs, reviewState] = await Promise.all([backend.settings(sessionId), backend.pullRequests(sessionId), backend.reviews(sessionId)]);
+			setAgents(settings.reviewers);
+			setReviewerOverride(settings.selectedReviewer);
+			setProjectDefaultReviewer(settings.defaultReviewer);
+			setReviewerConfig(settings.reviewerConfig);
 			const matchedPR = pullRequestSummaryForURL(prs, prUrl);
 			setPR(matchedPR);
 			setPRMissing(!matchedPR);
 			setReviews(reviewState);
-			setPolicies({
-				autoReviewEnabled: session.autoReviewEnabled ?? false,
-				autoInjectReview: session.autoInjectReview ?? true,
-				autoInjectCI: session.autoInjectCI ?? true,
-			});
+			setPolicies(settings.policies);
 		} catch (cause) {
 			setError(userFacingError(cause, "Could not load review actions."));
 		}
-	}, [config, hostMatches, prUrl, sessionId]);
+	}, [backend, hostMatches, prUrl, sessionId]);
 
 	useEffect(() => { void load(); }, [load]);
 	useEffect(() => {
 		const request = ++modelRequest.current;
 		setModels(undefined);
-		if (!hostMatches || !config || !effectiveReviewer) return;
+		const reviewerModels = backend?.reviewerModels;
+		if (!hostMatches || !reviewerModels || !effectiveReviewer) return;
 		const polling = new AbortController();
-		void getAgentModels(config, effectiveReviewer, undefined, polling.signal)
+		void reviewerModels(effectiveReviewer, polling.signal)
 			.then((result) => { if (request === modelRequest.current) setModels(result); })
 			.catch(() => { if (request === modelRequest.current) setModels(undefined); });
 		return () => polling.abort();
-	}, [config, effectiveReviewer, hostMatches]);
+	}, [backend, effectiveReviewer, hostMatches]);
 	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
 	const externalReviewers = useMemo(() => uniqueReviewers(pr, aoReviewIds), [aoReviewIds, pr]);
 	// Like the spawn sheet, only offer reviewers that can run now. A saved
@@ -126,12 +114,12 @@ function ReviewActionsContent() {
 	// The switch, the picker and the request each show their own progress, so
 	// none of them adds a haptic of its own; success is the moment worth feeling.
 	async function saveReviewer(id: string, agentConfig: ReviewerAgentConfig) {
-		if (!config) return;
+		if (!backend) return;
 		setBusy({ kind: "reviewer", id });
 		setError("");
 		try {
 			const selection = reviewerSwitchSelection(id, agentConfig);
-			await switchSessionReviewer(config, sessionId, selection.harness, selection.agentConfig);
+			await backend.setReviewer(sessionId, id, agentConfig);
 			setReviewerOverride(id);
 			setReviewerConfig(selection.agentConfig ?? {});
 			haptics.success();
@@ -143,12 +131,12 @@ function ReviewActionsContent() {
 	}
 
 	async function confirmReviewerChange(id: string, agentConfig: ReviewerAgentConfig) {
-		if (!config || busy) return;
+		if (!backend || busy) return;
 		if (!reviewerSelectionChanged(reviewerOverride, reviewerConfig, id, agentConfig)) return;
 		setBusy({ kind: "reviewer", id });
 		setError("");
 		try {
-			const latest = await getSessionReviews(config, sessionId);
+			const latest = await backend.reviews(sessionId);
 			setReviews(latest);
 			const warning = reviewerSwitchWarning(latest.reviews.some((item) => item.status === "running"));
 			if (!warning) { await saveReviewer(id, agentConfig); return; }
@@ -173,15 +161,13 @@ function ReviewActionsContent() {
 	}
 
 	async function updatePolicy(key: ReviewPolicyKey, value: boolean) {
-		if (!config || !policies || busy) return;
+		if (!backend || !policies || busy) return;
 		const previous = policies;
 		setPolicies({ ...policies, [key]: value });
 		setBusy({ kind: "policy", id: key });
 		setError("");
 		try {
-			if (key === "autoReviewEnabled") await setSessionAutoReview(config, sessionId, value);
-			else if (key === "autoInjectReview") await setSessionAutoInjectReview(config, sessionId, value);
-			else await setSessionAutoInjectCI(config, sessionId, value);
+			await backend.setPolicy(sessionId, key, value);
 			haptics.success();
 		} catch (cause) {
 			setPolicies(previous);
@@ -192,11 +178,12 @@ function ReviewActionsContent() {
 	}
 
 	async function rerequest(item: PRUnresolvedReviewer) {
-		if (!config || !pr || busy) return;
+		const ask = backend?.rerequest;
+		if (!ask || !pr || busy) return;
 		setBusy({ kind: "rerequest", id: item.reviewerId });
 		setError("");
 		try {
-			await requestSessionRereview(config, sessionId, pr.url, item.reviewerId);
+			await ask(sessionId, pr.url, item.reviewerId);
 			haptics.success();
 		} catch (cause) {
 			setError(userFacingError(cause, "Could not request another review."));
@@ -206,7 +193,7 @@ function ReviewActionsContent() {
 	}
 
 	function confirmResolve(comment: PRReviewCommentLink) {
-		if (!config || !pr || busy) return;
+		if (!backend?.resolveComment || !pr || busy) return;
 		Alert.alert("Resolve feedback?", comment.body?.trim() || "Mark this addressed comment as resolved on GitHub.", [
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Resolve", onPress: () => void resolve(comment) },
@@ -214,13 +201,14 @@ function ReviewActionsContent() {
 	}
 
 	async function resolve(comment: PRReviewCommentLink) {
-		if (!config || !pr) return;
+		const resolveComment = backend?.resolveComment;
+		if (!resolveComment || !pr) return;
 		const commentUrl = comment.url;
 		if (!commentUrl) return;
 		setBusy({ kind: "resolve", id: commentUrl });
 		setError("");
 		try {
-			await resolveSessionReviewComment(config, sessionId, pr.url, commentUrl);
+			await resolveComment(sessionId, pr.url, commentUrl);
 			haptics.success();
 			await load();
 		} catch (cause) {
@@ -231,11 +219,11 @@ function ReviewActionsContent() {
 	}
 
 	async function send(id: string, message: string) {
-		if (!config || busy) return;
+		if (!backend || busy) return;
 		setBusy({ kind: "send", id });
 		setError("");
 		try {
-			await sendMessage(config, sessionId, message, { userAuthored: true });
+			await backend.sendToWorker(sessionId, message);
 			setSent((current) => new Set(current).add(id));
 			haptics.success();
 		} catch (cause) {
@@ -281,7 +269,7 @@ function ReviewActionsContent() {
 		const actions: ItemAction[] = [
 			...(comment.url ? [{ id: "open", label: comment.file ? "Open file & line" : "Open on GitHub", icon: "openExternal" as const, onPress: () => void openGitHub(comment.url!, { fromSheet: true }) }] : []),
 			...(!sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatInlineReviewCommentMessage(comment, reviewerId)) }] : []),
-			...(!resolved && comment.url ? [{ id: "resolve", label: "Resolve", icon: "resolve" as const, onPress: () => confirmResolve(comment) }] : []),
+			...(!resolved && comment.url && backend?.resolveComment ? [{ id: "resolve", label: "Resolve", icon: "resolve" as const, onPress: () => confirmResolve(comment) }] : []),
 		];
 		return {
 			key: id,
@@ -322,8 +310,9 @@ function ReviewActionsContent() {
 			selectedModel: (models?.selectionMode === "mode" ? reviewerConfig.mode : reviewerConfig.model) ?? "",
 			onSelectModel: chooseModel,
 			busy: Boolean(busy),
+			modelChoice: Boolean(backend?.reviewerModels),
 		} : undefined}
-		externalReviewers={externalReviewers.map((item) => ({
+		externalReviewers={(backend?.rerequest ? externalReviewers : []).map((item) => ({
 			id: item.reviewerId,
 			detail: `${item.count} ${item.count === 1 ? "comment" : "comments"}`,
 			busy: busy?.kind === "rerequest" && busy.id === item.reviewerId,
