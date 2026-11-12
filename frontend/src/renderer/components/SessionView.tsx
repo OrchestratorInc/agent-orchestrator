@@ -3021,11 +3021,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										menu={{ kind: "group", onUngroup: () => updateGroups((current) => ungroupById(current, shownGroup.id)) }}
 										onPress={() => {
 											setPaneFocusRequests((current) => ({ ...current, [key]: (current[key] ?? 0) + 1 }));
-											// A terminal only autofocuses when it becomes selected, so a press
-											// on an already selected pane puts the caret in it directly.
+											// A terminal or chat composer only autofocuses when it becomes
+											// selected, so a press on a selected pane puts the caret in it.
 											requestAnimationFrame(() => {
 												for (const pane of document.querySelectorAll<HTMLElement>("[data-split-pane]")) {
-													if (pane.dataset.splitPane === key) pane.querySelector<HTMLElement>(".xterm-helper-textarea")?.focus({ preventScroll: true });
+													if (pane.dataset.splitPane === key) pane.querySelector<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='textbox']")?.focus({ preventScroll: true });
 												}
 											});
 										}}
