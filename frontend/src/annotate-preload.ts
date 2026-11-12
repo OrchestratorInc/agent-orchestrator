@@ -17,7 +17,7 @@ import {
 	type BrowserStyleAdjustment,
 } from "./shared/browser-annotations";
 import { promptPositionForRect, type AnnotationRectLike } from "./shared/browser-annotation-overlay";
-import type { DictationEvent } from "./shared/dictation";
+import type { DictationMessage } from "./shared/dictation";
 import { DICTATION_METER_BARS, dictationMeterSteps, runDictationMeter } from "./shared/dictation-meter";
 import { isTrustedUserEvent } from "./shared/trusted-event";
 
@@ -44,14 +44,20 @@ let dictationAllowed = false;
  * run started from; `before`/`after` are the note around it.
  */
 let dictation: {
+	/** The number main tags this run's events with. */
+	run: number;
 	phase: "starting" | "listening" | "finishing";
 	before: string;
+	/** What the run replaces; kept if no words arrive. */
+	selected: string;
 	after: string;
-	/** A space when the words would otherwise run into the text before them. */
+	/** Spaces for when the words would otherwise run into the text around them. */
 	prefix: string;
+	suffix: string;
 	unsubscribe: () => void;
 	stopMeter: (() => void) | null;
 } | null = null;
+let lastDictationRun = 0;
 
 const ADJUST_MODE_ENABLED = true;
 
@@ -409,8 +415,8 @@ function showNotice(message: string, durationMs: number): void {
 	}, durationMs);
 }
 
-function onDictationEvent(listener: (event: DictationEvent) => void): () => void {
-	const handler = (_event: Electron.IpcRendererEvent, message: DictationEvent) => listener(message);
+function onDictationEvent(listener: (event: DictationMessage) => void): () => void {
+	const handler = (_event: Electron.IpcRendererEvent, message: DictationMessage) => listener(message);
 	ipcRenderer.on("dictation:event", handler);
 	return () => {
 		ipcRenderer.removeListener("dictation:event", handler);
@@ -426,22 +432,28 @@ function startDictation(): void {
 	const textarea = shadow?.querySelector<HTMLTextAreaElement>(".composer-note");
 	if (!draft || !textarea || dictation) return;
 	const start = textarea.selectionStart ?? draft.body.length;
+	const end = textarea.selectionEnd ?? start;
 	const before = draft.body.slice(0, start);
+	const after = draft.body.slice(end);
 	dictation = {
+		run: ++lastDictationRun,
 		phase: "starting",
 		before,
-		after: draft.body.slice(textarea.selectionEnd ?? start),
+		selected: draft.body.slice(start, end),
+		after,
 		prefix: before && !/\s$/.test(before) ? " " : "",
+		suffix: after && !/^\s/.test(after) ? " " : "",
 		unsubscribe: onDictationEvent(handleDictationEvent),
 		stopMeter: null,
 	};
 	syncDictationButton();
-	void ipcRenderer.invoke("dictation:start");
+	void ipcRenderer.invoke("dictation:start", dictation.run);
 }
 
-function handleDictationEvent(event: DictationEvent): void {
+function handleDictationEvent(event: DictationMessage): void {
 	const run = dictation;
-	if (!run) return;
+	// A late event from an earlier run cannot end this one.
+	if (!run || event.run !== run.run) return;
 	switch (event.type) {
 		case "listening":
 		case "finishing":
@@ -474,14 +486,17 @@ function showDictatedText(text: string): void {
 	const run = dictation;
 	const draft = session.draft;
 	if (!run || !draft) return;
+	// Until words arrive the note keeps what the run would replace.
 	const words = text ? run.prefix + text : "";
-	draft.body = run.before + words + run.after;
+	draft.body = run.before + (words ? words + run.suffix : run.selected) + run.after;
 	const form = shadow?.querySelector<HTMLFormElement>(".composer");
 	const textarea = form?.querySelector<HTMLTextAreaElement>(".composer-note");
 	if (form && textarea) {
 		textarea.value = draft.body;
-		const caret = run.before.length + words.length;
-		textarea.setSelectionRange(caret, caret);
+		if (words) {
+			const caret = run.before.length + words.length;
+			textarea.setSelectionRange(caret, caret);
+		} else textarea.setSelectionRange(run.before.length, run.before.length + run.selected.length);
 		if (composerAnchorRect) resizeAndPositionComposer(form, textarea, composerAnchorRect);
 	}
 	emitState();

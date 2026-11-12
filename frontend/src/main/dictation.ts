@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { app, ipcMain, type WebContents } from "electron";
-import type { DictationEvent } from "../shared/dictation";
+import type { DictationEvent, DictationMessage } from "../shared/dictation";
 
 // One dictation at a time, run by the native helper and streamed to the surface
 // that started it: the shell renderer, or a browser page's annotation composer
@@ -13,22 +13,27 @@ export function registerDictationIpc(
 ): { stop(): void } {
 	let helper: ChildProcess | null = null;
 	let owner: WebContents | null = null;
+	/** The run number the owner gave for the running dictation. */
+	let ownerRun = 0;
 	const watched = new WeakSet<WebContents>();
 	const stop = () => {
 		helper?.stdin?.write("stop\n");
 	};
 	app.on("will-quit", () => helper?.kill());
 
-	ipcMain.handle("dictation:start", (event) => {
+	ipcMain.handle("dictation:start", (event, run: unknown) => {
 		if (process.platform !== "darwin" || !isAllowedSender(event.sender)) return;
 		const sender = event.sender;
+		const runId = typeof run === "number" && Number.isSafeInteger(run) ? run : 0;
 		const previous = helper;
 		// Another surface's dictation ends here; tell it, since the helper it was
 		// listening to goes quiet. Within one renderer the new owner ends the old one.
-		if (previous && owner && owner !== sender && !owner.isDestroyed()) owner.send("dictation:event", { type: "superseded" } satisfies DictationEvent);
+		if (previous && owner && owner !== sender && !owner.isDestroyed())
+			owner.send("dictation:event", { type: "superseded", run: ownerRun } satisfies DictationMessage);
 		const child = spawn(helperPath, [], { stdio: ["pipe", "pipe", "ignore"] });
 		helper = child;
 		owner = sender;
+		ownerRun = runId;
 		// A surface that closes mid-dictation cannot cancel; stop listening for it.
 		if (!watched.has(sender)) {
 			watched.add(sender);
@@ -42,7 +47,7 @@ export function registerDictationIpc(
 		// A helper that was replaced or cancelled is still shutting down; its
 		// events, exit included, belong to a dictation that already ended.
 		const send = (message: DictationEvent) => {
-			if (helper === child && !sender.isDestroyed()) sender.send("dictation:event", message);
+			if (helper === child && !sender.isDestroyed()) sender.send("dictation:event", { ...message, run: runId } satisfies DictationMessage);
 		};
 		previous?.kill();
 		// A stop written while the helper is exiting would otherwise throw EPIPE in main.

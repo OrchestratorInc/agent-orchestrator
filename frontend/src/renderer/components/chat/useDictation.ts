@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aoBridge } from "../../lib/bridge";
-import type { DictationEvent } from "../../../shared/dictation";
+import type { DictationMessage } from "../../../shared/dictation";
 
 export type DictationPhase = "idle" | "starting" | "listening" | "finishing";
 
 /** The composer whose dictation is running. Starting another one finishes it first. */
 let owner: { end(keep: boolean): void } | null = null;
+/** Numbers each dictation this renderer starts; main tags the run's events with it. */
+let lastRun = 0;
 
 type DictationTarget = {
 	/** Shows the transcript so far in place of the previous one. */
@@ -28,6 +30,7 @@ export function useDictation(target: DictationTarget) {
 	const owns = () => owner === self.current;
 	// Listening only while this composer owns a dictation.
 	const unsubscribe = useRef<(() => void) | null>(null);
+	const run = useRef(0);
 
 	const end = useCallback((keep: boolean) => {
 		if (owner === self.current) owner = null;
@@ -38,7 +41,9 @@ export function useDictation(target: DictationTarget) {
 	}, []);
 	self.current ??= { end };
 
-	const onEvent = useCallback((event: DictationEvent) => {
+	const onEvent = useCallback((event: DictationMessage) => {
+		// A late event from an earlier run, possibly another composer's.
+		if (event.run !== run.current) return;
 		switch (event.type) {
 			case "listening":
 				setPhase("listening");
@@ -91,10 +96,11 @@ export function useDictation(target: DictationTarget) {
 		// The main process replaces the running helper; the composer it belonged to keeps its words.
 		owner?.end(true);
 		owner = self.current;
+		run.current = ++lastRun;
 		unsubscribe.current = aoBridge.dictation.onEvent(onEvent);
 		setError(undefined);
 		setPhase("starting");
-		void aoBridge.dictation.start();
+		void aoBridge.dictation.start(run.current);
 	}, [onEvent]);
 
 	/** Ends the audio and waits for the recognizer's final wording. */
