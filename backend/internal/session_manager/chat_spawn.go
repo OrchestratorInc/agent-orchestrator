@@ -326,6 +326,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 				Permissions:       in.record.Metadata.Permissions,
 				Branch:            in.workspace.Branch,
 				WorkspacePath:     in.workspace.Path,
+				WorktreeRoot:      in.workspace.WorktreeRoot,
 				WorkspaceRepoPath: in.workspace.RepoPath,
 				Prompt:            in.prompt,
 				DiffBaseSHA:       diffBaseSHA,
@@ -692,6 +693,7 @@ func (m *Manager) resumeChatController(
 			}
 			metadata := rec.Metadata
 			metadata.WorkspacePath = ws.Path
+			metadata.WorktreeRoot = ws.WorktreeRoot
 			metadata.WorkspaceRepoPath = ws.RepoPath
 			if ws.Branch != "" {
 				metadata.Branch = ws.Branch

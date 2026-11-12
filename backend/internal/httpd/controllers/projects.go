@@ -5,7 +5,9 @@
 package controllers
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -32,11 +34,52 @@ func (c *ProjectsController) Register(r chi.Router) {
 	r.Post("/projects/clone/cleanup", c.cleanupPreparedClone)
 	r.Post("/projects/initialize", c.initialize)
 	r.Get("/projects/{id}", c.get)
+	r.Get("/projects/{id}/branches", c.listBranches)
 	r.Put("/projects/{id}", c.updateSettings)
 	r.Put("/projects/{id}/config", c.setConfig)
 	r.Patch("/projects/{id}/permissions", c.setPermissions)
 	r.Delete("/projects/{id}/permissions", c.forgetPermissions)
 	r.Delete("/projects/{id}", c.remove)
+}
+
+// configCarriesWorktreeRoot reports whether a project write body named the
+// worktreeRoot config key. The distinction matters because the empty string and
+// an absent key both decode to "": a client built before the field existed omits
+// it and must keep the saved root, while a client that clears the field sends
+// "" and must clear it.
+func configCarriesWorktreeRoot(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var body struct {
+		Config map[string]json.RawMessage `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return true
+	}
+	if body.Config == nil {
+		return false
+	}
+	_, ok := body.Config["worktreeRoot"]
+	return ok
+}
+
+// decodeProjectWriteBody decodes a project write body strictly and reports
+// whether it named worktreeRoot.
+func decodeProjectWriteBody(r *http.Request, out any) (bool, error) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return false, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		return false, err
+	}
+	return configCarriesWorktreeRoot(raw), nil
 }
 
 func (c *ProjectsController) checkCloneDestination(w http.ResponseWriter, r *http.Request) {
@@ -179,16 +222,34 @@ func (c *ProjectsController) get(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
+// listBranches serves the default-branch picker. A read failure is an error, not
+// an empty list: the form must be able to say why it has no suggestions while the
+// user keeps typing a branch by hand.
+func (c *ProjectsController) listBranches(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/projects/{id}/branches")
+		return
+	}
+	branches, err := c.Mgr.Branches(r.Context(), projectID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, branches)
+}
+
 func (c *ProjectsController) updateSettings(w http.ResponseWriter, r *http.Request) {
 	if c.Mgr == nil {
 		apispec.NotImplemented(w, r, "PUT", "/api/v1/projects/{id}")
 		return
 	}
 	var in projectsvc.UpdateSettingsInput
-	if err := decodeJSONStrict(r, &in); err != nil {
+	present, err := decodeProjectWriteBody(r, &in)
+	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	in.WorktreeRootPresent = present
 	p, err := c.Mgr.UpdateSettings(r.Context(), projectID(r), in)
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -203,10 +264,12 @@ func (c *ProjectsController) setConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in projectsvc.SetConfigInput
-	if err := decodeJSONStrict(r, &in); err != nil {
+	present, err := decodeProjectWriteBody(r, &in)
+	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	in.WorktreeRootPresent = present
 	p, err := c.Mgr.SetConfig(r.Context(), projectID(r), in)
 	if err != nil {
 		envelope.WriteError(w, r, err)

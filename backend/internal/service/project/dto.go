@@ -68,12 +68,34 @@ type InitializeRepositoryResult struct {
 type UpdateSettingsInput struct {
 	DisplayName string               `json:"displayName" minLength:"1" maxLength:"100"`
 	Config      domain.ProjectConfig `json:"config"`
+	// WorktreeRootPresent reports whether the request body's config object
+	// carried the "worktreeRoot" KEY. Presence is the whole rule: JSON cannot
+	// otherwise tell "leave the saved root alone" from "clear it", because an
+	// absent key and an explicit "" both decode to the empty string.
+	//
+	//   key absent  -> the saved root is preserved (this is what any client built
+	//                  before the field existed sends, and what a field-flag edit
+	//                  that never mentions the root sends)
+	//   key present -> its value is used verbatim, so "worktreeRoot": "" clears
+	//                  the saved root
+	//
+	// The CLI keeps three states distinct: `ao project set-config` with field
+	// flags omits the key; `--worktree-root ""` sends the key with an empty
+	// string; and the full replacements `--clear` / `--config-json` always send
+	// the key, explicitly empty when the replacement names no root, because they
+	// replace the whole config rather than merging into it.
+	WorktreeRootPresent bool `json:"-"`
 }
 
 // SetConfigInput is the body shape for PUT /api/v1/projects/{id}/config. Config
 // replaces the project's stored config wholesale; a zero-value config clears it.
 type SetConfigInput struct {
 	Config domain.ProjectConfig `json:"config"`
+	// WorktreeRootPresent mirrors UpdateSettingsInput: the key's presence in the
+	// request's config object decides. Absent preserves the stored root; present
+	// (including "") replaces it. See UpdateSettingsInput for the CLI's three
+	// states.
+	WorktreeRootPresent bool `json:"-"`
 }
 
 // RemoveResult reports what DELETE /api/v1/projects/{id} actually did.

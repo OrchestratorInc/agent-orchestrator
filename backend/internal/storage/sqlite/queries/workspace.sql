@@ -18,8 +18,8 @@ WHERE project_id = ?
 ORDER BY name;
 
 -- name: UpsertSessionWorktree :exec
-INSERT INTO session_worktrees (session_id, repo_name, branch, base_sha, base_ref, creation_sha, worktree_path, preserved_ref, state, project_id, repo_path)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO session_worktrees (session_id, repo_name, branch, base_sha, base_ref, creation_sha, worktree_path, preserved_ref, state, project_id, repo_path, worktree_root)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (session_id, repo_name) DO UPDATE SET
     branch = excluded.branch,
     base_sha = excluded.base_sha,
@@ -29,15 +29,18 @@ ON CONFLICT (session_id, repo_name) DO UPDATE SET
     preserved_ref = excluded.preserved_ref,
     state = excluded.state,
     project_id = CASE WHEN excluded.project_id = '' THEN session_worktrees.project_id ELSE excluded.project_id END,
-    repo_path = CASE WHEN excluded.repo_path = '' THEN session_worktrees.repo_path ELSE excluded.repo_path END;
+    repo_path = CASE WHEN excluded.repo_path = '' THEN session_worktrees.repo_path ELSE excluded.repo_path END,
+    -- The snapshot records where a worktree was actually created. A later upsert
+    -- that cannot name the root must not erase the snapshot restore depends on.
+    worktree_root = CASE WHEN excluded.worktree_root = '' THEN session_worktrees.worktree_root ELSE excluded.worktree_root END;
 
 -- name: GetSessionWorktree :one
-SELECT session_id, repo_name, branch, base_sha, worktree_path, preserved_ref, state, base_ref, creation_sha, project_id, repo_path
+SELECT session_id, repo_name, branch, base_sha, worktree_path, preserved_ref, state, base_ref, creation_sha, project_id, repo_path, worktree_root
 FROM session_worktrees
 WHERE session_id = ? AND repo_name = ?;
 
 -- name: ListSessionWorktrees :many
-SELECT session_id, repo_name, branch, base_sha, worktree_path, preserved_ref, state, base_ref, creation_sha, project_id, repo_path
+SELECT session_id, repo_name, branch, base_sha, worktree_path, preserved_ref, state, base_ref, creation_sha, project_id, repo_path, worktree_root
 FROM session_worktrees
 WHERE session_id = ?
 ORDER BY CASE WHEN repo_name = '__root__' THEN 0 ELSE 1 END, repo_name;

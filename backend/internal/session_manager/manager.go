@@ -143,12 +143,16 @@ var (
 	// "spawn <id>:" so wrapping them does not change daemon-log wording, while
 	// errors.Is can tell the service which stage failed. More specific wrapped
 	// sentinels (branch, agent binary, chat preflight) still match first.
-	ErrSpawnPrompt             = errors.New("prompt")
-	ErrSpawnCreate             = errors.New("create")
-	ErrSpawnSystemPrompt       = errors.New("system prompt file")
-	ErrSpawnArtifactDir        = errors.New("artifact dir")
-	ErrSpawnAgentAccount       = errors.New("agent account")
-	ErrWorkspaceCreate         = errors.New("workspace")
+	ErrSpawnPrompt       = errors.New("prompt")
+	ErrSpawnCreate       = errors.New("create")
+	ErrSpawnSystemPrompt = errors.New("system prompt file")
+	ErrSpawnArtifactDir  = errors.New("artifact dir")
+	ErrSpawnAgentAccount = errors.New("agent account")
+	ErrWorkspaceCreate   = errors.New("workspace")
+	// ErrWorktreeRootUnavailable reports a session worktree root that the
+	// project configured but that is now missing or not a directory. Spawn fails
+	// with this instead of quietly using the installation default.
+	ErrWorktreeRootUnavailable = errors.New("worktree root unavailable")
 	ErrWorkspaceProvision      = errors.New("provision")
 	ErrSpawnAttachments        = errors.New("attachments")
 	ErrSpawnBrowser            = errors.New("browser capability")
@@ -1596,6 +1600,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		Permissions:               rec.Metadata.Permissions,
 		Branch:                    ws.Branch,
 		WorkspacePath:             ws.Path,
+		WorktreeRoot:              ws.WorktreeRoot,
 		WorkspaceRepoPath:         ws.RepoPath,
 		RuntimeHandleID:           handle.ID,
 		RuntimeLaunchID:           launchID,
@@ -2059,8 +2064,99 @@ func (m *Manager) defaultBranchFetchedRecently(repoPath, baseRef string) bool {
 	return false
 }
 
+// requireSessionWorktreeRoot fails a spawn whose worktree root is unusable,
+// naming the root so the user can fix or reconfigure it. The workspace adapter
+// re-checks the same root; this early check exists only to produce a spawn error
+// that reads as a worktree-root problem rather than a generic workspace failure.
+func requireSessionWorktreeRoot(root string) error {
+	trimmed := strings.TrimSpace(root)
+	if trimmed == "" {
+		return nil
+	}
+	info, err := os.Stat(trimmed)
+	if err != nil {
+		return fmt.Errorf("%w: worktree root %q is unavailable: %v", ErrWorktreeRootUnavailable, trimmed, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: worktree root %q is not a directory", ErrWorktreeRootUnavailable, trimmed)
+	}
+	return nil
+}
+
+// restoreWorktreeRoot is the root a recorded worktree is validated against.
+// A row written before project roots existed has no snapshot and its worktree
+// lives under the adapter's installation-wide managed root, so that case passes
+// "" — the adapter's own root — instead of the project's current config, which
+// would re-point a legacy checkout. A row that HAS a snapshot always uses it.
+func (m *Manager) restoreWorktreeRoot(rec domain.SessionRecord, project domain.ProjectRecord) string {
+	if root := strings.TrimSpace(rec.Metadata.WorktreeRoot); root != "" {
+		return root
+	}
+	if strings.TrimSpace(project.Config.WorktreeRoot) == "" {
+		return ""
+	}
+	// The project names a root, but this worktree predates the column. Its
+	// previous root is unrecoverable, and the installation default is where such
+	// rows live, so it is the only safe fallback.
+	return domain.DefaultWorktreeRoot(m.dataDir)
+}
+
+// projectWorktreeRoot is the root NEW sessions of project create their worktree
+// under: the project's configured root, else the installation default. Existing
+// sessions keep the root recorded in their own metadata; this value only decides
+// where a fresh worktree materialises. An unresolvable root (no config root and
+// no data dir) is left empty so the workspace adapter falls back to its own
+// managed root exactly as it did before per-project roots existed.
+func (m *Manager) projectWorktreeRoot(project domain.ProjectRecord) string {
+	if root := strings.TrimSpace(project.Config.WorktreeRoot); root != "" {
+		return root
+	}
+	return domain.DefaultWorktreeRoot(m.dataDir)
+}
+
+// createWorktreeRoot is projectWorktreeRoot for an adapter that already owns a
+// managed root. The installation default is only passed when the project saved
+// it; a project with no configured root keeps following whatever root the
+// workspace adapter was constructed with, exactly as before per-project roots.
+func (m *Manager) createWorktreeRoot(project domain.ProjectRecord) string {
+	if root := strings.TrimSpace(project.Config.WorktreeRoot); root != "" {
+		return root
+	}
+	return ""
+}
+
+// worktreeRootIsDefault reports whether root is the installation-wide default,
+// which the workspace adapter already owns and creates. Only a project-specific
+// root is a precondition the manager itself has to prove before spawning.
+func (m *Manager) worktreeRootIsDefault(root string) bool {
+	if strings.TrimSpace(root) == "" {
+		return true
+	}
+	defaultRoot := domain.DefaultWorktreeRoot(m.dataDir)
+	if defaultRoot == "" {
+		return true
+	}
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	defaultAbs, err := filepath.Abs(filepath.Clean(defaultRoot))
+	if err != nil {
+		return false
+	}
+	return rootAbs == defaultAbs
+}
+
 func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.ProjectRecord, cfg ports.SpawnConfig, id domain.SessionID, branch string, baseRefs map[string]string) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
 	projectKind := project.Kind.WithDefault()
+	// A configured root that has since disappeared or turned read-only must fail
+	// this spawn with a message naming it. Falling back to the installation
+	// default would put the session somewhere the user did not choose.
+	if root := m.projectWorktreeRoot(project); projectKind != domain.ProjectKindScratch && !m.worktreeRootIsDefault(root) {
+		if err := requireSessionWorktreeRoot(root); err != nil {
+			return ports.WorkspaceInfo{}, nil, err
+		}
+	}
 	if cfg.ProjectID == "" {
 		projectKind = domain.ProjectKindScratch
 	}
@@ -2080,6 +2176,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			RequireNewBranch:        cfg.RequireNewBranch,
 			BaseBranch:              baseBranch,
 			BaseRef:                 baseRefs[filepath.Clean(project.Path)],
+			WorktreeRoot:            m.createWorktreeRoot(project),
 		}
 		ws, err := m.workspace.Create(ctx, workspaceCfg)
 		if errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) && cfg.Kind == domain.KindOrchestrator && cfg.Branch == "" {
@@ -2133,6 +2230,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		FreshBranch:             cfg.TaskPreparation != "" || cfg.RequireNewBranch,
 		RequireNewBranch:        cfg.RequireNewBranch,
 		RootRepoPath:            project.Path,
+		WorktreeRoot:            m.createWorktreeRoot(project),
 		BaseBranch:              project.Config.WorktreeBaseBranch(),
 		BaseRef:                 baseRefs[filepath.Clean(project.Path)],
 		Repos:                   childRepos,
@@ -2177,6 +2275,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			BaseRef:      wt.BaseRef,
 			CreationSHA:  wt.CreationSHA,
 			WorktreePath: wt.Path,
+			WorktreeRoot: wt.WorktreeRoot,
 			State:        "active",
 		}); storeErr != nil {
 			if cfg.TaskPreparation != "" {
@@ -2253,7 +2352,7 @@ func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceI
 		m.logger.Warn("spawn rollback: workspace ownership changed; preserving workspace", "sessionID", ws.SessionID, "error", err)
 		return false
 	}
-	if err := m.runPreRemove(ws.ProjectID, ws.Path); err != nil {
+	if err := m.runPreRemove(ws.ProjectID, ws.Path, ws.WorktreeRoot); err != nil {
 		m.logger.Warn("spawn rollback: workspace cleanup failed; preserving workspace", "sessionID", ws.SessionID, "error", err)
 		return false
 	}
@@ -2367,6 +2466,7 @@ func (m *Manager) preserveFailedSpawnWorkspace(ctx context.Context, id domain.Se
 	}
 	rec.Metadata.Branch = ws.Branch
 	rec.Metadata.WorkspacePath = ws.Path
+	rec.Metadata.WorktreeRoot = ws.WorktreeRoot
 	rec.Metadata.WorkspaceRepoPath = ws.RepoPath
 	if runtimeDestroyed {
 		rec.Metadata.RuntimeHandleID = ""
@@ -2860,7 +2960,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 				return KillResult{CleanupPending: true}, nil
 			}
 		}
-		if err := m.runPreRemove(rec.ProjectID, ws.Path); err != nil {
+		if err := m.runPreRemove(rec.ProjectID, ws.Path, ws.WorktreeRoot); err != nil {
 			return KillResult{}, err
 		}
 		// Give workspace removal its own budget after untimed user commands.
@@ -2991,7 +3091,7 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 	if err := m.recordTermination(ctx, rec.ID, true); err != nil {
 		return err
 	}
-	m.runReplacementPreRemove(rec.ID, rec.ProjectID, ws.Path)
+	m.runReplacementPreRemove(rec.ID, rec.ProjectID, ws.Path, ws.WorktreeRoot)
 	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
 	defer cancelWorkspace()
 	if err := m.workspace.ForceDestroy(ctx, ws); err != nil {
@@ -3069,7 +3169,7 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 	if err := m.recordTermination(ctx, rec.ID, false); err != nil {
 		return err
 	}
-	m.runReplacementPreRemove(rec.ID, rec.ProjectID, rec.Metadata.WorkspacePath)
+	m.runReplacementPreRemove(rec.ID, rec.ProjectID, rec.Metadata.WorkspacePath, rec.Metadata.WorktreeRoot)
 	ctx, cancelWorkspace := context.WithTimeout(context.WithoutCancel(ctx), killTeardownBudget)
 	defer cancelWorkspace()
 	for i := len(rows) - 1; i >= 0; i-- {
@@ -4598,6 +4698,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 			BaseBranch:              project.Config.WorktreeBaseBranch(),
 			BaseRef:                 rec.Metadata.DiffBaseRef,
 			Path:                    rec.Metadata.WorkspacePath,
+			WorktreeRoot:            m.restoreWorktreeRoot(rec, project),
 		})
 		if restoreErr != nil {
 			m.logger.Error("restore-all: workspace restore failed", "sessionID", rec.ID, "error", restoreErr)
@@ -4725,6 +4826,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			BaseBranch:              project.Config.WorktreeBaseBranch(),
 			BaseRef:                 rec.Metadata.DiffBaseRef,
 			Path:                    rec.Metadata.WorkspacePath,
+			WorktreeRoot:            m.restoreWorktreeRoot(rec, project),
 		})
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -4808,22 +4910,28 @@ func (m *Manager) workspaceProjectRestoreRowsFromMarkers(ctx context.Context, pr
 	}
 	rootPath := rec.Metadata.WorkspacePath
 	rootBranch := rec.Metadata.Branch
+	// The recorded row is the authority for the root snapshot: session metadata is
+	// empty for rows written before the column existed, and the row is what
+	// teardown validated at creation time.
+	rootWorktreeRoot := rec.Metadata.WorktreeRoot
 	var rootBaseSHA, rootBaseRef string
 	if len(rows) == 1 && (rows[0].RepoName == "" || rows[0].RepoName == domain.RootWorkspaceRepoName) {
 		rootPath = firstNonEmptyString(rows[0].WorktreePath, rootPath)
 		rootBranch = firstNonEmptyString(rows[0].Branch, rootBranch)
+		rootWorktreeRoot = firstNonEmptyString(rows[0].WorktreeRoot, rootWorktreeRoot)
 		rootBaseSHA = rows[0].BaseSHA
 		rootBaseRef = rows[0].BaseRef
 	}
 	out := []ports.WorkspaceRepoInfo{{
-		RepoName:  domain.RootWorkspaceRepoName,
-		RepoPath:  project.Path,
-		Path:      rootPath,
-		Branch:    rootBranch,
-		BaseSHA:   rootBaseSHA,
-		BaseRef:   rootBaseRef,
-		SessionID: rec.ID,
-		ProjectID: rec.ProjectID,
+		RepoName:     domain.RootWorkspaceRepoName,
+		RepoPath:     project.Path,
+		Path:         rootPath,
+		WorktreeRoot: rootWorktreeRoot,
+		Branch:       rootBranch,
+		BaseSHA:      rootBaseSHA,
+		BaseRef:      rootBaseRef,
+		SessionID:    rec.ID,
+		ProjectID:    rec.ProjectID,
 	}}
 	for _, repo := range childRepos {
 		out = append(out, ports.WorkspaceRepoInfo{
@@ -4890,6 +4998,7 @@ func (m *Manager) sessionWorktreeRowsToRepoInfos(ctx context.Context, project do
 			RepoName:     row.RepoName,
 			RepoPath:     repoPath,
 			Path:         row.WorktreePath,
+			WorktreeRoot: firstNonEmptyString(row.WorktreeRoot, rec.Metadata.WorktreeRoot),
 			Branch:       firstNonEmptyString(row.Branch, rec.Metadata.Branch),
 			BaseSHA:      row.BaseSHA,
 			BaseRef:      row.BaseRef,
@@ -5003,6 +5112,7 @@ func (m *Manager) upsertWorkspaceProjectRowState(ctx context.Context, row ports.
 		BaseRef:      row.BaseRef,
 		CreationSHA:  row.CreationSHA,
 		WorktreePath: row.Path,
+		WorktreeRoot: row.WorktreeRoot,
 		State:        state,
 	})
 }
@@ -5011,12 +5121,13 @@ func (m *Manager) restoreWorkspaceProjectRows(ctx context.Context, rows []ports.
 	var root ports.WorkspaceRepoInfo
 	for _, row := range rows {
 		restored, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
-			ProjectID: row.ProjectID,
-			SessionID: row.SessionID,
-			Branch:    row.Branch,
-			BaseRef:   row.BaseRef,
-			RepoPath:  row.RepoPath,
-			Path:      row.Path,
+			ProjectID:    row.ProjectID,
+			SessionID:    row.SessionID,
+			Branch:       row.Branch,
+			BaseRef:      row.BaseRef,
+			RepoPath:     row.RepoPath,
+			Path:         row.Path,
+			WorktreeRoot: row.WorktreeRoot,
 		})
 		if err != nil {
 			return ports.WorkspaceRepoInfo{}, fmt.Errorf("repo %s: %w", row.RepoName, err)
@@ -5772,7 +5883,7 @@ func (m *Manager) cleanupOne(ctx context.Context, rec domain.SessionRecord, ws p
 		m.logger.Warn("cleanup: attachment preservation failed", "sessionID", rec.ID, "error", err)
 		return ports.WorkspaceReclaimRemoved, refusedAttachmentsFailed
 	}
-	if err := m.runPreRemove(rec.ProjectID, ws.Path); err != nil {
+	if err := m.runPreRemove(rec.ProjectID, ws.Path, ws.WorktreeRoot); err != nil {
 		m.logger.Warn("cleanup: workspace script failed; preserving workspace", "sessionID", rec.ID, "error", err)
 		return ports.WorkspaceReclaimRemoved, cleanupRefusalFor(err)
 	}
@@ -7455,23 +7566,25 @@ func runtimeHandle(meta domain.SessionMetadata) ports.RuntimeHandle {
 
 func workspaceInfo(rec domain.SessionRecord) ports.WorkspaceInfo {
 	return ports.WorkspaceInfo{
-		Path:      rec.Metadata.WorkspacePath,
-		Branch:    rec.Metadata.Branch,
-		BaseRef:   rec.Metadata.DiffBaseRef,
-		SessionID: rec.ID,
-		ProjectID: rec.ProjectID,
-		RepoPath:  rec.Metadata.WorkspaceRepoPath,
+		Path:         rec.Metadata.WorkspacePath,
+		WorktreeRoot: rec.Metadata.WorktreeRoot,
+		Branch:       rec.Metadata.Branch,
+		BaseRef:      rec.Metadata.DiffBaseRef,
+		SessionID:    rec.ID,
+		ProjectID:    rec.ProjectID,
+		RepoPath:     rec.Metadata.WorkspaceRepoPath,
 	}
 }
 
 func workspaceInfoFromRepoInfo(info ports.WorkspaceRepoInfo) ports.WorkspaceInfo {
 	return ports.WorkspaceInfo{
-		Path:      info.Path,
-		Branch:    info.Branch,
-		BaseRef:   info.BaseRef,
-		SessionID: info.SessionID,
-		ProjectID: info.ProjectID,
-		RepoPath:  info.RepoPath,
+		Path:         info.Path,
+		WorktreeRoot: info.WorktreeRoot,
+		Branch:       info.Branch,
+		BaseRef:      info.BaseRef,
+		SessionID:    info.SessionID,
+		ProjectID:    info.ProjectID,
+		RepoPath:     info.RepoPath,
 	}
 }
 

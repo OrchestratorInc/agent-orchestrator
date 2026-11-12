@@ -935,6 +935,7 @@ type Session struct {
 	IndependentOrchestrator          int64
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
+	WorktreeRoot                     string
 }
 
 type SessionAgentAccount struct {
@@ -1067,6 +1068,7 @@ type SessionWorktree struct {
 	CreationSha  string
 	ProjectID    string
 	RepoPath     string
+	WorktreeRoot string
 }
 
 type ShellTerminal struct {

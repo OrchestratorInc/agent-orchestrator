@@ -60,6 +60,10 @@ type Manager interface {
 	// read-model.
 	SetConfig(ctx context.Context, id domain.ProjectID, in SetConfigInput) (Project, error)
 
+	// Branches lists the local and origin-tracking branches a project's
+	// configured default branch may name, read from the root repository.
+	Branches(ctx context.Context, id domain.ProjectID) (ProjectBranches, error)
+
 	// Remove unregisters a project, stopping its sessions and reclaiming
 	// managed workspaces.
 	Remove(ctx context.Context, id domain.ProjectID) (RemoveResult, error)
@@ -79,7 +83,10 @@ type Service struct {
 	telemetry      ports.EventSink
 	milestones     ports.InstallMilestones
 	defaultHarness domain.AgentHarness
-	logger         *slog.Logger
+	// dataDir is AO_DATA_DIR. It resolves the installation-wide default
+	// worktree root for projects whose config names none.
+	dataDir string
+	logger  *slog.Logger
 	// addMu serialises the whole body of Add. Workspace registration performs
 	// filesystem mutations (git init, .gitignore writes, commits) that are not
 	// covered by the store's own writeMu, so path/id conflict checks plus the
@@ -106,6 +113,9 @@ type Deps struct {
 	// Logger receives structured logs. Left nil, the service falls back to
 	// slog.Default, keeping service-focused tests logger-free.
 	Logger *slog.Logger
+	// DataDir is AO_DATA_DIR; it resolves the default worktree root. Empty
+	// leaves DefaultWorktreeRoot empty, which callers treat as unresolvable.
+	DataDir string
 }
 
 // New returns a project service backed by the given durable store.
@@ -126,6 +136,7 @@ func NewWithDeps(d Deps) *Service {
 		telemetry:      d.Telemetry,
 		milestones:     d.Milestones,
 		defaultHarness: defaultHarness,
+		dataDir:        strings.TrimSpace(d.DataDir),
 		logger:         d.Logger,
 	}
 	if s.clock == nil {
@@ -294,6 +305,15 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		}
 		projectConfig = *in.Config
 	}
+	// A new project records its resolved worktree root instead of inheriting
+	// whatever AO_DATA_DIR says later; only an explicit root is validated
+	// against the filesystem here.
+	if root, err := m.validateWorktreeRootSelection(ctx, id, path, projectConfig.WorktreeRoot); err != nil {
+		return Project{}, err
+	} else if root != "" {
+		projectConfig.WorktreeRoot = root
+	}
+	applyDefaultWorktreeRoot(&projectConfig, m.dataDir)
 
 	registeredAt := time.Now()
 	row := domain.ProjectRecord{
@@ -758,6 +778,18 @@ func (m *Service) UpdateSettings(ctx context.Context, id domain.ProjectID, in Up
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
+	root, err := m.validateWorktreeRootSelection(ctx, id, row.Path, in.Config.WorktreeRoot)
+	if err != nil {
+		return Project{}, err
+	}
+	if root != "" {
+		in.Config.WorktreeRoot = root
+	}
+	// A body that never named worktreeRoot keeps whatever the project saved; only
+	// an explicit value (or an explicit empty string) replaces it.
+	if !in.WorktreeRootPresent {
+		in.Config.WorktreeRoot = row.Config.WorktreeRoot
+	}
 	updated, err := m.store.UpdateProjectSettings(ctx, string(id), inDisplayName, in.Config)
 	if err != nil {
 		return Project{}, apierr.Internal("PROJECT_SETTINGS_UPDATE_FAILED", "Failed to update project settings")
@@ -793,6 +825,18 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	}
 	if err := in.Config.ValidateCanonicalRepository(row.RepoOriginURL); err != nil {
 		return Project{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
+	}
+	root, err := m.validateWorktreeRootSelection(ctx, id, row.Path, in.Config.WorktreeRoot)
+	if err != nil {
+		return Project{}, err
+	}
+	if root != "" {
+		in.Config.WorktreeRoot = root
+	}
+	// See UpdateSettings: an absent key preserves the saved root so an older CLI
+	// read-modify-write cannot clear it.
+	if !in.WorktreeRootPresent {
+		in.Config.WorktreeRoot = row.Config.WorktreeRoot
 	}
 	row.Config = in.Config
 	if err := m.store.UpsertProject(ctx, row); err != nil {
@@ -910,6 +954,9 @@ func (m *Service) projectFromRow(ctx context.Context, row domain.ProjectRecord) 
 		Agent:         string(m.defaultHarness),
 		FolderMissing: folderMissing,
 	}
+	if kind != domain.ProjectKindScratch {
+		p.WorktreeRoot = EffectiveWorktreeRoot(row.Config, m.dataDir)
+	}
 	p.Config = projectConfigPtr(row.Config)
 	return p
 }
@@ -1006,11 +1053,11 @@ func normalizeGitReportedPath(base, reported string) string {
 }
 
 func comparablePath(path string) string {
-	clean := filepath.Clean(path)
-	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		clean = resolved
+	physical, err := physicalPathIfExists(path)
+	if err != nil {
+		return filepath.Clean(path)
 	}
-	return filepath.Clean(clean)
+	return filepath.Clean(physical)
 }
 
 func samePath(a, b string) bool {

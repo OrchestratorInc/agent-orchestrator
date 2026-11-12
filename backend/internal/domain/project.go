@@ -85,6 +85,13 @@ type SessionWorktreeRecord struct {
 	BaseRef      string
 	CreationSHA  string
 	WorktreePath string
+	// WorktreeRoot is the root the worktree was created under, captured at
+	// creation. Restore, observation, cleanup, and PreRemove validate against
+	// this snapshot rather than the project's current config, so changing a
+	// project's root never invalidates worktrees that already exist. Empty on
+	// rows written before the column existed; readers resolve those to the
+	// installation default.
+	WorktreeRoot string
 	PreservedRef string
 	// ponytail: State mirrors session_worktrees.state, an enum that is unused
 	// multi-repo scaffolding. The save/restore lifecycle reads and writes only

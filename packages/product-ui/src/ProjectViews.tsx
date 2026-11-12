@@ -494,10 +494,13 @@ export function ProjectSettingsInputRow({
 	label,
 	onChange,
 	placeholder,
+	trailing,
 	value,
 }: {
 	editIcon?: ReactNode;
 	editLabel: string;
+	/** A control rendered beside the value, such as a suggestions menu. */
+	trailing?: ReactNode;
 	icon?: ReactNode;
 	id: string;
 	label: string;
@@ -541,17 +544,20 @@ export function ProjectSettingsInputRow({
 					placeholder={placeholder}
 				/>
 			) : (
-				<button
-					type="button"
-					className="settings-inline-edit-trigger"
-					aria-label={editLabel}
-					onClick={() => setEditing(true)}
-				>
-					<span className="settings-row-value" title={value || placeholder}>
-						{value || placeholder}
-					</span>
-					{editIcon}
-				</button>
+				<>
+					{trailing}
+					<button
+						type="button"
+						className="settings-inline-edit-trigger"
+						aria-label={editLabel}
+						onClick={() => setEditing(true)}
+					>
+						<span className="settings-row-value" title={value || placeholder}>
+							{value || placeholder}
+						</span>
+						{editIcon}
+					</button>
+				</>
 			)}
 		</ProjectSettingsRow>
 	);

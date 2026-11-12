@@ -25,6 +25,7 @@ vi.mock("../lib/host-clients", () => {
 		};
 	};
 	return {
+		labelForHost: (hostId: string) => hostId,
 		connectedHosts: () => mocks.connected,
 		subscribeConnectedHosts: (listener: () => void) => {
 			mocks.listeners.add(listener);
@@ -92,6 +93,8 @@ beforeEach(() => {
 		if (path === "/api/v1/sessions") return { data: { sessions: [] } };
 		if (path === "/api/v1/agents/readiness") return { data: agents };
 		if (path === "/api/v1/agents/{agent}/models") return { data: { agentId: "codex", selectionMode: "text", models: [], source: "manual", fetchedAt: "2026-09-28T00:00:00Z", stale: false } };
+		if (path === "/api/v1/projects/{id}/branches") return { data: { projectId: "shared", repository: project.path, default: "main", branches: [{ name: "main", local: true, current: true, default: true }] } };
+		if (path === "/api/v1/fs/dirs") return { data: { path: "/srv", parent: "/", entries: [{ name: "worktrees", path: "/srv/worktrees" }] } };
 		throw new Error(`Unexpected GET ${path}`);
 	});
 	mocks.post.mockImplementation(async (_hostId: string, path: string) => path === "/api/v1/agents/readiness/ensure"
@@ -152,6 +155,23 @@ it("replaces and retries the orchestrator on the selected host", async () => {
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(attempts).toBe(2));
 	expect(mocks.localPost).not.toHaveBeenCalled();
+});
+
+it("browses the owning host's filesystem to choose a worktree root", async () => {
+	connect("box-b");
+	renderForm("box-b");
+	await userEvent.click(await screen.findByRole("button", { name: "Choose worktree root folder" }));
+	// The native folder dialog belongs to the local app; a remote project must
+	// browse that daemon's filesystem through /api/v1/fs/dirs instead.
+	await waitFor(() => expect(mocks.get).toHaveBeenCalledWith("box-b", "/api/v1/fs/dirs", expect.anything()));
+	await userEvent.click(await screen.findByRole("button", { name: "Use this folder" }));
+	const root = await screen.findByRole("textbox", { name: "Worktree root" });
+	expect(root).toHaveValue("/srv");
+	fireEvent.submit(document.getElementById("project-settings-form")!);
+	await waitFor(() => expect(mocks.put).toHaveBeenCalledWith("box-b", "/api/v1/projects/{id}", expect.objectContaining({
+		body: expect.objectContaining({ config: expect.objectContaining({ worktreeRoot: "/srv" }) }),
+	})));
+	expect(mocks.localPut).not.toHaveBeenCalled();
 });
 
 it("shows offline state without contacting the local daemon", () => {

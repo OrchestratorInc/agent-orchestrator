@@ -4631,6 +4631,46 @@ paths:
       summary: Atomically replace a project's display name and config
       tags:
       - projects
+  /api/v1/projects/{id}/branches:
+    get:
+      operationId: listProjectBranches
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectBranches'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: List the local and origin-tracking branches a project's default branch
+        may name
+      tags:
+      - projects
   /api/v1/projects/{id}/config:
     put:
       operationId: setProjectConfig
@@ -24640,6 +24680,8 @@ components:
           items:
             $ref: '#/components/schemas/WorkspaceRepo'
           type: array
+        worktreeRoot:
+          type: string
       required:
       - id
       - name
@@ -24648,6 +24690,45 @@ components:
       - repo
       - defaultBranch
       - folderMissing
+      type: object
+    ProjectBranch:
+      properties:
+        current:
+          type: boolean
+        default:
+          type: boolean
+        local:
+          type: boolean
+        name:
+          type: string
+        remote:
+          type: string
+      required:
+      - name
+      - local
+      - current
+      - default
+      type: object
+    ProjectBranches:
+      properties:
+        branches:
+          items:
+            $ref: '#/components/schemas/ProjectBranch'
+          type: array
+        default:
+          type: string
+        projectId:
+          type: string
+        repository:
+          type: string
+        truncated:
+          type: boolean
+      required:
+      - projectId
+      - repository
+      - default
+      - branches
+      - truncated
       type: object
     ProjectClonePreparationCleanupInput:
       properties:
@@ -24713,6 +24794,8 @@ components:
           $ref: '#/components/schemas/RoleOverride'
         workersRequestReview:
           type: boolean
+        worktreeRoot:
+          type: string
       type: object
     ProjectGetResponse:
       properties:

@@ -333,6 +333,10 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			cfg.Branch = fmt.Sprintf("%s-%d", requested, suffix)
 		}
 	}
+	root, err := w.rootFor(cfg.WorktreeRoot)
+	if err != nil {
+		return ports.WorkspaceInfo{}, err
+	}
 	path, err := w.managedPath(cfg)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
@@ -412,13 +416,13 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	if pinnedSHA != "" {
 		// The pin is the recorded base whether or not a fresh branch was
 		// requested: it is the commit this caller planned from.
-		return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: pinnedSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
+		return ports.WorkspaceInfo{Path: path, WorktreeRoot: root, Branch: cfg.Branch, BaseSHA: pinnedSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 	}
 	var baseSHA string
 	if cfg.FreshBranch {
 		baseSHA = seedSHA
 	}
-	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
+	return ports.WorkspaceInfo{Path: path, WorktreeRoot: root, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
 
 // rollbackPreparedAdd cleans only the exact registered worktree, without
@@ -471,6 +475,10 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	if err := w.enableWorktreeConfig(ctx, rootRepo); err != nil {
 		return ports.WorkspaceProjectInfo{}, err
 	}
+	sessionRoot, err := w.rootFor(cfg.WorktreeRoot)
+	if err != nil {
+		return ports.WorkspaceProjectInfo{}, err
+	}
 	rootPath, err := w.managedPath(ports.WorkspaceConfig{
 		IndependentOrchestrator: cfg.IndependentOrchestrator,
 		ProjectID:               cfg.ProjectID,
@@ -478,6 +486,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		Kind:                    cfg.Kind,
 		SessionPrefix:           cfg.SessionPrefix,
 		Branch:                  firstNonEmpty(cfg.Branch, defaultSessionBranchName(cfg.SessionID)),
+		WorktreeRoot:            sessionRoot,
 	})
 	if err != nil {
 		return ports.WorkspaceProjectInfo{}, err
@@ -501,7 +510,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q: %w", child.Name, err)
 		}
-		outPath, err := w.validateManagedPath(filepath.Join(rootPath, filepath.FromSlash(rel)))
+		outPath, err := w.validateManagedPathUnder(sessionRoot, filepath.Join(rootPath, filepath.FromSlash(rel)))
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q path: %w", child.Name, err)
 		}
@@ -614,6 +623,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 			RepoName: repo.name, RepoPath: repo.repoPath, Path: repo.outputPath,
 			Branch: branch, CreationSHA: creationSHA, BaseRef: repo.baseRef,
 			SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RelativePath: repo.relativePath,
+			WorktreeRoot: sessionRoot,
 		}
 		baseSHA, err := w.revParse(ctx, repo.repoPath, repo.baseRef)
 		if err == nil {
@@ -638,7 +648,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 			if cfg.FreshBranch {
 				rootSHA = creationSHA
 			}
-			out.Root = ports.WorkspaceInfo{Path: repo.outputPath, Branch: branch, BaseSHA: rootSHA, BaseRef: repo.baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}
+			out.Root = ports.WorkspaceInfo{Path: repo.outputPath, WorktreeRoot: sessionRoot, Branch: branch, BaseSHA: rootSHA, BaseRef: repo.baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}
 		}
 		if repoIndex == 0 {
 			_, rootAlreadyExisted := existing[repoIndex]
@@ -996,7 +1006,7 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	if err != nil {
 		return ports.WorkspaceReclaimAlreadyAbsent, err
 	}
-	path, err := w.validateManagedPath(info.Path)
+	path, err := w.managedPathForInfo(info)
 	if err != nil {
 		return ports.WorkspaceReclaimAlreadyAbsent, err
 	}
@@ -1101,7 +1111,7 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 	if err != nil {
 		return err
 	}
-	path, err := w.validateManagedPath(info.Path)
+	path, err := w.managedPathForInfo(info)
 	if err != nil {
 		return err
 	}
@@ -1166,7 +1176,7 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	if err != nil {
 		return "", err
 	}
-	path, err := w.validateManagedPath(info.Path)
+	path, err := w.managedPathForInfo(info)
 	if err != nil {
 		return "", err
 	}
@@ -1353,7 +1363,7 @@ func (w *Workspace) AddExclude(ctx context.Context, info ports.WorkspaceInfo, pa
 	if len(patterns) == 0 {
 		return nil
 	}
-	path, err := w.validateManagedPath(info.Path)
+	path, err := w.managedPathForInfo(info)
 	if err != nil {
 		return err
 	}
@@ -1408,7 +1418,7 @@ func (w *Workspace) ObserveWorkspace(ctx context.Context, info ports.WorkspaceIn
 	if path == "" {
 		return ports.WorkspaceObservation{}, errors.New("gitworktree: observe workspace path is required")
 	}
-	validated, err := w.validateManagedPath(path)
+	validated, err := w.managedPathForInfo(info)
 	if err != nil {
 		return ports.WorkspaceObservation{}, err
 	}
@@ -1522,6 +1532,10 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 	if err := w.enableWorktreeConfig(ctx, repo); err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
+	root, err := w.rootFor(cfg.WorktreeRoot)
+	if err != nil {
+		return ports.WorkspaceInfo{}, err
+	}
 	path, err := w.restorePath(cfg)
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
@@ -1546,7 +1560,7 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 			if branch == "" {
 				branch = cfg.Branch
 			}
-			return ports.WorkspaceInfo{Path: path, Branch: branch, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
+			return ports.WorkspaceInfo{Path: path, WorktreeRoot: root, Branch: branch, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
 		}
 		// The registration outlived its directory (issue #2775: a session's git
 		// worktree registration and DB row survived a deletion that removed only
@@ -1578,7 +1592,7 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
-	return ports.WorkspaceInfo{Path: path, Branch: recreateBranch, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
+	return ports.WorkspaceInfo{Path: path, WorktreeRoot: root, Branch: recreateBranch, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
 }
 
 func (w *Workspace) existingWorktree(ctx context.Context, repo, path string, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, bool, error) {
@@ -1609,7 +1623,7 @@ func (w *Workspace) existingWorktree(ctx context.Context, repo, path string, cfg
 		if branch == "" {
 			branch = cfg.Branch
 		}
-		return ports.WorkspaceInfo{Path: path, Branch: branch, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, true, nil
+		return ports.WorkspaceInfo{Path: path, WorktreeRoot: cfg.WorktreeRoot, Branch: branch, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, true, nil
 	}
 	return ports.WorkspaceInfo{}, false, nil
 }
@@ -2470,19 +2484,113 @@ func validatePathComponent(name, value string) error {
 
 // managedPath 仅给项目主编排器保留固定目录，其余会话按 ID 隔离。
 func (w *Workspace) managedPath(cfg ports.WorkspaceConfig) (string, error) {
+	root, err := w.rootFor(cfg.WorktreeRoot)
+	if err != nil {
+		return "", err
+	}
 	var path string
 	if cfg.Kind == domain.KindOrchestrator && !cfg.IndependentOrchestrator {
 		prefix := resolvedSessionPrefix(cfg)
-		path = filepath.Join(w.managedRoot, string(cfg.ProjectID), "orchestrator", prefix+"-orchestrator")
+		path = filepath.Join(root, string(cfg.ProjectID), "orchestrator", prefix+"-orchestrator")
 	} else {
-		path = filepath.Join(w.managedRoot, string(cfg.ProjectID), string(cfg.SessionID))
+		path = filepath.Join(root, string(cfg.ProjectID), string(cfg.SessionID))
 	}
-	return w.validateManagedPath(path)
+	return w.validateManagedPathUnder(root, path)
+}
+
+// rootFor resolves the root one session's worktree belongs under: the caller's
+// snapshot when it supplies one, else the installation-wide managed root. A
+// snapshot must be absolute and must already exist: creating it here would
+// resurrect a root the user deliberately removed, and a session that silently
+// fell back to the managed root would land its worktree somewhere the user no
+// longer expects. Failing loudly is the documented behaviour.
+func (w *Workspace) rootFor(snapshot string) (string, error) {
+	root := strings.TrimSpace(snapshot)
+	if root == "" || physicalEq(root, w.managedRoot) {
+		// The adapter's own managed root is created by whoever configured it
+		// (the daemon, or a caller that resolves paths before spawning). It is
+		// not a project snapshot, so it needs no existence proof here.
+		return w.managedRoot, nil
+	}
+	if !filepath.IsAbs(root) {
+		return "", fmt.Errorf("%w: worktree root %q is not absolute", ErrUnsafePath, root)
+	}
+	physical, err := physicalAbs(root)
+	if err != nil {
+		return "", fmt.Errorf("gitworktree: resolve worktree root %q: %w", root, err)
+	}
+	info, err := os.Stat(physical)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("gitworktree: inspect worktree root %q: %w", physical, err)
+		}
+		// A root that does not exist yet is the normal first-spawn state: the
+		// project recorded <AO_DATA_DIR>/worktrees (or a folder the user created)
+		// and nothing has materialised under it. Creating it here is the same
+		// laziness the adapter already applies to its own managed root; a root
+		// the user later DELETES still fails loudly at the next spawn because the
+		// project config keeps naming it (see sessionmanager's root check).
+		if mkErr := os.MkdirAll(physical, 0o750); mkErr != nil {
+			return "", fmt.Errorf("gitworktree: create worktree root %q: %w", physical, mkErr)
+		}
+		return physical, nil
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%w: worktree root %q is not a directory", ErrUnsafePath, physical)
+	}
+	return physical, nil
+}
+
+// physicalEq compares two paths after resolving symlinks, so a snapshot that
+// names the adapter's managed root by another spelling is still recognised as
+// that root.
+func physicalEq(a, b string) bool {
+	pa, err := physicalAbs(a)
+	if err != nil {
+		return false
+	}
+	pb, err := physicalAbs(b)
+	if err != nil {
+		return false
+	}
+	return pa == pb
+}
+
+// validateManagedPathUnder is validateManagedPath resolved against one
+// session's own root instead of the installation-wide managed root.
+func (w *Workspace) validateManagedPathUnder(root, path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("%w: empty path", ErrUnsafePath)
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("%w: %q is not absolute", ErrUnsafePath, path)
+	}
+	clean := filepath.Clean(path)
+	if clean != path {
+		return "", fmt.Errorf("%w: %q is not clean", ErrUnsafePath, path)
+	}
+	physical, err := physicalAbs(clean)
+	if err != nil {
+		return "", fmt.Errorf("gitworktree: resolve path %q: %w", path, err)
+	}
+	clean = physical
+	inside, err := pathWithin(root, clean)
+	if err != nil {
+		return "", err
+	}
+	if !inside || clean == root {
+		return "", fmt.Errorf("%w: %q is outside managed root %q", ErrUnsafePath, clean, root)
+	}
+	return clean, nil
 }
 
 func (w *Workspace) restorePath(cfg ports.WorkspaceConfig) (string, error) {
 	if cfg.Path != "" {
-		return w.validateManagedPath(cfg.Path)
+		root, err := w.rootFor(cfg.WorktreeRoot)
+		if err != nil {
+			return "", err
+		}
+		return w.validateManagedPathUnder(root, cfg.Path)
 	}
 	return w.managedPath(cfg)
 }
@@ -2526,6 +2634,17 @@ func cleanRelativePath(path string) (string, error) {
 		return "", fmt.Errorf("%w: relative path %q escapes the workspace root", ErrUnsafePath, path)
 	}
 	return clean, nil
+}
+
+// managedPathForInfo validates an existing worktree path against the root
+// recorded with it. A worktree created under a project's earlier root stays
+// addressable after that project points somewhere else.
+func (w *Workspace) managedPathForInfo(info ports.WorkspaceInfo) (string, error) {
+	root, err := w.rootFor(info.WorktreeRoot)
+	if err != nil {
+		return "", err
+	}
+	return w.validateManagedPathUnder(root, info.Path)
 }
 
 func (w *Workspace) validateManagedPath(path string) (string, error) {

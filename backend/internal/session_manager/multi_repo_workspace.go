@@ -119,6 +119,9 @@ func (m *Manager) createMultiRepoSessionWorkspace(
 			// seed from it (and refuse when it cannot) instead of resolving the
 			// repository default, which may have advanced since planning.
 			BaseSHA: plan.baseSHA,
+			// Multi-repo sessions share one root, resolved from the project the
+			// session was spawned in.
+			WorktreeRoot: m.createWorktreeRoot(plan.project),
 		}
 		ws, createErr := m.workspace.Create(ctx, workspaceCfg)
 		if errors.Is(createErr, ports.ErrWorkspaceBranchCheckedOutElsewhere) &&
@@ -137,7 +140,7 @@ func (m *Manager) createMultiRepoSessionWorkspace(
 			// the conflict costs nothing beyond this spawn.
 			duplicate := workspaceInfoFromRepoInfo(ports.WorkspaceRepoInfo{
 				RepoName: plan.repoKey, RepoPath: plan.project.Path, Path: ws.Path,
-				Branch: ws.Branch, BaseSHA: ws.BaseSHA, SessionID: id, ProjectID: projectID,
+				WorktreeRoot: ws.WorktreeRoot, Branch: ws.Branch, BaseSHA: ws.BaseSHA, SessionID: id, ProjectID: projectID,
 			})
 			destroyCtx, cancel := spawnRollbackContext(ctx)
 			_ = m.workspace.Destroy(destroyCtx, duplicate)
@@ -155,10 +158,11 @@ func (m *Manager) createMultiRepoSessionWorkspace(
 		// accepted (that is the pre-pin behaviour) but an unreadable one still
 		// fails.
 		info := ports.WorkspaceRepoInfo{
-			RepoName: plan.repoKey,
-			RepoPath: plan.project.Path,
-			Path:     ws.Path,
-			Branch:   ws.Branch,
+			RepoName:     plan.repoKey,
+			RepoPath:     plan.project.Path,
+			Path:         ws.Path,
+			WorktreeRoot: ws.WorktreeRoot,
+			Branch:       ws.Branch,
 			// BaseSHA is the commit this repo was REQUIRED to start from: the
 			// request when there was one, else the base the adapter resolved
 			// (the comparison base for diffs). CreationSHA is the commit the
@@ -189,6 +193,7 @@ func (m *Manager) createMultiRepoSessionWorkspace(
 			BaseRef:      info.BaseRef,
 			CreationSHA:  info.CreationSHA,
 			WorktreePath: info.Path,
+			WorktreeRoot: info.WorktreeRoot,
 			State:        "active",
 		}); storeErr != nil {
 			return rollback(fmt.Errorf("record repo %s worktree: %w", info.RepoName, storeErr))
@@ -451,7 +456,8 @@ func (m *Manager) rollbackMultiRepoWorktrees(ctx context.Context, created []port
 		}
 		err := m.workspace.Destroy(ctx, workspaceInfoFromRepoInfo(ports.WorkspaceRepoInfo{
 			RepoName: info.RepoName, RepoPath: info.RepoPath, Path: info.Path,
-			Branch: info.Branch, BaseSHA: firstNonEmptyString(info.CreationSHA, info.BaseSHA),
+			WorktreeRoot: info.WorktreeRoot,
+			Branch:       info.Branch, BaseSHA: firstNonEmptyString(info.CreationSHA, info.BaseSHA),
 			SessionID: info.SessionID, ProjectID: info.ProjectID,
 		}))
 		if err != nil && firstErr == nil {
@@ -472,15 +478,16 @@ func (m *Manager) multiRepoRows(rows []domain.SessionWorktreeRecord) []ports.Wor
 	out := make([]ports.WorkspaceRepoInfo, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, ports.WorkspaceRepoInfo{
-			RepoName:    row.RepoName,
-			RepoPath:    row.RepoPath,
-			Path:        row.WorktreePath,
-			Branch:      row.Branch,
-			BaseSHA:     row.BaseSHA,
-			BaseRef:     row.BaseRef,
-			CreationSHA: row.CreationSHA,
-			SessionID:   row.SessionID,
-			ProjectID:   row.ProjectID,
+			RepoName:     row.RepoName,
+			RepoPath:     row.RepoPath,
+			Path:         row.WorktreePath,
+			WorktreeRoot: row.WorktreeRoot,
+			Branch:       row.Branch,
+			BaseSHA:      row.BaseSHA,
+			BaseRef:      row.BaseRef,
+			CreationSHA:  row.CreationSHA,
+			SessionID:    row.SessionID,
+			ProjectID:    row.ProjectID,
 		})
 	}
 	return out
@@ -614,12 +621,13 @@ func (m *Manager) restoreMultiRepoRows(
 	haveRoot := false
 	for _, row := range rows {
 		restored, err := m.workspace.Restore(ctx, ports.WorkspaceConfig{
-			ProjectID: row.ProjectID,
-			SessionID: row.SessionID,
-			Branch:    row.Branch,
-			BaseRef:   row.BaseRef,
-			RepoPath:  row.RepoPath,
-			Path:      row.Path,
+			ProjectID:    row.ProjectID,
+			SessionID:    row.SessionID,
+			Branch:       row.Branch,
+			BaseRef:      row.BaseRef,
+			RepoPath:     row.RepoPath,
+			Path:         row.Path,
+			WorktreeRoot: row.WorktreeRoot,
 		})
 		if err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("repo %s: %w", row.RepoName, err)

@@ -167,8 +167,16 @@ type SessionMetadata struct {
 	// Permissions pins the resolved launch policy independently of future project defaults.
 	Permissions PermissionMode `json:"permissions,omitempty"`
 
-	Branch            string `json:"branch,omitempty"`
-	WorkspacePath     string `json:"workspacePath,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	WorkspacePath string `json:"workspacePath,omitempty"`
+	// WorktreeRoot is the root this session's worktree was created under,
+	// captured at creation and never rewritten. Restore, observation, cleanup,
+	// and PreRemove validate the recorded path against this snapshot, so a
+	// project's worktreeRoot change never invalidates a worktree that already
+	// exists. Empty on rows written before the column existed (and for scratch
+	// sessions, whose adapter has one installation-wide root); readers resolve
+	// those to the installation default.
+	WorktreeRoot      string `json:"worktreeRoot,omitempty"`
 	WorkspaceRepoPath string `json:"workspaceRepoPath,omitempty"`
 	DiffBaseSHA       string `json:"diffBaseSha,omitempty"`
 	DiffBaseRef       string `json:"diffBaseRef,omitempty"`

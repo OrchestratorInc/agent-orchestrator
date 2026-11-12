@@ -266,6 +266,8 @@ var shippedMigrations = map[int64]string{
 	20261106025428494: "20261106025428494_m4_integration_operations.sql",
 	20261110012007956: "20261110012007956_independent_orchestrator_sessions.sql",
 	20261111070458370: "20261111070458370_session_spawn_parent.sql",
+	20261111182710396: "20261111182710396_session_worktree_root.sql",
+	20261111183038040: "20261111183038040_session_worktree_root_snapshot.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

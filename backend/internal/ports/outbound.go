@@ -608,12 +608,22 @@ type WorkspaceConfig struct {
 	RepoPath string
 	// Path optionally supplies an existing managed worktree path for restore.
 	Path string
+	// WorktreeRoot is the root this session's worktree is created under, laid
+	// out as <root>/<project-id>/<session-id>. Empty selects the adapter's
+	// configured managed root. Restore passes the root recorded with the
+	// worktree so a project's current config never orphans an existing
+	// checkout, and every later operation validates against that snapshot.
+	WorktreeRoot string
 }
 
 // WorkspaceInfo describes a created workspace — where it lives and its branch.
 type WorkspaceInfo struct {
-	Path   string
-	Branch string
+	Path string
+	// WorktreeRoot is the root Path was created under. Callers persist it with
+	// the worktree so restore, observation, and teardown keep addressing the
+	// directory that exists even after a project's configured root changes.
+	WorktreeRoot string
+	Branch       string
 	// BaseSHA pins the branch tip when this worktree was created. Speculative
 	// cleanup uses it to avoid deleting any later user commit.
 	BaseSHA string
@@ -633,14 +643,18 @@ type WorkspaceInfo struct {
 type WorkspaceProjectConfig struct {
 	// 独立编排器按会话隔离根目录，避免复用项目主编排器的固定目录。
 	IndependentOrchestrator bool
-	ProjectID               domain.ProjectID
-	SessionID               domain.SessionID
-	Kind                    domain.SessionKind
-	SessionPrefix           string
-	Branch                  string
-	FreshBranch             bool
-	RequireNewBranch        bool
-	RootRepoPath            string
+	// WorktreeRoot is the root every repo worktree of this session is created
+	// under; empty selects the adapter's configured managed root. See
+	// WorkspaceConfig.WorktreeRoot.
+	WorktreeRoot     string
+	ProjectID        domain.ProjectID
+	SessionID        domain.SessionID
+	Kind             domain.SessionKind
+	SessionPrefix    string
+	Branch           string
+	FreshBranch      bool
+	RequireNewBranch bool
+	RootRepoPath     string
 	// BaseBranch applies only to RootRepoPath. Empty asks the workspace adapter
 	// to resolve that repository's default independently from every child.
 	BaseBranch string
@@ -681,8 +695,11 @@ type WorkspaceRepoInfo struct {
 	RepoName string
 	RepoPath string
 	Path     string
-	Branch   string
-	BaseSHA  string
+	// WorktreeRoot is the root Path was created under, carried per repo so a
+	// workspace project's child worktrees restore against their own snapshot.
+	WorktreeRoot string
+	Branch       string
+	BaseSHA      string
 	// CreationSHA pins a speculative branch's initial tip for safe cleanup.
 	// BaseSHA stays the comparison base and may be a different commit.
 	CreationSHA string

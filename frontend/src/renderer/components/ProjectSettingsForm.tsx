@@ -7,7 +7,7 @@ import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions 
 import { useSettings } from "../hooks/useSettings";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { clientForHost } from "../lib/host-clients";
+import { clientForHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { isLaunchableAgent } from "../lib/agent-select-options";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
@@ -21,6 +21,7 @@ import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { buildIntake } from "./IntakeFields";
 import { ReviewerSelect, reviewerTrustWarning } from "./ReviewerSelect";
 import { ProjectSettingsEditor, type ProjectAgentPickerProps, type ProjectSettingsDraft } from "./ProjectSettingsEditor";
+import { WorktreeRootField } from "./settings/WorktreeRootField";
 import { CloudProjectSettingsAdapter } from "./CloudProjectSettingsForm";
 
 type Project = components["schemas"]["Project"];
@@ -146,6 +147,9 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const initialValues: ProjectSettingsDraft = {
 		displayName: project.name,
 		defaultBranch: config.defaultBranch ?? DEFAULT_BRANCH_AUTO,
+		// The project read model resolves the root in effect (configured, else the
+		// installation default), so the field always shows where new worktrees go.
+		worktreeRoot: project.worktreeRoot ?? config.worktreeRoot ?? "",
 		sessionPrefix: config.sessionPrefix ?? "",
 		workerAgent: config.worker?.agent ?? "",
 		orchestratorAgent: config.orchestrator?.agent ?? "",
@@ -205,6 +209,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 				}
 			: {
 					...config,
+					...withWorktreeRoot(worktreeRootDraft(values.worktreeRoot, config.worktreeRoot, project.worktreeRoot)),
 					defaultBranch: values.defaultBranch.trim() === DEFAULT_BRANCH_AUTO ? undefined : values.defaultBranch || undefined,
 					sessionPrefix: values.sessionPrefix || undefined,
 					worker: {
@@ -321,7 +326,9 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		}
 	};
 	return <ProjectSettingsEditor initialValues={initialValues} section={section} disabled={!hostConnected}
-		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject }}
+		projectId={projectId} branchHostId={hostId}
+		renderWorktreeRoot={isScratchProject ? undefined : ({ value, onChange, disabled }) => <WorktreeRootField value={value} onChange={onChange} hostId={hostId} hostLabel={hostId ? labelForHost(hostId) : undefined} hostConnected={hostConnected} disabled={disabled} />}
+		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject, worktreeRoot: !isScratchProject }}
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
 		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
@@ -367,6 +374,29 @@ function scratchSupportedConfig(config: ProjectConfig): ProjectConfig {
 		...supported
 	} = config as ProjectConfig;
 	return supported;
+}
+
+/**
+ * The worktree root the form saves for an edited draft.
+ *
+ * The field shows the root in effect, which for older projects is the
+ * installation default they never configured. Leaving an untouched field alone
+ * preserves that: only a value the user actually changed is written, so an
+ * inherited default never turns into saved configuration by accident. Clearing
+ * the field explicitly writes the empty value, which removes a configured root.
+ */
+function withWorktreeRoot(worktreeRoot: string | undefined): { worktreeRoot?: string } {
+	return worktreeRoot === undefined ? {} : { worktreeRoot };
+}
+
+function worktreeRootDraft(value: string, saved: string | undefined, effective: string | undefined): string | undefined {
+	const trimmed = value.trim();
+	if (trimmed === (saved ?? "")) return undefined;
+	// Showing the effective root is not an edit: when the field still holds the
+	// installation default the project never configured, saving it would pin a
+	// value the user did not choose.
+	if (!saved && trimmed === (effective ?? "")) return undefined;
+	return trimmed;
 }
 
 function blankToUndefined<T extends object>(obj: T): T | undefined {

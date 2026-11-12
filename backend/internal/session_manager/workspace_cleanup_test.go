@@ -221,7 +221,7 @@ func TestCleanupFiltersReservedProjectEnvironment(t *testing.T) {
 	project := st.projects["mer"]
 	project.Config.Env = map[string]string{"AO_TEST_RESERVED": "spoof", "AO_WORKTREE_PATH": "spoof", "PROJECT_VALUE": "project"}
 	st.projects["mer"] = project
-	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(rec.Metadata.WorkspacePath, "env-check"))
@@ -369,11 +369,11 @@ func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
 		slow = "ping -n 3 127.0.0.1 > NUL"
 	}
 	m, _, _, rec := newCleanupFixture(t, slow)
-	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath, ""); err != nil {
 		t.Fatalf("a step without a limit must run to its end: %v", err)
 	}
 	m, _, _, rec = newCleanupFixture(t, "# ao-timeout: 1m\n"+slow)
-	err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath)
+	err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath, "")
 	if !errors.Is(err, ErrCleanupScript) || err.Error() != "cleanup step 1 failed: timed out after 1 minute" {
 		t.Fatalf("err = %v, want the step timed out", err)
 	}
@@ -390,7 +390,7 @@ func TestCleanupStepSucceedingAtItsDeadlineIsNotATimeout(t *testing.T) {
 		return nil
 	}
 	m, _, _, rec := newCleanupFixture(t, "# ao-timeout: 1m\necho done")
-	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath); err != nil {
+	if err := m.runPreRemove(rec.ProjectID, rec.Metadata.WorkspacePath, ""); err != nil {
 		t.Fatalf("a step that succeeded at its deadline must not fail: %v", err)
 	}
 }

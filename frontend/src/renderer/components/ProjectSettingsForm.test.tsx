@@ -166,9 +166,24 @@ const agentCatalogResponse = {
 	error: undefined,
 };
 
+const branchListResponse = {
+	data: {
+		projectId: "proj-1",
+		repository: "/repo/project-one",
+		default: "main",
+		branches: [
+			{ name: "main", local: true, current: true, default: true },
+			{ name: "release/2026", local: true, current: false, default: false },
+			{ name: "origin/main", remote: "origin", local: true, current: false, default: false },
+		],
+	},
+	error: undefined,
+};
+
 function mockProject(project: Record<string, unknown>, agentResponse = agentCatalogResponse) {
 	getMock.mockImplementation(async (path: string) => {
 		if (path === "/api/v1/agents/readiness") return agentResponse;
+		if (path === "/api/v1/projects/{id}/branches") return branchListResponse;
 		if (path === "/api/v1/agents/{agent}/models") {
 			return {
 				data: {
@@ -2149,4 +2164,104 @@ describe("ProjectSettingsForm", () => {
 			"proj-1",
 		);
 	});
+	it("lists the project's local and origin branches in the default-branch picker", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "",
+			defaultBranch: "main",
+			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+		});
+		renderSettings();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Browse branches" }));
+		expect(await screen.findByRole("menuitem", { name: /^release\/2026$/ })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /^origin\/main$/ })).toBeInTheDocument();
+		// origin/HEAD is a symbolic alias, never a selectable base branch.
+		expect(screen.queryByRole("menuitem", { name: /origin\/HEAD/ })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: /^release\/2026$/ }));
+		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({ config: expect.objectContaining({ defaultBranch: "release/2026" }) }),
+		})));
+	});
+
+	it("keeps a hand-typed default branch usable and saves it when the branch list fails", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: { agentId: "x", selectionMode: "text", models: [], allowCustom: true }, error: undefined };
+			if (path === "/api/v1/projects/{id}/branches") return { data: undefined, error: { code: "PROJECT_BRANCHES_UNAVAILABLE", message: "boom" } };
+			return {
+				data: {
+					status: "ok",
+					project: {
+						id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+						repo: "", defaultBranch: "main",
+						config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+					},
+				},
+				error: undefined,
+			};
+		});
+		renderSettings();
+
+		// The failure is reported inside the picker menu, but the field still
+		// accepts a typed branch and the rest of the form stays usable.
+		await userEvent.click(await screen.findByRole("button", { name: "Browse branches" }));
+		expect(await screen.findByText(/Could not read this project's branches/)).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		const field = await beginEdit("Default branch");
+		await userEvent.clear(field);
+		await userEvent.type(field, "hotfix/typed-by-hand");
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({ config: expect.objectContaining({ defaultBranch: "hotfix/typed-by-hand" }) }),
+		})));
+	});
+
+	it("shows the effective worktree root and saves an edited one", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "",
+			defaultBranch: "main",
+			worktreeRoot: "/home/me/.ao/data/worktrees",
+			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+		});
+		renderSettings();
+
+		const field = await screen.findByRole("textbox", { name: "Worktree root" });
+		expect(field).toHaveValue("/home/me/.ao/data/worktrees");
+		await userEvent.clear(field);
+		await userEvent.type(field, "/srv/ao worktrees/项目");
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({ config: expect.objectContaining({ worktreeRoot: "/srv/ao worktrees/项目" }) }),
+		})));
+	});
+
+	it("does not write an inherited worktree root into the saved config", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "",
+			defaultBranch: "main",
+			// The project never configured a root; the read model resolved the
+			// installation default.
+			worktreeRoot: "/home/me/.ao/data/worktrees",
+			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+		});
+		renderSettings();
+
+		await screen.findByRole("textbox", { name: "Worktree root" });
+		await userEvent.click(await screen.findByRole("switch", { name: "Auto review PRs" }));
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config).not.toHaveProperty("worktreeRoot");
+	});
+
 });

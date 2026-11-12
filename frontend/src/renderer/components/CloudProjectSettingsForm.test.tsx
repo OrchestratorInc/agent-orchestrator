@@ -181,6 +181,16 @@ describe("Cloud project settings", () => {
 		expect(await screen.findByText("review")).toBeInTheDocument();
 	});
 
+	it("never shows the local worktree root control", async () => {
+		mount("general");
+		expect(await screen.findByRole("button", { name: "Edit Default branch" })).toBeInTheDocument();
+		// Cloud sessions run in the provider's sandbox, so a per-project worktree
+		// root is a local-only setting.
+		expect(screen.queryByRole("textbox", { name: "Worktree root" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Choose worktree root folder" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Browse branches" })).not.toBeInTheDocument();
+	});
+
 	it("normalizes legacy roles and saves only changed identity fields", async () => {
 		project.config = { workerAgent: "codex", orchestratorAgent: "claude-code", sessionPrefix: "legacy", trackerIntake: { enabled: true, assignee: "octo" } };
 		const view = mount();

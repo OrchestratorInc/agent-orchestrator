@@ -3081,10 +3081,16 @@ ipcMain.handle("app:chooseDirectory", async (_event, input?: string | { title?: 
 	const title = typeof input === "string"
 		? input
 		: input?.title;
-	const defaultPath = typeof input === "object" && input !== null && typeof input.defaultPath === "string"
+	const requestedPath = typeof input === "object" && input !== null && typeof input.defaultPath === "string"
 		? input.defaultPath.trim()
 		: "";
-	return chooseDirectory(title?.trim() || "Choose a git repository", defaultPath === "~/ao/projects" ? path.join(os.homedir(), "ao", "projects") : undefined);
+	// The shortcut the create-project flow uses names the user's usual projects
+	// folder; every other caller passes an absolute path (for example a project's
+	// current worktree root), which the dialog should open at.
+	const defaultPath = requestedPath === "~/ao/projects"
+		? path.join(os.homedir(), "ao", "projects")
+		: requestedPath || undefined;
+	return chooseDirectory(title?.trim() || "Choose a git repository", defaultPath);
 });
 ipcMain.handle("app:checkGitRepository", async (_event, remoteUrl: string) => {
 	await ensureShellEnv();

@@ -227,7 +227,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 FROM sessions WHERE id = ?
 `
 
@@ -313,6 +314,7 @@ type GetSessionRow struct {
 	IndependentOrchestrator          int64
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
+	WorktreeRoot                     string
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -400,6 +402,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.IndependentOrchestrator,
 		&i.OrchestratorSessionID,
 		&i.SpawnParentSessionID,
+		&i.WorktreeRoot,
 	)
 	return i, err
 }
@@ -423,7 +426,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -509,6 +513,7 @@ type GetSessionByAutomationRunIDRow struct {
 	IndependentOrchestrator          int64
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
+	WorktreeRoot                     string
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -596,6 +601,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.IndependentOrchestrator,
 		&i.OrchestratorSessionID,
 		&i.SpawnParentSessionID,
+		&i.WorktreeRoot,
 	)
 	return i, err
 }
@@ -616,7 +622,8 @@ INSERT INTO sessions (
     requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    client_request_id, client_request_hash, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    client_request_id, client_request_hash, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -624,7 +631,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?
 )
 `
 
@@ -695,6 +702,7 @@ type InsertSessionParams struct {
 	IndependentOrchestrator          int64
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
+	WorktreeRoot                     string
 }
 
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
@@ -765,6 +773,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.IndependentOrchestrator,
 		arg.OrchestratorSessionID,
 		arg.SpawnParentSessionID,
+		arg.WorktreeRoot,
 	)
 	return err
 }
@@ -788,7 +797,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 FROM sessions ORDER BY project_id, num
 `
 
@@ -874,6 +884,7 @@ type ListAllSessionsRow struct {
 	IndependentOrchestrator          int64
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
+	WorktreeRoot                     string
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -967,6 +978,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.IndependentOrchestrator,
 			&i.OrchestratorSessionID,
 			&i.SpawnParentSessionID,
+			&i.WorktreeRoot,
 		); err != nil {
 			return nil, err
 		}
@@ -1088,7 +1100,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -1174,6 +1187,7 @@ type ListSessionsByProjectRow struct {
 	IndependentOrchestrator          int64
 	OrchestratorSessionID            string
 	SpawnParentSessionID             string
+	WorktreeRoot                     string
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -1267,6 +1281,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.IndependentOrchestrator,
 			&i.OrchestratorSessionID,
 			&i.SpawnParentSessionID,
+			&i.WorktreeRoot,
 		); err != nil {
 			return nil, err
 		}
@@ -2211,20 +2226,40 @@ func (q *Queries) UpdateBrowserCapabilityVerifier(ctx context.Context, arg Updat
 
 const updateSession = `-- name: UpdateSession :exec
 UPDATE sessions SET
-    issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?,
-    activity_state = ?, activity_last_at = ?, first_signal_at = ?, is_terminated = ?,
-    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
-    runtime_launch_id = ?, agent_session_id = ?, agent_session_id_launch_id = ?, native_identity_observed_at = ?, prompt = ?,
-    latest_user_prompt = ?, latest_user_prompt_at = ?, latest_assistant_update = ?, latest_assistant_update_at = ?,
-    conversation_checkpoint_state = ?, conversation_checkpoint_generation = ?, conversation_checkpoint_native_id = ?,
-    conversation_checkpoint_unsettled = ?, conversation_checkpoint_turn_id = ?, native_checkpoint_evidence = ?,
-    native_transcript_path = ?,
-    preview_url = ?, preview_revision = ?, terminate_on_pr_merge = ?,
-    cleanup_generation = ?, browser_capability_verifier = ?,
-    provider_conversation_id = ?, controller_generation = ?, model = ?, effort = ?, updated_at = ?,
-    is_pinned = ?, pinned_at = ?, auto_inject_review = ?, auto_inject_ci = ?,
-    automation_launch_completed = ?
-WHERE id = ?
+    issue_id = ?1, kind = ?2, harness = ?3,
+    reviewer_harness = ?4, reviewer_agent_config = ?5,
+    auto_review_enabled = ?6,
+    activity_state = ?7, activity_last_at = ?8,
+    first_signal_at = ?9, is_terminated = ?10,
+    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ?11 THEN branch ELSE ?12 END,
+    workspace_path = ?13, workspace_repo_path = ?14,
+    diff_base_sha = ?15, diff_base_ref = ?16,
+    runtime_handle_id = ?17,
+    worktree_root = COALESCE(?18, worktree_root),
+    runtime_launch_id = ?19, agent_session_id = ?20,
+    agent_session_id_launch_id = ?21,
+    native_identity_observed_at = ?22, prompt = ?23,
+    latest_user_prompt = ?24, latest_user_prompt_at = ?25,
+    latest_assistant_update = ?26,
+    latest_assistant_update_at = ?27,
+    conversation_checkpoint_state = ?28,
+    conversation_checkpoint_generation = ?29,
+    conversation_checkpoint_native_id = ?30,
+    conversation_checkpoint_unsettled = ?31,
+    conversation_checkpoint_turn_id = ?32,
+    native_checkpoint_evidence = ?33,
+    native_transcript_path = ?34,
+    preview_url = ?35, preview_revision = ?36,
+    terminate_on_pr_merge = ?37,
+    cleanup_generation = ?38,
+    browser_capability_verifier = ?39,
+    provider_conversation_id = ?40,
+    controller_generation = ?41, model = ?42,
+    effort = ?43, updated_at = ?44,
+    is_pinned = ?45, pinned_at = ?46,
+    auto_inject_review = ?47, auto_inject_ci = ?48,
+    automation_launch_completed = ?49
+WHERE id = ?50
 `
 
 type UpdateSessionParams struct {
@@ -2245,6 +2280,7 @@ type UpdateSessionParams struct {
 	DiffBaseSha                      string
 	DiffBaseRef                      string
 	RuntimeHandleID                  string
+	WorktreeRoot                     sql.NullString
 	RuntimeLaunchID                  string
 	AgentSessionID                   string
 	AgentSessionIDLaunchID           string
@@ -2281,6 +2317,8 @@ type UpdateSessionParams struct {
 
 // The title has narrow writers only, and a renamed task's temporary branch is
 // never written back, so a write from an older read cannot undo either.
+// worktree_root is creation-time evidence: a NULL carries "this writer does not
+// know it", and COALESCE keeps the stored snapshot instead of erasing it.
 func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) error {
 	_, err := q.db.ExecContext(ctx, updateSession,
 		arg.IssueID,
@@ -2300,6 +2338,7 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) er
 		arg.DiffBaseSha,
 		arg.DiffBaseRef,
 		arg.RuntimeHandleID,
+		arg.WorktreeRoot,
 		arg.RuntimeLaunchID,
 		arg.AgentSessionID,
 		arg.AgentSessionIDLaunchID,

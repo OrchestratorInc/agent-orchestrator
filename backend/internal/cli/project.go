@@ -56,12 +56,15 @@ type projectSummary struct {
 }
 
 type projectDetails struct {
-	ID             string                 `json:"id"`
-	Name           string                 `json:"name"`
-	Kind           string                 `json:"kind"`
-	Path           string                 `json:"path"`
-	Repo           string                 `json:"repo"`
-	DefaultBranch  string                 `json:"defaultBranch"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Path          string `json:"path"`
+	Repo          string `json:"repo"`
+	DefaultBranch string `json:"defaultBranch"`
+	// WorktreeRoot is the effective root new sessions create worktrees under;
+	// the configured value, else the installation default.
+	WorktreeRoot   string                 `json:"worktreeRoot,omitempty"`
 	Agent          string                 `json:"agent,omitempty"`
 	Config         *projectConfig         `json:"config,omitempty"`
 	WorkspaceRepos []workspaceRepoDetails `json:"workspaceRepos,omitempty"`
@@ -111,23 +114,29 @@ type containerReapConfig struct {
 // --config-json. Every domain key must be modeled here, or set-config drops it
 // (TestProjectConfigMirrorsDomainJSONKeys guards this).
 type projectConfig struct {
-	ContainerReap         *containerReapConfig `json:"containerReap,omitempty"`
-	CanonicalRepoURL      string               `json:"canonicalRepoURL,omitempty"`
-	DefaultBranch         string               `json:"defaultBranch,omitempty"`
-	SessionPrefix         string               `json:"sessionPrefix,omitempty"`
-	Env                   map[string]string    `json:"env,omitempty"`
-	Symlinks              []string             `json:"symlinks,omitempty"`
-	PostCreate            []string             `json:"postCreate,omitempty"`
-	PreRemove             []string             `json:"preRemove,omitempty"`
-	AgentRules            string               `json:"agentRules,omitempty"`
-	AgentRulesFile        string               `json:"agentRulesFile,omitempty"`
-	OrchestratorRules     string               `json:"orchestratorRules,omitempty"`
-	OrchestratorRulesFile string               `json:"orchestratorRulesFile,omitempty"`
-	AgentConfig           agentConfig          `json:"agentConfig,omitempty"`
-	Worker                roleOverride         `json:"worker,omitempty"`
-	Orchestrator          roleOverride         `json:"orchestrator,omitempty"`
-	TrackerIntake         trackerIntakeConfig  `json:"trackerIntake,omitempty"`
-	AutoReview            bool                 `json:"autoReview,omitempty"`
+	ContainerReap    *containerReapConfig `json:"containerReap,omitempty"`
+	CanonicalRepoURL string               `json:"canonicalRepoURL,omitempty"`
+	DefaultBranch    string               `json:"defaultBranch,omitempty"`
+	// WorktreeRoot must round-trip: it is the absolute root new sessions of the
+	// project create worktrees under. It is a pointer so the CLI can express the
+	// three states the daemon distinguishes: absent (leave the saved root alone),
+	// a value (set it), and present-but-empty (clear it, as --clear and an
+	// explicit empty --worktree-root do).
+	WorktreeRoot          *string             `json:"worktreeRoot,omitempty"`
+	SessionPrefix         string              `json:"sessionPrefix,omitempty"`
+	Env                   map[string]string   `json:"env,omitempty"`
+	Symlinks              []string            `json:"symlinks,omitempty"`
+	PostCreate            []string            `json:"postCreate,omitempty"`
+	PreRemove             []string            `json:"preRemove,omitempty"`
+	AgentRules            string              `json:"agentRules,omitempty"`
+	AgentRulesFile        string              `json:"agentRulesFile,omitempty"`
+	OrchestratorRules     string              `json:"orchestratorRules,omitempty"`
+	OrchestratorRulesFile string              `json:"orchestratorRulesFile,omitempty"`
+	AgentConfig           agentConfig         `json:"agentConfig,omitempty"`
+	Worker                roleOverride        `json:"worker,omitempty"`
+	Orchestrator          roleOverride        `json:"orchestrator,omitempty"`
+	TrackerIntake         trackerIntakeConfig `json:"trackerIntake,omitempty"`
+	AutoReview            bool                `json:"autoReview,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
@@ -143,6 +152,7 @@ type setConfigRequest struct {
 type projectSetConfigOptions struct {
 	canonicalRepoURL      string
 	defaultBranch         string
+	worktreeRoot          string
 	sessionPrefix         string
 	model                 string
 	permission            string
@@ -309,7 +319,9 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 			"Field flags change only the fields they name and keep the rest of the saved config; " +
 			"a repeatable flag replaces that whole list or map. Field flags refuse a degraded " +
 			"project, whose config cannot be read; use --config-json to replace its config. " +
-			"--config-json replaces the whole config with the given object, and --clear removes all config.",
+			"--config-json replaces the whole config with the given object, and --clear removes all config. " +
+			"Both are full replacements: a worktree root the replacement does not name is cleared. " +
+			"A --worktree-root flag with an empty value also clears the saved root.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if err := cobra.ExactArgs(1)(cmd, args); err != nil {
 				return usageError{err}
@@ -342,6 +354,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&opts.defaultBranch, "default-branch", "", "Base branch for new worktrees; auto infers each repository's Git default")
+	f.StringVar(&opts.worktreeRoot, "worktree-root", "", "Absolute root directory for new session worktrees (empty clears the saved root; omit the flag to keep it)")
 	f.StringVar(&opts.canonicalRepoURL, "canonical-repo-url", "", "Explicit upstream HTTPS repository URL for PR claims (same provider, host, and port as origin)")
 	f.StringVar(&opts.sessionPrefix, "session-prefix", "", "Displayed session-id prefix")
 	f.StringVar(&opts.model, "model", "", "Agent model override (e.g. claude-opus-4-5)")
@@ -368,25 +381,37 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 
 // projectConfigFlags are the set-config flags that edit one config field.
 var projectConfigFlags = []string{
-	"canonical-repo-url", "default-branch", "session-prefix", "model", "permission",
+	"canonical-repo-url", "default-branch", "worktree-root", "session-prefix", "model", "permission",
 	"worker-agent", "orchestrator-agent", "agent-rules", "agent-rules-file",
 	"orchestrator-rules", "orchestrator-rules-file", "env", "symlink", "post-create",
 	"pre-remove", "tracker-intake", "tracker-repo", "tracker-assignee", "reviewer",
 }
 
 // buildProjectConfig turns the set-config flags into the typed config sent to
-// the daemon. --clear empties the config; --config-json supplies the whole
-// object; otherwise each changed field flag overwrites its field in the current
-// config, so fields the CLI has no flag for (effort, ...) survive.
+// the daemon. --clear and --config-json both replace the WHOLE config, so each
+// sends worktreeRoot explicitly (empty when the replacement names none) and thus
+// clears a saved root; field flags merge into the current config and leave a root
+// they do not mention untouched.
 // The daemon validates the values.
 func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) bool, current func() (projectConfig, error)) (projectConfig, error) {
 	if opts.clear {
-		return projectConfig{}, nil
+		// --clear replaces the whole config, so it must also clear a saved
+		// worktreeRoot. Omitting the key would read as "leave the root alone" on
+		// the daemon, leaving the project half-cleared.
+		cleared := ""
+		return projectConfig{WorktreeRoot: &cleared}, nil
 	}
 	if opts.configJSON != "" {
 		var cfg projectConfig
 		if err := json.Unmarshal([]byte(opts.configJSON), &cfg); err != nil {
 			return projectConfig{}, usageError{fmt.Errorf("--config-json is not a valid JSON object: %w", err)}
+		}
+		// The object IS the whole config, so a missing worktreeRoot means "no
+		// root", not "leave the saved root alone": send the key explicitly empty
+		// so a full replacement cannot silently keep a root the caller dropped.
+		if cfg.WorktreeRoot == nil {
+			cleared := ""
+			cfg.WorktreeRoot = &cleared
 		}
 		return cfg, nil
 	}
@@ -409,6 +434,10 @@ func buildProjectConfig(opts projectSetConfigOptions, changed func(name string) 
 	}
 	setIfChanged("canonical-repo-url", &cfg.CanonicalRepoURL, opts.canonicalRepoURL)
 	setIfChanged("default-branch", &cfg.DefaultBranch, opts.defaultBranch)
+	if changed("worktree-root") {
+		value := opts.worktreeRoot
+		cfg.WorktreeRoot = &value
+	}
 	setIfChanged("session-prefix", &cfg.SessionPrefix, opts.sessionPrefix)
 	setIfChanged("model", &cfg.AgentConfig.Model, opts.model)
 	setIfChanged("permission", &cfg.AgentConfig.Permissions, opts.permission)

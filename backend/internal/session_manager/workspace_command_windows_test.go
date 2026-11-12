@@ -55,7 +55,7 @@ func TestRunPostCreateAndCleanupWindowsQuotedPaths(t *testing.T) {
 					if stage == "setup" {
 						err = runPostCreate(t.Context(), workspace, source, []string{command}, project.Config.Env)
 					} else {
-						err = m.runPreRemove(rec.ProjectID, workspace)
+						err = m.runPreRemove(rec.ProjectID, workspace, "")
 					}
 					if tc.exit == 0 {
 						if err != nil {

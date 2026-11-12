@@ -283,6 +283,9 @@ function CloudAgentPicker({ role, draft, value, disabled, onChange }: ProjectAge
 function toEditorDraft(values: CloudProjectSettingsDraft): ProjectSettingsDraft {
 	return {
 		displayName: values.displayName, defaultBranch: values.defaultBranch, autoReview: values.autoReview,
+		// Cloud worktrees live in the provider's sandbox, so the per-project
+		// worktree root is local-only and never rendered here (capabilities.worktreeRoot).
+		worktreeRoot: "",
 		sessionPrefix: values.sessionPrefix, workersRequestReview: values.workersRequestReview,
 		intakeEnabled: values.intake.enabled, intakeRepo: values.intake.repo, intakeAssignee: values.intake.assignee,
 		workerAgent: values.worker.agent, orchestratorAgent: values.orchestrator.agent, reviewerHarness: values.reviewer.agent,

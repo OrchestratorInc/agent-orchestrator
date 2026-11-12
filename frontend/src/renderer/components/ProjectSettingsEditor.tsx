@@ -7,12 +7,15 @@ import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSectio
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { AgentModelField, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { DefaultBranchPicker } from "./settings/DefaultBranchCombobox";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
 export type ProjectSettingsDraft = {
 	displayName: string;
 	defaultBranch: string;
+	/** Absolute root new worktrees land under; empty follows the AO default. */
+	worktreeRoot: string;
 	sessionPrefix: string;
 	workerAgent: string;
 	orchestratorAgent: string;
@@ -60,6 +63,8 @@ type Capabilities = {
 	runtimeDefaults?: boolean;
 	/** Cloud keeps each role's agent fixed; its model, effort, and permissions stay editable. Local agents stay editable. */
 	lockedAgents?: boolean;
+	/** Local projects only: the per-project worktree root field. */
+	worktreeRoot?: boolean;
 };
 type RoleFields = {
 	agent: "workerAgent" | "orchestratorAgent" | "reviewerHarness";
@@ -76,7 +81,7 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, intakeDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
+export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, reviewerWarning, autoReviewDescription, intakeDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra, renderWorktreeRoot, projectId, branchHostId }: {
 	initialValues: ProjectSettingsDraft;
 	section: SettingsSection;
 	capabilities: Capabilities;
@@ -97,6 +102,12 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	saveUnchanged?: boolean;
 	/** Read-only sections appended to the General page (e.g. a Cloud project's Coder template). */
 	generalExtra?: ReactNode;
+	/** Renders the worktree-root row's value control (a native or remote folder picker). */
+	renderWorktreeRoot?: (props: { value: string; onChange: (value: string) => void; disabled: boolean }) => ReactNode;
+	/** Project whose branch list feeds the default-branch picker. */
+	projectId?: string;
+	/** Installation id of the daemon that owns the project; absent for the local one. */
+	branchHostId?: string;
 	/** Pauses autosave and submit, e.g. while the owning host is offline. */
 	disabled?: boolean;
 }) {
@@ -178,7 +189,15 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 				</ProjectSettingsSection>}
 				{capabilities.workflow && <>
 					<ProjectSettingsSection title={t("settings.project.worktrees")} grouped>
-						<ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />
+						{/* The picker only suggests the repository's branches; typing a branch it does not list stays supported. */}
+						<ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} trailing={projectId && capabilities.worktreeRoot ? <DefaultBranchPicker projectId={projectId} hostId={branchHostId} value={draft.defaultBranch} required={capabilities.requiredBranch} onChange={(defaultBranch) => patch({ defaultBranch })} /> : undefined} />
+						{capabilities.worktreeRoot && <ProjectSettingsRow label={t("settings.project.worktreeRoot")}>
+							<div className="min-w-0">
+								{renderWorktreeRoot
+									? renderWorktreeRoot({ value: draft.worktreeRoot, onChange: (worktreeRoot) => patch({ worktreeRoot }), disabled: disabled || mutation.isPending })
+									: <input id="worktreeRoot" aria-label={t("settings.project.worktreeRoot")} className="settings-inline-edit-input w-full" value={draft.worktreeRoot} placeholder={t("settings.project.worktreeRootPlaceholder")} onChange={(event) => patch({ worktreeRoot: event.target.value })} />}
+							</div>
+						</ProjectSettingsRow>}
 						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
 					</ProjectSettingsSection>
 					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}

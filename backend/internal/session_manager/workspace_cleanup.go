@@ -52,22 +52,34 @@ type stepTimeoutError struct {
 func (e *stepTimeoutError) Error() string { return "timed out after " + stepMinutes(e.timeout) }
 func (e *stepTimeoutError) Unwrap() error { return e.cause }
 
+// worktreeRootForSnapshot resolves the root recorded with a worktree. Rows
+// written before project roots existed carry no snapshot; those worktrees live
+// under the installation default, so it is the correct fallback. A root that was
+// deleted afterwards is still returned as a path — callers report it rather than
+// silently trusting a different directory.
+func (m *Manager) worktreeRootForSnapshot(snapshot string) string {
+	if root := strings.TrimSpace(snapshot); root != "" {
+		return root
+	}
+	return domain.DefaultWorktreeRoot(m.dataDir)
+}
+
 // runPreRemove is called only for permanent AO-owned workspace retirement,
 // after the session's processes have stopped and before worktree removal.
-func (m *Manager) runPreRemove(projectID domain.ProjectID, workspacePath string) error {
+func (m *Manager) runPreRemove(projectID domain.ProjectID, workspacePath, worktreeRoot string) error {
 	// Cleanup belongs to the daemon, not the request or its teardown deadline.
 	// It has no execution timer, but shutdown must still stop it.
-	return m.runPreRemoveContext(m.backgroundContext, projectID, workspacePath)
+	return m.runPreRemoveContext(m.backgroundContext, projectID, workspacePath, worktreeRoot)
 }
 
 // runReplacementPreRemove runs cleanup for a forced orchestrator retirement.
 // Replacement holds the project's orchestrator lock and must release the
 // branch, so a slow or failing script is logged instead of blocking or
 // vetoing the forced removal.
-func (m *Manager) runReplacementPreRemove(id domain.SessionID, projectID domain.ProjectID, workspacePath string) {
+func (m *Manager) runReplacementPreRemove(id domain.SessionID, projectID domain.ProjectID, workspacePath, worktreeRoot string) {
 	ctx, cancel := context.WithTimeout(m.backgroundContext, replacementCleanupBudget)
 	defer cancel()
-	if err := m.runPreRemoveContext(ctx, projectID, workspacePath); err != nil {
+	if err := m.runPreRemoveContext(ctx, projectID, workspacePath, worktreeRoot); err != nil {
 		m.logger.Warn("retire replacement: workspace cleanup failed; removing workspace anyway", "sessionID", id, "error", err)
 	}
 }
@@ -89,7 +101,7 @@ func ReplacementCleanupBudget(project domain.ProjectRecord) time.Duration {
 	return 0
 }
 
-func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.ProjectID, workspacePath string) error {
+func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.ProjectID, workspacePath, worktreeRoot string) error {
 	if workspacePath == "" {
 		return nil
 	}
@@ -105,7 +117,7 @@ func (m *Manager) runPreRemoveContext(ctx context.Context, projectID domain.Proj
 	} else if err != nil {
 		return fmt.Errorf("inspect workspace for cleanup: %w", err)
 	}
-	managedRoot, err := filepath.EvalSymlinks(filepath.Join(m.dataDir, "worktrees"))
+	managedRoot, err := filepath.EvalSymlinks(m.worktreeRootForSnapshot(worktreeRoot))
 	if err != nil {
 		return fmt.Errorf("resolve managed workspace root: %w", err)
 	}

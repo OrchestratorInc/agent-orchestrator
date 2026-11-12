@@ -24,6 +24,14 @@ type ProjectConfig struct {
 	// DefaultBranch is the base branch new session worktrees are created from.
 	// Empty and DefaultBranchAuto both mean infer each repository's Git default.
 	DefaultBranch string `json:"defaultBranch,omitempty"`
+	// WorktreeRoot is the absolute directory new session worktrees of this
+	// project are created under, laid out as <root>/<project-id>/<session-id>.
+	// Empty means the installation-wide default (<AO_DATA_DIR>/worktrees) for
+	// projects registered before the field existed; the project service writes
+	// the resolved default at registration so a new project keeps its root even
+	// when AO_DATA_DIR later changes. Only NEW sessions read it: existing
+	// worktrees are never migrated, moved, or deleted.
+	WorktreeRoot string `json:"worktreeRoot,omitempty"`
 	// SessionPrefix overrides the displayed session-id prefix.
 	SessionPrefix string `json:"sessionPrefix,omitempty"`
 
@@ -228,6 +236,9 @@ func (c ProjectConfig) Validate() error {
 	if err := validateNameComponent("sessionPrefix", c.SessionPrefix); err != nil {
 		return err
 	}
+	if err := ValidateWorktreeRoot(c.WorktreeRoot); err != nil {
+		return err
+	}
 	seenEnv := make(map[string]bool, len(c.Env))
 	for key, value := range c.Env {
 		if !validEnvName(key) || strings.ContainsRune(value, '\x00') {
@@ -335,6 +346,47 @@ func validateRepoRelative(p string) error {
 		if seg == ".." {
 			return fmt.Errorf("path must be repo-relative and must not escape the project root")
 		}
+	}
+	return nil
+}
+
+// DefaultWorktreesDirName is the directory beneath AO_DATA_DIR that holds
+// per-session worktrees when a project configures no root of its own.
+const DefaultWorktreesDirName = "worktrees"
+
+// DefaultWorktreeRoot returns the installation-wide worktree root that a
+// project follows when its config leaves WorktreeRoot empty: <dataDir>/worktrees.
+// An empty dataDir yields an empty root, which callers treat as unresolvable
+// rather than silently creating worktrees in the current directory.
+func DefaultWorktreeRoot(dataDir string) string {
+	trimmed := strings.TrimSpace(dataDir)
+	if trimmed == "" {
+		return ""
+	}
+	return filepath.Join(trimmed, DefaultWorktreesDirName)
+}
+
+// ValidateWorktreeRoot rejects worktree roots that can never be a safe place to
+// materialise session worktrees. It is deliberately pure: it does not touch the
+// filesystem, so the same rule guards the CLI, the API, and spawn-time reads.
+// Emptiness is valid and means "follow the installation default".
+func ValidateWorktreeRoot(root string) error {
+	trimmed := strings.TrimSpace(root)
+	if trimmed == "" {
+		return nil
+	}
+	if trimmed != root {
+		return fmt.Errorf("worktreeRoot: must not have leading or trailing whitespace")
+	}
+	if !filepath.IsAbs(trimmed) {
+		return fmt.Errorf("worktreeRoot: must be an absolute path")
+	}
+	clean := filepath.Clean(trimmed)
+	if clean == string(filepath.Separator) || clean == filepath.VolumeName(clean)+string(filepath.Separator) {
+		return fmt.Errorf("worktreeRoot: must not be a filesystem root")
+	}
+	if strings.ContainsRune(clean, '\x00') {
+		return fmt.Errorf("worktreeRoot: must not contain NUL bytes")
 	}
 	return nil
 }

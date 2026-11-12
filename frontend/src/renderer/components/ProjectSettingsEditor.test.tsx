@@ -6,7 +6,7 @@ import { ProjectSettingsEditor, type ProjectSettingsDraft } from "./ProjectSetti
 import { TooltipProvider } from "./ui/tooltip";
 
 const initialValues: ProjectSettingsDraft = {
-	displayName: "Project", defaultBranch: "main", sessionPrefix: "ao",
+	displayName: "Project", defaultBranch: "main", worktreeRoot: "", sessionPrefix: "ao",
 	workerAgent: "codex", orchestratorAgent: "claude-code", reviewerHarness: "",
 	workerModel: "", orchestratorModel: "", reviewerModel: "",
 	workerMode: "", orchestratorMode: "", reviewerMode: "",

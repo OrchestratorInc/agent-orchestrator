@@ -23,7 +23,8 @@ INSERT INTO sessions (
     requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    client_request_id, client_request_hash, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    client_request_id, client_request_hash, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 ) VALUES (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -31,7 +32,7 @@ INSERT INTO sessions (
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?
 );
 
 -- name: GetClientRequestSession :one
@@ -43,21 +44,43 @@ UPDATE sessions SET client_request_committed = 1 WHERE id = ? AND client_request
 -- name: UpdateSession :exec
 -- The title has narrow writers only, and a renamed task's temporary branch is
 -- never written back, so a write from an older read cannot undo either.
+-- worktree_root is creation-time evidence: a NULL carries "this writer does not
+-- know it", and COALESCE keeps the stored snapshot instead of erasing it.
 UPDATE sessions SET
-    issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?,
-    activity_state = ?, activity_last_at = ?, first_signal_at = ?, is_terminated = ?,
-    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
-    runtime_launch_id = ?, agent_session_id = ?, agent_session_id_launch_id = ?, native_identity_observed_at = ?, prompt = ?,
-    latest_user_prompt = ?, latest_user_prompt_at = ?, latest_assistant_update = ?, latest_assistant_update_at = ?,
-    conversation_checkpoint_state = ?, conversation_checkpoint_generation = ?, conversation_checkpoint_native_id = ?,
-    conversation_checkpoint_unsettled = ?, conversation_checkpoint_turn_id = ?, native_checkpoint_evidence = ?,
-    native_transcript_path = ?,
-    preview_url = ?, preview_revision = ?, terminate_on_pr_merge = ?,
-    cleanup_generation = ?, browser_capability_verifier = ?,
-    provider_conversation_id = ?, controller_generation = ?, model = ?, effort = ?, updated_at = ?,
-    is_pinned = ?, pinned_at = ?, auto_inject_review = ?, auto_inject_ci = ?,
-    automation_launch_completed = ?
-WHERE id = ?;
+    issue_id = sqlc.arg(issue_id), kind = sqlc.arg(kind), harness = sqlc.arg(harness),
+    reviewer_harness = sqlc.arg(reviewer_harness), reviewer_agent_config = sqlc.arg(reviewer_agent_config),
+    auto_review_enabled = sqlc.arg(auto_review_enabled),
+    activity_state = sqlc.arg(activity_state), activity_last_at = sqlc.arg(activity_last_at),
+    first_signal_at = sqlc.narg(first_signal_at), is_terminated = sqlc.arg(is_terminated),
+    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = sqlc.arg(temporary_branch) THEN branch ELSE sqlc.arg(branch) END,
+    workspace_path = sqlc.arg(workspace_path), workspace_repo_path = sqlc.arg(workspace_repo_path),
+    diff_base_sha = sqlc.arg(diff_base_sha), diff_base_ref = sqlc.arg(diff_base_ref),
+    runtime_handle_id = sqlc.arg(runtime_handle_id),
+    worktree_root = COALESCE(sqlc.narg(worktree_root), worktree_root),
+    runtime_launch_id = sqlc.arg(runtime_launch_id), agent_session_id = sqlc.arg(agent_session_id),
+    agent_session_id_launch_id = sqlc.arg(agent_session_id_launch_id),
+    native_identity_observed_at = sqlc.narg(native_identity_observed_at), prompt = sqlc.arg(prompt),
+    latest_user_prompt = sqlc.arg(latest_user_prompt), latest_user_prompt_at = sqlc.narg(latest_user_prompt_at),
+    latest_assistant_update = sqlc.arg(latest_assistant_update),
+    latest_assistant_update_at = sqlc.narg(latest_assistant_update_at),
+    conversation_checkpoint_state = sqlc.arg(conversation_checkpoint_state),
+    conversation_checkpoint_generation = sqlc.arg(conversation_checkpoint_generation),
+    conversation_checkpoint_native_id = sqlc.arg(conversation_checkpoint_native_id),
+    conversation_checkpoint_unsettled = sqlc.arg(conversation_checkpoint_unsettled),
+    conversation_checkpoint_turn_id = sqlc.arg(conversation_checkpoint_turn_id),
+    native_checkpoint_evidence = sqlc.arg(native_checkpoint_evidence),
+    native_transcript_path = sqlc.arg(native_transcript_path),
+    preview_url = sqlc.arg(preview_url), preview_revision = sqlc.arg(preview_revision),
+    terminate_on_pr_merge = sqlc.arg(terminate_on_pr_merge),
+    cleanup_generation = sqlc.arg(cleanup_generation),
+    browser_capability_verifier = sqlc.arg(browser_capability_verifier),
+    provider_conversation_id = sqlc.arg(provider_conversation_id),
+    controller_generation = sqlc.arg(controller_generation), model = sqlc.arg(model),
+    effort = sqlc.arg(effort), updated_at = sqlc.arg(updated_at),
+    is_pinned = sqlc.arg(is_pinned), pinned_at = sqlc.narg(pinned_at),
+    auto_inject_review = sqlc.arg(auto_inject_review), auto_inject_ci = sqlc.arg(auto_inject_ci),
+    automation_launch_completed = sqlc.arg(automation_launch_completed)
+WHERE id = sqlc.arg(id);
 
 -- name: UpdateSessionModel :execrows
 UPDATE sessions
@@ -294,7 +317,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -316,7 +340,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -338,7 +363,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -360,7 +386,8 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id
+    runtime_released_launch_id, independent_orchestrator, orchestrator_session_id, spawn_parent_session_id,
+    worktree_root
 FROM sessions ORDER BY project_id, num;
 
 -- name: ListChatHibernationCandidates :many
