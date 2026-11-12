@@ -23,6 +23,8 @@ export type ShellTerminal = {
 	sessionId?: string;
 	workingDir: string;
 	title: string;
+	/** The running program's title, sent only when it should label the tab. */
+	terminalTitle?: string;
 	createdAt: string;
 	/** Owning daemon; absent for local and cloud shells. */
 	hostId?: HostId;
@@ -56,6 +58,7 @@ export function toShellTerminal(t: components["schemas"]["ShellTerminalResponse"
 		// Shell tabs used to be named after their initial directory. Normalize
 		// those persisted legacy labels so existing tabs adopt the new idle state.
 		title: title === "Terminal" ? "Terminal 1" : title,
+		...(t.terminalTitle ? { terminalTitle: t.terminalTitle } : {}),
 		createdAt: t.createdAt,
 		...(hostId && hostId !== LOCAL_HOST ? { hostId } : {}),
 	};
@@ -138,8 +141,8 @@ async function fetchListedShellTerminals(hostId?: HostId): Promise<ShellTerminal
 	];
 }
 
-// No refetchInterval: shell terminals only change when this client opens or
-// closes one, and both mutations invalidate the query. Polling would spend a
+// No refetchInterval: opening or closing a shell invalidates the query, and a
+// program title change arrives as a session_updated event. Polling would spend a
 // liveness probe per shell per interval for no new information.
 export const shellTerminalsQueryOptions = {
 	queryKey: shellTerminalsQueryKey,

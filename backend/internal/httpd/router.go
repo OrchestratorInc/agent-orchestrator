@@ -247,7 +247,7 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 	if sink == nil {
 		return
 	}
-	// CLI telemetry is capped to bounded uniques: ao.app.active once per UTC day
+	// CLI telemetry is capped to bounded uniques: ao.cli.active once per UTC day
 	// for user-context CLI activity (matching the renderer
 	// heartbeat) and ao.cli.invoked once per actor type + command path per UTC
 	// day. Scripts and agent sessions invoke read-only commands (status, ls,
@@ -304,7 +304,7 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 		if actorType == "user" {
 			if now := time.Now(); cliTelemetry.reserveActive(now) {
 				sink.Emit(req.Context(), ports.TelemetryEvent{
-					Name:       "ao.app.active",
+					Name:       "ao.cli.active",
 					Source:     "cli",
 					OccurredAt: now.UTC(),
 					Level:      ports.TelemetryLevelInfo,
@@ -342,7 +342,7 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 		}
 
 		sink.Emit(req.Context(), ports.TelemetryEvent{
-			Name:       "ao.cli.usage_errors",
+			Name:       "ao.usage.cli_usage_errors",
 			Source:     "cli",
 			OccurredAt: time.Now().UTC(),
 			Level:      ports.TelemetryLevelWarn,

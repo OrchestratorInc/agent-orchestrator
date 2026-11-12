@@ -1,6 +1,6 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { createElement, useImperativeHandle } from "react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const menu = vi.hoisted(() => ({ show: vi.fn() }));
 const haptics = vi.hoisted(() => ({ press: vi.fn() }));
@@ -22,10 +22,16 @@ vi.mock("./ThemeProvider", () => {
 import { WorkerRowContextMenu } from "./worker-rename-context-menu.android";
 
 let renderer: ReactTestRenderer | undefined;
+beforeEach(() => {
+	vi.stubGlobal("requestAnimationFrame", () => 1);
+	vi.stubGlobal("cancelAnimationFrame", () => {});
+});
 afterEach(() => {
 	act(() => renderer?.unmount());
 	menu.show.mockClear();
 	haptics.press.mockClear();
+	vi.useRealTimers();
+	vi.unstubAllGlobals();
 });
 function mount(onPress = vi.fn(), onAction = vi.fn()) {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -45,6 +51,19 @@ function mount(onPress = vi.fn(), onAction = vi.fn()) {
 	return renderer!;
 }
 
+function longPress(view: ReactTestRenderer, x = 0, y = 0) {
+	const row = view.root.findByType("Pressable" as never);
+	act(() => row.props.onPressIn({ nativeEvent: { locationX: x, locationY: y } }));
+	act(() => row.props.onLongPress());
+}
+
+// Every scroll frame on Android re-lays out the whole mounted tree, and the
+// Compose menu was most of a resting row's nodes. It exists only while open.
+it("builds no menu until the row is long-pressed", () => {
+	const view = mount();
+	expect(view.root.findAllByType("MenuView" as never)).toHaveLength(0);
+});
+
 // Anchored to the whole row, Compose opened the menu against the screen's
 // left edge wherever the finger was; its anchor moves under the finger first.
 it("opens the native menu where the row was long-pressed", () => {
@@ -52,20 +71,42 @@ it("opens the native menu where the row was long-pressed", () => {
 	vi.stubGlobal("requestAnimationFrame", (callback: () => void) => { frame = callback; return 1; });
 	const onPress = vi.fn();
 	const view = mount(onPress);
-	const row = view.root.findByType("Pressable" as never);
-	act(() => row.props.onPressIn({ nativeEvent: { locationX: 310, locationY: 42 } }));
-	act(() => row.props.onLongPress());
+	longPress(view, 310, 42);
 	expect(haptics.press).toHaveBeenCalledTimes(1);
 	expect(view.root.findByType("MenuView" as never).props.style[1]).toEqual({ left: 310, top: 42 });
 	expect(menu.show).not.toHaveBeenCalled();
 	act(() => frame?.());
 	expect(menu.show).toHaveBeenCalledTimes(1);
 	expect(onPress).not.toHaveBeenCalled();
-	vi.unstubAllGlobals();
+});
+
+// Torn down after Compose has played its close, not under it.
+it("removes the menu once it has closed", () => {
+	vi.useFakeTimers();
+	const view = mount();
+	longPress(view);
+	act(() => view.root.findByType("MenuView" as never).props.onCloseMenu());
+	expect(view.root.findAllByType("MenuView" as never)).toHaveLength(1);
+	act(() => { vi.runAllTimers(); });
+	expect(view.root.findAllByType("MenuView" as never)).toHaveLength(0);
+});
+
+// A long press that lands while the last menu is still closing opens a menu
+// again rather than being torn down with the old one.
+it("keeps a menu reopened while the last one was closing", () => {
+	vi.useFakeTimers();
+	const view = mount();
+	longPress(view);
+	act(() => view.root.findByType("MenuView" as never).props.onCloseMenu());
+	longPress(view, 20, 10);
+	act(() => { vi.runAllTimers(); });
+	expect(view.root.findByType("MenuView" as never).props.style[1]).toEqual({ left: 20, top: 10 });
 });
 
 it("marks Archive as destructive", () => {
-	const actions = mount().root.findByType("MenuView" as never).props.actions;
+	const view = mount();
+	longPress(view);
+	const actions = view.root.findByType("MenuView" as never).props.actions;
 	expect(actions.at(-1)).toMatchObject({ id: "delete", attributes: { destructive: true } });
 });
 
@@ -83,6 +124,7 @@ it("offers the menu's actions to TalkBack", () => {
 it("routes a chosen action by its id", () => {
 	const onAction = vi.fn();
 	const view = mount(vi.fn(), onAction);
+	longPress(view);
 	act(() => view.root.findByType("MenuView" as never).props.onPressAction({ nativeEvent: { event: "pin" } }));
 	expect(onAction).toHaveBeenCalledWith("pin");
 });

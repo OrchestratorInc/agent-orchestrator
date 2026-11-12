@@ -107,6 +107,9 @@ func (m *Manager) InterfaceTransitionStatus(
 	} else if interfaceWorkspaceUnavailable(rec) {
 		status.ReasonCode = "WORKSPACE_UNAVAILABLE"
 		status.Reason = "This session's workspace was never set up. Retry start before switching interfaces."
+	} else if rec.NeedsImportResume() {
+		status.ReasonCode = "WORKSPACE_UNAVAILABLE"
+		status.Reason = "Open this imported chat once before switching interfaces."
 	} else if target == domain.SessionModeChat && (m.chat == nil || !m.chat.SupportsChat(rec.Harness)) {
 		status.ReasonCode = "CHAT_UNSUPPORTED"
 		status.Reason = fmt.Sprintf("%s does not support Chat UI.", rec.Harness)
@@ -204,6 +207,11 @@ func (m *Manager) StartInterfaceTransition(
 	}
 	if interfaceWorkspaceUnavailable(rec) {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceUnavailable, id)
+	}
+	// An import is copied into AO and checked for an outside owner on its first
+	// open. A switch would launch without either step.
+	if rec.NeedsImportResume() {
+		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: imported session %s has not been opened yet", ErrInterfaceWorkspaceUnavailable, id)
 	}
 	nativeID, err := m.handoffNativeConversationID(ctx, rec)
 	// A hermes Chat session whose adapter never declared the compatible
@@ -719,6 +727,7 @@ func (m *Manager) runInterfaceTransition(
 		captureBackgroundFault(context.WithoutCancel(ctx), err, "interface_transition", "durable_completion")
 		return
 	}
+	m.deliverQueuedAfterAccountMove(transition)
 }
 
 // hermesNativeConversationID reads the native state.db session id the
@@ -1552,6 +1561,7 @@ func (m *Manager) rollbackInterfaceTransition(
 		return
 	}
 	_ = m.finishInterfaceTransition(transition.ID, domain.SessionInterfaceTransitionFailed, code, cause.Error())
+	m.deliverQueuedAfterAccountMove(transition)
 }
 
 // chatHoldsProviderConversation reports whether the session durably holds a

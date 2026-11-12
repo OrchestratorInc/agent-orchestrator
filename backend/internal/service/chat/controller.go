@@ -81,7 +81,7 @@ type Store interface {
 	RecordProviderInput(ctx context.Context, turnID, text string) error
 	BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error
 	SettleTurn(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, now time.Time) error
-	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, now time.Time) error
+	SettleTurnWithFailureCode(ctx context.Context, conversationID, providerTurnID string, state domain.TurnState, errMessage string, failureCode domain.ConversationFailureCode, usageLimitResetsAt time.Time, now time.Time) error
 	SettleTurnByID(ctx context.Context, turnID string, state domain.TurnState, errMessage string, now time.Time) error
 	SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error
 	SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error
@@ -169,6 +169,7 @@ type Store interface {
 
 	ProjectProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
 	ProjectReviewProviderEvent(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation, providerEventID, method, payloadJSON string, now time.Time, project func(context.Context) error) (bool, error)
+	LoadSessionImportMessages(ctx context.Context, id domain.SessionID, before, limit int64) ([]domain.ConversationMessage, bool, error)
 }
 
 // ActivityRecorder feeds derived session status.
@@ -3348,7 +3349,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		}
 		state := settledTurnState(event)
 		if err := c.store.SettleTurnWithFailureCode(
-			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, now); err != nil {
+			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, event.UsageLimitResetsAt, now); err != nil {
 			return err
 		}
 		if errors.Is(event.Err, ports.ErrChatAuthRequired) {

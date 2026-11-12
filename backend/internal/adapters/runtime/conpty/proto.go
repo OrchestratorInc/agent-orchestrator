@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	conPTYHostProtocolVersion         = 3
+	conPTYHostProtocolVersion         = 4
 	conPTYStyledOutputProtocolVersion = 2
 	// Older hosts ignore MsgWatchForegroundReq and would stream raw output.
 	conPTYForegroundProtocolVersion = 3
+	// Older hosts ignore MsgWatchTitleReq and never report a title.
+	conPTYTitleProtocolVersion = 4
 )
 
 // Message type constants. Values must match pty-host.ts MSG_* constants exactly.
@@ -31,6 +33,8 @@ const (
 	MsgGetStyledOutputRes byte = 0x0a // host -> client: rendered UTF-8 text with ANSI styles
 	MsgWatchForegroundReq byte = 0x0b // client -> host: empty; turns the connection into a foreground watcher
 	MsgForegroundState    byte = 0x0c // host -> watcher: JSON ForegroundPayload, sent on change
+	MsgWatchTitleReq      byte = 0x0d // client -> host: empty; turns the connection into a title watcher
+	MsgTitleState         byte = 0x0e // host -> watcher: JSON TitlePayload, sent on change
 )
 
 // JSON payload structs shared with later tasks (kept minimal).
@@ -55,6 +59,12 @@ type ForegroundPayload struct {
 	PGID int      `json:"pgid"`
 	Argv []string `json:"argv,omitempty"`
 	Busy bool     `json:"busy"`
+}
+
+// TitlePayload is the MsgTitleState body: the normalized title the program last
+// set. Empty means it has set none, or reset the one it had.
+type TitlePayload struct {
+	Title string `json:"title"`
 }
 
 // GetOutputReq is the JSON body for MsgGetOutputReq.

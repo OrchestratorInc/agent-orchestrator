@@ -33,6 +33,7 @@ import { sessionInterfaceTransitionStatus } from "../test/interface-transition-f
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { resetSessionPreviewWarmth } from "../hooks/useSessionPreviewHover";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
@@ -65,6 +66,7 @@ const {
 	resumeOrchestratorMock,
 	updateStatusMock,
 	commandPaletteEnabled,
+	trustedApi,
 } = vi.hoisted(
 	() => ({
 		cloudGateState: { cloudEnabled: true, localEnabled: true, client: "" },
@@ -90,6 +92,7 @@ const {
 		downloadUpdateMock: vi.fn(),
 		checkUpdateMock: vi.fn(),
 		commandPaletteEnabled: { current: true },
+		trustedApi: { current: false },
 	}),
 );
 
@@ -189,7 +192,7 @@ vi.mock("../hooks/useSettings", () => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
-	hasTrustedApiBaseUrl: () => false,
+	hasTrustedApiBaseUrl: () => trustedApi.current,
 	apiErrorMessage: (error: unknown) => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
@@ -510,11 +513,13 @@ function fireDrag(
 beforeEach(() => {
 	window.localStorage.clear();
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], pinnedProjectIds: [], sessionOrders: {} });
+	useSessionImportStore.setState({ importedCounts: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();
 	document.documentElement.style.removeProperty("--ao-sidebar-w");
 	commandPaletteEnabled.current = true;
+	trustedApi.current = false;
 	cloudGateState.cloudEnabled = true;
 	cloudGateState.localEnabled = true;
 	cloudGateState.client = "";
@@ -524,6 +529,7 @@ beforeEach(() => {
 	cloudSessionState.signIn.mockReset();
 	cloudSessionState.signOut.mockReset().mockResolvedValue(undefined);
 	useUiStore.setState({
+		developerMode: false,
 		isCommandPaletteOpen: false,
 		newTaskRequest: null,
 		settingsModal: null,
@@ -592,6 +598,23 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+	it.each([true, false])("only warms an adopted session on hover (needsResume=%s)", async (needsResume) => {
+		vi.useFakeTimers();
+		try {
+			trustedApi.current = true;
+			renderSidebar({
+				workspaces: [{ ...workspace, sessions: [{ ...session, mode: "chat", needsResume, activity: { state: "exited", lastActivityAt: session.updatedAt } }] }],
+				seed: (client) => client.setQueryData(["conversation", session.id], { pages: [], pageParams: [] }),
+			});
+			fireEvent.mouseEnter(screen.getByLabelText("Open fix login"));
+			await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+			if (needsResume) expect(postMock).not.toHaveBeenCalled();
+			else expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", { params: { path: { sessionId: session.id } } });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("creates local or remote projects from the header button", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
@@ -3336,6 +3359,17 @@ describe("Sidebar", () => {
 			"aria-expanded",
 			"false",
 		);
+	});
+
+	it("expands a project once chats are imported into it", () => {
+		renderSidebar({
+			expandedProjectIds: [],
+			workspaces: [{ ...workspace, sessions: [session] }],
+		});
+		act(() => useSessionImportStore.getState().recordImport(workspace.id, 1));
+
+		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
+		expect(window.localStorage.getItem("ao.sidebar.expanded-projects")).toBe(JSON.stringify([workspace.id]));
 	});
 
 	it("reveals the active project when opening a worker-session deep link", async () => {

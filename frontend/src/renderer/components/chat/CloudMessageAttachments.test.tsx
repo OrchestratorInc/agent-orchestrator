@@ -20,9 +20,9 @@ vi.mock("../../lib/bridge", async (importOriginal) => {
 	return { ...actual, aoBridge: { ...actual.aoBridge, chatImage: { ...actual.aoBridge.chatImage, save: mocks.save } } };
 });
 vi.mock("../PdfPreview", () => ({
-	PdfPreview: (props: { path: string; firstPageOnly?: boolean; load: () => Promise<Uint8Array> }) => {
+	PdfPreview: (props: { path: string; cover?: boolean; firstPageOnly?: boolean; load: () => Promise<Uint8Array> }) => {
 		mocks.pdfPreview(props);
-		return <div data-testid="pdf-preview" data-first-page={String(Boolean(props.firstPageOnly))}>{props.path}</div>;
+		return <div data-testid="pdf-preview" data-first-page={String(Boolean(props.cover || props.firstPageOnly))}>{props.path}</div>;
 	},
 }));
 
@@ -78,6 +78,7 @@ describe("CloudMessageAttachments", () => {
 		mocks.fetchCloudAttachment.mockResolvedValue(new Blob(["hello"], { type: "text/plain" }));
 		renderAttachments([attachment({})]);
 		const chip = screen.getByRole("button", { name: /notes\.txt/ });
+		expect(within(chip).getByText("TXT")).toBeInTheDocument();
 		expect(chip).toHaveTextContent("2.0 KB");
 		expect(chip).toHaveAttribute("title", "Save notes.txt");
 		fireEvent.click(chip);

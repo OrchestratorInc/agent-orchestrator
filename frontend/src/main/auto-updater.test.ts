@@ -258,7 +258,7 @@ describe("macOS differential update policy", () => {
       ]),
     );
     expect(telemetryMessages().at(-1)?.payload).toMatchObject({
-      event: "ao.renderer.update_downloaded",
+      event: "ao.updates.downloaded",
       transfer_mode: "differential",
       fallback: true,
       transferred_bytes: 250,
@@ -1356,7 +1356,7 @@ describe("startAutoUpdates", () => {
     // the signal.
     expect(telemetryMessages().map((m) => m.payload)).toEqual([
       {
-        event: "ao.renderer.update_failed",
+        event: "ao.updates.failed",
         phase: "check",
         trigger: "automatic",
         error_category: "unknown",
@@ -1765,7 +1765,7 @@ describe("startAutoUpdates", () => {
     expect(statusMessages()).toEqual([]);
     expect(telemetryMessages().map((m) => m.payload)).toEqual([
       {
-        event: "ao.renderer.update_failed",
+        event: "ao.updates.failed",
         phase: "check",
         trigger: "automatic",
         error_category: "unknown",

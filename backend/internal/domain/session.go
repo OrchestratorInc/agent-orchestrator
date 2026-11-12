@@ -162,9 +162,46 @@ const (
 	ArtifactVersionSourceUser ArtifactVersionSource = "user"
 )
 
+// ImportedMessage is one visible message read from a provider's native history.
+type ImportedMessage struct {
+	Role MessageRole
+	Text string
+	At   time.Time
+}
+
+// SessionImportSource keeps provider provenance and durable workspace adoption facts.
+// Importing does not grant AO ownership of the source working directory.
+type SessionImportSource struct {
+	NativeID      string `json:"nativeId"`
+	ConfigDir     string `json:"configDir"`
+	CWD           string `json:"cwd"`
+	Adopted       bool   `json:"adopted"`
+	Transferred   bool   `json:"transferred"`
+	Prepared      bool   `json:"prepared"`
+	WorkingSubdir string `json:"workingSubdir,omitempty"`
+	// ResumeCwd is the launch directory AO prepared a directory-keyed provider's
+	// session for on the first open (see ports.AgentImportedSessionRelocator).
+	// Every later launch of the session uses it, so the provider keeps finding
+	// the same copy even if WorkingSubdir appears or disappears in between.
+	ResumeCwd string `json:"resumeCwd,omitempty"`
+	// ResumeNativeID and ResumeConfigDir name a provider-created import/fork.
+	// NativeID and ConfigDir remain the immutable source/deduplication identity.
+	ResumeNativeID       string `json:"resumeNativeId,omitempty"`
+	ResumeConfigDir      string `json:"resumeConfigDir,omitempty"`
+	ResumeTranscriptPath string `json:"resumeTranscriptPath,omitempty"`
+	// Fingerprint pins optional provider content/sidecar evidence from selection.
+	// First-open native preparation must verify it before copying that source.
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// HistoryThrough is the last conversation sequence the provider replayed
+	// while adopting. The timeline shows the archive in place of that replay.
+	HistoryThrough int64 `json:"historyThrough,omitempty"`
+}
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
+	ImportSource *SessionImportSource `json:"-"`
+
 	// Permissions pins the resolved launch policy independently of future project defaults.
 	Permissions PermissionMode `json:"permissions,omitempty"`
 
@@ -290,6 +327,9 @@ type SessionRecord struct {
 	ReviewerConfig    AgentConfig     `json:"reviewerConfig,omitempty"`
 	AutoReviewEnabled bool            `json:"autoReviewEnabled"`
 	DisplayName       string          `json:"displayName,omitempty"`
+	// DisplayNameExplicit marks a name a person or caller chose, which outranks
+	// a terminal program's title. Generated and prompt-derived names do not.
+	DisplayNameExplicit bool `json:"-"`
 	// Mode is the session's currently committed conversation controller. Every
 	// send, restore, kill, and reaper decision dispatches from it. Only the
 	// durable interface-transition coordinator may change it; the daemon default
@@ -537,12 +577,17 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // plus derived display facts. None of Status, SCMStatus, or KanbanColumn is
 // persisted.
 type Session struct {
+	NeedsResume bool `json:"needsResume"`
 	SessionRecord
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
 	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an
 	// archive: clients list its failure but raise no error for it.
 	WorkspaceCleanupReportOnly bool `json:"workspaceCleanupReportOnly,omitempty"`
+	// WorkspacePublished says the session has a recorded workspace, so its
+	// workspace reads can succeed. An asynchronous start publishes it partway
+	// through, and a failed start can keep one. The path itself stays private.
+	WorkspacePublished bool `json:"workspacePublished" description:"Whether the session has a recorded workspace that workspace reads can use."`
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
 	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`
@@ -560,9 +605,13 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus    DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Interrupted,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	TerminalHandleID string                `json:"terminalHandleId,omitempty"`
-	ArtifactFiles    []SessionArtifactFile `json:"-"`
+	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Interrupted,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	TerminalHandleID string        `json:"terminalHandleId,omitempty"`
+	// TerminalTitle is the title the session's terminal program set, present
+	// only when it should label the session: it is meaningful and no explicit
+	// name outranks it. It never replaces the session's id or stored name.
+	TerminalTitle string                `json:"terminalTitle,omitempty"`
+	ArtifactFiles []SessionArtifactFile `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.
@@ -591,4 +640,9 @@ func (s Session) LastEventAt() time.Time {
 		consider(pr.LastReviewAt)
 	}
 	return latest
+}
+
+// NeedsImportResume reports history that has not yet acquired an AO controller.
+func (s SessionRecord) NeedsImportResume() bool {
+	return s.Metadata.ImportSource != nil && !s.Metadata.ImportSource.Adopted
 }

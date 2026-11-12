@@ -46,16 +46,21 @@ export function useAppShortcut(
 	id: AppShortcutId,
 	handler: (event: AppShortcutEvent) => void,
 	enabled = true,
+	shouldHandle: () => boolean = () => true,
 ): void {
 	const handlerRef = useRef(handler);
 	handlerRef.current = handler;
+	const shouldHandleRef = useRef(shouldHandle);
+	shouldHandleRef.current = shouldHandle;
 	useEffect(() => {
 		if (!enabled) return;
 		const listener = (event: AppShortcutEvent) => {
-			if (event.id === id) handlerRef.current(event);
+			if (event.id === id && shouldHandleRef.current()) handlerRef.current(event);
 		};
 		localListeners.add(listener);
-		const unsubscribe = aoBridge.app.onShortcut(listener);
+		// Contextual find is deliberately renderer-owned: main leaves its key
+		// event untouched so focused terminals, editors and dialogs can claim it.
+		const unsubscribe = id === "find-in-chat" ? () => {} : aoBridge.app.onShortcut(listener);
 		return () => {
 			localListeners.delete(listener);
 			unsubscribe();
@@ -76,6 +81,7 @@ export function useAppShortcut(
 			};
 			const overrides = useKeybindingsStore.getState().overrides;
 			if (!matchesAppShortcut(id, chord, isMac, overrides)) return;
+			if (!shouldHandleRef.current()) return;
 			const target = event.target instanceof Element ? event.target : null;
 			if (!isMac && shortcutYieldsToTerminal(id, chord) && target?.closest(TERMINAL_SELECTOR)) return;
 			claimedEvents.add(event);

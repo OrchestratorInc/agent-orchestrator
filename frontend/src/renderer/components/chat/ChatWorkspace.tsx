@@ -1,4 +1,7 @@
 import { FileAnnotationContext } from "./FileAnnotationPreview";
+import { useChatFind } from "../../hooks/useChatFind";
+import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
+import "./chat-find.css";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
@@ -6,8 +9,7 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
-import { useSimplifiedTopbar } from "../../hooks/useSimplifiedTopbar";
-import { useEdgeFade } from "../../hooks/useEdgeFade";
+import { useEdgeFadeRef } from "../../hooks/useEdgeFade";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
 /**
  * The Chat surface for a session whose persisted mode is `chat`.
@@ -169,9 +171,11 @@ import {
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
+import { ChatEntrance, createChatEntranceGate } from "./chat-entrance";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
+import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
@@ -180,10 +184,12 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { isOrdinaryActivity } from "./activity-action";
+import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
@@ -214,6 +220,8 @@ import {
 	type TurnDiff,
 	type TurnSettings,
 } from "../../types/conversation";
+
+const NO_SKILLS: ChatSkill[] = [];
 
 const EMPTY_CHAT_PLACEHOLDERS = [
 	"Fix a failing test in this project",
@@ -395,6 +403,7 @@ export interface ChatWorkspaceProps {
 	controllerTransitioning?: boolean;
 	/** The handoff is an account move: the chat stays as it is, with no arrival chrome. */
 	accountMoving?: boolean;
+	accountMoveQueues?: boolean;
 	/** The conversation is still being read on a plain open or navigation; hold the composer without the startup shimmer. */
 	loadingQuietly?: boolean;
 	/** The history hasn't been read yet and may hold messages: arrive as in a chat that has some, never greet it as a new one. */
@@ -464,6 +473,8 @@ export interface ChatWorkspaceProps {
 	onResumeAgent?: () => void | Promise<unknown>;
 	resumingAgent?: boolean;
 	resumeError?: string;
+	/** resumeError says another app still holds this chat. */
+	resumeOpenElsewhere?: boolean;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
@@ -486,6 +497,7 @@ export interface ChatWorkspaceProps {
 	composerLockedPlaceholder?: string;
 	/** The snapshot is a saved copy, so its controller state says nothing about the agent now. */
 	savedCopy?: boolean;
+	importBlock?: AgentBlock;
 	/** Every edit of the chat box's draft text or move of its caret. */
 	onComposerInput?: (text: string, caret?: number) => void;
 	/**
@@ -737,6 +749,7 @@ function ChatWorkspaceContent({
 	onAuxiliaryTabOrderChange,
 	controllerTransitioning,
 	accountMoving = false,
+	accountMoveQueues = false,
 	loadingQuietly,
 	historyPending = false,
 	agentResuming = false,
@@ -780,6 +793,7 @@ function ChatWorkspaceContent({
 	onResumeAgent,
 	resumingAgent,
 	resumeError,
+	resumeOpenElsewhere,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -791,6 +805,7 @@ function ChatWorkspaceContent({
 	composerNotice,
 	composerLockedPlaceholder,
 	savedCopy = false,
+	importBlock,
 	settingsLocked = false,
 	onComposerInput,
 	onChooseSettings,
@@ -1074,6 +1089,7 @@ function ChatWorkspaceContent({
 	const queuedMessages = useQueuedMessages(snapshot, openingTurnId);
 	const [steerStartedAt, setSteerStartedAt] = useState<ReadonlyMap<string, string>>(() => new Map());
 	const [steerErrors, setSteerErrors] = useState<Readonly<Record<string, string>>>({});
+	const [steerEchoes, setSteerEchoes] = useState<readonly SteerEcho[]>([]);
 	const backgroundWakeQueuedTurnIds = useMemo(
 		() => new Set(
 			(localEchos ?? [])
@@ -1119,13 +1135,46 @@ function ChatWorkspaceContent({
 		],
 		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerStartedAt],
 	);
+	// A steer sent from the composer shows in its turn at once, as a send's echo does.
+	// The daemon places its row when the agent accepts the steer, so until then the echo
+	// stays last, and from then on it keeps the place it had, with later output below it.
+	// The daemon's own row, matched by its client id, replaces it.
+	const pendingSteerEchoes = useMemo(
+		() => turn?.state === "running"
+			? steerEchoes.filter((echo) => echo.turnId === turn.id && !snapshot.items.some((item) => steerEchoArrived(item, echo)))
+			: [],
+		[snapshot.items, steerEchoes, turn],
+	);
+	useEffect(() => {
+		setSteerEchoes((current) => {
+			const next = current.filter((echo) => pendingSteerEchoes.includes(echo));
+			return next.length === current.length ? current : next;
+		});
+	}, [pendingSteerEchoes]);
 	const timelineSnapshot = useMemo(() => {
 		const steering = queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
-		if (turn?.state !== "running" || steering.length === 0) return snapshot;
+		if (turn?.state !== "running" || (steering.length === 0 && pendingSteerEchoes.length === 0)) return snapshot;
+		const items = [...snapshot.items];
+		pendingSteerEchoes.forEach((echo, index) => {
+			const sequence = (echo.acceptedAfterSequence ?? snapshot.latestSequence) + 0.4 + index / 1000;
+			const at = items.findIndex((item) => item.sequence > sequence);
+			items.splice(at < 0 ? items.length : at, 0, {
+				kind: "activity",
+				id: `steer-echo:${echo.clientMessageId}`,
+				turnId: turn.id,
+				sequence,
+				revision: 0,
+				activityKind: "system",
+				status: "completed",
+				summary: echo.text,
+				detail: { event: "steer", text: echo.text, origin: "human", clientMessageId: echo.clientMessageId },
+				createdAt: echo.createdAt,
+			});
+		});
 		return {
 			...snapshot,
 			items: [
-				...snapshot.items,
+				...items,
 				...steering.map(({ turnId, message }, index): ConversationActivity => ({
 					kind: "activity",
 					id: `steering:${turnId}`,
@@ -1140,7 +1189,7 @@ function ChatWorkspaceContent({
 				})),
 			],
 		};
-	}, [queuedMessages, snapshot, steerStartedAt, turn]);
+	}, [pendingSteerEchoes, queuedMessages, snapshot, steerStartedAt, turn]);
 	// The dock omits queued turns that are not the user's own; the daemon needs
 	// the whole queue, with those turns left where they were.
 	const reorderQueuedTurns = useCallback(
@@ -1318,14 +1367,42 @@ function ChatWorkspaceContent({
 		},
 		[stablePromoteQueuedTurn],
 	);
+	const steerEchoTarget = useStableCallback(() =>
+		turn?.state === "running" ? { turnId: turn.id, sentAfterSequence: snapshot.latestSequence } : undefined);
+	const latestSequence = useStableCallback(() => snapshot.latestSequence);
 	const steer = useCallback(
 		async (
 			text: string,
 			attachments?: { mimeType: string; data: string }[],
 			clientMessageId?: string,
 			recoverOnly?: boolean,
-		) => stableSteer(text, attachments, clientMessageId, recoverOnly),
-		[stableSteer],
+		) => {
+			const id = clientMessageId ?? crypto.randomUUID();
+			// A recovery re-asks about a steer sent before; the daemon may already have it.
+			const target = recoverOnly ? undefined : steerEchoTarget();
+			if (target) {
+				setSteerEchoes((current) => [
+					...current.filter((echo) => echo.clientMessageId !== id),
+					{ clientMessageId: id, text, createdAt: new Date().toISOString(), ...target },
+				]);
+			}
+			const dropEcho = () => setSteerEchoes((current) => current.filter((echo) => echo.clientMessageId !== id));
+			try {
+				const outcome = await stableSteer(text, attachments, id, recoverOnly);
+				// A refused steer stays in the composer, so its echo goes.
+				if (outcome?.status === "not-accepted") dropEcho();
+				else {
+					const acceptedAfterSequence = latestSequence() ?? 0;
+					setSteerEchoes((current) => current.map((echo) =>
+						echo.clientMessageId === id && echo.acceptedAfterSequence === undefined ? { ...echo, acceptedAfterSequence } : echo));
+				}
+				return outcome;
+			} catch (error) {
+				dropEcho();
+				throw error;
+			}
+		},
+		[latestSequence, stableSteer, steerEchoTarget],
 	);
 	const acceptedClientMessageIds = useMemo(
 		() =>
@@ -1845,6 +1922,7 @@ function ChatWorkspaceContent({
  <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration }}>
 		<section
 			ref={surfaceRef}
+			data-chat-find-scope=""
 			onKeyDown={handleChatKeyDown}
 			onClick={handleChatSurfaceClick}
 			aria-label="Chat"
@@ -1941,7 +2019,7 @@ function ChatWorkspaceContent({
 					data-testid="chat-conversation-panel"
 					hidden={reviewerActive || shellActive}
 					inert={
-						reviewerActive || shellActive || agentInputDisabled || controllerTransitioning
+						reviewerActive || shellActive || agentInputDisabled || (controllerTransitioning && !accountMoveQueues)
 							? true
 							: undefined
 					}
@@ -1958,11 +2036,12 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy ? null : (
+					{savedCopy || importBlock ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
 							provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
+							needsResume={session?.needsResume}
 							transitioning={controllerTransitioning || agentResuming}
 							automaticWakePending={suppressStopped}
 							reconnecting={startupReconnecting}
@@ -1970,6 +2049,8 @@ function ChatWorkspaceContent({
 							onResume={newWorkDisabled ? undefined : onResumeAgent}
 							resuming={resumingAgent}
 							resumeError={resumeError}
+							resumeOpenElsewhere={resumeOpenElsewhere}
+							harness={snapshot.harness}
 							onOpenShell={onOpenShell}
 							openingShell={openingShell}
 							shellError={shellError}
@@ -1998,6 +2079,7 @@ function ChatWorkspaceContent({
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
+							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
@@ -2008,6 +2090,7 @@ function ChatWorkspaceContent({
 									snapshot={timelineSnapshot}
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
+									findUnavailable={Boolean(session?.cloud)}
 									draftScope={draftScope}
 									draftPersistenceAvailable={draftPersistenceAvailable}
 									hasOlder={hasOlder}
@@ -2038,6 +2121,7 @@ function ChatWorkspaceContent({
 									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
 									arriving={arrivingInChat}
 								/>
+							</ChatTokenSkills.Provider>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
@@ -2051,6 +2135,7 @@ function ChatWorkspaceContent({
 								{limitedTurn?.usageLimit && retryControl ? (
 									<UsageLimitNotice
 										key={limitedTurn.id}
+										className="justify-end"
 										usageLimit={limitedTurn.usageLimit}
 										onResume={() => { void Promise.resolve(retryControl.retry(limitedTurn.id)).catch(() => undefined); }}
 										onAutoResumeChange={retryControl.setAutoResume
@@ -2089,7 +2174,11 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
-									<ChatComposer
+									{importBlock && session ? (
+										<ImportedAgentBlocked agent={session.provider} block={importBlock} />
+									) : session?.mode === "tui" && session.needsResume ? (
+										<p className="py-3 text-sm text-muted-foreground" role="status">{t("sessionImport.terminalArchive")}</p>
+									) : <ChatComposer
 										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
@@ -2121,7 +2210,7 @@ function ChatWorkspaceContent({
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-										onInterrupt={turn && !newWorkDisabled && !openingStarting ? stableInterrupt : undefined}
+										onInterrupt={turn && !newWorkDisabled && !openingStarting && !accountMoveQueues ? stableInterrupt : undefined}
 										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
@@ -2140,14 +2229,14 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || startupQueues}
+										willQueue={Boolean(turn) || startupQueues || accountMoveQueues}
 										queuePlaceholder={
-											session?.provisionState === "provisioning" || cloudStarting
+											session?.provisionState === "provisioning" || cloudStarting || accountMoveQueues
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed" || terminated)) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
@@ -2203,7 +2292,7 @@ function ChatWorkspaceContent({
 										remoteHost={Boolean(activeRemoteHostId)}
 										acceptedClientMessageIds={acceptedClientMessageIds}
 										parkUnsentSends={parkUnsentSends}
-									/>
+									/>}
 								</div>
 								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
@@ -2479,7 +2568,6 @@ function ChatHeader({
 	// space; chat must too or the back/forward buttons land on the tab label.
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
-	const simplifiedTopbar = useSimplifiedTopbar();
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
 		<SessionTabsTopbar
@@ -2495,7 +2583,7 @@ function ChatHeader({
 			tabs={
 					<div
 						aria-label="Chat tabs"
-						className={cn("flex h-full min-w-0 items-stretch", !simplifiedTopbar && "flex-1")}
+						className="flex h-full min-w-0 items-stretch"
 						onKeyDown={onTabsKeyDown ?? handleTerminalTabListKeyDown}
 						ref={tabListRef}
 						role="tablist"
@@ -2580,6 +2668,8 @@ function ChatHeader({
 	return inline ? header : <SessionTopbarPortal>{header}</SessionTopbarPortal>;
 }
 
+const OPEN_ELSEWHERE_RECHECK_MS = 30_000;
+
 /**
  * Controller health and hibernation. A silent surface is indistinguishable from
  * an agent that is simply thinking.
@@ -2587,6 +2677,7 @@ function ChatHeader({
 function ControllerBanner({
 	controller,
 	provisionState,
+	needsResume,
 	transitioning,
 	automaticWakePending,
 	reconnecting,
@@ -2594,6 +2685,8 @@ function ControllerBanner({
 	onResume,
 	resuming,
 	resumeError,
+	resumeOpenElsewhere,
+	harness,
 	onOpenShell,
 	openingShell,
 	shellError,
@@ -2603,6 +2696,7 @@ function ControllerBanner({
 	/** The chat already shows the opening brief as working; connecting needs no banner. */
 	quietConnect?: boolean;
 	provisionState?: WorkspaceSession["provisionState"];
+	needsResume?: boolean;
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
 	/** The daemon is still reconnecting this session after a restart. */
@@ -2612,11 +2706,30 @@ function ControllerBanner({
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
+	resumeOpenElsewhere?: boolean;
+	harness?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
 }) {
 	const { t } = useTranslation();
+	// An earlier failure can outlive a later successful resume; only a stopped agent is still held elsewhere.
+	// An archived session is restored, never resumed, so it is not "open elsewhere".
+	const openElsewhere = Boolean(resumeOpenElsewhere) && controller.state === "stopped" && !terminated;
+	const resumeRef = useRef(onResume);
+	resumeRef.current = onResume;
+	// The other app releases the chat without telling AO (Codex can hold a closed
+	// one for many minutes), so keep checking instead of waiting for Retry; but
+	// not while a handoff, restart or startup owns the agent.
+	const recheck = openElsewhere && Boolean(onResume) && !resuming && !transitioning && !reconnecting &&
+		provisionState !== "provisioning" && provisionState !== "failed";
+	useEffect(() => {
+		if (!recheck) return;
+		const timer = window.setTimeout(() => {
+			void Promise.resolve().then(() => resumeRef.current?.()).catch(() => {});
+		}, OPEN_ELSEWHERE_RECHECK_MS);
+		return () => window.clearTimeout(timer);
+	}, [recheck]);
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
@@ -2650,8 +2763,12 @@ function ControllerBanner({
 					? "Waking agent…"
 					: restarting
 						? "Reconnecting to the agent…"
-						: "The agent controller stopped",
-			tone: terminated || waking || restarting ? "text-muted-foreground" : "text-destructive",
+						: openElsewhere
+							? t("chat.controller.openElsewhere")
+							: needsResume
+								? t("chat.controller.couldNotConnect")
+								: "The agent controller stopped",
+			tone: terminated || waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
@@ -2687,9 +2804,17 @@ function ControllerBanner({
 				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
-							{terminated ? t("chat.archived.body") : "History is kept. Resume the agent or open a shell in the same worktree."}
+							{terminated
+								? t("chat.archived.body")
+								: openElsewhere
+									? [
+										t("chat.controller.openElsewhereBody"),
+										harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
+										t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
+									].filter(Boolean).join(" ")
+									: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
-						{resumeError || shellError ? (
+						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-xs leading-snug text-destructive">
 								{resumeError ?? shellError}
 							</span>
@@ -2703,11 +2828,11 @@ function ControllerBanner({
 									onClick={resumeClick}
 									disabled={resuming}
 								>
-									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : "Resume agent"}
+									{terminated ? t("terminal.restoreSession") : resuming ? "Resuming…" : needsResume || openElsewhere ? t("chat.controller.retry") : "Resume agent"}
 								</Button>
 							) : null}
 							{/* Once the worktree is gone a shell would open in the project root. */}
-							{onOpenShell && !terminated ? (
+							{onOpenShell && !needsResume && !terminated ? (
 								<Button
 									type="button"
 									size="sm"
@@ -2782,9 +2907,11 @@ export function Timeline({
 	onAddToChat,
 	onForeignAnnotation,
 	annotationNavigationRef,
-	snapshot,
+	snapshot: sourceSnapshot,
 	assetBaseUrl,
 	remoteHost,
+	findUnavailable = false,
+	sideChat = false,
 	draftScope,
 	draftPersistenceAvailable = true,
 	hasOlder,
@@ -2824,6 +2951,8 @@ export function Timeline({
 	snapshot: ConversationSnapshot;
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
+	findUnavailable?: boolean;
+	sideChat?: boolean;
 	draftScope: ChatDraftScope;
 	/** False when drafts can't be saved; persisted inline edits are then ignored. */
 	draftPersistenceAvailable?: boolean;
@@ -2859,16 +2988,39 @@ export function Timeline({
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
 }) {
+	const findSurface = useRef<HTMLDivElement>(null);
+	const scroller = useRef<HTMLDivElement>(null);
+	const pauseFindFollow = useRef<() => void>(() => {});
+	const findScrollWritten = useRef<(top: number) => void>(() => {});
+	const findPausedFollow = useRef(false);
+	const [findTarget, setFindTarget] = useState<FindOccurrence>();
+	const find = useChatFind({ source: sourceSnapshot, root: findSurface, viewport: scroller, hostId: useContext(ChatHostId), unavailable: findUnavailable, sideChat, pauseFollow: () => pauseFindFollow.current(), onScrollWritten: (top) => findScrollWritten.current(top), reveal: (hit) => setFindTarget({ ...hit }) });
+	const snapshot = find.snapshot;
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
 	if (arriving && !hasTranscript) arrivedEmpty.current = true;
 	const revealTranscript = arrivedEmpty.current && hasTranscript;
+	// Rows above the newest sequence this chat opened with arrived while it was on
+	// screen; only they play an entrance (chat-entrance.ts). Taken from the first
+	// render with a transcript, so a placeholder or loading frame does not count.
+	const [entranceGate] = useState(createChatEntranceGate);
+	if (entranceGate.floor === undefined && sourceSnapshot.items.length > 0) {
+		entranceGate.floor = sourceSnapshot.items.reduce((floor, item) => Math.max(floor, item.sequence), sourceSnapshot.latestSequence);
+	}
+	useEffect(() => {
+		entranceGate.settled = true;
+	}, [entranceGate]);
 	const translateDraft = useChatDraftTranslation();
 	const uiSessionId = draftScope.sessionId;
-	const scroller = useRef<HTMLDivElement>(null);
 	// The transcript fades out under the top bar once it is scrolled, and above
-	// the composer while there is more below.
-	useEdgeFade(scroller);
+	// the composer while there is more below. A callback ref, not an effect: the
+	// scroller is not rendered while the chat is empty, and an effect that ran
+	// then never attached once it was.
+	const edgeFadeRef = useEdgeFadeRef<HTMLDivElement>();
+	const scrollerRef = useCallback((node: HTMLDivElement | null) => {
+		scroller.current = node;
+		edgeFadeRef(node);
+	}, [edgeFadeRef]);
 	const scrollContent = useRef<HTMLDivElement>(null);
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
@@ -2928,10 +3080,28 @@ export function Timeline({
 		cancelScrollFollow();
 		if (pinnedRef.current) setPinnedNow(false);
 	}, [cancelScrollFollow, setPinnedNow]);
+	findScrollWritten.current = markWritten;
+	pauseFindFollow.current = () => {
+		findPausedFollow.current = true;
+		window.clearTimeout(relatchTimer.current);
+		relatchTimer.current = undefined;
+		releaseFollow();
+	};
+	const dropFindWindow = find.dropWindow;
 	const requestGlideToEnd = useCallback(() => {
+		findPausedFollow.current = false;
+		dropFindWindow();
 		glideRequested.current = true;
 		setPinnedNow(true);
-	}, [setPinnedNow]);
+	}, [setPinnedNow, dropFindWindow]);
+	// Find pauses following while it steers the view; closing hands it back and
+	// leaves the reader where the last match put them.
+	useEffect(() => {
+		if (find.open || !findPausedFollow.current) return;
+		findPausedFollow.current = false;
+		const node = scroller.current;
+		if (node && node.scrollHeight - node.scrollTop - node.clientHeight <= 2) setPinnedNow(true);
+	}, [find.open, setPinnedNow]);
 	const [activityDisclosureOverrides, setActivityDisclosureOverrides] = useState<Record<string, boolean>>({});
 	const onActivityDisclosureChange = useCallback((key: string, open: boolean) => {
 		setActivityDisclosureOverrides((current) => ({ ...current, [key]: open }));
@@ -3252,9 +3422,10 @@ export function Timeline({
 	const canForkHistoricalContext = can(snapshot, "fork");
 	const canReconstructHistoricalContext =
 		can(snapshot, "prompt_replay") && can(snapshot, "embedded_context");
+	const stableBranchPoints = useStableValue(snapshot.branchPoints);
 	const branchPoints = useMemo(
-		() => new Map((snapshot.branchPoints ?? []).map((point) => [point.turnId, point])),
-		[snapshot.branchPoints],
+		() => new Map((stableBranchPoints ?? []).map((point) => [point.turnId, point])),
+		[stableBranchPoints],
 	);
 	const firstEditableHumanPromptTurnId = useMemo(
 		() =>
@@ -3903,7 +4074,25 @@ export function Timeline({
 	virtualizer.shouldAdjustScrollPositionOnItemSizeChange = virtualized ? undefined : () => false;
 	const virtualRows = virtualizer.getVirtualItems();
 	const virtualHeight = virtualizer.getTotalSize();
+	useEffect(() => {
+		if (!findTarget) return;
+		if (!find.open || !find.engaged || !find.active || occurrenceKey(find.active) !== occurrenceKey(findTarget)) {
+			setFindTarget(undefined);
+			return;
+		}
+		const index = groups.findIndex((group) => group.items.some((item) => item.id === findTarget.messageId));
+		if (index < 0) return;
+		const mounted = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-find-message-id]") ?? [])
+			.some((element) => element.dataset.findMessageId === findTarget.messageId);
+		// The active highlight persists; mounting completes this one reveal request.
+		if (mounted) { setFindTarget(undefined); return; }
+		const disclosureKey = `${groups[index].key}:worked`;
+		if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
+		if (virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+	}, [find.open, find.engaged, find.active, findTarget, groups, virtualRows, virtualized, virtualizer, activityDisclosureOverrides]);
 	renderedVirtualHeight.current = virtualHeight;
+	const findGapGroupKey = find.gapBeforeSequence === undefined ? undefined
+		: groups.find((group) => group.items.some((item) => item.sequence >= find.gapBeforeSequence!))?.key;
 	const renderedGroups = virtualized
 		? virtualRows.map((row) => ({ group: groups[row.index]!, row, index: row.index }))
 		: groups.map((group, index) => ({ group, row: undefined, index }));
@@ -4102,6 +4291,12 @@ export function Timeline({
 	// over the first frames (and may arrive in more than one snapshot), so keep
 	// snapping briefly after the first real layout instead of animating across them.
 	const followOrSnapToEnd = useCallback((node: HTMLElement) => {
+		// Sending shrinks the composer, which resizes the viewport. That must not turn
+		// the send's glide into a jump: keep it on course to the new end.
+		if (viewportResize.current && (glideRequested.current || isFlying())) {
+			reaim();
+			return;
+		}
 		if (viewportResize.current || !initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
 			if (viewportResize.current) cancelScrollFollow();
 			node.scrollTop = node.scrollHeight;
@@ -4109,7 +4304,7 @@ export function Timeline({
 			return;
 		}
 		followEnd();
-	}, [followEnd, markWritten, cancelScrollFollow]);
+	}, [followEnd, markWritten, cancelScrollFollow, isFlying, reaim]);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
@@ -4407,6 +4602,7 @@ export function Timeline({
 		relatchTimer.current = undefined;
 	}, []);
 	const scheduleRelatch = useCallback(() => {
+		if (findPausedFollow.current) return;
 		clearRelatch();
 		relatchTimer.current = window.setTimeout(() => {
 			relatchTimer.current = undefined;
@@ -4433,7 +4629,7 @@ export function Timeline({
 		// to the end after content shrank is not the reader leaving.
 		// Any scroll of the reader's own ends a settled turn's hold on their row.
 		if (!isOwnScroll(top)) releaseSettleHold();
-		if (isOwnScroll(top)) {
+		if (isOwnScroll(top) || findPausedFollow.current) {
 			// Ours: no change.
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
 			if (pinnedRef.current) releaseFollow();
@@ -4598,20 +4794,25 @@ export function Timeline({
 
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
+		<ChatEntrance.Provider value={entranceGate}>
 		<LiveStepChoices.Provider value={liveStepChoices}>
 		<div
-			className="relative min-h-0 flex-1"
+			ref={findSurface}
+			data-chat-find-surface=""
+			className="relative flex min-h-0 flex-1 flex-col"
 			data-testid="chat-timeline"
 			// The timeline is a fixed-size flex item with its own scroll viewport.
 			// Isolating its layout and paint means Lexical selection/composer updates
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
+			{find.bar}
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
 				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
 				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
 			<div
-				ref={scroller}
+				ref={scrollerRef}
+				tabIndex={-1}
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
 				onWheel={onViewportWheel}
@@ -4621,7 +4822,7 @@ export function Timeline({
 				}}
 				onKeyDown={onViewportKeyDown}
 				onPointerDown={onViewportPointerDown}
-				className="chat-scroll-viewport cursor-chat-timeline edge-fade [--edge-fade-end-size:var(--space-3)] h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
+				className="chat-scroll-viewport cursor-chat-timeline edge-fade [--edge-fade-end-size:var(--space-3)] min-h-0 min-w-0 flex-1 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"
@@ -4683,6 +4884,7 @@ export function Timeline({
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 								data-chat-turn={group.key}
 							>
+								{group.key === findGapGroupKey ? <div role="note" className="py-3 text-center text-caption text-muted-foreground">{t("chat.find.gap")}</div> : null}
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<BatchedReportsContext.Provider value={batchedReports}>
 								<TurnGroup
@@ -4901,6 +5103,7 @@ export function Timeline({
 			) : null}
 		</div>
 		</LiveStepChoices.Provider>
+		</ChatEntrance.Provider>
 		</ChatOpeningRef.Provider>
 	);
 }
@@ -5149,9 +5352,6 @@ const TurnGroup = memo(function TurnGroup({
 	const liveStep = useLiveRowStep(group, Boolean(startup || group.liveStartupLabel || group.liveProviderFailure));
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
-	// Only the run the agent is working in stays open while the turn runs; earlier
-	// runs fold to their summary, so a long turn does not keep every call mounted.
-	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
 	const renderRun = (run: TimelineRun) => {
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
@@ -5165,7 +5365,6 @@ const TurnGroup = memo(function TurnGroup({
 				disclosureOverrides={activityDisclosureOverrides}
 				onDisclosureChange={onActivityDisclosureChange}
 				activities={activities}
-				live={run.key === liveRunKey}
 			/>
 		);
 	};
@@ -5254,6 +5453,7 @@ const TurnGroup = memo(function TurnGroup({
 	const workingRow =
 		startup || group.live ? (
 			<LiveResponseStatus
+				entranceKey={`live:${group.key}`}
 				startedAt={group.liveStartedAt}
 				startupLabel={startup ? startup.label ?? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : group.liveStartupLabel}
 				failed={startup?.failed}
@@ -5732,6 +5932,21 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 }
 
 /**
+ * A steer the composer sent that the daemon has not yet recorded. `sentAfterSequence`
+ * is the newest row when it was sent; `acceptedAfterSequence`, the newest when the
+ * daemon accepted it, which is where the daemon's own row lands.
+ */
+type SteerEcho = { clientMessageId: string; text: string; createdAt: string; turnId: string; sentAfterSequence: number; acceptedAfterSequence?: number };
+
+/** Whether this row is the daemon's record of the steer. */
+function steerEchoArrived(item: ConversationItem, echo: SteerEcho): boolean {
+	if (item.kind !== "activity" || item.detail?.event !== "steer") return false;
+	return item.detail.clientMessageId
+		? item.detail.clientMessageId === echo.clientMessageId
+		: item.sequence > echo.sentAfterSequence && (item.detail.text ?? item.summary) === echo.text;
+}
+
+/**
  * A callback whose identity survives its caller re-rendering.
  *
  * `useConversationCommands` returns fresh arrows every render and the preview
@@ -6075,12 +6290,14 @@ function isHumanRun(item: ConversationItem | undefined): boolean {
 
 /** Conversation records that stay readable outside a settled turn's folded work. */
 function isNoticeRun(run: TimelineRun): boolean {
-	return run.kind === "single" && isNoticeItem(run.items[0]);
+	return run.items.some(isNoticeItem);
 }
 
 function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
+	// A run holding a failed call stays out of the fold, so the failure shows under it.
+	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }
