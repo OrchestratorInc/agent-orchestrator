@@ -2013,6 +2013,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				agentHandleId: tracksAgent ? key : undefined,
 			};
 	}, [centerFileRequestsBySession, closePane, reviewerHarness, selectTab, sessionLabel, sessionProvider, shellTerminals, t, uiSessionId]);
+	// Pressing a file pane's title bar moves keyboard focus into that file.
+	const [paneFocusRequest, setPaneFocusRequest] = useState({ key: "", n: 0 });
 	// Takes a pane out of its split and shows it as a tab of its own.
 	const unsplitPane = useCallback(
 		(key: string) => {
@@ -2968,6 +2970,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 													>
 														<SessionFileWorkspace
 															active={visible && !filesPoppedOut}
+															focusRequest={paneFocusRequest.key === paneKey ? paneFocusRequest.n : 0}
 															fileKey={fileKey}
 															hostId={hostId}
 															source={request?.source} annotationRange={request?.annotationRange}
@@ -3016,6 +3019,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										key={`header:${key}`}
 										member={groupMember(key)}
 										menu={{ kind: "group", onUngroup: () => updateGroups((current) => ungroupById(current, shownGroup.id)) }}
+										onPress={() => setPaneFocusRequest((current) => ({ key, n: current.n + 1 }))}
 										onUnsplit={() => unsplitPane(key)}
 										style={{ left: box.left, top: box.top, width: box.width, height: PANE_HEADER_PX }}
 									/>

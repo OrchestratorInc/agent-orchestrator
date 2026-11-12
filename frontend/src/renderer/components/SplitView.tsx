@@ -219,6 +219,7 @@ export function SplitPaneHeader({
 	style,
 	menu,
 	onUnsplit,
+	onPress,
 }: {
 	member: SplitGroupMember;
 	focused: boolean;
@@ -226,6 +227,8 @@ export function SplitPaneHeader({
 	style: CSSProperties;
 	menu: TabMenuSpec & { kind: "group" };
 	onUnsplit: () => void;
+	/** The header was pressed: the pane should take keyboard focus. */
+	onPress?: () => void;
 }) {
 	const { t } = useTranslation();
 	useShellAgentStream(Boolean(member.agentHandleId));
@@ -242,6 +245,7 @@ export function SplitPaneHeader({
 			onPointerDown={(event) => {
 				if (event.button !== 0) return;
 				member.onSelect();
+				onPress?.();
 				// The title chip is the tab being carried, so the ghost looks like a tab.
 				beginPaneTabDrag(event, member.key, event.currentTarget, undefined, { immediate: true });
 			}}

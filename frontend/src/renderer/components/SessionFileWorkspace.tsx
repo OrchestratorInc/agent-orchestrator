@@ -17,6 +17,7 @@ export function SessionFileWorkspace({
 	initialEditing = false,
 	initialLine,
 	annotationRange,
+	focusRequest = 0,
 	initialMode = "file",
 	initialRequestKey = 0,
 	onDirtyChange,
@@ -29,6 +30,8 @@ export function SessionFileWorkspace({
 }: {
 	annotation: FileAnnotationModel;
 	active?: boolean;
+	/** Changes when a pane header is pressed, to move keyboard focus into this file. */
+	focusRequest?: number;
 	fileKey?: string;
 	source?: FileOpenOptions["source"];
 	previousPath?: string;
@@ -58,7 +61,7 @@ export function SessionFileWorkspace({
 		if (!active || initialEditing) return;
 		const frame = requestAnimationFrame(() => scrollRef.current?.focus({ preventScroll: true }));
 		return () => cancelAnimationFrame(frame);
-	}, [active, initialEditing, initialRequestKey]);
+	}, [active, focusRequest, initialEditing, initialRequestKey]);
 	const pendingScrollRestoreRef = useRef<number | null>(null);
 	const restoreFrameRef = useRef<number | null>(null);
 	const scrollKey = `${hostId ?? "local"}:${sessionId}:${JSON.stringify(source)}:${path}`;
