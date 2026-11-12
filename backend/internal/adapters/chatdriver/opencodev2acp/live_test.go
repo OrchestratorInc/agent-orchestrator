@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +30,8 @@ import (
 // AO_LIVE_OPENCODE_V2_BIN to pick a binary, otherwise AO's own resolver picks
 // the installed OpenCode 2. The model is a scripted OpenAI-compatible server and
 // HOME and the XDG directories are temporary, so it needs no account and never
-// touches the operator's OpenCode data. CI never depends on it.
+// touches the operator's OpenCode data. CI never depends on it. It runs on
+// macOS and Linux only.
 //
 // It proves: the handshake turns Steer on; guidance sent while a command runs
 // joins that turn, reaches the model right after the tool result and the turn
@@ -39,6 +41,11 @@ import (
 func TestLiveOpenCodeV2ACPSteering(t *testing.T) {
 	if os.Getenv("AO_LIVE_OPENCODE_V2") != "1" {
 		t.Skip("set AO_LIVE_OPENCODE_V2=1 to run against the local OpenCode 2 with a scripted model")
+	}
+	if runtime.GOOS == "windows" {
+		// The fixture symlinks the binary as `opencode`, sets a POSIX PATH and has
+		// the model run `sleep`, so it only runs on macOS and Linux.
+		t.Skip("POSIX-only live fixture; run it on macOS or Linux")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
