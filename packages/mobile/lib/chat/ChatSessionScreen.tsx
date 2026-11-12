@@ -297,6 +297,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			),
 		});
 	}, [headerHarness, headerState, navigation, projectName, title, t]);
+	// The route keeps its options when it swaps this screen for the terminal,
+	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
+	// stayed on this screen's last state: the Chat controller the switch stopped,
+	// read as "Stopped" while the session sat idle (#8283).
+	useLayoutEffect(() => () => navigation.setOptions({ headerTitle: undefined }), [navigation]);
 	// The conversation scrolls up under a clear bar. iOS 27's is the system's
 	// glass, which blurs it beneath the title, as Settings and the board do; the
 	// edge effect is the system's own: setting `scrollEdgeEffects` from here
