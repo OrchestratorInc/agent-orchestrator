@@ -66,7 +66,7 @@ func TestSessionModeForAgentMapsOntoAgyACPModes(t *testing.T) {
 	if sessionModeForAgent(legacy) != nil {
 		t.Fatal("the separate server must keep its own mode ids")
 	}
-	cli := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: "Antigravity ACP Server", Version: "1.5.3"}}
+	cli := acpsdk.InitializeResponse{AgentInfo: &acpsdk.Implementation{Name: "Antigravity ACP Server", Version: "1.5.6"}}
 	modeFor := sessionModeForAgent(cli)
 	if modeFor == nil {
 		t.Fatal("no mode mapping for agy acp")
@@ -92,8 +92,9 @@ func TestSteeringIsOfferedOnlyForAgyACP(t *testing.T) {
 		name, version string
 		want          bool
 	}{
-		{"Antigravity ACP Server", "1.5.0", true},
-		{"Antigravity ACP Server", "1.5.3", true},
+		{"Antigravity ACP Server", "1.5.4", true},
+		{"Antigravity ACP Server", "1.5.6", true},
+		{"Antigravity ACP Server", "1.5.3", false},
 		{"Antigravity ACP Server", "1.4.9", false},
 		{"antigravity-acp", "1.4.5", false},
 	} {
@@ -111,7 +112,7 @@ func TestAgyACPSkipsTheSeparateServersSignInBootstrap(t *testing.T) {
 		return "", errors.New("unexpected")
 	}}
 	cli := acpsdk.InitializeResponse{
-		AgentInfo:   &acpsdk.Implementation{Name: "Antigravity ACP Server", Version: "1.5.3"},
+		AgentInfo:   &acpsdk.Implementation{Name: "Antigravity ACP Server", Version: "1.5.6"},
 		AuthMethods: []acpsdk.AuthMethod{{Agent: &acpsdk.AuthMethodAgent{Id: "oauth-personal", Name: "Google"}}},
 	}
 	if err := afterInitialize(bootstrap)(context.Background(), nil, cli, acpdriver.LaunchConfig{}); err != nil || called {
@@ -161,8 +162,8 @@ func TestValidateInitializeAdmitsOnlyTestedAntigravityServers(t *testing.T) {
 		info("antigravity-acp", "1.3.0"),
 		info("antigravity-acp", "1.10.2"),
 		info("antigravity-acp", "2.0.0-beta"),
-		info("Antigravity ACP Server", "1.5.0"),
-		info("Antigravity ACP Server", "1.5.3"),
+		info("Antigravity ACP Server", "1.5.4"),
+		info("Antigravity ACP Server", "1.5.6"),
 	} {
 		if err := validateInitialize(ok); err != nil {
 			t.Errorf("validateInitialize(%s %s) = %v", ok.AgentInfo.Name, ok.AgentInfo.Version, err)
@@ -174,6 +175,7 @@ func TestValidateInitializeAdmitsOnlyTestedAntigravityServers(t *testing.T) {
 		info("antigravity-acp", "1.2.1"),
 		info("antigravity-acp", "dev"),
 		info("Antigravity ACP Server", "1.4.0"),
+		info("Antigravity ACP Server", "1.5.3"),
 		info("Antigravity ACP Server", "dev"),
 	} {
 		if err := validateInitialize(bad); err == nil {
@@ -284,9 +286,10 @@ func TestResolverLaunchesAgyACPFromANewEnoughCLI(t *testing.T) {
 		err     error
 		wantCLI bool
 	}{
-		{version: "1.5.0", wantCLI: true},
-		{version: "1.5.3\n", wantCLI: true},
+		{version: "1.5.4", wantCLI: true},
+		{version: "1.5.6\n", wantCLI: true},
 		{version: "2.0.0", wantCLI: true},
+		{version: "1.5.3"},
 		{version: "1.4.9"},
 		{version: "unknown"},
 		{err: errors.New("agy --version failed")},
@@ -323,7 +326,7 @@ func TestLaunchStartsAgyACPWithTheChatDataFolder(t *testing.T) {
 	cli := writeExecutable(t, filepath.Join(t.TempDir(), "agy"))
 	r := testResolver(t, nil)
 	r.agyCLI = func(context.Context) (string, error) { return cli, nil }
-	r.cliVersion = func(context.Context, string) (string, error) { return "1.5.3", nil }
+	r.cliVersion = func(context.Context, string) (string, error) { return "1.5.6", nil }
 	cfg := buildConfig(nil, r, nil)
 
 	launch, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{Env: map[string]string{"PATH": "/usr/bin"}})

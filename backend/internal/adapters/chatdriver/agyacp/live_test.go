@@ -146,11 +146,11 @@ func TestLiveAntigravityACPConformance(t *testing.T) {
 }
 
 // TestLiveAgyACPSteersARunningTurn proves steering against the real `agy acp`
-// (agy CLI 1.5.0 or newer). Run explicitly with AO_LIVE_AGY=1. It uses an empty
+// (agy CLI 1.5.4 or newer). Run explicitly with AO_LIVE_AGY=1. It uses an empty
 // private GEMINI_HOME (the CLI's login lives outside it) and the default
-// approval mode: it approves only the one sleep command and rejects anything
-// else. While that command runs it steers, then checks that the turn took the
-// guidance and AO saw one turn, not two.
+// approval mode: it approves the one sleep command and read-only looks at the
+// workspace, and rejects anything else. While that command runs it steers, then
+// checks that the turn took the guidance and AO saw one turn, not two.
 func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 	if os.Getenv("AO_LIVE_AGY") != "1" {
 		t.Skip("set AO_LIVE_AGY=1 to run against the local agy CLI and Google sign-in")
@@ -181,7 +181,7 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 		_ = conversation.Close()
 	}()
 	if !conversation.Capabilities()[ports.ChatCapabilitySteer] {
-		t.Skip("the installed agy has no `agy acp` that steers (needs agy 1.5.0 or newer)")
+		t.Skip("the installed agy has no `agy acp` that steers (needs agy 1.5.4 or newer)")
 	}
 	steerer, ok := conversation.(ports.ChatSteerer)
 	if !ok {
@@ -205,7 +205,7 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 			reply.WriteString(event.Delta)
 		case ports.ChatEventApprovalRequested:
 			decision := decide(ports.ChatDecisionRejectOnce)(event)
-			if strings.Contains(event.Summary+string(event.Detail), "sleep 20") {
+			if strings.Contains(event.Summary+string(event.Detail), "sleep 20") || readsWorkspace(event.Summary, workspace) {
 				decision = decide(ports.ChatDecisionAllowOnce)(event)
 			}
 			t.Logf("approval %q -> %s", event.Summary, decision.ID)
@@ -239,18 +239,37 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 	if err := <-steered; err != nil {
 		t.Fatalf("Steer: %v", err)
 	}
-	if !strings.Contains(strings.ToUpper(reply.String()), "STAGING") {
-		t.Fatalf("the turn did not take the guidance: reply=%q", reply.String())
+	answer := reply.String()
+	if !strings.Contains(strings.ToLower(answer), "staging.yaml") || !strings.Contains(strings.ToUpper(answer), "STAGING") {
+		t.Fatalf("the turn did not take the guidance: reply=%q", answer)
 	}
-	t.Logf("reply: %q", reply.String())
+	t.Logf("reply: %q", answer)
 	// Nothing else may complete: the handoff was not a second turn.
-	select {
-	case event := <-conversation.Events():
-		if event.Kind == ports.ChatEventTurnCompleted {
-			t.Fatalf("a second turn completed after the steer: %+v", event)
+	quiet := time.After(3 * time.Second)
+	for waiting := true; waiting; {
+		select {
+		case event := <-conversation.Events():
+			if event.Kind == ports.ChatEventTurnCompleted {
+				t.Fatalf("a second turn completed after the steer: %+v", event)
+			}
+		case <-quiet:
+			waiting = false
 		}
-	case <-time.After(3 * time.Second):
 	}
+}
+
+// readsWorkspace reports whether an approval is for a plain read-only look in
+// the test's temporary folders, which the model sometimes takes before editing.
+func readsWorkspace(command, workspace string) bool {
+	fields := strings.Fields(command)
+	if len(fields) == 0 || !strings.Contains(command, filepath.Dir(workspace)) || strings.ContainsAny(command, ";|&<>`$()") {
+		return false
+	}
+	switch fields[0] {
+	case "find", "ls", "cat", "head":
+		return true
+	}
+	return false
 }
 
 // TestLiveAntigravityACPAndCLIShareConversationAcrossCopiedDatabases verifies

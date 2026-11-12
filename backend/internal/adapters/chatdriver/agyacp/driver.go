@@ -1,8 +1,9 @@
 // Package agyacp binds Google Antigravity to AO's reusable ACP Chat transport.
 //
-// The agy CLI 1.5.0 and newer has a built-in ACP server, `agy acp`, which
-// steers a running turn when another prompt arrives. AO launches it when the
-// installed CLI has it. Older CLIs have no ACP mode, so AO falls back to
+// The agy CLI has a built-in ACP server, `agy acp`, which steers a running turn
+// when another prompt arrives. AO launches it from agy 1.5.4, the first release
+// whose `agy acp` does not hang on a second approval. Older CLIs have no ACP
+// mode, or that bug, so AO falls back to
 // Google's separate `agy_acp_server` from the ACP registry (`antigravity-acp`),
 // found beside the agy CLI or on PATH. Like Autohand's separately distributed
 // `autohand-acp`, AO never downloads or bundles either. Login, models, MCP
@@ -42,8 +43,10 @@ const (
 	modeYolo     = "yolo"
 )
 
-// `agy acp`'s mode ids (1.5.3). It has no mode that runs every tool without
-// asking; that is a launch flag, and AO's approval can change between turns.
+// `agy acp`'s mode ids. It has no mode that runs every tool without asking;
+// that is a launch flag, and AO's approval can change between turns. 1.5.4's
+// `auto` still asks before a command leaves the terminal sandbox, so AO's
+// auto, which runs without asking, does not map onto it.
 const cliModeAcceptEdits = "accept-edits"
 
 // New constructs the Antigravity ACP Chat driver.

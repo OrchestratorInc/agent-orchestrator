@@ -38,6 +38,9 @@ func testDrain(wait time.Duration) *SteerDrain {
 type drainAgent struct {
 	*fakeAgent
 	collected chan []string
+	// gate, when set before the turn starts, holds the agent's collection
+	// requests until it is closed.
+	gate chan struct{}
 }
 
 // newDrainAgent runs prompts that ask AO for mid-turn guidance at a steady
@@ -54,6 +57,13 @@ func newDrainAgent(release <-chan struct{}) *drainAgent {
 			case <-ctx.Done():
 				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
 			case <-ticker.C:
+			}
+			if agent.gate != nil {
+				select {
+				case <-agent.gate:
+				case <-release:
+					return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+				}
 			}
 			raw, err := agent.conn.CallExtension(ctx, testDrainMethod, map[string]any{
 				"sessionId": string(params.SessionId),
@@ -125,15 +135,36 @@ func TestACPSteerDrainReportsInjectedOnlyAfterTheAgentCollects(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	agent := newDrainAgent(release)
+	agent.gate = make(chan struct{})
 	acceptImages(agent.fakeAgent)
 	conv, turn := startDrainConversation(t, agent.fakeAgent, testDrain(2*time.Second))
 
-	ref, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging instead"})
-	if err != nil {
-		t.Fatalf("Steer: %v", err)
+	type steered struct {
+		ref ports.ChatTurnRef
+		err error
 	}
-	if ref.ProviderTurnID != turn {
-		t.Fatalf("steered turn = %q, want %q", ref.ProviderTurnID, turn)
+	outcome := make(chan steered, 1)
+	go func() {
+		ref, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging instead"})
+		outcome <- steered{ref, err}
+	}()
+	select {
+	case got := <-outcome:
+		t.Fatalf("Steer returned %+v before the agent collected the guidance", got)
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(agent.gate)
+	var got steered
+	select {
+	case got = <-outcome:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Steer never returned after the agent collected")
+	}
+	if got.err != nil {
+		t.Fatalf("Steer: %v", got.err)
+	}
+	if got.ref.ProviderTurnID != turn {
+		t.Fatalf("steered turn = %q, want %q", got.ref.ProviderTurnID, turn)
 	}
 	select {
 	case texts := <-agent.collected:
@@ -627,7 +658,7 @@ func TestACPSteerRequestRefusesImagesTheAgentWouldDrop(t *testing.T) {
 				Supported: func(acpsdk.InitializeResponse) bool { return true },
 				Method:    "_vendor/steering",
 				Params: func(sessionID string, prompt []acpsdk.ContentBlock) (any, error) {
-					return map[string]any{"sessionId": sessionID, "blocks": len(prompt)}, nil
+					return map[string]any{"sessionId": sessionID, "blocks": prompt}, nil
 				},
 				TakesImages: func(init acpsdk.InitializeResponse) bool {
 					return init.AgentInfo != nil && init.AgentInfo.Version == "1.1.0" && takesImages
@@ -671,6 +702,18 @@ func TestACPSteerRequestRefusesImagesTheAgentWouldDrop(t *testing.T) {
 			if err != nil || sent != 1 {
 				t.Fatalf("image steer = %v with %d requests sent, want it sent", err, sent)
 			}
+			mu.Lock()
+			blocks, _ := calls[0]["blocks"].([]any)
+			mu.Unlock()
+			images := 0
+			for _, block := range blocks {
+				if fields, ok := block.(map[string]any); ok && fields["type"] == "image" {
+					images++
+				}
+			}
+			if images != 1 {
+				t.Fatalf("steer request blocks = %v, want the one image", blocks)
+			}
 		})
 	}
 }
@@ -685,6 +728,7 @@ func TestACPSteerKeepsAnIdentifiedReplyInOneMessage(t *testing.T) {
 			Meta:                map[string]any{"steering": map[string]any{"supported": true}},
 			SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
 		},
+		initMeta: map[string]any{"steering": map[string]any{"supported": true}},
 		extension: func(string, json.RawMessage) (any, error) {
 			return map[string]any{"outcome": "injected"}, nil
 		},
@@ -701,6 +745,9 @@ func TestACPSteerKeepsAnIdentifiedReplyInOneMessage(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer opened.Close()
+	if !opened.Capabilities().Has(ports.ChatCapabilitySteer) {
+		t.Fatal("Steer not offered to an agent that advertises _session/steering")
+	}
 	conv := opened.(*conversation)
 	conv.mu.Lock()
 	conv.activeTurn = "turn-1"
@@ -739,4 +786,43 @@ func TestACPSteerKeepsAnIdentifiedReplyInOneMessage(t *testing.T) {
 	if deltas[items[0]] != "editing prod.yaml, then the timeout." || deltas[items[1]] != "Switched to staging." {
 		t.Fatalf("messages = %#v in order %v, want the first reply whole and the steered one after it", deltas, items)
 	}
+}
+
+// A Stop that fails leaves the turn running, and the turn can be steered again.
+func TestACPSteerAfterAFailedStopIsAccepted(t *testing.T) {
+	agent := &fakeAgent{promptBlock: true}
+	conv, turn := startDrainConversation(t, agent, testDrain(50*time.Millisecond))
+	conv.WithdrawPendingSteers()
+	if _, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "refused"}); !errors.Is(err, errSteerTurnStopping) {
+		t.Fatalf("Steer while stopping = %v, want it refused", err)
+	}
+	var restorer ports.ChatSteerRestorer = conv
+	restorer.RestoreSteering()
+	_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "parked again"})
+	if err == nil || !strings.Contains(err.Error(), "did not collect") {
+		t.Fatalf("Steer after the failed Stop = %v, want it parked for the agent like any steer", err)
+	}
+}
+
+// Only one nudge is in flight. Steers that time out behind a stalled write do
+// not each leave another blocked request behind.
+func TestACPSteerDrainNudgesOneAtATime(t *testing.T) {
+	agent := &fakeAgent{promptBlock: true}
+	conv, turn := startDrainConversation(t, agent, testDrain(60*time.Millisecond))
+	writer := conv.legacyWire.writer
+	writer.mu.Lock()
+	unlock := sync.OnceFunc(writer.mu.Unlock)
+	t.Cleanup(unlock)
+	for range 3 {
+		if _, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "use staging"}); !errors.Is(err, ports.ErrChatTurnNotSteerable) {
+			t.Fatalf("Steer = %v, want the guidance withdrawn as not collected", err)
+		}
+	}
+	conv.legacyWire.mu.Lock()
+	inFlight := len(conv.legacyWire.pending)
+	conv.legacyWire.mu.Unlock()
+	if inFlight != 1 {
+		t.Fatalf("nudges in flight = %d, want 1", inFlight)
+	}
+	unlock()
 }

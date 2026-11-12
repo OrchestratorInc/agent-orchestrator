@@ -369,12 +369,14 @@ func (c *conversation) steerByDrain(
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
-	if drain.Nudge != "" {
-		// Off Steer's path: a write can stall before the call sees its context,
-		// and Steer must still return within its wait. The guidance is already
-		// parked, so the nudge only hurries the agent along.
+	// Off Steer's path: a write can stall before the call sees its context,
+	// and Steer must still return within its wait. The guidance is already
+	// parked, so the nudge only hurries the agent along. One nudge at a time,
+	// so steers that time out behind a stalled write do not pile up more.
+	if drain.Nudge != "" && c.nudging.CompareAndSwap(false, true) {
 		nudgeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), min(steerNudgeTimeout, wait))
 		go func() {
+			defer c.nudging.Store(false)
 			defer cancel()
 			if err := c.legacyWire.call(nudgeCtx, drain.Nudge, map[string]string{"sessionId": sessionID}); err != nil {
 				c.log.Debug("ACP steer nudge failed; guidance waits for the next boundary",
@@ -449,6 +451,11 @@ const adoptedPromptSeq = -1
 // errSteerUnconfirmed marks a steer prompt whose fate is not known yet. The
 // guidance may still reach the turn, so it is neither delivered nor refused.
 var errSteerUnconfirmed = errors.New("the agent has not shown that it took the guidance")
+
+// errSteerCancelled marks a steer prompt the agent answered as cancelled: the
+// turn was stopped, and whether the agent acted on the guidance first is not
+// known.
+var errSteerCancelled = fmt.Errorf("%w: the turn was stopped first", errSteerUnconfirmed)
 
 // steerByPrompt sends the guidance as another session/prompt under the running
 // turn's context, so Stop cancels it with the rest of the turn.
@@ -590,10 +597,10 @@ func hostResultEventID(resp acpsdk.PromptResponse, err error) string {
 
 // finishTurnPrompt routes one of the running turn's prompt answers.
 //
-// A successful answer while a later prompt still runs is a handoff: the agent
-// took that prompt's guidance and carries the work on under it. A steer
-// prompt's own answer settles its steer: an error is a refusal, success means
-// it ran inside the turn.
+// A successful answer while a later prompt still runs is a handoff to the next
+// of them: the agent took that prompt's guidance and carries the work on under
+// it. A steer prompt's own answer settles its steer: an error is a refusal, a
+// cancelled answer is uncertain, success means it ran inside the turn.
 //
 // The turn settles once every prompt this conversation sent has returned.
 // Behind a persistent host its result is the answer carrying the host's
@@ -618,6 +625,14 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		c.turnResult = &answer
 	}
 	acknowledged := c.steering.prompt != nil && c.steering.prompt.Ack != nil
+	cancelled := err == nil && resp.StopReason == acpsdk.StopReasonCancelled
+	// A handoff passes the work to the next prompt of the turn, the one that
+	// arrived after this one. A cancelled answer hands nothing on, and an
+	// acknowledging agent says itself whether a steer took.
+	handoffTo := noPrompt
+	if !acknowledged && err == nil && !cancelled && !result {
+		handoffTo = c.nextOutstandingLocked(seq)
+	}
 	for _, w := range c.promptSteers {
 		if w.turn != turnID || w.settled {
 			continue
@@ -625,14 +640,16 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		switch {
 		case w.seq == seq && err != nil:
 			w.settle(err) // refused
+		case w.seq == seq && cancelled:
+			w.settle(errSteerCancelled) // stopped before the agent acted on it
 		case w.seq == seq && !acknowledged:
 			w.settle(nil) // it ran inside this turn
 		case w.seq == seq && !w.awaitingAck:
 			// The acknowledgement can trail the answer; let it decide.
 			w.awaitingAck = true
 			go c.awaitSteerAck(w)
-		case !acknowledged && w.seq > seq && err == nil && !result:
-			w.settle(nil) // an earlier prompt handed the work on to it
+		case w.seq == handoffTo:
+			w.settle(nil) // the earlier prompt handed the work on to it
 		}
 	}
 	if len(c.outstanding) > 0 || (c.adoptedPrompt && c.turnResult == nil) {
@@ -667,8 +684,10 @@ func (c *conversation) adoptedPromptHandoff(err error) {
 		// An acknowledging agent says itself whether a steer took.
 		return
 	}
+	// The adopted prompt came before every prompt this attachment sent.
+	next := c.nextOutstandingLocked(adoptedPromptSeq)
 	for _, w := range c.promptSteers {
-		if w.turn == c.activeTurn {
+		if w.turn == c.activeTurn && w.seq == next {
 			w.settle(nil)
 		}
 	}
@@ -731,6 +750,21 @@ func (c *conversation) awaitSteerAck(w *promptSteer) {
 	c.mu.Lock()
 	w.settle(errSteerNotAcknowledged)
 	c.mu.Unlock()
+}
+
+// noPrompt is no prompt of the turn.
+const noPrompt = -2
+
+// nextOutstandingLocked returns the earliest prompt sent after seq that has
+// not returned yet, or noPrompt. Callers must hold c.mu.
+func (c *conversation) nextOutstandingLocked(seq int) int {
+	next := noPrompt
+	for other := range c.outstanding {
+		if other > seq && (next == noPrompt || other < next) {
+			next = other
+		}
+	}
+	return next
 }
 
 // resetPromptSteeringLocked clears the running turn's prompt bookkeeping. A
@@ -811,6 +845,25 @@ func (c *conversation) WithdrawPendingSteers() {
 		pending.withdrawn = true
 	}
 	c.releasePendingSteersLocked()
+	// A steer prompt is already with the agent and cannot be taken back. Its
+	// Steer returns now, so Stop does not wait out the steer's wait; whether
+	// the agent took it is not known.
+	for _, w := range c.promptSteers {
+		if w.turn == c.activeTurn {
+			w.settle(errSteerStopping)
+		}
+	}
+}
+
+// errSteerStopping settles a steer prompt still waiting when Stop begins.
+var errSteerStopping = fmt.Errorf("%w: the turn is being stopped", errSteerUnconfirmed)
+
+// RestoreSteering lets the running turn take steers again after a Stop that
+// did not stop it. See WithdrawPendingSteers.
+func (c *conversation) RestoreSteering() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stoppingTurn = ""
 }
 
 // releasePendingSteersLocked settles every waiting steer as not collected. It
