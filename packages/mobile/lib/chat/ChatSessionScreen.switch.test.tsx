@@ -120,7 +120,6 @@ vi.mock("./conversationBanners", () => ({
 	controllerStoppedBanner: () => ({ key: "stopped", title: "The agent stopped" }),
 	errorBanner: () => undefined,
 	mcpNoticeKey: () => "notice",
-	quotaBanner: () => undefined,
 	reauthBanner: () => undefined,
 	rolledBackBanner: () => undefined,
 	threadBanner: () => undefined,

@@ -956,6 +956,17 @@ describe("ChatWorkspace timeline", () => {
 		expect(within(composer).getByRole("progressbar", { name: "Context window used" })).toHaveAttribute("aria-valuetext", `${(129200).toLocaleString()} / ${(258400).toLocaleString()} tokens (50%)`);
 	});
 
+	// The meter can warn about the account's quota, but only if it is handed it.
+	it("warns beside the composer once the account's quota passes 75%", () => {
+		const reported = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: -1 } };
+		const view = render(<ChatWorkspace snapshot={reported} />);
+		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
+		expect(within(composer).queryByText(/% quota/)).not.toBeInTheDocument();
+
+		view.rerender(<ChatWorkspace snapshot={{ ...reported, rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: 82 } }} />);
+		expect(within(composer).getByText("82% quota")).toBeInTheDocument();
+	});
+
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {
 		const user = userEvent.setup();
 		const onSessionRenamed = vi.fn().mockResolvedValue(undefined);
