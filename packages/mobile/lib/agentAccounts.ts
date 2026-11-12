@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiRequest } from "./api";
 import type { ServerConfig } from "./config";
 import type { PickerOption } from "./NativePickerList";
@@ -68,11 +68,15 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 	const provider = agentAccountProvider(harness);
 	const [accounts, setAccounts] = useState<AgentAccount[]>([]);
 	const [current, setCurrent] = useState<string>();
+	const cfgRef = useRef(cfg);
+	cfgRef.current = cfg;
+	const cfgKey = cfg ? JSON.stringify(cfg) : "";
 	useEffect(() => {
-		setAccounts([]);
+		setAccounts((list) => (list.length ? [] : list));
 		setCurrent(undefined);
-	}, [cfg, provider, sessionId]);
+	}, [cfgKey, provider, sessionId]);
 	useEffect(() => {
+		const cfg = cfgRef.current;
 		if (!cfg || !provider) return;
 		let cancelled = false;
 		Promise.all([getAgentAccounts(cfg, provider), sessionId ? getSessionAgentAccount(cfg, sessionId, provider) : undefined])
@@ -83,6 +87,6 @@ export function useAgentAccounts(cfg: ServerConfig | null | undefined, harness: 
 			})
 			.catch(() => {});
 		return () => { cancelled = true; };
-	}, [cfg, provider, reloadKey, sessionId]);
+	}, [cfgKey, provider, reloadKey, sessionId]);
 	return { provider, accounts, current };
 }
