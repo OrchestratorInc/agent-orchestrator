@@ -423,7 +423,10 @@ func (c *conversation) WithdrawPendingSteers() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.activeTurn != "" {
-		c.stoppingTurn = c.activeTurn
+		if c.stoppingTurn != c.activeTurn {
+			c.stoppingTurn, c.stopAttempts = c.activeTurn, 0
+		}
+		c.stopAttempts++
 	}
 	for _, pending := range c.pendingSteers {
 		pending.withdrawn = true
@@ -432,11 +435,17 @@ func (c *conversation) WithdrawPendingSteers() {
 }
 
 // RestoreSteering lets the running turn take steers again after a Stop that
-// did not stop it. See WithdrawPendingSteers.
+// did not stop it. See WithdrawPendingSteers. Stops can overlap: while another
+// of them is still stopping the turn, its steers stay refused.
 func (c *conversation) RestoreSteering() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.stoppingTurn = ""
+	if c.stopAttempts > 0 {
+		c.stopAttempts--
+	}
+	if c.stopAttempts == 0 {
+		c.stoppingTurn = ""
+	}
 }
 
 // releasePendingSteersLocked settles every waiting steer as not collected. It
