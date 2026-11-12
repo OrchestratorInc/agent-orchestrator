@@ -24,13 +24,11 @@ func pathOutsideSession(workspaceDir, artifactDir, path string) bool {
 	return true
 }
 
-// pathUnderRoot compares lexically first, then through symlinks, so a worktree
-// reached by another spelling (macOS /var and /private/var) still owns its
-// files.
+// pathUnderRoot compares both paths as the filesystem resolves them, as the
+// session's workspace resolver does: a worktree reached by another spelling
+// (macOS /var and /private/var) still owns its files, and a link inside the
+// worktree that points out of it does not.
 func pathUnderRoot(root, path string) bool {
-	if within(filepath.Clean(root), filepath.Clean(path)) {
-		return true
-	}
 	return within(resolveExistingPrefix(root), resolveExistingPrefix(path))
 }
 

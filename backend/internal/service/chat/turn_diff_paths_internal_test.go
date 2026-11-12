@@ -18,6 +18,13 @@ func TestPathOutsideSession(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspace, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A link inside the worktree that points out of it.
+	if err := os.Symlink(elsewhere, filepath.Join(workspace, "external")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(elsewhere, "shared.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name, workspace, path string
@@ -33,6 +40,8 @@ func TestPathOutsideSession(t *testing.T) {
 		{"deleted directory with the root through a symlink", link, filepath.Join(workspace, "removed", "nested", "gone.go"), false},
 		{"artifact", workspace, filepath.Join(artifacts, "report.html"), false},
 		{"outside", workspace, filepath.Join(elsewhere, "memory", "MEMORY.md"), true},
+		{"through an outward link", workspace, filepath.Join(workspace, "external", "shared.go"), true},
+		{"new file through an outward link", workspace, filepath.Join(workspace, "external", "new.go"), true},
 		{"sibling with a shared prefix", workspace, workspace + "-other/a.go", true},
 		{"unknown worktree", "", filepath.Join(elsewhere, "a.go"), false},
 	} {
