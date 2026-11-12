@@ -758,4 +758,32 @@ describe("SessionsBoardView", () => {
 		expect(status?.style.getPropertyValue("--session-status-tone")).toBe("");
 		expect(status?.querySelector(".rounded-full")).toBeNull();
 	});
+
+	it("paints a merged PR purple inside the Ready lane", () => {
+		const { container } = render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={{
+					formatTime: () => "1h ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: {
+						short: "PR",
+						states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+					},
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{
+					...baseSession,
+					displayStatus: "Merged",
+					kanbanColumn: "ready",
+					status: "merged",
+				}}
+			/>,
+		);
+
+		const status = container.querySelector('[data-kanban-column="ready"]');
+		expect(status).toHaveClass("text-status-merged");
+		expect(status).not.toHaveClass("text-status-ready");
+	});
 });
