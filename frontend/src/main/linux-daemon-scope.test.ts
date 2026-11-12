@@ -38,7 +38,13 @@ describe("planDaemonScope", () => {
 				args: ["--user", "--scope", "--quiet", "--collect", "--unit=ao-daemon-1234-1000", "--slice=app-ao.slice", "--", launch.command, "daemon"],
 			},
 		});
-		expect(p.runProbe).toHaveBeenCalledWith("/usr/bin/systemd-run", ["--user", "--scope", "--quiet", "--collect", "--", "true"]);
+		expect(p.runProbe).toHaveBeenCalledWith("/usr/bin/systemd-run", ["--user", "--scope", "--quiet", "--collect", "--slice=app-ao.slice", "--", "true"]);
+	});
+
+	it("probes with the real launch's memory properties", async () => {
+		const p = probe({ env: { AO_DAEMON_SCOPE: "systemd", AO_DAEMON_MEMORY_MAX: "8G" } });
+		await planDaemonScope(launch, p, identity);
+		expect(p.runProbe).toHaveBeenCalledWith("/usr/bin/systemd-run", ["--user", "--scope", "--quiet", "--collect", "--slice=app-ao.slice", "--property", "MemoryMax=8G", "--", "true"]);
 	});
 
 	it.each([
@@ -59,6 +65,7 @@ describe("planDaemonScope", () => {
 		["flatpak", probe({ exists: (file) => file === "/.flatpak-info" })],
 		["systemd_run_missing", probe({ findExecutable: () => null })],
 		["user_manager_unavailable", probe({ runProbe: async () => false })],
+		["scope_launch_failed", probe({ scopeLaunchFailed: true })],
 	])("falls back to an OOM score adjustment: %s", async (reason, p) => {
 		expect(await planDaemonScope(launch, p, identity)).toEqual({ kind: "oom_score_adj", reason, adjustment: 300 });
 	});

@@ -19,7 +19,9 @@ import type { DaemonLaunchSpec } from "../shared/daemon-launch";
 // Fallback when no systemd user manager is reachable (non-systemd distros,
 // containers, Flatpak, a broken user bus): raise the daemon's oom_score_adj so
 // its descendants inherit a higher score and the kernel OOM killer picks a
-// runaway agent before the app. Raising is allowed without privileges.
+// runaway agent before the app. Raising is allowed without privileges. The
+// same fallback applies for the rest of the run once a scoped daemon exits
+// before it is ready (main.ts retries that start once without the scope).
 
 export type DaemonScopeMode = "off" | "systemd";
 
@@ -32,6 +34,8 @@ export type DaemonScopeProbe = {
 	/** Resolves true when `systemd-run --user --scope -- true` exits 0. */
 	runProbe: (command: string, args: string[]) => Promise<boolean>;
 	findExecutable: (name: string) => string | null;
+	/** A scoped daemon already failed to start in this run: use the fallback. */
+	scopeLaunchFailed?: boolean;
 };
 
 export type DaemonScopePlan =
@@ -59,7 +63,7 @@ export function scopeUnitName(pid: number, nowMs: number): string {
 }
 
 /** Wraps a direct (non-shell) daemon launch in `systemd-run --user --scope`. */
-export function wrapLaunchInScope(launch: DaemonLaunchSpec, systemdRun: string, unit: string, env: DaemonScopeEnv): DaemonLaunchSpec {
+export function wrapLaunchInScope(launch: DaemonLaunchSpec, systemdRun: string, unit: string | null, env: DaemonScopeEnv): DaemonLaunchSpec {
 	return {
 		...launch,
 		command: systemdRun,
@@ -68,7 +72,7 @@ export function wrapLaunchInScope(launch: DaemonLaunchSpec, systemdRun: string, 
 			"--scope",
 			"--quiet",
 			"--collect",
-			`--unit=${unit}`,
+			...(unit ? [`--unit=${unit}`] : []),
 			`--slice=${DAEMON_SCOPE_SLICE}`,
 			...memoryProperty("MemoryHigh", env.AO_DAEMON_MEMORY_HIGH),
 			...memoryProperty("MemoryMax", env.AO_DAEMON_MEMORY_MAX),
@@ -94,10 +98,14 @@ export async function planDaemonScope(
 	const fallback = (reason: string): DaemonScopePlan => ({ kind: "oom_score_adj", reason, adjustment: FALLBACK_OOM_SCORE_ADJ });
 	// A Flatpak sandbox cannot create host scopes without escaping it.
 	if (insideFlatpak(probe.env, probe.exists)) return fallback("flatpak");
+	if (probe.scopeLaunchFailed) return fallback("scope_launch_failed");
 	const systemdRun = probe.findExecutable("systemd-run");
 	if (!systemdRun) return fallback("systemd_run_missing");
 	// Containers and non-systemd sessions fail here: no user manager or bus.
-	if (!(await probe.runProbe(systemdRun, ["--user", "--scope", "--quiet", "--collect", "--", "true"]))) {
+	// The probe passes the real launch's slice and memory properties, so a
+	// refused slice or limit falls back here instead of failing the daemon.
+	const probeArgs = wrapLaunchInScope({ ...launch, command: "true", args: [] }, systemdRun, null, probe.env).args;
+	if (!(await probe.runProbe(systemdRun, probeArgs))) {
 		return fallback("user_manager_unavailable");
 	}
 	const unit = scopeUnitName(identity.pid, identity.nowMs);

@@ -115,7 +115,10 @@ transient user scope in `app-ao.slice`, so the daemon, tmux and agents leave the
 desktop app's scope. `AO_DAEMON_MEMORY_HIGH` / `AO_DAEMON_MEMORY_MAX` (systemd
 values such as `12G` or `80%`) limit that scope. Without a reachable systemd user
 manager (Flatpak, containers, non-systemd distros) it raises the daemon's
-`oom_score_adj` to 300 instead, which agents inherit.
+`oom_score_adj` to 300 instead, which agents inherit. The probe uses the same
+slice and memory properties as the launch; if a scoped daemon still exits before
+it is ready, AO stops using the scope for that run and retries once with the
+`oom_score_adj` fallback.
 
 ## Local updater diagnostics
 

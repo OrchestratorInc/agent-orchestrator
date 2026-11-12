@@ -425,7 +425,7 @@ let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
 type DaemonAutoRestartIntent = { generation: number; crashedPid: number; runFilePresent: boolean; keepAlive: boolean };
 // Why a daemon start was requested; recorded in the lifecycle log before any spawn.
-type DaemonStartTrigger = "startup" | "renderer_status" | "manual_start" | "manual_restart" | "browser_runtime_recovery" | "auto_restart";
+type DaemonStartTrigger = "startup" | "renderer_status" | "manual_start" | "manual_restart" | "browser_runtime_recovery" | "auto_restart" | "scope_fallback";
 let daemonAutoRestartExits: number[] = [];
 let daemonAutoRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let daemonAutoRestartGeneration = 0;
@@ -2794,6 +2794,22 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			setDaemonStatus({ state: "stopped" });
 			return;
 		}
+		// A scoped launch that exits with a code before it is ready may be
+		// systemd-run failing (user manager gone, slice or property refused):
+		// stop using the scope for this run and retry once without it.
+		if (isolation.kind === "scope" && !portConfirmed && signal === null && !browserQuitRequested && !daemonScopeLaunchFailed) {
+			daemonScopeLaunchFailed = true;
+			lifecycleLog("daemon_restart_decision", {
+				daemonPid: child.pid ?? null,
+				code,
+				signal,
+				decision: "restart",
+				cause: "scope_launch_failed",
+				fallback: "oom_score_adj",
+			});
+			void startDaemonForRestart(undefined, "scope_fallback");
+			return;
+		}
 		supervisorLink?.dispose();
 		supervisorLink = null;
 		daemonAutoRestartStandDown = true;
@@ -2831,7 +2847,11 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 				lifecycleLog("daemon_restart_decision", {
 					...observed,
 					decision: "no_restart",
-					cause: runFile.present ? "run_file_names_other_daemon" : "graceful_exit",
+					cause: runFile.present
+						? "run_file_names_other_daemon"
+						: code !== null && code !== 0
+							? "nonzero_exit_without_run_file"
+							: "graceful_exit",
 				});
 			}
 		});
@@ -2843,10 +2863,14 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 // Opt-in Linux isolation (AO_DAEMON_SCOPE=systemd): see linux-daemon-scope.ts.
 // The systemd-run probe runs at most once per app run.
 let daemonScopeProbe: Promise<boolean> | null = null;
+// Set when a scoped daemon exits before it is ready; later starts in this run
+// use the oom_score_adj fallback even though the cached probe succeeded.
+let daemonScopeLaunchFailed = false;
 function planDaemonSpawnIsolation(launch: DaemonLaunchSpec): Promise<DaemonScopePlan> {
 	return planDaemonScope(launch, {
 		platform: process.platform,
 		env: process.env,
+		scopeLaunchFailed: daemonScopeLaunchFailed,
 		exists: existsSync,
 		findExecutable: (name) => {
 			for (const dir of (cachedShellEnv?.PATH ?? process.env.PATH ?? "").split(path.delimiter)) {

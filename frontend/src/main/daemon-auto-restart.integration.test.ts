@@ -102,6 +102,7 @@ function setup() {
 		status: () => vm.runInContext("daemonStatus", context),
 		refresh: () => ipc.get("daemon:getStatus")!(),
 		markQuitPastPointOfNoReturn: () => vm.runInContext("browserQuitRequested = true", context),
+		scopeLaunchFailed: () => vm.runInContext("daemonScopeLaunchFailed", context),
 		rejectRuntime: () => vm.runInContext('handleBrowserRuntimeRejection("invalid-token")', context),
 		quit: () => app.emit("before-quit", { preventDefault: vi.fn() }),
 		crash(code: number | null = 1, signal: string | null = null) { children.at(-1)!.emit("exit", code, signal); },
@@ -244,6 +245,52 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		held.resolve({ kind: "unchanged", reason: "disabled" });
 		await vi.advanceTimersByTimeAsync(2000);
 		expect(h.spawn).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries once without the scope when a scoped launch exits before it is ready", async () => {
+		const h = setup();
+		const scopePlan = {
+			kind: "scope", unit: "ao-daemon-1-x", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--user", "--scope", "--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		};
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce(scopePlan);
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(h.scopeLaunchFailed()).toBe(true);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ code: 1, decision: "restart", cause: "scope_launch_failed", fallback: "oom_score_adj" }));
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_spawn", expect.objectContaining({ trigger: "scope_fallback" }));
+		// The retry is not a scoped launch, so a second early exit is an ordinary failure.
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(h.spawn).toHaveBeenCalledTimes(2);
+	});
+
+	it("treats a signal death of a scoped daemon as an ordinary crash", async () => {
+		const h = setup();
+		h.planDaemonSpawnIsolation.mockResolvedValueOnce({
+			kind: "scope", unit: "u", slice: "app-ao.slice",
+			launch: { command: "/usr/bin/systemd-run", args: ["--", "/owned/ao"], cwd: "/owned/data", source: "override", shell: false },
+		});
+		await h.start();
+		h.crash(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(h.scopeLaunchFailed()).toBe(false);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({ cause: "ungraceful_exit", decision: "restart" }));
+	});
+
+	it("labels a nonzero exit without a run file distinctly from a graceful one", async () => {
+		const h = setup();
+		await h.start();
+		h.setMarker(Object.assign(new Error("missing"), { code: "ENOENT" }));
+		h.crash(1, null);
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(h.spawn).toHaveBeenCalledTimes(1);
+		expect(h.lifecycleLog).toHaveBeenCalledWith("daemon_restart_decision", expect.objectContaining({
+			code: 1, decision: "no_restart", cause: "nonzero_exit_without_run_file",
+		}));
 	});
 
 	it("records a graceful exit as no restart", async () => {
