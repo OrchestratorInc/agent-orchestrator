@@ -1,6 +1,7 @@
 import { apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
 import { formatFileAnnotationMessages, type FileAnnotationComment } from "../../../shared/files/file-annotations";
+import { sumFiles } from "./model";
 
 const API = "/api/v1";
 
@@ -19,10 +20,14 @@ export type WorkspaceFileSummary = {
 	fileFingerprint?: string;
 };
 
+/** Every uncommitted change, staged or not, as one diff against HEAD. */
+export type FileSection = WorkspaceSection | "uncommitted";
+
 export type WorkspaceManifest = {
 	sessionId: string;
 	files: WorkspaceFileSummary[];
-	sections: Record<WorkspaceSection, WorkspaceFileSummary[]>;
+	/** `uncommitted` is missing from an older daemon, which cannot read it as one section. */
+	sections: Record<WorkspaceSection, WorkspaceFileSummary[]> & { uncommitted?: WorkspaceFileSummary[] };
 	summary: { files: number; additions: number; deletions: number };
 	truncated: boolean;
 	workspaceVersion: string;
@@ -66,6 +71,55 @@ export type WorkspaceTree = { path: string; entries: WorkspaceTreeEntry[]; trunc
 
 export type WorkspaceSearchResult = { path: string; status: WorkspaceFileStatus; binary: boolean; size: number };
 
+/**
+ * Another branch or the session's pull request, read in place of the worktree.
+ * The daemon answers these from git snapshots, so they are read-only.
+ */
+export type WorkspaceView = { branch?: string; prNumber?: number; sourceUrl?: string };
+
+/** Which of a file's diffs to read: one git section of the worktree, or one commit. Neither is base to worktree. */
+export type FileRead = { section?: FileSection; commitSha?: string };
+
+/** One row of the branch list: a branch, or a pull request whose branch is not local. */
+export type WorkspaceBranch = {
+	kind: "local" | "remote" | "pull_request";
+	/** The branch, the pull request's source branch, or "" for a detached HEAD. */
+	name: string;
+	checkedOut: boolean;
+	detached?: boolean;
+	isDefault: boolean;
+	prNumber?: number;
+	prTitle?: string;
+	prUrl?: string;
+	tipSha?: string;
+	updatedAt?: string | null;
+};
+
+/** The checked-out row first, then the rest newest first. */
+export type WorkspaceBranches = { branches: WorkspaceBranch[]; supported: boolean; truncated: boolean };
+
+export type WorkspaceCommit = { sha: string; subject: string; author: string; timestamp: string; files: WorkspaceFileSummary[] };
+
+export type WorkspaceHistory = {
+	/** Newest first. */
+	commits: WorkspaceCommit[];
+	commitsTruncated: boolean;
+	view: {
+		kind: "checked_out" | "branch" | "pull_request";
+		name?: string;
+		baseRef?: string;
+		/** `recent` lists a default branch's newest commits, having no base to count from. */
+		rangeMode: "since_base" | "recent";
+	};
+};
+
+/** The files a range of commits changed, combined. */
+export type WorkspaceCommitSelection = {
+	files: WorkspaceFileSummary[];
+	summary: { files: number; additions: number; deletions: number };
+	truncated: boolean;
+};
+
 const EMPTY_SECTIONS: Record<WorkspaceSection, WorkspaceFileSummary[]> = { committed: [], staged: [], unstaged: [], untracked: [] };
 
 function sessionPath(sessionId: string, rest: string): string {
@@ -90,28 +144,64 @@ export async function getWorkspaceManifest(cfg: ServerConfig, sessionId: string,
 	};
 }
 
+/**
+ * A view's query. `snapshot` keeps the daemon from ever answering it with the
+ * live worktree, as the desktop asks.
+ */
+function setView(query: URLSearchParams, view: WorkspaceView | undefined): void {
+	if (!view) return;
+	query.set("snapshot", "true");
+	if (view.branch) query.set("branch", view.branch);
+	if (view.prNumber) query.set("prNumber", String(view.prNumber));
+	if (view.sourceUrl) query.set("sourceUrl", view.sourceUrl);
+}
+
 export async function getWorkspaceFile(
 	cfg: ServerConfig,
 	sessionId: string,
 	path: string,
-	section?: WorkspaceSection,
+	read: FileRead = {},
+	view?: WorkspaceView,
 	init?: Pick<RequestInit, "signal">,
 ): Promise<WorkspaceFileDetail> {
 	const query = new URLSearchParams({ path });
-	if (section) query.set("section", section);
+	setView(query, view);
+	if (read.commitSha) query.set("commitSha", read.commitSha);
+	// A view or a commit is one diff; a section only splits the worktree's.
+	else if (read.section && !view) query.set("section", read.section);
 	const res = await apiRequest(cfg, `${sessionPath(sessionId, "workspace/file")}?${query}`, init);
 	return (await res.json()) as WorkspaceFileDetail;
 }
 
-export async function getWorkspaceTree(cfg: ServerConfig, sessionId: string, path = "", init?: Pick<RequestInit, "signal">): Promise<WorkspaceTree> {
-	const query = path ? `?${new URLSearchParams({ path })}` : "";
+/** One folder, of the worktree or of a view's tip. */
+export async function getWorkspaceTree(cfg: ServerConfig, sessionId: string, path = "", view?: WorkspaceView, init?: Pick<RequestInit, "signal">): Promise<WorkspaceTree> {
+	const params = new URLSearchParams(path ? { path } : {});
+	setView(params, view);
+	const query = String(params) ? `?${params}` : "";
 	const res = await apiRequest(cfg, `${sessionPath(sessionId, "workspace/tree")}${query}`, init);
 	const body = (await res.json()) as Partial<WorkspaceTree> | null;
 	return { path: body?.path ?? path, entries: body?.entries ?? [], truncated: Boolean(body?.truncated) };
 }
 
-export async function searchWorkspaceFiles(cfg: ServerConfig, sessionId: string, query: string, init?: Pick<RequestInit, "signal">): Promise<{ results: WorkspaceSearchResult[]; truncated: boolean }> {
-	const params = new URLSearchParams({ query, limit: "50" });
+const SEARCH_LIMIT = 50;
+
+/**
+ * Paths matching `query`. A view has no search route of its own: its tree,
+ * filtered, searches the whole snapshot.
+ */
+export async function searchWorkspaceFiles(cfg: ServerConfig, sessionId: string, query: string, view?: WorkspaceView, init?: Pick<RequestInit, "signal">): Promise<{ results: WorkspaceSearchResult[]; truncated: boolean }> {
+	if (view) {
+		const params = new URLSearchParams({ filter: query });
+		setView(params, view);
+		const res = await apiRequest(cfg, `${sessionPath(sessionId, "workspace/tree")}?${params}`, init);
+		const body = (await res.json()) as Partial<WorkspaceTree> | null;
+		const files = (body?.entries ?? []).filter((entry) => entry.type === "file");
+		return {
+			results: files.slice(0, SEARCH_LIMIT).map((entry) => ({ path: entry.path, status: entry.status ?? "unmodified", binary: Boolean(entry.binary), size: entry.size ?? 0 })),
+			truncated: files.length > SEARCH_LIMIT || Boolean(body?.truncated),
+		};
+	}
+	const params = new URLSearchParams({ query, limit: String(SEARCH_LIMIT) });
 	const res = await apiRequest(cfg, `${sessionPath(sessionId, "workspace/search")}?${params}`, init);
 	const body = (await res.json()) as { results?: WorkspaceSearchResult[]; truncated?: boolean } | null;
 	return { results: body?.results ?? [], truncated: Boolean(body?.truncated) };
@@ -122,9 +212,46 @@ export async function searchWorkspaceFiles(cfg: ServerConfig, sessionId: string,
  * no-store, so `version` (the workspace version) is what makes an edited image
  * reload; an unchanged URL is never refetched.
  */
-export function workspaceImageSource(cfg: ServerConfig, sessionId: string, path: string, side: "before" | "after", version: string): { uri: string; headers: Record<string, string> } {
+export function workspaceImageSource(cfg: ServerConfig, sessionId: string, path: string, side: "before" | "after", version: string, read: FileRead = {}, view?: WorkspaceView): { uri: string; headers: Record<string, string> } {
 	const query = new URLSearchParams({ path, side, v: version });
+	setView(query, view);
+	if (read.commitSha) query.set("commitSha", read.commitSha);
 	return { uri: `${httpBase(cfg)}${sessionPath(sessionId, "workspace/file/blob")}?${query}`, headers: authHeaders(cfg) };
+}
+
+/** The branches and pull request the Files screen can compare. */
+export async function getWorkspaceBranches(cfg: ServerConfig, sessionId: string, init?: Pick<RequestInit, "signal">): Promise<WorkspaceBranches> {
+	const res = await apiRequest(cfg, sessionPath(sessionId, "workspace/branches"), init);
+	const body = (await res.json()) as Partial<WorkspaceBranches> | null;
+	return { branches: body?.branches ?? [], supported: body?.supported !== false, truncated: Boolean(body?.truncated) };
+}
+
+/** The commits on the checked-out branch, or on a view, since its base. */
+export async function getWorkspaceHistory(cfg: ServerConfig, sessionId: string, view?: WorkspaceView, init?: Pick<RequestInit, "signal">): Promise<WorkspaceHistory> {
+	const params = new URLSearchParams();
+	if (view?.branch) params.set("branch", view.branch);
+	if (view?.prNumber) params.set("prNumber", String(view.prNumber));
+	if (view?.sourceUrl) params.set("sourceUrl", view.sourceUrl);
+	const query = String(params) ? `?${params}` : "";
+	const res = await apiRequest(cfg, `${sessionPath(sessionId, "workspace/history")}${query}`, init);
+	const body = (await res.json()) as Partial<WorkspaceHistory> | null;
+	return {
+		commits: (body?.commits ?? []).map((commit) => ({ ...commit, files: commit.files ?? [] })),
+		commitsTruncated: Boolean(body?.commitsTruncated),
+		view: body?.view ?? { kind: view ? (view.prNumber ? "pull_request" : "branch") : "checked_out", rangeMode: "since_base" },
+	};
+}
+
+/** What a view's whole range of commits changed. */
+export async function getWorkspaceRangeFiles(cfg: ServerConfig, sessionId: string, view: WorkspaceView, init?: Pick<RequestInit, "signal">): Promise<WorkspaceCommitSelection> {
+	const res = await apiRequest(cfg, sessionPath(sessionId, "workspace/history/selection"), {
+		...init,
+		method: "POST",
+		body: JSON.stringify({ ...view, commitShas: [] }),
+	});
+	const body = (await res.json()) as Partial<WorkspaceCommitSelection> | null;
+	const files = body?.files ?? [];
+	return { files, summary: body?.summary ?? sumFiles(files), truncated: Boolean(body?.truncated) };
 }
 
 /**

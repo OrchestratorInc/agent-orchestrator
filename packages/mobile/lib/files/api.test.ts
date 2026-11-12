@@ -18,7 +18,7 @@ vi.mock("../config", () => ({
 	}),
 }));
 
-import { sendFileFeedback, workspaceImageSource } from "./api";
+import { getWorkspaceFile, getWorkspaceHistory, getWorkspaceRangeFiles, getWorkspaceTree, searchWorkspaceFiles, sendFileFeedback, workspaceImageSource } from "./api";
 import { changedPathCount } from "./navigation";
 
 const cfg = { host: "mac.local", httpPort: 3001, password: "pw", hostId: "h1" } as never;
@@ -60,6 +60,52 @@ describe("image sources", () => {
 			uri: "http://mac.local:3001/api/v1/sessions/s/workspace/file/blob?path=img%2Fa+b.png&side=before&v=v7",
 			headers: { Authorization: "Bearer pw", "X-AO-Expected-Host-ID": "h1" },
 		});
+	});
+});
+
+describe("reading another branch or a commit", () => {
+	const view = { branch: "refs/remotes/origin/main" };
+
+	it("reads a worktree section, one commit, or a view's snapshot of a file", async () => {
+		await getWorkspaceFile(cfg, "s", "a.ts", { section: "staged" });
+		await getWorkspaceFile(cfg, "s", "a.ts", { commitSha: "abc" });
+		// A view is one diff, so a section would mean nothing to it.
+		await getWorkspaceFile(cfg, "s", "a.ts", { section: "staged" }, view);
+		await getWorkspaceFile(cfg, "s", "a.ts", { commitSha: "abc" }, { prNumber: 4, sourceUrl: "https://x/pull/4" });
+		expect(sent.bodies.map((entry) => entry.url)).toEqual([
+			"/api/v1/sessions/s/workspace/file?path=a.ts&section=staged",
+			"/api/v1/sessions/s/workspace/file?path=a.ts&commitSha=abc",
+			"/api/v1/sessions/s/workspace/file?path=a.ts&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain",
+			"/api/v1/sessions/s/workspace/file?path=a.ts&snapshot=true&prNumber=4&sourceUrl=https%3A%2F%2Fx%2Fpull%2F4&commitSha=abc",
+		]);
+	});
+
+	it("browses and searches a view's tip through its tree", async () => {
+		await getWorkspaceTree(cfg, "s", "");
+		await getWorkspaceTree(cfg, "s", "src", view);
+		await searchWorkspaceFiles(cfg, "s", "app", view);
+		expect(sent.bodies.map((entry) => entry.url)).toEqual([
+			"/api/v1/sessions/s/workspace/tree",
+			"/api/v1/sessions/s/workspace/tree?path=src&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain",
+			"/api/v1/sessions/s/workspace/tree?filter=app&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain",
+		]);
+	});
+
+	it("asks for a view's history and its whole range of commits", async () => {
+		await getWorkspaceHistory(cfg, "s");
+		await getWorkspaceHistory(cfg, "s", { prNumber: 4 });
+		await getWorkspaceRangeFiles(cfg, "s", view);
+		expect(sent.bodies.map((entry) => entry.url)).toEqual([
+			"/api/v1/sessions/s/workspace/history",
+			"/api/v1/sessions/s/workspace/history?prNumber=4",
+			"/api/v1/sessions/s/workspace/history/selection",
+		]);
+		expect(sent.bodies[2].body).toEqual({ branch: "refs/remotes/origin/main", commitShas: [] });
+	});
+
+	it("points a view's or a commit's image at its snapshot", () => {
+		expect(workspaceImageSource(cfg, "s", "a.png", "after", "v1", { commitSha: "abc" }, view).uri)
+			.toBe("http://mac.local:3001/api/v1/sessions/s/workspace/file/blob?path=a.png&side=after&v=v1&snapshot=true&branch=refs%2Fremotes%2Forigin%2Fmain&commitSha=abc");
 	});
 });
 

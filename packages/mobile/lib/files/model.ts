@@ -6,7 +6,8 @@ import type { WorkspaceFileStatus, WorkspaceFileSummary, WorkspaceManifest, Work
 
 /** A changed file with every git section it shows up in (staged and unstaged at once, say). */
 export type ChangeEntry = WorkspaceFileSummary & { sections: WorkspaceSection[] };
-export type ChangeGroup = { key: "uncommitted" | "committed"; title: string; files: ChangeEntry[] };
+/** `key` names the group in a list: uncommitted, committed, or the pick a list shows (see selection.ts). */
+export type ChangeGroup = { key: string; title: string; files: ChangeEntry[] };
 
 const SECTION_ORDER: WorkspaceSection[] = ["staged", "unstaged", "untracked", "committed"];
 
@@ -46,6 +47,17 @@ export function changeGroups(manifest: Pick<WorkspaceManifest, "files" | "sectio
 		{ key: "uncommitted" as const, title: "Uncommitted", files: uncommitted.sort(byPath) },
 		{ key: "committed" as const, title: "Committed on branch", files: committed.sort(byPath) },
 	].filter((group) => group.files.length > 0);
+}
+
+/** Files, additions and deletions across `files`. */
+export function sumFiles(files: readonly Pick<WorkspaceFileSummary, "additions" | "deletions">[]): { files: number; additions: number; deletions: number } {
+	const total = { files: 0, additions: 0, deletions: 0 };
+	for (const file of files) {
+		total.files += 1;
+		total.additions += file.additions;
+		total.deletions += file.deletions;
+	}
+	return total;
 }
 
 /** Every changed file in list order — what the viewer's previous/next buttons walk. */

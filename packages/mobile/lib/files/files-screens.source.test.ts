@@ -12,7 +12,7 @@ describe("the Files list", () => {
 	// A folder is a page of its own: the edge swipe, Android's back and the back
 	// button's history all climb one level instead of leaving Files.
 	it("opens each folder as a page titled with its name", () => {
-		expect(source("./useFileActions.ts")).toContain('router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId } })');
+		expect(source("./useFileActions.ts")).toContain('router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId, ...picked } })');
 		expect(source("../../app/files/[sessionId]/folder.tsx")).toContain("navigation.setOptions({ title: name })");
 	});
 

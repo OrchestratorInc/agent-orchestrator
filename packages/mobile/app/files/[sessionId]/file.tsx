@@ -22,14 +22,13 @@ import { ToastHost } from "../../../lib/Toast";
 import { font, fontScaleCap, radius, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
-import type { WorkspaceFileDetail } from "../../../lib/files/api";
+import type { FileRead, WorkspaceFileDetail } from "../../../lib/files/api";
 import type { FilesBackend, WorkspaceImageSource } from "../../../lib/files/backend";
 import { useFilesBackend } from "../../../lib/files/useFilesBackend";
 import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, MARKER_WIDTH, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
 import { fileIcon } from "../../../lib/files/fileIcons";
 import {
 	annotationTarget,
-	changeGroups,
 	commentAnchor,
 	CONTEXT_STEP,
 	contentLines,
@@ -55,6 +54,8 @@ import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
 import { SegmentedChoice, type SegmentedChoiceOption } from "../../../lib/files/SegmentedChoice";
+import { branchLabel, changesLabel, fileRead, selectionParams, type SelectionParams } from "../../../lib/files/selection";
+import { useBranchBackend, useChangeList, useRouteSelection } from "../../../lib/files/useChangeList";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -80,7 +81,10 @@ export default function SessionFileScreen() {
 }
 
 function SessionFileContent() {
-	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string }>();
+	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string } & SelectionParams>();
+	// What the Files screen was comparing; a file opened from chat has none, the worktree's base.
+	const pick = useRouteSelection(params);
+	const picked = Object.keys(selectionParams(pick)).length > 0;
 	const id = String(params.sessionId ?? "");
 	const path = String(params.path ?? "");
 	const router = useRouter();
@@ -94,9 +98,15 @@ function SessionFileContent() {
 	const codeScale = useCodeScale();
 
 	const { manifest } = useWorkspaceManifest(hostMatches ? backend : null, id, hostMatches);
-	const changes = useMemo(() => manifest ? orderedChanges(changeGroups(manifest)) : [], [manifest]);
+	const branchBackend = useBranchBackend(hostMatches ? backend : null, pick.branch);
+	const viewing = pick.branch.kind !== "checked_out";
+	const { groups } = useChangeList(branchBackend, id, pick, manifest, hostMatches);
+	const changes = useMemo(() => orderedChanges(groups ?? []), [groups]);
 	const position = changes.findIndex((file) => file.path === path);
 	const listed = position >= 0 ? changes[position] : undefined;
+	// The diff the pick reads: a worktree section, one commit, or the whole range.
+	const readKey = JSON.stringify(fileRead(pick, listed));
+	const read = useMemo(() => JSON.parse(readKey) as FileRead, [readKey]);
 
 	const [detail, setDetail] = useState<WorkspaceFileDetail | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -123,13 +133,14 @@ function SessionFileContent() {
 
 	// What says the file changed under us: its fingerprint in the manifest, or the
 	// whole workspace version for a file the manifest does not list.
-	const fingerprint = listed?.fileFingerprint || manifest?.workspaceVersion || "";
+	// Another branch moves on its own, with nothing in the worktree's version to say so.
+	const fingerprint = listed?.fileFingerprint || (viewing ? "" : manifest?.workspaceVersion) || "";
 	const load = useCallback(async (quiet: boolean) => {
-		if (!backend || !hostMatches || !path) return;
+		if (!branchBackend || !hostMatches || !path) return;
 		const ticket = ++request.current;
 		if (!quiet) setLoading(true);
 		try {
-			const next = await backend.file(id, path);
+			const next = await branchBackend.file(id, path, read);
 			if (ticket !== request.current) return;
 			setDetail(next);
 			setLoadError(undefined);
@@ -138,7 +149,7 @@ function SessionFileContent() {
 		} finally {
 			if (ticket === request.current) setLoading(false);
 		}
-	}, [backend, hostMatches, id, path]);
+	}, [branchBackend, hostMatches, id, path, read]);
 
 	// A new path starts from a clean slate; the same path reloads quietly when the
 	// agent edits it, keeping the reader's place.
@@ -175,7 +186,7 @@ function SessionFileContent() {
 	const markdown = isMarkdownPath(path);
 	const image = isImagePath(path);
 	const svg = isSvgPath(path);
-	const imageSources = useImageSources(backend, id, path, detail, changed, image);
+	const imageSources = useImageSources(branchBackend, id, path, detail, changed, image, read);
 
 	// Lines with a comment card under them, so a screen reader hears "has a comment" there.
 	const commented = useMemo(() => new Set(fileComments.flatMap((comment) => comment.anchor ? [`${comment.anchor.side}:${comment.anchor.line}`] : [])), [fileComments]);
@@ -382,8 +393,12 @@ function SessionFileContent() {
 	const truncation = detail?.diffTruncated && effectiveMode === "diff"
 		? "This diff is too large to show in full; the end is cut off."
 		: detail?.contentTruncated && effectiveMode === "file" ? "This file is too large to show in full." : "";
-	const meta = metaRow || detail?.previousPath || viewOptions.length > 1 || truncation ? (
+	// Another branch, or part of the changes: said under the title, since the
+	// page reads the same either way. The branch is named only when it is not the worktree's.
+	const compared = picked ? [viewing ? branchLabel(pick.branch) : "", changesLabel(pick.changes)].filter(Boolean).join(" · ") : "";
+	const meta = metaRow || compared || detail?.previousPath || viewOptions.length > 1 || truncation ? (
 		<View style={styles.meta}>
+			{compared ? <Text accessibilityLabel={`Comparing ${compared}`} maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="middle" style={styles.compared}>{compared}</Text> : null}
 			{metaRow}
 			{detail?.previousPath ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.renamed}>{`Renamed from ${detail.previousPath}`}</Text> : null}
 			{viewOptions.length > 1 ? <SegmentedChoice<ViewChoice> value={view} options={viewOptions} onChange={chooseView} accessibilityLabel="View" /> : null}
@@ -421,7 +436,7 @@ function SessionFileContent() {
 	} else if (detail && markdown && rendered && effectiveMode === "file") {
 		body = <ScrollView contentContainerStyle={styles.markdown}><ChatMarkdown text={detail.content} /></ScrollView>;
 	} else if (detail && !rows.length) {
-		body = <View style={styles.center}><EmptyState icon={effectiveMode === "diff" ? "check" : "file"} title={effectiveMode === "diff" ? "No changes in this file" : "Empty file"} message={effectiveMode === "diff" ? "It matches the base branch." : undefined} /></View>;
+		body = <View style={styles.center}><EmptyState icon={effectiveMode === "diff" ? "check" : "file"} title={effectiveMode === "diff" ? "No changes in this file" : "Empty file"} message={effectiveMode === "diff" && !picked ? "It matches the base branch." : undefined} /></View>;
 	} else {
 		const listView = (
 			<GestureDetector gesture={drag.gesture}>
@@ -506,21 +521,21 @@ type ImageSide = WorkspaceImageSource;
  * header; Orchestrator Cloud has no image URL, so its are read as data and
  * may not exist, which `unavailable` reports so the page says so instead.
  */
-function useImageSources(backend: FilesBackend | null, sessionId: string, path: string, detail: WorkspaceFileDetail | null, changed: boolean, image: boolean) {
+function useImageSources(backend: FilesBackend | null, sessionId: string, path: string, detail: WorkspaceFileDetail | null, changed: boolean, image: boolean, read: FileRead) {
 	const [sources, setSources] = useState<{ key: string; before?: ImageSide; after?: ImageSide }>();
 	const wantBefore = Boolean(detail && detail.status !== "added" && changed);
 	const wantAfter = Boolean(detail && !detail.deleted);
 	const version = detail?.workspaceVersion ?? "";
-	const key = JSON.stringify([backend?.key, sessionId, path, version, wantBefore, wantAfter]);
+	const key = JSON.stringify([backend?.key, sessionId, path, version, wantBefore, wantAfter, read]);
 	useEffect(() => {
 		if (!backend || !detail || !image) return;
 		let current = true;
 		// A side that can't be read is no side: the page then says the image is
 		// unavailable rather than staying on Opening… with the read rejected.
-		const read = (side: "before" | "after") => backend.imageSource(sessionId, path, side, version).catch(() => undefined);
+		const side = (which: "before" | "after") => backend.imageSource(sessionId, path, which, version, read).catch(() => undefined);
 		void Promise.all([
-			wantBefore ? read("before") : undefined,
-			wantAfter ? read("after") : undefined,
+			wantBefore ? side("before") : undefined,
+			wantAfter ? side("after") : undefined,
 		]).then(([before, after]) => { if (current) setSources({ key, before, after }); });
 		return () => { current = false; };
 		// `key` covers what the effect reads from `detail`.
@@ -576,6 +591,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	metaText: { flex: 1, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textTertiary },
 	stepCount: { ...type.footnote, fontFamily: font.medium, color: t.textSecondary, paddingHorizontal: space.sm },
 	renamed: { ...type.footnote, color: t.blue },
+	compared: { fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textSecondary },
 	warn: { ...type.footnote, color: t.amber },
 	preview: { padding: space.lg },
 	markdown: { padding: space.lg, paddingBottom: 120 },
