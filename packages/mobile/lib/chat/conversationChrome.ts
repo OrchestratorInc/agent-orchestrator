@@ -46,8 +46,10 @@ export const QUOTA_CRITICAL_PERCENT = 90;
 export type QuotaWindow = {
 	key: "primary" | "secondary";
 	label: string;
-	/** Whole percent used, clamped to 0..100. */
+	/** Whole percent used, clamped to 0..100, for display. */
 	percent: number;
+	/** The same reading unrounded: compare windows on this, not on `percent`. */
+	exactPercent: number;
 	/** Bar width — floored so a thin sliver stays visible. */
 	fillPercent: number;
 	severity: Severity;
@@ -75,6 +77,7 @@ export function quotaWindows(limits?: ConversationRateLimits): QuotaWindow[] {
 			key: window.key,
 			label: single ?? (window.key === "primary" ? "Short-term limit" : "Long-term limit"),
 			percent: Math.round(percent),
+			exactPercent: percent,
 			fillPercent: Math.max(2, percent),
 			severity: percent >= QUOTA_CRITICAL_PERCENT ? "critical" : percent >= QUOTA_WARN_PERCENT ? "warn" : "normal",
 			resetsInSeconds: window.resetsInSeconds,
@@ -98,7 +101,9 @@ export function quotaWarning(limits?: ConversationRateLimits): {
 } | undefined {
 	const windows = quotaWindows(limits);
 	if (!windows.length) return undefined;
-	const worst = windows.reduce((current, candidate) => candidate.percent > current.percent ? candidate : current);
+	// Unrounded: 74.6 and 75.1 both round to 75, and the tie would keep the
+	// window that is still below the threshold.
+	const worst = windows.reduce((current, candidate) => candidate.exactPercent > current.exactPercent ? candidate : current);
 	if (worst.severity === "normal") return undefined;
 	return { percent: worst.percent, severity: worst.severity, label: worst.label, resetsInSeconds: worst.resetsInSeconds };
 }

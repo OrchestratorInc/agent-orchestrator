@@ -33,6 +33,13 @@ describe("mobile Chat conversation chrome", () => {
 		expect(quotaWarning({ primaryUsedPercent: 91, secondaryUsedPercent: 80 })?.severity).toBe("critical");
 	});
 
+	// Rounding first made 74.6 and 75.1 tie at 75, and the tie kept the window
+	// that is still below the threshold, so the warning vanished.
+	it("picks the fullest window before rounding", () => {
+		expect(quotaWarning({ primaryUsedPercent: 74.6, secondaryUsedPercent: 75.1 })).toMatchObject({ percent: 75, severity: "warn", label: "Long-term limit" });
+		expect(quotaWarning({ primaryUsedPercent: 89.6, secondaryUsedPercent: 90.1 })).toMatchObject({ percent: 90, severity: "critical", label: "Long-term limit" });
+	});
+
 	it("lists each reported window and never draws an unreported one", () => {
 		expect(quotaWindows(undefined)).toEqual([]);
 		expect(quotaWindows({ primaryUsedPercent: -1, secondaryUsedPercent: -1 })).toEqual([]);
