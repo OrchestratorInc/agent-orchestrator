@@ -170,6 +170,9 @@ ipcRenderer.on("browser:annotation:action", (_event, action: string) => {
 	else if (action === "submit") void submitBatch();
 });
 
+// The tab was hidden, so the user can no longer see or finish the dictation.
+ipcRenderer.on("browser:annotation:stopDictation", () => haltDictation());
+
 window.addEventListener("beforeunload", cleanupOverlay);
 
 function sanitizeSessionAdjustments(): void {

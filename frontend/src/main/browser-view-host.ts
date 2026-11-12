@@ -2089,7 +2089,13 @@ export function createBrowserViewHost(
     }
     session.activeTabId = tabId;
     session.activationRevision += 1;
-    if (previous && previous !== next) previous.driver().show(false);
+    if (previous && previous !== next) {
+      previous.driver().show(false);
+      // A hidden tab's composer cannot be finished; its dictation ends with
+      // the words it has.
+      if (previous.annotationEnabled && previous.annotationDictation)
+        previous.view.webContents.send("browser:annotation:stopDictation");
+    }
     next.driver().show(true);
     if (session.devtools && isBlankBrowserEntry(next)) destroyDevTools(session);
     applySessionBounds(session, next);
@@ -5028,7 +5034,11 @@ export function createBrowserViewHost(
       lastUsedViewId !== null && entries.has(lastUsedViewId),
     isAnnotationDictationSender: (contents) => {
       const entry = tabsByWebContentsId.get(contents.id);
-      return Boolean(entry?.annotationEnabled && entry.annotationDictation);
+      if (!entry?.annotationEnabled || !entry.annotationDictation) return false;
+      // Only the tab on screen, whose composer the user can see and finish.
+      const viewId = viewIdsBySessionId.get(entry.sessionId);
+      const session = viewId ? entries.get(viewId) : undefined;
+      return session?.activeTabId === entry.tabId;
     },
     hasVisiblePanel: () =>
       [...entries.values()].some((session) => session.visible && session.tabs.size > 0),

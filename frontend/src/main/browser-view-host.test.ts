@@ -5279,6 +5279,28 @@ describe("agent browser screenshot", () => {
 	});
 });
 
+describe("annotation dictation", () => {
+	it("only lets the active annotating tab dictate, and stops a tab's dictation when it is hidden", async () => {
+		const { host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:annotation:setMode", { viewId, enabled: true, dictation: true });
+		const first = views[0].webContents;
+		expect(host.isAnnotationDictationSender(first)).toBe(true);
+
+		await invoke("browser:openTab", { viewId });
+
+		expect(first.send).toHaveBeenCalledWith("browser:annotation:stopDictation");
+		expect(host.isAnnotationDictationSender(first)).toBe(false);
+	});
+
+	it("does not offer dictation while annotation is off", async () => {
+		const { host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
+		await invoke("browser:annotation:setMode", { viewId, enabled: false, dictation: true });
+		expect(host.isAnnotationDictationSender(views[0].webContents)).toBe(false);
+	});
+});
+
 describe("browser tab lifecycle stress (tabs stop closing regression guard)", () => {
 	const stressTabCount = 16;
 	// Re-verifies the historically reported "tabs stop closing" bug against the

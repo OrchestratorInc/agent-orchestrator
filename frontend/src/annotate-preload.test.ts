@@ -833,6 +833,19 @@ describe("annotation composer dictation", () => {
 		expect(electronMocks.dictationListeners.size).toBe(0);
 	});
 
+	it("stops dictating, keeping the words, when its tab is hidden", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-hidden");
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+		emitDictation({ type: "text", text: "Keep this" });
+
+		electronMocks.listeners.get("browser:annotation:stopDictation")?.({});
+
+		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:cancel");
+		expect(root.querySelector<HTMLTextAreaElement>(".composer-note")?.value).toBe("Keep this");
+		expect(root.querySelector('[data-action="dictate"]')?.getAttribute("aria-pressed")).toBe("false");
+	});
+
 	it("finishes dictation on Escape instead of closing the composer", () => {
 		setMode(true, createBrowserAnnotationSession(window.location.href), true);
 		const root = openComment("dictate-escape");
