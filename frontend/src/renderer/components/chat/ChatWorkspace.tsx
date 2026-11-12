@@ -5519,7 +5519,9 @@ const TurnGroup = memo(function TurnGroup({
 			}
 			rollbackDisabled={rollbackDisabled}
 			onSelectAnnotation={onSelectAnnotation}
-			status={run.items[0]?.id === loginNoteMessageId && login ? <LoginStatusNote status={login.status} /> : undefined}
+			status={run.items[0]?.id === loginNoteMessageId && login
+				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
+				: undefined}
 		/>
 	);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
@@ -6385,7 +6387,12 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 							: state === "signedOut" ? "queued"
 								// In, but it was not sent: the band offers Send again.
 								: "stopped";
-			map.set(turn.id, { status, align: workedTurnIds.has(turn.id) ? "start" : "end" });
+			map.set(turn.id, {
+				status,
+				align: workedTurnIds.has(turn.id) ? "start" : "end",
+				// The band offers only the latest refusal; an earlier one keeps its own Retry.
+				...(turn.id !== refusedId ? { ownRetry: true } : {}),
+			});
 		}
 		return map;
 	}, [queued, refusedId, snapshot.turns, state, workedTurnIds]);

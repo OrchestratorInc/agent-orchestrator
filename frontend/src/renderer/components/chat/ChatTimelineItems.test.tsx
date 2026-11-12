@@ -137,6 +137,24 @@ describe("TurnOutcome", () => {
 		expect(screen.queryByTestId("retry-turn")).toBeNull();
 	});
 
+	it("keeps Retry on an earlier refusal the band no longer offers", () => {
+		const onRetry = vi.fn();
+		const { unmount } = render(<TurnOutcome state="failed" failureCode="auth_required" login={{ status: "stopped", align: "start", ownRetry: true }}
+			retry={{ onRetry }} copyText="Edited the file" onRollback={vi.fn()} />);
+		// A turn that did work: Retry leads its shared row.
+		fireEvent.click(screen.getByTestId("retry-turn"));
+		expect(onRetry).toHaveBeenCalledOnce();
+		unmount();
+
+		// One that did nothing else: on the line, which sits in the message's row.
+		render(<TurnOutcome state="failed" failureCode="auth_required" login={{ status: "stopped", align: "end", ownRetry: true }}
+			retry={{ onRetry, error: "Stop the current turn before retrying this one" }} />);
+		expect(screen.getByTestId("login-status")).toHaveTextContent(/^Stopped$/);
+		fireEvent.click(screen.getByTestId("retry-turn"));
+		expect(onRetry).toHaveBeenCalledTimes(2);
+		expect(screen.getByRole("alert")).toHaveTextContent("Stop the current turn before retrying this one");
+	});
+
 	it("shows a refused login with no way to log in as the plain failure", () => {
 		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" />);
 		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();

@@ -305,7 +305,8 @@ describe("ChatWorkspace refused login", () => {
 		}
 	});
 
-	it("counts no login until it knows the account the session runs on", async () => {
+	/** The session's account lookup, answered when the test says so. */
+	function slowAccountLookup() {
 		let answer: (accounts: Record<string, string>) => void = () => {};
 		const get = vi.spyOn(apiClient, "GET").mockImplementation(((path: string) =>
 			path === "/api/v1/agents/accounts/sessions/{sessionId}"
@@ -313,6 +314,11 @@ describe("ChatWorkspace refused login", () => {
 					answer = (data) => resolve({ data });
 				})
 				: Promise.resolve({ data: undefined })) as never);
+		return { get, answer: (accounts: Record<string, string>) => answer(accounts) };
+	}
+
+	it("counts no login for another account while it reads the account the session runs on", async () => {
+		const lookup = slowAccountLookup();
 		try {
 			const retry = vi.fn();
 			render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
@@ -325,12 +331,34 @@ describe("ChatWorkspace refused login", () => {
 			expect(useUiStore.getState().settingsModal).not.toBeNull();
 			expect(retry).not.toHaveBeenCalled();
 
-			await act(async () => answer({ claude: "acct-a" }));
+			// It was: the session runs on another account, so it stays signed out.
+			await act(async () => lookup.answer({ claude: "acct-a" }));
 			expect(useUiStore.getState().loginReturn).toMatchObject({ accountPending: false, accountId: "acct-a" });
+			expect(useUiStore.getState().loginReturn?.loggedInAt).toBeUndefined();
+			expect(retry).not.toHaveBeenCalled();
 			act(() => useUiStore.getState().completeLoginReturn("claude-code", undefined, "acct-a"));
 			expect(retry).toHaveBeenCalledWith("turn-1");
 		} finally {
-			get.mockRestore();
+			lookup.get.mockRestore();
+		}
+	});
+
+	it("counts a login that took while it read the account, once that is the account", async () => {
+		const lookup = slowAccountLookup();
+		try {
+			const retry = vi.fn();
+			render(<ChatWorkspace snapshot={signedOutSnapshot({ didWork: false })} retryControl={{ retry }} />);
+			await userEvent.click(within(band()).getByRole("button", { name: "Log in" }));
+
+			// Settings reports the login once, before the account is known.
+			act(() => useUiStore.getState().completeLoginReturn("claude-code", undefined, "acct-a"));
+			expect(retry).not.toHaveBeenCalled();
+
+			await act(async () => lookup.answer({ claude: "acct-a" }));
+			expect(useUiStore.getState().settingsModal).toBeNull();
+			expect(retry).toHaveBeenCalledWith("turn-1");
+		} finally {
+			lookup.get.mockRestore();
 		}
 	});
 
@@ -424,6 +452,24 @@ describe("ChatWorkspace refused login", () => {
 			if (platform) Object.defineProperty(window.navigator, "platform", platform);
 			else Reflect.deleteProperty(window.navigator, "platform");
 		}
+	});
+
+	it("keeps Retry on an earlier refused message, which the band no longer offers", async () => {
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const first = snapshot.turns[0]!;
+		const prompt = snapshot.items[0]!;
+		// Logged in some other way, the user went on with a new message, which was answered.
+		snapshot.turns = [first, { ...first, id: "turn-2", providerTurnId: "provider-turn-2", state: "completed", failureCode: undefined, errorMessage: undefined }];
+		snapshot.items = [prompt, { ...prompt, id: "user-2", turnId: "turn-2", sequence: prompt.sequence + 1 } as typeof prompt];
+		snapshot.account = undefined;
+		const retry = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry }} />);
+
+		expect(screen.queryByTestId("login-band")).toBeNull();
+		expect(screen.getByTestId("login-status")).toHaveTextContent(/^Stopped$/);
+		// Sending it again is the user's click, as for any failed turn.
+		await userEvent.click(screen.getByRole("button", { name: "Retry this turn" }));
+		expect(retry).toHaveBeenCalledWith("turn-1");
 	});
 
 	it("drops the wait, and sends nothing, once the conversation has moved on", () => {

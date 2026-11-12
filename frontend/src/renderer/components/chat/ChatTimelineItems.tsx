@@ -677,15 +677,19 @@ export function TurnOutcome({
 	// the provider's own advice ("run /login") is for its CLI and never shows.
 	if (state === "failed" && failureCode === "auth_required" && login) {
 		// A turn that did work still closes on the shared row, so its copy and undo
-		// stay where they always are; the band sends it again, so there is no Retry.
-		// One that did nothing else has its line under the message, whose row has them.
+		// stay where they always are; the band sends the latest refusal again, so that
+		// one has no Retry. One that did nothing else has its line under the message,
+		// whose row has them.
+		// An earlier refusal, past what the band offers, keeps its Retry like any failed turn.
 		const closesTurn = login.align === "start";
+		const ownRetry = login.ownRetry ? retry : undefined;
 		return (
 			<div data-turn-outcome={state} className={cn("flex min-w-0", closesTurn && "group/message flex-col gap-1.5")}>
-				<LoginStatusNote status={login.status} />
+				<LoginStatusNote status={login.status} retry={closesTurn ? undefined : ownRetry} />
 				{closesTurn ? (
 					<TurnActions
 						className="-mt-1"
+						retry={ownRetry}
 						copyText={copyText}
 						onRollback={onRollback}
 						rollbackDisabled={rollbackDisabled}
@@ -752,10 +756,14 @@ const LOGIN_STATUS_ICON = { queued: Hourglass, waiting: Hourglass, sending: Load
  * turn did nothing else leads its own row under the bubble with it, before the
  * time and copy; otherwise it is the turn's last line.
  */
-export function LoginStatusNote({ status }: { status: TurnOutcomeLogin["status"] }) {
+export function LoginStatusNote({ status, retry }: {
+	status: TurnOutcomeLogin["status"];
+	/** An earlier refusal's Retry, on the line itself when the message's row carries it. */
+	retry?: TurnOutcomeRetryControl;
+}) {
 	const { t } = useTranslation();
 	const Icon = LOGIN_STATUS_ICON[status];
-	return (
+	const note = (
 		<div
 			data-testid="login-status"
 			data-login-status={status}
@@ -763,6 +771,19 @@ export function LoginStatusNote({ status }: { status: TurnOutcomeLogin["status"]
 		>
 			{Icon ? <Icon aria-hidden="true" className={cn("size-3.5 shrink-0", status === "sending" && "animate-spin")} /> : null}
 			<span className="min-w-0">{t(`chat.login.status.${status}`)}</span>
+		</div>
+	);
+	if (!retry) return note;
+	return (
+		<div className="flex min-w-0 items-center gap-1">
+			{note}
+			<RetryTurnButton retry={retry} />
+			{/* The row is one line, so a failed retry says why where its button is. */}
+			{retry.error ? (
+				<span role="alert" title={retry.error} className="min-w-0 truncate text-xs leading-5 text-destructive">
+					{retry.error}
+				</span>
+			) : null}
 		</div>
 	);
 }
@@ -778,6 +799,30 @@ export interface TurnOutcomeLogin {
 	status: "queued" | "waiting" | "sending" | "resend" | "stopped";
 	/** On the message, under its bubble, when the turn did nothing else; otherwise the turn's last line. */
 	align: "end" | "start";
+	/** An earlier refusal the band no longer offers: it keeps its own Retry, as any failed turn does. */
+	ownRetry?: boolean;
+}
+
+/** Sends a failed turn's prompt again as a new turn. */
+function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
+	return (
+		<Button
+			type="button"
+			variant="quiet"
+			size="sm"
+			onClick={retry.onRetry}
+			disabled={retry.pending || retry.disabled}
+			aria-label="Retry this turn"
+			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
+			data-testid="retry-turn"
+		>
+			<RotateCw
+				aria-hidden="true"
+				className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
+			/>
+			{retry.pending ? "Retrying…" : "Retry"}
+		</Button>
+	);
 }
 
 interface TurnActionsProps {
@@ -815,24 +860,7 @@ export function TurnActions({
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
-				{retry ? (
-					<Button
-						type="button"
-						variant="quiet"
-						size="sm"
-						onClick={retry.onRetry}
-						disabled={retry.pending || retry.disabled}
-						aria-label="Retry this turn"
-						title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
-						data-testid="retry-turn"
-					>
-						<RotateCw
-							aria-hidden="true"
-							className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
-						/>
-						{retry.pending ? "Retrying…" : "Retry"}
-					</Button>
-				) : null}
+				{retry ? <RetryTurnButton retry={retry} /> : null}
 				{copyText !== undefined ? (
 					<div className="size-7 shrink-0">
 						<CopyButton

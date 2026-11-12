@@ -175,10 +175,12 @@ export type LoginReturn = {
 	 */
 	accountId?: string;
 	/**
-	 * The account is still being read. Until it is known no login counts, since
-	 * only that account's login fixes the session.
+	 * The account is still being read. A login that takes meanwhile is held until
+	 * it is known, since only that account's login fixes the session.
 	 */
 	accountPending?: boolean;
+	/** A login that took while the account was read, by the account it signed in. */
+	heldLogin?: { accountId?: string };
 	/** When the login took. */
 	loggedInAt?: number;
 	/** The chat has seen the login and sent nothing again: it says the user is in. */
@@ -486,6 +488,17 @@ function syncDeveloperModeToUpdater(enabled: boolean): void {
 	void request?.catch(() => undefined);
 }
 
+/** The waiting chat's login took: mark when, and close global settings back to the chat. */
+function loginTaken(state: UiState, waiting: LoginReturn): Partial<UiState> {
+	const modal = state.settingsModal;
+	// A login only finishes while the Agents page shows it, so closing global
+	// settings here returns the user to the chat they came from.
+	return {
+		loginReturn: { ...waiting, loggedInAt: Date.now() },
+		...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
+	};
+}
+
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
 	return sessions[sessionId] ?? { isOpen: false, view: "summary" };
 }
@@ -707,19 +720,19 @@ export const useUiStore = create<UiState>((set, get) => ({
 		const waiting = state.loginReturn;
 		if (!waiting || waiting.loggedInAt !== undefined || waiting.agentId !== agentId) return {};
 		if ((waiting.hostId ?? "local") !== (hostId ?? "local")) return {};
-		if (waiting.accountPending || (waiting.accountId !== undefined && waiting.accountId !== accountId)) return {};
-		const modal = state.settingsModal;
-		// A login only finishes while the Agents page shows it, so closing global
-		// settings here returns the user to the chat they came from.
-		return {
-			loginReturn: { ...waiting, loggedInAt: Date.now() },
-			...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
-		};
+		// Settings reports a login once: kept until the account is known, then matched.
+		if (waiting.accountPending) return { loginReturn: { ...waiting, heldLogin: accountId ? { accountId } : {} } };
+		if (waiting.accountId !== undefined && waiting.accountId !== accountId) return {};
+		return loginTaken(state, waiting);
 	}),
-	setLoginReturnAccount: (sessionId, accountId) => set((state) =>
-		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt === undefined
-			? { loginReturn: { ...state.loginReturn, accountPending: false, ...(accountId ? { accountId } : {}) } }
-			: {}),
+	setLoginReturnAccount: (sessionId, accountId) => set((state) => {
+		if (state.loginReturn?.sessionId !== sessionId || state.loginReturn.loggedInAt !== undefined) return {};
+		const { heldLogin, ...waiting } = state.loginReturn;
+		const known: LoginReturn = { ...waiting, accountPending: false, ...(accountId ? { accountId } : {}) };
+		// A login held while the account was read counts now, by the same rule as any.
+		const counts = heldLogin && (known.accountId === undefined || known.accountId === heldLogin.accountId);
+		return counts ? loginTaken(state, known) : { loginReturn: known };
+	}),
 	settleLoginReturn: (sessionId, turnId) => set((state) =>
 		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt !== undefined && !state.loginReturn.settled
 			? { loginReturn: { ...state.loginReturn, settled: true, ...(turnId ? { turnId } : {}) } }
