@@ -459,6 +459,12 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	// Cached artifact preview images, rendered once in a hidden window (main/artifact-snapshots.ts).
+	// Cards load them from the snapshot scheme; this only asks for a missing one.
+	artifactSnapshot: {
+		/** Renders a missing preview; true once it is cached. */
+		request: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:request", job) as Promise<boolean>,
+	},
 	// Session and project share links this device made (main/session-share-urls.ts).
 	sessionShareUrls: {
 		remember: (baseUrl: string, linkId: string, url: string) =>

@@ -147,6 +147,7 @@ import {
 	LiveResponseStatus,
 	LiveStepChoices,
 	isLiveStepKind,
+	isModelReroute,
 	liveTaskLabel,
 	reconnectCopy,
 	stepInProgress,
@@ -3960,7 +3961,9 @@ export function Timeline({
 					(item.turnId && backgroundQueuedTurnIds.has(item.turnId)) ||
 					// A terminal switch hands the note over as the first prompt; it is not the user's.
 					item.text.trimStart().startsWith("<ao-handoff-request")
-				)),
+				)) &&
+					// The model picker already names the model that answered.
+					!isModelReroute(item),
 			), localEchos),
 			...localItems,
 		],

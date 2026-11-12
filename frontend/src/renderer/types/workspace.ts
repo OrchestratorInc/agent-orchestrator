@@ -248,6 +248,8 @@ export type WorkspaceSession = {
 	 * is `"artifact"`. Empty/absent for sessions whose output is a PR or nothing.
 	 */
 	artifactFiles?: SessionArtifact[];
+	/** A cloud session counts artifacts whose list has not loaded yet. */
+	artifactFilesPending?: boolean;
 	/**
 	 * Present only for sessions that run in a control-plane sandbox. Carries the
 	 * org the session is scoped to so its terminal can be opened against the CP;
