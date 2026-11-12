@@ -490,6 +490,7 @@ function endDictation(): void {
 	if (!run) return;
 	dictation = null;
 	run.unsubscribe();
+	run.stopMeter?.();
 	syncDictationButton();
 }
 

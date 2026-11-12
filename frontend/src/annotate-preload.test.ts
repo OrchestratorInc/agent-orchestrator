@@ -804,6 +804,35 @@ describe("annotation composer dictation", () => {
 		expect(root.querySelector<HTMLButtonElement>('[data-action="add"]')?.disabled).toBe(false);
 	});
 
+	it.each([
+		["the helper finishes", () => emitDictation({ type: "end", text: "done" })],
+		["the user types", (root: ShadowRoot) => {
+			const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+			textarea.value = "typed";
+			textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		}],
+		["the composer closes", (root: ShadowRoot) => {
+			root.querySelector<HTMLTextAreaElement>(".composer-note")!
+				.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+		}],
+		["another surface takes the mic", () => emitDictation({ type: "superseded" })],
+	])("stops the level meter when %s while listening", (_name, finish) => {
+		const cancelFrame = vi.fn();
+		vi.stubGlobal("requestAnimationFrame", () => 42);
+		vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-meter");
+		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+		emitDictation({ type: "listening" });
+		// The run and its meter each listen.
+		expect(electronMocks.dictationListeners.size).toBe(2);
+
+		finish(root);
+
+		expect(cancelFrame).toHaveBeenCalledWith(42);
+		expect(electronMocks.dictationListeners.size).toBe(0);
+	});
+
 	it("finishes dictation on Escape instead of closing the composer", () => {
 		setMode(true, createBrowserAnnotationSession(window.location.href), true);
 		const root = openComment("dictate-escape");
