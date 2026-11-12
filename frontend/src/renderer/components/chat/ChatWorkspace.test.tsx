@@ -3163,13 +3163,12 @@ describe("ChatWorkspace timeline", () => {
 		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument());
 	});
 
-	it("keeps the sample requests on screen while the orchestrator starts, without filling the composer", async () => {
-		const user = userEvent.setup();
+	it("keeps the sample requests on screen but disabled while the orchestrator starts", () => {
 		const view = render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} newWorkDisabled />);
 
 		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
-		await user.click(prompts[0]);
-		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("Review my recent changes for bugs");
+		expect(prompts).toHaveLength(4);
+		for (const prompt of prompts) expect(prompt).toBeDisabled();
 		view.unmount();
 
 		// Other fenced chats (an unreachable host, leaving for the terminal) keep them hidden.

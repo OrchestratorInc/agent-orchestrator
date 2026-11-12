@@ -2193,11 +2193,11 @@ function ChatWorkspaceContent({
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
-									// While an orchestrator starts the prompts stay put so they don't pop in at
-									// the handoff; picks are ignored until it is up. Other fenced chats keep
-									// them hidden.
+									// While an orchestrator starts the prompts stay put, disabled, so they don't
+									// pop in at the handoff. Other fenced chats keep them hidden.
 									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart || orchestratorStarting)}
 									artifact={artifactSession}
+									unavailable={newWorkDisabled || pendingInPlaceStart}
 									onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
 								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
@@ -6604,7 +6604,7 @@ const CHAT_PROMPTS = [
  * The list collapses its height, and the gap below it, on the way in and out so the
  * centered composer glides instead of jumping.
  */
-function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; artifact: boolean; onPick: (text: string) => void }) {
+function WelcomePromptSuggestions({ open, artifact, unavailable = false, onPick }: { open: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
@@ -6638,6 +6638,7 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 									shape="pill"
 									title={t(prompt)}
 									className="welcome-prompt-suggestion border-border"
+									disabled={unavailable}
 									onClick={() => onPick(t(prompt))}
 								>
 									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
