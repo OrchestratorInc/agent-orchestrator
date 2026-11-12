@@ -147,6 +147,10 @@ type conversation struct {
 	// refused, so one that arrives while Stop waits for the dispatch lock
 	// cannot join, or hold up, a turn the user is stopping.
 	stoppingTurn string
+	// stopAttempts counts the Stops of stoppingTurn that have withdrawn its
+	// steers and not given them back. Steering returns only when the last
+	// one that fails gives it back; see RestoreSteering.
+	stopAttempts int
 	// nudging is set while a drain nudge is in flight; see steerByDrain.
 	nudging atomic.Bool
 	// steerSegment counts steers the running turn has taken. Text the agent
