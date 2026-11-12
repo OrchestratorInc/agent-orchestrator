@@ -223,26 +223,26 @@ function MoveSessionDialogContent({ request, onClose }: { request: MoveSessionRe
 				{view === "moving" ? null : (
 					<div className={settingsDialogFooterClass}>
 						{targets.length === 0 && !move ? (
-							<Button variant="footer" onClick={close}>{t("moveSession.cancel")}</Button>
+							<Button variant="secondary" onClick={close}>{t("moveSession.cancel")}</Button>
 						) : view === "choose" ? (
 							<>
-								<Button variant="footer" onClick={close}>{t("moveSession.cancel")}</Button>
-								<Button variant="footer-primary" disabled={!destination} onClick={() => start()}>{t("moveSession.start")}</Button>
+								<Button variant="secondary" onClick={close}>{t("moveSession.cancel")}</Button>
+								<Button variant="primary" disabled={!destination} onClick={() => start()}>{t("moveSession.start")}</Button>
 							</>
 						) : view === "busy" ? (
 							<>
-								<Button variant="footer" disabled={!destination} onClick={() => start({ stopTurn: true })}>{t("moveSession.stopAndMove")}</Button>
-								<Button variant="footer-primary" disabled={!destination} onClick={() => start({ afterTurn: true })}>{t("moveSession.afterTurn")}</Button>
+								<Button variant="secondary" disabled={!destination} onClick={() => start({ stopTurn: true })}>{t("moveSession.stopAndMove")}</Button>
+								<Button variant="primary" disabled={!destination} onClick={() => start({ afterTurn: true })}>{t("moveSession.afterTurn")}</Button>
 							</>
 						) : view === "waiting" ? (
-							<Button variant="footer" onClick={() => cancelWaitingMove(key)}>{t("moveSession.cancelMove")}</Button>
+							<Button variant="secondary" onClick={() => cancelWaitingMove(key)}>{t("moveSession.cancelMove")}</Button>
 						) : view === "failed" ? (
 							<>
-								<Button variant="footer" onClick={close}>{t("moveSession.cancel")}</Button>
-								<Button variant="footer-primary" disabled={!destination} onClick={() => start()}>{t("moveSession.retry")}</Button>
+								<Button variant="secondary" onClick={close}>{t("moveSession.cancel")}</Button>
+								<Button variant="primary" disabled={!destination} onClick={() => start()}>{t("moveSession.retry")}</Button>
 							</>
 						) : (
-							<Button variant="footer-primary" disabled={committing} onClick={() => void retryCommit()}>{t("moveSession.retry")}</Button>
+							<Button variant="primary" disabled={committing} onClick={() => void retryCommit()}>{t("moveSession.retry")}</Button>
 						)}
 					</div>
 				)}
