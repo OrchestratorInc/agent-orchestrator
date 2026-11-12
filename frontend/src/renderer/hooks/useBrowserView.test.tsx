@@ -1734,6 +1734,85 @@ describe("useBrowserView", () => {
 		expect(bridge.navigate).toHaveBeenCalledTimes(3);
 	});
 
+	describe("preview while the Browser slot is hidden", () => {
+		const preview = { viewId: "42:sess-1", url: "http://localhost:5173/" };
+		type Tab = { id: string; url: string; title: string; active: boolean };
+
+		// A session whose browser has no tab yet, entered with the slot hidden.
+		async function enterWithoutTabs() {
+			const bridge = setupBridge();
+			let tabs: Tab[] = [];
+			bridge.getTabs.mockImplementation(async (viewId: string) => ({ viewId, activeTabId: tabs[0]?.id ?? "", tabs }));
+			const hook = renderHook(
+				({ active }) =>
+					useBrowserView({ sessionId: "sess-1", active, poppedOut: false, previewUrl: preview.url, previewRevision: 1 }),
+				{ initialProps: { active: false } },
+			);
+			await waitFor(() => expect(hook.result.current.viewId).toBe(preview.viewId));
+			await waitFor(() => expect(bridge.getTabs).toHaveBeenCalled());
+			await act(async () => undefined);
+			const agentCommand = (active: boolean) =>
+				act(() =>
+					bridge.emitActivity({
+						viewId: preview.viewId,
+						active,
+						action: "open",
+						commandId: "c1",
+						phase: active ? "started" : "finished",
+					}),
+				);
+			const setTabs = (next: Tab[]) => {
+				tabs = next;
+				act(() => bridge.emitTabs({ viewId: preview.viewId, activeTabId: next[0]?.id ?? "", tabs: next }));
+			};
+			return { bridge, agentCommand, setTabs, ...hook };
+		}
+
+		it("does not load the preview until the slot is shown", async () => {
+			const { bridge, rerender } = await enterWithoutTabs();
+			expect(bridge.navigate).not.toHaveBeenCalled();
+			expect(bridge.openTab).not.toHaveBeenCalled();
+
+			rerender({ active: true });
+			await waitFor(() => expect(bridge.navigate).toHaveBeenCalledWith(preview));
+			expect(bridge.navigate).toHaveBeenCalledTimes(1);
+		});
+
+		it("loads the preview on entry when the session already has a tab", async () => {
+			const bridge = setupBridge();
+			renderHook(() =>
+				useBrowserView({ sessionId: "sess-1", active: false, poppedOut: false, previewUrl: preview.url, previewRevision: 1 }),
+			);
+			await waitFor(() => expect(bridge.navigate).toHaveBeenCalledWith(preview));
+		});
+
+		it("keeps the page an agent opened while the preview was held", async () => {
+			const { bridge, agentCommand, setTabs, rerender } = await enterWithoutTabs();
+			agentCommand(true);
+			setTabs([{ id: "t1", url: "http://localhost:5173/settings", title: "Settings", active: true }]);
+			await act(async () => undefined);
+			expect(bridge.navigate).not.toHaveBeenCalled();
+
+			const reads = bridge.getTabs.mock.calls.length;
+			agentCommand(false);
+			await waitFor(() => expect(bridge.getTabs.mock.calls.length).toBeGreaterThan(reads));
+			rerender({ active: true });
+			await act(async () => undefined);
+			expect(bridge.navigate).not.toHaveBeenCalled();
+		});
+
+		it("loads the held preview into a blank tab once the agent command that made it ends", async () => {
+			const { bridge, agentCommand, setTabs } = await enterWithoutTabs();
+			agentCommand(true);
+			setTabs([{ id: "t1", url: "", title: "", active: true }]);
+			await act(async () => undefined);
+			expect(bridge.navigate).not.toHaveBeenCalled();
+
+			agentCommand(false);
+			await waitFor(() => expect(bridge.navigate).toHaveBeenCalledWith(preview));
+		});
+	});
+
 	it("never opens a disconnected remote localhost preview on this machine", async () => {
 		const browser = setupBridge();
 		const resolve = vi.spyOn(aoBridge.remotes, "previewUrl").mockRejectedValueOnce(new Error("disconnected"))
