@@ -730,7 +730,8 @@ func TestSend_SteerReportsRestartedExitedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "restarted it and delivered") || strings.Contains(out, "No active turn") {
-		t.Errorf("output = %q, want the restart reported instead of the idle-turn text", out)
+	if !strings.Contains(out, "orch-48's agent had exited and Orchestrator restarted it") ||
+		!strings.Contains(out, "in queued state") || strings.Contains(out, "delivered") || strings.Contains(out, "No active turn") {
+		t.Errorf("output = %q, want the restart reported with the turn still queued, not delivered", out)
 	}
 }

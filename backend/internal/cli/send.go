@@ -151,7 +151,17 @@ func (c *commandContext) steerMessage(
 		return nil
 	}
 	if result.AgentWake != "" {
-		c.reportAgentWake(strings.TrimPrefix(sessionPath, "sessions/"), result.AgentWake)
+		// The steer answer carries the turn as it was queued, before the
+		// restarted agent took it, so report its state rather than delivery.
+		session := strings.TrimPrefix(sessionPath, "sessions/")
+		if result.Duplicate {
+			_, _ = fmt.Fprintf(c.deps.Out,
+				"%s's agent had exited and Orchestrator restarted it. Message was already accepted; delivery state is unchanged.\n", session)
+			return nil
+		}
+		_, _ = fmt.Fprintf(c.deps.Out,
+			"%s's agent had exited and Orchestrator restarted it. Message accepted as a normal Chat turn in %s state with delivery handle %s; provider delivery is not confirmed.\n",
+			session, result.State, clientMessageID)
 		return nil
 	}
 	if result.Duplicate {
