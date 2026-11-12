@@ -241,6 +241,7 @@ function findRegisteredWorkspaceByPath(workspaces: WorkspaceSummary[], path: str
 type CreateProjectConfigInput = {
 	workerAgent: string;
 	orchestratorAgent: string;
+	reviewerAgent?: string;
 	trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	defaultBranch?: string;
 };
@@ -250,6 +251,7 @@ export function createProjectConfig(input: CreateProjectConfigInput): components
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
 		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
 		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
+		...(input.reviewerAgent ? { reviewers: [{ harness: input.reviewerAgent }] } : {}),
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -457,7 +459,9 @@ function ShellLayout() {
 			workspaces.some((workspace) => workspace.id === routeParams.projectId && workspace.kind !== CLOUD_PROJECT_KIND),
 		leavePage: () => void navigate({ to: "/", replace: true }),
 	});
-	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
+	const linkSession = (routeParams.hostId ? remoteWorkspaces ?? [] : workspaces)
+		.flatMap((workspace) => workspace.sessions)
+		.find((session) => session.id === routeParams.sessionId && session.hostId === routeParams.hostId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);
 	useEffect(() => {
@@ -749,19 +753,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
 					: item),
 			);
+			// Follow the new orchestrator only if the user is still waiting on
+			// this project's board; do not pull them back from another page.
+			// The provisioning gate stays up until the session route has landed,
+			// otherwise the board shows through for a beat between the two.
+			const current = routeParamsRef.current;
+			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				// A failed navigation is not a failed start: the session exists.
+				await navigate({
+					to: "/projects/$projectId/sessions/$sessionId",
+					params: { projectId: workspace.id, sessionId },
+				}).catch(() => undefined);
+			}
 			// The session now exists, so the sidebar button can open it even if
 			// the user left while it spawned.
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			// Follow the new orchestrator only if the user is still waiting on
-			// this project's board; do not pull them back from another page.
-			const current = routeParamsRef.current;
-			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
-				void navigate({
-					to: "/projects/$projectId/sessions/$sessionId",
-					params: { projectId: workspace.id, sessionId },
-				});
-			}
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
@@ -811,6 +818,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			path: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			asWorkspace?: boolean;
 			clonePreparationId?: string;
@@ -909,6 +917,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			destinationParent: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			signal?: AbortSignal;
 		}) => {
@@ -1476,6 +1485,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			initializeProjectRepository,
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 			openProject,
+			remoteHosts,
+			retryRemoteHosts,
 			validateImport,
 		}),
 		[
@@ -1485,6 +1496,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			initializeProjectRepository,
 			openProjectSettings,
 			openProject,
+			remoteHosts,
+			retryRemoteHosts,
 			validateImport,
 			workspaceStartupState,
 		],

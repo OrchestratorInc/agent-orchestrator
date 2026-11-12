@@ -1,5 +1,6 @@
 import type { Element as HastElement } from "hast";
 import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excerpt-source";
+import { pageHidden } from "../../lib/page-hidden";
 /**
  * Markdown for agent prose.
  *
@@ -32,6 +33,7 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
+	useRef,
 	useState,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
@@ -250,9 +252,14 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	if (streaming && !fading) setFading(true);
 	// A reply already on screen when its chat opens (switching to a chat
 	// mid-stream) is not new; only characters that arrive afterwards fade in. A
-	// reply that arrives later fades from its first character.
+	// reply that arrives later fades from its first character. Text that arrives
+	// while the window is hidden is not watched either: its fade could only play
+	// once the reader is back, replaying the whole stretch at once.
 	const chatOpening = useContext(ChatOpeningRef);
-	const [settledOffset] = useState(() => (chatOpening.current ? text.length : 0));
+	const [openedOffset] = useState(() => (chatOpening.current ? text.length : 0));
+	const hiddenOffset = useRef(0);
+	if (pageHidden()) hiddenOffset.current = text.length;
+	const settledOffset = Math.max(openedOffset, hiddenOffset.current);
 	const renderMath = useUiStore((state) => state.renderMath);
 	const plugins = useMemo(() => {
 		const base = renderMath ? MATH_PLUGINS : PLUGINS;

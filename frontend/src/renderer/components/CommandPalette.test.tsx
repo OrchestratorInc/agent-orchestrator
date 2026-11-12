@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -279,6 +280,7 @@ beforeEach(() => {
 	createProjectFlowMock.lastOpenSignal = 0;
 	restoreMock.mockResolvedValue({ status: "success" });
 	act(() => {
+		useSessionImportStore.setState({ dialog: null });
 		useUiStore.setState({
 			isCommandPaletteOpen: false,
 			themePreference: "dark",
@@ -879,6 +881,30 @@ describe("CommandPalette drill-in + Enter", () => {
 });
 
 describe("CommandPalette actions", () => {
+	it("opens folder import with Enter from home and closes the palette", async () => {
+		mockSearch([]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "import claude code" } });
+		await waitFor(() => expect(document.querySelector('[cmdk-item][data-selected="true"]')?.textContent).toContain("Import projects and their chats"));
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(useSessionImportStore.getState().dialog).toEqual({ kind: "folders" });
+		await waitFor(() => expect(paletteInput()).toBeNull());
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("opens chat import for the selected project", async () => {
+		ctx.params = { projectId: "proj-1" };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.click(screen.getByText(rowTitle("Import chats…")));
+		expect(useSessionImportStore.getState().dialog).toEqual({ kind: "project", projectId: "proj-1" });
+		await waitFor(() => expect(paletteInput()).toBeNull());
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
 	it("shows disabled New task reason, skips it for selection, and ignores clicks", async () => {
 		ctx.params = {};
 		renderPalette();
