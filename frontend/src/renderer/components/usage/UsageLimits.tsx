@@ -113,7 +113,8 @@ function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAcco
 			>
 				<div className={cn("h-full rounded-full", tone)} style={{ width: `${used}%`, backgroundColor: tone ? undefined : agentTone(harness) }} />
 				{usedAtReset !== null && usedAtReset > used ? (
-					<div aria-hidden="true" className="absolute inset-y-0 w-0.5 bg-foreground/70" style={{ insetInlineStart: `${usedAtReset}%` }} />
+					// Clamped by the marker's own width so a projection that hits 100% stays inside the clipped track.
+					<div aria-hidden="true" className="absolute inset-y-0 w-0.5 bg-foreground/70" style={{ insetInlineStart: `min(${usedAtReset}%, calc(100% - 0.125rem))` }} />
 				) : null}
 			</div>
 			<span className="whitespace-nowrap text-end text-xs tabular-nums text-muted-foreground">
