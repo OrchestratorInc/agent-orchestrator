@@ -354,6 +354,15 @@ describe("prRowStatus", () => {
 		expect(prRowStatus(pr({ reviewDecision: "approved" }))).toEqual({ text: "Approved", tone: "success" });
 	});
 
+	// The summary's mergeability is the fresher fact: the board's boolean only
+	// stands in when the summary has no state.
+	it("lets the summary's blocked state outrank the board's mergeable flag", () => {
+		const approved = { decision: "approved" as const, hasUnresolvedHumanComments: false, unresolvedBy: [] };
+		expect(prRowStatus(pr({ mergeability: { mergeable: true } }), rich({ review: approved, mergeability: { state: "blocked", reasons: [] } }))).toEqual({ text: "Approved", tone: "success" });
+		expect(prRowStatus(pr({ reviewDecision: "approved", mergeability: { mergeable: true } }))).toEqual({ text: "Ready to merge", tone: "success" });
+		expect(prRowStatus(pr({ mergeability: { mergeable: true } }), rich({ review: approved, mergeability: { state: "unknown", reasons: [] } }))).toEqual({ text: "Ready to merge", tone: "success" });
+	});
+
 	// Their section already says merged or closed.
 	it("says nothing for a merged or closed PR", () => {
 		expect(prRowStatus(pr({ state: "merged", ciStatus: "failing" }))).toBeNull();

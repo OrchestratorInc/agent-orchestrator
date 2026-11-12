@@ -239,7 +239,8 @@ export function prRowStatus(pr: DashboardPR, summary?: SessionPRSummary): { text
 	if (unresolved) return { text: "Unresolved comments", tone: "warning" };
 	if (ci === "pending") return { text: "Checks running", tone: "neutral" };
 	if (review === "approved") {
-		const mergeable = merge === "mergeable" || pr.mergeability?.mergeable === true;
+		// A known state decides; the board's boolean only stands in without one.
+		const mergeable = merge && merge !== "unknown" ? merge === "mergeable" : pr.mergeability?.mergeable === true;
 		return mergeable ? { text: "Ready to merge", tone: "success" } : { text: "Approved", tone: "success" };
 	}
 	return null;
