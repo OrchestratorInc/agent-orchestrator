@@ -74,6 +74,28 @@ func TestConfigureLaunchArguments(t *testing.T) {
 	}
 }
 
+func TestToolDisabledStartsFailBeforeLaunchingGrok(t *testing.T) {
+	for _, readOnly := range []bool{false, true} {
+		args, env, err := configure(t.Context(), acpdriver.LaunchConfig{ReadOnly: readOnly, DisableTools: true})
+		if !errors.Is(err, ports.ErrChatCapabilityUnavailable) || args != nil || env != nil {
+			t.Fatalf("tool-disabled configuration = %v, %v, %v; want rejected launch", args, env, err)
+		}
+		driver := New(fakePlugin{status: ports.AgentAuthStatusAuthorized}, nil)
+		conversation, err := driver.Start(t.Context(), ports.ChatStartConfig{
+			SessionID: "background-grok-test", DataDir: t.TempDir(), Ephemeral: true,
+			WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeDefault,
+			ReadOnly: readOnly, DisableTools: true,
+		})
+		if conversation != nil {
+			_ = conversation.Close()
+			t.Fatal("tool-disabled launch started a native conversation")
+		}
+		if !errors.Is(err, ports.ErrChatCapabilityUnavailable) {
+			t.Fatalf("tool-disabled launch (read-only=%v) = %v, want capability unavailable", readOnly, err)
+		}
+	}
+}
+
 func TestPermissionModesCannotChangeOnLiveProcess(t *testing.T) {
 	for _, initial := range []ports.PermissionMode{
 		ports.PermissionModeDefault, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions,

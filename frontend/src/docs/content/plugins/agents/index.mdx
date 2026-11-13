@@ -117,6 +117,10 @@ requires restarting it. Native session history is loaded when the session is
 reopened. Restart existing Grok Chat providers after updating to apply these
 session-creation settings.
 
+Grok Chat does not yet support tool-free background tasks. Automatic task naming
+uses the prompt-derived fallback because the driver refuses launches that cannot
+enforce disabled native tools.
+
 ```bash
 ao spawn --project my-app --name auth-fix --agent claude-code --mode chat
 ```

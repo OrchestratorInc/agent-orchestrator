@@ -43,6 +43,10 @@ func TestTaskNamingAllShippedAgents(t *testing.T) {
 			if !drivers.SupportsChat(agent.Harness) {
 				launcher.err = ports.ErrChatUnsupported
 				want = "fix-login-redirect"
+			} else if agent.Harness == domain.HarnessGrok {
+				// Grok cannot enforce tool-disabled background launches yet.
+				launcher.err = ports.ErrChatCapabilityUnavailable
+				want = "fix-login-redirect"
 			}
 			m, st, _ := newChatManager(launcher)
 			m.dataDir = t.TempDir()

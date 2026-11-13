@@ -29,6 +29,12 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 }
 
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	if cfg.DisableTools {
+		// Grok ACP has no verified way to remove every native tool. In
+		// particular, an empty agent-profile tool list still enables defaults.
+		// Refuse text-only background calls before starting a native process.
+		return nil, nil, fmt.Errorf("%w: Grok ACP cannot disable native tools", ports.ErrChatCapabilityUnavailable)
+	}
 	if err := validateTurnSettings(cfg.Permissions, ports.ChatTurnSettings{Approval: cfg.Permissions}); err != nil {
 		return nil, nil, err
 	}
