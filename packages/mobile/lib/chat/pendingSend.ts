@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import type { ChatExcerpt } from "./types";
+import type { ProviderSwitchInput } from "./api";
 import { isChatExcerpt } from "./responseQuotes";
 
 export type PendingSendRecord = {
@@ -11,6 +12,8 @@ export type PendingSendRecord = {
 	excerpts?: ChatExcerpt[];
 	/** Absent on records saved by older builds, where every delivery was a send. */
 	kind?: "send" | "steer";
+	/** A send that also switches the chat's agent (desktop's pending switch). */
+	providerSwitch?: ProviderSwitchInput;
 };
 
 export function pendingSendKey(host: string, conversation: string): string {

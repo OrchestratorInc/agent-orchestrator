@@ -101,13 +101,14 @@ vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_target, key) => `#${String(key)}` });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
 });
-vi.mock("./api", () => ({ getWorkspacePaths: vi.fn(), openSessionShell: vi.fn() }));
+vi.mock("./api", () => ({ getWorkspacePaths: vi.fn(), openSessionShell: vi.fn(), prewarmChatAgent: vi.fn() }));
 vi.mock("./requestDockModel", () => ({ requestDockModel: () => undefined }));
 vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer") }));
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));
 vi.mock("./ChatMarkdown", async () => ({ ChatLinkProvider: await host("ChatLinkProvider") }));
 vi.mock("./ChatTimeline", async () => ({ ChatTimeline: await host("ChatTimeline") }));
 vi.mock("./McpServerNotice", async () => ({ McpServerNotice: await host("McpServerNotice") }));
+vi.mock("./ProviderSwitchMarker", async () => ({ ProviderSwitchLine: await host("ProviderSwitchLine") }));
 vi.mock("./useChatKeyboard", () => ({
 	useChatKeyboard: () => ({ keyboardVisible: false, rootStyle: {}, behavior: "padding", keyboardVerticalOffset: 0, composerLift: 0, restingInset: 0, dockRiseOverride: undefined }),
 }));
@@ -128,6 +129,7 @@ vi.mock("./conversationErrors", () => ({ conversationActionError: () => undefine
 vi.mock("./turnOptionsCatalog", () => ({ providerCatalogLive: () => false, turnOptionsLoadFor: () => undefined }));
 vi.mock("./types", () => ({ brokenMcpServers: () => [], can: () => false }));
 vi.mock("./useConversation", () => ({ useMobileConversation: () => fixtures.conversation }));
+vi.mock("./useAgentSwitchMenu", () => ({ useAgentSwitchMenu: () => undefined }));
 vi.mock("../useLastVerifiedConfig", () => ({ useLastVerifiedConfig: () => undefined }));
 vi.mock("./SessionStartup", async () => ({ SessionStartupStatus: await host("SessionStartupStatus") }));
 vi.mock("../session/sessionStartup", () => ({ sessionStartupView: () => undefined, startupVisible: () => false }));

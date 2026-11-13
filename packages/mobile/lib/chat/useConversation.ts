@@ -17,6 +17,8 @@ import {
 	resolveReviewerInput,
 	rollbackConversation,
 	sendConversationMessage,
+	switchProviderAndSend,
+	type ProviderSwitchInput,
 	requireConversationExcerptSupport,
 	sendReviewerConversationMessage,
 	setConversationConfigOption,
@@ -61,6 +63,8 @@ export type PendingSend = {
 	excerpts?: ChatExcerpt[];
 	hasAttachments: boolean;
 	restored?: boolean;
+	/** A send that also switches the chat's agent; see switchProviderAndSend. */
+	providerSwitch?: ProviderSwitchInput;
 };
 
 export type ConversationAction =
@@ -101,7 +105,8 @@ export type MobileConversation = {
 	 */
 	loadTurnOptions(options?: { refresh?: boolean; ifMissing?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
 	loadSkills(): Promise<ChatSkill[]>;
-	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
+	/** With `providerSwitch`, the chat switches to that agent and sends to it in one request. */
+	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], providerSwitch?: ProviderSwitchInput): Promise<string>;
 	retrySend(id: string): Promise<void>;
 	discardSend(id: string): Promise<void>;
 	acknowledgeSend(id: string): Promise<void>;
@@ -172,6 +177,9 @@ export function useMobileConversation(
 	const refreshGate = useRef(createRequestGate()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
+	// The agent the chat runs, for a retried switch's send (see deliver).
+	const harnessRef = useRef(snapshot?.harness);
+	harnessRef.current = snapshot?.harness;
 	const hasConversation = Boolean(snapshot);
 
 	const refresh = useCallback(async () => {
@@ -376,14 +384,20 @@ export function useMobileConversation(
 				} else if (pending.kind === "steer") {
 					await steerConversation(cfg, sessionId, pending.text, pending.id);
 				} else {
-					const sendMessage = options?.reviewId ? sendReviewerConversationMessage : sendConversationMessage;
-					await sendMessage(cfg, options?.reviewId ?? sessionId, {
+					const message = {
 						text: pending.text,
 						clientMessageId: pending.id,
 						attachments: pending.attachments,
 						resources: pending.resources,
 						excerpts: pending.excerpts,
-					});
+					};
+					// A retry after the chat already took the new agent is an ordinary
+					// send, as on desktop: the switch went through and only the send did not.
+					const providerSwitch = !options?.reviewId && pending.providerSwitch?.targetHarness !== harnessRef.current
+						? pending.providerSwitch
+						: undefined;
+					if (providerSwitch) await switchProviderAndSend(cfg, sessionId, providerSwitch, message);
+					else await (options?.reviewId ? sendReviewerConversationMessage : sendConversationMessage)(cfg, options?.reviewId ?? sessionId, message);
 				}
 				setPendingSends((old) => old.filter((item) => item.id !== pending.id));
 				await refresh();
@@ -398,7 +412,7 @@ export function useMobileConversation(
 	);
 
 	const send = useCallback(
-		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => {
+		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], providerSwitch?: ProviderSwitchInput) => {
 			if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
 			// Before anything is reserved: a record written here that never reaches
 			// `pendingSends` would block the next send with nothing to resolve.
@@ -417,6 +431,7 @@ export function useMobileConversation(
 			}
 			const saved = await reservePendingSend(pendingKey, {
 				id, draftText: excerptDraftText(text, excerpts), text: message, excerpts, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
+				...(providerSwitch ? { providerSwitch } : {}),
 			});
 			await deliver({
 				...saved, text: attachments?.length || resources?.length ? message : saved.text,
