@@ -284,6 +284,15 @@ func TestSnapshotsRunNoRepositoryHooks(t *testing.T) {
 		}
 	}
 	runGit(t, repo, "config", "core.hooksPath", hooks)
+	// The hooks do fire for a plain git command, so none firing below means the
+	// snapshot kept them off.
+	runGit(t, repo, "update-ref", "refs/test/x", "HEAD")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("hooks did not fire for a plain git command: %v", err)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
 	ref := Ref("s1", "turn-1")
 	if err := Capture(context.Background(), repo, ref); err != nil {
 		t.Fatalf("Capture: %v", err)
@@ -493,6 +502,45 @@ func TestCaptureSkipsTooManyOrTooLargeUntrackedFiles(t *testing.T) {
 	sparse(t, repo, "build/huge.bin", maxUntrackedBytes+1)
 	if err := Capture(context.Background(), repo, Ref("s1", "turn-1")); err != nil {
 		t.Fatalf("Capture with only ignored output = %v", err)
+	}
+}
+
+func TestPlanRefusesUntrackedFilesPastTheLimits(t *testing.T) {
+	repo := newRepo(t)
+	ref := Ref("s1", "turn-1")
+	if err := Capture(context.Background(), repo, ref); err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	sparse(t, repo, "model.bin", maxUntrackedFileBytes+1)
+	if _, err := Plan(context.Background(), repo, ref); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("Plan = %v, want ErrTooLarge", err)
+	}
+}
+
+func TestRestoreCoversAssumeUnchangedFiles(t *testing.T) {
+	repo := newRepo(t)
+	runGit(t, repo, "update-index", "--assume-unchanged", "a.txt")
+	write(t, repo, "a.txt", "before\n")
+	ref := Ref("s1", "turn-1")
+	if err := Capture(context.Background(), repo, ref); err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	write(t, repo, "a.txt", "agent\n")
+	plan, err := Plan(context.Background(), repo, ref)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if want := []Change{{Path: "a.txt", Kind: ChangeReverted}}; !reflect.DeepEqual(plan.Changes, want) {
+		t.Fatalf("Changes = %+v, want %+v", plan.Changes, want)
+	}
+	if err := plan.Apply(context.Background()); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := read(t, repo, "a.txt"); got != "before\n" {
+		t.Fatalf("a.txt = %q, want the pre-turn contents", got)
+	}
+	if got := gitOutput(t, repo, "ls-files", "-v", "a.txt"); got != "h a.txt" {
+		t.Fatalf("real index entry = %q, want it still marked assume-unchanged", got)
 	}
 }
 

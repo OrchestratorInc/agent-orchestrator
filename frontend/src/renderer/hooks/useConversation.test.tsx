@@ -1024,7 +1024,7 @@ describe("conversation branching commands", () => {
 
 		expect(getMock).toHaveBeenCalledWith(
 			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
-			{ params: { path: { sessionId: "ao-1", turnId: "turn-2" } } },
+			{ params: { path: { sessionId: "ao-1", turnId: "turn-2" } }, signal: expect.any(AbortSignal) },
 		);
 		expect(postMock).toHaveBeenCalledWith(
 			"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",

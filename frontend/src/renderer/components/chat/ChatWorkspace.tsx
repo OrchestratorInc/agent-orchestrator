@@ -2368,9 +2368,9 @@ function ChatWorkspaceContent({
 				onPreview={onPreviewRollback ? previewRollback : undefined}
 				onConfirm={(turnId, filePlanId) => {
 					setConfirming(undefined);
-					void Promise.resolve(onRollback?.(turnId, filePlanId)).catch((cause: unknown) => {
-						// Files changed after the list was shown: open it again, read fresh.
-						if (apiErrorCode(cause) === "CHAT_ROLLBACK_FILES_CHANGED") setConfirming(turnId);
+					void Promise.resolve(onRollback?.(turnId, filePlanId)).catch(() => {
+						// Open it again so the error shows; this also reads the file list fresh.
+						setConfirming(turnId);
 					});
 				}}
 				onClose={() => setConfirming(undefined)}
@@ -2435,7 +2435,6 @@ function RollbackConfirmation({
 	const checking = Boolean(onPreview) && !loaded?.result && !loaded?.error;
 	const restore = loaded?.result?.filesRestorable ? loaded.result : undefined;
 	const unavailable = loaded?.result?.reason ?? loaded?.error;
-	const hiddenFiles = restore ? restore.totalFiles - restore.files.length : 0;
 
 	let detail: string;
 	if (checking) {
@@ -2445,11 +2444,11 @@ function RollbackConfirmation({
 			? "No files have changed since then."
 			: `${restore.totalFiles} ${restore.totalFiles === 1 ? "file" : "files"} will change.`;
 		const commits = restore.commitsSince === 1
-			? " 1 commit made since then stays on the branch, so its changes come back as uncommitted edits."
+			? " 1 commit made since then stays on the branch, and restoring the files can leave uncommitted changes that undo it."
 			: restore.commitsSince > 1
-				? ` ${restore.commitsSince} commits made since then stay on the branch, so their changes come back as uncommitted edits.`
+				? ` ${restore.commitsSince} commits made since then stay on the branch, and restoring the files can leave uncommitted changes that undo them.`
 				: "";
-		detail = `${files}${commits} Ignored files are left alone. This cannot be undone.`;
+		detail = `${files}${commits} Ignored files this rollback does not change are left alone. This cannot be undone.`;
 	} else {
 		detail = `${unavailable ? `Files can't be restored: ${unavailable}. ` : ""}Its memory of the conversation is discarded up to this point, so it will not know about anything you or it said later. Files it already changed in the worktree are left exactly as they are; only the conversation is rolled back. This cannot be undone.`;
 	}
@@ -2481,19 +2480,16 @@ function RollbackConfirmation({
 			}}
 		>
 			{restore && restore.files.length > 0 ? (
-				<>
-					<ul aria-label="Files that will change" className="max-h-40 overflow-y-auto rounded-md bg-surface py-1">
-						{restore.files.map((file) => (
-							<li key={file.path} className="flex items-center gap-2 px-2.5 py-1 text-xs">
-								<span className="min-w-0 flex-1 truncate font-mono text-foreground/80" title={file.path}>
-									{file.path}
-								</span>
-								<span className="shrink-0 text-muted-foreground">{rollbackChangeLabels[file.change]}</span>
-							</li>
-						))}
-					</ul>
-					{hiddenFiles > 0 ? <p className="mt-1 text-xs text-muted-foreground">and {hiddenFiles} more</p> : null}
-				</>
+				<ul aria-label="Files that will change" className="max-h-40 overflow-y-auto rounded-md bg-surface py-1">
+					{restore.files.map((file) => (
+						<li key={file.path} className="flex items-center gap-2 px-2.5 py-1 text-xs">
+							<span className="min-w-0 flex-1 truncate font-mono text-foreground/80" title={file.path}>
+								{file.path}
+							</span>
+							<span className="shrink-0 text-muted-foreground">{rollbackChangeLabels[file.change]}</span>
+						</li>
+					))}
+				</ul>
 			) : null}
 		</ConfirmDialog>
 	);

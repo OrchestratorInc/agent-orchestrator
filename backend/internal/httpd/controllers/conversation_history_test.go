@@ -286,7 +286,7 @@ func TestRollbackRouteRestoresFilesOnlyWhenAsked(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_BODY")
 }
 
-func TestRollbackPreviewRouteListsFilesUpToTheCap(t *testing.T) {
+func TestRollbackPreviewRouteListsEveryFile(t *testing.T) {
 	changes := []filesnapshot.Change{
 		{Path: "a.go", Kind: filesnapshot.ChangeReverted},
 		{Path: "gone.go", Kind: filesnapshot.ChangeRestored},
@@ -305,14 +305,14 @@ func TestRollbackPreviewRouteListsFilesUpToTheCap(t *testing.T) {
 	}
 	var got controllers.RollbackPreviewResponse
 	mustJSON(t, body, &got)
-	if !got.FilesRestorable || got.Reason != "" || got.TotalFiles != 201 || len(got.Files) != 200 || got.CommitsSince != 2 || got.PlanID != "plan-1" {
-		t.Fatalf("preview = restorable %v, reason %q, %d of %d files, %d commits, plan %q; want restorable, 200 of 201, 2 commits, plan-1",
+	if !got.FilesRestorable || got.Reason != "" || got.TotalFiles != 201 || len(got.Files) != 201 || got.CommitsSince != 2 || got.PlanID != "plan-1" {
+		t.Fatalf("preview = restorable %v, reason %q, %d of %d files, %d commits, plan %q; want restorable, 201 of 201, 2 commits, plan-1",
 			got.FilesRestorable, got.Reason, len(got.Files), got.TotalFiles, got.CommitsSince, got.PlanID)
 	}
 	if got.Files[0] != (controllers.RollbackFileChange{Path: "a.go", Change: "reverted"}) ||
 		got.Files[1] != (controllers.RollbackFileChange{Path: "gone.go", Change: "restored"}) ||
-		got.Files[199].Change != "removed" {
-		t.Fatalf("files = %+v ... %+v, want the service's order and kinds", got.Files[:2], got.Files[199])
+		got.Files[200].Change != "removed" {
+		t.Fatalf("files = %+v ... %+v, want the service's order and kinds", got.Files[:2], got.Files[200])
 	}
 }
 

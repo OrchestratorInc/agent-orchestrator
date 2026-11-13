@@ -4152,8 +4152,7 @@ type RollbackPreviewResponse struct {
 	// and a rollback then changes only the conversation.
 	FilesRestorable bool   `json:"filesRestorable"`
 	Reason          string `json:"reason,omitempty"`
-	// Files lists what a restore changes, at most the first 200; TotalFiles counts
-	// all of them.
+	// Files lists every path a restore changes; TotalFiles counts them.
 	Files      []RollbackFileChange `json:"files"`
 	TotalFiles int                  `json:"totalFiles"`
 	// CommitsSince counts commits made on the branch after the turn. A restore

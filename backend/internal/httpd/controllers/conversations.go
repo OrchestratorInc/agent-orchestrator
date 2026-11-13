@@ -629,12 +629,8 @@ func (c *ConversationsController) reloadMCPServers(w http.ResponseWriter, r *htt
 	})
 }
 
-// maxRollbackPreviewFiles bounds the file list a preview carries; a turn that
-// generated thousands of files is summarized by its count past this point.
-const maxRollbackPreviewFiles = 200
-
-// rollbackPreview lists the worktree files rolling back to a turn would restore,
-// so the confirmation can show them before anything changes.
+// rollbackPreview lists every worktree file rolling back to a turn would
+// restore, so the confirmation can show them all before anything changes.
 func (c *ConversationsController) rollbackPreview(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET",
@@ -647,9 +643,8 @@ func (c *ConversationsController) rollbackPreview(w http.ResponseWriter, r *http
 		writeConversationError(w, r, err)
 		return
 	}
-	shown := preview.Changes[:min(len(preview.Changes), maxRollbackPreviewFiles)]
-	files := make([]RollbackFileChange, 0, len(shown))
-	for _, change := range shown {
+	files := make([]RollbackFileChange, 0, len(preview.Changes))
+	for _, change := range preview.Changes {
 		files = append(files, RollbackFileChange{Path: change.Path, Change: string(change.Kind)})
 	}
 	envelope.WriteJSON(w, http.StatusOK, RollbackPreviewResponse{

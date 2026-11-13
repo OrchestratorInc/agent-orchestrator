@@ -205,6 +205,9 @@ func Plan(ctx context.Context, workspace, ref string) (Restore, error) {
 	if nested != "" {
 		return Restore{}, fmt.Errorf("%w: %s", ErrNestedRepository, nested)
 	}
+	if err := checkUntracked(ctx, top); err != nil {
+		return Restore{}, err
+	}
 	current, err := capture(ctx, top, nil)
 	if err != nil {
 		return Restore{}, err
@@ -399,9 +402,12 @@ func (r Restore) write(ctx context.Context, to state, write, remove []string) er
 // real index, so files whose stat data git already holds are not re-read. The
 // worktree tree leaves out ignored files other than those under ignored.
 func capture(ctx context.Context, top string, ignored []string) (state, error) {
-	realIndex, err := git(ctx, top, nil, nil, "rev-parse", "--path-format=absolute", "--git-path", "index")
+	realIndex, err := git(ctx, top, nil, nil, "rev-parse", "--git-path", "index")
 	if err != nil {
 		return state{}, err
+	}
+	if !filepath.IsAbs(realIndex) {
+		realIndex = filepath.Join(top, realIndex)
 	}
 	dir, err := os.MkdirTemp("", "ao-file-snapshot-*")
 	if err != nil {
@@ -417,6 +423,9 @@ func capture(ctx context.Context, top string, ignored []string) (state, error) {
 	if out.index, err = git(ctx, top, env, nil, "write-tree"); err != nil {
 		return state{}, err
 	}
+	if err := clearAssumeUnchanged(ctx, top, env); err != nil {
+		return state{}, err
+	}
 	if _, err := git(ctx, top, env, nil, "add", "--all"); err != nil {
 		return state{}, err
 	}
@@ -430,6 +439,28 @@ func capture(ctx context.Context, top string, ignored []string) (state, error) {
 		return state{}, err
 	}
 	return out, nil
+}
+
+// clearAssumeUnchanged drops the assume-unchanged mark from every entry of the
+// temporary index env names. git add skips files with the mark, so a snapshot
+// would miss their edits; the real index keeps its marks.
+func clearAssumeUnchanged(ctx context.Context, top string, env []string) error {
+	out, err := git(ctx, top, env, nil, "ls-files", "-v", "-z")
+	if err != nil {
+		return err
+	}
+	var marked []string
+	for _, entry := range strings.Split(out, "\x00") {
+		// "<tag> <path>"; a lowercase tag marks the entry assume-unchanged.
+		if len(entry) > 2 && entry[0] >= 'a' && entry[0] <= 'z' {
+			marked = append(marked, entry[2:])
+		}
+	}
+	if len(marked) == 0 {
+		return nil
+	}
+	_, err = git(ctx, top, env, nulList(marked), "update-index", "--no-assume-unchanged", "-z", "--stdin")
+	return err
 }
 
 // copyIndex copies the index with its modification time. Git compares an

@@ -1387,7 +1387,10 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		previewRollback: async (turnId: string) => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
-				{ params: { path: { sessionId: sessionId as string, turnId } } },
+				{
+					params: { path: { sessionId: sessionId as string, turnId } },
+					signal: AbortSignal.timeout(10_000),
+				},
 			);
 			if (error) throw error;
 			return data;

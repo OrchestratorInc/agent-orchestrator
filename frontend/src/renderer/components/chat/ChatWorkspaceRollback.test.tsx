@@ -68,7 +68,7 @@ describe("ChatWorkspace rollback", () => {
 				{ path: "src/auth/refresh.ts", change: "removed" },
 				{ path: "docs/auth.md", change: "restored" },
 			],
-			totalFiles: 4,
+			totalFiles: 3,
 			commitsSince: 1,
 			planId: "plan-1",
 		});
@@ -79,8 +79,7 @@ describe("ChatWorkspace rollback", () => {
 			"docs/auth.mdRestored",
 		]);
 		expect(dialog.textContent).toContain("the worktree goes back to how it was before it");
-		expect(dialog.textContent).toContain("4 files will change");
-		expect(dialog.textContent).toContain("and 1 more");
+		expect(dialog.textContent).toContain("3 files will change");
 		expect(dialog.textContent).toContain("1 commit made since then stays on the branch");
 		expect(dialog.textContent).not.toContain("left exactly as they are");
 

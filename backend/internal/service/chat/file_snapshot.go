@@ -94,14 +94,22 @@ func planFileRestore(ctx context.Context, workspace string, session domain.Sessi
 	if workspace == "" {
 		return filesnapshot.Restore{}, "this session has no workspace", nil
 	}
-	restore, err := filesnapshot.Plan(ctx, workspace, filesnapshot.Ref(session, turnID))
+	// Planning hashes the worktree like the snapshot before a turn does, so it
+	// gets the same budget instead of holding the preview or the rollback.
+	planCtx, cancel := context.WithTimeout(ctx, fileSnapshotBudget)
+	defer cancel()
+	restore, err := filesnapshot.Plan(planCtx, workspace, filesnapshot.Ref(session, turnID))
 	switch {
+	case err != nil && ctx.Err() == nil && errors.Is(planCtx.Err(), context.DeadlineExceeded):
+		return restore, "reading the worktree's files took too long", nil
 	case errors.Is(err, filesnapshot.ErrNotRepository):
 		return restore, "the workspace is not a git repository", nil
 	case errors.Is(err, filesnapshot.ErrNotFound):
 		return restore, "AO has no snapshot of the files from before this turn", nil
 	case errors.Is(err, filesnapshot.ErrNestedRepository):
 		return restore, "the workspace contains another git repository, whose files AO cannot restore", nil
+	case errors.Is(err, filesnapshot.ErrTooLarge):
+		return restore, "the worktree has too many or too large untracked files to restore safely", nil
 	case err != nil:
 		return restore, "", fmt.Errorf("plan file restore for %s: %w", turnID, err)
 	}
