@@ -142,7 +142,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; settle
 		return Promise.all(due.map(attemptOnce)).then(() => undefined);
 	}, [attemptOnce]);
 	const retryNow = useCallback(async () => {
-		retries.current.clear();
+		for (const retry of retries.current.values()) retry.attempt = -1;
 		await refresh();
 	}, [refresh]);
 

@@ -347,3 +347,19 @@ it("stops retrying and shows why when a retry is refused", async () => {
 	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
 	expect(remotes.connect).toHaveBeenCalledTimes(2);
 });
+
+it("keeps retrying an offline host when Retry cannot read the saved hosts", async () => {
+	vi.useFakeTimers();
+	vi.spyOn(Math, "random").mockReturnValue(1);
+	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
+	remotes.connect.mockRejectedValue(new Error("host http://box-a:3001 is offline"));
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await act(async () => { await Promise.resolve(); });
+	expect(result.current.hosts[0]?.status).toBe("offline");
+	remotes.list.mockRejectedValue(new Error("account changed"));
+	await act(async () => { await expect(result.current.retryNow()).rejects.toThrow("account changed"); });
+	const attempts = remotes.connect.mock.calls.length;
+	await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+	expect(remotes.connect.mock.calls.length).toBeGreaterThan(attempts);
+});
