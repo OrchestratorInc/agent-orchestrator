@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +14,15 @@ afterEach(async () => {
 });
 
 function sender(id = 1, destroyed = false) {
-	return Object.assign(new EventEmitter(), { id, isDestroyed: () => destroyed });
+	return Object.assign(new EventEmitter(), { id, isDestroyed: () => destroyed, isCrashed: () => false });
+}
+
+async function fileHandleWrite() {
+	const probe = await open(path.join(dir, "probe"), "w");
+	const proto = Object.getPrototypeOf(probe) as { write: (...args: unknown[]) => Promise<{ bytesWritten: number }> };
+	await probe.close();
+	await rm(path.join(dir, "probe"));
+	return { proto, real: proto.write };
 }
 
 function setup(chosen: string | null) {
@@ -42,6 +50,25 @@ describe("registerFileDownloadIpc", () => {
 		expect(await readdir(dir)).toEqual(["report.pdf"]);
 		expect(markDownloaded).toHaveBeenCalledExactlyOnceWith(target, "Orchestrator");
 		expect(window.listenerCount("destroyed")).toBe(0);
+		expect(window.listenerCount("render-process-gone")).toBe(0);
+	});
+
+	it("writes the rest of a chunk after a short write and fails a write that makes no progress", async () => {
+		const target = path.join(dir, "a.bin");
+		const { call } = setup(target);
+		const window = sender();
+		const { proto, real } = await fileHandleWrite();
+		const write = vi.spyOn(proto, "write").mockImplementation(function (this: unknown, buffer: unknown, offset: unknown, length: unknown) {
+			return real.call(this, buffer, offset, Math.min(Number(length), 1));
+		});
+		const id = await call("start", window, "a.bin");
+		await call("append", window, id, new Uint8Array([1, 2, 3]));
+		expect(write).toHaveBeenCalledTimes(3);
+		write.mockResolvedValueOnce({ bytesWritten: 0 });
+		await expect(call("append", window, id, new Uint8Array([4]))).rejects.toThrow("Short write");
+		write.mockRestore();
+		await call("finish", window, id);
+		expect([...(await readFile(target))]).toEqual([1, 2, 3]);
 	});
 
 	it("writes nothing when the user cancels the dialog", async () => {
@@ -60,6 +87,9 @@ describe("registerFileDownloadIpc", () => {
 		await call("start", window, "a.bin");
 		expect(await readdir(dir)).toHaveLength(1);
 		window.emit("destroyed");
+		await vi.waitFor(async () => expect(await readdir(dir)).toEqual([]));
+		await call("start", window, "a.bin");
+		window.emit("render-process-gone");
 		await vi.waitFor(async () => expect(await readdir(dir)).toEqual([]));
 	});
 

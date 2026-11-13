@@ -21,7 +21,7 @@ type Transfer = {
 	release: () => void;
 };
 
-type Sender = Pick<IpcMainInvokeEvent["sender"], "id" | "isDestroyed" | "once" | "removeListener">;
+type Sender = Pick<IpcMainInvokeEvent["sender"], "id" | "isCrashed" | "isDestroyed" | "once" | "removeListener">;
 
 export function registerFileDownloadIpc(deps: FileDownloadIpcDeps): void {
 	const mark = deps.markDownloaded ?? ((filePath: string, appName: string) => markDownloaded(filePath, appName));
@@ -50,27 +50,36 @@ export function registerFileDownloadIpc(deps: FileDownloadIpcDeps): void {
 		const partPath = path.join(path.dirname(result.filePath), `.${path.basename(result.filePath)}.${randomUUID()}.download`);
 		const file = await open(partPath, "wx");
 		const sender: Sender = event.sender;
-		if (sender.isDestroyed()) {
+		if (sender.isDestroyed() || sender.isCrashed()) {
 			await file.close().catch(() => undefined);
 			await rm(partPath, { force: true });
 			return null;
 		}
 		const key = randomUUID();
-		const onDestroyed = () => void discard(key);
-		sender.once("destroyed", onDestroyed);
+		const onGone = () => void discard(key);
+		sender.once("destroyed", onGone);
+		sender.once("render-process-gone", onGone);
 		transfers.set(key, {
 			owner: sender.id,
 			file,
 			partPath,
 			filePath: result.filePath,
-			release: () => sender.removeListener("destroyed", onDestroyed),
+			release: () => {
+				sender.removeListener("destroyed", onGone);
+				sender.removeListener("render-process-gone", onGone);
+			},
 		});
 		return key;
 	});
 
 	deps.ipcMain.handle("fileDownload:append", async (event, id: string, bytes: Uint8Array) => {
 		const [, transfer] = owned(event.sender, id);
-		await transfer.file.write(bytes);
+		let offset = 0;
+		while (offset < bytes.byteLength) {
+			const { bytesWritten } = await transfer.file.write(bytes, offset, bytes.byteLength - offset);
+			if (!bytesWritten) throw new Error("Short write");
+			offset += bytesWritten;
+		}
 	});
 
 	deps.ipcMain.handle("fileDownload:finish", async (event, id: string) => {

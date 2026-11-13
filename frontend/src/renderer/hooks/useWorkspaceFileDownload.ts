@@ -9,7 +9,13 @@ export async function downloadWorkspaceFile(baseUrl: string, sessionId: string, 
 	const route = `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}?raw=true`;
 	const response = await fetch(`${baseUrl.replace(/\/+$/, "")}${route}`);
 	if (!response.ok) throw new Error(`Download failed (${response.status})`);
-	const id = await aoBridge.fileDownload.start(path.slice(path.lastIndexOf("/") + 1));
+	let id: string | null;
+	try {
+		id = await aoBridge.fileDownload.start(path.slice(path.lastIndexOf("/") + 1));
+	} catch (error) {
+		await response.body?.cancel().catch(() => undefined);
+		throw error;
+	}
 	if (!id) {
 		await response.body?.cancel().catch(() => undefined);
 		return false;
