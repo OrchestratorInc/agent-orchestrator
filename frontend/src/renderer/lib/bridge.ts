@@ -106,6 +106,33 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
+		fileDownload: (() => {
+			const transfers = new Map<string, { name: string; chunks: Uint8Array[] }>();
+			return {
+				start: async (name: string) => {
+					const id = crypto.randomUUID();
+					transfers.set(id, { name, chunks: [] });
+					return id;
+				},
+				append: async (id: string, bytes: Uint8Array) => {
+					transfers.get(id)?.chunks.push(new Uint8Array(bytes));
+				},
+				finish: async (id: string) => {
+					const transfer = transfers.get(id);
+					transfers.delete(id);
+					if (!transfer) return;
+					const url = URL.createObjectURL(new Blob(transfer.chunks as BlobPart[]));
+					const link = document.createElement("a");
+					link.href = url;
+					link.download = transfer.name;
+					link.click();
+					setTimeout(() => URL.revokeObjectURL(url), 0);
+				},
+				cancel: async (id: string) => {
+					transfers.delete(id);
+				},
+			};
+		})(),
 		// Outside the desktop app a made link is remembered for this page only.
 		sessionShareUrls: (() => {
 			const urls = new Map<string, string>();

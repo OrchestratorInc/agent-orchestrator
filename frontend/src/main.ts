@@ -212,6 +212,7 @@ import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
+import { registerFileDownloadIpc } from "./main/file-download-ipc";
 import { createArtifactSnapshotStore, registerArtifactSnapshotIpc, registerArtifactSnapshotProtocol } from "./main/artifact-snapshots";
 import { ARTIFACT_SNAPSHOT_SCHEME } from "./shared/artifact-snapshot";
 import { createArtifactSnapshotRenderer } from "./main/artifact-snapshot-window";
@@ -3615,6 +3616,12 @@ registerChatImageIpc({
 	ipcMain,
 	clipboard: { writeImage: writeClipboardImage },
 	createImage: (bytes) => nativeImage.createFromBuffer(bytes),
+	dialog,
+	downloadsDirectory: () => app.getPath("downloads"),
+	appName: app.getName(),
+});
+registerFileDownloadIpc({
+	ipcMain,
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 	appName: app.getName(),

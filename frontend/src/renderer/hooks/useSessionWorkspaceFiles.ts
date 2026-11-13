@@ -430,7 +430,7 @@ async function artifactFingerprint(bytes: Uint8Array): Promise<string> {
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function readBoundedResponseBytes(response: Response, limit: number): Promise<{ bytes: Uint8Array; size: number; truncated: boolean }> {
+async function readBoundedResponseBytes(response: Response, limit: number): Promise<{ bytes: Uint8Array; size: number; truncated: boolean }> {
 	if (!response.body) {
 		const buffer = await response.arrayBuffer();
 		const bytes = new Uint8Array(buffer);
