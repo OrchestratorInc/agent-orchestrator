@@ -49,7 +49,9 @@ import {
 	shellTerminalsQueryKeyForHost,
 	useCloseShellTerminal,
 	useOpenShellTerminal,
+	toShellTerminal,
 	useRenameShellTerminal,
+	useReopenShellTerminal,
 	useShellTerminals,
 } from "./useShellTerminals";
 import { takeCloudShellInput } from "../lib/cloud-shell-input";
@@ -515,5 +517,44 @@ describe("tabs opened while their shell is being created", () => {
 		await waitFor(() => expect(open.result.current.isPending).toBe(false));
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual(shells);
 		expect(adoptedShellHandle(pending.handleId)).toBeUndefined();
+	});
+});
+
+describe("ended shell terminals", () => {
+	it("keeps the ended fields the daemon reports", () => {
+		expect(
+			toShellTerminal({
+				createdAt: "2026-11-09T09:00:00Z",
+				endedAt: "2026-11-10T20:44:00Z",
+				handleId: "shellterm-ended",
+				resumeHarness: "claude-code",
+				sessionId: "session-1",
+				title: "Build",
+				workingDir: "/worktree",
+			}),
+		).toMatchObject({ endedAt: "2026-11-10T20:44:00Z", resumeHarness: "claude-code", title: "Build" });
+		expect(toShellTerminal({ createdAt: "x", handleId: "live", title: "Terminal 1", workingDir: "/" })).not.toHaveProperty("endedAt");
+	});
+
+	it("reopens only on request and hands the tab to the new shell", async () => {
+		const ended: ShellTerminal = { ...shells[0], endedAt: "2026-11-10T20:44:00Z", resumeHarness: "codex" };
+		const queryClient = queryClientWithShells();
+		queryClient.setQueryData(shellTerminalsQueryKey, [ended, shells[1]]);
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		postMock.mockResolvedValue({
+			data: { shellTerminal: { createdAt: ended.createdAt, handleId: "shellterm-new", title: "one", workingDir: "/tmp" } },
+		});
+		const { result } = renderHook(() => useReopenShellTerminal(), { wrapper: wrapper(queryClient) });
+		expect(postMock).not.toHaveBeenCalled();
+
+		await act(async () => {
+			await result.current.mutateAsync({ handleId: ended.handleId, resumeAgent: true });
+		});
+
+		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}/reopen", {
+			params: { path: { handleId: ended.handleId } },
+			body: expect.objectContaining({ resumeAgent: true, shell: "auto" }),
+		});
+		expect(adoptedShellHandle(ended.handleId)).toBe("shellterm-new");
 	});
 });

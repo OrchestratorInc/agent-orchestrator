@@ -23,6 +23,7 @@ type ShellTerminalService interface {
 	ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]shelltermsvc.ShellTerminal, error)
 	RenameShellTerminal(ctx context.Context, handleID, title string) (shelltermsvc.ShellTerminal, error)
 	CloseShellTerminal(ctx context.Context, handleID string) error
+	ReopenShellTerminal(ctx context.Context, in shelltermsvc.ReopenShellTerminalInput) (shelltermsvc.ShellTerminal, error)
 }
 
 // ShellTerminalsController owns the /shell-terminals routes: standalone shells
@@ -37,6 +38,7 @@ func (c *ShellTerminalsController) Register(r chi.Router) {
 	r.Post("/shell-terminals", c.open)
 	r.Patch("/shell-terminals/{handleId}", c.rename)
 	r.Delete("/shell-terminals/{handleId}", c.close)
+	r.Post("/shell-terminals/{handleId}/reopen", c.reopen)
 	r.Get("/terminal-shells", c.listShells)
 	r.Get("/terminal-shells/check", c.checkShell)
 }
@@ -156,6 +158,39 @@ func (c *ShellTerminalsController) close(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// reopen replaces an ended shell with a fresh one in the same tab, on the
+// user's explicit request.
+func (c *ShellTerminalsController) reopen(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/shell-terminals/{handleId}/reopen")
+		return
+	}
+	var req ReopenShellTerminalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	handleID, err := url.PathUnescape(chi.URLParam(r, "handleId"))
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SHELL_TERMINAL_ID_INVALID", "Invalid shell terminal id", nil)
+		return
+	}
+	terminal, err := c.Svc.ReopenShellTerminal(r.Context(), shelltermsvc.ReopenShellTerminalInput{
+		HandleID:    handleID,
+		Shell:       req.Shell,
+		ResumeAgent: req.ResumeAgent,
+		Cols:        req.Cols,
+		Rows:        req.Rows,
+	})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ShellTerminalEnvelope{
+		ShellTerminal: shellTerminalResponse(terminal),
+	})
+}
+
 func shellTerminalResponses(in []shelltermsvc.ShellTerminal) []ShellTerminalResponse {
 	out := make([]ShellTerminalResponse, 0, len(in))
 	for _, t := range in {
@@ -173,5 +208,7 @@ func shellTerminalResponse(t shelltermsvc.ShellTerminal) ShellTerminalResponse {
 		Title:         t.Title,
 		TerminalTitle: t.TerminalTitle,
 		CreatedAt:     t.CreatedAt,
+		EndedAt:       t.EndedAt,
+		ResumeHarness: string(t.ResumeHarness),
 	}
 }

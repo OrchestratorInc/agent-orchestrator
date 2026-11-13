@@ -203,6 +203,7 @@ type fakeShellTerminalStore struct {
 	records           []ShellTerminalRecord
 	insertErr         error
 	deleteErrByHandle map[string]error
+	markEndedErr      error
 }
 
 func (f *fakeShellTerminalStore) InsertShellTerminal(_ context.Context, rec ShellTerminalRecord) error {
@@ -2450,11 +2451,15 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 			if tc.childProbeErr != nil && len(rt.destroyed) != 0 {
 				t.Fatalf("inconclusive child probe destroyed runtime: %v", rt.destroyed)
 			}
+			if listed[0].EndedAt != nil || st.records[0].EndedAt != nil {
+				t.Fatalf("uncertain shell marked ended: %+v", st.records)
+			}
 			// A later conclusive retry must finish cleanup without losing the
 			// handle needed to stop the host retained by the failed attempt.
+			// The session's shell then stays listed as an ended tab.
 			rt.childProbeErr, rt.destroyErr, rt.aliveErr = nil, nil, nil
 			listed, err = svc.ListShellTerminalsForCurrentAppRun(context.Background())
-			if err != nil || len(listed) != 0 || len(st.records) != 0 || rt.aliveByHandle[handleID] {
+			if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || len(st.records) != 1 || rt.aliveByHandle[handleID] {
 				t.Fatalf("retry list = %v, %v; rows = %v", listed, err, st.records)
 			}
 		})

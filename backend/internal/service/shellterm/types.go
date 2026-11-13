@@ -32,6 +32,22 @@ type ShellTerminal struct {
 	// TerminalTitle is present only when the program's title should label the tab.
 	TerminalTitle string    `json:"terminalTitle,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
+	// EndedAt is set when the shell's process is gone (for example after the
+	// computer restarted). The tab stays listed so the user can reopen it.
+	EndedAt *time.Time `json:"endedAt,omitempty"`
+	// ResumeHarness names the coding agent last seen in an ended shell when AO
+	// can reopen that agent's conversation picker for the user.
+	ResumeHarness domain.AgentHarness `json:"resumeHarness,omitempty"`
+}
+
+// ReopenShellTerminalInput asks to replace an ended shell with a fresh one in
+// the same place. ResumeAgent also starts the agent last seen there in its
+// own conversation picker; nothing the old shell ran is ever replayed.
+type ReopenShellTerminalInput struct {
+	HandleID    string
+	Shell       string
+	ResumeAgent bool
+	Cols, Rows  int
 }
 
 // OpenShellTerminalInput is the request to open a new shell pane. An empty

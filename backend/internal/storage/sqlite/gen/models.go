@@ -946,6 +946,8 @@ type ShellTerminal struct {
 	CommandOwner              string
 	TitleExplicit             bool
 	AppTitle                  string
+	EndedAt                   sql.NullTime
+	LastAgentHarness          string
 }
 
 type TelemetryEvent struct {
