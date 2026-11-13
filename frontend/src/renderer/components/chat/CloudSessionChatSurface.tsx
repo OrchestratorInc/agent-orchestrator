@@ -1535,8 +1535,9 @@ export function CloudSessionChatSurface({
 	const queuedEditOffered = offering.features.includes(QUEUED_EDIT_FEATURE) && !readOnly && session.isTerminated !== true;
 	const ownTurns = useMemo(() => ownMessageTurns(eventsQuery.data, me), [eventsQuery.data, me]);
 	// Only the author's own message, and only one whose text alone is what the
-	// agent receives: quotes and captures are inlined for it and an edit
-	// cannot rebuild them.
+	// agent receives. The control plane takes an edit of a message with quotes
+	// or captures but drops them, and they are inlined in the text the agent
+	// gets, which the composer cannot rebuild, so such a message offers no Edit.
 	const canEditQueuedMessage = useCallback(
 		(message: ConversationMessage) => Boolean(message.turnId && ownTurns.has(message.turnId) && !message.content?.length),
 		[ownTurns],

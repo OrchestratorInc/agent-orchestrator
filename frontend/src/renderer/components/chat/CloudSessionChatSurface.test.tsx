@@ -455,6 +455,34 @@ describe("CloudSessionChatSurface", () => {
 		expect(await outcome(new TypeError("Failed to fetch"))).not.toHaveProperty("code");
 	});
 
+	// The control plane edits any queued message of its author, and drops the
+	// quotes and captures it recorded; the agent got them inlined in its text,
+	// which the composer cannot rebuild. So Edit is offered only on the
+	// viewer's own messages without them.
+	it("offers Edit on the viewer's own queued messages, not on a teammate's or one with quotes", async () => {
+		cloudSetup.features = ["queued-edit"];
+		const message = (sequence: number, turnId: string, payload: Record<string, unknown>) =>
+			({ sessionId: session.id, sequence, type: "chat.user_message", payload: { turnId, ...payload }, createdAt: session.updatedAt });
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.turn_started", payload: { turnId: "running" }, createdAt: session.updatedAt },
+			message(2, "plain", { text: "mine", authorUserId: "user-1" }),
+			message(3, "quoted", { text: "Explain this\n\nquote", displayText: "Explain this", content: [{ type: "excerpt", text: "quote" }], authorUserId: "user-1" }),
+			message(4, "theirs", { text: "theirs", authorUserId: "teammate" }),
+		];
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 4, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items.filter((item: { kind: string }) => item.kind === "message")).toHaveLength(3));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.onEditQueuedTurn).toEqual(expect.any(Function));
+		const editable = Object.fromEntries(props.snapshot.items
+			.filter((item: { kind: string }) => item.kind === "message")
+			.map((item: { turnId: string }) => [item.turnId, props.canEditQueuedMessage(item)]));
+		expect(editable).toEqual({ plain: true, quoted: false, theirs: false });
+	});
+
 	// The control plane lets only a message's author edit it.
 	it("knows the turns of the viewer's own messages", () => {
 		const events: CloudCpClientEvent[] = [
