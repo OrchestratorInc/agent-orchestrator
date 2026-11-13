@@ -220,6 +220,20 @@ describe("handing dictation from one composer to another", () => {
 		expect(bridge.start).toHaveBeenCalledTimes(1);
 	});
 
+	it("lets Escape cancel a start that is still waiting for another composer", async () => {
+		record();
+		const second = renderHook(() => useDictation({ onText: vi.fn(), onEnd: vi.fn(), ownerKey: "chat-b" }));
+		bridge.start.mockClear();
+		act(() => second.result.current.toggle());
+		expect(second.result.current.phase).toBe("starting");
+		act(() => void window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+		expect(second.result.current.phase).toBe("idle");
+		await act(async () => {
+			for (const listener of [...bridge.listeners]) listener({ type: "end", text: "ignored" });
+		});
+		expect(bridge.start).not.toHaveBeenCalled();
+	});
+
 	it("does not wait forever for a recording that never finishes", async () => {
 		vi.useFakeTimers();
 		try {
