@@ -63,12 +63,16 @@ func InstallBugTriageSkill(skillsDir string) error {
 		return fmt.Errorf("create bug-triage skill: %w", err)
 	}
 	// Temp files from an interrupted write would stay untracked in git status.
-	stale, err := filepath.Glob(filepath.Join(skillDir, ".ao-tmp-*"))
+	// ReadDir, not Glob: the workspace path may hold pattern characters.
+	entries, err := os.ReadDir(skillDir)
 	if err != nil {
-		return fmt.Errorf("find bug-triage temp files: %w", err)
+		return fmt.Errorf("read bug-triage skill: %w", err)
 	}
-	for _, path := range stale {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".ao-tmp-") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(skillDir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove bug-triage temp file: %w", err)
 		}
 	}

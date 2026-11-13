@@ -162,7 +162,8 @@ func TestBugTriageSkillRepairsAnInterruptedInstall(t *testing.T) {
 			if out, err := exec.Command("git", "-C", workspace, "init", "-q").CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v: %s", err, out)
 			}
-			skillsDir := filepath.Join(workspace, "skills")
+			// Pattern characters in the project path must not change which files match.
+			skillsDir := filepath.Join(workspace, "notes[draft", "skills")
 			skillDir := filepath.Join(skillsDir, "bug-triage")
 			if err := os.MkdirAll(skillDir, 0o750); err != nil {
 				t.Fatal(err)
