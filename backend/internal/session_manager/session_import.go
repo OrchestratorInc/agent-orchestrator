@@ -372,6 +372,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 			SessionID string `json:"sessionId"`
 			CWD       string `json:"cwd"`
 			StartedAt int64  `json:"startedAt"`
+			Version   string `json:"version"`
 		}
 		if err != nil || json.Unmarshal(body, &live) != nil || live.SessionID != nativeID || live.PID <= 0 {
 			continue
@@ -379,7 +380,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 		if ownWorkspace != "" && pathWithin(ownWorkspace, live.CWD) {
 			continue
 		}
-		if claudeProcessLive(ctx, live.PID, live.StartedAt) {
+		if claudeProcessLive(ctx, live.PID, live.StartedAt, live.Version) {
 			return true
 		}
 	}
@@ -389,13 +390,13 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 // claudeProcessLive checks a registry entry against the process now holding its
 // PID. Registry files outlive crashes and PIDs are reused, so the PID must still
 // be a Claude process, and one that started before it registered the session.
-func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) bool {
+func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64, version string) bool {
 	if !processalive.Alive(pid) {
 		return false
 	}
 	name, started, ok := processStart(ctx, pid)
 	name = strings.ToLower(name)
-	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") {
+	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") && (version == "" || name != strings.ToLower(version)) {
 		return false
 	}
 	return registeredAtMillis <= 0 || !started.After(time.UnixMilli(registeredAtMillis))
