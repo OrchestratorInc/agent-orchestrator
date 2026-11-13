@@ -3912,8 +3912,8 @@ func TestSpawn_WorkspaceProjectRecordsRootAndChildWorktrees(t *testing.T) {
 	if rec.Metadata.WorkspacePath != managedPath {
 		t.Fatalf("workspace path = %q, want root worktree path", rec.Metadata.WorkspacePath)
 	}
-	if rec.Metadata.Branch != "ao/mer-1" {
-		t.Fatalf("workspace branch = %q, want ao/mer-1", rec.Metadata.Branch)
+	if !isGeneratedBranch(rec.Metadata.Branch, "ao/mer-1", false) {
+		t.Fatalf("workspace branch = %q, want ao/mer-1-<token>", rec.Metadata.Branch)
 	}
 	if got := ws.lastProjectCfg.RootRepoPath; got != projectPath {
 		t.Fatalf("root repo path = %q, want %q", got, projectPath)
@@ -5764,8 +5764,8 @@ func TestSpawn_DefaultsBranchFromSessionID(t *testing.T) {
 	}
 	// An empty SpawnConfig.Branch defaults to a unique per-session root branch
 	// under a namespace that can also hold sibling PR branches.
-	if got := st.sessions[s.ID].Metadata.Branch; got != "ao/mer-1/root" {
-		t.Fatalf("default branch = %q, want ao/mer-1/root", got)
+	if got := st.sessions[s.ID].Metadata.Branch; !isGeneratedBranch(got, "ao/mer-1", true) {
+		t.Fatalf("default branch = %q, want ao/mer-1-<token>/root", got)
 	}
 	if !st.sessions[s.ID].AutoInjectReview {
 		t.Fatal("automatic review injection must default to enabled")
@@ -6001,8 +6001,8 @@ func TestSpawn_DefaultBranchFetchFailureDoesNotBlockWorkerSpawn(t *testing.T) {
 	if len(ws.fetches) != 1 {
 		t.Fatalf("fetches = %d, want 1", len(ws.fetches))
 	}
-	if ws.lastCfg.Branch != "ao/mer-1/root" {
-		t.Fatalf("created branch = %q, want ao/mer-1/root", ws.lastCfg.Branch)
+	if !isGeneratedBranch(ws.lastCfg.Branch, "ao/mer-1", true) {
+		t.Fatalf("created branch = %q, want ao/mer-1-<token>/root", ws.lastCfg.Branch)
 	}
 }
 
@@ -6016,8 +6016,8 @@ func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions[worker.ID].Metadata.Branch; got != "ao/dev/mer-1/root" {
-		t.Fatalf("worker branch = %q, want ao/dev/mer-1/root", got)
+	if got := st.sessions[worker.ID].Metadata.Branch; !isGeneratedBranch(got, "ao/dev/mer-1", true) {
+		t.Fatalf("worker branch = %q, want ao/dev/mer-1-<token>/root", got)
 	}
 
 	orchestrator, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator})

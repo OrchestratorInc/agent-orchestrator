@@ -117,7 +117,7 @@ func TestPoll_ExistingAndExplicitAttachmentsStayStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pr := domain.PullRequest{URL: "https://github.com/o/r/pull/1", SessionID: owner.ID, Number: 1, Provider: "github", Host: "github.com", Repo: "o/r", SourceBranch: "feat/child", Author: "former-account", UpdatedAt: now}
+	pr := domain.PullRequest{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", SessionID: owner.ID, Number: 1, Provider: "github", Host: "github.com", Repo: "o/r", SourceBranch: "feat/child", Author: "former-account", UpdatedAt: now}
 	if err := store.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatal(err)
 	}

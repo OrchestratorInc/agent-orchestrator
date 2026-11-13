@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -208,6 +210,12 @@ func (m *Manager) renameTaskBranch(namer ports.WorkspaceTaskNamer, rec domain.Se
 	info := ports.WorkspaceProjectInfo{Root: ws}
 	if project != nil {
 		info = *project
+	}
+	name := strings.TrimSuffix(ws.Branch, "/root")
+	if len(name) > 36 && name[len(name)-37] == '-' {
+		if _, err := uuid.Parse(name[len(name)-36:]); err == nil {
+			slug += name[len(name)-37:]
+		}
 	}
 	held, err := namer.RenameTaskBranch(ctx, info, aoBranch(generatedBranchNamespace(m.dataDir), slug, "root"))
 	if err == nil && held.Root.Branch != ws.Branch {

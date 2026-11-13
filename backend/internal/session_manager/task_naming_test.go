@@ -133,7 +133,7 @@ func TestTaskNamingAfterAgentLaunch(t *testing.T) {
 					work[0]()
 				}
 				launched := st.sessions[rec.ID]
-				if launched.Metadata.Branch != "ao/"+string(rec.ID)+"/root" || filepath.Base(launched.Metadata.WorkspacePath) != string(rec.ID) {
+				if !isGeneratedBranch(launched.Metadata.Branch, "ao/"+string(rec.ID), true) || filepath.Base(launched.Metadata.WorkspacePath) != string(rec.ID) {
 					t.Fatalf("agent did not launch on the temporary names: %+v", launched)
 				}
 				if mode == domain.SessionModeChat && (len(launcher.started) != 1 || launcher.started[0].WorkspacePath != launched.Metadata.WorkspacePath) {
@@ -144,7 +144,7 @@ func TestTaskNamingAfterAgentLaunch(t *testing.T) {
 					t.Fatal(err)
 				}
 				actual := st.sessions[rec.ID]
-				if actual.Metadata.Branch != "ao/fix-login-redirect/root" || actual.Metadata.WorkspacePath != launched.Metadata.WorkspacePath || actual.DisplayName != "Fix login redirect" {
+				if actual.Metadata.Branch != namedBranch(actual.TemporaryBranch, "fix-login-redirect") || actual.Metadata.WorkspacePath != launched.Metadata.WorkspacePath || actual.DisplayName != "Fix login redirect" {
 					t.Fatalf("named session = %+v", actual)
 				}
 				if got := strings.TrimSpace(runManagerGit(t, actual.Metadata.WorkspacePath, "branch", "--show-current")); got != actual.Metadata.Branch {
@@ -184,7 +184,7 @@ func TestTaskNamingAfterLatePreparedWorkspace(t *testing.T) {
 		fn()
 	}
 	actual := st.sessions[rec.ID]
-	if actual.ProvisionState != domain.SessionProvisionReady || actual.Metadata.Branch != "ao/fix-login-redirect/root" || filepath.Base(actual.Metadata.WorkspacePath) != string(rec.ID) {
+	if actual.ProvisionState != domain.SessionProvisionReady || actual.Metadata.Branch != namedBranch(actual.TemporaryBranch, "fix-login-redirect") || filepath.Base(actual.Metadata.WorkspacePath) != string(rec.ID) {
 		t.Fatalf("state=%s error=%q branch=%s path=%s", actual.ProvisionState, actual.ProvisionError, actual.Metadata.Branch, actual.Metadata.WorkspacePath)
 	}
 }
@@ -217,7 +217,7 @@ func TestTaskNamingFallbackAndManualTitle(t *testing.T) {
 			if slug == "" {
 				slug = "fix-login-redirect"
 			}
-			if actual := st.sessions[rec.ID]; actual.Metadata.Branch != "ao/"+slug+"/root" || actual.DisplayName != "My manual title" {
+			if actual := st.sessions[rec.ID]; actual.Metadata.Branch != namedBranch(actual.TemporaryBranch, slug) || actual.DisplayName != "My manual title" {
 				t.Fatalf("fallback = %+v", actual)
 			}
 		})
@@ -413,7 +413,7 @@ func TestAsyncStartNamesOnlyAfterSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual := st.sessions[rec.ID]
-	if !gateFree || actual.ProvisionState != domain.SessionProvisionFailed || actual.Metadata.Branch != "ao/"+string(rec.ID)+"/root" || actual.BranchNaming {
+	if !gateFree || actual.ProvisionState != domain.SessionProvisionFailed || !isGeneratedBranch(actual.Metadata.Branch, "ao/"+string(rec.ID), true) || actual.BranchNaming {
 		t.Fatalf("gate free = %v, session = %+v", gateFree, actual)
 	}
 }
@@ -574,7 +574,7 @@ func TestTaskNamingRenamesEveryRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual := st.sessions[rec.ID]
-	if actual.Metadata.Branch != "ao/fix-login-redirect/root" || filepath.Base(actual.Metadata.WorkspacePath) != string(rec.ID) {
+	if actual.Metadata.Branch != namedBranch(actual.TemporaryBranch, "fix-login-redirect") || filepath.Base(actual.Metadata.WorkspacePath) != string(rec.ID) {
 		t.Fatalf("named session = %+v", actual)
 	}
 	if rows := st.worktrees[rec.ID]; len(rows) != 2 {

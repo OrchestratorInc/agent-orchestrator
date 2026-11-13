@@ -105,12 +105,12 @@ func TestPoll_TwoGitLabHostsIdentityResolution(t *testing.T) {
 		},
 		openPRs: map[string][]ports.SCMPRObservation{
 			prKey(glRepo, 0): {
-				{URL: "https://gitlab.com/o/r/-/merge_requests/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"},
-				{URL: "https://gitlab.com/o/r/-/merge_requests/2", Number: 2, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2", Author: "comuser"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://gitlab.com/o/r/-/merge_requests/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://gitlab.com/o/r/-/merge_requests/2", Number: 2, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2", Author: "comuser"},
 			},
 			prKey(glSelfRepo, 0): {
-				{URL: "https://gitlab.internal/o/r/-/merge_requests/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha3", Author: "other"},
-				{URL: "https://gitlab.internal/o/r/-/merge_requests/4", Number: 4, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha4", Author: "internaluser"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://gitlab.internal/o/r/-/merge_requests/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha3", Author: "other"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://gitlab.internal/o/r/-/merge_requests/4", Number: 4, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha4", Author: "internaluser"},
 			},
 		},
 		observations: map[string]ports.SCMObservation{
@@ -167,12 +167,12 @@ func TestPoll_PerProviderIdentityResolution(t *testing.T) {
 		},
 		openPRs: map[string][]ports.SCMPRObservation{
 			prKey(testRepo, 0): {
-				{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"},
-				{URL: "https://github.com/o/r/pull/2", Number: 2, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2", Author: "octocat"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/2", Number: 2, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2", Author: "octocat"},
 			},
 			prKey(glRepo, 0): {
-				{URL: "https://gitlab.com/o/r/-/merge_requests/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha3", Author: "other"},
-				{URL: "https://gitlab.com/o/r/-/merge_requests/4", Number: 4, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha4", Author: "gitlabuser"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://gitlab.com/o/r/-/merge_requests/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha3", Author: "other"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://gitlab.com/o/r/-/merge_requests/4", Number: 4, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha4", Author: "gitlabuser"},
 			},
 		},
 		observations: map[string]ports.SCMObservation{
@@ -233,10 +233,10 @@ func TestPoll_ScopedIdentityPartialFailure(t *testing.T) {
 		},
 		openPRs: map[string][]ports.SCMPRObservation{
 			prKey(testRepo, 0): {
-				{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "octocat"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "octocat"},
 			},
 			prKey(glRepo, 0): {
-				{URL: "https://gitlab.com/o/r/-/merge_requests/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha3", Author: "gitlabuser"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://gitlab.com/o/r/-/merge_requests/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha3", Author: "gitlabuser"},
 			},
 		},
 		observations: map[string]ports.SCMObservation{

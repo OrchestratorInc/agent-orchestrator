@@ -262,15 +262,16 @@ func failingSCMObservation(prURL string, num int, headSHA, logTail string) ports
 		Fetched:  true,
 		Provider: "github", Host: "github.com", Repo: "octocat/hello",
 		PR: ports.SCMPRObservation{
-			URL:          prURL,
-			HTMLURL:      prURL,
-			Number:       num,
-			State:        string(domain.PRStateOpen),
-			SourceBranch: "feat/x",
-			TargetBranch: "main",
-			HeadSHA:      headSHA,
-			Author:       "octocat",
-			Title:        "Found a bug",
+			CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(),
+			URL:               prURL,
+			HTMLURL:           prURL,
+			Number:            num,
+			State:             string(domain.PRStateOpen),
+			SourceBranch:      "feat/x",
+			TargetBranch:      "main",
+			HeadSHA:           headSHA,
+			Author:            "octocat",
+			Title:             "Found a bug",
 		},
 		CI: ports.SCMCIObservation{
 			Summary:           string(domain.CIFailing),
@@ -290,15 +291,16 @@ func mergedSCMObservation(prURL string, num int, headSHA string) ports.SCMObserv
 		Fetched:  true,
 		Provider: "github", Host: "github.com", Repo: "octocat/hello",
 		PR: ports.SCMPRObservation{
-			URL:          prURL,
-			HTMLURL:      prURL,
-			Number:       num,
-			State:        string(domain.PRStateMerged),
-			Merged:       true,
-			SourceBranch: "feat/x",
-			TargetBranch: "main",
-			HeadSHA:      headSHA,
-			Title:        "Ship it",
+			CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(),
+			URL:               prURL,
+			HTMLURL:           prURL,
+			Number:            num,
+			State:             string(domain.PRStateMerged),
+			Merged:            true,
+			SourceBranch:      "feat/x",
+			TargetBranch:      "main",
+			HeadSHA:           headSHA,
+			Title:             "Ship it",
 		},
 		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: headSHA},
 		Review:       ports.SCMReviewObservation{Decision: string(domain.ReviewApproved)},
@@ -320,7 +322,8 @@ func TestSCMObserverEndToEnd(t *testing.T) {
 			logTail = "setup\nsetup\nFAILED: build broke\n"
 		)
 		f.provider.detected["feat/x"] = ports.SCMPRObservation{
-			URL: prURL, Number: 42, SourceBranch: "feat/x", HeadRepo: scmTestRepo.Repo, TargetBranch: "main", HeadSHA: headSHA, Author: "octocat",
+			CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(),
+			URL:               prURL, Number: 42, SourceBranch: "feat/x", HeadRepo: scmTestRepo.Repo, TargetBranch: "main", HeadSHA: headSHA, Author: "octocat",
 		}
 		f.provider.observations[42] = failingSCMObservation(prURL, 42, headSHA, logTail)
 
@@ -421,7 +424,8 @@ func TestSCMObserverEndToEnd(t *testing.T) {
 			headSHA = "cafef00d"
 		)
 		f.provider.detected["feat/x"] = ports.SCMPRObservation{
-			URL: prURL, Number: 77, SourceBranch: "feat/x", HeadRepo: scmTestRepo.Repo, TargetBranch: "main", HeadSHA: headSHA, Author: "octocat", Merged: true,
+			CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(),
+			URL:               prURL, Number: 77, SourceBranch: "feat/x", HeadRepo: scmTestRepo.Repo, TargetBranch: "main", HeadSHA: headSHA, Author: "octocat", Merged: true,
 		}
 		f.provider.observations[77] = mergedSCMObservation(prURL, 77, headSHA)
 
@@ -449,7 +453,8 @@ func TestSCMObserverEndToEnd(t *testing.T) {
 		f.lcm.SetCompletionTerminator(terminator)
 		const prURL = "https://github.com/octocat/hello/pull/78"
 		f.provider.detected["feat/x"] = ports.SCMPRObservation{
-			URL: prURL, Number: 78, SourceBranch: "feat/x", HeadRepo: scmTestRepo.Repo, TargetBranch: "main", HeadSHA: "deadbeef", Author: "octocat", Merged: true,
+			CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(),
+			URL:               prURL, Number: 78, SourceBranch: "feat/x", HeadRepo: scmTestRepo.Repo, TargetBranch: "main", HeadSHA: "deadbeef", Author: "octocat", Merged: true,
 		}
 		f.provider.observations[78] = mergedSCMObservation(prURL, 78, "deadbeef")
 
@@ -510,14 +515,15 @@ func openSCMObservation(prURL string, num int, headSHA, src, tgt string, merge d
 		Fetched:  true,
 		Provider: "github", Host: "github.com", Repo: "octocat/hello",
 		PR: ports.SCMPRObservation{
-			URL:          prURL,
-			HTMLURL:      prURL,
-			Number:       num,
-			State:        string(domain.PRStateOpen),
-			SourceBranch: src,
-			TargetBranch: tgt,
-			HeadSHA:      headSHA,
-			Title:        "wip",
+			CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(),
+			URL:               prURL,
+			HTMLURL:           prURL,
+			Number:            num,
+			State:             string(domain.PRStateOpen),
+			SourceBranch:      src,
+			TargetBranch:      tgt,
+			HeadSHA:           headSHA,
+			Title:             "wip",
 		},
 		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: headSHA},
 		Review:       ports.SCMReviewObservation{Decision: string(domain.ReviewNone)},
@@ -539,7 +545,7 @@ func mergedSCMObservationBranches(prURL string, num int, headSHA, src, tgt strin
 // listed PR to a session by source-branch prefix, so only identity + branches
 // matter here.
 func detectedPR(prURL string, num int, src, tgt, headSHA string) ports.SCMPRObservation {
-	return ports.SCMPRObservation{URL: prURL, HTMLURL: prURL, Number: num, SourceBranch: src, HeadRepo: scmTestRepo.Repo, TargetBranch: tgt, HeadSHA: headSHA, Author: "octocat"}
+	return ports.SCMPRObservation{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: prURL, HTMLURL: prURL, Number: num, SourceBranch: src, HeadRepo: scmTestRepo.Repo, TargetBranch: tgt, HeadSHA: headSHA, Author: "octocat"}
 }
 
 // TestSCMObserverMultiPREndToEnd is the functional regression guard for the

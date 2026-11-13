@@ -72,6 +72,17 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	if !o.Fetched {
 		return nil
 	}
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil || !ok {
+		return err
+	}
+	pr, found, err := m.store.GetPR(ctx, o.URL)
+	if err != nil {
+		return err
+	}
+	if !found || !pr.AllowsAutomaticWork(rec) {
+		return nil
+	}
 	// A PR observation is this session's earliest opportunity to durably record
 	// "this session produced a PR" — reconcile immediately rather than waiting
 	// for the artifact-output poller's next tick. A failure here must not
@@ -116,10 +127,6 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 			return m.terminateCompletedSession(ctx, id)
 		}
 		return nil
-	}
-	rec, ok, err := m.store.GetSession(ctx, id)
-	if err != nil || !ok {
-		return err
 	}
 	// Re-arm the merge-conflict dedup on a definitively-cleared observation
 	// BEFORE the dead-session delivery gate below. Re-arming is non-delivery

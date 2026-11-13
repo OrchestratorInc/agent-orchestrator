@@ -18,6 +18,7 @@ type deliveredBatchItem struct {
 	Kind              string               `json:"kind"`
 	Text              string               `json:"text"`
 	Origin            domain.MessageOrigin `json:"origin"`
+	AuthoredByUser    bool                 `json:"authoredByUser"`
 	SenderSessionID   string               `json:"senderSessionId"`
 	SenderProjectID   string               `json:"senderProjectId"`
 	SenderDisplayName string               `json:"senderDisplayName"`
@@ -751,7 +752,7 @@ func TestQueuedTypedMessagesDrainOnePerTurn(t *testing.T) {
 		t.Fatalf("fourth provider input = %q, want the second typed message alone", got)
 	}
 	complete(4)
-	if got := h.conv.sentTexts()[4]; got != "worker three" {
+	if got := h.conv.sentTexts()[4]; !strings.HasSuffix(got, "\n\nworker three") {
 		t.Fatalf("fifth provider input = %q", got)
 	}
 }

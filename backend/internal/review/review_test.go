@@ -344,8 +344,17 @@ func (f fakeSessions) GetSession(_ context.Context, _ domain.SessionID) (domain.
 
 type fakePRs struct{ prs []domain.PullRequest }
 
-func (f fakePRs) ListPRsBySession(_ context.Context, _ domain.SessionID) ([]domain.PullRequest, error) {
-	return f.prs, nil
+func (f fakePRs) ListPRsBySession(_ context.Context, id domain.SessionID) ([]domain.PullRequest, error) {
+	prs := append([]domain.PullRequest(nil), f.prs...)
+	for i := range prs {
+		if prs[i].SessionID == "" {
+			prs[i].SessionID = id
+		}
+		if prs[i].OwnershipSource == "" && prs[i].CreatedAtProvider.IsZero() {
+			prs[i].OwnershipSource = domain.PROwnershipClaimed
+		}
+	}
+	return prs, nil
 }
 
 type fakeProjects struct{ cfg domain.ProjectConfig }

@@ -556,6 +556,7 @@ type PR struct {
 	ProviderID               string
 	AuthorAvatarURL          string
 	ReviewPartial            bool
+	OwnershipSource          string
 }
 
 type PRCheck struct {

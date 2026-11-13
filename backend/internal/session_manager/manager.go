@@ -6139,11 +6139,9 @@ func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, 
 	if kind == domain.KindOrchestrator {
 		return aoBranch(branchNamespace, prefix+"-orchestrator")
 	}
-	// A fresh, unique branch per worker session: gitworktree can't add a worktree
-	// on a branch already checked out elsewhere (e.g. main). Put the root work
-	// branch under a session namespace so sibling PR branches such as
-	// ao/<session>/<topic> remain valid Git refs.
-	return aoBranch(branchNamespace, string(id), "root")
+	// The token prevents independent installations from sharing a worker namespace.
+	// The /root suffix permits other branches in the same namespace.
+	return aoBranch(branchNamespace, string(id)+"-"+uuid.NewString(), "root")
 }
 
 // DefaultSpawnBranch returns AO's generated work branch for a spawn. Explicit
@@ -6154,7 +6152,7 @@ func DefaultSpawnBranch(id domain.SessionID, kind domain.SessionKind, prefix str
 	}
 	branchNamespace := generatedBranchNamespace(dataDir)
 	if projectKind == domain.ProjectKindWorkspace {
-		return aoBranch(branchNamespace, string(id))
+		return aoBranch(branchNamespace, string(id)+"-"+uuid.NewString())
 	}
 	return defaultSessionBranch(id, kind, prefix, branchNamespace)
 }

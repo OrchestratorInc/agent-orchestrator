@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,7 +148,7 @@ func TestStalledPrimaryTurnReleasesQueuedWork(t *testing.T) {
 			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				return turnStateByText(t, s)["automation"] != domain.TurnStateQueued
 			})
-			if got := h.conv.sentTexts(); len(got) != 2 || got[1] != "automation" {
+			if got := h.conv.sentTexts(); len(got) != 2 || !strings.HasSuffix(got[1], "\n\nautomation") {
 				t.Fatalf("provider received %v, want the root prompt then the queued one", got)
 			}
 		})

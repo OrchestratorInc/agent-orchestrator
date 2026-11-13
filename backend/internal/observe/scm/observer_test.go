@@ -74,7 +74,13 @@ func (s *fakeStore) ListAllSessions(ctx context.Context) ([]domain.SessionRecord
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]domain.SessionRecord(nil), s.sessions...), nil
+	sessions := append([]domain.SessionRecord(nil), s.sessions...)
+	for i := range sessions {
+		if sessions[i].CreatedAt.IsZero() {
+			sessions[i].CreatedAt = time.Unix(1, 0).UTC()
+		}
+	}
+	return sessions, nil
 }
 
 func (s *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
@@ -348,7 +354,7 @@ func quietSlog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, 
 
 func testStoreWithSession() *fakeStore {
 	return &fakeStore{
-		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "feat"}}},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}},
 		prs:      map[domain.SessionID][]domain.PullRequest{},
 		checks:   map[string][]domain.PullRequestCheck{},
@@ -358,7 +364,7 @@ func testStoreWithSession() *fakeStore {
 func testObs(num int) ports.SCMObservation {
 	return ports.SCMObservation{
 		Fetched: true, Provider: "github", Host: "github.com", Repo: "o/r",
-		PR:           ports.SCMPRObservation{URL: "https://github.com/o/r/pull/" + fmt.Sprint(num), Number: num, State: "open", SourceBranch: "feat", TargetBranch: "main", HeadSHA: "sha" + fmt.Sprint(num), Title: "PR"},
+		PR:           ports.SCMPRObservation{CreatedAtProvider: time.Unix(2, 0).UTC(), URL: "https://github.com/o/r/pull/" + fmt.Sprint(num), Number: num, State: "open", SourceBranch: "feat", TargetBranch: "main", HeadSHA: "sha" + fmt.Sprint(num), Title: "PR"},
 		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: "sha" + fmt.Sprint(num), Checks: []ports.SCMCheckObservation{{Name: "build", Status: string(domain.PRCheckPassed), Conclusion: "success", URL: "ci"}}},
 		Review:       ports.SCMReviewObservation{Decision: string(domain.ReviewNone)},
 		Mergeability: ports.SCMMergeabilityObservation{State: string(domain.MergeMergeable), Mergeable: true},
@@ -805,7 +811,7 @@ func TestPoll_RepoETag200DiscoversPRAndRefreshesSamePoll(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
-		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{ProviderID: "PR_stable_1", URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"}}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{CreatedAtProvider: time.Unix(2, 0).UTC(), ProviderID: "PR_stable_1", URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"}}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
 	}
 	lc := &fakeLifecycle{}
@@ -835,9 +841,9 @@ func TestPoll_DiscoversOnlyPRsFromAuthenticatedHuman(t *testing.T) {
 	provider := &fakeProvider{
 		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
 		openPRs: map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {
-			{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"},
-			{URL: "https://github.com/o/r/pull/2", Number: 2, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2", Author: " ALICE "},
-			{URL: "https://github.com/o/r/pull/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", Author: ""},
+			{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"},
+			{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/2", Number: 2, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2", Author: " ALICE "},
+			{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/3", Number: 3, SourceBranch: "feat", HeadRepo: "o/r", Author: ""},
 		}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 2): testObs(2)},
 	}
@@ -882,7 +888,7 @@ func TestPoll_DisablesAutomaticDiscoveryWithoutHumanIdentity(t *testing.T) {
 			store := testStoreWithSession()
 			provider := &fakeProvider{
 				repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
-				openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"}}},
+				openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Author: "other"}}},
 				observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
 				identity:     tt.identity,
 				identityErr:  tt.identityErr,
@@ -912,8 +918,8 @@ func TestPoll_DiscoversStackedChildByBranchPrefix(t *testing.T) {
 	provider := &fakeProvider{
 		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
 		openPRs: map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {
-			{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"},
-			{URL: "https://github.com/o/r/pull/2", Number: 2, SourceBranch: "feat/child", HeadRepo: "o/r", TargetBranch: "feat", HeadSHA: "sha2"},
+			{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"},
+			{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/2", Number: 2, SourceBranch: "feat/child", HeadRepo: "o/r", TargetBranch: "feat", HeadSHA: "sha2"},
 		}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1), prKey(testRepo, 2): childObs},
 	}
@@ -942,7 +948,7 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	provider := &fakeProvider{
 		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
 		openPRs: map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {
-			{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "ao/p-1/fix", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"},
+			{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "ao/p-1/fix", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"},
 		}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): prObs},
 	}
@@ -1035,7 +1041,7 @@ func TestPoll_DiscoversWorkspaceChildRepoPR(t *testing.T) {
 		},
 		openPRs: map[string][]ports.SCMPRObservation{
 			prKey(testAPIRepo, 0): {
-				{URL: "https://github.com/o/api/pull/12", Number: 12, SourceBranch: "ao/p-1/api-billing", HeadRepo: "o/api", TargetBranch: "main", HeadSHA: "api-sha"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/api/pull/12", Number: 12, SourceBranch: "ao/p-1/api-billing", HeadRepo: "o/api", TargetBranch: "main", HeadSHA: "api-sha"},
 			},
 		},
 		observations: map[string]ports.SCMObservation{prKey(testAPIRepo, 12): prObs},
@@ -1104,7 +1110,7 @@ func TestPoll_DiscoversWorkspaceChildRepoUpstreamPR(t *testing.T) {
 		},
 		openPRs: map[string][]ports.SCMPRObservation{
 			prKey(upstreamRepo, 0): {
-				{URL: "https://github.com/upstream/api/pull/44", Number: 44, SourceBranch: "ao/p-1/api-billing", HeadRepo: "o/api", TargetBranch: "main", HeadSHA: "api-sha"},
+				{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/upstream/api/pull/44", Number: 44, SourceBranch: "ao/p-1/api-billing", HeadRepo: "o/api", TargetBranch: "main", HeadSHA: "api-sha"},
 			},
 		},
 		observations: map[string]ports.SCMObservation{prKey(upstreamRepo, 44): prObs},
@@ -1132,7 +1138,7 @@ func TestPoll_IgnoresForkPRWithMatchingBranch(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
-		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{URL: "https://github.com/forker/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "forker/r", TargetBranch: "main", HeadSHA: "sha1"}}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/forker/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "forker/r", TargetBranch: "main", HeadSHA: "sha1"}}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
 	}
 	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
@@ -1151,7 +1157,7 @@ func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
-		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{URL: "https://github.com/neworg/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "NewOrg/r", BaseRepo: "NewOrg/r", TargetBranch: "main", HeadSHA: "sha1"}}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/neworg/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "NewOrg/r", BaseRepo: "NewOrg/r", TargetBranch: "main", HeadSHA: "sha1"}}},
 		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
 	}
 	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
@@ -1190,14 +1196,14 @@ func TestPoll_DiscoversCrossForkPRFromUpstreamRemote(t *testing.T) {
 
 	upstream := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "up", Name: "r", Repo: "up/r"}
 	store := &fakeStore{
-		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "ao/p-1/root"}}},
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "ao/p-1/root"}}},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir, RepoOriginURL: "https://github.com/o/r.git"}},
 		prs:      map[domain.SessionID][]domain.PullRequest{},
 		checks:   map[string][]domain.PullRequestCheck{},
 	}
 	crossObs := ports.SCMObservation{
 		Fetched: true, Provider: "github", Host: "github.com", Repo: "up/r",
-		PR:           ports.SCMPRObservation{URL: "https://github.com/up/r/pull/1", Number: 1, State: "open", SourceBranch: "ao/p-1/feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Title: "PR"},
+		PR:           ports.SCMPRObservation{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/up/r/pull/1", Number: 1, State: "open", SourceBranch: "ao/p-1/feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1", Title: "PR"},
 		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: "sha1"},
 		Review:       ports.SCMReviewObservation{Decision: string(domain.ReviewNone)},
 		Mergeability: ports.SCMMergeabilityObservation{State: string(domain.MergeMergeable), Mergeable: true},
@@ -1205,7 +1211,7 @@ func TestPoll_DiscoversCrossForkPRFromUpstreamRemote(t *testing.T) {
 	provider := &fakeProvider{
 		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "origin"}, prKey(upstream, 0): {ETag: "up"}},
 		openPRs: map[string][]ports.SCMPRObservation{
-			prKey(upstream, 0): {{URL: "https://github.com/up/r/pull/1", Number: 1, SourceBranch: "ao/p-1/feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"}},
+			prKey(upstream, 0): {{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/up/r/pull/1", Number: 1, SourceBranch: "ao/p-1/feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"}},
 		},
 		observations: map[string]ports.SCMObservation{prKey(upstream, 1): crossObs},
 	}
@@ -1251,7 +1257,7 @@ func TestPoll_IgnoresUpstreamPRFromForeignHead(t *testing.T) {
 
 	upstream := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "up", Name: "r", Repo: "up/r"}
 	store := &fakeStore{
-		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "ao/p-1/root"}}},
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "ao/p-1/root"}}},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir, RepoOriginURL: "https://github.com/o/r.git"}},
 		prs:      map[domain.SessionID][]domain.PullRequest{},
 		checks:   map[string][]domain.PullRequestCheck{},
@@ -1259,7 +1265,7 @@ func TestPoll_IgnoresUpstreamPRFromForeignHead(t *testing.T) {
 	provider := &fakeProvider{
 		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "origin"}, prKey(upstream, 0): {ETag: "up"}},
 		openPRs: map[string][]ports.SCMPRObservation{
-			prKey(upstream, 0): {{URL: "https://github.com/up/r/pull/9", Number: 9, SourceBranch: "ao/p-1/feat", HeadRepo: "stranger/r", TargetBranch: "main", HeadSHA: "sha9"}},
+			prKey(upstream, 0): {{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/up/r/pull/9", Number: 9, SourceBranch: "ao/p-1/feat", HeadRepo: "stranger/r", TargetBranch: "main", HeadSHA: "sha9"}},
 		},
 		observations: map[string]ports.SCMObservation{},
 	}
@@ -1284,7 +1290,7 @@ func TestPoll_DiscoveredPRPersistedAsBaselineBeforeRefresh(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
-		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"}}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/o/r/pull/1", Number: 1, SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha1"}}},
 		observations: map[string]ports.SCMObservation{}, // refresh returns nothing
 	}
 	obs := newTestObserver(store, provider, &fakeLifecycle{}, time.Unix(1, 0).UTC())
@@ -2415,7 +2421,7 @@ func TestPoll_WriteFailureDoesNotAdvanceGuardETags(t *testing.T) {
 func TestPoll_DuplicateTrackedPRKeepsFirstSession(t *testing.T) {
 	store := &fakeStore{
 		sessions: []domain.SessionRecord{
-			{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}},
+			{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "feat"}},
 			{ID: "p-2", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}},
 		},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}},
@@ -2458,7 +2464,7 @@ func TestDiscoverSubjects_BackfillsRepoOriginURL(t *testing.T) {
 	}
 
 	store := &fakeStore{
-		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "feat"}}},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir}}, // empty RepoOriginURL
 		prs:      map[domain.SessionID][]domain.PullRequest{},
 		checks:   map[string][]domain.PullRequestCheck{},
@@ -2566,7 +2572,7 @@ func TestPoll_StaleOpenPRForcedRefreshAfterMaxAge(t *testing.T) {
 func TestDiscoverSubjects_NonGitPathDoesNotBackfill(t *testing.T) {
 	dir := t.TempDir()
 	store := &fakeStore{
-		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "feat"}}},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: dir}},
 		prs:      map[domain.SessionID][]domain.PullRequest{},
 		checks:   map[string][]domain.PullRequestCheck{},
@@ -3547,7 +3553,7 @@ func TestPoll_RepoRefreshMonotonicity_ListingFailsButPRSucceeds(t *testing.T) {
 func renamedRepoFixture() (*fakeStore, *fakeProvider, ports.SCMRepo) {
 	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
 	store := &fakeStore{
-		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "feat"}}},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/old/r.git"}},
 		prs: map[domain.SessionID][]domain.PullRequest{"p-1": {{
 			URL: "https://github.com/new/r/pull/1", SessionID: "p-1", Number: 1,
@@ -3557,7 +3563,7 @@ func renamedRepoFixture() (*fakeStore, *fakeProvider, ports.SCMRepo) {
 	}
 	canonical := ports.SCMObservation{
 		Fetched: true, Provider: "github", Host: "github.com", Repo: "new/r",
-		PR:           ports.SCMPRObservation{URL: "https://github.com/new/r/pull/1", Number: 1, State: "open", SourceBranch: "feat", TargetBranch: "main", HeadSHA: "sha1", Title: "PR"},
+		PR:           ports.SCMPRObservation{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/new/r/pull/1", Number: 1, State: "open", SourceBranch: "feat", TargetBranch: "main", HeadSHA: "sha1", Title: "PR"},
 		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: "sha1"},
 		Review:       ports.SCMReviewObservation{Decision: string(domain.ReviewRequired)},
 		Mergeability: ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked), Blockers: []string{"review_required"}},
@@ -3666,7 +3672,7 @@ func TestPoll_SecondScanNameDoesNotRebaselineTrackedPR(t *testing.T) {
 				ObservedAt: time.Unix(50, 0).UTC(), CIObservedAt: time.Unix(50, 0).UTC(), ReviewObservedAt: time.Unix(50, 0).UTC(),
 			}
 			store := &fakeStore{
-				sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+				sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "feat"}}},
 				projects: map[string]domain.ProjectRecord{"p": {ID: "p", Path: "/proj", RepoOriginURL: "https://github.com/new/r.git"}},
 				prs:      map[domain.SessionID][]domain.PullRequest{"p-1": {tracked}},
 				checks:   map[string][]domain.PullRequestCheck{},
@@ -3703,7 +3709,7 @@ func TestPoll_SecondScanNameDoesNotRebaselineTrackedPR(t *testing.T) {
 func TestPoll_IdentityKeyedDispatchSurvivesRename(t *testing.T) {
 	oldRepo := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "old", Name: "r", Repo: "old/r"}
 	store := &fakeStore{
-		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}}},
+		sessions: []domain.SessionRecord{{ID: "p-1", ProjectID: "p", CreatedAt: time.Unix(1, 0).UTC(), Metadata: domain.SessionMetadata{Branch: "feat"}}},
 		projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/old/r.git"}},
 		prs: map[domain.SessionID][]domain.PullRequest{"p-1": {{
 			// URL intentionally differs from the canonical URL so the legacy
@@ -3716,7 +3722,7 @@ func TestPoll_IdentityKeyedDispatchSurvivesRename(t *testing.T) {
 	}
 	canonical := ports.SCMObservation{
 		Fetched: true, Provider: "github", Host: "github.com", Repo: "new/r",
-		PR:           ports.SCMPRObservation{URL: "https://github.com/new/r/pull/1", Number: 1, ProviderID: "PR_stable_1", State: "open", SourceBranch: "feat", TargetBranch: "main", HeadSHA: "sha1", Title: "PR"},
+		PR:           ports.SCMPRObservation{CreatedAtProvider: time.Unix(1_800_000_000, 0).UTC(), URL: "https://github.com/new/r/pull/1", Number: 1, ProviderID: "PR_stable_1", State: "open", SourceBranch: "feat", TargetBranch: "main", HeadSHA: "sha1", Title: "PR"},
 		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: "sha1"},
 		Review:       ports.SCMReviewObservation{Decision: string(domain.ReviewRequired)},
 		Mergeability: ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked), Blockers: []string{"review_required"}},

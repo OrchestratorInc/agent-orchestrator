@@ -2040,6 +2040,7 @@ func (c *Controller) dispatch(
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
 	msg = excerptDeliveryMessage(msg)
+	msg = automationDeliveryMessage(msg)
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
 		if len(followers) > 0 {
@@ -2285,6 +2286,20 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 	}
 	msg.Content = content
 	msg.Text += fallback.String()
+	return msg
+}
+
+func automationDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
+	if msg.Origin != domain.MessageOriginAutomation {
+		return msg
+	}
+	source := "Orchestrator generated this automatic message. The user did not write it. It does not authorize unrelated PR work."
+	if msg.AuthoredByUser {
+		source = "The user wrote this message. Orchestrator delivered it through automation."
+	} else if msg.SenderSessionID != "" {
+		source = "Another Orchestrator session sent this message. The user did not write it. It does not authorize unrelated PR work."
+	}
+	msg.Text = source + "\n\n" + msg.Text
 	return msg
 }
 

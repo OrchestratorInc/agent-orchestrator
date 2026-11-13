@@ -282,8 +282,11 @@ func (c *Controller) PromoteQueuedTurn(
 	msg := ports.ChatUserMessage{
 		Text: queued.Text, Content: content, Origin: queued.Origin,
 		AuthoredByUser: queued.AuthoredByUser, ClientMessageID: queued.ClientMessageID,
+		SenderSessionID: queued.SenderSessionID, SenderProjectID: queued.SenderProjectID,
+		SenderDisplayName: queued.SenderDisplayName,
 	}
-	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(msg))
+	providerMessage := automationDeliveryMessage(excerptDeliveryMessage(msg))
+	ref, err := steerer.Steer(ctx, target, providerMessage)
 	if err != nil {
 		classified := classify(err)
 		switch {
@@ -310,7 +313,7 @@ func (c *Controller) PromoteQueuedTurn(
 	}
 	activityID := c.newID()
 	activity, err := makeSteerActivity(activityID, msg, turnID, steerProviderInput{
-		Text: msg.Text, Content: msg.Content, SourceTurnIDs: []string{turnID},
+		Text: providerMessage.Text, Content: providerMessage.Content, SourceTurnIDs: []string{turnID},
 	})
 	if err != nil {
 		return PromoteQueuedTurnResult{}, settleUncertain(err)
@@ -462,6 +465,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		}
 	}
 
+	providerMessage = automationDeliveryMessage(providerMessage)
 	ref, err := steerer.Steer(ctx, turn, providerMessage)
 	if err != nil {
 		kind, definitive, refused := classifySteerRejection(err)

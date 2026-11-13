@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
@@ -728,7 +730,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		// changed hashes at their local values until lifecycle succeeds; if the
 		// daemon restarts after a lifecycle failure, the stale hashes force the
 		// same observation to be fetched and delivered again.
-		if o.lifecycle != nil {
+		if o.lifecycle != nil && finalPR.AllowsAutomaticWork(subj.session) {
 			pendingOpts := opts
 			if prepared.Changed.Metadata {
 				pendingOpts.preserveLocalMetadataHash = true
@@ -747,7 +749,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			markRepoRefreshFailed(subj.repo)
 			continue
 		}
-		if o.lifecycle != nil {
+		if o.lifecycle != nil && finalPR.AllowsAutomaticWork(subj.session) {
 			// A merged or closed PR is not selected again after a failed
 			// reaction, so its one reaction (teardown, final notifications)
 			// runs unbounded. An open PR is retried on the next poll.
@@ -1291,24 +1293,27 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				headRepo = repoFullName(repo)
 			}
 			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
+			eligible = candidatesForPRCreation(eligible, pr.CreatedAtProvider)
 			sr, ok := matchSession(eligible, pr.SourceBranch)
 			if !ok {
 				continue
 			}
 			known := domain.PullRequest{
-				URL:          firstNonEmpty(pr.URL, pr.HTMLURL),
-				SessionID:    sr.session.ID,
-				Number:       pr.Number,
-				Draft:        pr.Draft,
-				SourceBranch: pr.SourceBranch,
-				TargetBranch: pr.TargetBranch,
-				HeadSHA:      pr.HeadSHA,
-				Author:       strings.TrimSpace(pr.Author),
-				Provider:     repo.Provider,
-				Host:         repo.Host,
-				Repo:         repoFullName(repo),
-				ProviderID:   pr.ProviderID,
-				UpdatedAt:    now,
+				URL:               firstNonEmpty(pr.URL, pr.HTMLURL),
+				SessionID:         sr.session.ID,
+				OwnershipSource:   domain.PROwnershipDiscovered,
+				CreatedAtProvider: pr.CreatedAtProvider,
+				Number:            pr.Number,
+				Draft:             pr.Draft,
+				SourceBranch:      pr.SourceBranch,
+				TargetBranch:      pr.TargetBranch,
+				HeadSHA:           pr.HeadSHA,
+				Author:            strings.TrimSpace(pr.Author),
+				Provider:          repo.Provider,
+				Host:              repo.Host,
+				Repo:              repoFullName(repo),
+				ProviderID:        pr.ProviderID,
+				UpdatedAt:         now,
 			}
 			// Persist the discovered PR as an open baseline row immediately, before
 			// the refresh/lifecycle pass runs. A session can own several PRs, and a
@@ -1378,6 +1383,17 @@ func candidatesForHeadRepo(candidates []sessionRepo, headRepo string) []sessionR
 	return out
 }
 
+func candidatesForPRCreation(candidates []sessionRepo, createdAt time.Time) []sessionRepo {
+	var out []sessionRepo
+	for _, sr := range candidates {
+		pr := domain.PullRequest{SessionID: sr.session.ID, CreatedAtProvider: createdAt}
+		if pr.AllowsAutomaticWork(sr.session) {
+			out = append(out, sr)
+		}
+	}
+	return out
+}
+
 // matchSession prefers exact branches, then the longest owned prefix. Root
 // leaves own slash siblings. Legacy workspace branches are bare refs, so they
 // also own hyphen siblings, but only under the validated AO session branch.
@@ -1426,6 +1442,9 @@ func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
+	if rest, ok := strings.CutPrefix(branch, "ao/dev/"); ok {
+		branch = "ao/" + rest
+	}
 	base := "ao/" + string(sr.session.ID)
 	if branch == base {
 		return true
@@ -1433,6 +1452,17 @@ func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	suffix, ok := strings.CutPrefix(branch, base+"-")
 	if !ok {
 		return false
+	}
+	if len(suffix) >= 36 {
+		if _, err := uuid.Parse(suffix[:36]); err == nil {
+			if len(suffix) == 36 {
+				return true
+			}
+			suffix, ok = strings.CutPrefix(suffix[36:], "-")
+			if !ok {
+				return false
+			}
+		}
 	}
 	// workspaceProjectBranch appends -2, -3, ... when a ref already exists.
 	// Do not treat arbitrary topics, another session ID, or padded numbers as
@@ -1977,6 +2007,7 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 		URL:                      firstNonEmpty(obs.PR.URL, obs.PR.HTMLURL),
 		URLAlias:                 obs.PR.URLAlias,
 		SessionID:                sessionID,
+		OwnershipSource:          local.OwnershipSource,
 		Number:                   obs.PR.Number,
 		Draft:                    obs.PR.Draft,
 		Merged:                   obs.PR.Merged,

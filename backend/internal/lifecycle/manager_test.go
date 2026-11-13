@@ -62,8 +62,14 @@ func (f *fakeStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]
 }
 
 func (f *fakeStore) GetPR(_ context.Context, prURL string) (domain.PullRequest, bool, error) {
-	for _, prs := range f.prs {
+	for id, prs := range f.prs {
 		for _, pr := range prs {
+			if pr.SessionID == "" {
+				pr.SessionID = id
+			}
+			if pr.CreatedAtProvider.IsZero() && pr.OwnershipSource == "" {
+				pr.OwnershipSource = domain.PROwnershipClaimed
+			}
 			if pr.URL != prURL {
 				continue
 			}
@@ -79,7 +85,13 @@ func (f *fakeStore) GetPR(_ context.Context, prURL string) (domain.PullRequest, 
 	if !explicitlySet {
 		policy = true
 	}
-	return domain.PullRequest{URL: prURL, AutoInjectCI: policy}, true, nil
+	id := domain.SessionID("mer-1")
+	if len(f.sessions) == 1 {
+		for only := range f.sessions {
+			id = only
+		}
+	}
+	return domain.PullRequest{URL: prURL, SessionID: id, OwnershipSource: domain.PROwnershipClaimed, AutoInjectCI: policy}, true, nil
 }
 
 func (f *fakeStore) ListPRReviews(_ context.Context, prURL string) ([]domain.PullRequestReview, error) {

@@ -75,9 +75,6 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 		q.Set("direction", "desc")
 		q.Set("per_page", strconv.Itoa(perPage))
 		q.Set("page", strconv.Itoa(page))
-		if !updatedAfter.IsZero() {
-			q.Set("since", updatedAfter.UTC().Format(time.RFC3339Nano))
-		}
 		resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
 		if err != nil {
 			return nil, err
@@ -87,7 +84,11 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 			return nil, fmt.Errorf("github scm: decode open PR list: %w", err)
 		}
 		for _, pull := range pulls {
-			out = append(out, restListPullToSCM(pull))
+			pr := restListPullToSCM(pull)
+			if !updatedAfter.IsZero() && !pr.UpdatedAtProvider.IsZero() && pr.UpdatedAtProvider.Before(updatedAfter) {
+				return out, nil
+			}
+			out = append(out, pr)
 		}
 		if len(pulls) < perPage {
 			return out, nil
