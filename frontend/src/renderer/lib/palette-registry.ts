@@ -118,7 +118,6 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "version", section: "updates", label: "settings.updates.versionSection", keywords: ["about", "build number"] },
 	{ id: "shortcuts", section: "shortcuts", label: "settings.keyboardShortcuts", keywords: [] },
 	{ id: "help", section: "help", label: "settings.help", keywords: [] },
-	{ id: "report-problem", section: "help", label: "settings.reportProblem", keywords: ["bug report", "feedback", "issue"] },
 	{ id: "diagnostics", section: "diagnostics", label: "settings.diagnostics", keywords: ["performance", "cpu", "memory", "monitor"] },
 ];
 

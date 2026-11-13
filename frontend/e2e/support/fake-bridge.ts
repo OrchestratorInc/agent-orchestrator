@@ -74,6 +74,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				triage: {
+					launch: async () => ({ ok: true }),
+				},
 					dictation: {
 						start: async () => undefined,
 						stop: async () => undefined,
@@ -1039,6 +1042,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				triage: {
+					launch: async () => ({ ok: true }),
+				},
 					dictation: {
 						start: async () => undefined,
 						stop: async () => undefined,

@@ -250,7 +250,10 @@ export type UiState = {
 	// every request so a repeat press (even for the same project) still re-fires;
 	// the always-mounted NewTaskNavigator consumes it by opening the new chat
 	// page. Selection still lives in the URL — this is a one-shot action.
-	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	newTaskRequest: { projectId: string; hostId?: string; report?: boolean; nonce: number } | null;
+	// Bumped after writing the new chat draft from outside the page, so an open
+	// composer reloads it.
+	newChatDraftRevision: number;
 	// The archive modal, open over whatever page is showing (the shell hosts
 	// it). Null while closed. Every entry point (the board's Archive button,
 	// a sidebar project's menu, Cmd+K) opens it here; none navigates.
@@ -348,7 +351,7 @@ export type UiState = {
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string, hostId?: string) => void;
+	requestNewTask: (projectId: string, hostId?: string, options?: { report?: boolean }) => void;
 	openArchive: (request: Omit<ArchiveModalRequest, "nonce">) => void;
 	closeArchive: () => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
@@ -518,6 +521,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToastSequence: 0,
 	newTaskRequest: null,
 	archiveModal: null,
+	newChatDraftRevision: 0,
 	firstRunPromptActive: false,
 	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
@@ -921,7 +925,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			globalToast: state.globalToast?.nonce === nonce ? null : state.globalToast,
 		})),
 	clearGlobalToast: () => set({ globalToast: null, globalToasts: [], globalToastSequence: 0 }),
-	requestNewTask: (projectId, hostId) => {
+	requestNewTask: (projectId, hostId, options) => {
 		// Central gate: every New Task entry point (buttons, sidebar menus,
 		// shortcuts) funnels through here, so a project whose orchestrator is
 		// still provisioning cannot start tasks before it exists.
@@ -933,7 +937,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			);
 			return;
 		}
-		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
+		set((state) => ({ newTaskRequest: { projectId, hostId, report: options?.report, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
 	openArchive: (request) =>
 		set(() => {

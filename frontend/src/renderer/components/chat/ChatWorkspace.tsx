@@ -658,6 +658,7 @@ export interface ChatWorkspaceProps {
 	parkUnsentSends?: boolean;
 	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
 	centerInWindow?: boolean;
+	welcomeHeading?: string;
 	/** The project has a setup script, so the start-up checklist lists that step. */
 	showSetupStep?: boolean;
 	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
@@ -887,6 +888,7 @@ function ChatWorkspaceContent({
 	composerTray,
 	parkUnsentSends = true,
 	centerInWindow = false,
+	welcomeHeading,
 	showSetupStep = true,
 	holdAttachments,
 	onHeldAttachmentsChange,
@@ -2217,7 +2219,7 @@ function ChatWorkspaceContent({
 								) : null}
 								{conversationEmpty ? (
 									<h1 className="mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl">
-										{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+										{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
@@ -2234,7 +2236,7 @@ function ChatWorkspaceContent({
 											aria-hidden="true"
 											className="chat-welcome-leaving pointer-events-none absolute inset-x-0 bottom-full mb-5 text-center text-2xl font-normal tracking-tight text-foreground sm:text-3xl"
 										>
-											{t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
+											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
 									<McpServerBanner
