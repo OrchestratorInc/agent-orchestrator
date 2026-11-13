@@ -1403,7 +1403,7 @@ describe("Sidebar", () => {
 		expect(screen.queryByText("baby")).not.toBeInTheDocument();
 	});
 
-	it("caps the ad hoc agent list at 10 and lets the section grow to half the available height", async () => {
+	it("caps the ad hoc agent list at 5 and lets the section grow to half the available height", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [
@@ -1425,8 +1425,8 @@ describe("Sidebar", () => {
 			],
 		});
 
-		expect(screen.getByText("Agent 10")).toBeInTheDocument();
-		expect(screen.queryByText("Agent 11")).not.toBeInTheDocument();
+		expect(screen.getByText("Agent 5")).toBeInTheDocument();
+		expect(screen.queryByText("Agent 6")).not.toBeInTheDocument();
 
 		const scroller = screen.getByTestId("sidebar-scratchpad-scroller");
 		expect(scroller).toHaveClass("overflow-y-auto");
@@ -1434,17 +1434,17 @@ describe("Sidebar", () => {
 		expect(scroller.style.maxHeight).toBe("");
 		expect(document.querySelector<HTMLElement>("[data-scratchpad-section]")!.style.maxHeight).toBe("");
 
-		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
+		await user.click(screen.getByRole("button", { name: "Show 8 more agents" }));
 
-		expect(screen.getByText("Agent 11")).toBeInTheDocument();
+		expect(screen.getByText("Agent 6")).toBeInTheDocument();
 		expect(screen.getByText("Agent 13")).toBeInTheDocument();
 		expect(scroller.style.maxHeight).toBe("");
 		expect(screen.getByRole("button", { name: "Show fewer agents" })).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Show fewer agents" }));
 
-		expect(screen.queryByText("Agent 11")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+		expect(screen.queryByText("Agent 6")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Show 8 more agents" })).toBeInTheDocument();
 	});
 
 	it("fades the scroll edges of project and Scratchpad sections as they scroll", () => {

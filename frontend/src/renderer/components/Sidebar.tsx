@@ -381,6 +381,8 @@ function sidebarMinWidth(): number {
 const SIDEBAR_INITIAL_SECTION_LIMIT = 10;
 /** Initial agent count listed under each expanded project before its own Show more. */
 const SIDEBAR_PROJECT_SESSION_LIMIT = 6;
+/** Initial agent count listed in the Sessions section, which sits above Projects, before its Show more. */
+const SIDEBAR_SESSIONS_LIMIT = 5;
 /** Section scrollers fill the height their flex parent leaves them and scroll inside it. */
 const SECTION_SCROLLER_CLASS =
 	"scrollbar-none overflow-y-auto overflow-x-hidden overscroll-contain group-data-[collapsible=icon]:overflow-visible";
@@ -2320,7 +2322,7 @@ function ScratchpadSection({
 		hiddenCount: hiddenSessionCount,
 		showAll,
 		toggleShowAll,
-	} = useShowMoreCap(sessions, SIDEBAR_INITIAL_SECTION_LIMIT, selection.activeSessionId, isCollapsed);
+	} = useShowMoreCap(sessions, SIDEBAR_SESSIONS_LIMIT, selection.activeSessionId, isCollapsed);
 	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
 	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
 	// With every session archived, the section keeps one row: the way to them,
