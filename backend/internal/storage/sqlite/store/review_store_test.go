@@ -280,7 +280,7 @@ func TestInsertReviewRunDuplicatePRSHAMapsToSentinel(t *testing.T) {
 		t.Fatalf("same sha on different PR should insert: %v", err)
 	}
 
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunFailed, domain.VerdictNone, "claude: not found", "", true); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunFailed, domain.VerdictNone, "claude: not found", "", true); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	} else if !ok {
 		t.Fatal("mark failed: got ok=false")
@@ -362,7 +362,7 @@ func TestInsertReviewRunAllowsRerunAfterChangesRequested(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, run); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "please fix", "rev-1", true); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "please fix", "rev-1", true); err != nil {
 		t.Fatalf("mark changes requested: %v", err)
 	} else if !ok {
 		t.Fatal("mark changes requested: got ok=false")
@@ -393,7 +393,7 @@ func TestInsertReviewRunAllowsRerunAfterTerminalEmptyVerdict(t *testing.T) {
 	}
 	run := domain.ReviewRun{
 		ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerClaudeCode,
-		PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictNone, CreatedAt: now,
+		PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictNone, CreatedAt: now,
 	}
 	if err := s.InsertReviewRun(ctx, run); err != nil {
 		t.Fatalf("first insert: %v", err)
@@ -556,7 +556,7 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert run: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "please fix", "rev-987", false); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "please fix", "rev-987", false); err != nil {
 		t.Fatalf("update run: %v", err)
 	} else if !ok {
 		t.Fatal("update run: got ok=false")
@@ -574,7 +574,7 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("by sha: ok=%v err=%v", ok, err)
 	}
-	if bySHA.Status != domain.ReviewRunComplete || bySHA.Verdict != domain.VerdictChangesRequested || bySHA.Body != "please fix" || bySHA.GithubReviewID != "rev-987" {
+	if bySHA.Status != domain.ReviewRunCompleted || bySHA.Verdict != domain.VerdictChangesRequested || bySHA.Body != "please fix" || bySHA.GithubReviewID != "rev-987" {
 		t.Fatalf("run result not persisted: %+v", bySHA)
 	}
 	byHarness, ok, err := s.GetReviewRunBySessionPRSHAAndHarness(ctx, rec.ID, got.PRURL, "sha1", domain.ReviewerHarness("greptile"))
@@ -606,14 +606,14 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 		t.Fatalf("batch runs = %+v", batchRuns)
 	}
 
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "again", "", true); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "again", "", true); err != nil {
 		t.Fatalf("second update: %v", err)
 	} else if ok {
 		t.Fatal("second update completed an already-complete run")
 	}
 }
 
-func TestCancelRunningReviewRunsBySession(t *testing.T) {
+func TestTransitionReviewRunsBySessionMovesOnlyActiveRunsOfTheHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
@@ -630,26 +630,29 @@ func TestCancelRunningReviewRunsBySession(t *testing.T) {
 	}
 	for _, run := range []domain.ReviewRun{
 		{ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning, CreatedAt: now},
-		{ID: "run-2", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/2", TargetSHA: "sha2", Status: domain.ReviewRunRunning, CreatedAt: now.Add(time.Second)},
-		{ID: "run-3", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/3", TargetSHA: "sha3", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now.Add(2 * time.Second)},
+		{ID: "run-2", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/2", TargetSHA: "sha2", Status: domain.ReviewRunQueued, CreatedAt: now.Add(time.Second)},
+		{ID: "run-3", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/3", TargetSHA: "sha3", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now.Add(2 * time.Second)},
+		{ID: "run-4", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerClaudeCode, PRURL: "https://example/pr/4", TargetSHA: "sha4", Status: domain.ReviewRunLaunching, CreatedAt: now.Add(3 * time.Second)},
 	} {
 		if err := s.InsertReviewRun(ctx, run); err != nil {
 			t.Fatalf("insert %s: %v", run.ID, err)
 		}
 	}
-	running, err := s.ListRunningReviewRunsBySession(ctx, rec.ID)
+	active, err := s.ListActiveReviewRunsBySession(ctx, rec.ID)
 	if err != nil {
-		t.Fatalf("list running: %v", err)
+		t.Fatalf("list active: %v", err)
 	}
-	if len(running) != 2 || running[0].ID != "run-2" || running[1].ID != "run-1" {
-		t.Fatalf("running = %+v", running)
+	if len(active) != 3 || active[0].ID != "run-4" || active[1].ID != "run-2" || active[2].ID != "run-1" {
+		t.Fatalf("active = %+v", active)
 	}
-	n, err := s.CancelRunningReviewRunsBySession(ctx, rec.ID, "cancelled by user")
+	codex := domain.ReviewerCodex
+	ended := now.Add(time.Minute)
+	ids, err := s.TransitionReviewRunsBySession(ctx, rec.ID, &codex, domain.ActiveReviewRunStatuses, domain.ReviewRunCancelled, domain.ReviewRunPatch{CancelledBy: domain.ReviewCancelledByUser, EndedAt: &ended})
 	if err != nil {
-		t.Fatalf("cancel running: %v", err)
+		t.Fatalf("cancel codex runs: %v", err)
 	}
-	if n != 2 {
-		t.Fatalf("cancelled rows = %d, want 2", n)
+	if len(ids) != 2 {
+		t.Fatalf("cancelled ids = %v, want run-1 and run-2", ids)
 	}
 	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)
 	if err != nil {
@@ -659,11 +662,81 @@ func TestCancelRunningReviewRunsBySession(t *testing.T) {
 	for _, run := range runs {
 		byID[run.ID] = run
 	}
-	if byID["run-1"].Status != domain.ReviewRunCancelled || byID["run-2"].Status != domain.ReviewRunCancelled {
-		t.Fatalf("running runs not cancelled: %+v", byID)
+	for _, id := range []string{"run-1", "run-2"} {
+		if run := byID[id]; run.Status != domain.ReviewRunCancelled || run.CancelledBy != domain.ReviewCancelledByUser || run.EndedAt == nil || !run.EndedAt.Equal(ended) {
+			t.Fatalf("%s not cancelled by user: %+v", id, run)
+		}
 	}
-	if byID["run-3"].Status != domain.ReviewRunComplete {
-		t.Fatalf("complete run changed: %+v", byID["run-3"])
+	if byID["run-3"].Status != domain.ReviewRunCompleted {
+		t.Fatalf("completed run changed: %+v", byID["run-3"])
+	}
+	if byID["run-4"].Status != domain.ReviewRunLaunching {
+		t.Fatalf("other harness's run changed: %+v", byID["run-4"])
+	}
+}
+
+// Every write is guarded by its allowed from-states, and the first final
+// state wins: a late writer sees false and changes nothing.
+func TestTransitionReviewRunIsGuardedByFromStates(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev-1", SessionID: rec.ID, ProjectID: rec.ProjectID, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("upsert review: %v", err)
+	}
+	if err := s.InsertReviewRun(ctx, domain.ReviewRun{ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunQueued, CreatedAt: now}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	get := func() domain.ReviewRun {
+		t.Helper()
+		run, ok, err := s.GetReviewRun(ctx, "run-1")
+		if err != nil || !ok {
+			t.Fatalf("get run ok=%v err=%v", ok, err)
+		}
+		return run
+	}
+	launching := now.Add(time.Second)
+	if ok, err := s.TransitionReviewRun(ctx, "run-1", []domain.ReviewRunStatus{domain.ReviewRunRunning}, domain.ReviewRunCompleted, domain.ReviewRunPatch{}); err != nil || ok {
+		t.Fatalf("queued -> completed from running only: ok=%v err=%v", ok, err)
+	}
+	if ok, err := s.TransitionReviewRun(ctx, "run-1", []domain.ReviewRunStatus{domain.ReviewRunQueued}, domain.ReviewRunLaunching, domain.ReviewRunPatch{LaunchID: "launch-1", LaunchingAt: &launching}); err != nil || !ok {
+		t.Fatalf("queued -> launching: ok=%v err=%v", ok, err)
+	}
+	started := now.Add(2 * time.Second)
+	if ok, err := s.TransitionReviewRun(ctx, "run-1", []domain.ReviewRunStatus{domain.ReviewRunLaunching}, domain.ReviewRunRunning, domain.ReviewRunPatch{StartedAt: &started}); err != nil || !ok {
+		t.Fatalf("launching -> running: ok=%v err=%v", ok, err)
+	}
+	if n, err := s.MarkReviewRunsFirstActivity(ctx, "rev-1", "launch-other", started); err != nil || n != 0 {
+		t.Fatalf("activity from another launch counted: n=%d err=%v", n, err)
+	}
+	if n, err := s.MarkReviewRunsFirstActivity(ctx, "rev-1", "launch-1", started); err != nil || n != 1 {
+		t.Fatalf("activity from the serving launch: n=%d err=%v", n, err)
+	}
+	if n, err := s.MarkReviewRunsFirstActivity(ctx, "rev-1", "launch-1", started.Add(time.Second)); err != nil || n != 0 {
+		t.Fatalf("first activity recorded twice: n=%d err=%v", n, err)
+	}
+	failedAt := now.Add(3 * time.Second)
+	if ok, err := s.TransitionReviewRun(ctx, "run-1", []domain.ReviewRunStatus{domain.ReviewRunRunning}, domain.ReviewRunFailed, domain.ReviewRunPatch{FailureReason: domain.ReviewFailureTimedOut, EndedAt: &failedAt}); err != nil || !ok {
+		t.Fatalf("running -> failed: ok=%v err=%v", ok, err)
+	}
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "late", "gh-1", true); err != nil || ok {
+		t.Fatalf("late submit overwrote a final run: ok=%v err=%v", ok, err)
+	}
+	run := get()
+	if run.Status != domain.ReviewRunFailed || run.FailureReason != domain.ReviewFailureTimedOut || run.Verdict != domain.VerdictNone || run.Body != "" {
+		t.Fatalf("final run = %+v", run)
+	}
+	if run.LaunchID != "launch-1" || run.LaunchingAt == nil || !run.LaunchingAt.Equal(launching) || run.StartedAt == nil || !run.StartedAt.Equal(started) || run.EndedAt == nil || !run.EndedAt.Equal(failedAt) {
+		t.Fatalf("timestamps = %+v", run)
+	}
+	active, err := s.ListActiveReviewRuns(ctx)
+	if err != nil || len(active) != 0 {
+		t.Fatalf("active runs after final = %+v err=%v", active, err)
 	}
 }
 
@@ -774,7 +847,7 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			}
 			for _, run := range []domain.ReviewRun{
 				{ID: "missing", BatchID: "batch-1", Status: domain.ReviewRunRunning},
-				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, Body: "submitted result"},
+				{ID: "submitted", BatchID: "batch-1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, Body: "submitted result"},
 				{ID: "next", BatchID: "batch-2", Status: domain.ReviewRunRunning},
 			} {
 				run.ReviewID, run.SessionID, run.Harness, run.CreatedAt = review.ID, session.ID, domain.ReviewerCodex, now
@@ -811,11 +884,11 @@ func TestReviewerChatCompletionSettlesOnlyItsUnsubmittedBatch(t *testing.T) {
 			if missing.Status != want {
 				t.Fatalf("unsubmitted status = %s, want %s", missing.Status, want)
 			}
-			if want == domain.ReviewRunFailed && missing.Body != "reviewer Chat turn ended without submitting a result" {
-				t.Fatalf("failure explanation = %q", missing.Body)
+			if want == domain.ReviewRunFailed && (missing.FailureReason != domain.ReviewFailureTurnEndedWithoutSubmit || missing.Body != "" || missing.EndedAt == nil) {
+				t.Fatalf("failure = reason %q body %q ended %v", missing.FailureReason, missing.Body, missing.EndedAt)
 			}
 			submitted, _, err := s.GetReviewRun(ctx, "submitted")
-			if err != nil || submitted.Status != domain.ReviewRunComplete || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
+			if err != nil || submitted.Status != domain.ReviewRunCompleted || submitted.Verdict != domain.VerdictApproved || submitted.Body != "submitted result" {
 				t.Fatalf("submitted result changed: %+v %v", submitted, err)
 			}
 			next, _, err := s.GetReviewRun(ctx, "next")
@@ -848,7 +921,7 @@ func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, run); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-1", domain.ReviewRunComplete, domain.VerdictApproved, "approved", "rev-1", true); err != nil {
+	if ok, err := finishReviewRun(ctx, s, "run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "approved", "rev-1", true); err != nil {
 		t.Fatalf("mark approved: %v", err)
 	} else if !ok {
 		t.Fatal("mark approved: got ok=false")
@@ -866,7 +939,7 @@ func TestInsertReviewRunAllowsRerunAfterApproval(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, duplicate); !errors.Is(err, domain.ErrDuplicateReviewRun) {
 		t.Fatalf("concurrent rerun = %v, want duplicate", err)
 	}
-	if ok, err := s.UpdateReviewRunResult(ctx, rerun.ID, domain.ReviewRunComplete, domain.VerdictApproved, "approved again", "rev-2", true); err != nil || !ok {
+	if ok, err := finishReviewRun(ctx, s, rerun.ID, domain.ReviewRunCompleted, domain.VerdictApproved, "approved again", "rev-2", true); err != nil || !ok {
 		t.Fatalf("finish rerun = %v, %v", ok, err)
 	}
 	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)

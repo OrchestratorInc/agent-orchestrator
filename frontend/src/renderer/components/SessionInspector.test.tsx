@@ -313,7 +313,7 @@ const approvedReview = {
   reviewId: "review-1",
   sessionId: "sess-1",
   harness: "codex",
-  status: "complete",
+  status: "completed",
   verdict: "approved",
   body: "Looks good.",
   prUrl: "https://example.com/pr/3",
@@ -3769,7 +3769,7 @@ describe("SessionInspector summary reviews", () => {
 
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    await screen.findByText("Review in progress · Codex");
+    await screen.findByText("Reviewing... · Codex");
 
     expect(screen.queryByText("Reviewable change 3")).not.toBeInTheDocument();
     expect(screen.queryByText("Review summary")).not.toBeInTheDocument();
@@ -4330,7 +4330,7 @@ describe("SessionInspector summary reviews", () => {
         previousRun: {
           ...approvedReview,
           id: "run-previous",
-          status: "delivered",
+          status: "completed",
           verdict: previousVerdict,
           body: "Previous review summary with actionable detail.",
           githubReviewId: "98765",
@@ -4375,7 +4375,7 @@ describe("SessionInspector summary reviews", () => {
       // word on the button.
       if (status === "running") {
         expect(
-          screen.getByText("Review in progress · Codex"),
+          screen.getByText("Reviewing... · Codex"),
         ).toBeInTheDocument();
       } else {
         expect(
@@ -5705,7 +5705,7 @@ describe("SessionInspector summary reviews", () => {
         ...approvedReview,
         id: "run-done",
         harness: "claude-code",
-        status: "complete",
+        status: "completed",
       },
     };
     const running = {
@@ -5727,10 +5727,10 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(
-      await screen.findByText("Review in progress · Codex"),
+      await screen.findByText("Reviewing... · Codex"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Review in progress · Claude Code"),
+      screen.queryByText("Reviewing... · Claude Code"),
     ).not.toBeInTheDocument();
   });
 
@@ -5821,13 +5821,13 @@ describe("SessionInspector summary reviews", () => {
 
     // AO runs one reviewer per worker, so a second harness cannot start
     // alongside it. Say so rather than silently ignoring the choice.
-    expect(screen.getByText("Review in progress · Codex")).toBeInTheDocument();
+    expect(screen.getByText("Reviewing... · Codex")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Select reviewer agent/ }),
     ).toBeDisabled();
   });
 
-  it("hides the review in progress strip when the reviewer hook reports idle", async () => {
+  it("keeps showing the run state when the reviewer hook reports idle", async () => {
     const running = {
       ...reviewState(3, "running", "sha-1"),
       latestRun: {
@@ -5843,12 +5843,46 @@ describe("SessionInspector summary reviews", () => {
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
+    // The daemon owns the run: an idle reviewer that does not submit is failed
+    // by the run supervisor after its grace period, so the UI never guesses.
     expect(
-      screen.queryByText("Review in progress · Codex"),
-    ).not.toBeInTheDocument();
+      await screen.findByText("Reviewing... · Codex"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Stop review" }),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["launching", "active", "Starting review..."],
+    ["queued", "idle", "Starting review..."],
+    ["running", "waiting_input", "Waiting for input · Codex"],
+    ["cancelling", "active", "Stopping..."],
+  ])("shows the %s run state as %s activity -> %s", async (status, activity, label) => {
+    const live = {
+      ...reviewState(3, "running", "sha-1"),
+      latestRun: { ...approvedReview, id: "run-live", harness: "codex", status, verdict: "" },
+    };
+    mockCommonGets([], "reviewer-pane", [live], activity);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
+  });
+
+  it("does not report a run a newer commit replaced as a failure", async () => {
+    mockCommonGets([], "", [
+      {
+        ...reviewState(3, "needs_review", "abc123"),
+        latestRun: { ...failedReview, status: "superseded", body: "" },
+      },
+    ]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("shows the review in progress strip when the reviewer hook reports blocked", async () => {
@@ -5868,7 +5902,7 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(
-      await screen.findByText("Review in progress · Codex"),
+      await screen.findByText("Reviewing... · Codex"),
     ).toBeInTheDocument();
   });
 
@@ -5878,7 +5912,7 @@ describe("SessionInspector summary reviews", () => {
       previousRun: {
         ...approvedReview,
         id: "run-previous",
-        status: "delivered",
+        status: "completed",
         verdict: "changes_requested",
         targetSha: "sha-previous",
       },
@@ -6012,7 +6046,8 @@ describe("SessionInspector summary reviews", () => {
     const failedAutoReview = {
       ...failedReview,
       triggerSource: "auto",
-      body: 'reviewer preflight: reviewer harness "kimi" is unauthorized',
+      body: "",
+      failureReason: "preflight_failed",
     };
     mockCommonGets([], "", [
       {
@@ -6029,15 +6064,16 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      'Auto review Failed: reviewer preflight: reviewer harness "kimi" is unauthorized',
+      "Auto review: Review failed. Please try again.",
     );
   });
 
-  it("surfaces the stored reason of a failed manual review", async () => {
+  it("surfaces a failed manual review with a retry", async () => {
     const failedManualReview = {
       ...failedReview,
       triggerSource: "manual",
-      body: "launch reviewer: reviewer replace stale pane: no such session",
+      body: "",
+      failureReason: "turn_ended_without_submit",
     };
     mockCommonGets([], "", [
       {
@@ -6049,8 +6085,14 @@ describe("SessionInspector summary reviews", () => {
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
+    // The reason code is for diagnostics; people get one message and a retry.
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Review Failed: launch reviewer: reviewer replace stale pane: no such session",
+      "Review: Review failed. Please try again.",
+    );
+    expect(screen.getByRole("status")).not.toHaveTextContent("turn_ended_without_submit");
+    await userEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()),
     );
   });
 
@@ -6351,7 +6393,7 @@ describe("SessionInspector Cloud reviews", () => {
             triggerSource: "manual",
             pullRequestUrl: "https://github.com/acme/repo/pull/7",
             targetSha: "head-7",
-            status: "delivered",
+            status: "completed",
             verdict: "approved",
             body: "Cloud review is ready for the worker.",
             providerReviewId: "98765",
@@ -6371,7 +6413,7 @@ describe("SessionInspector Cloud reviews", () => {
           triggerSource: "manual",
           pullRequestUrl: "https://github.com/acme/repo/pull/7",
           targetSha: "head-7",
-          status: "delivered",
+          status: "completed",
           verdict: "approved",
           body: "Cloud review is ready for the worker.",
           providerReviewId: "98765",

@@ -698,21 +698,29 @@ type Review struct {
 }
 
 type ReviewRun struct {
-	ID               string
-	ReviewID         string
-	SessionID        domain.SessionID
-	Harness          domain.ReviewerHarness
-	PRURL            string
-	TargetSha        string
-	Status           domain.ReviewRunStatus
-	Verdict          domain.ReviewVerdict
-	Body             string
-	CreatedAt        time.Time
-	GithubReviewID   string
-	DeliveredAt      sql.NullTime
-	BatchID          string
-	AutoInjectReview bool
-	TriggerSource    domain.ReviewTriggerSource
+	ID                string
+	ReviewID          string
+	SessionID         domain.SessionID
+	Harness           domain.ReviewerHarness
+	PRURL             string
+	TargetSha         string
+	Status            domain.ReviewRunStatus
+	Verdict           domain.ReviewVerdict
+	Body              string
+	CreatedAt         time.Time
+	GithubReviewID    string
+	DeliveredAt       sql.NullTime
+	BatchID           string
+	AutoInjectReview  bool
+	TriggerSource     domain.ReviewTriggerSource
+	FailureReason     domain.ReviewFailureReason
+	CancelledBy       domain.ReviewCancelledBy
+	LaunchID          string
+	LaunchingAt       sql.NullTime
+	StartedAt         sql.NullTime
+	FirstActivityAt   sql.NullTime
+	CancelRequestedAt sql.NullTime
+	EndedAt           sql.NullTime
 }
 
 type Session struct {
