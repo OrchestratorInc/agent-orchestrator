@@ -2124,6 +2124,193 @@ paths:
                 $ref: "#/components/schemas/MentionCandidates"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listSessionAsides
+      tags: [Sessions]
+      description: >-
+        The session's asides, as the caller sees them, in the order their
+        messages were sent. A message or steer that mentions people or teams
+        starts an aside: a thread between people about that message, which
+        its chat.user_message or chat.turn_steered event names by asideId.
+        Only mentions start one. The message still goes to the agent like any
+        other, but the agent never reads the aside: its replies never reach a
+        worker, a prompt, a prompt suggestion or the agent's context. Anyone
+        who can open the session (read or write) may list them; a client draws
+        each message's aside icon, and its unread dot, from this list.
+      responses:
+        "200":
+          description: The session's asides.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Aside"
+        "404":
+          description: The caller can't open the session.
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/AsideId"
+    get:
+      operationId: getSessionAside
+      tags: [Sessions]
+      description: >-
+        One aside: the message that started it and its replies, oldest first.
+        Anyone who can open the session may read it. Reading does not mark it
+        read; markSessionAsideRead does.
+      parameters:
+        - name: cursor
+          in: query
+          description: The nextCursor of the previous page, for the replies after it.
+          schema:
+            type: string
+            maxLength: 200
+        - name: limit
+          in: query
+          description: At most this many replies.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        "200":
+          description: The aside, its message, and a page of its replies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsideThread"
+        "404":
+          description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/replies:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/AsideId"
+    post:
+      operationId: replyToSessionAside
+      tags: [Sessions]
+      description: >-
+        Replies in an aside. Anyone who can open the session may reply, a
+        viewer too, and it needs no composer lease. The reply never reaches
+        the agent. Everyone watching the session receives it as a
+        chat.aside_reply event. Everyone in the aside except the author, and
+        unless they muted it, gets an aside_reply notification; each person or
+        team member the reply mentions joins the aside and gets a mentioned
+        notification instead (mentions are checked as on sendMessage).
+        Replying marks the aside read for the author. A retry with the same
+        clientMessageId returns the reply the first try created.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AsideReplyInput"
+      responses:
+        "201":
+          description: The reply, or the one an earlier try with the same clientMessageId created.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [reply]
+                properties:
+                  reply:
+                    $ref: "#/components/schemas/AsideReply"
+        "404":
+          description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        "409":
+          description: "`SESSION_TERMINATED`: the session ended or was deleted. Nothing is stored."
+          $ref: "#/components/responses/Error"
+        "422":
+          description: >-
+            `validation_error`: details.field `text` when the text is blank or
+            longer than 65536 characters; details.field `mentions` with a
+            details.reason as on sendMessage (`unknown`, `no_access`,
+            `outside_session`, `too_many`). Nothing is stored.
+          $ref: "#/components/responses/ValidationError"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/read:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/AsideId"
+    post:
+      operationId: markSessionAsideRead
+      tags: [Sessions]
+      description: >-
+        Marks the aside read for the caller up to now: its unread becomes
+        false until someone else replies. Also marks read the caller's
+        aside_reply notification for it, and a mentioned notification that
+        points at it. A client calls it when it opens the aside.
+      responses:
+        "200":
+          description: The aside after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Aside"
+        "404":
+          description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/mute:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/AsideId"
+    put:
+      operationId: muteSessionAside
+      tags: [Sessions]
+      description: >-
+        Mutes or unmutes the aside for the caller. While muted, its replies
+        notify the caller of nothing (no notification, alert or push); a
+        reply that mentions them still does. The aside is still listed, and
+        its unread still follows its replies.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [muted]
+              properties:
+                muted:
+                  type: boolean
+      responses:
+        "200":
+          description: The aside after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Aside"
+        "404":
+          description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-models:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -4792,6 +4979,14 @@ components:
       schema:
         type: string
         format: uuid
+    AsideId:
+      name: asideId
+      in: path
+      required: true
+      description: The asideId on the chat.user_message or chat.turn_steered event of the message that started the aside.
+      schema:
+        type: string
+        format: uuid
     WorkerRequestId:
       name: requestId
       in: path
@@ -5221,9 +5416,11 @@ components:
           type: string
           description: >-
             What happened. `mentioned`: someone named the recipient, or a team
-            they are in, in a session's message or steer; its metadata is a
-            MentionNotificationMetadata. A client shows kinds it doesn't know
-            by title and body.
+            they are in, in a session's message or steer, or in a reply in an
+            aside; its metadata is a MentionNotificationMetadata.
+            `aside_reply`: someone replied in an aside the recipient is in;
+            its metadata is an AsideReplyNotificationMetadata. A client shows
+            kinds it doesn't know by title and body.
         title:
           type: string
         body:
@@ -5344,6 +5541,62 @@ components:
           type: string
         projectName:
           type: string
+        asideId:
+          type: string
+          format: uuid
+          description: >-
+            The aside the mention is in: the one the message started, or the
+            one whose reply named them. A client opens the session with this
+            aside open.
+        replyId:
+          type: string
+          format: uuid
+          description: Set when a reply in the aside named them; sequence and turnId are then the aside's message.
+    AsideReplyNotificationMetadata:
+      type: object
+      additionalProperties: true
+      required: [asideId, replyId, authorUserId, authorName, sequence]
+      description: >-
+        The metadata of an `aside_reply` notification. A reply notifies
+        everyone in the aside except its author and anyone who muted it. In
+        the aside are the author of the message that started it, everyone it
+        named (a team's members as they were when it was sent), everyone who
+        replied, and everyone a reply named. Someone a reply names gets a
+        mentioned notification for it instead. The recipient has one
+        aside_reply notification per aside: a newer reply replaces it (same
+        id, new title, body and metadata, unread again, and a
+        notification_created event so it alerts again). Opening the aside
+        (markSessionAsideRead) or replying in it marks it read. title is
+        "{author} replied in an aside"; body is the reply's first line, about
+        200 characters, with each mention as @Name.
+      properties:
+        asideId:
+          type: string
+          format: uuid
+        replyId:
+          type: string
+          format: uuid
+          description: The newest reply.
+        authorUserId:
+          type: string
+          format: uuid
+          description: Who wrote the newest reply.
+        authorName:
+          type: string
+          description: Never an email address.
+        sequence:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+          description: The session event of the message that started the aside, to open the session at it.
+        turnId:
+          type: string
+          format: uuid
+        sessionTitle:
+          type: string
+        projectName:
+          type: string
     NotificationStateChange:
       type: object
       additionalProperties: false
@@ -5377,7 +5630,7 @@ components:
     NotificationPreferences:
       type: object
       additionalProperties: false
-      required: [mentions, teamMentions]
+      required: [mentions, teamMentions, asideReplies]
       description: >-
         Which notifications alert the person on the desktop and the phone.
         Off stops the alert and the push only; the notification is still
@@ -5389,6 +5642,9 @@ components:
         teamMentions:
           type: boolean
           description: Someone mentions a team I'm in. On by default.
+        asideReplies:
+          type: boolean
+          description: New replies in asides I'm in (aside_reply). On by default.
     NotificationPreferencesInput:
       type: object
       additionalProperties: false
@@ -5398,6 +5654,8 @@ components:
         mentions:
           type: boolean
         teamMentions:
+          type: boolean
+        asideReplies:
           type: boolean
     AuthProvider:
       type: string
@@ -7950,7 +8208,8 @@ components:
             can open the session, or a team, and a guest may name only people
             in the session; anything else is refused with 422. Recorded, with
             their names, on the chat.user_message event; the agent receives
-            `text` only, where the composer writes each one as @Name.
+            `text` only, where the composer writes each one as @Name. A
+            message with mentions starts an aside (asideId on its event).
           items:
             $ref: "#/components/schemas/MentionToken"
     MessageAttachment:
@@ -8090,7 +8349,8 @@ components:
           description: >-
             People and teams the guidance notifies, checked as on a message.
             Recorded, with their names, on the steer's events; the agent
-            receives `text` only.
+            receives `text` only. Guidance with mentions starts an aside
+            (asideId on its event).
           items:
             $ref: "#/components/schemas/MentionToken"
     MentionToken:
@@ -8182,6 +8442,154 @@ components:
                 format: uuid
               name:
                 type: string
+    Aside:
+      type: object
+      additionalProperties: false
+      required: [asideId, anchor, replyCount, unread, muted]
+      description: An aside as the caller sees it (see listSessionAsides).
+      properties:
+        asideId:
+          type: string
+          format: uuid
+        anchor:
+          $ref: "#/components/schemas/AsideAnchor"
+        replyCount:
+          type: integer
+          minimum: 0
+        lastReplyAt:
+          type: string
+          format: date-time
+          description: When the newest reply was written. Absent while it has none.
+        unread:
+          type: boolean
+          description: >-
+            The caller is in the aside and something in it by someone else
+            (the message that started it, or a reply) is newer than when they
+            last read it (markSessionAsideRead, or their own reply). Always
+            false for someone not in it.
+        muted:
+          type: boolean
+          description: The caller muted it (muteSessionAside).
+    AsideAnchor:
+      type: object
+      additionalProperties: false
+      required: [sequence]
+      description: The message that started the aside.
+      properties:
+        sequence:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+          description: Its chat.user_message or chat.turn_steered event.
+        turnId:
+          type: string
+          format: uuid
+        clientMessageId:
+          type: string
+          description: A steer's clientMessageId, or the Idempotency-Key a message was sent with. Absent when it had none.
+    AsideMessage:
+      type: object
+      additionalProperties: false
+      required: [sequence, text, mentions, createdAt]
+      description: The message that started an aside, as the transcript shows it.
+      properties:
+        sequence:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+        turnId:
+          type: string
+          format: uuid
+        text:
+          type: string
+          description: The message's text, after any edit while it was queued.
+        mentions:
+          type: array
+          description: The people and teams it named, with their names when it was sent.
+          items:
+            $ref: "#/components/schemas/EventMention"
+        authorUserId:
+          type: string
+          format: uuid
+        authorName:
+          type: string
+          description: Never an email address.
+        createdAt:
+          type: string
+          format: date-time
+    AsideReply:
+      type: object
+      additionalProperties: false
+      required: [replyId, asideId, text, mentions, authorUserId, authorName, createdAt]
+      properties:
+        replyId:
+          type: string
+          format: uuid
+        asideId:
+          type: string
+          format: uuid
+        text:
+          type: string
+        mentions:
+          type: array
+          description: The people and teams the reply named, with their names when it was sent; empty when it named none.
+          items:
+            $ref: "#/components/schemas/EventMention"
+        authorUserId:
+          type: string
+          format: uuid
+        authorName:
+          type: string
+          description: The author's display name when they replied. Never an email address.
+        createdAt:
+          type: string
+          format: date-time
+    AsideThread:
+      type: object
+      additionalProperties: false
+      required: [aside, message, replies, hasMore]
+      properties:
+        aside:
+          $ref: "#/components/schemas/Aside"
+        message:
+          $ref: "#/components/schemas/AsideMessage"
+        replies:
+          type: array
+          description: Oldest first.
+          items:
+            $ref: "#/components/schemas/AsideReply"
+        hasMore:
+          type: boolean
+          description: Newer replies follow; ask again with nextCursor.
+        nextCursor:
+          type: string
+          description: Set when hasMore is true.
+    AsideReplyInput:
+      type: object
+      additionalProperties: false
+      required: [text, clientMessageId]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          description: The reply. Blank text is refused with 422. Each mention is written as @Name, as in a message.
+        mentions:
+          type: array
+          maxItems: 20
+          description: >-
+            People and teams the reply names, checked as on sendMessage. Each
+            joins the aside (a team's members as they are now) and gets a
+            mentioned notification.
+          items:
+            $ref: "#/components/schemas/MentionToken"
+        clientMessageId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The client's id for the reply. A retry with the same one returns the first reply and stores nothing new.
     EditQueuedMessageInput:
       type: object
       additionalProperties: false
@@ -10651,6 +11059,14 @@ components:
               description: The people and teams the message named, with their names when it was sent, in the order sent. Absent when it named none.
               items:
                 $ref: "#/components/schemas/EventMention"
+            asideId:
+              type: string
+              format: uuid
+              description: >-
+                The aside the message started (see listSessionAsides). Set
+                exactly when it carries mentions, in the transaction that
+                appends it, so the event the send returns has it too. Absent
+                from a control plane that predates asides.
         createdAt:
           type: string
           format: date-time
@@ -10911,6 +11327,13 @@ components:
                 steer request returns. Absent when it named none.
               items:
                 $ref: "#/components/schemas/EventMention"
+            asideId:
+              type: string
+              format: uuid
+              description: >-
+                The aside the guidance started, as on chat.user_message: set
+                exactly when it carries mentions, so the event the steer
+                request returns has it too.
         createdAt:
           type: string
           format: date-time
@@ -10939,6 +11362,54 @@ components:
         createdAt:
           type: string
           format: date-time
+    AsideReplyEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        A reply in an aside (replyToSessionAside). Everyone who can open the
+        session receives it on the session's events, so an open aside updates
+        live. It is hidden from the agent: no worker ever receives it, and it
+        never enters a prompt, a prompt suggestion or the agent's context.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.aside_reply
+        payload:
+          type: object
+          additionalProperties: false
+          required: [asideId, replyId, text, mentions, authorUserId, authorName, createdAt]
+          properties:
+            asideId:
+              type: string
+              format: uuid
+            replyId:
+              type: string
+              format: uuid
+            text:
+              type: string
+            mentions:
+              type: array
+              description: The people and teams the reply named, with their names when it was sent; empty when it named none.
+              items:
+                $ref: "#/components/schemas/EventMention"
+            authorUserId:
+              type: string
+              format: uuid
+            authorName:
+              type: string
+              description: Never an email address.
+            createdAt:
+              type: string
+              format: date-time
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -10951,6 +11422,7 @@ components:
         - $ref: "#/components/schemas/InterruptRequestedEvent"
         - $ref: "#/components/schemas/TurnSteeredEvent"
         - $ref: "#/components/schemas/ScriptStepEvent"
+        - $ref: "#/components/schemas/AsideReplyEvent"
     ClientEventPage:
       type: object
       additionalProperties: false
