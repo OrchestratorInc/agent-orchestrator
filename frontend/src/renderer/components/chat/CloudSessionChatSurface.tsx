@@ -48,6 +48,8 @@ import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliver
 
 type EventPayload = {
 	attempt?: unknown;
+	/** chat.turn_interrupted: why a turn ended before it started (deleted, interface_switch). */
+	reason?: unknown;
 	/** chat.user_message: the files the message carries. */
 	attachments?: unknown;
 	/** workspace.setup */
@@ -704,8 +706,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// before the agent started on it from one that ran.
 	const promptedTurns = new Set<string>();
 	const startedTurns = new Set<string>();
-	// Messages stopped before the agent started on them (deleted from the queue,
-	// or the queue ended by a switch to the terminal).
+	// Queued messages the person deleted (turn_interrupted of reason deleted).
 	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
 	// Live Setup and Cleanup logs. A run with step events replaces the older
@@ -783,20 +784,27 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			// (a turn starts after its prompt), or it ended at attempt 0, never
 			// claimed, which holds on a page without its prompt too.
 			const neverStarted = !startedTurns.has(turnID) && (promptedTurns.has(turnID) || eventPayload(event).attempt === 0);
-			if (neverStarted && event.type === "chat.turn_interrupted") {
-				// Stopped before it ran: it leaves the conversation, as a local chat
-				// drops a queued message deleted from its dock.
+			if (event.type === "chat.turn_interrupted" && eventPayload(event).reason === "deleted") {
+				// The person took the queued message back: it leaves the
+				// conversation, as a local chat drops a queued message deleted from
+				// its dock. Any other ending (a switch to the terminal, an older
+				// event, a reason this desktop does not know) keeps the person's
+				// text, shown interrupted as local shows a queue its Stop ended.
 				turn.state = "cancelled";
 				delete turn.startedAt;
 				withdrawnTurns.add(turnID);
-			} else if (neverStarted && event.type === "chat.turn_aborted") {
-				// Refused when its turn came: not run, with the reason, rather than
-				// a run that failed.
-				turn.notRun = true;
+			} else if (neverStarted) {
+				// Ended before it ran: it did no work to time (a page without its
+				// prompt took its first event for its start).
 				delete turn.startedAt;
-				if (turn.errorMessage) {
-					const reason = turn.errorMessage.replace(/^Not run:\s*/i, "");
-					turn.errorMessage = reason.charAt(0).toUpperCase() + reason.slice(1);
+				if (event.type === "chat.turn_aborted") {
+					// Refused when its turn came: not run, with the reason, rather than
+					// a run that failed.
+					turn.notRun = true;
+					if (turn.errorMessage) {
+						const reason = turn.errorMessage.replace(/^Not run:\s*/i, "");
+						turn.errorMessage = reason.charAt(0).toUpperCase() + reason.slice(1);
+					}
 				}
 			}
 		}

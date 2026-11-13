@@ -1211,6 +1211,31 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 	});
 
+	// A queued turn a Stop or a switch to the terminal ended before it was sent
+	// to the agent did no work: it reads as interrupted, without a working time
+	// counted from when it was queued.
+	it("shows a turn interrupted before it started without Worked for", () => {
+		const turnId = "turn-interrupted-queued";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 1,
+			turns: [{ id: turnId, state: "interrupted", requestedAt: "2026-11-13T09:00:00Z", completedAt: "2026-11-13T09:00:30Z" }],
+			items: [{
+				kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+				role: "user", origin: "human", text: "queued text",
+				streaming: false, createdAt: "2026-11-13T09:00:00Z",
+			}],
+		};
+		const view = render(<ChatWorkspace snapshot={snapshot} />);
+		expect(screen.getByText("queued text")).toBeInTheDocument();
+		expect(screen.getByText("The agent was interrupted by you")).toBeInTheDocument();
+		expect(screen.queryByText(/Worked for/)).toBeNull();
+		view.unmount();
+		// One that ran keeps its working time.
+		render(<ChatWorkspace snapshot={{ ...snapshot, turns: [{ ...snapshot.turns[0]!, startedAt: "2026-11-13T09:00:10Z" }] }} />);
+		expect(document.querySelector("[data-turn-worked]")?.textContent).toMatch(/Worked for\s*20s/);
+	});
+
 	it("heads a turn with no work to fold with Worked for as plain text", () => {
 		const turnId = "turn-straight-to-answer";
 		const snapshot: ConversationSnapshot = {

@@ -536,30 +536,52 @@ describe("CloudSessionChatSurface", () => {
 			.toMatchObject({ message: "The request could not be completed." });
 	});
 
-	// A message deleted from the queue (or ended with the queue) before the
-	// agent started on it leaves the conversation, as a local chat drops a
-	// queued message deleted from its dock: no bubble, no "Worked for", no
-	// "interrupted by you". The control plane ends it with turn_interrupted of
-	// attempt 0, so it is known on a page without its message too.
-	it("drops a queued message deleted before the agent started on it", () => {
+	// A message the person deleted from the queue leaves the conversation, as a
+	// local chat drops a queued message deleted from its dock: no bubble, no
+	// "Worked for", no "interrupted by you". The control plane ends it with
+	// turn_interrupted of reason deleted, so it is known on a page without its
+	// message too.
+	const queueEvents = (reason?: string) => {
 		const at = (sequence: number, type: string, payload: Record<string, unknown>) =>
 			({ sessionId: session.id, sequence, type, payload, createdAt: `2026-11-13T09:0${sequence}:00Z` });
-		const events = [
+		return [
 			at(1, "chat.user_message", { text: "long job", turnId: "turn-run" }),
 			at(2, "chat.turn_started", { turnId: "turn-run", attempt: 1 }),
-			at(3, "chat.user_message", { text: "deleted while queued", turnId: "turn-deleted" }),
+			at(3, "chat.user_message", { text: "ended while queued", turnId: "turn-ended" }),
 			at(4, "chat.user_message", { text: "still queued", turnId: "turn-next" }),
-			at(5, "chat.turn_interrupted", { turnId: "turn-deleted", attempt: 0 }),
+			at(5, "chat.turn_interrupted", { turnId: "turn-ended", attempt: 0, ...(reason ? { reason } : {}) }),
 		];
+	};
+	it("drops a queued message the person deleted, on a page without it too", () => {
+		const events = queueEvents("deleted");
 		const full = toSnapshot(session, events);
 		expect(full.items.filter((item) => item.kind === "message").map((item) => item.turnId)).toEqual(["turn-run", "turn-next"]);
-		expect(full.turns.find((turn) => turn.id === "turn-deleted")?.state).toBe("cancelled");
-		expect(full.turns.map((turn) => [turn.id, turn.state])).toEqual([["turn-run", "running"], ["turn-deleted", "cancelled"], ["turn-next", "queued"]]);
-		// A page that starts below the deleted message knows it by its attempt.
+		expect(full.turns.map((turn) => [turn.id, turn.state])).toEqual([["turn-run", "running"], ["turn-ended", "cancelled"], ["turn-next", "queued"]]);
 		const partial = toSnapshot(session, events.slice(4), undefined, { partial: true });
 		expect(partial.items).toEqual([]);
-		expect(partial.turns.find((turn) => turn.id === "turn-deleted")?.state).toBe("cancelled");
+		expect(partial.turns.find((turn) => turn.id === "turn-ended")?.state).toBe("cancelled");
 	});
+
+	// A queued message ended any other way (a stop-now switch to the terminal,
+	// an event from before reasons, a reason this desktop does not know) keeps
+	// the person's text, shown interrupted as a local chat shows a queued
+	// message its Stop or switch ended. It never started, so it has no working
+	// time to show, on a page without its message too.
+	it.each([["a switch to the terminal", "interface_switch"], ["no reason", undefined], ["an unknown reason", "session_ended"]])(
+		"keeps a queued message ended by %s, shown interrupted without working time",
+		(_name, reason) => {
+			const events = queueEvents(reason);
+			const full = toSnapshot(session, events);
+			expect(full.items.filter((item) => item.kind === "message").map((item) => item.turnId)).toEqual(["turn-run", "turn-ended", "turn-next"]);
+			const ended = full.turns.find((turn) => turn.id === "turn-ended");
+			expect(ended).toMatchObject({ state: "interrupted", completedAt: "2026-11-13T09:05:00Z" });
+			expect(ended).not.toHaveProperty("startedAt");
+			const partial = toSnapshot(session, events.slice(4), undefined, { partial: true });
+			const partialEnded = partial.turns.find((turn) => turn.id === "turn-ended");
+			expect(partialEnded?.state).toBe("interrupted");
+			expect(partialEnded).not.toHaveProperty("startedAt");
+		},
+	);
 
 	// A queued message the control plane refused when its turn came never ran:
 	// it reads as not run, with the reason, not as a run that failed.

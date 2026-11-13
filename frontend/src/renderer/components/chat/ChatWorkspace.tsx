@@ -6478,8 +6478,9 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		group.outcome = {
 			state: turn.notRun ? "not_run" : turn.state,
 			usageLimit: turn.usageLimit,
-			// A turn that never started did no work to time.
-			durationMs: turn.notRun ? undefined : settledTurnDuration(turn),
+			// A turn that never started did no work to time: one refused, or a
+			// queued one a Stop or a switch ended before it was sent.
+			durationMs: turn.notRun || (turn.state === "interrupted" && !turn.startedAt) ? undefined : settledTurnDuration(turn),
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(
 					(item): item is ConversationActivity => item.kind === "activity" && item.activityKind === "error",
