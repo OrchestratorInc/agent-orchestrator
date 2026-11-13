@@ -40,9 +40,9 @@ export const terminalTabRenameInputClassName =
 	"absolute -left-1 -top-0.5 h-[calc(100%+4px)] w-[calc(100%+8px)] rounded-xs bg-background px-1 text-control leading-none text-foreground outline-none ring-1 ring-accent";
 
 /**
- * A tab's ghost close button, for the frame's `action` slot: it takes the
- * icon's place on hover. The click stays off the tab, so closing never
- * selects it first.
+ * A tab's ghost close button, for the frame's `action` slot: over the icon on
+ * hover (`actionPosition="icon"`), or at the tab's end (`"end"`, pinned to show
+ * at rest). The click stays off the tab, so closing never selects it first.
  */
 export function TabCloseButton({ label, onClose }: { label: string; onClose: () => void }) {
 	return (
