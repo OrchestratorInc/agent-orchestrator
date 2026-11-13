@@ -3163,6 +3163,8 @@ type LinkPreviewResponse struct {
 	ImageURL    string `json:"imageUrl,omitempty"`
 	SiteName    string `json:"siteName,omitempty"`
 	FaviconURL  string `json:"faviconUrl,omitempty"`
+	// FaviconDarkURL is the page's icon for a dark color scheme, when it names one.
+	FaviconDarkURL string `json:"faviconDarkUrl,omitempty"`
 }
 
 // MobileStatusResponse is the body of the Connect Mobile status/enable/disable/
