@@ -2146,6 +2146,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		lastPaneReportRef.current = signature;
 		reportPaneLayout(sessionId, layout);
 	};
+	// Changes whenever this view's relay registration starts or ends (the session
+	// changed, or the relay was switched off), so a command that waited on a slow
+	// lookup can tell the view it was sent to is gone.
+	const paneRegistrationRef = useRef(0);
 	const paneCommandRef = useRef<PaneCommandHandler>(async () => describeSessionPanesRef.current());
 	paneCommandRef.current = async (request) => {
 		if (!splitPanes) {
@@ -2173,7 +2177,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					else if (seen || waited >= 1_000) break;
 				}
 			} else if (tab.startsWith("file:")) {
+				const registration = paneRegistrationRef.current;
 				const path = await resolvePaneFile(tab.slice("file:".length));
+				// Opening a file resets this view's selection, so it must still be
+				// the view the command was sent to.
+				if (paneRegistrationRef.current !== registration) {
+					throw new PaneCommandError("VIEW_CHANGED", "The AO window moved to another session before the file could be split.");
+				}
 				openCenterFile(path);
 				updateGroups((current) => splitBeside(current, anchor, `file:${path}`, side));
 			} else {
@@ -2222,10 +2232,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (resolved?.kind === "workspace") return resolved.path;
 		throw new PaneCommandError("FILE_OUTSIDE_WORKSPACE", `${rawPath} is not in this session's workspace.`);
 	};
-	useEffect(
-		() => (paneRelayEnabled ? registerPaneSession(sessionId, (request) => paneCommandRef.current(request)) : undefined),
-		[paneRelayEnabled, sessionId],
-	);
+	useEffect(() => {
+		if (!paneRelayEnabled) return undefined;
+		paneRegistrationRef.current += 1;
+		const unregister = registerPaneSession(sessionId, (request) => paneCommandRef.current(request));
+		return () => {
+			paneRegistrationRef.current += 1;
+			unregister();
+		};
+	}, [paneRelayEnabled, sessionId]);
 	// Report after every render (only a changed layout is sent), and when a
 	// terminal's agent changes, which this view does not render on.
 	useEffect(() => reportSessionPanesRef.current());
