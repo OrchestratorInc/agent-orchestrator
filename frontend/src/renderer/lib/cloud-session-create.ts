@@ -88,6 +88,17 @@ export class CloudTaskFilesUndeliveredError extends Error {
 }
 
 /**
+ * A start with files whose outcome is not known yet, by its request id: a
+ * create that went unanswered may have made the session, and a session the
+ * cleanup could not delete is still there. A retry with the same request id
+ * continues that attempt under the same keys (with the files it already
+ * uploaded to that session), so it reaches the session the attempt made
+ * instead of starting a second one. It is forgotten once the attempt is
+ * settled: started, refused before a session existed, or its session deleted.
+ */
+const unsettledFileStarts = new Map<string, { key: string; sessionId?: string; attachmentIds?: string[] }>();
+
+/**
  * Creates a Chat session whose brief carries files. Files are uploaded to a
  * session that exists, and a session created with its prompt queues that
  * prompt as its first turn at once, without them. So the session is created
@@ -100,7 +111,8 @@ export class CloudTaskFilesUndeliveredError extends Error {
  * (a control plane's refusal keeps its own status); while the session may
  * still be there the error stays as it was, so a retry can still reach it.
  * Each attempt creates under its own key, since a replay of the same create
- * would answer with the deleted session.
+ * would answer with the deleted session; a retry of an attempt not settled
+ * yet keeps it (unsettledFileStarts).
  */
 export async function createCloudChatSessionWithFiles(
 	client: Pick<CloudCpClient, "createSession" | "sendSessionMessage" | "deleteSession">,
@@ -110,23 +122,43 @@ export async function createCloudChatSessionWithFiles(
 	upload: (sessionId: string, file: CloudTaskFile) => Promise<{ id: string }>,
 	options: { idempotencyKey?: string } = {},
 ): Promise<CloudCpSessionResponse> {
-	const key = `${options.idempotencyKey ?? crypto.randomUUID()}:files:${crypto.randomUUID()}`;
-	const created = await createCloudSession(client, orgId, { ...body, prompt: "" }, { idempotencyKey: key });
+	const requestId = options.idempotencyKey;
+	const attempt = (requestId === undefined ? undefined : unsettledFileStarts.get(requestId))
+		?? { key: `${requestId ?? crypto.randomUUID()}:files:${crypto.randomUUID()}` };
+	if (requestId !== undefined) unsettledFileStarts.set(requestId, attempt);
+	const settle = () => {
+		if (requestId !== undefined) unsettledFileStarts.delete(requestId);
+	};
+	let created: CloudCpSessionResponse;
+	try {
+		created = await createCloudSession(client, orgId, { ...body, prompt: "" }, { idempotencyKey: attempt.key });
+	} catch (error) {
+		// A refusal made nothing. Without an answer the session may exist, so a
+		// retry replays this create.
+		if (error instanceof CloudCpError && error.status >= 400 && error.status < 500) settle();
+		throw error;
+	}
 	const sessionId = created.session.id;
 	try {
 		if (created.session.interfaceMode !== "chat") throw new CloudTaskFilesNeedChatError();
-		const attachments = await Promise.all(files.map((file) => upload(sessionId, file)));
+		if (attempt.sessionId !== sessionId || !attempt.attachmentIds) {
+			const attachments = await Promise.all(files.map((file) => upload(sessionId, file)));
+			Object.assign(attempt, { sessionId, attachmentIds: attachments.map((attachment) => attachment.id) });
+		}
 		await client.sendSessionMessage(orgId, sessionId, {
 			text: body.prompt,
-			attachmentIds: attachments.map((attachment) => attachment.id),
+			attachmentIds: attempt.attachmentIds,
 			...(body.model ? { model: body.model } : {}),
 			...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
 			...(body.approvalMode ? { approvalMode: body.approvalMode } : {}),
-		}, { idempotencyKey: `${key}:brief` });
+		}, { idempotencyKey: `${attempt.key}:brief` });
 	} catch (error) {
 		const deleted = await client.deleteSession(orgId, sessionId).then(() => true, () => false);
-		if (!deleted || error instanceof CloudCpError || error instanceof CloudTaskFilesNeedChatError) throw error;
+		if (!deleted) throw error;
+		settle();
+		if (error instanceof CloudCpError || error instanceof CloudTaskFilesNeedChatError) throw error;
 		throw new CloudTaskFilesUndeliveredError(error instanceof Error ? error.message : String(error));
 	}
+	settle();
 	return created;
 }

@@ -101,6 +101,53 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(client.createSession.mock.calls[0]![2].idempotencyKey).not.toBe(client.createSession.mock.calls[1]![2].idempotencyKey);
 	});
 
+	// A create whose answer was lost may have made the session: a retry with
+	// the same request id replays it rather than starting a second session.
+	it("replays a create whose answer was lost, so its retry reaches the same session", async () => {
+		const client = clientFor();
+		client.createSession.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const upload = vi.fn().mockResolvedValue({ id: "f" });
+		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-lost" })).rejects.toBeInstanceOf(TypeError);
+		await createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-lost" });
+		const [first, second] = client.createSession.mock.calls.map((call) => call[2].idempotencyKey);
+		expect(first).toMatch(/^req-lost:files:/);
+		expect(second).toBe(first);
+		expect(client.sendSessionMessage).toHaveBeenCalledOnce();
+		// Settled, the request id starts afresh.
+		await createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-lost" });
+		expect(client.createSession.mock.calls[2]![2].idempotencyKey).not.toBe(first);
+	});
+
+	// The cleanup could not delete the session, so it is still there: the
+	// retry continues it, with the files it already holds, under the same keys.
+	it("continues the session a failed cleanup left, with the files it holds", async () => {
+		const client = clientFor();
+		client.sendSessionMessage.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		client.deleteSession.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const upload = vi.fn(async (_sessionId: string, file: { name?: string }) => ({ id: `id-${file.name}` }));
+		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-left" })).rejects.toBeInstanceOf(TypeError);
+		await createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-left" });
+		const [first, second] = client.createSession.mock.calls.map((call) => call[2].idempotencyKey);
+		expect(second).toBe(first);
+		expect(upload).toHaveBeenCalledTimes(files.length);
+		expect(client.sendSessionMessage.mock.calls[1]).toEqual(client.sendSessionMessage.mock.calls[0]);
+	});
+
+	// Nothing was made by a refused create or is left of a deleted session.
+	it.each([
+		["a refused create", "create"],
+		["a deleted session", "delete"],
+	])("starts afresh after %s", async (_name, step) => {
+		const client = clientFor();
+		const upload = vi.fn().mockResolvedValue({ id: "f" });
+		if (step === "create") client.createSession.mockRejectedValueOnce(new CloudCpError("All your plan's running sessions are in use.", { status: 409, code: "WORKER_SLOTS_FULL" }));
+		else upload.mockRejectedValueOnce(new Error("This file type is not allowed."));
+		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: `req-${step}` })).rejects.toBeInstanceOf(Error);
+		await createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: `req-${step}` });
+		const [first, second] = client.createSession.mock.calls.map((call) => call[2].idempotencyKey);
+		expect(second).not.toBe(first);
+	});
+
 	it.each([
 		["a file that fails to upload", "upload"],
 		["a brief the control plane refuses", "send"],
