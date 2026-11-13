@@ -149,7 +149,7 @@ type conversation struct {
 	stoppingTurn string
 	// stopAttempts counts the Stops of stoppingTurn that have withdrawn its
 	// steers and not given them back. Steering returns only when the last
-	// one that fails gives it back; see RestoreSteering.
+	// one that fails gives it back; see WithdrawPendingSteers.
 	stopAttempts int
 	// nudging is set while a drain nudge is in flight; see steerByDrain.
 	nudging atomic.Bool
