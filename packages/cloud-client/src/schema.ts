@@ -1621,7 +1621,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Replace the text and files of a message whose turn is still queued, before the agent starts on it. Only the message's author may edit it (403 otherwise). The message keeps its model and settings; a display it recorded (displayText, content) is dropped. 409 TURN_NOT_QUEUED once the agent took the turn or it was stopped. Offered when offering.features lists queued-edit. */
+        /** @description Replace the text and files of a message whose turn is still queued, before the agent starts on it. Only the message's author may edit it (403 otherwise). The message keeps its model and settings, and runs under the author's share access as it is at the edit; a display it recorded (displayText, content) is dropped. 409 TURN_NOT_QUEUED once the agent took the turn or it was stopped, and 409 SESSION_TERMINATED once the session ended. Offered when offering.features lists queued-edit. */
         post: operations["editQueuedMessage"];
         delete?: never;
         options?: never;
