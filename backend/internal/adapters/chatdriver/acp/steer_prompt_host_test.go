@@ -621,3 +621,33 @@ func TestACPSteerPromptAdoptedCompactionIsNotSteerable(t *testing.T) {
 	default:
 	}
 }
+
+// The reply's next segment starts in the same critical section that settles a
+// steer as taken, so text the agent streams without a message id right after
+// it renders below the steer even before Steer has returned. The waiter here
+// has no Steer reading it, which is the moment that matters.
+func TestACPSteerPromptTakenStartsTheNextSegmentAtOnce(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, _ := startScriptedTurn(t, conv, host)
+
+	waiter := &promptSteer{turn: turn, seq: 1, result: make(chan error, 1), sent: true}
+	conv.mu.Lock()
+	conv.promptSeq = 1
+	conv.outstanding[1] = true
+	conv.promptSteers = append(conv.promptSteers, waiter)
+	before := conv.steerSegment
+	conv.mu.Unlock()
+
+	// The turn's own prompt hands the work on to the steer prompt.
+	conv.finishTurnPrompt(turn, 0, acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil)
+	conv.mu.Lock()
+	after := conv.steerSegment
+	conv.mu.Unlock()
+	if err := <-waiter.result; err != nil {
+		t.Fatalf("handoff settled the steer with %v, want taken", err)
+	}
+	if after != before+1 {
+		t.Fatalf("steer segment = %d after the steer took, want %d", after, before+1)
+	}
+}
