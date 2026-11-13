@@ -766,7 +766,9 @@ describe("ChatWorkspace timeline", () => {
 			},
 		];
 
-		const view = render(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} />);
+		// A chat that can delete its queued messages, as every local chat can.
+		const onCancelQueuedTurn = vi.fn();
+		const view = render(<ChatWorkspace snapshot={snapshot} localEchos={localEchos} onCancelQueuedTurn={onCancelQueuedTurn} />);
 
 		const dock = screen.getByTestId("queued-message-dock");
 		expect(within(dock).getByText("Do this next")).toBeInTheDocument();
@@ -789,7 +791,7 @@ describe("ChatWorkspace timeline", () => {
 			streaming: false,
 			createdAt: "2026-09-09T00:00:05Z",
 		});
-		view.rerender(<ChatWorkspace snapshot={durable} localEchos={localEchos} onCancelQueuedTurn={vi.fn()} />);
+		view.rerender(<ChatWorkspace snapshot={durable} localEchos={localEchos} onCancelQueuedTurn={onCancelQueuedTurn} />);
 
 		// The daemon's row replaces the pending one: still one row, now with its actions.
 		expect(screen.getAllByText("Do this next")).toHaveLength(1);
