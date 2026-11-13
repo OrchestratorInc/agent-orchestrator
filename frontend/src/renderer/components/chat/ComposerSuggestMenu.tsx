@@ -16,6 +16,7 @@ import { useEffect, useRef } from "react";
 import { CornerDownLeft } from "@/components/app-icons";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { cn } from "../../lib/utils";
+import { PersonAvatar, TeamTile } from "../teams/TeamVisuals";
 import { Pressable } from "../ui/pressable";
 import { composerFileIcon } from "./composerFileIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
@@ -58,6 +59,58 @@ export function ComposerSuggestMenu({
 
 	if (items.length === 0) return null;
 
+	const renderOption = (item: Suggestion, index: number) => {
+		const active = index === highlighted;
+		const badge = displayBadge(item.badge);
+		const Icon = !item.mention && kind === "file" ? composerFileIcon(item.value) : undefined;
+		return (
+			<Pressable
+				tabIndex={-1}
+				role="option"
+				id={`${id}-option-${index}`}
+				aria-selected={active}
+				onClick={() => onPick(item.value)}
+				className={cn(
+					"flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground outline-none !transition-none",
+					active
+						? "bg-interactive-active text-foreground"
+						: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
+				)}
+			>
+				{item.mention ? (
+					<span aria-hidden="true" className="flex shrink-0 items-center">
+						{item.mention.kind === "person"
+							? <PersonAvatar name={item.mention.name} size="xs" />
+							: <TeamTile name={item.mention.name} size="sm" className="size-4 rounded-[4px] text-[7px]" />}
+					</span>
+				) : Icon ? (
+					<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+				) : null}
+				{/* Name first, then its description or folder on the same line,
+				    in smaller text, so a row stays one line tall. */}
+				<span className="flex min-w-0 flex-1 items-baseline gap-2">
+					<span className={cn("truncate", item.detail ? "max-w-3/5 shrink-0" : "min-w-0")}>
+						{kind === "skill" ? `/${item.label}` : item.label}
+					</span>
+					{item.detail ? (
+						<span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
+							{item.detail}
+						</span>
+					) : null}
+				</span>
+				{badge ? <span className="shrink-0 text-micro text-muted-foreground">{badge}</span> : null}
+				{active ? (
+					<span
+						aria-label="Press Tab or Enter to insert"
+						className="flex shrink-0 items-center text-muted-foreground"
+					>
+						<CornerDownLeft aria-hidden="true" className="size-3" />
+					</span>
+				) : null}
+			</Pressable>
+		);
+	};
+
 	return (
 		<div
 			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-overlay p-1 text-popover-foreground shadow-(--shadow-popover)"
@@ -73,53 +126,30 @@ export function ComposerSuggestMenu({
 				// The scroll padding keeps a keyboard-highlighted row clear of it.
 				className="model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto overscroll-contain [--edge-fade-size:16px]"
 			>
-				{items.map((item, index) => {
-					const active = index === highlighted;
-					const badge = displayBadge(item.badge);
-					const Icon = kind === "file" ? composerFileIcon(item.value) : undefined;
-					return (
-						<li key={item.value} data-index={index}>
-							<Pressable
-								tabIndex={-1}
-								role="option"
-								id={`${id}-option-${index}`}
-								aria-selected={active}
-								onClick={() => onPick(item.value)}
-								className={cn(
-									"flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground outline-none !transition-none",
-									active
-										? "bg-interactive-active text-foreground"
-										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
-								)}
+				{menuGroups(items).map((group) => group.section ? (
+					// A section is a group named for screen readers; its visible title says the same.
+					<li key={`section:${group.start}`} role="presentation">
+						<ul aria-label={group.section} className="flex flex-col" role="group">
+							<li
+								aria-hidden="true"
+								className={cn("px-2 pt-1.5 pb-1 text-caption text-muted-foreground", group.start > 0 && "mt-1")}
+								data-suggest-section=""
+								role="presentation"
 							>
-								{Icon ? (
-									<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-								) : null}
-								{/* Name first, then its description or folder on the same line,
-								    in smaller text, so a row stays one line tall. */}
-								<span className="flex min-w-0 flex-1 items-baseline gap-2">
-									<span className={cn("truncate", item.detail ? "max-w-3/5 shrink-0" : "min-w-0")}>
-										{kind === "skill" ? `/${item.label}` : item.label}
-									</span>
-									{item.detail ? (
-										<span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
-											{item.detail}
-										</span>
-									) : null}
-								</span>
-								{badge ? <span className="shrink-0 text-micro text-muted-foreground">{badge}</span> : null}
-								{active ? (
-									<span
-										aria-label="Press Tab or Enter to insert"
-										className="flex shrink-0 items-center text-muted-foreground"
-									>
-										<CornerDownLeft aria-hidden="true" className="size-3" />
-									</span>
-								) : null}
-							</Pressable>
-						</li>
-					);
-				})}
+								{group.section}
+							</li>
+							{group.items.map((item, offset) => (
+								<li key={item.value} data-index={group.start + offset} role="presentation">
+									{renderOption(item, group.start + offset)}
+								</li>
+							))}
+						</ul>
+					</li>
+				) : group.items.map((item, offset) => (
+					<li key={item.value} data-index={group.start + offset} role="presentation">
+						{renderOption(item, group.start + offset)}
+					</li>
+				)))}
 			</ul>
 
 			{truncated ? (
@@ -137,4 +167,15 @@ export function ComposerSuggestMenu({
 function displayBadge(badge?: string): string | undefined {
 	if (!badge || badge.toLowerCase() === "agent") return undefined;
 	return badge.toLowerCase() === "ao" ? "Orchestrator" : badge;
+}
+
+/** Runs of items under one section title (none for an untitled run), each with where it starts. */
+function menuGroups<T extends { section?: string }>(items: readonly T[]): Array<{ section?: string; start: number; items: T[] }> {
+	const groups: Array<{ section?: string; start: number; items: T[] }> = [];
+	items.forEach((item, index) => {
+		const last = groups.at(-1);
+		if (last && last.section === item.section) last.items.push(item);
+		else groups.push({ section: item.section, start: index, items: [item] });
+	});
+	return groups;
 }

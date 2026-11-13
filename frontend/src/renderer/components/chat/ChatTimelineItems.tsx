@@ -138,6 +138,8 @@ import { HighlightedCode } from "./HighlightedCode";
 import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
+import { MentionedText } from "./MentionChip";
+import type { TimelineMention } from "../../lib/cloud-mentions";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -847,13 +849,16 @@ function inlineImageRenderer(attachments: string[], sessionId: string, apiBaseUr
  * color, and inline image chips. Undefined when neither applies, which keeps
  * UserMarkdown's memo; stable while the message and its attachments are.
  */
-function useUserTextRenderer(sessionId: string, body: string, attachments: string[], apiBaseUrl: string | null) {
+function useUserTextRenderer(sessionId: string, body: string, attachments: string[], apiBaseUrl: string | null, mentions?: readonly TimelineMention[]) {
 	const renderTokens = useComposerTokenRenderer(sessionId, body);
 	const attachmentKey = attachments.join("\n");
 	return useMemo(() => {
 		const renderImages = inlineImageRenderer(attachmentKey ? attachmentKey.split("\n") : [], sessionId, apiBaseUrl);
-		return renderTokens ? (text: string) => renderTokens(text, renderImages) : renderImages;
-	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl]);
+		const render = renderTokens ? (text: string) => renderTokens(text, renderImages) : renderImages;
+		// The people and teams a shared Cloud message named stay chips once sent.
+		if (!mentions?.length) return render;
+		return (text: string) => <MentionedText text={text} mentions={mentions} renderText={render} />;
+	}, [renderTokens, attachmentKey, sessionId, apiBaseUrl, mentions]);
 }
 
 // A list, quote or code block at either end of a message sits flush with the
@@ -1098,8 +1103,8 @@ export function HumanMessage({
 		/>
 	) : null;
 	const hasAttachments = Boolean(annotationSummary) || attachments.length > 0 || Boolean(message.cloudAttachments?.length);
-	// The skills and files it sent as chips, drawn as colored text.
-	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
+	// The skills and files it sent as chips, drawn as colored text, and the people it named.
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl, message.mentions);
 	// Attachments carry themselves, so a message of nothing else draws no empty bubble.
 	const showBubble = Boolean(body) || !hasAttachments;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
@@ -1113,6 +1118,7 @@ export function HumanMessage({
 		<div
 			className="group/message relative flex flex-col items-end gap-1"
 			data-chat-message-id={!queued && !editing ? message.id : undefined}
+			data-chat-focus-id={message.id}
 			data-find-message-id={!queued && !editing && message.origin !== "automation" && message.origin !== "daemon" && !message.continuation ? message.id : undefined}
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
@@ -3380,7 +3386,7 @@ export function SteerMessage({
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(text, senderSessionId) : text;
 	const { body, attachments } = stagedAttachmentParts(visibleText);
 	// Only the person's own steer is marked; a steer from another session is not theirs.
-	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl);
+	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl, activity.detail?.mentions);
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? `${body.slice(0, ORIGIN_REPORT_PREVIEW_LENGTH).trimEnd()}…`
@@ -3421,7 +3427,7 @@ export function SteerMessage({
 		</>
 	);
 	return (
-		<div className={cn("flex flex-col gap-1", automationSteer ? "items-stretch" : "items-end")}>
+		<div className={cn("flex flex-col gap-1", automationSteer ? "items-stretch" : "items-end")} data-chat-focus-id={activity.id}>
 			{automationSteer ? (
 				<AutomationMessageFrame
 					label={<>[from {senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}]</>}
@@ -3451,7 +3457,7 @@ export function SteerMessage({
 						</AttachmentStrip>
 					) : null}
 					{body || (attachments.length === 0 && remainingContent.length === 0) ? (
-						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground" data-chat-focus-bubble="">
 							{body ? (
 								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
 									<UserMarkdown text={body} renderText={renderText} />

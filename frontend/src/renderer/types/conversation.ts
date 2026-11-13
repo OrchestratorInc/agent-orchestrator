@@ -1,3 +1,4 @@
+import type { ComposerMention, TimelineMention } from "../lib/cloud-mentions";
 import type { ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
@@ -216,6 +217,8 @@ export interface ConversationContentSummary {
 
 export interface QueuedMessageEditOptions {
 	clientMessageId?: string;
+	/** The people and teams the edited message names, as its chips did. */
+	mentions?: ComposerMention[];
 	attachments?: { mimeType: string; data: string }[];
 	retainedContent?: number[];
 	expectedRevision?: number;
@@ -245,6 +248,8 @@ export interface ConversationMessage {
 	delivery?: DeliveryState;
 	/** Set on a human message another participant in a shared session sent. */
 	authorName?: string;
+	/** The people and teams a human message in a shared Cloud session named, drawn as chips in its text. */
+	mentions?: TimelineMention[];
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;
@@ -574,6 +579,8 @@ export interface SystemEventDetail {
 	senderProjectId?: string;
 	senderDisplayName?: string;
 	clientMessageId?: string;
+	/** steer: the people and teams it named in a shared Cloud session, drawn as chips. */
+	mentions?: TimelineMention[];
 	/** steer: the queued turns whose messages this steer carried into the running turn. */
 	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
