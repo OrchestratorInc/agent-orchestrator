@@ -106,7 +106,7 @@ func (c *conversation) HandleExtensionMethod(
 		if err != nil {
 			return nil, err
 		}
-		c.adoptedPromptHandoff(answer.err)
+		c.adoptedPromptHandoff(answer)
 		return nil, nil
 	}
 	if method == persistenthost.ACPPromptResultMethod {

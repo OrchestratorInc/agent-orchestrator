@@ -536,10 +536,8 @@ func (c *conversation) steerByPrompt(
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	settled := func(err error) (ports.ChatTurnRef, error) {
-		if err != nil && isACPSessionMissing(err) {
-			// The agent has no session to steer, so the guidance was not
-			// delivered and the provider cannot serve this conversation again.
-			return ports.ChatTurnRef{}, &providerRefusal{err: c.providerSessionLost(err)}
+		if errors.Is(err, ports.ErrChatProviderSessionLost) {
+			return ports.ChatTurnRef{}, err // a refusal; see finishTurnPrompt
 		}
 		if err != nil {
 			return ports.ChatTurnRef{}, steerPromptError(err)
@@ -642,6 +640,13 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		c.turnResult = &answer
 	}
 	cancelled := err == nil && resp.StopReason == acpsdk.StopReasonCancelled
+	// A steer prompt answered "Session not found" was not delivered, and the
+	// provider can never serve this conversation again. It is stopped below,
+	// whether or not the steer's Steer is still waiting for the answer.
+	lostSession := seq > 0 && err != nil && isACPSessionMissing(err)
+	if lostSession {
+		c.sessionLost = true
+	}
 	// A handoff passes the work to the next prompt of the turn, the one that
 	// arrived after this one. A cancelled answer hands nothing on.
 	handoffTo := noPrompt
@@ -653,6 +658,8 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 			continue
 		}
 		switch {
+		case w.seq == seq && lostSession:
+			w.settle(&providerRefusal{err: fmt.Errorf("%w: %w", ports.ErrChatProviderSessionLost, err)})
 		case w.seq == seq && err != nil:
 			w.settle(err) // refused
 		case w.seq == seq && cancelled:
@@ -665,14 +672,21 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 	}
 	final, done := c.turnEndLocked(turnID)
 	c.mu.Unlock()
-	if !done {
-		if err != nil {
-			c.log.Debug("ACP prompt returned an error while another prompt keeps the turn",
-				"turn", turnID, "prompt", seq, "error", err)
-		}
-		return
+	if done {
+		c.finishPrompt(turnID, final.resp, final.err)
+	} else if err != nil && !lostSession {
+		c.log.Debug("ACP prompt returned an error while another prompt keeps the turn",
+			"turn", turnID, "prompt", seq, "error", err)
 	}
-	c.finishPrompt(turnID, final.resp, final.err)
+	if lostSession {
+		// Stop it now rather than when the turn's other prompts fail.
+		c.log.Warn("chat: ACP provider no longer holds the session; stopping it so the session can be resumed",
+			"turn", turnID, "error", err)
+		if stopErr := c.stopLostProvider(); stopErr != nil {
+			c.log.Error("chat: failed to stop ACP provider after its session was lost",
+				"turn", turnID, "error", stopErr)
+		}
+	}
 }
 
 // turnEndLocked reports whether every prompt of the turn has returned, and if
@@ -707,10 +721,13 @@ func (c *conversation) dropUnsentPromptLocked(turnID string, seq int) (promptAns
 // adoptedPromptHandoff hears that the prompt an earlier attachment sent
 // answered while a steer prompt of this attachment's still runs: the agent
 // took the guidance and carries the turn on under the steer.
-func (c *conversation) adoptedPromptHandoff(err error) {
-	if err != nil {
-		c.log.Debug("adopted ACP prompt returned an error while a steer prompt keeps the turn", "error", err)
+func (c *conversation) adoptedPromptHandoff(answer promptAnswer) {
+	if answer.err != nil {
+		c.log.Debug("adopted ACP prompt returned an error while a steer prompt keeps the turn", "error", answer.err)
 		return
+	}
+	if answer.resp.StopReason == acpsdk.StopReasonCancelled {
+		return // a cancelled answer hands nothing on, as in finishTurnPrompt
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -730,11 +747,19 @@ func (c *conversation) adoptedPromptHandoff(err error) {
 const noPrompt = -2
 
 // nextOutstandingLocked returns the earliest prompt sent after seq that has
-// not returned yet, or noPrompt. Callers must hold c.mu.
+// not returned yet, or noPrompt. A steer prompt registered but not yet written
+// has not reached the agent, so the work cannot have gone to it. Callers must
+// hold c.mu.
 func (c *conversation) nextOutstandingLocked(seq int) int {
+	unsent := map[int]bool{}
+	for _, w := range c.promptSteers {
+		if w.turn == c.activeTurn && !w.sent {
+			unsent[w.seq] = true
+		}
+	}
 	next := noPrompt
 	for other := range c.outstanding {
-		if other > seq && (next == noPrompt || other < next) {
+		if other > seq && !unsent[other] && (next == noPrompt || other < next) {
 			next = other
 		}
 	}
