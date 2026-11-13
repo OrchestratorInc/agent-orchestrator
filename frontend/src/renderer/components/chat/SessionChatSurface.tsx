@@ -56,7 +56,7 @@ import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from 
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
-import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
+import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, continuableTurnId } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode, withUltracode } from "./TurnSettingsBar";
 
@@ -688,7 +688,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							// Retain the main draft if handing the request to the side fails.
 							await sideChats.send(side.id, question, attachments, excerpts, true, clientMessageId);
 						}
-						return;
+						// The main transcript keeps the reader's place: /btw is for asking aside.
+						return SENT_OUTSIDE_TRANSCRIPT;
 					}
 					const viaClaude = (pendingSwitch?.harness ?? currentHarness) === "claude-code";
 					const message = {

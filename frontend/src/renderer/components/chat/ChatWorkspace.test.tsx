@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatWorkspace, forgetReadingPositions, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
+import { ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, forgetReadingPositions, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -613,8 +613,8 @@ describe("ChatWorkspace timeline", () => {
 			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "New question");
 			await userEvent.keyboard("{Enter}");
 			await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(log.scrollTop).toBe(4000));
 			expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
-			expect(log.scrollTop).toBe(4000);
 		});
 
 		it("brings the reader to the end when they steer the running turn after scrolling away", async () => {
@@ -624,8 +624,37 @@ describe("ChatWorkspace timeline", () => {
 			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Only the unit ones");
 			await userEvent.keyboard("{Control>}{Enter}{/Control}");
 			await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
+			await waitFor(() => expect(log.scrollTop).toBe(4000));
 			expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
-			expect(log.scrollTop).toBe(4000);
+		});
+
+		// Only a send the main transcript took moves the reader: a /btw question
+		// is asked aside so they keep their place, and a refused send shows nothing new.
+		it.each([
+			["a question the surface sent to a side chat", () => vi.fn().mockResolvedValue(SENT_OUTSIDE_TRANSCRIPT)],
+			["a message the chat refused", () => vi.fn().mockRejectedValue(Object.assign(new Error("Someone else is typing."), { code: "COMPOSER_LOCKED" }))],
+		])("keeps the reader's place when they send %s", async (_name, makeOnSend) => {
+			const onSend = makeOnSend();
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} onSend={onSend} />);
+			const log = readBack();
+			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "/btw what is this?");
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+			await act(async () => { await Promise.resolve(); });
+			expect(log.scrollTop).toBe(1000);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		});
+
+		it("keeps the reader's place when the running turn refuses their steer", async () => {
+			const onSteer = vi.fn().mockResolvedValue({ status: "not-accepted" });
+			render(<ChatWorkspace snapshot={running(chatFixtureLongHistory(8))} onSend={vi.fn()} onSteer={onSteer} />);
+			const log = readBack();
+			await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Only the unit ones");
+			await userEvent.keyboard("{Control>}{Enter}{/Control}");
+			await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
+			await act(async () => { await Promise.resolve(); });
+			expect(log.scrollTop).toBe(1000);
+			expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
 		});
 	});
 
