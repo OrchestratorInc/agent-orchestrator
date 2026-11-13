@@ -187,6 +187,7 @@ import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
 import { nearQuotaWindow, QuotaMenuNotice, QuotaPill, QuotaReadout, QuotaStatus, quotaTitle, useQuotaFlash } from "./QuotaReadout";
+import { SmoothSwap } from "./SmoothSwap";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -2313,8 +2314,11 @@ function ChatWorkspaceContent({
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
+											{/* Flashes like the agent picker's; a full window stays until it resets. */}
 											{!agentSwitch && nearQuota ? (
-												<QuotaPill quota={nearQuota} />
+												<SmoothSwap swapKey={pickerOverride?.key ?? "hidden"}>
+													{pickerOverride ? <QuotaPill quota={nearQuota} /> : null}
+												</SmoothSwap>
 											) : null}
 											<QuotaStatus quota={nearQuota} />
 											{composerSettings}
