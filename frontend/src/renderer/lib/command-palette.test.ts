@@ -181,7 +181,7 @@ describe("buildCommands grouping", () => {
 		expect(byId(buildCommands({ workspaces: workspaces(), developerMode: true })).has("global-usage")).toBe(true);
 	});
 
-	it("offers Open archive for the current project only when it has archived sessions", () => {
+	it("offers Archived sessions for the current project only when it has archived sessions", () => {
 		expect(byId(buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" })).has("current-open-archive")).toBe(false);
 
 		const withArchive = workspaces();
@@ -192,6 +192,7 @@ describe("buildCommands grouping", () => {
 		);
 		const archive = byId(buildCommands({ workspaces: withArchive, currentProjectId: "proj-1" })).get("current-open-archive");
 		expect(archive?.group).toBe("current");
+		expect(archive?.title).toBe("Archived sessions");
 		expect(archive?.subtitle).toBe("2 archived sessions");
 		expect(archive?.action).toEqual({ kind: "open-archive", projectId: "proj-1" });
 	});

@@ -1325,7 +1325,7 @@ describe("Sidebar", () => {
 		const section = document.querySelector("[data-scratchpad-section]") as HTMLElement;
 		expect(section).not.toBeNull();
 		expect(within(section).queryByText("Fix the flake")).toBeNull();
-		await user.click(within(section).getByRole("button", { name: "Archive, 1 session" }));
+		await user.click(within(section).getByRole("button", { name: "Archived sessions, 1" }));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions" });
 		cleanup();
 
@@ -1333,7 +1333,7 @@ describe("Sidebar", () => {
 		renderSidebar({ workspaces: [workspace, agent([agentSession])] });
 		const active = document.querySelector("[data-scratchpad-section]") as HTMLElement;
 		expect(within(active).getByText("Fix the flake")).toBeInTheDocument();
-		expect(within(active).queryByRole("button", { name: /^Archive, / })).toBeNull();
+		expect(within(active).queryByRole("button", { name: /^Archived sessions, / })).toBeNull();
 		cleanup();
 
 		// A local Scratchpad still shows its sessions beside an archived agent.
@@ -1352,7 +1352,7 @@ describe("Sidebar", () => {
 		});
 		const local = document.querySelector("[data-scratchpad-section]") as HTMLElement;
 		expect(local).toContainElement(screen.getByText("baby"));
-		expect(within(local).queryByRole("button", { name: /^Archive, / })).toBeNull();
+		expect(within(local).queryByRole("button", { name: /^Archived sessions, / })).toBeNull();
 	});
 
 	it("shows no Scratchpad section for Cloud standalone agents that hold no session", () => {
@@ -4856,14 +4856,14 @@ describe("Memoized Sidebar with unchanged props", () => {
 		const view = render(shell(client, <Sidebar workspaces={[alpha]} {...handlers} />));
 		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
 		expect(await screen.findByRole("menuitem", { name: "Open dashboard" })).toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /^Archive/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /^Archived sessions/ })).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Open dashboard" })).not.toBeInTheDocument());
 
 		const archived = { ...alpha, sessions: [...alpha.sessions, { ...alpha.sessions[0]!, id: "alpha-2", title: "old task", kanbanColumn: "archive" as const }] };
 		view.rerender(shell(client, <Sidebar workspaces={[archived]} {...handlers} />));
 		fireEvent.contextMenu(document.querySelector('[data-project-id="alpha"] [data-project-label]')!);
-		await user.click(await screen.findByRole("menuitem", { name: "Archive, 1 session" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Archived sessions, 1" }));
 
 		expect(useUiStore.getState().archiveModal).toMatchObject({ projectId: "alpha" });
 		// The modal opens over the current page; the menu never goes to the board.

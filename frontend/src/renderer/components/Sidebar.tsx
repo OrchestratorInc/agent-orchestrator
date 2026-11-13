@@ -1825,9 +1825,10 @@ const ProjectItem = memo(function ProjectItem({
 	// The ⋮ button and right-click show these same rows. Built only while a menu
 	// is open, so the archive count costs a closed row nothing.
 	const buildMenuEntries = (): MenuEntry[] => {
-		// The project's archive: every project row has one, the Scratchpad's
-		// archive is its own section's entry. Hidden while empty, as the board's
-		// Archive button and Cmd+K's Open archive are.
+		// The project's archived sessions: every project row has the entry, the
+		// Scratchpad's is its own section's row. A noun, not "Archive", so it never
+		// reads as archiving the project. Hidden while empty, as the board's button
+		// and the Cmd+K command are.
 		const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;
 		return [
 			// A new task in someone else's agent is a dead end: it takes no session but its own.
@@ -1865,9 +1866,9 @@ const ProjectItem = memo(function ProjectItem({
 					kind: "item" as const,
 					id: "archive",
 					icon: <Archive aria-hidden="true" />,
-					label: t("shell.archive"),
+					label: t("shell.archivedSessions"),
 					count: archivedCount,
-					ariaLabel: t("shell.archiveSessionsAria", { count: archivedCount }),
+					ariaLabel: t("shell.archivedSessionsAria", { count: archivedCount }),
 					onSelect: openArchive,
 				}]
 				: []),
@@ -2490,7 +2491,7 @@ function ScratchpadSection({
 				{showArchivedRow ? (
 					<button
 						type="button"
-						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
+						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						className={cn(SECTION_ROW_CLASS, NAV_ROW_HIGHLIGHT_HOST_CLASS, "mb-1 shrink-0 rounded-lg text-left text-muted-foreground")}
 						data-scratchpad-archived-row=""
 						onClick={selection.goStandaloneBoard}
