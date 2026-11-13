@@ -586,8 +586,8 @@ describe("useWorkspaceQuery", () => {
 			const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 			await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-			expect(result.current.data?.[0]).toMatchObject({ name: "草稿区" });
-			expect(result.current.data?.[0].sessions[0]).toMatchObject({ workspaceName: "草稿区" });
+			expect(result.current.data?.[0]).toMatchObject({ name: "会话" });
+			expect(result.current.data?.[0].sessions[0]).toMatchObject({ workspaceName: "会话" });
 		} finally {
 			await appI18n.changeLanguage("en");
 		}
