@@ -155,14 +155,28 @@ describe("moveSession", () => {
 		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
 	});
 
-	it("names the computer that cannot be reached and resumes the source", async () => {
+	it("leaves the move pending when the destination stops answering during receive", async () => {
 		const { source, input } = hosts(undefined, () => {
 			throw new TypeError("Failed to fetch");
 		});
 		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
 
 		expect(error.message).toBe("MacBook B is not reachable");
-		expect(error.step).toBe("receive");
+		expect(error.code).toBe("RECEIVE_UNCONFIRMED");
+		expect(error.transferId).toBe(transfer.transferId);
+		expect(error.resumedSource).toBe(false);
+		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/transfer/cancel");
+		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("names the computer a copy cannot reach and resumes the source", async () => {
+		const { source, target, input } = hosts();
+		const targetClient = target.client as unknown as { PUT: () => Promise<unknown> };
+		targetClient.PUT = () => Promise.reject(new TypeError("Failed to fetch"));
+		const error = (await moveSession(input).catch((e: unknown) => e)) as MoveError;
+
+		expect(error.message).toBe("MacBook B is not reachable");
+		expect(error.step).toBe("copy");
 		expect(source.calls).toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
 	});
 
