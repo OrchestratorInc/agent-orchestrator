@@ -375,7 +375,7 @@ export function SplitPaneHeader({
 			{closable ? (
 				<Pressable
 					aria-label={t("splitPane.closePane", { name: shown.label })}
-					className="inline-grid size-5 shrink-0 cursor-pointer place-items-center rounded-md text-muted-foreground hover:bg-raised hover:text-foreground"
+					className={cn(terminalTabActionClassName, "shrink-0")}
 					onClick={(event) => {
 						event.stopPropagation();
 						member.onClose();

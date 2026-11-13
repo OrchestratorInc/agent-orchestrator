@@ -3007,7 +3007,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 												}
 											});
 										}}
-										style={{ left: box.left, top: box.top, width: box.width, height: PANE_HEADER_PX }}
+										// The top row reaches 2px above the screen so no sliver of the
+										// panel shows over its title bar.
+										style={box.top === "0%"
+											? { left: box.left, top: -2, width: box.width, height: PANE_HEADER_PX + 2, paddingTop: 2 }
+											: { left: box.left, top: box.top, width: box.width, height: PANE_HEADER_PX }}
 									/>
 								))
 								: null}
