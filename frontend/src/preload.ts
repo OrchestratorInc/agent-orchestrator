@@ -63,7 +63,6 @@ import {
 	type CloudShareFile,
 	type CloudShareGrant,
 	type CloudShareInspection,
-	type CloudShareStatus,
 	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudShareProgress,
@@ -483,7 +482,6 @@ const api = {
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
 		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
-		status: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:status", file) as Promise<CloudShareStatus>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,

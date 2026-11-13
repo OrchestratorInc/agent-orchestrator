@@ -33,8 +33,6 @@ interface ShareLinkRecord {
 	/** The file's fingerprint when it was published; see scanShareFile. */
 	fingerprint?: string;
 	url?: string;
-	/** Kinds of credential the published copy looked like it held. */
-	secretFindings?: string[];
 	/** Who the link opens for, as last known; the daemon serves it with the URL. */
 	access?: CloudShareAccess;
 }
@@ -43,9 +41,7 @@ export interface ShareLinkRecordStore {
 	get(key: string): Promise<string | undefined>;
 	/** The fingerprint the file had when it was last published, if recorded. */
 	publishedFingerprint(key: string): Promise<string | undefined>;
-	/** Kinds of credential the copy last published looked like it held, if recorded. */
-	publishedSecretFindings(key: string): Promise<string[] | undefined>;
-	set(key: string, shareId: string, fingerprint?: string, url?: string, secretFindings?: string[], access?: CloudShareAccess): Promise<void>;
+	set(key: string, shareId: string, fingerprint?: string, url?: string, access?: CloudShareAccess): Promise<void>;
 	/** Records who a link opens for now, on every record of it. */
 	setAccess(shareId: string, access: CloudShareAccess): Promise<void>;
 	/** Moves the record at `from` to `to`, unless `to` already has one. */
@@ -73,13 +69,9 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 		return asRecord((await this.load())[key])?.fingerprint;
 	}
 
-	async publishedSecretFindings(key: string): Promise<string[] | undefined> {
-		return asRecord((await this.load())[key])?.secretFindings;
-	}
-
-	async set(key: string, shareId: string, fingerprint?: string, url?: string, secretFindings?: string[], access?: CloudShareAccess): Promise<void> {
+	async set(key: string, shareId: string, fingerprint?: string, url?: string, access?: CloudShareAccess): Promise<void> {
 		const records = await this.load();
-		records[key] = encodeRecord({ shareId, fingerprint, url, secretFindings, access });
+		records[key] = encodeRecord({ shareId, fingerprint, url, access });
 		await this.save();
 	}
 
@@ -162,14 +154,14 @@ export function shareAccess(share: Pick<CloudShareLink, "access">): CloudShareAc
 	return isPrivateShare(share) ? "restricted" : "anyone";
 }
 
-function encodeRecord({ shareId, fingerprint, url, secretFindings, access }: ShareLinkRecord): string | ShareLinkRecord {
-	const findings = secretFindings?.length ? secretFindings : undefined;
-	if (!fingerprint && !url && !findings && !access) return shareId;
+// Writes only the fields it knows: a record from an older version loses any
+// other field the next time it is written.
+function encodeRecord({ shareId, fingerprint, url, access }: ShareLinkRecord): string | ShareLinkRecord {
+	if (!fingerprint && !url && !access) return shareId;
 	return {
 		shareId,
 		...(fingerprint ? { fingerprint } : {}),
 		...(url ? { url } : {}),
-		...(findings ? { secretFindings: findings } : {}),
 		...(access ? { access } : {}),
 	};
 }
@@ -193,8 +185,6 @@ function isRecordMap(value: unknown): value is Record<string, string | ShareLink
 			typeof record === "object" && record !== null && typeof (record as ShareLinkRecord).shareId === "string" &&
 			((record as ShareLinkRecord).fingerprint === undefined || typeof (record as ShareLinkRecord).fingerprint === "string") &&
 			((record as ShareLinkRecord).url === undefined || typeof (record as ShareLinkRecord).url === "string") &&
-			((record as ShareLinkRecord).access === undefined || (record as ShareLinkRecord).access === "restricted" || (record as ShareLinkRecord).access === "anyone") &&
-			((record as ShareLinkRecord).secretFindings === undefined || (Array.isArray((record as ShareLinkRecord).secretFindings) &&
-				(record as ShareLinkRecord).secretFindings!.every((kind) => typeof kind === "string")))
+			((record as ShareLinkRecord).access === undefined || (record as ShareLinkRecord).access === "restricted" || (record as ShareLinkRecord).access === "anyone")
 		));
 }

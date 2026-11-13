@@ -1,7 +1,7 @@
 import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronDown, TriangleAlert } from "@/components/app-icons";
+import { Check, ChevronDown } from "@/components/app-icons";
 import type { CloudShareAccess } from "../../../../shared/cloud-share";
 import { cn } from "../../../lib/utils";
 import { shareAccessIcon } from "../../ArtifactShareMark";
@@ -29,15 +29,13 @@ export function accessSentence(t: TFunction, access: CloudShareAccess, invited: 
  * (choosable false) it only says the link is public. The change applies to
  * the link at once; its URL stays the same.
  */
-export function ArtifactGeneralAccess({ access, invited, onChange, choosable = true, disabled = false, secretFindings = [] }: {
+export function ArtifactGeneralAccess({ access, invited, onChange, choosable = true, disabled = false }: {
 	access: CloudShareAccess;
 	/** How many people the link is shared with. */
 	invited: number;
 	onChange: (access: CloudShareAccess) => void;
 	choosable?: boolean;
 	disabled?: boolean;
-	/** Credentials the file looks like it holds: making it public is warned about in the menu. */
-	secretFindings?: readonly string[];
 }) {
 	const { t } = useTranslation();
 	const sentenceId = useId();
@@ -82,9 +80,6 @@ export function ArtifactGeneralAccess({ access, invited, onChange, choosable = t
 									label={t("artifacts.share.access.anyone")}
 									onSelect={() => access !== "anyone" && onChange("anyone")}
 									selected={access === "anyone"}
-									warning={access !== "anyone" && secretFindings.length > 0
-										? t("artifacts.share.access.secretsPublic", { kinds: secretFindings.join(", ") })
-										: undefined}
 								/>
 							</DropdownMenuContent>
 						</DropdownMenu>
@@ -100,13 +95,12 @@ export function ArtifactGeneralAccess({ access, invited, onChange, choosable = t
 	);
 }
 
-function AccessOption({ icon, label, description, selected, onSelect, warning }: {
+function AccessOption({ icon, label, description, selected, onSelect }: {
 	icon: React.ReactNode;
 	label: string;
 	description: string;
 	selected: boolean;
 	onSelect: () => void;
-	warning?: string;
 }) {
 	return (
 		<DropdownMenuItem
@@ -119,12 +113,6 @@ function AccessOption({ icon, label, description, selected, onSelect, warning }:
 			<span className="flex min-w-0 flex-1 flex-col">
 				<span className="text-foreground">{label}</span>
 				<span className="text-xs text-muted-foreground">{description}</span>
-				{warning ? (
-					<span className="mt-1 flex items-start gap-1 text-xs text-status-in-review">
-						<TriangleAlert aria-hidden="true" className="mt-0.5 size-3 shrink-0 text-status-in-review!" />
-						{warning}
-					</span>
-				) : null}
 			</span>
 			{selected ? <Check aria-hidden="true" className="mt-0.5 text-foreground!" /> : null}
 		</DropdownMenuItem>

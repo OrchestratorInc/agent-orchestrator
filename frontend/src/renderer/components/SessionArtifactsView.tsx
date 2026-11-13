@@ -876,11 +876,10 @@ export function SessionArtifactsView({
 						    session publishes its files. */}
 						{editingFile || session.cloud?.shared ? null : session.cloud ? (!cloudOwner ? null : (
 							<ShareArtifactButton
-								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}) }}
+								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}), ...(selected.sha256 ? { fingerprint: selected.sha256 } : {}) }}
 								name={selected.name}
 								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
-								fingerprint={selected.sha256}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
