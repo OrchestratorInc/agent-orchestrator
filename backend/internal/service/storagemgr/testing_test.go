@@ -95,7 +95,9 @@ func (f *fakeStore) ListStorageActions(_ context.Context, limit int) ([]domain.S
 	return out, nil
 }
 
-func (f *fakeStore) PruneStorageActionsBefore(context.Context, time.Time) (int64, error) { return 0, nil }
+func (f *fakeStore) PruneStorageActionsBefore(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
 
 func (f *fakeStore) ListSessionEndTimes(context.Context) (map[domain.SessionID]time.Time, error) {
 	f.mu.Lock()
@@ -111,7 +113,9 @@ func (f *fakeStore) DatabaseTableSizes(context.Context, int) ([]domain.StorageTa
 	return nil, false, nil
 }
 
-func (f *fakeStore) IncrementalVacuum(context.Context, int64) error { return nil }
+func (f *fakeStore) IncrementalVacuum(context.Context, int64) error {
+	return nil
+}
 
 func (f *fakeStore) snapshotActions() []domain.StorageAction {
 	f.mu.Lock()
@@ -124,7 +128,9 @@ type fakeSessions struct {
 	cleaned  []domain.SessionID
 }
 
-func (f *fakeSessions) ListAll(context.Context) ([]domain.Session, error) { return f.sessions, nil }
+func (f *fakeSessions) ListAll(context.Context) ([]domain.Session, error) {
+	return f.sessions, nil
+}
 
 func (f *fakeSessions) CleanupSessions(_ context.Context, ids []domain.SessionID) ([]domain.SessionID, map[domain.SessionID]string, error) {
 	f.cleaned = append(f.cleaned, ids...)
@@ -139,7 +145,9 @@ func (f fakeProjects) GetProject(_ context.Context, id string) (domain.ProjectRe
 }
 
 // passQuiet runs fn with a record whose workspace is path.
-type passQuiet struct{ records map[domain.SessionID]domain.SessionRecord }
+type passQuiet struct {
+	records map[domain.SessionID]domain.SessionRecord
+}
 
 func (p passQuiet) WithQuietSession(_ context.Context, id domain.SessionID, fn func(domain.SessionRecord) error) error {
 	return fn(p.records[id])
