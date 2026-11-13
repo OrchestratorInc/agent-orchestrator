@@ -67,8 +67,10 @@ type offloadTarget struct {
 
 // gitCommand runs non-interactive, hook-free git in dir.
 func gitCommand(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	global := []string{"--no-pager", "--no-optional-locks", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-C", dir}
-	cmd := aoprocess.CommandContext(ctx, "git", append(global, args...)...)
+	argv := make([]string, 0, 8+len(args))
+	argv = append(argv, "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-c", "core.fsmonitor=false", "-C", dir)
+	argv = append(argv, args...)
+	cmd := aoprocess.CommandContext(ctx, "git", argv...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

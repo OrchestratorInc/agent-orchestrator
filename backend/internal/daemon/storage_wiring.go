@@ -78,5 +78,6 @@ func startStorage(ctx context.Context, cfg config.Config, store *sqlite.Store, s
 	}); ok {
 		hooked.SetStorageHooks(svc)
 	}
-	return svc, svc.Start(ctx)
+	done := svc.Start(ctx)
+	return svc, done
 }

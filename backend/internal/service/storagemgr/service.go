@@ -391,7 +391,7 @@ func selectActions(planned []PlannedAction, req CleanRequest) []PlannedAction {
 	for _, id := range req.SessionIDs {
 		sessions[id] = true
 	}
-	var out []PlannedAction
+	out := make([]PlannedAction, 0, len(planned))
 	for _, action := range planned {
 		switch {
 		case len(kinds) > 0 && !kinds[action.Kind]:

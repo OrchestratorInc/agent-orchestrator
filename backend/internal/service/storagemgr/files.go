@@ -142,6 +142,8 @@ func moveToTrash(trashDir, path string) (string, error) {
 
 // removeTree deletes path. On Windows a read-only file blocks RemoveAll, so
 // read-only bits are cleared first when the first attempt fails.
+//
+//nolint:gosec,nilerr // G122: path was checked to sit inside an AO-owned root; the chmod pass is best effort, so unreadable entries are skipped.
 func removeTree(path string) error {
 	err := os.RemoveAll(path)
 	if err == nil || runtime.GOOS != "windows" {

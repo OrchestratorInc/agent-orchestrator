@@ -15,6 +15,8 @@ import (
 // reflink ioctl (Btrfs, XFS and other reflink filesystems). Directories and
 // symlinks are recreated; any file that cannot be cloned aborts the whole
 // tree with errCloneUnsupported.
+//
+//nolint:gosec // G122: src is a tree AO itself moved under its data dir; links are recreated, never followed.
 func cloneTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
