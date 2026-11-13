@@ -296,8 +296,10 @@ func TestClaudeDeviceIdentitySeesSavedSetupToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Claude{
-		Binary:    func(context.Context) (string, error) { return bin, nil },
-		DeviceEnv: func() map[string]string { return map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-saved"} },
+		Binary: func(context.Context) (string, error) { return bin, nil },
+		DeviceEnv: func(context.Context) map[string]string {
+			return map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-saved"}
+		},
 	}
 	device, err := c.Identity(context.Background(), "")
 	if err != nil || !device.SignedIn {

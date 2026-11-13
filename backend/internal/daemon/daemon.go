@@ -59,6 +59,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
@@ -1823,7 +1824,11 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	providers := []ports.AgentAccountProviderCLI{
 		&agentaccount.Claude{
 			Binary: claudePlugin.ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig,
-			DeviceEnv: func() map[string]string { return claudePlugin.RuntimeCredentialEnv(cfg.DataDir) },
+			// The daemon exports AO's saved keys to itself; the account check
+			// must not see one Claude Code's sessions never get.
+			DeviceEnv: func(ctx context.Context) map[string]string {
+				return claudePlugin.RuntimeCredentialEnv(cfg.DataDir, providerkeys.HoldBack(ctx, nil, cfg.DataDir, "claude-code"))
+			},
 		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
