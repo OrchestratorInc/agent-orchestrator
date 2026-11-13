@@ -960,7 +960,7 @@ describe("ChatWorkspace timeline", () => {
 
 	// The meter can warn about the account's quota, but only if it is handed it.
 	it("shows no separate quota badge beside the composer, even near the account's limit", () => {
-		// Near the limit the usage bar takes the agent picker's place (QuotaBar), not a badge.
+		// Near the limit the usage readout takes the model name's place (QuotaReadout), not a badge.
 		const reported = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 100, secondaryUsedPercent: 95 } };
 		render(<ChatWorkspace snapshot={reported} />);
 		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;

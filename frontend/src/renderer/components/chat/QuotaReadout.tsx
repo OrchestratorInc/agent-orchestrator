@@ -1,14 +1,13 @@
 /**
- * The account's usage limit, drawn in the model picker once it is close.
+ * The account's usage limit, shown in the model picker once it is close.
  *
  * Below the warning line the picker names the agent and model as usual. From
  * there the same control shows how much of the provider's usage window is gone,
  * because that has become the thing most likely to stop the next turn. The
  * picker still opens on click and names the model in its hover title.
  *
- * The fill is the real reported percentage. It grows in once when the bar first
- * appears and eases to each new reading; nothing loops. Once the window is full
- * the bar gives way to a clock and the time it resets.
+ * It reads as the window's name and the percentage used, amber then red. Once
+ * the window is full, it is a clock and the time until it resets.
  */
 
 import type { TFunction } from "i18next";
@@ -17,7 +16,7 @@ import { Clock } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import type { ConversationRateLimits } from "../../types/conversation";
 
-/** Where the bar replaces the model name, and where it turns red. */
+/** Where the readout replaces the model name, and where it turns red. */
 export const QUOTA_WARN = 75;
 export const QUOTA_CRITICAL = 90;
 
@@ -52,65 +51,37 @@ export function formatQuotaReset(seconds: number): string {
 	return `${Math.floor(hours / 24)}d`;
 }
 
-export function QuotaBar({ quota }: { quota: QuotaWindow }) {
+export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
 	const { t } = useTranslation();
 	const percent = Math.min(100, Math.max(0, Math.round(quota.percent)));
 	const critical = percent >= QUOTA_CRITICAL;
-	const full = percent >= 100;
 	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatQuotaReset(quota.resetsIn) : undefined;
 	const label = t(quota.kind === "session" ? "chat.quota.session" : "chat.quota.weekly");
+	const appear = "animate-[quota-in_150ms_var(--ease-out)] motion-reduce:animate-none";
 
-	// Full: there is nothing left to fill, so only when it comes back matters.
-	if (full) {
+	// Full: nothing is left to use, so only when it comes back matters.
+	if (percent >= 100) {
 		return (
-			<span
-				data-quota-bar=""
-				data-severity="full"
-				role="status"
-				className="flex min-w-0 items-center gap-1.5 text-status-exited animate-[quota-in_150ms_var(--ease-out)] motion-reduce:animate-none"
-			>
+			<span data-quota-readout="" data-severity="full" className={cn("flex min-w-0 items-center gap-1.5 text-status-exited", appear)}>
 				<Clock aria-hidden="true" className="size-3.5 shrink-0" />
-				<span className="truncate tabular-nums">
-					{resets ? t("chat.quota.resetsIn", { time: resets }) : t("chat.usageLimit.title")}
-				</span>
+				{resets ? (
+					<span className="tabular-nums" aria-label={t("chat.quota.resetsIn", { time: resets })}>{resets}</span>
+				) : (
+					<span className="truncate">{t("chat.usageLimit.title")}</span>
+				)}
 			</span>
 		);
 	}
 
 	return (
-		<span
-			data-quota-bar=""
-			data-severity={critical ? "critical" : "warn"}
-			className="flex min-w-0 items-center gap-2 animate-[quota-in_150ms_var(--ease-out)] motion-reduce:animate-none"
-		>
+		<span data-quota-readout="" data-severity={critical ? "critical" : "warn"} className={cn("flex min-w-0 items-center gap-1.5", appear)}>
 			<span className="shrink-0 text-muted-foreground">{label}</span>
-			<span
-				role="meter"
-				aria-label={label}
-				aria-valuemin={0}
-				aria-valuemax={100}
-				aria-valuenow={percent}
-				className="relative h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-border"
-			>
-				<span
-					aria-hidden="true"
-					style={{ width: `${percent}%` }}
-					className={cn(
-						"absolute inset-y-0 left-0 origin-left rounded-full",
-						"transition-[width,background-color] duration-500 ease-out motion-reduce:transition-none",
-						"animate-[quota-fill_700ms_var(--ease-out)] motion-reduce:animate-none",
-						critical ? "bg-status-exited" : "bg-status-in-review",
-					)}
-				/>
-			</span>
-			<span className={cn("shrink-0 tabular-nums", critical ? "text-status-exited" : "text-status-in-review")}>
-				{percent}%
-			</span>
+			<span className={cn("shrink-0 tabular-nums", critical ? "text-status-exited" : "text-status-in-review")}>{percent}%</span>
 		</span>
 	);
 }
 
-/** One line for the picker's hover title: what the bar means, and when it resets. */
+/** One line for the picker's hover title: what the readout means, and when it resets. */
 export function quotaTitle(quota: QuotaWindow, t: TFunction): string {
 	const percent = Math.min(100, Math.round(quota.percent));
 	const used = t(quota.kind === "session" ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent });

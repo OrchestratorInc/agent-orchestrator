@@ -1,13 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { formatQuotaReset, nearQuotaWindow, QuotaBar, tightestQuotaWindow } from "./QuotaBar";
+import { formatQuotaReset, nearQuotaWindow, QuotaReadout, tightestQuotaWindow } from "./QuotaReadout";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLimits {
 	return { primaryUsedPercent: 40, secondaryUsedPercent: -1, primaryResetsInSeconds: 8_100, secondaryResetsInSeconds: 345_600, ...over };
 }
 
-describe("QuotaBar", () => {
+describe("QuotaReadout", () => {
 	it("only takes the picker's place from 75%", () => {
 		expect(nearQuotaWindow(limits({ primaryUsedPercent: 74 }))).toBeUndefined();
 		expect(nearQuotaWindow(limits({ primaryUsedPercent: 75 }))?.kind).toBe("session");
@@ -20,27 +20,26 @@ describe("QuotaBar", () => {
 		expect(tightestQuotaWindow(limits({ primaryUsedPercent: -1, secondaryUsedPercent: -1 }))).toBeUndefined();
 	});
 
-	it("draws the real percentage, amber then red past 90%", () => {
-		const { rerender } = render(<QuotaBar quota={{ percent: 82, kind: "session", resetsIn: 8_100 }} />);
-		expect(screen.getByRole("meter", { name: "Session" })).toHaveAttribute("aria-valuenow", "82");
+	it("names the window and the percentage, amber then red past 90%", () => {
+		const { rerender } = render(<QuotaReadout quota={{ percent: 82, kind: "session", resetsIn: 8_100 }} />);
+		expect(screen.getByText("Session")).toBeInTheDocument();
 		expect(screen.getByText("82%").className).toContain("text-status-in-review");
 
-		rerender(<QuotaBar quota={{ percent: 94, kind: "weekly" }} />);
-		expect(screen.getByRole("meter", { name: "Weekly" })).toHaveAttribute("aria-valuenow", "94");
+		rerender(<QuotaReadout quota={{ percent: 94, kind: "weekly" }} />);
+		expect(screen.getByText("Weekly")).toBeInTheDocument();
 		expect(screen.getByText("94%").className).toContain("text-status-exited");
 	});
 
-	it("swaps the bar for a clock and the reset time once full", () => {
-		render(<QuotaBar quota={{ percent: 100, kind: "session", resetsIn: 8_100 }} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Resets in 2h 15m");
-		expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+	it("is a clock and the time left once full", () => {
+		render(<QuotaReadout quota={{ percent: 100, kind: "session", resetsIn: 8_100 }} />);
+		expect(screen.getByLabelText("Resets in 2h 15m")).toHaveTextContent(/^2h 15m$/);
+		expect(screen.queryByText("Session")).not.toBeInTheDocument();
 		expect(screen.queryByText("100%")).not.toBeInTheDocument();
 	});
 
 	it("names the limit when a full window has no reported reset", () => {
-		render(<QuotaBar quota={{ percent: 100, kind: "weekly" }} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Usage limit reached");
-		expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+		render(<QuotaReadout quota={{ percent: 100, kind: "weekly" }} />);
+		expect(screen.getByText("Usage limit reached")).toBeInTheDocument();
 	});
 
 	it("formats resets to the useful unit", () => {

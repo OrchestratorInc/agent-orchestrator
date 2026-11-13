@@ -2091,12 +2091,9 @@ textarea,
 	animation: chat-live-label-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* The usage-limit bar in the model picker: the label fades in, the fill grows once to its value. */
+/* The usage-limit readout in the model picker fades in when it replaces the model. */
 @keyframes quota-in {
 	from { opacity: 0; }
-}
-@keyframes quota-fill {
-	from { transform: scaleX(0); }
 }
 
 @keyframes chat-live-label-in {

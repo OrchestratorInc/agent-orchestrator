@@ -186,7 +186,7 @@ import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
-import { nearQuotaWindow, QuotaBar, quotaTitle } from "./QuotaBar";
+import { nearQuotaWindow, QuotaReadout, quotaTitle } from "./QuotaReadout";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -1703,7 +1703,7 @@ function ChatWorkspaceContent({
 	// Near the account's usage limit, the model picker shows the limit in its place.
 	const nearQuota = useStableValue(nearQuotaWindow(snapshot.rateLimits));
 	const pickerOverride = useMemo(
-		() => (nearQuota ? { label: <QuotaBar quota={nearQuota} />, title: quotaTitle(nearQuota, t) } : undefined),
+		() => (nearQuota ? { label: <QuotaReadout quota={nearQuota} />, title: quotaTitle(nearQuota, t) } : undefined),
 		[nearQuota, t],
 	);
 	// A reroute describes the model it was recorded against; once the user picks a
