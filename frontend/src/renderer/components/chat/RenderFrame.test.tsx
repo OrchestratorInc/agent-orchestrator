@@ -65,6 +65,18 @@ describe("render activity", () => {
 		expect(frame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3555\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
 	});
 
+	it("opens an image the reader clicks in the page at full size, only from the frame in use", async () => {
+		render(<ActivityRow activity={renderActivity()} />);
+		const src = "data:image/png;base64,iVBORw0KGgo=";
+		const request = { jsonrpc: "2.0", method: "ao/open-image", params: { src, alt: "Before" } };
+		post(request, frame().contentWindow);
+		expect(screen.queryByRole("dialog")).toBeNull();
+		act(() => frame().focus());
+		post(request, frame().contentWindow);
+		const dialog = await screen.findByRole("dialog", { name: "Before" });
+		expect(within(dialog).getByRole("img", { name: "Before" })).toHaveAttribute("src", src);
+	});
+
 	it("toggles reflow without reloading and shares the choice with the expanded page", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={renderActivity()} />);
@@ -433,7 +445,7 @@ describe("render activity", () => {
 		const user = userEvent.setup();
 		const onLinkOpen = vi.fn();
 		render(<ChatLinkProvider onLinkOpen={onLinkOpen}><ActivityRow activity={renderActivity()} /></ChatLinkProvider>);
-		await user.click(screen.getByRole("button", { name: "Open in AO Browser" }));
+		await user.click(screen.getByRole("button", { name: "Open in Orchestrator Browser" }));
 		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/));
 	});
 });
@@ -549,12 +561,43 @@ describe("artifact activity", () => {
 	it("heads the dialog with the artifact's name and has no Save as artifact", async () => {
 		const { dialog } = await expandArtifact([sessionArtifact("other.html")]);
 		expect(within(dialog).getByRole("heading", { name: "Q3 (final).html" })).toBeInTheDocument();
-		for (const name of ["View source", "Save page", "Open in external browser", "Close"]) {
+		for (const name of ["View source", "Save page", "Close"]) {
 			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
 		}
 		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
-		// The session lists no preview for this path.
+		// The session lists no preview for this path, so it opens nowhere outside the chat:
+		// its artifact-files route serves only the app's own frames.
 		expect(within(dialog).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
+		expect(within(dialog).queryByRole("button", { name: "Open in external browser" })).toBeNull();
+	});
+
+	it("opens the artifact in the external browser from its preview origin, not the app-only artifact route", async () => {
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+		try {
+			const { user, dialog } = await expandArtifact([sessionArtifact("q3/Q3 (final).html")]);
+			await user.click(within(dialog).getByRole("button", { name: "Open in external browser" }));
+			// No #ao-theme: that fragment is the chat frame's own hand-off.
+			expect(open).toHaveBeenCalledExactlyOnceWith(previewUrl, "_blank", "noopener,noreferrer");
+		} finally {
+			open.mockRestore();
+		}
+	});
+
+	it("opens the artifact in the session's Browser panel from its preview origin", async () => {
+		const user = userEvent.setup();
+		const onLinkOpen = vi.fn();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatLinkProvider onLinkOpen={onLinkOpen}>
+					<ChatImageSourceProvider sessionId="proj-1" artifacts={[sessionArtifact("q3/Q3 (final).html")]}>
+						<ActivityRow activity={artifactActivity} />
+					</ChatImageSourceProvider>
+				</ChatLinkProvider>
+			</QueryClientProvider>,
+		);
+		await user.click(screen.getByRole("button", { name: "Open in Orchestrator Browser" }));
+		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith(previewUrl);
 	});
 
 	it("opens the artifact in the Artifacts tab and closes the dialog", async () => {

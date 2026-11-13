@@ -11,7 +11,7 @@ import (
 )
 
 // HostTrustWarning documents that Autohand retains its normal approval flow.
-const HostTrustWarning = "experimental user-approved reviewer: Autohand uses normal permission prompts; AO does not enable --yes or --unrestricted"
+const HostTrustWarning = "experimental user-approved reviewer: Autohand uses normal permission prompts; Orchestrator does not enable --yes or --unrestricted"
 
 // Reviewer builds Autohand's reviewer command.
 type Reviewer struct {

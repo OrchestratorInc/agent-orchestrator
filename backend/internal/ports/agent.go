@@ -135,6 +135,33 @@ func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
 	return e.identity
 }
 
+type authEnvironmentKey struct{}
+
+// WithAuthEnvironment returns a context whose authentication checks see
+// overrides on top of AO's own environment, as the harness's sessions do: AO
+// exports every saved provider key to itself, but holds back from a harness a
+// key that would replace its own sign-in. An empty value reads as unset.
+func WithAuthEnvironment(ctx context.Context, overrides map[string]string) context.Context {
+	if len(overrides) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, authEnvironmentKey{}, overrides)
+}
+
+// AuthEnvironmentOverride reports the value an authentication check must use
+// for name instead of AO's environment, if the context carries one.
+func AuthEnvironmentOverride(ctx context.Context, name string) (string, bool) {
+	overrides, _ := ctx.Value(authEnvironmentKey{}).(map[string]string)
+	value, ok := overrides[name]
+	return value, ok
+}
+
+// AuthEnvironmentOverrides returns every override the context carries.
+func AuthEnvironmentOverrides(ctx context.Context) map[string]string {
+	overrides, _ := ctx.Value(authEnvironmentKey{}).(map[string]string)
+	return overrides
+}
+
 // RecordAuthDiagnostic retains an adapter-authored check outcome, including
 // unsuccessful attempts. Never pass raw errors, credential values or CLI output.
 func RecordAuthDiagnostic(ctx context.Context, diagnostic domain.AgentAuthDiagnostic) {
@@ -175,9 +202,19 @@ type AgentRuntimeAuthChecker interface {
 // AgentRuntimeCredentialEnv reports the credential environment AO adds when it
 // launches a local session from dataDir (such as a login AO saved itself), so
 // work done outside a session, like model discovery or the computer's account
-// check, sees the same credential. It returns nil when AO adds none.
+// check, sees the same credential. base is the environment that work already
+// has over the daemon's own (the keys AO holds back from the harness), and the
+// credential is chosen against it as a session launch chooses it. It returns
+// base plus that credential, or nil when both are empty. base is not mutated.
 type AgentRuntimeCredentialEnv interface {
-	RuntimeCredentialEnv(dataDir string) map[string]string
+	RuntimeCredentialEnv(dataDir string, base map[string]string) map[string]string
+}
+
+// AgentAuthCacheInvalidator is implemented by an adapter that remembers what its
+// own authentication checks found, so a recheck after a login sees the login
+// instead of the answer from before it.
+type AgentAuthCacheInvalidator interface {
+	InvalidateAuthCache()
 }
 
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
@@ -724,12 +761,11 @@ type ActiveTurnSteerer interface {
 	SteersActiveTurn() bool
 }
 
-// MetadataKeyAgentSessionID is the SessionRef.Metadata key that carries an
-// agent's native session id. It matches the json tag on
-// domain.SessionMetadata.AgentSessionID and the key the adapters read, so the
-// Session Manager can bridge its typed metadata onto a SessionRef without
-// either side hard-coding the other's vocabulary.
-const MetadataKeyAgentSessionID = "agentSessionId"
+// MetadataKeyAgentSessionID and MetadataKeyNativeTranscriptPath bridge typed session metadata onto SessionRef without adapters hard-coding domain JSON vocabulary.
+const (
+	MetadataKeyAgentSessionID       = "agentSessionId"
+	MetadataKeyNativeTranscriptPath = "nativeTranscriptPath"
+)
 
 // MetadataKeySessionMode is the SessionRef.Metadata key that carries the
 // current session mode (e.g. "chat" or "tui").
@@ -804,8 +840,10 @@ type LaunchConfig struct {
 	WorkspacePath    string
 	// Env is the environment the runtime layers over the daemon's own for this
 	// launch (the project env plus AO's variables). The session manager sets it
-	// for PreLaunch, so an adapter prepares the provider config the launched
-	// process will actually read (for example a project CLAUDE_CONFIG_DIR).
+	// for PreLaunch and command construction, so an adapter prepares the
+	// provider config, and picks the flags, the launched process will actually
+	// read (for example a project CLAUDE_CONFIG_DIR). A key set to "" is unset
+	// in the launch; a key absent here keeps the daemon's value. Read-only.
 	Env map[string]string
 }
 
@@ -818,6 +856,11 @@ type WorkspaceHookConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Restore fields are empty for fresh launches. NativeSessionID is the exact
+	// selected identity after imported-session preparation, never a guessed id;
+	// ImportConfigDir is set only while that identity is an import's.
+	NativeSessionID string
+	ImportConfigDir string
 }
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
@@ -840,6 +883,9 @@ type RestoreConfig struct {
 	// system-prompt flag should re-apply this in their resume command.
 	SystemPrompt     string
 	SystemPromptFile string
+	// Env is the environment the runtime layers over the daemon's own for the
+	// resumed process, as LaunchConfig.Env is for a launch.
+	Env map[string]string
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

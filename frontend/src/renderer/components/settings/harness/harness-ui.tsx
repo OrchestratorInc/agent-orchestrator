@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 
-export type HarnessDetailTab = "account" | "models" | "health";
+export type HarnessDetailTab = "account" | "models" | "health" | "import";
 export type HarnessTone = "ok" | "error" | "off";
 
 const SPLIT_LAYOUT_MIN_WIDTH = 720;
@@ -51,13 +51,16 @@ export function HarnessDetailGroup({ title, action, children }: { title: string;
 	</section>;
 }
 
-export function HarnessDetailRow({ label, description, children }: { label: string; description?: string; children?: ReactNode }) {
+/** A row of a harness page card. `secondary` is a second, full-width line of
+ * the same row (AO Cloud's side of the harness), not a row of its own. */
+export function HarnessDetailRow({ label, description, children, secondary }: { label: string; description?: string; children?: ReactNode; secondary?: ReactNode }) {
 	return <div className={cn(HARNESS_CARD_ROW_CLASS, "min-w-0 flex-wrap gap-x-4 gap-y-1 [overflow-wrap:anywhere]")}>
 		<span className="min-w-0 flex-1">
 			<span className="block text-sm leading-5 text-settings-label">{label}</span>
 			{description ? <span className="mt-0.5 block text-pretty text-xs leading-4 text-settings-muted">{description}</span> : null}
 		</span>
 		<span className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-1">{children}</span>
+		{secondary}
 	</div>;
 }
 

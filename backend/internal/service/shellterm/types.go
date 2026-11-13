@@ -29,7 +29,9 @@ type ShellTerminal struct {
 	SessionID  domain.SessionID `json:"sessionId,omitempty"`
 	WorkingDir string           `json:"workingDir"`
 	Title      string           `json:"title"`
-	CreatedAt  time.Time        `json:"createdAt"`
+	// TerminalTitle is present only when the program's title should label the tab.
+	TerminalTitle string    `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // OpenShellTerminalInput is the request to open a new shell pane. An empty
@@ -77,7 +79,13 @@ type InitialInputReadyState struct {
 // values from the reviewed auth registry; the input is sent only after the
 // harness renders one of its known editor-ready states.
 type OpenCommandTerminalInput struct {
-	Argv                    []string
+	// Owner is a trusted workflow identity, independent of the editable title.
+	// It is persisted so the workflow can reconcile commands after a restart.
+	Owner string
+	Argv  []string
+	// HideFromList keeps a daemon-owned guided login PTY out of the user's
+	// terminal drawer. The auth service still owns and closes its handle.
+	HideFromList            bool
 	Env                     map[string]string
 	WorkingDir              string
 	Title                   string

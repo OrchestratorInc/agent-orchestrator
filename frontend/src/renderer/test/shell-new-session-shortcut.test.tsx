@@ -25,7 +25,7 @@ const shellMocks = vi.hoisted(() => {
 		workspaces: [] as WorkspaceSummary[],
 		remoteWorkspaces: [] as WorkspaceSummary[],
 		remoteFailedHostIds: [] as string[],
-		removeRemoteProject: undefined as ((hostId: string, projectId: string) => Promise<void>) | undefined,
+		removeRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		configureRemoteProject: undefined as ((hostId: string, projectId: string) => void) | undefined,
 		workspaceQuery: {
 			data: [] as WorkspaceSummary[],
@@ -113,12 +113,16 @@ const shellMocks = vi.hoisted(() => {
 		queryClient: {
 			ensureQueryData: vi.fn(),
 			fetchQuery: vi.fn(),
+			getQueryCache: () => ({ findAll: () => [], subscribe: () => () => undefined }),
 			getQueryData: vi.fn(),
 			getQueryState: vi.fn(),
 			invalidateQueries: vi.fn(),
 			cancelQueries: vi.fn(),
 			prefetchQuery: vi.fn(async () => undefined),
+			refetchQueries: vi.fn(async () => undefined),
+			getQueriesData: vi.fn(() => []),
 			setQueryData: vi.fn(),
+			setQueriesData: vi.fn(),
 		},
 		remoteDelete: vi.fn(),
 		listRemoteHosts: vi.fn(async () => []),
@@ -189,6 +193,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceTraySessions: () => ({ data: [] }),
 	workspaceQueryKey: ["workspaces"],
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	remoteProjectsQueryKey: (hostId: string) => ["remote-workspaces", hostId, "projects"],
+	remoteSessionsQueryKey: (hostId: string) => ["remote-workspaces", hostId, "sessions"],
+	cloudProjectsQueryKey: ["cloud-projects"],
+	cloudSessionsQueryKey: ["cloud-sessions"],
 	workspaceQueryOptions: {},
 	toWorkspaceSession: (session: { id: string }, project: { id: string; name: string }) => ({ ...session, workspaceId: project.id, workspaceName: project.name }),
 }));
@@ -212,7 +220,7 @@ vi.mock("../hooks/useDaemonStatus", () => ({
 
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/api-client")>()),
-	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn() },
+	apiClient: { POST: vi.fn(), DELETE: vi.fn(), PATCH: vi.fn(), PUT: vi.fn() },
 	apiErrorCode: (error: { code?: string } | undefined) => error?.code,
 	apiErrorMessage: (error: { message?: string } | undefined) => error?.message ?? "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -253,6 +261,14 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	// which keeps these shortcut tests free of telemetry side effects.
 	useAgentReadinessQuery: () => ({ data: undefined }),
 	useEnsureAgentReadiness: vi.fn(),
+	useProjectAgentDefaults: () => async () => ({ workerAgent: "claude-code", orchestratorAgent: "claude-code", reviewerAgent: "claude-code" }),
+}));
+
+// ao.setup.checked reads the startup checks' react-query cache; these
+// shortcut tests render the shell without a QueryClient.
+vi.mock("../hooks/useAgentInventoryTelemetry", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useAgentInventoryTelemetry")>()),
+	useSetupCheckedTelemetry: () => undefined,
 }));
 
 vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null, NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
@@ -340,7 +356,7 @@ vi.mock("../components/Sidebar", async () => {
 		SIDEBAR_DEFAULT_WIDTH: 240,
 		Sidebar: ({ topbarOffset, onRemoveRemoteProject, onConfigureRemoteProject }: {
 			topbarOffset?: string;
-			onRemoveRemoteProject: (hostId: string, projectId: string) => Promise<void>;
+			onRemoveRemoteProject: (hostId: string, projectId: string) => void;
 			onConfigureRemoteProject: (hostId: string, projectId: string) => void;
 		}) => {
 			shellMocks.state.removeRemoteProject = onRemoveRemoteProject;
@@ -467,6 +483,7 @@ beforeEach(() => {
 	shellMocks.state.daemonStatus = { state: "error", code: "not_ready" };
 	shellMocks.state.shellValue = undefined;
 	vi.mocked(apiClient.PATCH).mockReset().mockResolvedValue({ error: undefined });
+	vi.mocked(apiClient.PUT).mockReset().mockResolvedValue({ error: undefined });
 	shellMocks.queryClient.fetchQuery.mockReset().mockResolvedValue(workspaces);
 	shellMocks.queryClient.getQueryData.mockReset().mockReturnValue(workspaces);
 	shellMocks.queryClient.getQueryState.mockReset().mockReturnValue({ dataUpdatedAt: 0 });
@@ -525,10 +542,14 @@ describe("shell workspace startup", () => {
 		] as WorkspaceSummary[];
 		await renderShell();
 
-		await shellMocks.state.removeRemoteProject?.("box-b", "project-b");
+		// Removal is optimistic and runs in the background; the page is left
+		// before the project disappears, and only when it shows that project.
+		act(() => shellMocks.state.removeRemoteProject?.("box-b", "project-b"));
+		await waitFor(() => expect(shellMocks.remoteDelete).toHaveBeenCalledTimes(1));
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
-		await shellMocks.state.removeRemoteProject?.("box-a", "project-a");
-		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/" });
+		act(() => shellMocks.state.removeRemoteProject?.("box-a", "project-a"));
+		await waitFor(() => expect(shellMocks.remoteDelete).toHaveBeenCalledTimes(2));
+		expect(shellMocks.navigate).toHaveBeenCalledWith({ to: "/", replace: true });
 	});
 
 	it("resyncs Developer Mode when an attached daemon restarts on the same port", async () => {
@@ -539,6 +560,9 @@ describe("shell workspace startup", () => {
 		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
 			body: { enabled: true },
 		});
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
+			body: { enabled: true },
+		}));
 
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
 		view.rerender(
@@ -555,6 +579,9 @@ describe("shell workspace startup", () => {
 		await renderShell();
 
 		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+			body: { enabled: false },
+		}));
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
 			body: { enabled: false },
 		}));
 	});
@@ -607,7 +634,7 @@ describe("shell workspace startup", () => {
 			params: { projectId: "proj-1", sessionId: "orch-existing" },
 		}));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
-			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex" },
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex", async: true },
 		});
 		expect(apiClient.POST).toHaveBeenCalledTimes(3);
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
@@ -722,13 +749,13 @@ describe("shell workspace startup", () => {
 			useUiStore.getState().setProjectCreationPending(false);
 		});
 		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		shellMocks.state.routeParams = { projectId: "proj-1", sessionId: "sess-1" };
 		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
 		expect(screen.getByLabelText("Message the agent")).toBe(composer);
-		expect(screen.getByText("Getting your project ready")).toBeInTheDocument();
+		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		act(() => useUiStore.getState().setProjectProvisioning("proj-1", false));
-		expect(screen.queryByText("Getting your project ready")).not.toBeInTheDocument();
+		expect(screen.queryByText("Starting your orchestrator")).not.toBeInTheDocument();
 	});
 
 	const spawnNewProject = () => {
@@ -760,6 +787,9 @@ describe("shell workspace startup", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-new", sessionId: "orch-new" },
 		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-new", kind: "orchestrator", harness: "codex", async: true },
+		});
 		const publish = shellMocks.queryClient.setQueryData.mock.calls.at(-1)?.[1] as (current: WorkspaceSummary[]) => WorkspaceSummary[];
 		expect(publish([{ ...workspaces[0], id: "proj-new", name: "New", sessions: [] }])[0].sessions[0]).toMatchObject({ id: "orch-new", mode: "chat", provisionState: "provisioning" });
 		expect(useUiStore.getState().provisioningProjectIds.has("proj-new")).toBe(false);
@@ -1064,7 +1094,7 @@ describe("shell quit confirm subscription", () => {
 		act(() => listener({ keepsRunning: true }));
 		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
 		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
-		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit Orchestrator?" })).not.toBeInTheDocument());
 
 		act(() => listener({ keepsRunning: true }));
 		fireEvent.click(await screen.findByRole("button", { name: "Quit" }));
@@ -1080,14 +1110,14 @@ describe("shell quit confirm subscription", () => {
 		if (!listener) throw new Error("quit confirm listener was not registered");
 		act(() => listener({ keepsRunning: true }));
 		expect(
-			await screen.findByText("AO will keep running in the background. You can reopen it from the menu bar."),
+			await screen.findByText("Orchestrator will keep running in the background. You can reopen it from the menu bar."),
 		).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Quit" }));
 		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledExactlyOnceWith(true);
-		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit Orchestrator?" })).not.toBeInTheDocument());
 
 		act(() => listener({ keepsRunning: false }));
-		expect(await screen.findByText("Are you sure you want to quit AO?")).toBeInTheDocument();
+		expect(await screen.findByText("Are you sure you want to quit Orchestrator?")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
 	});

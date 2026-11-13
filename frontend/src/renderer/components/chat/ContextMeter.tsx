@@ -13,7 +13,8 @@
  * required, which matters for something glanced at rather than studied.
  */
 
-import { AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { AlertTriangle } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { formatTokenCount } from "../../lib/format-token-count";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
@@ -80,6 +81,8 @@ function formatResetIn(seconds: number): string {
 	return `${Math.floor(hours / 24)}d`;
 }
 
+type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" | "weekly" };
+
 /**
  * The tighter of the provider's two windows, or undefined when it reported
  * neither. Negative is the daemon's "not reported" signal and must not be drawn:
@@ -87,11 +90,13 @@ function formatResetIn(seconds: number): string {
  */
 function worstWindow(
 	limits: ConversationRateLimits,
-): { percent: number; resetsIn?: number } | undefined {
-	const windows = [
-		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds },
-		{ percent: limits.secondaryUsedPercent, resetsIn: limits.secondaryResetsInSeconds },
-	].filter((w) => typeof w.percent === "number" && w.percent >= 0);
+): QuotaWindow | undefined {
+	// Primary is the short (session) window, secondary the weekly one. Both are
+	// already consumed percentages, so they are drawn as-is (never inverted).
+	const windows: QuotaWindow[] = [
+		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds, kind: "session" as const },
+		{ percent: limits.secondaryUsedPercent, resetsIn: limits.secondaryResetsInSeconds, kind: "weekly" as const },
+	].filter((w) => typeof w.percent === "number" && Number.isFinite(w.percent) && w.percent >= 0);
 	if (windows.length === 0) return undefined;
 	return windows.reduce((worst, w) => (w.percent > worst.percent ? w : worst));
 }
@@ -225,12 +230,14 @@ function QuotaWarning({
 	quota,
 	limits,
 }: {
-	quota: { percent: number; resetsIn?: number };
+	quota: QuotaWindow;
 	limits?: ConversationRateLimits;
 }) {
+	const { t } = useTranslation();
 	const severity = quotaSeverity(quota.percent);
-	const percent = Math.round(quota.percent);
+	const percent = Math.min(100, Math.round(quota.percent));
 	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatResetIn(quota.resetsIn) : undefined;
+	const session = quota.kind === "session";
 
 	return (
 		<Tooltip>
@@ -244,21 +251,19 @@ function QuotaWarning({
 					)}
 				>
 					<AlertTriangle aria-hidden="true" className="size-3" />
-					{percent}% quota
+					{t(session ? "chat.quota.badgeSession" : "chat.quota.badgeWeekly", { percent })}
 				</span>
 			</TooltipTrigger>
 			<TooltipContent>
 				<p>
-					This account has used {percent}% of its
-					{limits?.planLabel ? ` ${limits.planLabel}` : ""} rate limit
-					{resets ? `, which resets in ${resets}` : ""}.
+					{t(session ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent })}
+					{limits?.planLabel ? ` ${t("chat.quota.plan", { plan: limits.planLabel })}` : ""}
+					{resets ? ` ${t("chat.quota.resetsIn", { time: resets })}` : ""}
 				</p>
 				{/* Named explicitly because this is the failure a user cannot otherwise
 				    explain: the turn was fine, the account was not. */}
 				<p className="mt-1">
-					{severity === "critical"
-						? "Turns may start failing for reasons unrelated to what you asked."
-						: "If this reaches the limit, turns will fail until the window resets."}
+					{t(severity === "critical" ? "chat.quota.critical" : "chat.quota.warn")}
 				</p>
 			</TooltipContent>
 		</Tooltip>

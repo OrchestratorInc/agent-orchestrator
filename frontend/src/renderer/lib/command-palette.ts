@@ -22,17 +22,20 @@ import {
 	type PRReviewState,
 } from "./session-reviews";
 import { appI18n, type MessageKey } from "../i18n";
+import { isArchivedSession } from "./standalone-archive";
 import type { components } from "../../api/schema";
 import type { AppShortcutId } from "../../shared/shortcuts";
 import type { GlobalSettingsSection } from "../stores/ui-store";
 import { renderedSnippetText } from "./chat-annotation-navigation";
 import { getSessionStatusDotView } from "./session-presentation";
+import { importableProject } from "./session-import";
 
 export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
 
 export type NavigateTarget =
 	| { to: "/" }
 	| { to: "/settings" }
+	| { to: "/usage" }
 	| { to: "/projects/$projectId"; params: { projectId: string } }
 	| { to: "/projects/$projectId/settings"; params: { projectId: string } }
 	| { to: "/projects/$projectId/sessions/$sessionId"; params: { projectId: string; sessionId: string } }
@@ -57,7 +60,9 @@ export type CommandAction =
 	| { kind: "navigate"; target: NavigateTarget }
 	| { kind: "open-new-task"; projectId: string }
 	| { kind: "open-new-project" }
+	| { kind: "open-session-import"; projectId?: string }
 	| { kind: "open-orchestrator"; projectId: string }
+	| { kind: "open-archive"; projectId: string }
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
 	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
@@ -70,7 +75,8 @@ export type CommandAction =
 	| { kind: "copy-pr-url"; url: string }
 	| { kind: "trigger-review"; sessionId: string }
 	| { kind: "toggle-theme" }
-	| { kind: "open-shared-link" };
+	| { kind: "open-shared-link" }
+	| { kind: "report-problem" };
 
 export type CommandItem = {
 	id: string;
@@ -115,6 +121,7 @@ export type CommandPaletteContext = {
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
 	/** Signed in to Cloud, so a shared session's link can be opened. */
 	cloudReady?: boolean;
+	developerMode?: boolean;
 };
 
 export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
@@ -362,6 +369,8 @@ export function findSession(workspaces: WorkspaceSummary[], sessionId: string): 
 	return undefined;
 }
 
+const IMPORT_SESSION_KEYWORDS = ["import", "chats", "sessions", "conversations", "history", "existing", "resume", "continue", "claude code", "codex", "terminal"];
+
 export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n.t): CommandItem[] {
 	const { workspaces, currentProjectId, currentSessionId, currentHostId, restartingProjectIds, reviewStatesBySessionId } = ctx;
 	const items: CommandItem[] = [];
@@ -395,7 +404,18 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 	});
 
 	if (currentProject) {
-		if (currentProject.id !== STANDALONE_WORKSPACE_ID) {
+		if (importableProject(currentProject)) {
+			items.push({
+				id: "current-import-sessions",
+				group: "current",
+				title: t("sessionImport.menuItem"),
+				emphasis: currentProject.name,
+				keywords: [...IMPORT_SESSION_KEYWORDS, currentProject.name],
+				action: { kind: "open-session-import", projectId: currentProject.id },
+			});
+		}
+		// A Cloud standalone agent has no orchestrator either.
+		if (currentProject.id !== STANDALONE_WORKSPACE_ID && !currentProject.standaloneAgent) {
 			items.push({
 				id: "current-open-orchestrator",
 				group: "current",
@@ -407,6 +427,18 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				disabledReason: isProjectRestarting ? t("command.orchestratorRestarting") : undefined,
 				action: { kind: "open-orchestrator", projectId: currentProject.id },
 			});
+			const archivedCount = workerSessions(currentProject.sessions).filter(isArchivedSession).length;
+			if (archivedCount > 0) {
+				items.push({
+					id: "current-open-archive",
+					group: "current",
+					title: t("command.archivedSessions"),
+					emphasis: currentProject.name,
+					subtitle: t("command.archivedCount", { count: archivedCount }),
+					keywords: ["archive", "archived", "ended", "terminated", "restore", "history", currentProject.name],
+					action: { kind: "open-archive", projectId: currentProject.id },
+				});
+			}
 			items.push({
 				id: "current-project-settings",
 				group: "current",
@@ -474,7 +506,8 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		items.push(sessionCommand(workspace, session, "attention"));
 	}
 
-	for (const workspace of workspaces.filter((candidate) => candidate.id !== STANDALONE_WORKSPACE_ID)) {
+	// Cloud standalone agents are the Scratchpad's, not projects; their sessions are listed.
+	for (const workspace of workspaces.filter((candidate) => candidate.id !== STANDALONE_WORKSPACE_ID && !candidate.standaloneAgent)) {
 		items.push({
 			id: `project:${workspace.id}`,
 			group: "projects",
@@ -561,6 +594,23 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		action: { kind: "open-new-project" },
 	});
 	items.push({
+		id: "global-import-sessions",
+		group: "global",
+		title: t("sessionImport.foldersTitle"),
+		subtitle: t("settings.harness.thisComputer"),
+		keywords: [...IMPORT_SESSION_KEYWORDS, "folders", "projects"],
+		action: { kind: "open-session-import" },
+	});
+	if (ctx.developerMode) {
+		items.push({
+			id: "global-usage",
+			group: "global",
+			title: t("command.openUsage"),
+			keywords: ["usage", "cost", "tokens", "limits", "spend", "billing", "quota"],
+			action: { kind: "navigate", target: { to: "/usage" } },
+		});
+	}
+	items.push({
 		id: "global-settings",
 		group: "global",
 		title: t("command.globalSettings"),
@@ -574,6 +624,13 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		title: t("command.toggleTheme"),
 		keywords: ["dark", "light", "appearance"],
 		action: { kind: "toggle-theme" },
+	});
+	items.push({
+		id: "global-report-problem",
+		group: "global",
+		title: t("report.action"),
+		keywords: ["bug", "report", "issue", "triage", "feedback"],
+		action: { kind: "report-problem" },
 	});
 	if (ctx.cloudReady) {
 		items.push({
@@ -655,8 +712,12 @@ function contentMatchScore(q: string, item: CommandItem): number {
 /** A typed word of 4+ letters missing at most two letters of a word in text: "sidbar" for "sidebar". */
 function nearMissIn(word: string, text: string): boolean {
 	if (word.length < 4) return false;
-	return text.split(/[^\p{L}\p{N}]+/u).some((candidate) =>
+	return wordsOf(text).some((candidate) =>
 		candidate[0] === word[0] && candidate.length >= word.length && candidate.length - word.length <= 2 && isSubsequence(word, candidate));
+}
+
+function wordsOf(text: string): string[] {
+	return text.split(/[^\p{L}\p{N}]+/u);
 }
 
 export function matchScore(query: string, item: CommandItem): number {
@@ -674,6 +735,11 @@ export function matchScore(query: string, item: CommandItem): number {
 	}
 	if (titleIdx === 0) return 1000;
 	if (titleIdx > 0) return 800 - titleIdx;
+	// The closer a keyword names the row, the higher it ranks: "bug" finds Report
+	// a problem before "debug" finds Developer mode, and "code" finds Open in
+	// editor before "qr code" finds Mobile.
+	if (item.keywords?.some((keyword) => keyword.toLowerCase() === q)) return 650;
+	if (wordsOf(extras).includes(q)) return 600;
 	if (extras.includes(q)) return 500;
 	// Every word somewhere, in any order: "add codex account", "hide sidebar",
 	// "toggle sidbar".

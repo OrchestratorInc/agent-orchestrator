@@ -84,6 +84,38 @@ func TestRuntimeIntegration(t *testing.T) {
 	}
 }
 
+// TestRuntimeIntegrationDeliversEnvironmentThroughAFile checks the agent
+// receives its environment from the sourced launch file, which the pane's
+// shell deletes before the agent runs.
+func TestRuntimeIntegrationDeliversEnvironmentThroughAFile(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	ctx := context.Background()
+	id := strings.ReplaceAll(t.Name(), "/", "_")
+	envDir := t.TempDir()
+	r := New(Options{Timeout: 5 * time.Second, EnvDir: envDir})
+	_ = r.Destroy(ctx, ports.RuntimeHandle{ID: id})
+	t.Cleanup(func() { _ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id}) })
+
+	h, err := r.Create(ctx, ports.RuntimeConfig{
+		SessionID:     domain.SessionID(id),
+		WorkspacePath: t.TempDir(),
+		Argv:          []string{"sh", "-c", `printf 'key-length:%s\n' "${#AO_TEST_PROVIDER_KEY}"`},
+		Env:           map[string]string{"AO_SESSION_ID": id, "AO_TEST_PROVIDER_KEY": "sk-test-0123456789"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out := waitForOutput(t, r, h, "key-length:18", 5*time.Second); !strings.Contains(out, "key-length:18") {
+		t.Fatalf("output = %q, want key-length:18", out)
+	}
+	entries, err := os.ReadDir(envDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("launch environment left behind: %v err=%v", entries, err)
+	}
+}
+
 // TestRuntimeIntegrationExactSessionParsing verifies that IsAlive uses exact
 // session matching and does not treat a prefix as a live session.
 func TestRuntimeIntegrationExactSessionParsing(t *testing.T) {

@@ -75,7 +75,7 @@ describe("reasoning", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText(/longer than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/longer than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	// The default install sends the item with no body. A labelled empty row teaches
@@ -104,8 +104,9 @@ describe("MCP tool call", () => {
 	it("names the server and the tool, not a shell command", () => {
 		render(<ActivityRow activity={call} />);
 		expect(screen.getByText("search_issues")).toBeInTheDocument();
-		// The distinction the kind exists to draw: nothing ran in the worktree.
-		expect(screen.getByText("MCP · github")).toBeInTheDocument();
+		// The distinction the kind exists to draw: nothing ran in the worktree, a
+		// tool server answered. The row reads "<tool> · <server>".
+		expect(screen.getByText("· github")).toBeInTheDocument();
 	});
 
 	it("shows the arguments and the answer when opened", async () => {
@@ -158,7 +159,7 @@ describe("MCP tool call", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByText(/larger than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/larger than Orchestrator stores/i)).toBeInTheDocument();
 		expect(screen.getByText(/2\.0 MB/)).toBeInTheDocument();
 	});
 
@@ -250,8 +251,8 @@ describe("auto review", () => {
 });
 
 describe("system events", () => {
-	it("names what actually answered when the provider rerouted", () => {
-		render(
+	it("draws nothing when the provider rerouted the model", () => {
+		const { container } = render(
 			<ActivityRow
 				activity={activity({
 					activityKind: "system",
@@ -265,9 +266,7 @@ describe("system events", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText("gpt-5.6-terra-mini")).toBeInTheDocument();
-		expect(screen.getByText("gpt-5.6-terra")).toBeInTheDocument();
-		expect(screen.getByText("at capacity")).toBeInTheDocument();
+		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("records where the provider demanded credentials", () => {
@@ -685,7 +684,7 @@ describe("file changes", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button", { name: /Created/ }));
-		expect(screen.getByText(/longer than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/longer than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	// Rows written by earlier builds carry no status. The file is still drawn, as a

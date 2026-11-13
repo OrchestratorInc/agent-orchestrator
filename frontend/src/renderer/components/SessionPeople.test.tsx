@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudCpSessionLive } from "../lib/cloud-cp";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fireEvent, render as renderView, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CloudCpSessionLive, CloudCpShareLink } from "../lib/cloud-cp";
 import type { SessionPerson } from "../lib/session-people";
 import { SessionPeopleControl, SessionPeopleStack } from "./SessionPeople";
 
@@ -8,19 +10,31 @@ const mocks = vi.hoisted(() => ({
 	live: undefined as CloudCpSessionLive | undefined,
 	dialog: vi.fn(),
 	teams: true,
+	links: [] as CloudCpShareLink[],
+	createShareLink: vi.fn(),
+	listShareLinks: vi.fn(),
 }));
 vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => mocks.teams }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ userId: "me", ready: true, baseUrl: "https://cp.test" }) }));
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({
+		userId: "me",
+		ready: true,
+		baseUrl: "https://cp.test",
+		client: { listShareLinks: mocks.listShareLinks, createShareLink: mocks.createShareLink, revokeShareLink: vi.fn() },
+	}),
+}));
 vi.mock("../hooks/useCloudSessionLive", () => ({ useCloudSessionLive: () => mocks.live }));
 vi.mock("./ShareSessionDialog", () => ({
-	ShareSessionDialog: (props: { open: boolean }) => {
+	ShareSessionDialog: (props: { open: boolean; people?: boolean; sessionId?: string }) => {
 		mocks.dialog(props.open);
-		return props.open ? <div data-testid="share-dialog" /> : null;
+		return props.open ? <div data-testid="share-dialog" data-people={String(props.people)} data-session={props.sessionId ?? ""} /> : null;
 	},
 }));
-vi.mock("./ShareLinkDialog", () => ({
-	ShareLinkDialog: (props: { open: boolean }) => (props.open ? <div data-testid="share-link-dialog" /> : null),
-}));
+
+function render(ui: React.ReactElement) {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return renderView(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
 
 const person = (userId: string, name: string, state: SessionPerson["state"], present = true): SessionPerson => ({ userId, name, present, state });
 
@@ -77,24 +91,55 @@ describe("SessionPeopleControl", () => {
 		mocks.live = undefined;
 		mocks.dialog.mockClear();
 		mocks.teams = true;
+		mocks.links = [];
+		mocks.createShareLink.mockReset();
+		mocks.listShareLinks.mockReset().mockImplementation(async () => ({ links: mocks.links }));
 	});
+	afterEach(() => vi.restoreAllMocks());
 
-	it("in a build without Teams, Share opens the link-only dialog from before Teams", () => {
+	it("in a build without Teams, Share opens the dialog with links only", () => {
 		mocks.teams = false;
 		mocks.live = live([{ userId: "me", name: "Mohak" }]);
 		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
 		fireEvent.click(screen.getByRole("button", { name: "Share" }));
-		expect(screen.getByTestId("share-link-dialog")).toBeTruthy();
-		expect(screen.queryByTestId("share-dialog")).toBeNull();
-		expect(mocks.dialog).not.toHaveBeenCalled();
+		expect(screen.getByTestId("share-dialog").dataset.people).toBe("false");
 	});
 
 	it("in a build with Teams, Share opens the people and teams dialog", () => {
 		mocks.live = live([{ userId: "me", name: "Mohak" }]);
 		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
 		fireEvent.click(screen.getByRole("button", { name: "Share" }));
-		expect(screen.getByTestId("share-dialog")).toBeTruthy();
-		expect(screen.queryByTestId("share-link-dialog")).toBeNull();
+		expect(screen.getByTestId("share-dialog").dataset.people).toBe("true");
+	});
+
+	it("is one plain Share button, with no menu beside it, that opens this session's dialog", async () => {
+		mocks.live = live([{ userId: "me", name: "Mohak" }]);
+		const { container } = render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		// Google Docs' Share: the one control in the header is the button itself.
+		expect(screen.getAllByRole("button")).toHaveLength(1);
+		const share = screen.getByRole("button", { name: "Share" });
+		expect(share).not.toHaveAttribute("aria-haspopup");
+		expect(share.className).not.toContain("rounded-r-none");
+		expect(screen.queryByRole("button", { name: "More sharing options" })).toBeNull();
+		expect(container.querySelector("[data-share-menu], [data-share-split]")).toBeNull();
+		await userEvent.click(share);
+		expect(screen.getByTestId("share-dialog").dataset.session).toBe("session");
+		// Nothing to copy from the header: Copy link is in the dialog, never a disabled menu item here.
+		expect(screen.queryByRole("menu")).toBeNull();
+		expect(screen.queryByRole("menuitem")).toBeNull();
+		expect(screen.queryByText("Link access is off")).toBeNull();
+		// It reads no links of its own: the dialog does.
+		expect(mocks.listShareLinks).not.toHaveBeenCalled();
+	});
+
+	it("keeps no menu beside the circles when someone else is here", () => {
+		mocks.live = live([{ userId: "me", name: "Mohak" }, { userId: "b", name: "Bob" }], "b");
+		const { container } = render(<SessionPeopleControl orgId="org" projectId="project" sessionId="session" canShare />);
+		expect(screen.getAllByRole("button")).toHaveLength(1);
+		expect(screen.queryByRole("button", { name: "More sharing options" })).toBeNull();
+		expect(container.querySelector("[data-share-menu], [data-share-split]")).toBeNull();
+		fireEvent.click(container.querySelector("[data-session-people]")!);
+		expect(screen.getByTestId("share-dialog").dataset.session).toBe("session");
 	});
 
 	it("shows the owner a Share button while nobody else is here", () => {

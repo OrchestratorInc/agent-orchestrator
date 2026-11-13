@@ -1,7 +1,7 @@
 import type { ProjectSource } from "@aoagents/product-ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "lucide-react";
+import { AlertTriangle, Cloud, Folder, Folders, FolderOpen, GitFork, MessageSquarePlus, Star } from "@/components/app-icons";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useMigrationOffer } from "../hooks/useMigrationOffer";
@@ -24,17 +24,19 @@ import {
 } from "../types/workspace";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
+import { SessionImportOffer } from "./SessionImportOffer";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { dragStyle } from "./PageTopbar";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
+import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
 /**
  * Home landing layout contracts (do not regress without explicit design sign-off):
  * - One centered column (`max-w-[640px]`); no upward translate hack.
  * - "Star us" is a quiet text link with dashed underline on hover — NOT a
- *   TopbarButton / accent pill / bordered card.
+ *   filled button / accent pill / bordered card.
  * - Primary actions are always a 2×2 grid. The fourth cell is the
  *   standalone-agent action, or Clone to the cloud when Developer Mode and
  *   Cloud are both enabled (standalone stays reachable from the sidebar's
@@ -98,7 +100,7 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 		>
 			<NavRowHighlight className="bg-card" />
 			<span className={cn(HOME_PROJECT_ICON_CLASS, "relative z-[1]")} aria-hidden="true">
-				{project.folderMissing ? <AlertTriangle strokeWidth={1.8} className="text-warning" /> : <Folder strokeWidth={1.8} />}
+				{project.folderMissing ? <AlertTriangle className="text-warning" /> : <Folder />}
 			</span>
 			<span className="relative z-[1] min-w-0 text-sm leading-5">
 				<span className="flex items-center gap-1.5">
@@ -152,6 +154,7 @@ export function HomePage() {
 }
 
 function HomePageContent() {
+	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
@@ -179,7 +182,7 @@ function HomePageContent() {
 	}, []);
 	const recentProjects = useMemo(
 		() =>
-			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND)).slice(
+			sortProjectsByActivity(projects.filter((project) => project.kind !== STANDALONE_PROJECT_KIND && !project.standaloneAgent)).slice(
 				0,
 				RECENT_PROJECT_LIMIT,
 			),
@@ -271,50 +274,50 @@ function HomePageContent() {
 	}
 
 	return (
-		<div className="relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
+		<div ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] relative flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-16">
 			<div className="w-full max-w-[640px]">
 				<div className="space-y-6">
 					<section className="space-y-3 px-3" style={firstRunPromptOpen ? { visibility: "hidden" } : undefined}>
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
-							{/* Quiet text link — not TopbarButton / accent. Dashed underline only on hover. */}
+							{/* Quiet text link — not filled button / accent. Dashed underline only on hover. */}
 							<Button
 								className="gap-1.5 rounded-none border-0 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground no-underline hover:border-current"
 								onClick={() => void aoBridge.app.openExternal(GITHUB_REPOSITORY_URL)}
 								type="button"
 								variant="link"
 							>
-								<Star className="size-3.5" strokeWidth={1.8} aria-hidden="true" />
+								<Star className="size-3.5" aria-hidden="true" />
 								{t("home.starUs")}
 							</Button>
 						</div>
 
 						<div className="grid grid-cols-2 gap-3">
 							<HomeActionCard
-								icon={<GitFork strokeWidth={1.8} />}
+								icon={<GitFork />}
 								label={t("createProject.cloneFromGit")}
 								onClick={() => requestSource("clone")}
 							/>
 							<HomeActionCard
-								icon={<FolderOpen strokeWidth={1.8} />}
+								icon={<FolderOpen />}
 								label={t("createProject.openLocal")}
 								onClick={() => requestSource("local")}
 							/>
 							<HomeActionCard
-								icon={<Folders strokeWidth={1.8} />}
+								icon={<Folders />}
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
 							{/* Cloud is on for everyone a control plane is configured for. */}
 							{cloudEnabled ? (
 								<HomeActionCard
-									icon={<Cloud strokeWidth={1.8} />}
+									icon={<Cloud />}
 									label={t("createProject.cloudTitle")}
 									onClick={() => requestSource("cloud")}
 								/>
 							) : (
 								<HomeActionCard
-									icon={<MessageSquarePlus strokeWidth={1.8} />}
+									icon={<MessageSquarePlus />}
 									label={t("home.newStandaloneAgent")}
 									onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 								/>
@@ -346,6 +349,7 @@ function HomePageContent() {
 						)}
 					</section>
 
+					{workspaceQuery.isSuccess && recentProjects.length === 0 ? <SessionImportOffer /> : null}
 				</div>
 
 				<CreateProjectFlow

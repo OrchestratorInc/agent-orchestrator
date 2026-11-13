@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCloudCpClient, retryAfterMs } from "./client";
+import { createCloudCpClient, MAX_GITHUB_REPOSITORY_DESCRIPTION, retryAfterMs } from "./client";
 import { CloudCpError } from "./errors";
 
 describe("Cloud control-plane interface transitions", () => {
@@ -101,6 +101,32 @@ describe("cloud control-plane Coder template parameters", () => {
 		expect(url).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/coder-templates/tpl%201/parameters/evaluate");
 		expect(init).toMatchObject({ method: "POST" });
 		expect(JSON.parse(String(init.body))).toEqual({ values: { github_repos: "[\"Other\"]" } });
+	});
+});
+
+describe("cloud control-plane harness versions", () => {
+	const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+
+	it("lists the organization's harness versions, refreshing the newest releases on request", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => ok({ editable: true, agents: [] }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.listOrgHarnessVersions("org/a")).resolves.toEqual({ editable: true, agents: [] });
+		await client.listOrgHarnessVersions("org/a", { refresh: true });
+		expect(fetchImpl.mock.calls[0][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/harness-versions");
+		expect(fetchImpl.mock.calls[1][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%2Fa/harness-versions?refresh=true");
+	});
+
+	it("updates a harness to the version the caller saw, and resets it to the AO-tested one", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => ok({ agentId: "codex" }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await client.installOrgHarnessVersion("org-1", "codex", "0.167.0");
+		const [url, init] = fetchImpl.mock.calls[0];
+		expect(url).toBe("https://cloud.example.test/api/cloud/v1/orgs/org-1/harness-versions/codex/install");
+		expect(init).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(init.body))).toEqual({ method: "ao-cloud", operation: "update", expectedVersion: "0.167.0" });
+		await client.resetOrgHarnessVersion("org-1", "codex");
+		expect(fetchImpl.mock.calls[1][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org-1/harness-versions/codex");
+		expect(fetchImpl.mock.calls[1][1]).toMatchObject({ method: "DELETE" });
 	});
 });
 
@@ -219,6 +245,11 @@ describe("cloud control-plane session lifecycle", () => {
 			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/chat-events?after=0&limit=500&types=workspace.script.step%2Cagent.ready",
 			expect.objectContaining({ method: "GET" }),
 		);
+		await client.listChatEvents("org/1", "session/1", { before: 40, since: "2026-11-08T10:00:00.000Z", limit: 500 });
+		expect(fetchMock).toHaveBeenLastCalledWith(
+			"https://cloud.example.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/chat-events?limit=500&before=40&since=2026-11-08T10%3A00%3A00.000Z",
+			expect.objectContaining({ method: "GET" }),
+		);
 	});
 
 	it("reads a Cloud project and patches only supplied settings", async () => {
@@ -274,6 +305,58 @@ describe("cloud control-plane session lifecycle", () => {
 				config: { worker: { agent: "codex" } },
 			}),
 		}));
+	});
+
+	it("creates a repository for a local folder and a workspace project from it", async () => {
+		const repository = { githubRepositoryId: "77", name: "notes", fullName: "acme/notes", htmlUrl: "https://github.com/acme/notes", defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "" };
+		const responses: Array<[number, unknown]> = [
+			[201, { repository, created: true, pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git" }],
+			[201, { project: { id: "project-1", config: { layout: "workspace" } } }],
+		];
+		const fetchMock = vi.fn(async () => {
+			const [status, body] = responses.shift() ?? [500, {}];
+			return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+		});
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		await expect(client.createGitHubRepository("org-1", { name: "notes", owner: "acme" })).resolves.toEqual({
+			repository,
+			created: true,
+			pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git",
+		});
+		await client.createGitHubProject("org-1", {
+			githubRepositoryId: "77",
+			displayName: "Platform",
+			config: { layout: "workspace", agentStartsIn: "parent", repos: [{ url: "https://github.com/acme/api" }] },
+		}, { idempotencyKey: "create-1" });
+
+		const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+		expect(calls[0]?.[0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org-1/github/repositories");
+		expect(calls[0]?.[1]).toEqual(expect.objectContaining({ method: "POST", body: JSON.stringify({ name: "notes", owner: "acme" }) }));
+		expect(new Headers(calls[1]?.[1].headers).get("Idempotency-Key")).toBe("create-1");
+		expect(JSON.parse(calls[1]?.[1].body as string).config.layout).toBe("workspace");
+	});
+
+	it("never sends a project's layout in a settings write, and keeps a repository description within the limit", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ project: {} }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		await client.updateProjectSettings("org-1", "p-1", { config: { layout: "workspace", repos: [{ url: "https://github.com/acme/web" }] } as never });
+		await client.createGitHubRepository("org-1", { name: "notes", description: "é".repeat(400) });
+
+		const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+		expect(JSON.parse(calls[0]?.[1].body as string)).toEqual({ config: { repos: [{ url: "https://github.com/acme/web" }] } });
+		expect([...JSON.parse(calls[1]?.[1].body as string).description]).toHaveLength(MAX_GITHUB_REPOSITORY_DESCRIPTION);
+	});
+
+	it("surfaces a repository creation refusal with its code and message", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "unprocessable", code: "repository_owner_required", message: "Choose the GitHub account for the new repository." }), { status: 422, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+
+		const error = await client.createGitHubRepository("org-1", { name: "notes" }).catch((caught: unknown) => caught);
+
+		expect(error).toBeInstanceOf(CloudCpError);
+		expect(error).toMatchObject({ status: 422, code: "repository_owner_required", message: "Choose the GitHub account for the new repository." });
 	});
 
 	it("loads detailed pull requests for a cloud session", async () => {
@@ -526,5 +609,35 @@ describe("Cloud control-plane rate limits", () => {
 		expect(retryAfterMs("Sat, 31 Oct 2026 00:00:00 GMT", now)).toBe(0);
 		expect(retryAfterMs(null, now)).toBeUndefined();
 		expect(retryAfterMs("soon", now)).toBeUndefined();
+	});
+});
+
+describe("Cloud control-plane share links", () => {
+	const ORG = "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b";
+	const LINK = "0c927f48-7214-4fb1-833a-7c1af5b7bf80";
+	const client = (response: () => Response) => {
+		const fetchImpl = vi.fn().mockImplementation(async () => response());
+		return { fetchImpl, client: createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl }) };
+	};
+
+	it("says how many grants removing who joined by a link changed", async () => {
+		const { fetchImpl, client: cp } = client(() => new Response(JSON.stringify({ removedGrants: 3 }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		expect(await cp.revokeShareLink(ORG, "project", LINK, { removeJoined: true })).toEqual({ removedGrants: 3 });
+		const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+		expect(url).toContain(`/orgs/${ORG}/projects/project/shares/${LINK}/revoke`);
+		expect(init).toMatchObject({ method: "POST", body: JSON.stringify({ removeJoined: true }) });
+	});
+
+	it("takes a plain revoke's 204, or an older control plane's, with no body", async () => {
+		const { fetchImpl, client: cp } = client(() => new Response(null, { status: 204 }));
+		expect(await cp.revokeShareLink(ORG, "project", LINK)).toEqual({});
+		expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).body).toBeUndefined();
+		// An older control plane ignores removeJoined and answers the same way.
+		expect(await cp.revokeShareLink(ORG, "project", LINK, { removeJoined: true })).toEqual({});
+	});
+
+	it("reports a link already revoked as a 404", async () => {
+		const { client: cp } = client(() => new Response(JSON.stringify({ code: "not_found", message: "Not found" }), { status: 404, headers: { "Content-Type": "application/json" } }));
+		await expect(cp.revokeShareLink(ORG, "project", LINK)).rejects.toMatchObject({ status: 404 });
 	});
 });

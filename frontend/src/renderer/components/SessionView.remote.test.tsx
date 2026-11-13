@@ -32,7 +32,7 @@ vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button aria-
 vi.mock("./TerminalPane", () => ({ TerminalPane: ({ session, terminalTarget, inputDisabled, createMux }: { session?: { hostId?: string; terminalHandleId?: string }; terminalTarget?: { kind: string; handleId?: string }; inputDisabled?: boolean; createMux?: () => unknown }) => <div data-testid="remote-terminal-base" data-host-id={session?.hostId ?? ""} data-terminal-handle={terminalTarget?.handleId ?? session?.terminalHandleId ?? ""} data-input-disabled={inputDisabled ? "true" : "false"} data-remote-mux={createMux ? "true" : "false"}>{session?.hostId ? baseUrlForHost(session.hostId) : "local"}</div> }));
 
 import { baseUrlForHost, connectHost, disconnectHost } from "../lib/host-clients";
-import { conversationQueryKey } from "../hooks/useConversation";
+import { conversationConfigOptionsQueryKey, conversationQueryKey, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
@@ -115,7 +115,9 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	])));
 });
 
-it("removes remote chat actions when its host disconnects, without falling back to local", async () => {
+const LAST_SAVED_COPY = "Showing the last saved copy until the host connects.";
+
+it("keeps a remote chat readable and locked while its host is away, without falling back to local", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -133,13 +135,102 @@ it("removes remote chat actions when its host disconnects, without falling back 
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(queryClient.getQueryData(conversationQueryKey("session-1", "box-a"))).toBeDefined();
-	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	// The refused read of the outage must not take the chat away while the first read after it runs.
+	await act(async () => { await queryClient.refetchQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
+	expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.status).toBe("error");
+	await act(async () => { await connectHost("http://box-a:3001"); });
+	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(screen.queryByTestId("session-missing")).not.toBeInTheDocument();
+	await waitFor(() => expect(screen.queryByText(LAST_SAVED_COPY)).not.toBeInTheDocument());
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("hides stale chat controls when the upstream daemon fails but its proxy remains connected", async () => {
+it.each(["disconnected", "upstream unavailable"])("pauses provider polling while the host is %s and resumes after reconnect", async (outage) => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	let offline = false;
+	let catalogReads = 0;
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		const unavailable = () => Response.json({ code: "UPSTREAM_UNAVAILABLE", message: "The host could not be reached" }, { status: 502 });
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return offline && outage === "upstream unavailable"
+			? unavailable()
+			: Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "idle", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({
+			capabilities: ["config_options"], settings: { model: "model-1", approvalMode: "default" },
+			messages: [{ id: "saved", role: "assistant", text: "Saved answer", sequence: 1 }],
+		}));
+		if (path.endsWith("/config-options")) {
+			catalogReads++;
+			return offline ? unavailable() : Response.json({ options: [] });
+		}
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const catalogKey = conversationConfigOptionsQueryKey("session-1", "box-a");
+	renderRemoteSession(queryClient);
+	await screen.findByText("Saved answer");
+	await waitFor(() => expect(queryClient.getQueryState(catalogKey)?.status).toBe("success"));
+
+	offline = true;
+	await act(async () => {
+		if (outage === "disconnected") await disconnectHost("box-a");
+		else await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") });
+	});
+	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+	await waitFor(() => expect(queryClient.getQueryCache().find({ queryKey: catalogKey })?.isActive()).toBe(false));
+	const readsBeforePoll = catalogReads;
+	await act(async () => { await queryClient.refetchQueries({ queryKey: catalogKey, exact: true }); });
+	expect(catalogReads).toBe(readsBeforePoll);
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+	offline = false;
+	await act(async () => {
+		if (outage === "disconnected") await connectHost("http://box-a:3001");
+		else await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") });
+	});
+	await waitFor(() => expect(screen.queryByText(LAST_SAVED_COPY)).not.toBeInTheDocument());
+	await waitFor(() => expect(catalogReads).toBeGreaterThan(readsBeforePoll));
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	expect(localGet).not.toHaveBeenCalled();
+	expect(localPost).not.toHaveBeenCalled();
+});
+
+it("hides the stale stopped-agent banner while the host is away and brings it back after", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: "stopped" }));
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	expect(await screen.findByRole("alert")).toHaveTextContent("The agent controller stopped");
+	expect(screen.getByRole("button", { name: "Open shell" })).toBeInTheDocument();
+	await act(async () => { await disconnectHost("box-a"); });
+	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+	await act(async () => { await connectHost("http://box-a:3001"); });
+	expect(await screen.findByRole("button", { name: "Open shell" })).toBeInTheDocument();
+});
+
+it("locks the last saved chat when the upstream daemon fails but its proxy remains connected", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -163,17 +254,16 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	await waitFor(() => expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument());
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
-	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
+	expect(await screen.findByText(LAST_SAVED_COPY)).toBeInTheDocument();
+	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
 
 it.each([
-	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "Host rejected the password"],
-	[426, { error: "incompatible", code: "HOST_API_INCOMPATIBLE" }, "AO versions are incompatible"],
+	[401, { error: "unauthorized", code: "BAD_PASSWORD" }, "The host rejected this device"],
+	[426, { error: "incompatible", code: "HOST_API_INCOMPATIBLE" }, "Orchestrator versions are incompatible"],
 	[502, { error: "unavailable", code: "HOST_IDENTITY_UNVERIFIED", message: "Host identity changed" }, "Host is offline"],
 ])("explains remote session HTTP %i failures while its proxy is still connected", async (status, body, message) => {
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -417,7 +507,7 @@ it("automatically reveals a remote preview after session data finishes loading",
 	});
 	const navigate = vi.spyOn(window.ao!.browser, "navigate").mockImplementation(async ({ viewId, url }) => {
 		emitTabs?.({ viewId, activeTabId: "t1", tabs: [{ id: "t1", url, title: "QA preview", active: true }] });
-		return { viewId, url, title: "AO preview", canGoBack: false, canGoForward: false, isLoading: false };
+		return { viewId, url, title: "Orchestrator preview", canGoBack: false, canGoForward: false, isLoading: false };
 	});
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
@@ -498,7 +588,7 @@ it("opens a TUI host file in a shared center tab and renames on that host", asyn
 	expect(localGet).not.toHaveBeenCalled();
 });
 
-it("loads older remote history once while polling only the latest page", async () => {
+it("loads older remote history once while refreshing only the latest page", async () => {
 	const conversationReads: URL[] = [];
 	let latestReads = 0;
 	localGet.mockReset();
@@ -532,7 +622,11 @@ it("loads older remote history once while polling only the latest page", async (
 	fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
 	await screen.findByText("Earlier work");
 	expect(conversationReads.map((url) => url.searchParams.get("beforeSequence"))).toContain("201");
-	expect(conversationReads.every((url) => url.searchParams.get("limit") === "200")).toBe(true);
+	// A remote chat reads a small live page, larger older pages, and cut tool output.
+	expect(conversationReads.map((url) => url.searchParams.get("limit"))).toEqual(["30", "100"]);
+	expect(conversationReads.every((url) => url.searchParams.get("outputLimit") === "512")).toBe(true);
+	// What the event stream does for each conversation event of an open chat.
+	act(() => refreshRemoteConversationOnce(queryClient, "session-1", "box-a"));
 	await screen.findByText("Latest update 2", {}, { timeout: 4_000 });
 	expect(screen.getByText("Sliding window edge")).toBeInTheDocument();
 	expect(screen.getByText("Earlier work")).toBeInTheDocument();
@@ -619,12 +713,13 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	const message = await screen.findByRole("combobox", { name: "Message the agent" });
 	await typeInLexicalEditor(message, "Continue the task");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await screen.findByText(/delivery wasn’t confirmed/);
+	// The lost send waits beside the box with its delivery ID.
+	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-a"); });
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
 	await act(async () => { await connectHost("http://box-a:3001"); });
-	await screen.findByRole("button", { name: "Retry message safely" });
-	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([
@@ -713,12 +808,13 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(await screen.findByText("Review on port 4001")).toBeInTheDocument();
 	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Review this change");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await screen.findByText(/delivery wasn’t confirmed/);
+	// The lost send waits beside the box with its delivery ID.
+	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-b"); });
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
 	await act(async () => { await connectHost("http://box-b:3001"); });
-	await screen.findByRole("button", { name: "Retry message safely" });
-	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
+	await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
+	await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 	await waitFor(() => expect(deliveryIds).toHaveLength(2));
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([

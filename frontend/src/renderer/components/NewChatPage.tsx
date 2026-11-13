@@ -1,19 +1,24 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { Cloud, Folder, Plus, Smartphone, StickyNote } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Cloud, Folder, Plus, Smartphone, StickyNote } from "@/components/app-icons";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
-import { chatDraftScopeKey, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
+import { dropReportPrompt, sessionNameFromBrief } from "../lib/report-problem";
+import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
-import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, CLOUD_STANDALONE_WORKSPACE_ID, isScratchpadWorkspace, STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { STANDALONE_AGENTS_FEATURE } from "../lib/cloud-offering";
+import { standaloneAgentProjectId } from "../lib/cloud-standalone-agents";
 import type { ApprovalMode, ChatConfigOption, ChatConfigOptionValue, ChatModel, ConversationSnapshot, TurnSettings } from "../types/conversation";
 import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
@@ -22,19 +27,22 @@ import { startingConversationSnapshot } from "./chat/OrchestratorStartingChat";
 import { LaunchSettingsBar, rememberLaunchSettings, rememberOpeningStart, type LaunchSettings } from "./chat/LaunchSettingsBar";
 import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar } from "./chat/TurnSettingsBar";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
-import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
+import { fetchDevices, isPhone, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
+import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 
 /**
  * New task as a chat that has no session yet. The first send creates the
  * session; the page keeps the brief on screen and hands it to the session's own
  * chat, so starting a task reads as one continuous conversation.
  */
-export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?: string }) {
+// A page opened from Report a problem is `report`: its agent runs on Scratchpad only.
+export function NewChatPage({ projectId, hostId, report }: { projectId: string; hostId?: string; report?: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
@@ -60,7 +68,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// One draft per host, so switching project keeps what was typed.
 	const hostKey = hostId ?? "local";
 	const draftId = `new-chat:${hostKey}`;
-	const draftScope = useMemo(() => ({ sessionId: draftId, incarnation: draftId }), [draftId]);
+	const draftRevision = useUiStore((state) => state.newChatDraftRevision);
+	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
 	const [echo, setEcho] = useState<ConversationLocalEcho>();
 	// The settings bar the brief was sent with, held still until the session takes over.
 	const [launched, setLaunched] = useState<LaunchSettings>();
@@ -106,6 +115,21 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		},
 	});
 	const stagePrepared = useStageAttachments(preparedId, hostId);
+	// A Cloud task carries files when its control plane takes them: they ride
+	// the first message of its Chat session, up to the size one upload may be.
+	// A Cloud standalone agent starts without them (createCloudTask).
+	const cloudOffering = useCloudOffering(task.isCloudProject);
+	const cloudTaskTakesFiles = task.isCloudProject && projectId !== CLOUD_STANDALONE_WORKSPACE_ID;
+	const cloudFiles = useMemo(() => cloudTaskTakesFiles && cloudOffering.maxAttachmentBytes !== undefined
+		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
+	[cloudOffering.maxAttachmentBytes, cloudTaskTakesFiles]);
+	// A draft keeps the files it brought from a target that takes them; here
+	// they stay with why this target takes none, until they are removed.
+	const attachmentsRefusal = projectId === CLOUD_STANDALONE_WORKSPACE_ID && task.isCloudProject
+		? t("newTask.cloudStandaloneNoFiles", { defaultValue: "Files can't start a standalone agent. Remove them to continue." })
+		: task.isCloudProject && cloudOffering.loaded && !cloudFiles
+			? t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
+			: undefined;
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
 	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);
@@ -168,10 +192,25 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		if (!pendingLaunch || pendingLaunch.projectId === projectId) return;
 		void navigate({
 			to: "/new",
-			search: { project: pendingLaunch.projectId === STANDALONE_WORKSPACE_ID ? undefined : pendingLaunch.projectId, host: hostId },
+			search: { project: pendingLaunch.projectId === STANDALONE_WORKSPACE_ID ? undefined : pendingLaunch.projectId, host: hostId, report },
 			replace: true,
 		});
-	}, [hostId, navigate, pendingLaunch, projectId]);
+	}, [hostId, navigate, pendingLaunch, projectId, report]);
+	// A request placed before the Cloud lists answered, or an old link, can name
+	// a Cloud standalone agent's project. An agent takes no new task: once the
+	// lists know it, the page moves to where one starts, another agent beside the
+	// person's own and the Scratchpad beside one shared with them. A report page
+	// already goes back to Scratchpad by itself (below), keeping its report flag.
+	const listedWorkspaces = useWorkspaceQuery({ enabled: !hostId }).data;
+	const agentWorkspace = hostId ? undefined : listedWorkspaces?.find((workspace) => workspace.id === projectId && workspace.standaloneAgent);
+	useEffect(() => {
+		if (!agentWorkspace || pendingLaunch || report) return;
+		void navigate({
+			to: "/new",
+			search: { project: agentWorkspace.shared ? undefined : CLOUD_STANDALONE_WORKSPACE_ID, host: undefined },
+			replace: true,
+		});
+	}, [agentWorkspace, navigate, pendingLaunch, report]);
 	const resolveLaunch = (clientMessageId: string) => {
 		clearPendingLaunch(hostKey, clientMessageId);
 		setLaunchRevision((revision) => revision + 1);
@@ -228,13 +267,15 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		}
 		// A Cloud task is already on the board (the launch refreshed the Cloud list).
 		if (!taskRef.current.isCloudProject) await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(target.hostId) });
+		// A Cloud standalone agent opens in the project the control plane made for it.
+		const sessionProjectId = target.projectId === CLOUD_STANDALONE_WORKSPACE_ID ? standaloneAgentProjectId(sessionId) : target.projectId;
 		// After the composer settles this send, so its draft never outlives the page.
 		// Someone who has since left, or opened another new task, stays where they are.
 		setTimeout(() => {
 			if (!mounted.current) return;
 			const here = targetRef.current;
 			if (here.projectId === target.projectId && here.hostId === target.hostId) {
-				void navigate({ ...sessionNavigateTarget(target.projectId, sessionId, target.hostId), replace: true });
+				void navigate({ ...sessionNavigateTarget(sessionProjectId, sessionId, target.hostId), replace: true });
 				return;
 			}
 			// The page now shows another project: the task is in the sidebar, and this
@@ -286,7 +327,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			if (saved && !sendIsUncertain(error)) setRefusedRetry(apiErrorMessage(error, t("newTask.unableToStart")));
 			if (sendIsUncertain(error) || saved) throw error;
 			resolveLaunch(clientMessageId);
-			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
+			throw Object.assign(apiErrorException(error, t("newTask.unableToStart")), { code: "TASK_CREATE_FAILED" });
 		}
 	};
 
@@ -328,7 +369,21 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const pending = Boolean(echo);
 	const frozen = pending || Boolean(pendingLaunch);
 	const frozenSettings = launched ?? pendingLaunch?.settings;
+	// A saved send took a report page to its project; once settled, the report goes back.
+	useEffect(() => {
+		if (!report || frozen || projectId === STANDALONE_WORKSPACE_ID) return;
+		void navigate({ to: "/new", search: { host: hostId, report }, replace: true });
+	}, [frozen, hostId, navigate, projectId, report]);
+	useEffect(() => {
+		if (!report && !frozen) dropReportPrompt(draftScope);
+	}, [draftScope, frozen, report]);
 	pendingRef.current = pending;
+	// From the send on, the shell gives this page the session's top bar, before the
+	// first message paints, so the message sits where the session shows it.
+	useLayoutEffect(() => {
+		useUiStore.getState().setNewChatSending(pending);
+		return () => useUiStore.getState().setNewChatSending(false);
+	}, [pending]);
 	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
 		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
 			<span>{task.error}</span>
@@ -355,9 +410,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
-			<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
-				{t("newTask.modelNotice.retry")}
-			</Button>
+			{task.modelWarningRetries ? (
+				<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void task.refreshModels().catch(() => undefined)}>
+					{t("newTask.modelNotice.retry")}
+				</Button>
+			) : null}
 		</div>
 	) : task.modelWarning;
 
@@ -369,21 +426,32 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			<div aria-hidden="true" className="new-chat-topbar flex h-toolbar w-full shrink-0 overflow-hidden">
 				<SessionTabsTopbar hideActions tabs={null} />
 			</div>
+			{/* The placeholder bar above is its drag region; without it (bar-less panel) this keeps the top edge draggable. */}
+			<BareTopbarDragStrip />
 			<ChatWorkspace
 				// A different project is a different worktree: the composer reloads its
-				// draft (text kept, staged files dropped above).
-				key={projectId}
+				// draft (text kept, staged files dropped above). So does a draft written
+				// from outside this page.
+				key={`${projectId}:${draftRevision}`}
 				snapshot={snapshot}
 				uiSessionId={draftId}
+				// The pending launch below tracks its own unanswered send.
+				parkUnsentSends={false}
 				// The session is titled after its brief, so the tab already reads that way.
-				sessionTitle={echo ? echo.text.trim().slice(0, 100) : t("command.newTask")}
+				sessionTitle={echo ? sessionNameFromBrief(echo.text) : t("command.newTask")}
 				sessionRole="worker"
 				hideHeader
 				centerInWindow
+				welcomeHeading={report ? t("report.heading") : undefined}
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				// A Cloud task cannot carry files yet, so its composer offers none.
-				holdAttachments={!task.isCloudProject}
+				// A Cloud task whose control plane takes no files offers none. A send
+				// whose answer was lost keeps the files it went with until its outcome
+				// is known: its retry carries them under the same request, and only a
+				// new send meets a target that takes none.
+				holdAttachments={!task.isCloudProject || Boolean(cloudFiles) || Boolean(pendingLaunch)}
+				cloudAttachments={cloudFiles}
+				attachmentsRefusal={pendingLaunch ? undefined : attachmentsRefusal}
 				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
@@ -391,7 +459,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				skills={skills}
 				composerTray={
 					<>
-						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
+						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen || report} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
 						{hostId ? null : <MobileConnected />}
 					</>
 				}
@@ -416,6 +484,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
 								projectId: task.catalogProjectId,
+								cloudOrgId: task.catalogCloudOrgId,
 								hostId,
 								agents: task.agentChoices,
 								disabled: task.agent.disabled,
@@ -449,7 +518,10 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 		choice.value === item.id || choice.name === agentModelDisplayLabel(harness, item.displayName));
 	if (models.some((item) => item.id !== "default" && !listed(item))) return undefined;
 	// Only choices a new task can start with: those AO's model list also has.
-	const modelChoices = model.choices.filter((choice) => catalogModelFor(choice, harness, models));
+	const modelChoices = model.choices.flatMap((choice) => {
+		const listed = catalogModelFor(choice, harness, models);
+		return listed ? [listed.hint ? { ...choice, hint: listed.hint } : choice] : [];
+	});
 	const chosen = models.find((item) => item.id === settings.model);
 	const label = chosen ? agentModelDisplayLabel(harness, chosen.displayName) : undefined;
 	const modelValue = modelChoices.find((choice) => choice.value === settings.model)?.value ??
@@ -563,23 +635,37 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 	const localWorkspaces = useWorkspaceQuery().data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces().data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
+	// A Cloud standalone agent is offered beside the local scratchpad wherever
+	// this machine's Cloud workspace starts them.
+	const offering = useCloudOffering(!hostId);
+	const cloudStandalone = !hostId && offering.ready && Boolean(offering.org) && offering.features.includes(STANDALONE_AGENTS_FEATURE);
 	// A Cloud project's page lists Cloud projects beside local ones; a local
 	// project's page lists local projects only, as it always has.
-	const onCloudProject = workspaces.some((workspace) => workspace.id === projectId && workspace.kind === CLOUD_PROJECT_KIND);
+	const onCloudProject = projectId === CLOUD_STANDALONE_WORKSPACE_ID ||
+		workspaces.some((workspace) => workspace.id === projectId && workspace.kind === CLOUD_PROJECT_KIND);
+	// Scratchpads, the local one and Cloud standalone agents' projects, are not projects to pick.
 	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND &&
+		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && !isScratchpadWorkspace(workspace) &&
 			(onCloudProject || workspace.kind !== CLOUD_PROJECT_KIND),
 	);
-	const cloudProjectIds = new Set(projects.filter((project) => project.kind === CLOUD_PROJECT_KIND).map((project) => project.id));
+	const cloudProjectIds = new Set([
+		CLOUD_STANDALONE_WORKSPACE_ID,
+		...projects.filter((project) => project.kind === CLOUD_PROJECT_KIND).map((project) => project.id),
+	]);
 	const projectOptions = [
 		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
+		...(cloudStandalone || projectId === CLOUD_STANDALONE_WORKSPACE_ID
+			? [{ value: CLOUD_STANDALONE_WORKSPACE_ID, label: t("standalone.cloudWorkspaceName") }]
+			: []),
 		...projects.map((project) => ({ value: project.id, label: project.name })),
 	];
 	// A project that is not (or not yet) listed, such as one still loading or deleted,
 	// reads as unselected rather than as the scratchpad.
 	const selectedProjectName = projectId === STANDALONE_WORKSPACE_ID
 		? t("standalone.workspaceName")
-		: projects.find((project) => project.id === projectId)?.name ?? t("newTask.selectProject");
+		: projectId === CLOUD_STANDALONE_WORKSPACE_ID
+			? t("standalone.cloudWorkspaceName")
+			: projects.find((project) => project.id === projectId)?.name ?? t("newTask.selectProject");
 	const hostLabel = hostId ? labelForHost(hostId) ?? hostId : undefined;
 	const requestCreateProject = useUiStore((state) => state.requestCreateProject);
 	return (
@@ -591,6 +677,7 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 			disabled={disabled}
 			menuAlign="start"
 			menuClassName="w-48 max-h-72"
+			triggerVariant="ghost"
 			triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
 			showCaret={false}
 			// Icon and label share the row's colour, so hover changes both together.
@@ -628,7 +715,7 @@ function MobileConnected() {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const { data } = useQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices, refetchInterval: 10_000, retry: false });
-	const live = data?.filter((device) => device.live) ?? [];
+	const live = data?.filter((device) => device.live && isPhone(device)) ?? [];
 	if (live.length === 0) return null;
 	return (
 		<Button

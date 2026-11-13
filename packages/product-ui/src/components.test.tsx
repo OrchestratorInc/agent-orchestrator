@@ -120,6 +120,51 @@ describe("portable leaf components", () => {
 		expect(screen.getByText("feature → main")).toHaveClass("break-words");
 	});
 
+	it("puts the PR view card's branches, size and author on one line", () => {
+		const { rerender } = render(
+			<PRSummaryMeta
+				countNounLabel={(count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`}
+				externalLink={ExternalLink}
+				inline
+				pr={{ provider: "github", author: "Meraj-08", sourceBranch: "edit/cli", targetBranch: "edit/base", changedFiles: 3, additions: 89, deletions: 1 }}
+			/>,
+		);
+		const line = screen.getByTestId("pr-meta");
+		// Head, then base; files, the diff with a real minus sign, then the avatar.
+		expect(line).toHaveTextContent(/^edit\/cli.*→.*edit\/base.*3 files\+89−1/);
+		expect(line).not.toHaveClass("font-mono");
+		// The author's name is the avatar's accessible name, not text on the line.
+		expect(screen.getByRole("link", { name: "Meraj-08" })).toHaveAttribute("href", "https://github.com/Meraj-08");
+		expect(line).not.toHaveTextContent("Meraj-08");
+		expect(screen.getByText("89 added, 1 removed")).toHaveClass("sr-only");
+
+		// A long head keeps its first and last segments; screen readers hear it whole.
+		rerender(
+			<PRSummaryMeta
+				countNounLabel={(count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`}
+				externalLink={ExternalLink}
+				inline
+				openedViaLabel="via Orchestrator"
+				pr={{
+					provider: "github",
+					author: "ao-by-untrivial[bot]",
+					openedBy: { name: "Ada Lovelace", githubLogin: "ada" },
+					sourceBranch: "ao/taskr-edit-docs/document-taskr-edit",
+					targetBranch: "edit/cli",
+					changedFiles: 165,
+					additions: 21018,
+					deletions: 664,
+				}}
+			/>,
+		);
+		expect(screen.getByText("ao/…/document-taskr-edit")).toHaveAttribute("aria-hidden", "true");
+		expect(screen.getByText("ao/taskr-edit-docs/document-taskr-edit")).toHaveClass("sr-only");
+		expect(screen.getByText("+21,018")).toBeInTheDocument();
+		expect(screen.getByText("−664")).toBeInTheDocument();
+		// A PR AO's app opened names the person, and says so.
+		expect(screen.getByRole("link", { name: "ada via Orchestrator" })).toHaveAttribute("href", "https://github.com/ada");
+	});
+
 	it("renders precomputed PR presentation without controller dependencies", () => {
 		const presentation: PRCardPresentation = {
 			primary: {
@@ -170,6 +215,152 @@ describe("portable leaf components", () => {
 		expect(detail.parentElement).toHaveClass("flex", "items-baseline");
 		expect(detail.parentElement).toContainElement(screen.getByRole("button", { name: "View review details ↗" }));
 		expect(detail.closest(".grid")).toHaveClass("grid-cols-1");
+	});
+
+	it("leads with what's in the way and opens everything else in one click", async () => {
+		const presentation: PRCardPresentation = {
+			primary: { key: "lifecycle", label: "Not mergeable yet", tone: "error", links: [] },
+			supporting: [],
+			statusRows: [{ key: "lifecycle", label: "Not mergeable yet", tone: "error", links: [] }],
+			readinessRows: [
+				{ key: "merge", label: "No conflicts", tone: "success", links: [] },
+				{ key: "ci", label: "Checks failing", href: "https://example.com/checks", tone: "error", links: [] },
+				{ key: "review", label: "No reviews yet", tone: "passive", links: [] },
+			],
+			readinessExplained: true,
+			readiness: { label: "Not mergeable yet", detail: "Failing checks block this PR.", tone: "error" },
+		};
+		render(
+			<PRCardStatusSummary
+				action={<button type="button">Merge</button>}
+				compactReadiness
+				externalLink={ExternalLink}
+				presentation={presentation}
+				readinessDetails={{ ci: <p>format</p> }}
+			/>,
+		);
+
+		const toggle = screen.getByRole("button", { name: "Checks failing" });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("link", { name: "Checks failing" })).toHaveAttribute("href", "https://example.com/checks");
+		expect(screen.queryByText("No conflicts")).not.toBeInTheDocument();
+		expect(screen.queryByText("format")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
+		expect(screen.queryByText("No reviews yet")).not.toBeInTheDocument();
+		expect(screen.queryByText("Not mergeable yet")).not.toBeInTheDocument();
+
+		fireEvent.click(toggle);
+
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(await screen.findByText("format")).toBeInTheDocument();
+		expect(screen.getByText("No conflicts")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "No conflicts" })).not.toBeInTheDocument();
+	});
+
+	it("says the checks row as counts worst first, each with its own glyph", () => {
+		render(
+			<PRCardStatusSummary
+				compactReadiness
+				externalLink={ExternalLink}
+				presentation={{
+					primary: { key: "ci", label: "Checks failing", tone: "error", links: [] },
+					supporting: [],
+					readinessRows: [
+						{ key: "merge", label: "No conflicts", tone: "success", links: [] },
+						{
+							key: "ci",
+							label: "Checks failing",
+							tone: "error",
+							links: [],
+							checks: {
+								title: "Checks",
+								counts: [
+									{ state: "failed", count: 2, label: "2 failing" },
+									{ state: "running", count: 1, label: "1 running" },
+									{ state: "passed", count: 9, label: "9 passed" },
+								],
+							},
+						},
+					],
+					readinessExplained: true,
+					readiness: { label: "Can't merge yet", detail: "", tone: "error" },
+				}}
+			/>,
+		);
+		const tally = screen.getByTestId("pr-checks-tally");
+		expect(tally).toHaveTextContent("Checks2 failing1 running9 passed");
+		// The counts stand in for the verdict, so it isn't said twice.
+		expect(screen.queryByText("Checks failing")).not.toBeInTheDocument();
+		expect([...tally.querySelectorAll("[data-state]")].map((count) => count.getAttribute("data-state"))).toEqual(["failed", "running", "passed"]);
+		// Each count has a shape, not only a colour; only the running one spins.
+		expect(tally.querySelector('[data-state="failed"] svg')).toHaveClass("icon-check-failed");
+		expect(tally.querySelector('[data-state="running"] svg')).toHaveClass("motion-safe:animate-spin");
+		expect(tally.querySelector('[data-state="passed"] svg')).not.toHaveClass("motion-safe:animate-spin");
+		// A row without a link of its own has no arrow beside it.
+		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+	});
+
+	it("still lists the failed checks when a conflict leads", async () => {
+		render(
+			<PRCardStatusSummary
+				compactReadiness
+				externalLink={ExternalLink}
+				presentation={{
+					primary: { key: "merge", label: "Merge conflict", tone: "error", links: [] },
+					supporting: [],
+					readinessRows: [
+						{ key: "merge", label: "Merge conflict", tone: "error", links: [] },
+						{ key: "ci", label: "Checks failing", tone: "error", links: [] },
+					],
+					readinessExplained: true,
+					readiness: { label: "Not mergeable yet", detail: "Resolve the conflict.", tone: "error" },
+				}}
+				readinessDetails={{ ci: <p>format</p> }}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "Merge conflict" }));
+		expect(await screen.findByText("Checks failing")).toBeInTheDocument();
+		expect(screen.getByText("format")).toBeInTheDocument();
+	});
+
+	it("leads with the checks when nothing is in the way, and has no dropdown with nothing to open", () => {
+		const presentation: PRCardPresentation = {
+			primary: { key: "merge", label: "Ready to merge", tone: "success", links: [] },
+			supporting: [],
+			readinessRows: [
+				{ key: "merge", label: "No conflicts", tone: "success", links: [] },
+				{ key: "ci", label: "Checks passing", href: "https://example.com/checks", tone: "success", links: [] },
+			],
+			readinessExplained: true,
+			readiness: { label: "Mergeable", detail: "Ready.", tone: "success" },
+		};
+		const { rerender } = render(<PRCardStatusSummary compactReadiness externalLink={ExternalLink} presentation={presentation} />);
+		expect(screen.getByRole("button", { name: "Checks passing" })).toBeInTheDocument();
+
+		rerender(<PRCardStatusSummary compactReadiness externalLink={ExternalLink} presentation={{ ...presentation, readinessRows: presentation.readinessRows?.slice(1) }} />);
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /Checks passing/ })).toHaveAttribute("href", "https://example.com/checks");
+	});
+
+	it("leads with the verdict when no fact explains it, with why in the dropdown", async () => {
+		render(
+			<PRCardStatusSummary
+				compactReadiness
+				externalLink={ExternalLink}
+				presentation={{
+					primary: { key: "merge", label: "Merge blocked", tone: "warning", links: [] },
+					supporting: [],
+					readinessRows: [{ key: "merge", label: "No conflicts", tone: "success", links: [] }],
+					readinessExplained: false,
+					readiness: { label: "Not mergeable yet", detail: "GitHub reports this can't be merged.", tone: "error" },
+				}}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "Not mergeable yet" }));
+		expect(await screen.findByText("GitHub reports this can't be merged.")).toBeInTheDocument();
+		expect(screen.getByText("No conflicts")).toBeInTheDocument();
 	});
 
 	it("computes overflow against the requested link limit", () => {

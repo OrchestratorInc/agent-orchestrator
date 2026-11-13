@@ -436,12 +436,13 @@ func TestOpenCommandTerminalStartsTrustedCommandInDedicatedAuthWorkspace(t *test
 		t.Errorf("argv = %#v, want []string{\"pi\"}", got)
 	}
 	wantRecord := ShellTerminalRecord{
-		HandleID:   "shellterm-test1",
-		WorkingDir: authWorkspace,
-		Title:      "Log in to Pi",
-		AppRunID:   testAppRunID,
-		Transient:  true,
-		CreatedAt:  time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		HandleID:      "shellterm-test1",
+		WorkingDir:    authWorkspace,
+		Title:         "Log in to Pi",
+		TitleExplicit: true,
+		AppRunID:      testAppRunID,
+		Transient:     true,
+		CreatedAt:     time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
 	}
 	if !reflect.DeepEqual(st.records, []ShellTerminalRecord{wantRecord}) {
 		t.Errorf("records = %#v, want %#v", st.records, []ShellTerminalRecord{wantRecord})
@@ -1956,6 +1957,88 @@ func TestCloseShellTerminalDestroysRuntimeAndDeletesRecord(t *testing.T) {
 	}
 }
 
+func TestGuidedAuthTerminalStaysOutOfNormalTerminalList(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	hidden, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Guided login", HideFromList: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Terminal fallback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].HandleID != visible.HandleID {
+		t.Fatalf("listed=%+v, hidden=%s", listed, hidden.HandleID)
+	}
+	delete(rt.aliveByHandle, hidden.HandleID) // Native login command exited.
+	listed, err = svc.ListShellTerminalsForCurrentAppRun(t.Context())
+	if err != nil || len(listed) != 1 || listed[0].HandleID != visible.HandleID {
+		t.Fatalf("list after native exit=%+v err=%v", listed, err)
+	}
+	if observed, err := svc.ObserveAuthTerminal(t.Context(), hidden.HandleID); err != nil || observed.Alive {
+		t.Fatalf("guided login lost exit observation: %+v, %v", observed, err)
+	}
+	if err := svc.CloseShellTerminal(t.Context(), hidden.HandleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svc.hiddenAuthTerminals[hidden.HandleID]; ok {
+		t.Fatal("hidden handle retained after close")
+	}
+}
+
+func TestGuidedAuthTerminalObservationAndInputArePrivate(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "private terminal frame"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	term, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Guided login", HideFromList: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.ObserveAuthTerminal(t.Context(), term.HandleID)
+	if err != nil || got.Output != rt.output || !got.Alive {
+		t.Fatalf("observation=%+v err=%v", got, err)
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.input != "\x1b[B" {
+			t.Fatalf("sent=%q", sent.input)
+		}
+	default:
+		t.Fatal("no menu key sent")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "3"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.input != "3" {
+			t.Fatalf("sent=%q", sent.input)
+		}
+	default:
+		t.Fatal("no digit sent")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "arbitrary"); err == nil {
+		t.Fatal("accepted arbitrary PTY input")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "0"); err == nil {
+		t.Fatal("accepted a digit outside the fixed action set")
+	}
+	if _, err := svc.ObserveAuthTerminal(t.Context(), "missing"); err == nil {
+		t.Fatal("observed unrelated PTY")
+	}
+}
+
 func TestCloseShellTerminalReturnsNotFoundForUnknownHandle(t *testing.T) {
 	svc := newTestService(newFakeShellRuntime(), &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
 
@@ -2508,5 +2591,23 @@ func TestOpenCommandTerminalRenderedSkipStateOverridesStaleRawMarker(t *testing.
 	case got := <-rt.sentCh:
 		t.Fatalf("initial input sent while rendered authentication picker is open: %#v", got)
 	case <-time.After(2 * initialInputPollInterval):
+	}
+}
+
+// A restarted daemon in the same app launch must still see the trusted command
+// terminals its predecessor opened, so agent auth can keep excluding logins.
+func TestListCommandTerminalsForCurrentAppRunReturnsOnlyThisLaunchesTrustedTerminals(t *testing.T) {
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
+		{HandleID: "user-shell", AppRunID: testAppRunID, Title: "Shell 1"},
+		{HandleID: "auth-current", AppRunID: testAppRunID, Title: "Log in to Codex", Transient: true},
+		{HandleID: "auth-previous", AppRunID: "previous", Title: "Log in to Codex", Transient: true},
+	}}
+	svc := newTestService(newFakeShellRuntime(), st, nil)
+	got, err := svc.ListCommandTerminalsForCurrentAppRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].HandleID != "auth-current" || got[0].Title != "Log in to Codex" {
+		t.Fatalf("command terminals = %+v, want only this launch's trusted terminal", got)
 	}
 }

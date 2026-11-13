@@ -66,6 +66,14 @@ type controllerEpochStore interface {
 		string,
 		time.Time,
 	) (bool, error)
+	CommitSessionControllerEpochArchivedChat(
+		context.Context,
+		domain.SessionID,
+		domain.SessionMode,
+		domain.SessionMode,
+		string,
+		time.Time,
+	) (bool, error)
 	RestoreSessionControllerEpoch(
 		context.Context,
 		domain.SessionID,
@@ -467,8 +475,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		}
 		// AO destroyed this launch's terminal on purpose and kept the session
 		// (an agent exit); Resume builds a new one. Its death is not a crash.
-		if cur.Activity.State == domain.ActivityExited && currentLaunch != "" &&
-			cur.Metadata.RuntimeReleasedLaunchID == currentLaunch {
+		if cur.RuntimeReleased() {
 			return cur, false
 		}
 		if !runtimeClearlyDead(f, cur.Activity, now, m.window) {
@@ -928,6 +935,12 @@ retryProjection:
 		(s.TranscriptPath != "" && rec.Metadata.NativeTranscriptPath != s.TranscriptPath) ||
 		checkpointChanged || subagentFacts != storedSubagentFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
+	nativeSessionChanged := s.AgentSessionID != "" &&
+		(rec.Metadata.AgentSessionID != s.AgentSessionID || rec.Metadata.AgentSessionIDLaunchID != s.LaunchID)
+	var usageReactivator sessionUsageReactivator
+	if nativeSessionChanged {
+		usageReactivator = m.usageReactivator
+	}
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
 	}
@@ -976,6 +989,9 @@ retryProjection:
 			goto retryProjection
 		}
 		m.mu.Unlock()
+		if nativeSessionChanged {
+			reactivateSessionUsage(ctx, id, rec.Metadata.RuntimeLaunchID, usageReactivator)
+		}
 		return nil
 	}
 	if metadataChanged {
@@ -1017,6 +1033,9 @@ retryProjection:
 				return nil
 			}
 			m.mu.Unlock()
+			if nativeSessionChanged {
+				reactivateSessionUsage(ctx, id, rec.Metadata.RuntimeLaunchID, usageReactivator)
+			}
 			return nil
 		}
 		m.mu.Unlock()
@@ -1064,6 +1083,9 @@ retryProjection:
 	resolutions := needsInputResolutions(rec, next, now)
 	waitingEvents := m.waitingInputEvents(next, prevState, prevAt, now)
 	m.mu.Unlock()
+	if nativeSessionChanged {
+		reactivateSessionUsage(ctx, id, next.Metadata.RuntimeLaunchID, usageReactivator)
+	}
 	if prevState != domain.ActivityIdle && next.Activity.State == domain.ActivityIdle {
 		m.operationGateMu.RLock()
 		gate := m.operationGate
@@ -1354,7 +1376,7 @@ func (m *Manager) waitingInputEvents(next domain.SessionRecord, prevState domain
 	// transition emits neither event so dwell covers the whole pause.
 	if !prevState.NeedsInput() && next.Activity.State.NeedsInput() && !next.IsTerminated {
 		events = append(events, ports.TelemetryEvent{
-			Name:       "ao.session.waiting_input_entered",
+			Name:       "ao.sessions.input_wait_started",
 			Source:     "lifecycle",
 			OccurredAt: now.UTC(),
 			Level:      ports.TelemetryLevelInfo,
@@ -1372,7 +1394,7 @@ func (m *Manager) waitingInputEvents(next domain.SessionRecord, prevState domain
 			"exited_to": string(next.Activity.State),
 		}
 		events = append(events, ports.TelemetryEvent{
-			Name:       "ao.session.waiting_input_exited",
+			Name:       "ao.sessions.input_wait_ended",
 			Source:     "lifecycle",
 			OccurredAt: now.UTC(),
 			Level:      ports.TelemetryLevelInfo,
@@ -1391,7 +1413,7 @@ func (m *Manager) emitTelemetry(ctx context.Context, ev ports.TelemetryEvent) {
 	if ev.RequestID == "" {
 		ev.RequestID = reqid.FromContext(ctx)
 	}
-	if ev.Name == "ao.session.waiting_input_entered" && ev.SessionID != nil {
+	if ev.Name == "ao.sessions.input_wait_started" && ev.SessionID != nil {
 		m.countWaitingInput(ctx, *ev.SessionID)
 	}
 	m.telemetry.Emit(ctx, ev)
@@ -1573,7 +1595,22 @@ func (m *Manager) CommitControllerEpoch(
 	startFresh bool,
 ) (bool, error) {
 	return m.changeControllerEpoch(
-		ctx, id, source, target, nativeConversationID, startFresh, false,
+		ctx, id, source, target, nativeConversationID, startFresh, false, false,
+	)
+}
+
+// CommitControllerEpochArchivedChat is CommitControllerEpoch for a degraded
+// identity-reset handoff: the source Chat may carry real messages and stays
+// archived instead of proving its root untouched (upstream issue #7724).
+func (m *Manager) CommitControllerEpochArchivedChat(
+	ctx context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	startFresh bool,
+) (bool, error) {
+	return m.changeControllerEpoch(
+		ctx, id, source, target, nativeConversationID, startFresh, false, true,
 	)
 }
 
@@ -1588,7 +1625,7 @@ func (m *Manager) RestoreControllerEpoch(
 	startFresh bool,
 ) (bool, error) {
 	return m.changeControllerEpoch(
-		ctx, id, source, target, nativeConversationID, startFresh, true,
+		ctx, id, source, target, nativeConversationID, startFresh, true, false,
 	)
 }
 
@@ -1597,7 +1634,7 @@ func (m *Manager) changeControllerEpoch(
 	id domain.SessionID,
 	source, target domain.SessionMode,
 	nativeConversationID string,
-	startFresh, restore bool,
+	startFresh, restore, archivedChat bool,
 ) (bool, error) {
 	if !source.Valid() || !target.Valid() || source == target {
 		return false, fmt.Errorf("lifecycle: invalid controller epoch %q -> %q", source, target)
@@ -1632,6 +1669,10 @@ func (m *Manager) changeControllerEpoch(
 	var changed bool
 	if restore {
 		changed, err = writer.RestoreSessionControllerEpoch(
+			ctx, id, source, target, nativeConversationID, now,
+		)
+	} else if archivedChat {
+		changed, err = writer.CommitSessionControllerEpochArchivedChat(
 			ctx, id, source, target, nativeConversationID, now,
 		)
 	} else {
@@ -1838,6 +1879,10 @@ func sameActivity(a, b domain.Activity) bool {
 }
 
 func mergeMetadata(base, in domain.SessionMetadata) domain.SessionMetadata {
+	if in.ImportSource != nil {
+		source := *in.ImportSource
+		base.ImportSource = &source
+	}
 	set := func(dst *string, v string) {
 		if v != "" {
 			*dst = v

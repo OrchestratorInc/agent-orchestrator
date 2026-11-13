@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -50,6 +51,7 @@ type Service struct {
 	terminals Terminals
 	// stopAgents stops every running agent on an account before it is removed.
 	stopAgents func(context.Context, string) error
+	limitLog   ports.AgentLimitReadingStore
 	log        *slog.Logger
 	now        func() time.Time
 
@@ -59,6 +61,7 @@ type Service struct {
 	// removing holds accounts being removed. No launch resolves to one, so an
 	// agent cannot start on a login AO is about to delete.
 	removing       map[string]bool
+	lastOrg        map[string]seenOrg
 	defaultChanged func(domain.AgentAccountProvider)
 	loginConfirmed func(domain.AgentAccount, time.Time)
 }
@@ -103,7 +106,7 @@ func New(store ports.AgentAccountStore, providers []ports.AgentAccountProviderCL
 	}
 	return &Service{
 		store: store, providers: byProvider, root: filepath.Clean(root), terminals: terminals, log: log,
-		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{},
+		now: func() time.Time { return time.Now().UTC() }, readings: map[string]*reading{}, logins: map[string]*login{}, removing: map[string]bool{}, lastOrg: map[string]seenOrg{},
 	}
 }
 
@@ -123,15 +126,79 @@ func (s *Service) SetAgentStopper(stop func(ctx context.Context, accountID strin
 	s.stopAgents = stop
 }
 
+// SetLimitLog late-binds where each limits read is kept.
+func (s *Service) SetLimitLog(log ports.AgentLimitReadingStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.limitLog = log
+}
+
+// KeepReadingLimits reads each account's limits again once its last reading is stale, so the window history keeps going while no screen asks for limits.
+func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !s.keepingLimits(ctx) {
+				continue
+			}
+			if _, err := s.List(ctx, false); err != nil && ctx.Err() == nil {
+				s.log.DebugContext(ctx, "background limits read failed", "error", err)
+			}
+		}
+	}
+}
+
+func (s *Service) keepingLimits(ctx context.Context) bool {
+	s.mu.Lock()
+	log := s.limitLog
+	s.mu.Unlock()
+	return log != nil && log.LimitHistoryEnabled(ctx)
+}
+
+func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
+	if len(limits.Windows) == 0 || !s.keepingLimits(ctx) {
+		return
+	}
+	s.mu.Lock()
+	log := s.limitLog
+	s.mu.Unlock()
+	at := limits.FetchedAt
+	if at.IsZero() {
+		at = s.now()
+	}
+	readings := make([]domain.AgentLimitReading, 0, len(limits.Windows))
+	for _, w := range limits.Windows {
+		readings = append(readings, domain.AgentLimitReading{
+			AccountID: account.ID, Provider: account.Provider, Email: email, Plan: plan, WindowID: w.ID, Label: w.Label,
+			DurationMinutes: w.DurationMinutes, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, ReadAt: at,
+		})
+	}
+	if err := log.RecordAgentLimitReadings(context.WithoutCancel(ctx), readings); err != nil {
+		s.log.WarnContext(ctx, "failed to record limit readings", "account", account.ID, "error", err)
+	}
+}
+
 // AccountView is an account with its latest readings, as the app shows it.
 type AccountView struct {
-	Account     domain.AgentAccount
-	Default     bool
-	SignedIn    bool
+	Account  domain.AgentAccount
+	Default  bool
+	SignedIn bool
+	// LoggedIn is any login the CLI launches with as this account, an API key
+	// included; a folder signed in as another login is not.
+	LoggedIn    bool
 	IdentityErr string
 	Limits      *domain.AgentAccountLimits
 	LimitsErr   string
+	SameLoginAs string
+	OrgID       string
+	OrgName     string
 }
+
+type seenOrg struct{ id, name string }
 
 // List returns every account, the computer's own first per provider. refresh
 // reads identity and limits again even when the last reading is fresh.
@@ -152,10 +219,15 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		def, _ := s.defaultID(ctx, account.Provider)
 		s.mu.Lock()
 		r := s.readings[account.ID]
+		lastOrg := s.lastOrg[account.ID]
 		s.mu.Unlock()
-		view := AccountView{Account: account, Default: def == account.ID}
+		view := AccountView{Account: account, Default: def == account.ID, OrgID: lastOrg.id, OrgName: lastOrg.name}
 		if r != nil {
 			view.SignedIn, view.IdentityErr, view.Limits, view.LimitsErr = r.identity.SignedIn, r.identityErr, r.limits, r.limitsErr
+			view.LoggedIn = r.identity.LoggedIn && !r.mismatch
+			if r.identity.SignedIn && r.identity.OrgID != "" {
+				view.OrgID, view.OrgName = r.identity.OrgID, r.identity.OrgName
+			}
 			if account.Device() {
 				view.Account.Email, view.Account.Plan = r.identity.Email, r.identity.Plan
 			} else if r.identity.Plan != "" {
@@ -164,7 +236,34 @@ func (s *Service) List(ctx context.Context, refresh bool) ([]AccountView, error)
 		}
 		views = append(views, view)
 	}
+	markSameLogin(views)
 	return views, nil
+}
+
+func markSameLogin(views []AccountView) {
+	for i := range views {
+		device := &views[i]
+		if !device.Account.Device() || !device.SignedIn || device.Account.Email == "" {
+			continue
+		}
+		for _, saved := range views {
+			if !saved.Account.Device() && saved.Account.Provider == device.Account.Provider && saved.SignedIn && strings.EqualFold(saved.Account.Email, device.Account.Email) && sameOrg(saved.OrgID, device.OrgID) {
+				device.SameLoginAs = saved.Account.ID
+				break
+			}
+		}
+	}
+}
+
+func sameOrg(a, b string) bool {
+	return a == "" || b == "" || a == b
+}
+
+func orgLabel(name, id string) string {
+	if name != "" {
+		return name
+	}
+	return id
 }
 
 func (s *Service) needsReading(id string, refresh bool) bool {
@@ -204,6 +303,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		}
 		s.mu.Unlock()
 	}
+	s.mu.Lock()
+	known := s.lastOrg[account.ID]
+	s.mu.Unlock()
 	switch {
 	case err != nil:
 	case !identity.SignedIn:
@@ -213,11 +315,28 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.identity.SignedIn = false
 		r.mismatch = true
 		r.identityErr = fmt.Sprintf("the folder is now signed in as %s, not %s", identity.Email, account.Email)
+	case !account.Device() && !sameOrg(known.id, identity.OrgID):
+		r.identity.SignedIn = false
+		r.mismatch = true
+		r.identityErr = fmt.Sprintf("the folder is now signed in to %s, not %s", orgLabel(identity.OrgName, identity.OrgID), orgLabel(known.name, known.id))
 	default:
 		if limits, limitsErr := provider.Limits(ctx, account.Home); limitsErr != nil {
 			r.limitsErr = limitsErr.Error()
+			s.mu.Lock()
+			if prev := s.readings[account.ID]; prev != nil && prev.limits != nil && strings.EqualFold(prev.identity.Email, identity.Email) {
+				r.limits = prev.limits
+			}
+			s.mu.Unlock()
 		} else {
 			r.limits = &limits
+			email, plan := identity.Email, identity.Plan
+			if email == "" {
+				email = account.Email
+			}
+			if plan == "" {
+				plan = account.Plan
+			}
+			s.recordLimits(ctx, account, email, plan, limits)
 		}
 	}
 	// A caller that went away (a closed request, a cancelled move) says nothing
@@ -228,11 +347,14 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	}
 	s.mu.Lock()
 	s.readings[account.ID] = r
+	if err == nil && r.identity.SignedIn && !r.mismatch && r.identity.OrgID != "" && !account.Device() {
+		s.lastOrg[account.ID] = seenOrg{id: r.identity.OrgID, name: r.identity.OrgName}
+	}
 	confirmed := s.loginConfirmed
 	s.mu.Unlock()
 	// The limits come from the provider's API under this login, so a reading
 	// that has them shows the login worked when the reading began.
-	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil {
+	if confirmed != nil && err == nil && r.identity.SignedIn && r.limits != nil && r.limitsErr == "" {
 		confirmed(account, r.at)
 	}
 	return r
@@ -345,6 +467,19 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	return identity, true
 }
 
+// DefaultLaunchEnv gives discovery the account a new task would use, without binding a session.
+func (s *Service) DefaultLaunchEnv(ctx context.Context, harness domain.AgentHarness) (map[string]string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return nil, nil
+	}
+	account, err := s.newSessionAccount(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return s.providers[p].LaunchEnv(account.Home), nil
+}
+
 // SetDefaultChanged late-binds what must hear that the account new sessions of
 // a provider start on, or its sign-in, may have changed (agent readiness).
 func (s *Service) SetDefaultChanged(changed func(domain.AgentAccountProvider)) {
@@ -402,6 +537,10 @@ func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountPr
 	account, err := s.find(ctx, def)
 	if err != nil {
 		return domain.AgentAccount{}, err
+	}
+	// A custom Codex model provider does not use the account's sign-in.
+	if p == domain.AgentAccountProviderCodex && codexagent.UsesCustomModelProvider() {
+		return account, nil
 	}
 	r := s.cachedReading(account.ID)
 	if !r.knownUnusable() {
@@ -529,7 +668,9 @@ func (s *Service) startLogin(ctx context.Context, p domain.AgentAccountProvider,
 		discard()
 		return LoginStart{}, err
 	}
-	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title})
+	terminal, err := terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{
+		Owner: "agentaccounts:" + string(p), Argv: argv, Env: provider.LaunchEnv(home), WorkingDir: home, Title: title,
+	})
 	if err != nil {
 		discard()
 		return LoginStart{}, fmt.Errorf("open sign-in terminal: %w", err)
@@ -549,7 +690,8 @@ const (
 	LoginComplete  LoginStatus = "complete"
 	LoginDuplicate LoginStatus = "duplicate"
 	// LoginMismatch is a sign-in again with another login than the account's.
-	LoginMismatch LoginStatus = "mismatch"
+	LoginMismatch        LoginStatus = "mismatch"
+	LoginNotSubscription LoginStatus = "not_subscription"
 )
 
 // VerifyLogin checks whether the sign-in finished, and saves the account when
@@ -568,8 +710,12 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return "", nil, fmt.Errorf("check sign-in: %w", err)
 	}
 	if !identity.SignedIn {
+		if identity.LoggedIn {
+			return LoginNotSubscription, nil, nil
+		}
 		return LoginWaiting, nil, nil
 	}
+	s.read(ctx, domain.AgentAccount{ID: domain.DeviceAgentAccountID(op.provider), Provider: op.provider})
 	views, err := s.List(ctx, false)
 	if err != nil {
 		return "", nil, err
@@ -581,10 +727,11 @@ func (s *Service) VerifyLogin(ctx context.Context, operationID string) (LoginSta
 		return "", nil, ports.ErrAgentAccountLoginUnknown
 	}
 	for _, view := range views {
-		if op.account != nil && view.Account.ID == op.account.ID {
+		if op.account != nil && (view.Account.ID == op.account.ID || view.Account.Device()) {
 			continue
 		}
-		if view.Account.Provider == op.provider && view.SignedIn && strings.EqualFold(view.Account.Email, identity.Email) {
+		heldBy := view.SignedIn || (op.account == nil && !view.Account.Device() && view.Account.Email != "")
+		if view.Account.Provider == op.provider && heldBy && strings.EqualFold(view.Account.Email, identity.Email) && sameOrg(view.OrgID, identity.OrgID) {
 			s.endLogin(ctx, op, true)
 			return LoginDuplicate, &view, nil
 		}
@@ -643,7 +790,10 @@ func (s *Service) finishSignInAgain(ctx context.Context, op *login, identity dom
 			saved = &views[i]
 		}
 	}
-	if op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email) {
+	s.mu.Lock()
+	known := s.lastOrg[op.account.ID]
+	s.mu.Unlock()
+	if (op.account.Email != "" && !strings.EqualFold(op.account.Email, identity.Email)) || !sameOrg(known.id, identity.OrgID) {
 		s.endLogin(ctx, op, true)
 		return LoginMismatch, saved, nil
 	}
@@ -757,6 +907,7 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 	s.removeFolder(account.Home)
 	s.mu.Lock()
 	delete(s.readings, accountID)
+	delete(s.lastOrg, accountID)
 	s.mu.Unlock()
 	s.notifyDefaultChanged(account.Provider)
 	return nil

@@ -1,8 +1,8 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Play } from "lucide-react";
+import { Play } from "@/components/app-icons";
 import { aoBridge } from "../lib/bridge";
-import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -49,7 +49,7 @@ export function ResumeAgentControl({
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 				params: { path: { sessionId: session.id } },
 			});
-			if (error) throw new Error(apiErrorMessage(error, `Failed to resume agent (${response.status})`));
+			if (error) throw apiErrorException(error, `Failed to resume agent (${response.status})`);
 			return data;
 		},
 		onSuccess: async (data) => {
@@ -82,7 +82,7 @@ export function ResumeAgentControl({
 				onClick={() => resume.mutate()}
 				size="sm"
 				type="button"
-				variant="outline"
+				variant="secondary"
 			>
 				<Play className="size-icon-sm" aria-hidden="true" />
 				{t("inspector.resumeAgent")}

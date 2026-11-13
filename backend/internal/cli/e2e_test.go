@@ -28,14 +28,15 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
 // aoBin is the path to the binary built once for the whole suite.
 var aoBin string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("AO_CLI_BATCH_HELPER") == "1" {
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "ao-e2e-bin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: mktemp:", err)
@@ -304,13 +305,13 @@ func TestE2E_SecondDaemonOnSameDataDir(t *testing.T) {
 	second := newEnv(t)
 	second.dataDir = first.dataDir
 	const shutdownTimeout = 100 * time.Millisecond
-	installerTimeout := max(shutdownTimeout, systeminstall.DefaultShutdownTimeout())
+	const installerTimeout = shutdownTimeout
 	wait := 8*shutdownTimeout + installerTimeout + 18*time.Second
 	// A regressed lock would let this daemon serve forever, so bound the run.
 	ctx, cancel := context.WithTimeout(context.Background(), wait+15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, aoBin, "daemon")
-	cmd.Env = append(second.environ(""), "AO_SHUTDOWN_TIMEOUT="+shutdownTimeout.String())
+	cmd.Env = append(second.environ(""), "AO_SHUTDOWN_TIMEOUT="+shutdownTimeout.String(), "AO_INSTALLER_SHUTDOWN_TIMEOUT="+installerTimeout.String())
 	cmd.WaitDelay = 5 * time.Second
 	b, err := cmd.CombinedOutput()
 	out := string(b)
