@@ -1,6 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { components } from "../../../../api/schema";
 import { probeAgentAuth } from "../../../hooks/useAgentAuth";
+import { invalidateAgentModelCatalogs } from "../../../hooks/useAgentModelsQuery";
 import { cacheAgentReadiness, type AgentReadinessSnapshot } from "../../../hooks/useAgentReadinessQuery";
 import { fetchInstallJobs, installJobsQueryKey, isActiveInstallJob } from "../../../hooks/useHarnessUpdates";
 import { apiClient } from "../../../lib/api-client";
@@ -86,6 +87,8 @@ export async function collectTroubleshootingSnapshot(agentId: AgentId, queryClie
 	if (isActiveInstallJob(job) || job.status === "interrupted") throw new Error("Installation verification did not finish. Run the checks again.");
 	onStage?.("authentication");
 	await probeAgentAuth(agentId);
+	// As after the Account tab's check: an open composer or picker drops a stale login error.
+	void invalidateAgentModelCatalogs(queryClient, agentId);
 	onStage?.("results");
 	const readiness = await apiClient.GET("/api/v1/agents/readiness");
 	if (readiness.error || !readiness.data) throw new Error("Fresh readiness results are unavailable.");

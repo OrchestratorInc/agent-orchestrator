@@ -1,5 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as agentModels from "../../../hooks/useAgentModelsQuery";
 import { apiClient } from "../../../lib/api-client";
 import { agentReadiness } from "../../../test/agent-readiness-fixtures";
 import { collectTroubleshootingSnapshot, troubleshootingIssueDraft, troubleshootingNextStep, troubleshootingPrompt, troubleshootingSnapshot, troubleshootingVerified } from "./harness-troubleshooting";
@@ -55,7 +56,9 @@ describe("fresh verification", () => {
 		const job = { target: "codex", status: "verifying", startedAt: "2026-10-23T00:00:00Z" };
 		const post = vi.spyOn(apiClient, "POST").mockResolvedValueOnce({ data: job } as never).mockResolvedValueOnce({ data: { supported: true } } as never);
 		vi.spyOn(apiClient, "GET").mockResolvedValueOnce({ data: { jobs: [{ ...job, status: "succeeded" }] } } as never).mockResolvedValueOnce({ data: { agents: [agentReadiness("codex")] } } as never);
-		const pending = collectTroubleshootingSnapshot("codex", new QueryClient(), "0.13.0", "win32", onStage);
+		const invalidateModels = vi.spyOn(agentModels, "invalidateAgentModelCatalogs").mockResolvedValue(undefined);
+		const queryClient = new QueryClient();
+		const pending = collectTroubleshootingSnapshot("codex", queryClient, "0.13.0", "win32", onStage);
 		await Promise.resolve();
 		expect(post).toHaveBeenCalledTimes(1);
 		expect(onStage.mock.calls).toEqual([["installation"]]);
@@ -65,6 +68,8 @@ describe("fresh verification", () => {
 		expect(post).toHaveBeenNthCalledWith(2, "/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } });
 		expect(troubleshootingVerified(result)).toBe(true);
 		expect(onStage.mock.calls).toEqual([["installation"], ["authentication"], ["results"]]);
+		// Open composers and pickers drop a login error cached before the probe.
+		expect(invalidateModels).toHaveBeenCalledWith(queryClient, "codex");
 	});
 
 	it("does not export a stale snapshot when the probe fails", async () => {
