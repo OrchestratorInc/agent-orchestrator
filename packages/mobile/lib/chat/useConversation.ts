@@ -91,7 +91,6 @@ export type ConversationAction =
 export type MobileConversation = {
 	snapshot?: ConversationSnapshot;
 	loading: boolean;
-	refreshing: boolean;
 	loadingOlder: boolean;
 	error?: string;
 	unavailable?: { code?: string; message: string };
@@ -160,7 +159,6 @@ export function useMobileConversation(
 		: { pages: [] as ConversationPage[], loading: true });
 	const [pages, setPages] = useState<ConversationPage[]>(initialState.pages);
 	const [loading, setLoading] = useState(initialState.loading);
-	const [refreshing, setRefreshing] = useState(false);
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
@@ -224,7 +222,6 @@ export function useMobileConversation(
 		// One read at a time, at most one more queued (see refreshQueue): every
 		// answer is shown, where a newer request used to discard the older one's.
 		// On a slow link that left the transcript still for the whole reply.
-		if (!refreshQueue.busy()) setRefreshing(true);
 		await refreshQueue.run(async (isCurrent) => {
 			try {
 				const live = options?.reviewId
@@ -247,7 +244,6 @@ export function useMobileConversation(
 				if (mounted.current && isCurrent()) setLoading(false);
 			}
 		});
-		if (mounted.current && !refreshQueue.busy()) setRefreshing(false);
 	}, [cacheKey, cfg, options?.reviewId, refreshQueue, sessionId]);
 
 	// The first change is read at once; changes after it at most every
@@ -601,7 +597,6 @@ export function useMobileConversation(
 	return {
 		snapshot,
 		loading,
-		refreshing,
 		loadingOlder,
 		error,
 		unavailable,
