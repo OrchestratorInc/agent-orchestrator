@@ -41,6 +41,7 @@ import type {
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
 	CloudCpOrgCoderConfigResponse,
+	CloudCpOrgMembersResponse,
 	CloudCpBillingLinkResponse,
 	CloudCpBillingSummary,
 	CloudCpPutOrgCoderConfigRequest,
@@ -200,6 +201,8 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpCreateOrganizationResponse>;
 	listMyInvitations(options?: CloudCpRequestOptions): Promise<CloudCpInvitationsResponse>;
+	/** The organization's active members; any member may read them. */
+	listOrgMembers(orgId: string, options?: CloudCpRequestOptions): Promise<CloudCpOrgMembersResponse>;
 
 	listProjects(
 		orgId: string,
@@ -877,6 +880,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		me: (o) => requestJson("GET", "/me", { signal: o?.signal }),
 		createOrganization: (body, o) => requestJson("POST", "/orgs", { body, signal: o?.signal }),
 		listMyInvitations: (o) => requestJson("GET", "/invitations", { signal: o?.signal }),
+		listOrgMembers: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/members`, { signal: o?.signal }),
 
 		listProjects: (orgId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/projects`, {
