@@ -56,4 +56,13 @@ describe("PR pills", () => {
 		// The three other merged PRs stay one click away.
 		expect(pills.getByTestId("pr-pills-earlier")).toHaveTextContent("+3 earlier");
 	});
+
+	it("names the repository from the PR's URL when the PR doesn't carry one", () => {
+		const bare = pr(7, { repo: "", url: "https://github.com/acme-platform/landing-site/pull/7" });
+		const other = pr(8, { repo: "acme-platform/control-plane", url: "https://github.com/acme-platform/control-plane/pull/8" });
+		render(<PRPills focused={bare} onFocus={() => {}} prs={[bare, other]} showRepository />);
+		const chip = within(screen.getByTestId("pr-pills")).getByRole("button", { pressed: true });
+		expect(chip).toHaveTextContent("landing-site#7");
+		expect(chip.getAttribute("title")).toContain("acme-platform/landing-site");
+	});
 });

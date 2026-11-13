@@ -1,7 +1,7 @@
 import { ChevronDown, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { prCanMerge, prHasNoChecks, prRepositoryLabels } from "../lib/pr-display";
+import { prCanMerge, prHasNoChecks, prRepositoryFromUrl, prRepositoryLabels } from "../lib/pr-display";
 import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { cn } from "../lib/utils";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -73,7 +73,9 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 				const status = t(dot.labelKey);
 				const pressed = prFocusKey(pr) === focusKey;
 				const branch = prFocusKey(pr) === branchKey;
-				const repository = showRepository && pr.repo ? repositoryLabels.get(pr.repo) ?? pr.repo : undefined;
+				// The repository comes from the PR, or from its URL when the PR doesn't say.
+				const fullRepository = showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined;
+				const repository = fullRepository ? repositoryLabels.get(fullRepository) ?? fullRepository : undefined;
 				return (
 					<button
 						aria-pressed={pressed}
@@ -85,7 +87,7 @@ export function PRPills({ branchPR, focused, onFocus, prs, showRepository }: {
 						)}
 						key={prFocusKey(pr)}
 						onClick={() => onFocus(pr)}
-						title={`${showRepository && pr.repo ? `${pr.repo} · ` : ""}${pr.title} · ${status}${branch ? ` · ${t("pr.others.checkedOut")}` : ""}`}
+						title={`${fullRepository ? `${fullRepository} · ` : ""}${pr.title} · ${status}${branch ? ` · ${t("pr.others.checkedOut")}` : ""}`}
 						type="button"
 					>
 						<span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full", dot.className, dot.breathe && "animate-status-pulse")} />
