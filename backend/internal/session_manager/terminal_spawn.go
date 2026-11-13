@@ -102,6 +102,7 @@ func (m *Manager) launchTerminalAgent(ctx context.Context, in terminalSpawn) (do
 		IssueID:          string(cfg.IssueID),
 		Config:           adapterConfig,
 		Permissions:      adapterConfig.Permissions,
+		Env:              env,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {

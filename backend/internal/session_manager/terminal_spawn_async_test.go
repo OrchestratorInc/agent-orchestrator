@@ -428,3 +428,28 @@ func TestSpawnAsyncTerminal_CarriesOutcomeTrace(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalLaunchConfigReceivesProjectEnvironment(t *testing.T) {
+	for _, async := range []bool{false, true} {
+		t.Run(fmt.Sprint(async), func(t *testing.T) {
+			m, st, _, _ := newAsyncTerminalManager(&fakeRuntime{}, &fakeMessenger{})
+			agent := &recordingAgent{}
+			m.agents = singleAgent{agent: agent}
+			project := st.projects["mer"]
+			project.Config.Env = map[string]string{"AO_TEST_LAUNCH_ENV": "present"}
+			st.projects["mer"] = project
+			deferred := deferredBackground(m)
+			cfg := asyncTerminalConfig("fix it")
+			cfg.Async = async
+			if _, _, _, err := m.Spawn(context.Background(), cfg); err != nil {
+				t.Fatal(err)
+			}
+			if async {
+				(*deferred)[0]()
+			}
+			if agent.lastLaunch.Env["AO_TEST_LAUNCH_ENV"] != "present" {
+				t.Fatal("agent launch config lost project environment")
+			}
+		})
+	}
+}
