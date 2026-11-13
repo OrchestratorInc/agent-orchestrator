@@ -7,13 +7,12 @@
  * picker still opens on click and names the model in its hover title.
  *
  * Close to the limit it is a warning; once the window is full, a clock and the
- * time until it resets. Only the icon carries colour.
+ * time until it resets, each in a softly tinted pill.
  */
 
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Clock } from "@/components/app-icons";
-import { cn } from "../../lib/utils";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 /** Where the warning replaces the model name. */
@@ -53,13 +52,13 @@ export function formatQuotaReset(seconds: number): string {
 export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
 	const { t } = useTranslation();
 	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatQuotaReset(quota.resetsIn) : undefined;
-	const appear = "animate-[quota-in_150ms_var(--ease-out)] motion-reduce:animate-none";
+	const kind = quota.kind === "session" ? "chat.quota.approaching" : "chat.quota.approachingWeekly";
 
 	// Full: nothing is left to use, so only when it comes back matters.
 	if (quota.percent >= 100) {
 		return (
-			<span data-quota-readout="" data-severity="full" className={cn("flex min-w-0 items-center gap-1.5 text-foreground", appear)}>
-				<Clock aria-hidden="true" className="size-3.5 shrink-0 text-status-exited" />
+			<span data-quota-readout="" data-severity="full" className="quota-pill">
+				<Clock aria-hidden="true" className="size-3 shrink-0" />
 				{resets ? (
 					<span className="tabular-nums" aria-label={t("chat.quota.resetsIn", { time: resets })}>{resets}</span>
 				) : (
@@ -71,9 +70,9 @@ export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
 
 	// Close: a warning is enough. The exact share lives in the hover title.
 	return (
-		<span data-quota-readout="" data-severity="warn" className={cn("flex min-w-0 items-center gap-1.5 text-foreground", appear)}>
-			<AlertTriangle aria-hidden="true" className="size-3.5 shrink-0 text-status-in-review" />
-			<span className="truncate">{t(quota.kind === "session" ? "chat.quota.approaching" : "chat.quota.approachingWeekly")}</span>
+		<span data-quota-readout="" data-severity="warn" className="quota-pill">
+			<AlertTriangle aria-hidden="true" className="size-3 shrink-0" />
+			<span className="truncate">{t(kind)}</span>
 		</span>
 	);
 }
