@@ -260,6 +260,7 @@ export function OptionMenuSubTrigger({
 	className,
 	label,
 	value,
+	detail,
 	children,
 	onClick,
 	onKeyDown,
@@ -268,11 +269,22 @@ export function OptionMenuSubTrigger({
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
 	label?: string;
 	value?: string;
+	/** A second line under the label and value, inside the same row. */
+	detail?: React.ReactNode;
 }) {
 	const allowReopen = useContext(AllowSubmenuReopen);
+	const main = (
+		<>
+			<span>{label}</span>
+			<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+				<span className="min-w-0 truncate">{value}</span>
+				<ChevronRight aria-hidden="true" className="size-3 shrink-0" />
+			</span>
+		</>
+	);
 	return (
 		<DropdownMenuPrimitive.SubTrigger
-			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", className)}
+			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", detail ? "flex-col items-stretch gap-1" : undefined, className)}
 			// Stop the click reaching the composer's click-to-focus handler without
 			// calling preventDefault, which Radix's composeEventHandlers reads as a
 			// signal to skip its own open/close handling.
@@ -293,15 +305,7 @@ export function OptionMenuSubTrigger({
 			}}
 			{...props}
 		>
-			{children ?? (
-				<>
-					<span>{label}</span>
-					<span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-						<span className="min-w-0 truncate">{value}</span>
-						<ChevronRight aria-hidden="true" className="size-3 shrink-0" />
-					</span>
-				</>
-			)}
+			{children ?? (detail ? <><span className="flex items-center justify-between gap-3">{main}</span>{detail}</> : main)}
 		</DropdownMenuPrimitive.SubTrigger>
 	);
 }

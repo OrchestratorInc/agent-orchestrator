@@ -136,7 +136,8 @@ function ContextReadout({ usage, compactsAt }: { usage: ConversationUsage; compa
 					aria-valuetext={`${exactUsage} tokens (${percent}%)`}
 				>
 					<svg aria-hidden="true" className="size-5 -rotate-90" viewBox="0 0 24 24">
-						<circle cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3" className="text-border" />
+						{/* The whole track in a faint tint of the fill, so a partial ring reads as a gauge, not a spinner. */}
+						<circle cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.22" />
 						<circle
 							cx="12" cy="12" fill="none" r="9" stroke="currentColor" strokeWidth="3"
 							strokeLinecap="round" pathLength="100"

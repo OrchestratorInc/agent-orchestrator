@@ -528,6 +528,7 @@ export function TurnSettingsBar({
 							toggles={grouped.toggles}
 							extraOptions={grouped.extra}
 							onChangeConfigOption={onChangeConfigOption ? applyOption : undefined}
+							notice={pickerNotice}
 						/>
 					) : null}
 
@@ -542,6 +543,7 @@ export function TurnSettingsBar({
 							extraOptions={grouped.extra}
 							disabled={optionDisabled}
 							onChange={applyOption}
+							notice={pickerNotice}
 						/>
 					) : null}
 
@@ -773,7 +775,9 @@ function ModelEffortPicker({
 	toggles = [],
 	extraOptions = [],
 	onChangeConfigOption,
+	notice,
 }: {
+	notice?: ReactNode;
 	models: ChatModel[];
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
@@ -817,7 +821,7 @@ function ModelEffortPicker({
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
 				<OptionMenuSub closeOnSelect>
-					<OptionMenuSubTrigger label="Model" value={modelLabel} />
+					<OptionMenuSubTrigger label="Model" value={modelLabel} detail={notice} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
@@ -882,7 +886,9 @@ function ClubbedConfigPicker({
 	disabled,
 	onChange,
 	groupClaude,
+	notice,
 }: {
+	notice?: ReactNode;
 	groupClaude?: boolean;
 	modelOptions: ChatConfigOption[];
 	effortOptions: ChatConfigOption[];
@@ -949,6 +955,7 @@ function ClubbedConfigPicker({
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
+				{notice ? <div className="px-2 py-1.5">{notice}</div> : null}
 				{modelOptions.map((option) => (
 					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable groupClaude={groupClaude} />
 				))}
