@@ -7,34 +7,43 @@ import { useTheme } from "./ThemeProvider";
 
 /**
  * Android's answer to iOS 26's scroll edge: the page's own colour laid over
- * the content under a bar, solid across the bar itself, then dissolving into
- * the page over a short tail. Content passing under a bar reads as frosted out
- * rather than cut off at a hard line.
+ * the content under a bar, then dissolving into the page over a long tail.
+ * Content passing under a bar dims out rather than being cut off at a hard
+ * line.
  *
- * Without a blur to soften what shows through, the bar keeps full cover: rows
- * showing through it fought the bar's title and items.
+ * Never fully solid: the content stays faintly visible right up to the screen
+ * edge, so the bar's items read as floating over the page rather than sitting
+ * on a strip of their own. The cover stays high enough across the bar (see
+ * `FROST_EDGE` and `FROST_BAR`) that rows showing through don't fight its
+ * title and items.
  */
 
 /** One step of the gradient: where it sits (0 at the screen edge) and how much of the page colour it lays down. */
 export type FrostStop = readonly [offset: number, opacity: number];
 
 /** How far the frost runs past the bar into the page. */
-export const FROST_TAIL = 32;
+export const FROST_TAIL = 56;
+
+/** The cover at the screen edge, behind the system's status or navigation bar. */
+export const FROST_EDGE = 0.92;
+
+/** The cover where the bar ends and the tail begins. */
+export const FROST_BAR = 0.88;
 
 /**
- * The frost for a bar `barHeight` tall: solid through the bar, then an eased
- * fade over the tail, with enough
- * stops that the fade shows no band.
+ * The frost for a bar `barHeight` tall: easing from `FROST_EDGE` at the screen
+ * edge to `FROST_BAR` where the bar ends, then an eased fade over the tail,
+ * with enough stops that the fade shows no band.
  */
 export function frostStops(barHeight: number, tail = FROST_TAIL): FrostStop[] {
 	const bar = barHeight / (barHeight + tail);
 	const fade = (at: number) => bar + (1 - bar) * at;
 	return [
-		[0, 1],
-		[bar, 1],
-		[fade(0.2), 0.72],
-		[fade(0.45), 0.4],
-		[fade(0.7), 0.15],
+		[0, FROST_EDGE],
+		[bar, FROST_BAR],
+		[fade(0.2), 0.64],
+		[fade(0.45), 0.36],
+		[fade(0.7), 0.14],
 		[fade(0.88), 0.04],
 		[1, 0],
 	];
@@ -42,7 +51,7 @@ export function frostStops(barHeight: number, tail = FROST_TAIL): FrostStop[] {
 
 /**
  * The frost itself, filling `style`'s box. `from` is the screen edge it is
- * solid at; the gradient runs away from it.
+ * densest at; the gradient runs away from it.
  *
  * Drawn in a unit `viewBox` stretched over the box, not as a `100%` rect: on
  * Android the rect kept the height it first resolved, so a frost that grew once

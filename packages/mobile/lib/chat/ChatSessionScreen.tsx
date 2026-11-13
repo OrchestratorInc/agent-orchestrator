@@ -850,7 +850,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					/>
 				)
 			) : null}
-			{/* Android's frost behind the clear bar: solid under the title, then
+			{/* Android's frost behind the clear bar: nearly opaque under the title, then
 			    dissolving into the page, so the conversation frosts out as it
 			    passes under it rather than meeting a hard edge. */}
 			{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (
