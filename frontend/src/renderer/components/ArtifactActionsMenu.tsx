@@ -20,7 +20,7 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
-import { ShareArtifactMenuPopover, VIDEO_FILE, useShareAvailable } from "./ShareArtifactPopover";
+import { ShareArtifactMenuPopover, VIDEO_FILE, usePrefetchShare, useShareAvailable } from "./ShareArtifactPopover";
 import type { CloudShareFile } from "../../shared/cloud-share";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -126,6 +126,12 @@ export function ArtifactActionsMenu({
 	const sharing = useRef(false);
 	const shareAvailable = useShareAvailable();
 	const canShare = Boolean(share) && iconOnly && shareAvailable && !VIDEO_FILE.test(artifact.path);
+	// Opening the menu starts what its Publish panel opens on.
+	const prefetchShare = usePrefetchShare(canShare && !published ? share : undefined);
+	const onMenuOpenChange = (next: boolean) => {
+		if (next) prefetchShare();
+		setMenuOpen(next);
+	};
 	const actionClassName = cn(className, (menuOpen || shareOpen) && "opacity-100 [@media(hover:hover)]:opacity-100");
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
@@ -306,7 +312,7 @@ export function ArtifactActionsMenu({
 					<TooltipContent side="bottom">{t("artifacts.openInSession")}</TooltipContent>
 				</Tooltip>
 			) : null}
-			{!sidebar || local || session.cloud ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+			{!sidebar || local || session.cloud ? <DropdownMenu open={menuOpen} onOpenChange={onMenuOpenChange}>
 				{iconOnly ? (
 					canShare && share ? (
 						<ShareArtifactMenuPopover file={share} intent={shareIntent} name={artifact.name} onOpenChange={setShareOpen} open={shareOpen}>

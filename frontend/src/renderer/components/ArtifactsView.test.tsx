@@ -668,7 +668,7 @@ describe("ArtifactsView", () => {
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Published");
 	});
 
-	it.each(["list", "gallery"] as const)("marks a private link with amber people, not the globe, in %s view", async (view) => {
+	it.each(["list", "gallery"] as const)("marks a private link with an amber link, not the globe, in %s view", async (view) => {
 		const published = session("ao-2", "Review pricing", [
 			{ name: "pricing.md", updatedAt: "2026-10-10T10:00:00Z" },
 			{ name: "roadmap.md", updatedAt: "2026-10-09T10:00:00Z" },
@@ -682,8 +682,10 @@ describe("ArtifactsView", () => {
 		const item = (name: string) => within(artifactList()).getByRole("button", { name: new RegExp(`^${name.replace(".", "\\.")}`) }).closest("li")!;
 		const shared = within(item("pricing.md")).getByRole("img", { name: "Shared privately" });
 		expect(shared).toHaveClass("text-status-in-review");
+		expect(shared.querySelector("svg")).toHaveClass("icon-link");
 		expect(within(item("pricing.md")).queryByRole("img", { name: "Published" })).toBeNull();
 		expect(within(item("roadmap.md")).getByRole("img", { name: "Published" })).toHaveClass("text-success");
+		expect(within(item("roadmap.md")).getByRole("img", { name: "Published" }).querySelector("svg")).toHaveClass("icon-globe");
 		fireEvent.pointerMove(shared, { pointerType: "mouse" });
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Shared privately");
 	});

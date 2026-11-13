@@ -26,7 +26,7 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
 import { artifactAtPath, deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
-import { ShareArtifactButton } from "./ShareArtifactPopover";
+import { ShareArtifactButton, useReconciledShareLinks } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -684,6 +684,8 @@ export function SessionArtifactsView({
 	const fileMenuActions = useRef<ArtifactMenuAction[]>([]);
 	const contentRef = useRef<HTMLDivElement>(null);
 	const uiKey = sessionUiKey(session.id, hostId);
+	// Who each published card's link opens for, so it is marked as on the Artifacts page.
+	const shareAccess = useReconciledShareLinks();
 	const { client: cloudClient } = useCloudCp(cloud);
 	// Only the person who started a cloud session shares its files.
 	const cloudUserId = useCloudMeUserId(cloud);
@@ -778,6 +780,7 @@ export function SessionArtifactsView({
 		sessionTitle: session.title ?? "",
 		cloud: session.cloud,
 		hostId,
+		...(artifact.shareUrl && shareAccess.has(artifact.shareUrl) ? { shareAccess: shareAccess.get(artifact.shareUrl) } : {}),
 	});
 	const openArtifact = (artifact: Pick<SessionArtifact, "path">) => {
 		setEditingPath(null);

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, Copy, Globe, Loader2, Lock, Share } from "@/components/app-icons";
+import { Check, ChevronDown, Copy, Loader2, Share } from "@/components/app-icons";
 import {
 	type CloudShareAccess,
 	type CloudShareFile,
@@ -22,6 +22,7 @@ import { useCloudSession } from "../lib/cloud-session";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { shareAccessIcon } from "./ArtifactShareMark";
 import { ArtifactGeneralAccess, accessName, accessSentence } from "./share/artifact/ArtifactGeneralAccess";
 import { type ArtifactPerson, ArtifactPeopleList } from "./share/artifact/ArtifactPeopleList";
 import { InviteField } from "./share/artifact/InviteField";
@@ -168,7 +169,8 @@ export function useShareAvailable(): boolean {
 
 /**
  * Bumped when a panel publishes, unpublishes or changes who a link opens for,
- * so useReconciledShareLinks reads the link list again.
+ * so useReconciledShareLinks reads the link list again and a cached list read
+ * before the change is no longer used.
  */
 let shareLinksRevision = 0;
 const shareLinksListeners = new Set<() => void>();
@@ -181,8 +183,120 @@ function subscribeShareLinks(listener: () => void): () => void {
 	return () => shareLinksListeners.delete(listener);
 }
 
+/** The last link list read from each control plane, the revision it was read at, and when. */
+interface CachedShareLinks {
+	links: CloudShareLinks;
+	revision: number;
+	at: number;
+}
+const shareLinksCache = new Map<string, CachedShareLinks>();
+/** Reads under way, one per control plane and revision, shared by every caller. */
+const shareLinksReads = new Map<string, Promise<CloudShareLinks>>();
+/** How long a list read lets the panel open without waiting for another. */
+const SHARE_LINKS_FRESH_MS = 5 * 60_000;
+
+/**
+ * Reads the person's link list. Callers asking at the same time share one
+ * request, and the answer is kept for the panel to open on at once. The main
+ * process also brings this computer's publish records up to date with it.
+ */
+function readShareLinks(baseUrl: string): Promise<CloudShareLinks> {
+	const revision = shareLinksRevision;
+	const key = JSON.stringify([baseUrl, revision]);
+	let read = shareLinksReads.get(key);
+	if (!read) {
+		read = aoBridge.cloudShare.list(baseUrl)
+			.then((links) => {
+				// A read started before a change never replaces one started after it.
+				const cached = shareLinksCache.get(baseUrl);
+				if (!cached || cached.revision <= revision) shareLinksCache.set(baseUrl, { links, revision, at: Date.now() });
+				for (const listener of shareLinksListeners) listener();
+				return links;
+			})
+			.finally(() => shareLinksReads.delete(key));
+		shareLinksReads.set(key, read);
+	}
+	return read;
+}
+
+/** The list last read, while no change was made since and it is recent; else undefined. */
+function freshShareLinks(baseUrl: string): CloudShareLinks | undefined {
+	const cached = shareLinksCache.get(baseUrl);
+	if (!cached || cached.revision !== shareLinksRevision || Date.now() - cached.at > SHARE_LINKS_FRESH_MS) return undefined;
+	return cached.links;
+}
+
+/** Inspections started ahead of a click, by file, and when; each is used once. */
+const prefetchedInspections = new Map<string, { inspection: Promise<CloudShareInspection>; at: number }>();
+/** How long a prefetched inspection may stand in for one made on the click. */
+const INSPECTION_PREFETCH_MS = 10_000;
+
+/**
+ * The file's inspection: one prefetched moments ago when there is one, else a
+ * new one. Publishing names its fingerprint and the main process refuses a
+ * file that changed since, so a prefetched one never publishes other bytes.
+ */
+function takeInspection(file: CloudShareFile): Promise<CloudShareInspection> {
+	const key = JSON.stringify(file);
+	const prefetched = prefetchedInspections.get(key);
+	prefetchedInspections.delete(key);
+	if (prefetched && Date.now() - prefetched.at < INSPECTION_PREFETCH_MS) return prefetched.inspection;
+	return aoBridge.cloudShare.inspect(file);
+}
+
+/**
+ * Starts what opening the publish panel waits for, the file's inspection and
+ * the link list, as the person points at Publish, so the panel opens on its
+ * answer rather than on Checking.
+ */
+export function usePrefetchShare(file: Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined): () => void {
+	const { baseUrl, signedIn } = useShareAccess();
+	const fileRef = useRef(file);
+	fileRef.current = file;
+	return useCallback(() => {
+		const current = fileRef.current;
+		if (!current || !signedIn || VIDEO_FILE.test(current.path)) return;
+		if (!freshShareLinks(baseUrl)) void readShareLinks(baseUrl).catch(() => undefined);
+		const shareFile = { ...current, baseUrl };
+		const key = JSON.stringify(shareFile);
+		const prefetched = prefetchedInspections.get(key);
+		if (prefetched && Date.now() - prefetched.at < INSPECTION_PREFETCH_MS) return;
+		const inspection = aoBridge.cloudShare.inspect(shareFile);
+		// A failed prefetch is not kept: the click inspects again and shows why.
+		inspection.catch(() => {
+			if (prefetchedInspections.get(key)?.inspection === inspection) prefetchedInspections.delete(key);
+		});
+		if (prefetchedInspections.size >= 50) prefetchedInspections.clear();
+		prefetchedInspections.set(key, { inspection, at: Date.now() });
+	}, [baseUrl, signedIn]);
+}
+
+/** Forgets every cached link list and prefetched inspection; for tests. */
+export function resetShareCachesForTests(): void {
+	shareLinksCache.clear();
+	shareLinksReads.clear();
+	prefetchedInspections.clear();
+}
+
 /** Who each active link opens for, by the URL a published artifact carries as its shareUrl. */
 export type ShareAccessByUrl = ReadonlyMap<string, CloudShareAccess>;
+
+const NO_SHARE_ACCESS: ShareAccessByUrl = new Map();
+/** One map per list read, so a surface re-renders only when the list changes. */
+const accessByList = new WeakMap<CloudShareLinks, ShareAccessByUrl>();
+function shareAccessOf(links: CloudShareLinks): ShareAccessByUrl {
+	let access = accessByList.get(links);
+	if (!access) {
+		access = new Map(links.shares
+			.filter((share) => !share.revokedAt)
+			.map((share): [string, CloudShareAccess] => [artifactShareUrl(share), isPrivateShare(share) ? "restricted" : "anyone"]));
+		accessByList.set(links, access);
+	}
+	return access;
+}
+
+/** Link-list reads that have already had the artifact list read again after them. */
+const reconciledReads = new WeakSet<Promise<CloudShareLinks>>();
 
 /**
  * Brings this computer's publish records up to date with the person's link
@@ -192,33 +306,27 @@ export type ShareAccessByUrl = ReadonlyMap<string, CloudShareAccess>;
  * each artifact's shareUrl from those records, so until they are reconciled
  * a published file reads as not shared, or an unpublished one as public.
  * Runs once per mount, again when sign-in or the control plane changes, and
- * again after a panel changes a link. Returns who each link opens for, so a
- * private link is not marked public; empty until the list is read.
+ * again after a panel changes a link; surfaces mounted together share one
+ * read. Returns who each link opens for, so a private link is not marked
+ * public: the last list read, and empty until one is.
  */
 export function useReconciledShareLinks(): ShareAccessByUrl {
 	const available = useShareAvailable();
 	const { baseUrl, signedIn } = useShareAccess();
 	const queryClient = useQueryClient();
 	const revision = useSyncExternalStore(subscribeShareLinks, () => shareLinksRevision);
-	const [accessByUrl, setAccessByUrl] = useState<ShareAccessByUrl>(() => new Map());
+	const cached = useSyncExternalStore(subscribeShareLinks, () => shareLinksCache.get(baseUrl));
 	useEffect(() => {
 		if (!available || !signedIn) return;
-		let cancelled = false;
-		aoBridge.cloudShare.list(baseUrl)
-			.then((links) => {
-				if (cancelled) return;
-				setAccessByUrl(new Map(links.shares
-					.filter((share) => !share.revokedAt)
-					.map((share): [string, CloudShareAccess] => [artifactShareUrl(share), isPrivateShare(share) ? "restricted" : "anyone"])));
-				void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
-			})
+		const read = readShareLinks(baseUrl);
+		if (reconciledReads.has(read)) return;
+		reconciledReads.add(read);
+		read
+			.then(() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }))
 			// Offline or signed out: the records stay as they are until the next list.
 			.catch(() => undefined);
-		return () => {
-			cancelled = true;
-		};
 	}, [available, signedIn, baseUrl, queryClient, revision]);
-	return accessByUrl;
+	return available && signedIn && cached ? shareAccessOf(cached.links) : NO_SHARE_ACCESS;
 }
 
 /** The control plane URL and whether the person is signed in to share. */
@@ -345,7 +453,7 @@ function usePublishedShare(file: CloudShareFile | null, revision: string): Publi
 		void (async (): Promise<PublishedShare> => {
 			const inspection = await aoBridge.cloudShare.inspect(file);
 			if (!inspection.shareId) return { outdated: false };
-			const links = await aoBridge.cloudShare.list(file.baseUrl);
+			const links = await readShareLinks(file.baseUrl);
 			const share = links.shares.find((candidate) => candidate.id === inspection.shareId && !candidate.revokedAt);
 			if (!share) return { outdated: false };
 			const changed = Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
@@ -390,6 +498,9 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	const { baseUrl, signedIn } = useShareAccess();
 	const video = VIDEO_FILE.test(file.path);
 	const publishing = usePublishing(pendingKey(baseUrl, file));
+	// Pointing at the button starts what its panel opens on.
+	const prefetch = usePrefetchShare(file);
+	const prefetchProps = { onFocus: prefetch, onPointerEnter: prefetch };
 	const { share, outdated } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, `${revision}:${checks}:${publishing}`);
 	// What the panel does on opening is fixed when it opens, so a check that
 	// lands while it is open never starts a second publish.
@@ -405,9 +516,10 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	};
 	useCloseWhenFrameFocused(open, () => onOpenChange(false));
 	const isPublic = Boolean(share && !isPrivateShare(share));
-	const AccessIcon = isPublic ? Globe : Lock;
-	// A public link's globe is green, as in General access: anyone can open it.
-	const accessIconClass = cn("size-icon-sm", isPublic && "text-success");
+	// A public link's green globe or a private link's amber link, as on every artifact list.
+	const accessMark = shareAccessIcon(isPublic ? "anyone" : "restricted");
+	const AccessIcon = accessMark.Icon;
+	const accessIconClass = cn("size-icon-sm", accessMark.className);
 	const label = publishing ? t("artifacts.share.publishing")
 		: outdated ? t("artifacts.share.republish")
 		: share ? t("artifacts.share.published")
@@ -447,7 +559,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 					<span className={cn("inline-flex items-center", className)} data-share-split="">
 						<Tooltip>
 							<TooltipTrigger asChild>
-								<Button aria-label={`${label}: ${name}`} className="relative" onClick={() => openPanel(true)} size="sm" type="button" variant="quiet">
+								<Button aria-label={`${label}: ${name}`} className="relative" onClick={() => openPanel(true)} size="sm" type="button" variant="quiet" {...prefetchProps}>
 									<Share aria-hidden="true" className="size-icon-sm" />
 									{label}
 									{amberDot}
@@ -463,6 +575,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 							size="sm"
 							type="button"
 							variant="quiet"
+							{...prefetchProps}
 						>
 							<AccessIcon aria-hidden="true" className={accessIconClass} />
 							<ChevronDown aria-hidden="true" className="size-3" />
@@ -481,6 +594,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 			size={iconOnly ? "icon-sm" : "sm"}
 			type="button"
 			variant="quiet"
+			{...prefetchProps}
 		>
 			{icon}
 			{iconOnly ? null : label}
@@ -623,40 +737,67 @@ function SharePanel({
 			};
 		}
 		setPhase({ kind: "loading" });
-		Promise.all([aoBridge.cloudShare.inspect({ ...file, baseUrl }), aoBridge.cloudShare.list(baseUrl)])
+		// What decides the panel's first state: whether the file has an active
+		// link, who it opens for, whether a new one fits the plan. A change in
+		// any of these after opening on a cached list opens it again.
+		const decisionKey = (inspection: CloudShareInspection, links: CloudShareLinks) => {
+			const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId) : undefined;
+			return JSON.stringify([
+				links.privateLinks, links.unlimited, links.limit, links.used,
+				current ? [current.revokedAt ?? null, current.access ?? null, current.name, current.grantCount ?? 0] : null,
+				links.shares.some((share) => !share.revokedAt && share.name === inspection.name),
+			]);
+		};
+		const decide = (inspection: CloudShareInspection, links: CloudShareLinks, publishNow: boolean) => {
+			setPrivateLinks(links.privateLinks);
+			if (inspection.unsupported) return setPhase({ kind: "unsupported" });
+			// The link this file was published to from here, while it is active.
+			const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
+			if (current) {
+				if (unpublishOnOpen) return showPublished(current, { inspection, unpublishing: "confirm" });
+				// The link may still have the old content or the old filename.
+				const outdated = current.name !== inspection.name ||
+					Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
+				if (publishNow && republishOnOpen && outdated) {
+					// The Republish click, like Publish, needs no second one. A
+					// public link waits under a credential warning.
+					if (inspection.secretFindings.length > 0 && !isPrivateShare(current)) return showPublished(current, { inspection, republish: { inspection, links } });
+					return void publish(inspection, links, current);
+				}
+				// Changed since: Republish is offered on the link, wherever the panel was opened.
+				return showPublished(current, { inspection, ...(outdated ? { republish: { inspection, links } } : {}) });
+			}
+			// It was published from here, but its link is unpublished now,
+			// usually from somewhere else. Publishing gives it a new link.
+			const unpublished = Boolean(inspection.shareId);
+			// A file with no active link of its name is most likely a new
+			// document; the server decides for sure when it uploads.
+			const likelyNew = !links.shares.some((share) => !share.revokedAt && share.name === inspection.name);
+			if (!links.unlimited && likelyNew && links.used >= links.limit) return setPhase({ kind: "limit", limit: links.limit });
+			// A private link exposes nothing until people are invited, so it
+			// publishes at once whatever the file holds; its warning shows on the link.
+			const atOnce = !onThisComputer && (links.privateLinks || inspection.secretFindings.length === 0);
+			if (publishNow && atOnce) return void publish(inspection, links);
+			setStagedAccess(links.privateLinks ? "restricted" : "anyone");
+			setPhase({ kind: "setup", inspection, links, unpublished });
+		};
+		// The list read moments ago (by the toolbar button, an artifacts list or
+		// pointing at Publish) opens the panel at once; it is read again behind it.
+		const cached = freshShareLinks(baseUrl);
+		const openedRevision = shareLinksRevision;
+		Promise.all([takeInspection({ ...file, baseUrl }), cached ?? readShareLinks(baseUrl)])
 			.then(([inspection, links]) => {
 				if (cancelled) return;
-				setPrivateLinks(links.privateLinks);
-				if (inspection.unsupported) return setPhase({ kind: "unsupported" });
-				// The link this file was published to from here, while it is active.
-				const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
-				if (current) {
-					if (unpublishOnOpen) return showPublished(current, { inspection, unpublishing: "confirm" });
-					// The link may still have the old content or the old filename.
-					const outdated = current.name !== inspection.name ||
-						Boolean(inspection.publishedFingerprint && inspection.publishedFingerprint !== inspection.fingerprint);
-					if (publishNow && republishOnOpen && outdated) {
-						// The Republish click, like Publish, needs no second one. A
-						// public link waits under a credential warning.
-						if (inspection.secretFindings.length > 0 && !isPrivateShare(current)) return showPublished(current, { inspection, republish: { inspection, links } });
-						return void publish(inspection, links, current);
-					}
-					// Changed since: Republish is offered on the link, wherever the panel was opened.
-					return showPublished(current, { inspection, ...(outdated ? { republish: { inspection, links } } : {}) });
-				}
-				// It was published from here, but its link is unpublished now,
-				// usually from somewhere else. Publishing gives it a new link.
-				const unpublished = Boolean(inspection.shareId);
-				// A file with no active link of its name is most likely a new
-				// document; the server decides for sure when it uploads.
-				const likelyNew = !links.shares.some((share) => !share.revokedAt && share.name === inspection.name);
-				if (!links.unlimited && likelyNew && links.used >= links.limit) return setPhase({ kind: "limit", limit: links.limit });
-				// A private link exposes nothing until people are invited, so it
-				// publishes at once whatever the file holds; its warning shows on the link.
-				const atOnce = !onThisComputer && (links.privateLinks || inspection.secretFindings.length === 0);
-				if (publishNow && atOnce) return void publish(inspection, links);
-				setStagedAccess(links.privateLinks ? "restricted" : "anyone");
-				setPhase({ kind: "setup", inspection, links, unpublished });
+				decide(inspection, links, publishNow);
+				if (!cached) return;
+				void readShareLinks(baseUrl)
+					.then((fresh) => {
+						// A publish this opening started is not second-guessed: its answer settles the panel.
+						// Nor is a change made in the panel since: that read predates it.
+						if (cancelled || pendingShares.has(key) || shareLinksRevision !== openedRevision || decisionKey(inspection, fresh) === decisionKey(inspection, links)) return;
+						decide(inspection, fresh, false);
+					})
+					.catch(() => undefined);
 			})
 			.catch((error: unknown) => {
 				if (!cancelled) setPhase({ kind: "error", message: errorMessage(error) });
@@ -893,12 +1034,12 @@ function SharePanel({
 			const sentence = phase.access === "restricted"
 				? phase.invited > 0 ? t("artifacts.share.access.willHave", { count: phase.invited }) : t("artifacts.share.access.privateUploading")
 				: accessSentence(t, "anyone", 0);
-			const Icon = phase.access === "anyone" ? Globe : Lock;
+			const { Icon, className: iconClass } = shareAccessIcon(phase.access);
 			return (
 				<>
 					{titled(t("artifacts.share.title.publishing"))}
 					<div className="mt-3.5 flex items-start gap-2.5 rounded-md bg-muted/40 py-2 pr-2 pl-2.5" data-share-uploading="">
-						<span className={cn("grid size-6 shrink-0 place-items-center rounded-full bg-muted", phase.access === "anyone" ? "text-success" : "text-muted-foreground")} aria-hidden="true">
+						<span className={cn("grid size-6 shrink-0 place-items-center rounded-full bg-muted", iconClass)} aria-hidden="true">
 							<Icon className="size-3.5" />
 						</span>
 						<span className="flex min-w-0 flex-col">

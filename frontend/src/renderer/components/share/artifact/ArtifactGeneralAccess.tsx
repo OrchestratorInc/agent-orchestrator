@@ -1,9 +1,10 @@
 import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronDown, Globe, Lock, TriangleAlert } from "@/components/app-icons";
+import { Check, ChevronDown, TriangleAlert } from "@/components/app-icons";
 import type { CloudShareAccess } from "../../../../shared/cloud-share";
 import { cn } from "../../../lib/utils";
+import { shareAccessIcon } from "../../ArtifactShareMark";
 import { Button } from "../../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 
@@ -40,13 +41,15 @@ export function ArtifactGeneralAccess({ access, invited, onChange, choosable = t
 }) {
 	const { t } = useTranslation();
 	const sentenceId = useId();
-	const Icon = access === "anyone" ? Globe : Lock;
+	const { Icon, className: iconClass } = shareAccessIcon(access);
+	const PrivateIcon = shareAccessIcon("restricted");
+	const PublicIcon = shareAccessIcon("anyone");
 	const name = accessName(t, access, invited);
 	return (
 		<section className="flex flex-col gap-2" aria-label={t("artifacts.share.access.title")} data-artifact-access={access}>
 			<p className="text-xs text-muted-foreground">{t("artifacts.share.access.title")}</p>
 			<div className={cn("flex items-start gap-2.5 rounded-md bg-muted/40 py-2 pr-2 pl-2.5", disabled && "opacity-70")} aria-busy={disabled || undefined}>
-				<span className={cn("grid size-6 shrink-0 place-items-center rounded-full bg-muted", access === "anyone" ? "text-success" : "text-muted-foreground")} aria-hidden="true">
+				<span className={cn("grid size-6 shrink-0 place-items-center rounded-full bg-muted", iconClass)} aria-hidden="true">
 					<Icon className="size-3.5" />
 				</span>
 				<div className="flex min-w-0 flex-1 flex-col">
@@ -68,14 +71,14 @@ export function ArtifactGeneralAccess({ access, invited, onChange, choosable = t
 							<DropdownMenuContent align="start" className="w-72">
 								<AccessOption
 									description={t("artifacts.share.access.invitedOption")}
-									icon={<Lock />}
+									icon={<PrivateIcon.Icon className="text-status-in-review!" />}
 									label={t("artifacts.share.access.invited")}
 									onSelect={() => access !== "restricted" && onChange("restricted")}
 									selected={access === "restricted"}
 								/>
 								<AccessOption
 									description={t("artifacts.share.access.anyoneOption")}
-									icon={<Globe className="text-success!" />}
+									icon={<PublicIcon.Icon className="text-success!" />}
 									label={t("artifacts.share.access.anyone")}
 									onSelect={() => access !== "anyone" && onChange("anyone")}
 									selected={access === "anyone"}
