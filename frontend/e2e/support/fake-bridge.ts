@@ -158,6 +158,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				cloudShare: {
 					available: async () => true,
 					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+					status: async () => ({ name: "", changed: false }),
 					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
 					publish: async () => ({ status: "cancelled" as const }),
 					cancel: async () => undefined,
@@ -1119,6 +1120,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				cloudShare: {
 					available: async () => true,
 					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
+					status: async () => ({ name: "", changed: false }),
 					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
 					publish: async () => ({ status: "cancelled" as const }),
 					cancel: async () => undefined,
