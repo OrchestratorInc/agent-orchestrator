@@ -381,6 +381,8 @@ function queuedDeleteRefusal(error: unknown): Error | undefined {
 			return new Error("This message is no longer queued, so it was not deleted. If the agent started on it, stop that turn instead.");
 		case "SESSION_TERMINATED":
 			return new Error("This session has ended, so this message can no longer be deleted.");
+		case "STEER_IN_PROGRESS":
+			return new Error("This message is being steered into the running turn, so it can't be deleted now. Try again once the steer settles.");
 		case "forbidden":
 			return new Error("Only the person who sent this message, whoever started the session, or a workspace admin can delete it.");
 		default:

@@ -8751,7 +8751,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description TURN_NOT_QUEUED: the agent started on the message, or it was stopped or ended otherwise, so it can no longer be deleted (the turn is left as it is). SESSION_TERMINATED: the session ended. */
+            /** @description TURN_NOT_QUEUED: the agent started on the message, or it was stopped or ended otherwise, so it can no longer be deleted (the turn is left as it is). SESSION_TERMINATED: the session ended. STEER_IN_PROGRESS: the message is being steered into the running turn (steerQueuedMessage); it can be deleted once the steer settles and it is back in the queue. */
             409: {
                 headers: {
                     [name: string]: unknown;

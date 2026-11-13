@@ -2539,6 +2539,9 @@ paths:
             TURN_NOT_QUEUED: the agent started on the message, or it was
             stopped or ended otherwise, so it can no longer be deleted (the
             turn is left as it is). SESSION_TERMINATED: the session ended.
+            STEER_IN_PROGRESS: the message is being steered into the running
+            turn (steerQueuedMessage); it can be deleted once the steer
+            settles and it is back in the queue.
           content:
             application/json:
               schema:
