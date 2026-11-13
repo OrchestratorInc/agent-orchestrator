@@ -30,6 +30,7 @@ import {
 	type SpawnAttachmentInput,
 } from "./api";
 import { hostMachineIdentity, isConfigured, machineIdentity, type ServerConfig } from "./config";
+import { createBoardSaver, loadBoard } from "./boardSnapshot";
 import { resolveActiveConfig, runtimeResolveDeps } from "./resolveConfig";
 import { pollIntervalFor } from "./pollInterval";
 import { fetchAdvertisedEndpoints, rejectedEndpointNeedsRace, type ConnectOptions } from "./connectRuntime";
@@ -418,6 +419,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// never on every poll tick. openRef tracks the current state; everConnectedRef
 	// tells a fresh launch apart from a later reconnect.
 	const openRef = useRef(false);
+	// The selected machine's last board, saved on the phone after polls and shown
+	// at launch until the first poll answers (see boardSnapshot). `publishedFor`
+	// names the machine a poll has already filled the board for: a saved board
+	// never replaces a live one.
+	const [boardSaver] = useState(() => createBoardSaver());
+	const publishedFor = useRef("");
 	// Whether the most recent poll reached the daemon. Distinct from openRef,
 	// which latches on first connect and never clears.
 	const lastTickOkRef = useRef(false);
@@ -624,6 +631,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (active === pollActiveRef.current) return;
 			pollActiveRef.current = active;
 			if (!active) {
+				// Leaving the app is when the phone may close it: the newest board is
+				// written now (see boardSnapshot).
+				void boardSaver.flush();
 				primaryLoadRef.current?.controller.abort();
 				cancelAccountHostSync();
 				// A LAN address can point at a different machine when the phone wakes,
@@ -893,14 +903,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// in flight. Stop here rather than spending another request that would
 			// re-mark this device live after the user left.
 			if (!isCurrent()) return false;
+			publishedFor.current = machineIdentity(c);
+			let unread = 0;
 			try {
 				const page = await getNotifications(c, { status: "unread", limit: 1 }, { signal: controller.signal });
 				if (!isCurrent()) return false;
+				unread = page.unreadCount;
 				setNotificationsUnread(page.unreadCount);
 			} catch {
 				if (!isCurrent()) return false;
 				setNotificationsUnread(0);
 			}
+			boardSaver.schedule({
+				machine: machineIdentity(c),
+				savedAt: Date.now(),
+				sessions: sess.sessions,
+				orchestrators: sess.orchestrators,
+				projects: sess.projects,
+				archive: sess.archive ?? null,
+				stats: sess.stats,
+				notificationsUnread: unread,
+			});
 			return true;
 		} catch (e) {
 			if (!isCurrent()) return false;
@@ -938,7 +961,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		} finally {
 			if (isCurrent()) setLoading(false);
 		}
-	}, [reloadConfig, recordLink]);
+	}, [reloadConfig, recordLink, boardSaver]);
+
+	// At launch (and on switching machines), the machine's saved board shows
+	// until a poll answers, instead of an empty board and a loader. Only while
+	// nothing live has been published for it; the first poll reconciles over it.
+	useEffect(() => {
+		if (!selectedHostId) return;
+		const machine = hostMachineIdentity(selectedHostId);
+		if (publishedFor.current === machine) return;
+		let active = true;
+		void loadBoard(machine).then((saved) => {
+			if (!active || !saved || publishedFor.current === machine || selectedHostIdRef.current !== selectedHostId) return;
+			setSessions((current) => current.length ? current : saved.sessions);
+			setOrchestrators((current) => current.length ? current : saved.orchestrators);
+			setArchive((current) => current ?? saved.archive);
+			setStats(saved.stats);
+			setNotificationsUnread(saved.notificationsUnread);
+			setKnownProjects((current) => current.known ? current : { machine, projects: saved.projects ?? [], known: saved.projects !== null });
+			setSessionMachine((current) => current || machine);
+			// The stale banner says how old it is.
+			if (!lastSyncAtRef.current) lastSyncAtRef.current = saved.savedAt;
+		});
+		return () => { active = false; };
+	}, [selectedHostId]);
 
 	const fetchAll = useCallback((afterCurrent = false): Promise<boolean> => {
 		const c = cfgRef.current;
