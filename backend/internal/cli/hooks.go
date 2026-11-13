@@ -614,6 +614,74 @@ func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, paylo
 	}
 }
 
+// claudePostToolUseOutput adds to a Claude Code PostToolUse or
+// PostToolUseFailure result: SystemMessage is shown to the user in the
+// session, AdditionalContext is handed to the model with the tool's result.
+type claudePostToolUseOutput struct {
+	SystemMessage      string `json:"systemMessage,omitempty"`
+	HookSpecificOutput struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	} `json:"hookSpecificOutput"`
+}
+
+// Claude Code's built-in computer use, whose tools Claude Code names
+// mcp__computer-use__<tool>.
+const claudeComputerUseToolPrefix = "mcp__computer-use__"
+
+const computerUsePermissionNotice = "Computer use needs Orchestrator to have Accessibility and Screen Recording: macOS checks Orchestrator for " +
+	"everything this session runs, not Claude. Grant them in Orchestrator under Settings > Computer use agents > Orchestrator permissions, " +
+	"then restart this session's agent if it still says not granted."
+
+const computerUsePermissionContext = "This session runs inside Orchestrator, so macOS checks Orchestrator's permissions, not the Claude desktop app's " +
+	"or a terminal's, for everything it runs. Ignore the advice to grant Claude: tell the user to grant Accessibility and Screen Recording to " +
+	"Orchestrator in Orchestrator's Settings > Computer use agents > Orchestrator permissions, and that if it still says not granted afterwards, " +
+	"this session's agent needs a restart to see them."
+
+// computerUsePermissionDenied reports whether a tool result is Claude Code's
+// built-in computer use refusing because macOS has not granted its
+// permissions ("... permission(s) are still not granted").
+func computerUsePermissionDenied(payload []byte) bool {
+	var p struct {
+		ToolName     string          `json:"tool_name"`
+		ToolResponse json.RawMessage `json:"tool_response"`
+		Error        string          `json:"error"`
+	}
+	if json.Unmarshal(payload, &p) != nil || !strings.HasPrefix(p.ToolName, claudeComputerUseToolPrefix) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(p.ToolResponse)+"\n"+p.Error), "not granted")
+}
+
+// emitComputerUsePermissionNotice answers a Claude Code computer-use result
+// that macOS refused: the user sees where to grant the permissions, and the
+// model is told to name Orchestrator, whose grants macOS checks for the
+// session, instead of the Claude desktop app its own result names.
+func (c *commandContext) emitComputerUsePermissionNotice(agent, event, sessionID string, payload []byte) {
+	if domain.AgentHarness(agent) != domain.HarnessClaudeCode {
+		return
+	}
+	var hookEventName string
+	switch event {
+	case "post-tool-use":
+		hookEventName = "PostToolUse"
+	case "post-tool-use-failure":
+		hookEventName = "PostToolUseFailure"
+	default:
+		return
+	}
+	if !computerUsePermissionDenied(payload) {
+		return
+	}
+	var out claudePostToolUseOutput
+	out.SystemMessage = computerUsePermissionNotice
+	out.HookSpecificOutput.HookEventName = hookEventName
+	out.HookSpecificOutput.AdditionalContext = computerUsePermissionContext
+	if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
+		c.reportHookFailure(agent, event, sessionID, fmt.Errorf("write computer use permission notice: %w", err))
+	}
+}
+
 const reviewerPermissionDenyMessage = "Orchestrator headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
 	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
@@ -718,6 +786,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
 	c.emitArtifactNudge(agent, event, sessionID, payload)
+	c.emitComputerUsePermissionNotice(agent, event, sessionID, payload)
 	if isCursorPermissionHook(agent, event) {
 		return c.runCursorPermissionHook(ctx, agent, event, sessionID, payload)
 	}
