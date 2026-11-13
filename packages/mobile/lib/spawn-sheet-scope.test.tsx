@@ -11,12 +11,14 @@ const fixtures = vi.hoisted(() => ({
 	agentModels: {} as Record<string, { id: string; label: string; isDefault?: boolean; efforts?: string[]; defaultEffort?: string }[]>,
 	app: {} as Record<string, unknown>,
 	spawn: vi.fn(),
+	push: vi.fn(),
+	cloud: undefined as object | undefined,
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 
 vi.mock("expo-router", () => ({
 	useLocalSearchParams: () => ({}),
-	useRouter: () => ({ back: vi.fn(), canGoBack: () => true, push: vi.fn(), replace: vi.fn() }),
+	useRouter: () => ({ back: vi.fn(), canGoBack: () => true, push: fixtures.push, replace: vi.fn() }),
 	useNavigation: () => ({ addListener: () => () => {}, isFocused: () => true, setOptions: vi.fn() }),
 }));
 vi.mock("expo-document-picker", () => ({ getDocumentAsync: vi.fn() }));
@@ -93,9 +95,20 @@ vi.mock("./ThemeProvider", () => ({
 	useThemedStyles: (make: (theme: unknown) => unknown) => make(fixtures.theme),
 }));
 vi.mock("./ui", () => ({ Button: "Button" }));
+// The tray's image viewer pulls in react-native-gesture-handler, whose Flow
+// source vitest doesn't transform; no attachment is added here.
+vi.mock("./chat/ComposerAttachmentTray", () => ({ ComposerAttachmentTray: () => null }));
+// Each test opens on the machine's active project, not the one a previous
+// test started a task in.
+vi.mock("./lastProject", () => ({ rememberLastProject: vi.fn(), useLastProject: () => ({ loaded: true, projectId: null }) }));
+// Orchestrator Cloud is signed out unless a test signs in with fixtures.cloud.
+// One state object, as the provider keeps, so effects keyed on its arrays settle.
+const SIGNED_OUT = { org: null, client: {}, projects: [], projectsLoaded: false, connections: [], connectionsLoaded: false, chatHarnesses: [] };
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => fixtures.cloud ?? SIGNED_OUT }));
 vi.mock("./voice/useVoiceInput", () => ({ useVoiceInput: () => ({ state: "idle", partial: "", mode: "dictate" }) }));
 
 import SpawnModal from "../app/spawn";
+import { NEW_CLOUD_PROJECT } from "./cloud/spawnSource";
 import { STANDALONE_PROJECT } from "./projectFilter";
 
 let renderer: ReactTestRenderer | undefined;
@@ -145,6 +158,8 @@ beforeEach(() => {
 	fixtures.projectModels = {};
 	fixtures.agentModels = {};
 	fixtures.spawn.mockReset();
+	fixtures.push.mockReset();
+	fixtures.cloud = undefined;
 	fixtures.spawn.mockResolvedValue({ id: "session-1", projectId: "ao" });
 });
 
@@ -281,5 +296,21 @@ describe("spawn sheet scope", () => {
 
 		expect(controls().projectId).toBe("scratch");
 		expect(await startTask()).toMatchObject({ projectId: "scratch", harness: "cursor", model: undefined });
+	});
+
+	it("opens the new cloud project sheet from the project menu and stays on its project", async () => {
+		// Signed in to Cloud with no machine connected, so the sheet opens on Cloud.
+		const projects = [{ id: "web", name: "web", displayName: "web", config: {} }];
+		fixtures.cloud = { ...SIGNED_OUT, projects, projectsLoaded: true, connectionsLoaded: true };
+		fixtures.app = { ...appWith([]), hostStates: [], cloud: { projects } };
+		await settled(() => {
+			renderer = create(<SpawnModal />);
+		});
+		expect(controls().projectId).toBe("web");
+
+		await settled(() => controls().onSelectProject(NEW_CLOUD_PROJECT));
+
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/cloud/new-project", params: { placement: "cloud" } });
+		expect(controls().projectId).toBe("web");
 	});
 });

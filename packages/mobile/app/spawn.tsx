@@ -436,6 +436,8 @@ export default function SpawnScreen() {
 	// only valid for that agent, and the new scope's default may be another one.
 	const pickProject = (nextProjectId: string) => {
 		if (nextProjectId === projectId) return;
+		// "New cloud project" opens its own sheet and leaves this one where it is.
+		if (nextProjectId === NEW_CLOUD_PROJECT) return changeProject(nextProjectId);
 		if (agentTouched || modelTouched) {
 			setAgentTouched(true);
 			setModelError(undefined);
