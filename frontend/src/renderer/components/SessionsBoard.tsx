@@ -31,7 +31,7 @@ import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useBackgroundTaskReadings } from "../hooks/useBackgroundTasks";
-import { BackgroundTasksButton } from "./BackgroundTasks";
+import { BackgroundTasksBadge } from "./BackgroundTasks";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -351,7 +351,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						labels={boardLabels}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
-								backgroundTasks={!hostId && !localCloudBoard ? <BackgroundTasksButton session={session} reading={backgroundTasks.data?.get(session.id)} stale={backgroundTasks.isError} /> : undefined}
+								backgroundTasks={!hostId && !localCloudBoard ? <BackgroundTasksBadge session={session} reading={backgroundTasks.data?.get(session.id)} stale={backgroundTasks.isError} /> : undefined}
 								participants={participantsBySession.get(session.id)}
 								me={cloudUserId}
 								memory={memoryBySession?.get(session.id)}

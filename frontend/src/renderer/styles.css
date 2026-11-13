@@ -2946,6 +2946,29 @@ html.sidebar-reordering * {
 	background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
 }
 
+/* Background work rides the composer's top edge: the tray's mirror, with the same
+   inset and fill. It meets the edge rather than tucking under it, for the same
+   see-through reason. It grows in the flow, so the queue's footprint above moves
+   up with it and the queue's floating list can never cover it. */
+.chat-composer-tasks {
+	margin: 0 1rem;
+	padding: 0 0.75rem;
+	border-radius: calc(var(--radius-lg) + 0.375rem) calc(var(--radius-lg) + 0.375rem) 0 0;
+	background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+.chat-composer-tasks + .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+
+/* Five rows, then the list scrolls inside itself, never the transcript. */
+.chat-composer-tasks-list {
+	max-height: calc(2rem * 5 + 0.25rem);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding-bottom: 0.25rem;
+}
+
 .chat-composer-startup-shimmer {
 	position: absolute;
 	inset: 0;

@@ -37,6 +37,16 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 	if exists && old.RunID != "" && task.RunID != "" && old.RunID != task.RunID && task.State != "running" {
 		return
 	}
+	// A task keeps the time AO first saw it; a new run of the same id restarts it.
+	sameRun := exists && (task.RunID == "" || old.RunID == "" || task.RunID == old.RunID)
+	if task.StartedAt == nil {
+		if sameRun && old.StartedAt != nil {
+			task.StartedAt = old.StartedAt
+		} else {
+			at := now
+			task.StartedAt = &at
+		}
+	}
 	if task.RunID == "" {
 		task.RunID = old.RunID
 	}
@@ -96,6 +106,10 @@ func (t *Tracker) Snapshot(now time.Time) []ports.ChatBackgroundTask {
 	t.prune(now)
 	out := make([]ports.ChatBackgroundTask, 0, len(t.tasks))
 	for _, task := range t.tasks {
+		if task.StartedAt != nil {
+			at := *task.StartedAt
+			task.StartedAt = &at
+		}
 		if task.EndedAt != nil {
 			at := *task.EndedAt
 			task.EndedAt = &at

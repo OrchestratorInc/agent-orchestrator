@@ -20,6 +20,13 @@ type backgroundTasksService struct {
 	reading chatsvc.BackgroundTaskSnapshot
 	err     error
 	project domain.ProjectID
+	stopped []string
+	stopErr error
+}
+
+func (s *backgroundTasksService) StopBackgroundTask(_ context.Context, _ domain.SessionID, task string) error {
+	s.stopped = append(s.stopped, task)
+	return s.stopErr
 }
 
 func (s *backgroundTasksService) BackgroundTasks(context.Context, domain.SessionID) (chatsvc.BackgroundTaskSnapshot, error) {
@@ -51,6 +58,28 @@ func TestBackgroundTasksRoutesPreserveAvailabilityAndErrors(t *testing.T) {
 	svc.err = ports.ErrSessionNotFound
 	r = request("/sessions/missing/background-tasks")
 	if r.Code != 404 {
+		t.Fatalf("missing session=%d %s", r.Code, r.Body)
+	}
+}
+
+func TestStopBackgroundTaskRouteMapsOutcomes(t *testing.T) {
+	svc := &backgroundTasksService{}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	stop := func() *httptest.ResponseRecorder {
+		r := httptest.NewRecorder()
+		router.ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/sessions/s/background-tasks/bash-1/stop", nil))
+		return r
+	}
+	if r := stop(); r.Code != http.StatusNoContent || len(svc.stopped) != 1 || svc.stopped[0] != "bash-1" {
+		t.Fatalf("stop=%d stopped=%v", r.Code, svc.stopped)
+	}
+	svc.stopErr = ports.ErrBackgroundTaskNotStoppable
+	if r := stop(); r.Code != http.StatusConflict {
+		t.Fatalf("not stoppable=%d %s", r.Code, r.Body)
+	}
+	svc.stopErr = ports.ErrSessionNotFound
+	if r := stop(); r.Code != http.StatusNotFound {
 		t.Fatalf("missing session=%d %s", r.Code, r.Body)
 	}
 }

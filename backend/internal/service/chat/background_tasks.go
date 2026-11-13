@@ -93,6 +93,40 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 	return out, nil
 }
 
+// StopBackgroundTask stops one provider-owned background task. Like a reading,
+// it never starts a controller or wakes a hibernated session.
+func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, taskID string) error {
+	rec, found, err := s.sessions.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ports.ErrSessionNotFound
+	}
+	if rec.IsTerminated || rec.Mode != domain.SessionModeChat || rec.HibernatedAt != nil {
+		return ports.ErrBackgroundTaskNotStoppable
+	}
+	controller, err := s.Controller(id)
+	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != rec.Metadata.ControllerGeneration {
+		return ports.ErrBackgroundTaskNotStoppable
+	}
+	stopper, ok := controller.conv.(ports.ChatBackgroundTaskStopper)
+	if !ok {
+		return ports.ErrBackgroundTaskNotStoppable
+	}
+	stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := stopper.StopBackgroundTask(stopCtx, taskID); err != nil {
+		return err
+	}
+	// The next reading must ask the provider again, not reuse the sample
+	// taken before the stop.
+	controller.backgroundMu.Lock()
+	controller.backgroundSampledAt = time.Time{}
+	controller.backgroundMu.Unlock()
+	return nil
+}
+
 // ListBackgroundTasks inspects only already attached controllers. Sessions
 // omitted from this batch have no reading; clients must not invent a zero.
 func (s *Service) ListBackgroundTasks(ctx context.Context, projectID domain.ProjectID) ([]BackgroundTaskSnapshot, error) {

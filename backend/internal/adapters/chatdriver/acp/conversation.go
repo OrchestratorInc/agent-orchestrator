@@ -155,6 +155,7 @@ type conversation struct {
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	backgroundTasks              func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
+	stopBackgroundTask           func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
 	historyNotice                func(string) bool
 	// promptErrorFailure: see Config.PromptErrorFailure.
 	promptErrorFailure func(error, bool) error

@@ -14,6 +14,10 @@ var ErrBackgroundTasksPartial = errors.New("background task reporting is event-d
 // empty native task registry.
 var ErrBackgroundTasksUnsupported = errors.New("provider cannot report background tasks")
 
+// ErrBackgroundTaskNotStoppable means the provider cannot stop this task now:
+// it has no stop control, or the task is no longer running.
+var ErrBackgroundTaskNotStoppable = errors.New("background task cannot be stopped")
+
 // ChatBackgroundTask is native background work, never an OS process or a
 // foreground tool call. IDs are scoped to one provider controller.
 type ChatBackgroundTask struct {
@@ -22,13 +26,24 @@ type ChatBackgroundTask struct {
 	Kind        string
 	Description string
 	State       string
-	EndedAt     *time.Time
+	// StartedAt is when the provider started the task, or else when AO first
+	// observed it. Nil when neither is known.
+	StartedAt *time.Time
+	EndedAt   *time.Time
+	// Stoppable is true only when this provider can stop this running task.
+	Stoppable bool
 }
 
 // ChatBackgroundTaskInspector reads the provider's complete live background
 // set and any recently settled tasks. Reading must not start or wake a provider.
 type ChatBackgroundTaskInspector interface {
 	BackgroundTasks(context.Context) ([]ChatBackgroundTask, error)
+}
+
+// ChatBackgroundTaskStopper stops one provider-owned background task. It
+// returns ErrBackgroundTaskNotStoppable when the provider has no stop control.
+type ChatBackgroundTaskStopper interface {
+	StopBackgroundTask(ctx context.Context, taskID string) error
 }
 
 // ChatBackgroundTaskDriver describes the reporting path provided by the

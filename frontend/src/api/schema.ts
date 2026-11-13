@@ -2958,6 +2958,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop one native background task without waking the session */
+        post: operations["stopBackgroundTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/chat-view": {
         parameters: {
             query?: never;
@@ -5636,8 +5653,15 @@ export interface components {
             /** @enum {string} */
             kind: "shell" | "agent" | "other";
             runId?: string;
+            /**
+             * Format: date-time
+             * @description When the provider started the task, or else when the daemon first observed it.
+             */
+            startedAt?: null | string;
             /** @enum {string} */
             state: "running" | "paused" | "completed" | "failed" | "stopped";
+            /** @description True when this provider can stop this running task. */
+            stoppable?: boolean;
         };
         BackgroundTasksResponse: {
             /** @enum {string} */
@@ -19736,6 +19760,47 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    stopBackgroundTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Provider-scoped background task identifier. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

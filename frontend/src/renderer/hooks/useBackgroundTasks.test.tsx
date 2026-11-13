@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useBackgroundTaskReadings, useBackgroundTasks } from "./useBackgroundTasks";
+import { useBackgroundTaskReadings, useBackgroundTasks, useStopBackgroundTask } from "./useBackgroundTasks";
 
-const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
-vi.mock("../lib/api-client", () => ({ apiClient: { GET: getMock } }));
+const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
+vi.mock("../lib/api-client", () => ({ apiClient: { GET: getMock, POST: postMock } }));
 
 function BoardConsumer({ projectId }: { projectId?: string }) {
 	const query = useBackgroundTaskReadings(true, projectId);
@@ -68,6 +68,34 @@ describe("background task queries", () => {
 		const view = render(<QueryClientProvider client={client}><Consumer /></QueryClientProvider>);
 		await waitFor(() => expect(screen.getByText("unavailable")).toBeVisible());
 		expect(getMock).toHaveBeenCalledTimes(1);
+		view.unmount();
+		client.clear();
+	});
+});
+
+describe("stopping a background task", () => {
+	beforeEach(() => vi.clearAllMocks());
+	it("posts the stop, treats a settled task as done, and rereads every task view", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		const outcomes: string[] = [];
+		function Stopper({ taskId }: { taskId: string }) {
+			const stop = useStopBackgroundTask("s");
+			return <button type="button" onClick={() => stop.mutate(taskId, { onSuccess: () => outcomes.push(`ok:${taskId}`), onError: () => outcomes.push(`error:${taskId}`) })}>{taskId}</button>;
+		}
+		postMock
+			.mockResolvedValueOnce({ response: { status: 204 } })
+			.mockResolvedValueOnce({ error: { code: "BACKGROUND_TASK_NOT_STOPPABLE" }, response: { status: 409 } })
+			.mockResolvedValueOnce({ error: { code: "INTERNAL" }, response: { status: 500 } });
+		const view = render(<QueryClientProvider client={client}><Stopper taskId="a" /><Stopper taskId="b" /><Stopper taskId="c" /></QueryClientProvider>);
+		for (const id of ["a", "b", "c"]) {
+			screen.getByRole("button", { name: id }).click();
+			await waitFor(() => expect(outcomes).toHaveLength(["a", "b", "c"].indexOf(id) + 1));
+		}
+		expect(outcomes).toEqual(["ok:a", "ok:b", "error:c"]);
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop", { params: { path: { sessionId: "s", taskId: "a" } } });
+		await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3));
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["background-tasks"] });
 		view.unmount();
 		client.clear();
 	});

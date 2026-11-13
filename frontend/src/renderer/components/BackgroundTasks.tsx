@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ListTodo, RefreshCw } from "lucide-react";
-import { useBackgroundTasks, type BackgroundTask, type BackgroundTaskReading } from "../hooks/useBackgroundTasks";
-import { formatMemory, useDiagnosticsEnabled, useSessionMemory } from "../hooks/useSessionMemory";
+import { ChevronRight, ListTodo, Loader2, SquareTerminal } from "@/components/app-icons";
+import {
+	useBackgroundTasks,
+	useStopBackgroundTask,
+	type BackgroundTask,
+	type BackgroundTaskReading,
+} from "../hooks/useBackgroundTasks";
+import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { Pressable } from "./ui/pressable";
-import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 
 function taskSummary(tasks: BackgroundTask[], t: TFunction): string | null {
 	const live = tasks.filter((task) => task.state === "running");
@@ -22,118 +24,213 @@ export function supportsLocalBackgroundTasks(session: WorkspaceSession) {
 	return session.mode === "chat" && !session.isTerminated && !session.hostId && !session.cloud;
 }
 
-/** The board supplies its shared batch reading; cards never create a poller. */
-export function BackgroundTasksButton({ session, reading, stale = false }: {
+/** The board supplies its shared batch reading; cards never create a poller. Plain text: it opens nothing. */
+export function BackgroundTasksBadge({ session, reading, stale = false }: {
 	session: WorkspaceSession;
 	reading?: BackgroundTaskReading;
 	stale?: boolean;
 }) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	const returnFocus = useRef<HTMLElement | null>(null);
 	if (!supportsLocalBackgroundTasks(session)) return null;
 	const summary = reading && reading.availability !== "unavailable" ? taskSummary(reading.tasks, t) : null;
-	if (!summary && !open) return null;
+	if (!summary) return null;
 	return (
-		<>
-			{summary ? <Button
-				type="button"
-				variant="quiet"
-				size="xs"
-				className="max-w-full"
-				onClick={(event) => {
-					event.stopPropagation();
-					// If the badge disappears after completion, return to the card's
-					// primary button instead of leaving keyboard focus on the body.
-					returnFocus.current = event.currentTarget.closest("[data-session-id]")?.querySelector<HTMLElement>("button") ?? event.currentTarget;
-					setOpen(true);
-				}}
-			>
-				<ListTodo aria-hidden="true" className="size-3" />
-				<span>{summary}{stale ? ` · ${t("backgroundTasks.stale")}` : ""}</span>
-			</Button> : null}
-			{open ? <BackgroundTasksDialog key={session.id} session={session} onOpenChange={setOpen} onReturnFocus={() => {
- if (returnFocus.current?.isConnected) returnFocus.current.focus();
- else document.querySelector<HTMLElement>('[aria-label="Message the agent"]')?.focus();
- }} /> : null}
-		</>
+		<span className="inline-flex min-w-0 max-w-full items-center gap-1 text-xs text-muted-foreground">
+			<ListTodo aria-hidden="true" className="size-3 shrink-0" />
+			<span className="truncate">{summary}{stale ? ` · ${t("backgroundTasks.stale")}` : ""}</span>
+		</span>
 	);
 }
 
-/** Chat/detail entry point. The board's badge uses the batch hook instead. */
+const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
+
+/**
+ * What the composer tab shows: live work and recent failures. Agents have their
+ * own Subagents view; work that completed or was stopped needs no attention.
+ */
+export function composerBackgroundTasks(reading?: BackgroundTaskReading): BackgroundTask[] {
+	if (!reading || reading.availability === "unavailable") return [];
+	const tasks = reading.tasks.filter((task) => task.kind !== "agent" && (isLive(task) || task.state === "failed"));
+	// Live work first; the daemon orders by state, but a failure must never lead.
+	return [...tasks.filter(isLive), ...tasks.filter((task) => !isLive(task))];
+}
+
+/** Seconds under a minute, minutes under an hour, then hours: "38s", "12m", "1h 5m". */
+export function formatElapsed(ms: number): string {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	if (seconds < 60) return `${seconds}s`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function elapsed(task: BackgroundTask, now: number): string | null {
+	const start = task.startedAt ? Date.parse(task.startedAt) : Number.NaN;
+	const end = isLive(task) ? now : task.endedAt ? Date.parse(task.endedAt) : Number.NaN;
+	if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+	return formatElapsed(end - start);
+}
+
+/** Ticks only while something runs: every second in a task's first minute, then every ten. */
+function useNow(tasks: BackgroundTask[]): number {
+	const [now, setNow] = useState(() => Date.now());
+	const live = tasks.filter(isLive);
+	const young = live.some((task) => task.startedAt && now - Date.parse(task.startedAt) < 60_000);
+	const ticking = live.length > 0;
+	useEffect(() => {
+		if (!ticking) return;
+		const timer = window.setInterval(() => setNow(Date.now()), young ? 1_000 : 10_000);
+		return () => window.clearInterval(timer);
+	}, [ticking, young]);
+	return now;
+}
+
+const STOP_SETTLE_MS = 10_000;
+const STOP_ERROR_MS = 4_000;
+
+/** Stop requests in flight, per task, and the one that last failed. */
+function useTaskStops(sessionId: string, liveIds: string) {
+	const mutation = useStopBackgroundTask(sessionId);
+	const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
+	const [failed, setFailed] = useState<string | null>(null);
+	const timers = useRef(new Map<string, number>());
+	const release = useCallback((id: string) => {
+		window.clearTimeout(timers.current.get(id));
+		timers.current.delete(id);
+		setStopping((previous) => {
+			if (!previous.has(id)) return previous;
+			const next = new Set(previous);
+			next.delete(id);
+			return next;
+		});
+	}, []);
+	// A stopped task leaves the live set; one that never does gets its button back.
+	useEffect(() => {
+		const live = new Set(liveIds ? liveIds.split("\n") : []);
+		for (const id of [...timers.current.keys()]) if (!live.has(id)) release(id);
+	}, [liveIds, release]);
+	useEffect(() => {
+		if (!failed) return;
+		const timer = window.setTimeout(() => setFailed(null), STOP_ERROR_MS);
+		return () => window.clearTimeout(timer);
+	}, [failed]);
+	useEffect(() => () => {
+		for (const timer of timers.current.values()) window.clearTimeout(timer);
+	}, []);
+	const stop = (id: string) => {
+		if (stopping.has(id)) return;
+		setFailed(null);
+		setStopping((previous) => new Set(previous).add(id));
+		timers.current.set(id, window.setTimeout(() => release(id), STOP_SETTLE_MS));
+		mutation.mutate(id, {
+			onError: () => {
+				release(id);
+				setFailed(id);
+			},
+		});
+	};
+	return { stopping, failed, stop };
+}
+
+/** Chat entry point: a tab on the composer's top edge. Renders nothing while no work shows. */
 export function SessionBackgroundTasks({ session }: { session: WorkspaceSession }) {
-	const query = useBackgroundTasks(session.id, supportsLocalBackgroundTasks(session));
-	return <BackgroundTasksButton session={session} reading={query.data} stale={query.isError} />;
+	const enabled = supportsLocalBackgroundTasks(session);
+	const query = useBackgroundTasks(session.id, enabled);
+	if (!enabled) return null;
+	return <ComposerBackgroundTasks sessionId={session.id} reading={query.data} />;
 }
 
-function BackgroundTasksDialog({ session, onOpenChange, onReturnFocus }: { session: WorkspaceSession; onOpenChange: (open: boolean) => void; onReturnFocus: () => void }) {
+export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: string; reading?: BackgroundTaskReading }) {
 	const { t } = useTranslation();
-	const query = useBackgroundTasks(session.id, supportsLocalBackgroundTasks(session), true);
-	const [selected, setSelected] = useState<BackgroundTask | null>(null);
-	useEffect(() => setSelected(null), [query.data?.controllerGeneration]);
-	const [processesOpen, setProcessesOpen] = useState(false);
-	const diagnostics = useDiagnosticsEnabled();
-	const ready = query.data && query.data.availability !== "unavailable";
-	const tasks = query.data && query.data.availability !== "unavailable" ? query.data.tasks : [];
-	const live = tasks.filter((task) => task.state === "running" || task.state === "paused");
-	const recent = tasks.filter((task) => task.state !== "running" && task.state !== "paused");
-	const current = selected && [...live, ...recent].find((task) => task.id === selected.id && task.runId === selected.runId);
-	const detail = current ?? selected;
-	return (
-		<Dialog open onOpenChange={onOpenChange}>
-			<DialogContent className="max-h-[80vh] overflow-auto sm:max-w-xl" onClick={(event) => event.stopPropagation()} onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus(); }}>
-				<DialogTitle>{t("backgroundTasks.title")}</DialogTitle>
-				<DialogDescription>{session.title}</DialogDescription>
-				<div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-					<span>{query.data?.observedAt ? t("backgroundTasks.observed", { time: new Date(query.data.observedAt).toLocaleTimeString() }) : ""}</span>
-					<Button type="button" variant="quiet" size="xs" onClick={() => void query.refetch()} disabled={query.isFetching}>
-						<RefreshCw aria-hidden="true" className="size-3" />{t("backgroundTasks.refresh")}
-					</Button>
-				</div>
-				{query.isError ? <p role="status" className="text-xs text-warning">{t("backgroundTasks.staleReading")}</p> : null}
-				{query.isPending ? <p className="text-sm text-muted-foreground">{t("backgroundTasks.loading")}</p> : !ready ? (
-					<p className="text-sm text-muted-foreground">{t("backgroundTasks.unavailable")}</p>
-				) : (
-					<>
-						{query.data?.availability === "partial" ? <p role="status" className="text-xs text-muted-foreground">{t("backgroundTasks.partial")}</p> : null}
-						<h3 className="text-xs font-medium">{t("backgroundTasks.running", { count: live.length })}</h3>
-						{!live.length ? <p className="text-sm text-muted-foreground">{t("backgroundTasks.empty")}</p> : null}
-						{live.map((task) => <TaskRow key={`${task.id}:${task.runId ?? ""}`} task={task} onSelect={setSelected} />)}
-						{recent.length ? <h3 className="mt-2 text-xs font-medium">{t("backgroundTasks.recent")}</h3> : null}
-						{recent.map((task) => <TaskRow key={`${task.id}:${task.runId ?? ""}`} task={task} onSelect={setSelected} />)}
-					</>
-				)}
-				{detail ? (
-					<div className="rounded border border-border p-3 text-xs">
-						<p className="mb-2 break-words font-medium">{detail.description || detail.id}</p>
-						<p className="text-muted-foreground">{query.isError || !ready ? t("backgroundTasks.unavailable") : current ? t(`backgroundTasks.state.${detail.state}`) : t("backgroundTasks.noLongerReported")}</p>
-						<p className="mt-2 break-all font-mono text-muted-foreground">{detail.id}</p>
-					</div>
-				) : null}
-				<details className="border-t border-border pt-3 text-xs text-muted-foreground" onToggle={(event) => setProcessesOpen(event.currentTarget.open)}>
-					<summary className="cursor-pointer">{t("backgroundTasks.processDetails")}</summary>
-					<p className="my-2">{t("backgroundTasks.processHint")}</p>
-					{processesOpen && diagnostics ? <SessionProcessDetails sessionId={session.id} /> : <p className="mt-2">{t("backgroundTasks.diagnosticsRequired")}</p>}
-				</details>
-			</DialogContent>
-		</Dialog>
+	const listId = useId();
+	const tasks = useMemo(() => composerBackgroundTasks(reading), [reading]);
+	const live = tasks.filter(isLive);
+	const failedCount = tasks.length - live.length;
+	const now = useNow(tasks);
+	const { stopping, failed, stop } = useTaskStops(sessionId, live.map((task) => task.id).join("\n"));
+	const [open, setOpen] = useState(false);
+	const several = tasks.length > 1;
+	// Back to one line, the list has nothing to hold: start closed next time.
+	const [wasSeveral, setWasSeveral] = useState(several);
+	if (several !== wasSeveral) {
+		setWasSeveral(several);
+		if (!several) setOpen(false);
+	}
+	if (!tasks.length) return null;
+
+	const name = (task: BackgroundTask) => task.description || t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other");
+	const status = (task: BackgroundTask) => isLive(task) ? (
+		<span role="img" aria-label={t("backgroundTasks.state.running")} className="grid size-3 shrink-0 place-items-center">
+			<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60 motion-reduce:animate-none" />
+		</span>
+	) : (
+		<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 shrink-0 rounded-full bg-destructive" />
 	);
-}
+	const time = (task: BackgroundTask) => {
+		if (failed === task.id) {
+			return <span role="status" className="shrink-0 text-[11px] text-destructive">{t("backgroundTasks.stopFailed")}</span>;
+		}
+		const text = elapsed(task, now);
+		return text ? <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{text}</span> : null;
+	};
+	// Only a live task its provider can stop gets the square; the rest end flush.
+	const stopButton = (task: BackgroundTask) => isLive(task) && task.stoppable ? (
+		<Button
+			type="button"
+			variant="quiet"
+			size="icon-xs"
+			className="-mr-1 shrink-0"
+			aria-label={t("backgroundTasks.stop", { name: name(task) })}
+			disabled={stopping.has(task.id)}
+			onClick={() => stop(task.id)}
+		>
+			<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
+		</Button>
+	) : null;
 
-function TaskRow({ task, onSelect }: { task: BackgroundTask; onSelect: (task: BackgroundTask) => void }) {
-	const { t } = useTranslation();
-	return <Pressable aria-label={`${task.description || task.id} · ${t(`backgroundTasks.kind.${task.kind}`)} · ${t(`backgroundTasks.state.${task.state}`)}`} className={`${NAV_ROW_HIGHLIGHT_HOST_CLASS} flex w-full items-start justify-between gap-3 rounded p-3 text-xs`} onClick={() => onSelect(task)}>
-		<NavRowHighlight />
-		<span className="relative z-[1] min-w-0"><span className="block break-words">{task.description || task.id}</span><span className="mt-1 block text-muted-foreground">{t(`backgroundTasks.kind.${task.kind}`)}</span></span>
-		<span className="relative z-[1] shrink-0 text-muted-foreground">{t(`backgroundTasks.state.${task.state}`)}</span>
-	</Pressable>;
-}
+	if (!several) {
+		const [task] = tasks;
+		return (
+			<section aria-label={t("backgroundTasks.title")} className="chat-composer-tasks">
+				<div className="flex h-8 min-w-0 items-center gap-2">
+					<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+					<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
+					<span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
+						{status(task)}
+						{time(task)}
+					</span>
+					{stopButton(task)}
+				</div>
+			</section>
+		);
+	}
 
-function SessionProcessDetails({ sessionId }: { sessionId: string }) {
-	const { t } = useTranslation();
-	const query = useSessionMemory();
-	const reading = query.data?.get(sessionId);
-	if (query.isPending) return <p>{t("backgroundTasks.loading")}</p>;
-	if (!reading || query.isError) return <p>{t("backgroundTasks.processUnavailable")}</p>;
-	return <ul className="space-y-2">{reading.processes.map((process) => <li key={process.pid} className="flex justify-between gap-3 font-mono"><span className="min-w-0 truncate" title={process.command}>{process.pid} · {process.command}</span><span className="shrink-0">{formatMemory(process.rssBytes)}</span></li>)}</ul>;
+	return (
+		<section aria-label={t("backgroundTasks.title")} className="chat-composer-tasks">
+			<button
+				type="button"
+				aria-expanded={open}
+				aria-controls={open ? listId : undefined}
+				onClick={() => setOpen((value) => !value)}
+				className="flex h-8 w-full min-w-0 items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+			>
+				<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+				{live.length ? <span className="shrink-0 text-xs font-medium text-foreground/90">{t("backgroundTasks.runningCount", { count: live.length })}</span> : null}
+				{failedCount ? <span className="min-w-0 truncate text-[11px] text-destructive">{t("backgroundTasks.failedCount", { count: failedCount })}</span> : null}
+				<ChevronRight aria-hidden="true" className={cn("ml-auto size-3 shrink-0 text-muted-foreground/60 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+			</button>
+			{open ? (
+				<ul id={listId} className="chat-composer-tasks-list">
+					{tasks.map((task) => (
+						<li key={`${task.id}:${task.runId ?? ""}`} className="flex h-8 min-w-0 items-center gap-2">
+							<span className="grid size-4 shrink-0 place-items-center">{status(task)}</span>
+							<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
+							{time(task)}
+							{stopButton(task)}
+						</li>
+					))}
+				</ul>
+			) : null}
+		</section>
+	);
 }

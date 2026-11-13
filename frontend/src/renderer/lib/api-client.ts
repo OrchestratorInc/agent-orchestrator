@@ -162,6 +162,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/sessions",
 	"/api/v1/sessions/background-tasks",
 	"/api/v1/sessions/{sessionId}/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop",
 	"/api/v1/sessions/{sessionId}",
 	"/api/v1/sessions/{sessionId}/activity",
 	"/api/v1/sessions/{sessionId}/exit-agent",

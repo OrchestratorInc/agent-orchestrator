@@ -1354,6 +1354,12 @@ func shellTerminalOperations() []operation {
 			resps:      []respUnit{{http.StatusOK, controllers.BackgroundTasksResponse{}}, {http.StatusNotFound, envelope.APIError{}}},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop", id: "stopBackgroundTask", tag: "conversations",
+			summary:    "Stop one native background task without waking the session",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BackgroundTaskIDParam{}},
+			resps:      []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/chat-view", id: "setSessionChatView", tag: "conversations",
 			summary:    "Keep a viewed chat awake or release its view lease",
 			pathParams: []any{controllers.SessionIDParam{}},

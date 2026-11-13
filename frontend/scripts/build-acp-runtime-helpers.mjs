@@ -217,6 +217,8 @@ function aoObserveBackgroundTasks(session, message) {
 				kind: task.task_type === "local_bash" ? "shell" : task.task_type === "local_agent" ? "agent" : "other",
 				description: task.description ?? "", state: "running", observedAt: now, wasBackground: true,
 				ambient: task.ambient === true || (sameRun && previous?.ambient === true),
+				// The run's own start when its task_started was seen, else the first snapshot.
+				startedAt: (sameRun && previous?.startedAt) || new Date(now).toISOString(),
 			};
 			known.set(record.id, record);
 			if (!record.ambient) live.set(record.id, record);
@@ -228,7 +230,7 @@ function aoObserveBackgroundTasks(session, message) {
 		// grants membership; starts can enrich or hide an already known task.
 		let record = known.get(message.task_id);
 		if (!record || (message.run_id && record.runId && message.run_id !== record.runId)) {
-			record = { id: message.task_id, runId: message.run_id, observedAt: now };
+			record = { id: message.task_id, runId: message.run_id, observedAt: now, startedAt: new Date(now).toISOString() };
 			known.set(message.task_id, record);
 		}
 		if (record && (!message.run_id || !record.runId || record.runId === message.run_id)) {
@@ -271,7 +273,18 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             if (!session.aoBackgroundReady) throw RequestError.methodNotFound("Background task snapshot unavailable.");
             aoObserveBackgroundTasks(session, { subtype: "prune" });
             const tasks = [...session.aoBackgroundLive.values(), ...session.aoBackgroundRecent.values()];
-            return { tasks: tasks.map(({ id, runId, kind, description, state, endedAt }) => ({ id, runId, kind, description, state, endedAt })) };
+            return { tasks: tasks.map(({ id, runId, kind, description, state, startedAt, endedAt }) => ({ id, runId, kind, description, state, startedAt, endedAt, stoppable: state === "running" })) };
+        })
+        .onRequest("_ao/session/stop_background_task", { parse: params => params }, async (ctx) => {
+            const id = ctx.params?.sessionId;
+            const taskId = ctx.params?.taskId;
+            const session = typeof id === "string" && Object.hasOwn(agent.sessions, id) ? agent.sessions[id] : undefined;
+            if (!session || session.queryClosed) throw RequestError.invalidParams(undefined, "Live Claude session unavailable.");
+            // Only work in the background projection above: never a foreground call.
+            if (typeof taskId !== "string" || !session.aoBackgroundLive?.has(taskId)) throw RequestError.invalidParams(undefined, "Background task is not running.");
+            // The SDK settles it with a task_notification "stopped", which the projection records.
+            await session.query.stopTask(taskId);
+            return {};
         })
         `;
 	writeFileSync(adapterPath, `${aoObserveBackgroundTasks.toString()}\n${source.replace(marker, registration + marker)}`);

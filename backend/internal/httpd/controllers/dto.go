@@ -2394,7 +2394,14 @@ type BackgroundTaskResponse struct {
 	Kind        string     `json:"kind" enum:"shell,agent,other"`
 	Description string     `json:"description"`
 	State       string     `json:"state" enum:"running,paused,completed,failed,stopped"`
+	StartedAt   *time.Time `json:"startedAt,omitempty" description:"When the provider started the task, or else when the daemon first observed it."`
 	EndedAt     *time.Time `json:"endedAt,omitempty"`
+	Stoppable   bool       `json:"stoppable,omitempty" description:"True when this provider can stop this running task."`
+}
+
+// BackgroundTaskIDParam names one provider-owned background task.
+type BackgroundTaskIDParam struct {
+	TaskID string `path:"taskId" description:"Provider-scoped background task identifier."`
 }
 
 // BackgroundTasksResponse distinguishes unavailable reporting from no live tasks.

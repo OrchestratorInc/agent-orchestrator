@@ -8084,6 +8084,42 @@ paths:
       summary: Inspect native background work without waking the session
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop:
+    post:
+      operationId: stopBackgroundTask
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Provider-scoped background task identifier.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Provider-scoped background task identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Stop one native background task without waking the session
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/chat-view:
     post:
       operationId: setSessionChatView
@@ -16471,6 +16507,13 @@ components:
           type: string
         runId:
           type: string
+        startedAt:
+          description: When the provider started the task, or else when the daemon
+            first observed it.
+          format: date-time
+          type:
+          - "null"
+          - string
         state:
           enum:
           - running
@@ -16479,6 +16522,9 @@ components:
           - failed
           - stopped
           type: string
+        stoppable:
+          description: True when this provider can stop this running task.
+          type: boolean
       required:
       - id
       - kind

@@ -31,6 +31,22 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 	return c.backgroundObserved.Snapshot(time.Now()), ports.ErrBackgroundTasksPartial
 }
 
+var _ ports.ChatBackgroundTaskStopper = (*conversation)(nil)
+
+// StopBackgroundTask asks the provider to stop one of its own background tasks.
+func (c *conversation) StopBackgroundTask(ctx context.Context, taskID string) error {
+	c.mu.Lock()
+	id, closed := c.sessionID, c.closed
+	c.mu.Unlock()
+	if closed {
+		return errConversationClosed
+	}
+	if c.stopBackgroundTask == nil || taskID == "" {
+		return ports.ErrBackgroundTaskNotStoppable
+	}
+	return c.stopBackgroundTask(ctx, c.conn, acpsdk.SessionId(id), taskID)
+}
+
 func (c *conversation) observeBackgroundTool(tool *toolState) {
 	// A provider can report an explicit background transition in raw input or
 	// metadata. Do not identify jobs by titles, output text, or terminal existence.
