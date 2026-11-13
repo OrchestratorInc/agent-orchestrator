@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { openSync, closeSync, writeSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -119,6 +119,34 @@ describe("snapshotShareFile", () => {
 		await expect(snapshotShareFile(file, path.join(dataDir, "snapshots"))).rejects.toThrow("changed");
 		await expect(statShareFile(file)).rejects.toThrow("changed");
 		expect(await fs.readdir(path.join(dataDir, "snapshots")).catch(() => [])).toEqual([]);
+	});
+
+	it("refuses a file rewritten while it is copied, though its size stays the same", async () => {
+		// 2 MiB, last written long ago: a write during the copy moves its times.
+		const big = path.join(artifacts, "big.bin");
+		await fs.writeFile(big, Buffer.alloc(2 << 20, 1));
+		const past = new Date("2020-01-01T00:00:00Z");
+		await fs.utimes(big, past, past);
+		const file = await resolveShareFile(dataDir, "sess-1", "big.bin");
+		const inspected = await statShareFile(file);
+		let rewritten = false;
+		const snapshot = snapshotShareFile(file, path.join(dataDir, "snapshots"), {
+			// After the first MiB is copied, an agent rewrites the second one.
+			onProgress: () => {
+				if (rewritten) return;
+				rewritten = true;
+				const handle = openSync(big, "r+");
+				writeSync(handle, Buffer.alloc(1 << 20, 2), 0, 1 << 20, 1 << 20);
+				closeSync(handle);
+			},
+		});
+		await expect(snapshot).rejects.toMatchObject({ code: "source_changed" });
+		expect(rewritten).toBe(true);
+		expect(await fs.readdir(path.join(dataDir, "snapshots"))).toEqual([]);
+		// Left alone, the same file copies, and names its new version.
+		const again = await snapshotShareFile(await resolveShareFile(dataDir, "sess-1", "big.bin"), path.join(dataDir, "snapshots"));
+		expect(again.fingerprint).not.toBe(inspected);
+		expect(again.size).toBe(2 << 20);
 	});
 
 	it("reports progress and stops when cancelled", async () => {

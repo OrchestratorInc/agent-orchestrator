@@ -35,6 +35,7 @@ import {
 	shareLinksAvailable,
 	shareCloudSessionArtifact,
 	type ShareSnapshot,
+	shareFileFingerprint,
 	snapshotShareFile,
 	statShareFile,
 	unpublishShareLink,
@@ -304,27 +305,36 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			const progress = (sentBytes: number, totalBytes: number) => {
 				if (!sender.isDestroyed()) sender.send(CLOUD_SHARE_PROGRESS_CHANNEL, { sessionId: file.sessionId, path: file.path, sentBytes, totalBytes });
 			};
-			// Preparing the snapshot is the first half of the progress, uploading it the second.
-			snapshot = await snapshotShareFile(resolved, deps.snapshotDir(), {
-				signal: controller.signal,
-				onProgress: (copied) => progress(copied, resolved.size * 2),
-			});
-			const taken = snapshot;
-			// Publish only the file as the panel showed it: one rewritten since is offered again.
 			const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
 			const shareId = await deps.records.get(key);
-			if (!file.fingerprint || !sameShareFingerprint(taken.fingerprint, file.fingerprint)) {
+			// The file as it is now, for the panel to show and publish again.
+			const changed = async (): Promise<CloudSharePublishResult> => {
+				const now = await fs.stat(resolved.realPath);
 				return {
 					status: "changed",
 					inspection: {
 						name: resolved.name,
-						size: taken.size,
+						size: now.size,
 						unsupported: false,
-						fingerprint: taken.fingerprint,
+						fingerprint: shareFileFingerprint(now),
 						...(shareId ? { shareId } : {}),
 					},
 				};
+			};
+			// Preparing the snapshot is the first half of the progress, uploading it the second.
+			try {
+				snapshot = await snapshotShareFile(resolved, deps.snapshotDir(), {
+					signal: controller.signal,
+					onProgress: (copied) => progress(copied, resolved.size * 2),
+				});
+			} catch (error) {
+				// Written to while it was copied: nothing is published, and the newest version is offered.
+				if (error instanceof CloudShareError && error.code === "source_changed") return await changed();
+				throw error;
 			}
+			const taken = snapshot;
+			// Publish only the file as the panel showed it: one rewritten since is offered again.
+			if (!file.fingerprint || !sameShareFingerprint(taken.fingerprint, file.fingerprint)) return await changed();
 			if (controller.signal.aborted) return { status: "cancelled" };
 			// The document is the file's path in its session's artifacts, in its project.
 			const folder = path.posix.dirname(resolved.relativePath);

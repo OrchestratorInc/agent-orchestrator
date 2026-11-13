@@ -127,7 +127,8 @@ export interface SnapshotOptions {
 
 /**
  * Copies a shared file into a private snapshot under snapshotDir, hashing it
- * as it goes. The upload reads only the snapshot. The copy
+ * as it goes. A file written while it is copied is refused (source_changed):
+ * the snapshot would not be the version its fingerprint names. The upload reads only the snapshot. The copy
  * needs as much free space as the file, which is checked first.
  */
 export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: string, options: SnapshotOptions = {}): Promise<ShareSnapshot> {
@@ -152,6 +153,15 @@ export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: st
 			await output.write(chunk);
 			size += bytesRead;
 			options.onProgress?.(size);
+		}
+		// The fingerprint is taken before the copy, so the copy must end on the
+		// same version: a write while it ran (an agent rewriting a part not yet
+		// read) leaves bytes the fingerprint does not name. The same open file
+		// is checked again, by its size, modification and change time, and the
+		// bytes copied must be all of it.
+		const after = await source.stat();
+		if (size !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) {
+			throw new CloudShareError("source_changed", "The file changed while it was being prepared for sharing.");
 		}
 		return { path: target, size, sha256: hash.digest("hex"), fingerprint: shareFileFingerprint(stat) };
 	} catch (error) {

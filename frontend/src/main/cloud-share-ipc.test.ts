@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { promises as fs } from "node:fs";
+import { openSync, closeSync, writeSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -347,6 +347,28 @@ describe("cloudShare IPC", () => {
 		await expect(malformed.invoke("cloudShare:publish", { ...malformed.cloudFile, orgId: "../x", fingerprint: CLOUD_SHA256 })).resolves.toEqual({ status: "error", message: "Not a cloud session's artifact." });
 		await expect(malformed.invoke("cloudShare:publish", { ...malformed.cloudFile, orgId: undefined })).rejects.toThrow("Not a file to share");
 		await expect(malformed.invoke("cloudShare:inspect", { ...malformed.cloudFile, path: "missing.md" })).rejects.toThrow("no longer available");
+	});
+
+	it("publishes nothing when the file is rewritten while it is being copied", async () => {
+		const { invoke, file, requests, sender } = setup();
+		const big = path.join(dataDir, "artifacts", "sess-1", "docs", "report.html");
+		await fs.writeFile(big, Buffer.alloc(2 << 20, 1));
+		const past = new Date("2020-01-01T00:00:00Z");
+		await fs.utimes(big, past, past);
+		const shown = (await invoke("cloudShare:inspect", file)) as { fingerprint: string };
+		// The first progress report comes after the first MiB is copied: rewrite the second.
+		sender.send.mockImplementationOnce(() => {
+			const handle = openSync(big, "r+");
+			writeSync(handle, Buffer.alloc(1 << 20, 2), 0, 1 << 20, 1 << 20);
+			closeSync(handle);
+			return false;
+		});
+		const result = await invoke("cloudShare:publish", { ...file, fingerprint: shown.fingerprint }) as { status: string; inspection?: { fingerprint: string; size: number } };
+		expect(result.status).toBe("changed");
+		expect(result.inspection?.size).toBe(2 << 20);
+		expect(result.inspection?.fingerprint).not.toBe(shown.fingerprint);
+		expect(requests).toEqual([]);
+		expect(await snapshots()).toEqual([]);
 	});
 
 	it("publishes nothing when the file changed since it was inspected", async () => {
