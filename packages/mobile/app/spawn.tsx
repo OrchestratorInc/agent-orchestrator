@@ -2,8 +2,9 @@ import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
+import { clearSpawnDraft, createSpawnDraftSaver, loadSpawnDraft } from "../lib/spawnDraft";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
+import { AppState, Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
@@ -112,6 +113,33 @@ export default function SpawnScreen() {
 	const [prompt, setPrompt] = useState("");
 	const [attachments, setAttachments] = useState<SpawnAttachment[]>([]);
 	const attachmentsRef = useRef<SpawnAttachment[]>([]);
+	// The prompt and attachments are saved as they change, so they survive the
+	// phone closing the app in the background (see spawnDraft). A draft from
+	// before comes back when the page opens empty; starting the task clears it.
+	const draftSaver = useRef(createSpawnDraftSaver()).current;
+	const draftRestored = useRef(false);
+	const startedRef = useRef(false);
+	useEffect(() => {
+		if (!draftRestored.current || startedRef.current) return;
+		draftSaver.schedule({ prompt, attachments });
+	}, [attachments, draftSaver, prompt]);
+	useEffect(() => {
+		let active = true;
+		void loadSpawnDraft().then((draft) => {
+			if (!active || !draft) return;
+			setPrompt((current) => current || draft.prompt);
+			if (!attachmentsRef.current.length && draft.attachments.length) {
+				attachmentsRef.current = draft.attachments;
+				setAttachments(draft.attachments);
+			}
+		}).finally(() => { if (active) draftRestored.current = true; });
+		const subscription = AppState.addEventListener("change", (state) => { if (state !== "active") void draftSaver.flush(); });
+		return () => {
+			active = false;
+			subscription.remove();
+			void draftSaver.flush();
+		};
+	}, [draftSaver]);
 	const pickingAttachments = useRef(false);
 	// A paste that came in while a pick was loading, said again when it ends.
 	const missedPaste = useRef(false);
@@ -633,6 +661,9 @@ export default function SpawnScreen() {
 				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
+			// Started: the draft goes, so the next New task opens empty.
+			startedRef.current = true;
+			void draftSaver.cancel().then(clearSpawnDraft).catch(() => {});
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			else rememberLastProject(selectedHostId, projectId);
 			holding.current = false;
