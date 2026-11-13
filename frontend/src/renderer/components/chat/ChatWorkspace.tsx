@@ -1338,12 +1338,14 @@ function ChatWorkspaceContent({
 					});
 				} catch (error) {
 					// These outcomes follow the daemon's atomic receipt lookup, so even
-					// a recovered retry proves this exact edit was never accepted.
+					// a recovered retry proves this exact edit was never accepted. A
+					// Cloud control plane's refusal of the edit proves it too.
 					if ([
 						"CHAT_TURN_NOT_QUEUED",
 						"CHAT_QUEUED_EDIT_CONFLICT",
 						"CHAT_QUEUED_CONTENT_INVALID",
 						"CHAT_QUEUED_TEXT_REQUIRED",
+						"CHAT_QUEUED_EDIT_REFUSED",
 					].includes(apiErrorCode(error) ?? "")) {
 						updateQueueDraft({
 							...prepared.draft.queuedEdit,

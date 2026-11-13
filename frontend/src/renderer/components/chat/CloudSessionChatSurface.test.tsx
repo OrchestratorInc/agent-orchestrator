@@ -24,6 +24,7 @@ const cloudMocks = vi.hoisted(() => ({
 	sendSessionMessage: vi.fn(),
 	cancelTurn: vi.fn(),
 	steerTurn: vi.fn(),
+	editQueuedMessage: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
 	listUserAgentModels: vi.fn(),
@@ -32,13 +33,13 @@ const cloudMocks = vi.hoisted(() => ({
 	chatProps: vi.fn(),
 }));
 // The control plane's base URL and attachment limit, for the tests that attach files.
-const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined }));
+const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined, features: [] as string[] }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl, userId: "user-1" }),
 }));
 vi.mock("../../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({
-		features: cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"],
+		features: [...(cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"]), ...cloudSetup.features],
 		maxAttachmentBytes: cloudSetup.maxAttachmentBytes,
 	}),
 }));
@@ -97,6 +98,7 @@ describe("CloudSessionChatSurface", () => {
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 		cloudSetup.baseUrl = "";
 		cloudSetup.maxAttachmentBytes = undefined;
+		cloudSetup.features = [];
 	});
 
 	it("lists the session's agent's models from Cloud's list for the account, not this computer's", async () => {
@@ -410,6 +412,43 @@ describe("CloudSessionChatSurface", () => {
 		]).items[0];
 		expect(withoutFiles).toMatchObject({ text: "second" });
 		expect(withoutFiles).not.toHaveProperty("cloudAttachments");
+	});
+
+	// The queue editor lets go of an edit only for a refusal that proves it was
+	// not applied; any other failure keeps it pending, to retry, with its
+	// Cancel and the message's own Cancel held. A control plane's refusal is
+	// such proof, so the edit is handed back with its reason.
+	it("hands a refused queued edit back to the editor, and keeps one without an answer pending", async () => {
+		cloudSetup.features = ["queued-edit"];
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0, hasOlder: false, nextBefore: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onEditQueuedTurn).toEqual(expect.any(Function)));
+		const edit = (text: string) => cloudMocks.chatProps.mock.lastCall?.[0].onEditQueuedTurn("turn-1", text) as Promise<unknown>;
+		const file = { id: "a1", fileName: "shot.png", contentType: "image/png", size: 1 };
+
+		cloudMocks.editQueuedMessage.mockReset().mockResolvedValue({ event: {} });
+		await act(async () => { await edit(`Use the parser\n\nAttached files (read these files in the workspace):\n- ${cloudAttachmentReference(file)}`); });
+		expect(cloudMocks.editQueuedMessage).toHaveBeenCalledWith("org-1", session.id, "turn-1", { text: "Use the parser", attachmentIds: ["a1"] });
+
+		const outcome = async (error: Error) => {
+			cloudMocks.editQueuedMessage.mockReset().mockRejectedValue(error);
+			let thrown: unknown;
+			await act(async () => { thrown = await edit("Use the parser").catch((reason: unknown) => reason); });
+			return thrown;
+		};
+		expect(await outcome(new CloudCpError("The agent already started on this message, so it can no longer be edited.", { status: 409, code: "TURN_NOT_QUEUED" })))
+			.toMatchObject({ code: "CHAT_TURN_NOT_QUEUED", message: "The agent already started on this message, so it can no longer be edited." });
+		expect(await outcome(new CloudCpError("text must be at most 65536 bytes", { status: 422, code: "validation_error" })))
+			.toMatchObject({ code: "CHAT_QUEUED_EDIT_REFUSED", message: "text must be at most 65536 bytes" });
+		expect(await outcome(new CloudCpError("This session's sandbox runs an older AO worker that cannot receive attached files.", { status: 409, code: "ATTACHMENTS_UNSUPPORTED" })))
+			.toMatchObject({ code: "CHAT_QUEUED_EDIT_REFUSED" });
+		// A server error or a lost answer says nothing about the edit.
+		expect(await outcome(new CloudCpError("The request could not be completed.", { status: 500, code: "internal_error" }))).toMatchObject({ code: "internal_error" });
+		expect(await outcome(new CloudCpError("Too many requests.", { status: 429, code: "rate_limited" }))).toMatchObject({ code: "rate_limited" });
+		expect(await outcome(new TypeError("Failed to fetch"))).not.toHaveProperty("code");
 	});
 
 	// The control plane lets only a message's author edit it.

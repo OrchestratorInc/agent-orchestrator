@@ -1517,6 +1517,13 @@ export function CloudSessionChatSurface({
 				if (error instanceof CloudCpError && error.code === "TURN_NOT_QUEUED") {
 					throw Object.assign(new Error(error.message), { code: "CHAT_TURN_NOT_QUEUED" });
 				}
+				// Any other refusal (a text too long, files the worker cannot take)
+				// left the message as it was, so the editor gets the edit back with
+				// the reason. A server error, a rate limit or no answer stays
+				// pending for the editor to retry.
+				if (error instanceof CloudCpError && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) {
+					throw Object.assign(new Error(error.message), { code: "CHAT_QUEUED_EDIT_REFUSED" });
+				}
 				throw error;
 			}
 		},

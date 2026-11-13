@@ -6586,6 +6586,23 @@ describe("durable queued edits", () => {
 		expect(text).toContain(cloudAttachmentReference(file));
 	});
 
+	// A refusal that proves the edit was not applied (a Cloud control plane's
+	// own) hands it back: the text stays, and it can be saved again or cancelled.
+	it("hands a refused queued edit back to its editor instead of holding it for recovery", async () => {
+		const snapshot = queuedSnapshot();
+		const save = vi.fn().mockRejectedValue(Object.assign(new Error("text must be at most 65536 bytes"), { code: "CHAT_QUEUED_EDIT_REFUSED" }));
+		render(<ChatWorkspace snapshot={snapshot} onSend={vi.fn()} onEditQueuedTurn={save} />);
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), " refused");
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(save).toHaveBeenCalledOnce());
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("text must be at most 65536 bytes"));
+		expect(screen.queryByRole("button", { name: "Retry edit safely" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Cancel edit" })).toBeEnabled();
+		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit).toMatchObject({ text: "queued text refused" });
+		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.clientMessageId).toBeUndefined();
+	});
+
 	// A chat may narrow which queued messages it can edit (a Cloud chat: its
 	// viewer's own, without quotes).
 	it("offers Edit only on the queued messages the chat can edit", () => {
