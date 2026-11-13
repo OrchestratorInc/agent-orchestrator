@@ -354,6 +354,26 @@ describe("HarnessLoginPanel", () => {
 		expect(startAgentUILogin).toHaveBeenCalledWith("aider", "aider_openrouter_key", "sk-or", undefined);
 		expect(await screen.findByText("Configured", {}, { timeout: 3_000 })).toBeVisible();
 	});
+	// Keys are set here, so this is where the user hears that turning sharing
+	// off left AO's copy in the user environment.
+	it("warns when a saved key is still in the user environment", async () => {
+		const user = userEvent.setup();
+		const saved: AgentLoginSnapshot = { ...snapshot, agentId: "gemini", method: "gemini_api_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined, withdrawFailed: true };
+		vi.mocked(startAgentUILogin).mockResolvedValue(saved);
+		render(<HarnessLoginPanel agentId="gemini" methods={[{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.type(screen.getByLabelText("API key"), "sk-gemini");
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
+		expect(await screen.findByText("Saved, but apps outside AO can still see this key until you log out.")).toBeVisible();
+	});
+	it("says nothing about the user environment when the key left it", async () => {
+		const user = userEvent.setup();
+		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "gemini", method: "gemini_api_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
+		render(<HarnessLoginPanel agentId="gemini" methods={[{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.type(screen.getByLabelText("API key"), "sk-gemini");
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
+		expect(await screen.findByText("Configured", {}, { timeout: 3_000 })).toBeVisible();
+		expect(screen.queryByText(/apps outside AO can still see this key/)).toBeNull();
+	});
 	it("saves a Google AI Studio key for Gemini alongside native sign-in", async () => {
 		const user = userEvent.setup();
 		const saved: AgentLoginSnapshot = { ...snapshot, agentId: "gemini", method: "gemini_api_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined };

@@ -5240,6 +5240,7 @@ export interface components {
             selectedOption?: string;
             /** @enum {string} */
             status: "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
+            withdrawFailed?: boolean;
         };
         AgentModelInfo: {
             /** Format: int64 */

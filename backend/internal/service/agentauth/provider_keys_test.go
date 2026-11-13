@@ -157,7 +157,7 @@ func TestHarnessPanelClaimsItsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, withhold, _ := providerkeys.ForSession(dir, "claude-code"); len(withhold) != 1 {
-		t.Fatalf("a key saved on the API keys page reached Claude Code: withhold=%v", withhold)
+		t.Fatalf("a key saved for another harness reached Claude Code: withhold=%v", withhold)
 	}
 	if _, err := svc.StartLogin(t.Context(), "claude-code", "env_ANTHROPIC_API_KEY", "panel-key"); err != nil {
 		t.Fatal(err)
@@ -464,5 +464,30 @@ func TestFailedReplacementSaveGivesTheNameBackToTheUser(t *testing.T) {
 	}
 	if keys, _ := providerkeys.Load(dir); keys["GROQ_API_KEY"] != "groq-users-own" {
 		t.Fatalf("stored key = %q, want the earlier one", keys["GROQ_API_KEY"])
+	}
+}
+
+// The login panel is where keys are set, so it hears when turning sharing
+// off left AO's copy in the user environment.
+func TestKeyLoginReportsAWithdrawalThatFailed(t *testing.T) {
+	stubDeviceEnvironment(t)
+	unpublishProviderKey = func(context.Context, string, string) error { return errors.New("no user bus") }
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Cleanup(func() { _ = providerkeys.RestoreInherited("OPENAI_API_KEY") })
+	svc := NewWithAgentResolver(foundExecutable("goose"), nil, nil, t.TempDir())
+	t.Cleanup(svc.Close)
+	shared, err := svc.StartLoginWithOptions(t.Context(), "goose", "env_OPENAI_API_KEY", "sk-goose-secret", LoginOptions{Device: new(true)})
+	if err != nil || shared.Status != "succeeded" || shared.WithdrawFailed {
+		t.Fatalf("sharing = %+v, %v", shared, err)
+	}
+	off, err := svc.StartLoginWithOptions(t.Context(), "goose", "env_OPENAI_API_KEY", "", LoginOptions{Device: new(false)})
+	if err != nil || off.Status != "succeeded" {
+		t.Fatalf("turning sharing off = %+v, %v; want it saved", off, err)
+	}
+	if !off.WithdrawFailed {
+		t.Fatal("the login did not report that AO's copy could not be withdrawn")
+	}
+	if found, err := svc.Login(t.Context(), "goose", off.ID); err != nil || !found.WithdrawFailed {
+		t.Fatalf("polled login = %+v, %v; want the warning kept", found, err)
 	}
 }

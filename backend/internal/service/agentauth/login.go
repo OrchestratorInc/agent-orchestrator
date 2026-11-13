@@ -105,16 +105,21 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 // LoginSnapshot contains only recognized prompts and process state. A successful
 // process must still be checked through the harness's authentication probe.
 type LoginSnapshot struct {
-	ID             string    `json:"id"`
-	AgentID        string    `json:"agentId"`
-	Method         string    `json:"method"`
-	Status         string    `json:"status" enum:"running,succeeded,failed,cancelled,timed_out"`
-	LoginURL       string    `json:"loginUrl,omitempty"`
-	DeviceCode     string    `json:"deviceCode,omitempty"`
-	AcceptsCode    bool      `json:"acceptsCode,omitempty"`
-	NativePrompt   string    `json:"nativePrompt,omitempty" enum:"waiting,menu,terminal_required"`
-	SelectedOption string    `json:"selectedOption,omitempty"`
-	NativeOptions  []string  `json:"nativeOptions,omitempty"`
+	ID             string   `json:"id"`
+	AgentID        string   `json:"agentId"`
+	Method         string   `json:"method"`
+	Status         string   `json:"status" enum:"running,succeeded,failed,cancelled,timed_out"`
+	LoginURL       string   `json:"loginUrl,omitempty"`
+	DeviceCode     string   `json:"deviceCode,omitempty"`
+	AcceptsCode    bool     `json:"acceptsCode,omitempty"`
+	NativePrompt   string   `json:"nativePrompt,omitempty" enum:"waiting,menu,terminal_required"`
+	SelectedOption string   `json:"selectedOption,omitempty"`
+	NativeOptions  []string `json:"nativeOptions,omitempty"`
+	// WithdrawFailed reports, for a key saved with sharing turned off, that
+	// AO could not take its copy back out of the OS user environment: the
+	// save succeeded, but programs started outside AO may still see the key
+	// until the user signs out.
+	WithdrawFailed bool      `json:"withdrawFailed,omitempty"`
 	ExpiresAt      time.Time `json:"expiresAt"`
 }
 
@@ -220,7 +225,8 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 	// Key methods write their store under this harness's reservation only.
 	// s.mu is taken just to record the result, so a slow store (`omp auth
 	// import`, a systemd user bus) never stalls other harnesses' logins.
-	if isKey, err := s.saveLoginKey(ctx, plan, method, secret, model, opts); isKey {
+	withdrawFailed := false
+	if isKey, err := s.saveLoginKey(ctx, plan, method, secret, model, opts, &withdrawFailed); isKey {
 		if err != nil {
 			return LoginSnapshot{}, err
 		}
@@ -232,7 +238,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The key was saved, but AO could not stop passing this harness its earlier API key. Try again.")
 			}
 		}
-		return s.recordCompletedLogin(agentID, method)
+		return s.recordCompletedLogin(agentID, method, withdrawFailed)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -921,7 +927,14 @@ func directKeyWriter(agentID string) (func(context.Context, string, string) erro
 
 // saveLoginKey saves the credential of a key method in its store and reports
 // isKey=false for a method that runs a native CLI login instead.
-func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, model string, opts LoginOptions) (isKey bool, err error) {
+func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, model string, opts LoginOptions, withdrawFailed *bool) (isKey bool, err error) {
+	// store saves an AO-managed key and notes when AO could not take its copy
+	// back out of the OS user environment, so the panel can say so.
+	store := func(name, value string, share *bool, harness string) error {
+		failed, storeErr := s.storeProviderKeyReporting(ctx, name, value, share, harness)
+		*withdrawFailed = *withdrawFailed || failed
+		return storeErr
+	}
 	agentID := plan.AgentID
 	if method == catalogKeyMethod {
 		return true, s.saveCatalogKey(ctx, plan, opts.Provider, secret)
@@ -934,7 +947,7 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 		// .env of their own, and AO worktrees start untrusted. Its sessions
 		// receive the key through their environment, which wins.
 		if agentID == "gemini" && strings.TrimSpace(s.dataDir) != "" {
-			return true, s.storeProviderKey(ctx, "GEMINI_API_KEY", strings.TrimSpace(secret), nil, agentID)
+			return true, store("GEMINI_API_KEY", strings.TrimSpace(secret), nil, agentID)
 		}
 		return true, nil
 	}
@@ -959,7 +972,7 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 			}
 			// The model and key go together: a failed key save puts the
 			// earlier model back.
-			if err := s.storeProviderKey(ctx, name, secret, opts.Device, agentID); err != nil {
+			if err := store(name, secret, opts.Device, agentID); err != nil {
 				undoOpenHandsModel(ctx, s.dataDir, previous, hadPrevious)
 				return true, err
 			}
@@ -970,7 +983,7 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 			if err != nil {
 				return true, err
 			}
-			if err := s.storeProviderKey(ctx, name, secret, opts.Device, agentID); err != nil {
+			if err := store(name, secret, opts.Device, agentID); err != nil {
 				undo()
 				return true, err
 			}
@@ -981,13 +994,13 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 			if err != nil {
 				return true, err
 			}
-			if err := s.storeProviderKey(ctx, name, secret, opts.Device, agentID); err != nil {
+			if err := store(name, secret, opts.Device, agentID); err != nil {
 				undo()
 				return true, err
 			}
 			return true, nil
 		}
-		return true, s.storeProviderKey(ctx, name, secret, opts.Device, agentID)
+		return true, store(name, secret, opts.Device, agentID)
 	}
 	return false, nil
 }
@@ -1008,14 +1021,14 @@ func undoOpenHandsModel(ctx context.Context, dataDir, previous string, had bool)
 
 // recordCompletedLogin registers a finished key save as the harness's latest
 // operation, so the panel can poll it like any other login.
-func (s *Service) recordCompletedLogin(agentID, method string) (LoginSnapshot, error) {
+func (s *Service) recordCompletedLogin(agentID, method string, withdrawFailed bool) (LoginSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "Authentication service is stopping.")
 	}
 	s.pruneOperationsLocked(agentID)
-	complete := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "succeeded", ExpiresAt: time.Now()}, done: make(chan struct{})}
+	complete := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "succeeded", WithdrawFailed: withdrawFailed, ExpiresAt: time.Now()}, done: make(chan struct{})}
 	close(complete.done)
 	s.operations[complete.snapshot.ID] = complete
 	return complete.snapshot, nil

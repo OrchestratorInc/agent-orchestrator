@@ -26,21 +26,6 @@ export function useInvalidateProviderKeys(hostId?: string) {
 
 // Credentials go straight to the daemon and stay out of React Query's cache.
 
-/** Saves secret, or keeps the saved key when secret is empty, and sets whether it is published to the OS user environment. */
-export async function saveProviderKey(name: string, secret: string, device: boolean, hostId?: string): Promise<ProviderKey> {
-	const { data, error } = await clientForSessionHost(hostId).PUT("/api/v1/agents/provider-keys/{name}", {
-		params: { path: { name } }, body: { ...(secret ? { secret } : {}), device },
-	});
-	if (error || !data) throw apiErrorException(error, "Could not save the key.");
-	return data;
-}
-
-export async function removeProviderKey(name: string, hostId?: string): Promise<ProviderKey> {
-	const { data, error } = await clientForSessionHost(hostId).DELETE("/api/v1/agents/provider-keys/{name}", { params: { path: { name } } });
-	if (error || !data) throw apiErrorException(error, "Could not remove the key.");
-	return data;
-}
-
 /** Asks the provider whether it accepts secret, or the saved key when secret is empty. */
 export async function checkProviderKey(name: string, secret: string, hostId?: string): Promise<ProviderKeyCheck> {
 	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/provider-keys/{name}/check", {

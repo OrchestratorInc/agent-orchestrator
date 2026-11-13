@@ -1,9 +1,8 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, Bot, CircleHelp, CreditCard, KeyRound, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
+import { Activity, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
-import { ApiKeysSection } from "./ApiKeysSection";
 import { BillingSection } from "./BillingSection";
 import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
@@ -100,14 +99,6 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Bot,
 		label: (t) => t("settings.harness"),
 		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
-	},
-	{
-		id: "apiKeys",
-		icon: KeyRound,
-		label: (t) => t("settings.apiKeys"),
-		// The same host the Harness page opens for, so a key saved for a remote
-		// host's harness lands on that host's daemon.
-		render: (_t, titleHidden, { hostId }) => <ApiKeysSection titleHidden={titleHidden} {...(hostId ? { hostId } : {})} />,
 	},
 	{
 		id: "teams",

@@ -141,20 +141,15 @@ func (s *Service) SaveProviderKey(ctx context.Context, name, secret string, devi
 	return key, nil
 }
 
-// storeProviderKey saves name (and, when secret is empty, reuses the stored
+// storeProviderKeyReporting saves name (and, when secret is empty, reuses the stored
 // value), activates it for this daemon, and publishes or withdraws it from the
 // OS user environment together with its companions. A non-empty harness is
 // the harness whose own panel saved it, which lets that harness's sessions
 // receive a key that would otherwise replace its subscription sign-in. A nil
 // share keeps the device setting the key already has, so a client that has
-// not loaded it yet never withdraws a published key by omission.
-func (s *Service) storeProviderKey(ctx context.Context, name, secret string, share *bool, harness string) error {
-	_, err := s.storeProviderKeyReporting(ctx, name, secret, share, harness)
-	return err
-}
-
-// storeProviderKeyReporting is storeProviderKey that also reports when a
-// withdrawal from the OS user environment failed, so Settings can say so.
+// not loaded it yet never withdraws a published key by omission. It reports
+// whether AO could not take its copy back out of the OS user environment, so
+// the login panel can say so.
 func (s *Service) storeProviderKeyReporting(ctx context.Context, name, secret string, share *bool, harness string) (bool, error) {
 	s.keysMu.Lock()
 	defer s.keysMu.Unlock()

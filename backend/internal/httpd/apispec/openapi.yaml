@@ -15471,6 +15471,8 @@ components:
           - cancelled
           - timed_out
           type: string
+        withdrawFailed:
+          type: boolean
       required:
       - id
       - agentId

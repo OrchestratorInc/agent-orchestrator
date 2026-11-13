@@ -9,8 +9,8 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 
-// Pieces shared by the API keys page and a harness's Account login panel, so
-// a saved key reads and behaves the same on both.
+// Pieces of the provider-key form in a harness's Account login panel, so
+// a saved key reads and behaves the same for every harness.
 
 /** "Saved, ending 1234 · Also set outside AO", or undefined while no key is saved. */
 export function savedKeySummary(t: TFunction, key?: ProviderKey): string | undefined {
@@ -25,15 +25,6 @@ export function savedKeySummary(t: TFunction, key?: ProviderKey): string | undef
 export function providerKeyNeedsModel(agentId: AgentId, methodId?: string): boolean {
 	if (!methodId?.startsWith("env_")) return false;
 	return agentId === "qwen" || agentId === "openhands" || (agentId === "continue" && methodId !== "env_CONTINUE_API_KEY");
-}
-
-/** A small dot beside a key's name: filled once it is saved. Decorative; the row text carries the state. */
-export function KeyStatusDot({ configured }: { configured: boolean }) {
-	return <span
-		aria-hidden="true"
-		data-key-status={configured ? "saved" : "unset"}
-		className={cn("block size-2 rounded-full", configured ? "bg-success" : "border border-settings-muted/60")}
-	/>;
 }
 
 /**

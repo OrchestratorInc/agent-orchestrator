@@ -548,6 +548,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 					{status}
 				</p>
 				{connected && <p className="pl-8.5 text-xs leading-4 text-settings-muted">{configured ? t("settings.harness.models.configuredProviderHint") : t("settings.harness.loginUi.connectedDescription")}</p>}
+				{/* Sharing is off in AO, but AO could not take its copy back out of
+				    the user environment: say so, so it is not mistaken for gone. */}
+				{operation?.withdrawFailed && <KeyWarning className="pl-8.5">{t("settings.apiKeys.savedWithdrawFailed")}</KeyWarning>}
 			</div>
 			{operation?.deviceCode && running && <div className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-(--color-bg-secondary) py-1 pr-1 pl-3">
 				<code className="break-all font-mono text-[15px] leading-6 font-medium tracking-wide text-settings-label" aria-label={t("settings.harness.loginUi.deviceCode")}>{operation.deviceCode}</code>
