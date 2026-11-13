@@ -86,4 +86,52 @@ describe("side close recovery ownership", () => {
 		expect(recovery.pending()).toHaveLength(1);
 		expect(recovery.state?.sides).toMatchObject([{ cleanupOnly: true }]);
 	});
+	it("retains confirmed host shutdown when the renderer misses cleanup pending", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side");
+		expect(recovery.summary("session")).toEqual({ pending: recovery.pending(), closedIds: [] });
+		recovery.remember(snapshot([{ ...record, cleanupOnly: true, hostStopped: true }]));
+		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: ["side"] });
+		// Native fork cleanup is still owned, but it must no longer keep a tab open.
+		expect(recovery.state?.sides).toHaveLength(1);
+		recovery.remember(snapshot([{ ...record, cleanupOnly: true }]));
+		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: ["side"] });
+		recovery.remember(snapshot([]));
+		recovery.remember(snapshot([record]));
+		expect(recovery.state?.sides).toEqual([]);
+		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: ["side"] });
+		expect(recovery.summary("other")).toEqual({ pending: [], closedIds: [] });
+	});
+	it("discovers completed shutdown without a local close intent", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([{ ...record, cleanupOnly: true, hostStopped: true }]));
+		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: ["side"] });
+	});
+	it("remembers completion when observed daemon cleanup disappears", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side");
+		recovery.remember(snapshot([{ ...record, cleanupOnly: true }]));
+		recovery.remember(snapshot([]));
+		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: ["side"] });
+	});
+	it("does not convert restore ownership and ordinary absence into shutdown proof", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side");
+		recovery.markRestoreAttempt(); recovery.remember(snapshot([]));
+		expect(recovery.summary("session")).toEqual({
+			pending: [{ id: "side", sessionId: "session", label: "Question", phase: "unconfirmed" }], closedIds: [],
+		});
+		expect(recovery.state?.sides).toHaveLength(1);
+	});
+	it("retains successful DELETE proof after cleanup bookkeeping drains", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side"); recovery.confirm("side");
+		recovery.remember(snapshot([]));
+		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: ["side"] });
+	});
+	it("does not report a rejected close as completed", () => {
+		const recovery = new SideCloseRecovery();
+		recovery.remember(snapshot([record])); recovery.begin("side"); recovery.cancel("side");
+		expect(recovery.summary("session")).toEqual({ pending: [], closedIds: [] });
+	});
 });

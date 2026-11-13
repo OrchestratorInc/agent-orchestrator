@@ -20,7 +20,7 @@ vi.mock("../../lib/api-client", () => ({
 	subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: { capture: async () => {}, confirmClose: async () => "closed", getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } },
+	aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: { capture: async () => {}, confirmClose: async () => "closed", getCloseState: async () => ({ pending: [], closedIds: [] }), onPendingClosesChanged: () => () => {} } },
 }));
 
 describe("side delivery draft ownership", () => {

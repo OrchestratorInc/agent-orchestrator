@@ -1,4 +1,4 @@
-import type { PendingSideClose, SideCloseOutcome } from "../shared/side-close";
+import type { PendingSideClose, SideCloseOutcome, SideCloseState } from "../shared/side-close";
 
 interface RecoveryRecord {
 	side: { id: string; sessionId: string; label?: string; [key: string]: unknown };
@@ -20,11 +20,20 @@ export class SideCloseRecovery {
 	state?: SideLaunchSnapshot;
 	private closing = new Map<string, { original: RecoveryRecord; cleanup: RecoveryRecord; observed: boolean; accepted: boolean; conversationClosed: boolean }>();
 	private closed = new Set<string>();
+	// Retain shutdown proof for this Electron launch, including across renderer
+	// remounts and snapshots that no longer contain the native fork cleanup.
+	private confirmedClosed = new Map<string, string>();
+
+	private rememberClosed(side: RecoveryRecord["side"]): void {
+		this.confirmedClosed.set(side.id, side.sessionId);
+		this.closed.add(side.id);
+	}
 
 	remember(state: SideLaunchSnapshot): void {
 		const records = state.sides as RecoveryRecord[];
 		// A replacement renderer can discover cleanup without having issued DELETE.
 		for (const record of records) {
+			if (record.cleanupOnly && record.hostStopped) this.rememberClosed(record.side);
 			if (record.cleanupOnly && !record.hostStopped && !this.closing.has(record.side.id) && !this.closed.has(record.side.id)) {
 				this.closing.set(record.side.id, { original: record, cleanup: record, observed: true, accepted: false, conversationClosed: true });
 				this.closed.add(record.side.id);
@@ -36,7 +45,8 @@ export class SideCloseRecovery {
 				intent.cleanup = incoming;
 				intent.observed = true;
 				intent.conversationClosed = true;
-			} else if (!incoming && (intent.observed || intent.accepted)) {
+			} else if (!incoming && (intent.conversationClosed || intent.accepted)) {
+				this.rememberClosed(intent.original.side);
 				this.closing.delete(id);
 			}
 		}
@@ -71,7 +81,10 @@ export class SideCloseRecovery {
 
 	confirm(id: string): void {
 		const intent = this.closing.get(id);
-		if (intent) intent.accepted = true;
+		if (intent) {
+			intent.accepted = true;
+			this.rememberClosed(intent.original.side);
+		}
 	}
 
 	markRestoreAttempt(): void {
@@ -94,7 +107,14 @@ export class SideCloseRecovery {
 
 	pending(sessionId?: string): PendingSideClose[] {
 		return [...this.closing.values()]
-			.filter((intent) => !intent.accepted && !intent.cleanup.hostStopped && (!sessionId || intent.original.side.sessionId === sessionId))
+			.filter((intent) => !intent.accepted && !intent.cleanup.hostStopped && !this.confirmedClosed.has(intent.original.side.id) && (!sessionId || intent.original.side.sessionId === sessionId))
 			.map(({ original, conversationClosed }) => ({ id: original.side.id, sessionId: original.side.sessionId, label: original.side.label ?? "", phase: conversationClosed ? "cleanup_pending" : "unconfirmed" }));
+	}
+
+	summary(sessionId?: string): SideCloseState {
+		return {
+			pending: this.pending(sessionId),
+			closedIds: [...this.confirmedClosed].filter(([, owner]) => !sessionId || owner === sessionId).map(([id]) => id),
+		};
 	}
 }

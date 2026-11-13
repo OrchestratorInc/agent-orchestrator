@@ -12,7 +12,7 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorMessage: (e: unknown) => e instanceof Error ? e.message : "Request failed",
 	getApiBaseUrl: () => "", subscribeApiBaseUrl: () => () => {},
 }));
-vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: { capture, confirmClose: async () => "closed", getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } } }));
+vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: { capture, confirmClose: async () => "closed", getCloseState: async () => ({ pending: [], closedIds: [] }), onPendingClosesChanged: () => () => {} } } }));
 
 const drafts = new Map<string, string>();
 const creations = new Map<string, string>();

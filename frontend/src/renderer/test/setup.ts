@@ -250,7 +250,7 @@ if (typeof window !== "undefined") {
 			onStatus: () => () => undefined,
 		},
 		agentLogin: { request: async () => null },
-		sideChats: { capture: async () => undefined, confirmClose: async () => "closed", getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
+		sideChats: { capture: async () => undefined, confirmClose: async () => "closed", getCloseState: async () => ({ pending: [], closedIds: [] }), onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
 			pathAction: async () => undefined,
 			getState: async () => ({

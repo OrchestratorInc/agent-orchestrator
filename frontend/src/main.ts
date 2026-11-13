@@ -2986,9 +2986,9 @@ ipcMain.handle("sideChats:confirmClose", async (event, sideId: string, alreadyCl
 	sideLaunchRecovery.captureInBackground();
 	return "closed";
 });
-ipcMain.handle("sideChats:pendingCloses", (event, sessionId: string) => {
+ipcMain.handle("sideChats:closeState", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || sessionId.length > 255) throw new Error("Invalid side close query.");
-	return sideCloseRecovery.pending(sessionId);
+	return sideCloseRecovery.summary(sessionId);
 });
 
 ipcMain.handle("editorHandoff:pathAction", (event, input) => {

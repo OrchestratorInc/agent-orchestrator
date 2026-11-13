@@ -4,7 +4,7 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { apiErrorException } from "../../lib/api-error-exception";
 import { useTranslation } from "react-i18next";
 import { flushSync } from "react-dom";
-import type { PendingSideClose, SideCloseOutcome } from "../../../shared/side-close";
+import type { PendingSideClose, SideCloseOutcome, SideCloseState } from "../../../shared/side-close";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "@/components/app-icons";
 import type { components } from "../../../api/schema";
@@ -412,7 +412,6 @@ export function useIndependentSideChats(
 		}, 0);
 		return () => window.clearTimeout(timer);
 	}, [confirmClose]);
-	const [closing, setClosing] = useState(false);
 	const [closeWarnings, setCloseWarningsState] = useState<Record<string, "open" | "cleanup_pending" | "unconfirmed">>({});
 	const closeWarningsRef = useRef(closeWarnings);
 	const setCloseWarnings = useCallback((update: typeof closeWarnings | ((current: typeof closeWarnings) => typeof closeWarnings)) => {
@@ -446,12 +445,12 @@ export function useIndependentSideChats(
 	const closingSidesRef = useRef(new Set<string>());
 	const snapshot = liveSnapshot?.side.id === activeId ? liveSnapshot : activeId && closingSidesRef.current.has(activeId) ? retainedSnapshots.current.get(activeId)?.snapshot : undefined;
 	const closeRequests = useRef(new Set<string>());
+	const closing = Boolean(confirmClose && closeRequests.current.has(confirmClose));
 	const [closeRevision, setCloseRevision] = useState(0);
 	const lifecycleRevision = useRef(0);
 	const listRequests = useRef(0);
 	const appliedListRequest = useRef(0);
 	const localCreates = useRef(new Map<string, Side>());
-	const cleanupConfirmed = useRef(new Set<string>());
 	const sideRevisions = useRef(new Map<string, number>());
 	const loadingOlderRef = useRef(false);
 	const olderGeneration = useRef(0);
@@ -498,7 +497,6 @@ export function useIndependentSideChats(
 					return next;
 				});
 				closeRequests.current.clear();
-				setClosing(false);
 				setConfirmClose(undefined);
 				setAttachmentRevision(value => value + 1);
 			}
@@ -517,7 +515,6 @@ export function useIndependentSideChats(
 		retainedSnapshots.current.clear();
 		localCreates.current.clear();
 		sideRevisions.current.clear();
-		cleanupConfirmed.current.clear();
 		setSideError(undefined);
 		lifecycleRevision.current++;
 		setPendingCloses([]);
@@ -531,7 +528,6 @@ export function useIndependentSideChats(
 		setRenameId(undefined);
 		setRenameText(undefined);
 		setConfirmClose(undefined);
-		setClosing(false);
 		setCloseWarnings({});
 		setError(undefined);
 		setListError(undefined);
@@ -544,7 +540,6 @@ export function useIndependentSideChats(
 		closingSidesRef.current.delete(sideId);
 		localCreates.current.delete(sideId);
 		retainedSnapshots.current.delete(sideId);
-		cleanupConfirmed.current.delete(sideId);
 		setSideError(current => current?.id === sideId ? undefined : current);
 		const current = sidesRef.current;
 		const index = current.findIndex(side => side.id === sideId);
@@ -556,6 +551,7 @@ export function useIndependentSideChats(
 		setAttachments(current => { const next = { ...current }; delete next[sideId]; return next; });
 		setCloseWarnings(current => { const next = { ...current }; delete next[sideId]; return next; });
 		setPendingCloses(current => current.filter(side => side.id !== sideId));
+		setConfirmClose(current => current === sideId ? undefined : current);
 	}, [setSides]);
 
 	const refreshList = useCallback(async (reportErrors = true) => {
@@ -574,15 +570,13 @@ export function useIndependentSideChats(
 				if (reportErrors) setListError(apiErrorMessage(requestError));
 				return;
 			}
-			const closes = await aoBridge.sideChats.getPendingCloses(sessionId);
+			const { pending: closes, closedIds } = await aoBridge.sideChats.getCloseState(sessionId);
 			if (!current()) return;
 			appliedListRequest.current = request;
 			setListError(undefined);
-			for (const pending of closes) if (pending.phase === "cleanup_pending") cleanupConfirmed.current.add(pending.id);
-			// Keep proof of logical closure until host-stop reconciliation finishes.
-			for (const id of cleanupConfirmed.current) {
-				if (!closes.some(side => side.id === id) && !data?.sides?.some(side => side.id === id)) removeSide(id);
-			}
+			// Completion is remembered by Electron; a refresh may miss every
+			// intermediate cleanup state and may still carry an older open list.
+			for (const id of closedIds) if (!closedSidesRef.current.has(id)) removeSide(id);
 			setPendingCloses(closes);
 			setCloseWarnings(warnings => {
 				const next = { ...warnings };
@@ -1310,16 +1304,18 @@ export function useIndependentSideChats(
 					failure = cause;
 				}
 				if (!current()) return;
+				if (closedSidesRef.current.has(sideId)) { outcome = "closed"; return; }
 				if (outcome === "closed") { removeSide(sideId); return; }
 				// Keep the request marker through reconciliation: a concurrent list
 				// refresh must not unlock a side whose capture failed before pinning.
-				let closes: PendingSideClose[] | undefined;
-				try { closes = await aoBridge.sideChats.getPendingCloses(sessionId); } catch { /* keep the local close intent */ }
+				let state: SideCloseState | undefined;
+				try { state = await aoBridge.sideChats.getCloseState(sessionId); } catch { /* keep the local close intent */ }
 				if (!current()) return;
+				if (state?.closedIds.includes(sideId)) { outcome = "closed"; removeSide(sideId); return; }
+				const closes = state?.pending;
 				const pending = closes?.find(side => side.id === sideId);
 				if (closes) setPendingCloses(closes);
 				if (pending?.phase === "cleanup_pending") outcome = "cleanup_pending";
-				if (outcome === "cleanup_pending") cleanupConfirmed.current.add(sideId);
 				const stillOpen = rejected && closes !== undefined && !pending;
 				if (stillOpen) closingSidesRef.current.delete(sideId);
 				setCloseWarnings(warnings => ({ ...warnings, [sideId]: stillOpen ? "open" : outcome === "cleanup_pending" ? "cleanup_pending" : "unconfirmed" }));
@@ -1645,16 +1641,14 @@ export function useIndependentSideChats(
 				if (!open && !closing) setConfirmClose(undefined);
 			}}
 			onConfirm={() => {
-				if (!confirmClose) return;
+				if (!confirmClose || closeRequests.current.has(confirmClose)) return;
 				const scope = creationScopeRef.current;
 				const current = () => scope.active && creationScopeRef.current === scope;
-				setClosing(true);
 				void close(confirmClose)
 					.catch(() => undefined)
 					.finally(() => {
 						if (!current()) return;
 						setConfirmClose(selected => selected === confirmClose ? undefined : selected);
-						setClosing(false);
 					});
 			}}
 		/>

@@ -4,25 +4,26 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "../ui/tooltip";
 import { useIndependentSideChats } from "./IndependentSideChats";
-import type { PendingSideClose } from "../../../shared/side-close";
+import type { PendingSideClose, SideCloseState } from "../../../shared/side-close";
+import { SideCloseRecovery } from "../../../main/side-close";
 
-const { get, post, put, remove, capture, confirmClose, getPending, pending, listeners, daemonListeners } = vi.hoisted(() => ({
+const { get, post, put, remove, capture, confirmClose, getState, pending, closedIds, listeners, daemonListeners } = vi.hoisted(() => ({
 	get: vi.fn(), post: vi.fn(), remove: vi.fn(), capture: vi.fn(), confirmClose: vi.fn(),
-	getPending: vi.fn(),
+	getState: vi.fn(),
 	put: vi.fn(), listeners: new Set<() => void>(), daemonListeners: new Set<(status: { state: string; pid: number; port: number }) => void>(),
-	pending: [] as PendingSideClose[],
+	pending: [] as PendingSideClose[], closedIds: [] as string[],
 }));
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: get, POST: post, DELETE: remove, PUT: put, PATCH: vi.fn() },
 	apiErrorMessage: () => "Close failed", getApiBaseUrl: () => "", subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: (listener: (status: { state: string; pid: number; port: number }) => void) => { daemonListeners.add(listener); return () => daemonListeners.delete(listener); } }, sideChats: {
-	capture, confirmClose, getPendingCloses: getPending, onPendingClosesChanged: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
+	capture, confirmClose, getCloseState: getState, onPendingClosesChanged: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
 } } }));
 
 beforeEach(() => {
-	vi.resetAllMocks(); pending.length = 0; listeners.clear(); daemonListeners.clear();
-	getPending.mockImplementation(async (sessionId: string) => pending.filter(side => side.sessionId === sessionId));
+	vi.resetAllMocks(); pending.length = 0; closedIds.length = 0; listeners.clear(); daemonListeners.clear();
+	getState.mockImplementation(async (sessionId: string) => ({ pending: pending.filter(side => side.sessionId === sessionId), closedIds: [...closedIds] }));
 	put.mockResolvedValue({});
 	HTMLElement.prototype.scrollTo = vi.fn();
 	get.mockImplementation(async (path: string) => path.endsWith("/side-chats")
@@ -67,6 +68,110 @@ async function setup() {
 	await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
 	return hook;
 }
+
+function trackRecovery() {
+	const recovery = new SideCloseRecovery();
+	const record = { side: { id: "side", sessionId: "session", state: "ready", label: "Side" }, providerHostId: "host", providerForkId: "fork", harness: "codex" };
+	const snapshot = (sides: unknown[]) => ({ appRunId: "run", sides });
+	recovery.remember(snapshot([record]));
+	getState.mockImplementation(async (sessionId: string) => recovery.summary(sessionId));
+	capture.mockImplementation(async (id?: string) => { if (id) recovery.begin(id); });
+	return { recovery, record, snapshot };
+}
+
+it.each(["host_stopped", "cleanup_gone"])("removes an unconfirmed tab after %s without observing cleanup pending", async completion => {
+	const { recovery, record, snapshot } = trackRecovery();
+	confirmClose.mockResolvedValueOnce("unconfirmed"); remove.mockResolvedValueOnce({});
+	const hook = await setup();
+	await act(async () => { await expect(hook.result.current.close("side")).rejects.toThrow(); });
+	await act(async () => hook.result.current.send("side", "must remain read-only"));
+	expect(post).not.toHaveBeenCalled();
+	recovery.remember(snapshot([{ ...record, cleanupOnly: true, hostStopped: true }]));
+	if (completion === "cleanup_gone") recovery.remember(snapshot([]));
+	// The list still contains an old open row; authoritative shutdown wins.
+	await changed();
+	expect(hook.result.current.sides).toEqual([]);
+	expect(hook.result.current.activeId).toBeUndefined();
+	await changed(); expect(hook.result.current.sides).toEqual([]);
+	hook.unmount();
+	const restored = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+	await waitFor(() => expect(getState).toHaveBeenLastCalledWith("session"));
+	await changed();
+	expect(restored.result.current.sides).toEqual([]);
+});
+
+it("preserves a newly selected tab when direct shutdown confirmation removes another side", async () => {
+	const { recovery, record, snapshot } = trackRecovery();
+	confirmClose.mockResolvedValueOnce("unconfirmed"); remove.mockResolvedValueOnce({});
+	const hook = await setup();
+	await act(async () => { await expect(hook.result.current.close("side")).rejects.toThrow(); });
+	post.mockResolvedValueOnce({ data: { side: { id: "new", sessionId: "session", state: "ready", label: "New" } } });
+	await act(async () => hook.result.current.create(undefined, true));
+	act(() => hook.result.current.setQuestionDraft("new", "Keep this draft"));
+	recovery.remember(snapshot([{ ...record, cleanupOnly: true, hostStopped: true }]));
+	await changed();
+	expect(hook.result.current.activeId).toBe("new");
+	expect(hook.result.current.sides.map(side => side.id)).toEqual(["new"]);
+	post.mockResolvedValueOnce({});
+	await act(async () => hook.result.current.send("new", "Keep this draft"));
+	expect(post).toHaveBeenLastCalledWith(expect.stringContaining("/messages"), expect.objectContaining({ body: expect.objectContaining({ text: "Keep this draft" }) }));
+	expect(hook.result.current.error).toBeUndefined();
+});
+
+it("uses authoritative shutdown proof returned after a failed DELETE", async () => {
+	const { recovery, record, snapshot } = trackRecovery();
+	const hook = await setup();
+	remove.mockImplementationOnce(async () => {
+		recovery.remember(snapshot([{ ...record, cleanupOnly: true, hostStopped: true }]));
+		return { error: {}, response: { status: 500 } };
+	});
+	await act(async () => hook.result.current.close("side"));
+	expect(hook.result.current.sides).toEqual([]);
+});
+
+it("keeps an unknown close read-only when a list and pending summary are merely empty", async () => {
+	const hook = await setup(); capture.mockRejectedValueOnce(new Error("Capture unavailable"));
+	await act(async () => { await expect(hook.result.current.close("side")).rejects.toThrow(); });
+	get.mockResolvedValue({ data: { sides: [] } });
+	await changed();
+	expect(hook.result.current.activeId).toBe("side");
+	expect(hook.result.current.sides.map(side => side.id)).toEqual(["side"]);
+	await act(async () => hook.result.current.send("side", "blocked"));
+	expect(post).not.toHaveBeenCalled();
+});
+
+it("ignores an old close-state reply after switching sessions", async () => {
+	const hook = renderHook(({ id }) => useIndependentSideChats(id, [], [], async () => [], false), { initialProps: { id: "session" } });
+	await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+	const oldState = deferred<SideCloseState>(); getState.mockReturnValueOnce(oldState.promise);
+	await changed();
+	get.mockResolvedValue({ data: { sides: [{ id: "other", sessionId: "replacement", label: "Other" }] } });
+	hook.rerender({ id: "replacement" });
+	await waitFor(() => expect(hook.result.current.activeId).toBe("other"));
+	await act(async () => oldState.resolve({ pending: [], closedIds: ["side"] }));
+	expect(hook.result.current.activeId).toBe("other");
+	expect(hook.result.current.sides.map(side => side.id)).toEqual(["other"]);
+});
+
+it("dismisses a completed delete without letting its late reply unlock a newer dialog", async () => {
+	const oldDelete = deferred<object>(); const newDelete = deferred<object>();
+	remove.mockReturnValueOnce(oldDelete.promise).mockReturnValueOnce(newDelete.promise);
+	render(<Panel />); await screen.findByLabelText("Side chat question"); await deleteFromPanel();
+	closedIds.push("side"); pending.length = 0; await changed();
+	await screen.findByText("No side chat opened.");
+	expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	post.mockResolvedValueOnce({ data: { side: { id: "new", sessionId: "session", state: "ready", label: "New" } } });
+	await userEvent.click(screen.getByRole("button", { name: "New side chat" }));
+	await screen.findByRole("tab", { name: "New" });
+	await userEvent.click(screen.getByRole("button", { name: "Close New" }));
+	await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+	await act(async () => oldDelete.resolve({ error: {}, response: { status: 500 } }));
+	expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+	expect(screen.getByTitle("New")).toHaveAttribute("aria-busy", "true");
+	await act(async () => newDelete.resolve({}));
+	await screen.findByText("No side chat opened.");
+	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
 
 it.each(["transport", "server", "timeout"])("retains an uncertain %s close through remount and blocks submission", async (mode) => {
 	const hook = await setup();
@@ -138,7 +243,7 @@ it("retains a partial-failure tab read-only and removes it when background clean
 	await screen.findByText(/its agent is still stopping/);
 	expect(screen.queryByLabelText("Side chat question")).not.toBeInTheDocument();
 	expect(screen.getByRole("tab", { name: "Side" })).not.toHaveAttribute("aria-busy");
-	get.mockResolvedValue({ data: { sides: [] } }); pending.length = 0;
+	get.mockResolvedValue({ data: { sides: [] } }); pending.length = 0; closedIds.push("side");
 	await changed();
 	await screen.findByText("No side chat opened.");
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -190,7 +295,7 @@ it("preserves another selected tab while an unconfirmed deletion awaits cleanup"
 		? { data: { sides: [{ id: "new", sessionId: "session", state: "ready", label: "New" }] } }
 		: normal(path, ...args));
 	pending[0].phase = "cleanup_pending"; await changed();
-	pending.length = 0; await changed();
+	pending.length = 0; closedIds.push("side"); await changed();
 	expect(hook.result.current.activeId).toBe("new");
 	expect(hook.result.current.sides.map(side => side.id)).toEqual(["new"]);
 });
@@ -262,16 +367,16 @@ it("clears a recovered list error without clearing a create failure", async () =
 });
 
 it("keeps a failed capture locked while pending-close reconciliation is delayed", async () => {
-	const hook = await setup(); const reconciliation = deferred<PendingSideClose[]>();
+	const hook = await setup(); const reconciliation = deferred<SideCloseState>();
 	capture.mockRejectedValueOnce(new Error("Capture failed"));
-	getPending.mockClear(); getPending.mockReturnValueOnce(reconciliation.promise);
+	getState.mockClear(); getState.mockReturnValueOnce(reconciliation.promise);
 	let closing!: Promise<void>;
 	act(() => { closing = hook.result.current.close("side").catch(() => undefined); });
-	await waitFor(() => expect(getPending).toHaveBeenCalledOnce());
+	await waitFor(() => expect(getState).toHaveBeenCalledOnce());
 	await changed();
 	await act(async () => hook.result.current.send("side", "must stay blocked"));
 	expect(post).not.toHaveBeenCalled();
-	await act(async () => { reconciliation.resolve([]); await closing; });
+	await act(async () => { reconciliation.resolve({ pending: [], closedIds: [] }); await closing; });
 	expect(remove).not.toHaveBeenCalled();
 });
 

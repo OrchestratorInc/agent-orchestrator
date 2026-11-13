@@ -4,8 +4,8 @@ import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { TooltipProvider } from "../ui/tooltip";
 
-const { get, post, put, remove, capture, pendingCloses } = vi.hoisted(() => ({
-	get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), capture: vi.fn(), pendingCloses: vi.fn(),
+const { get, post, put, remove, capture, closeState } = vi.hoisted(() => ({
+	get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), capture: vi.fn(), closeState: vi.fn(),
 }));
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: get, POST: post, PUT: put, DELETE: remove, PATCH: vi.fn() },
@@ -13,7 +13,7 @@ vi.mock("../../lib/api-client", () => ({
 	getApiBaseUrl: () => "", subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: {
-	capture, getPendingCloses: pendingCloses, confirmClose: async () => "closed", onPendingClosesChanged: () => () => {},
+	capture, getCloseState: closeState, confirmClose: async () => "closed", onPendingClosesChanged: () => () => {},
 } } }));
 
 const excerpt: ChatDraftExcerptReference = {
@@ -32,7 +32,7 @@ beforeEach(() => {
 	});
 	post.mockResolvedValue({ data: { side: side("created") } });
 	put.mockResolvedValue({}); remove.mockResolvedValue({});
-	capture.mockResolvedValue(undefined); pendingCloses.mockResolvedValue([]);
+	capture.mockResolvedValue(undefined); closeState.mockResolvedValue({ pending: [], closedIds: [] });
 });
 
 async function mount() {

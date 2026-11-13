@@ -7,3 +7,8 @@ export interface PendingSideClose {
 }
 
 export type SideCloseOutcome = "closed" | PendingSideClose["phase"];
+
+export interface SideCloseState {
+	pending: PendingSideClose[];
+	closedIds: string[];
+}

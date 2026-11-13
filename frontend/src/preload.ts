@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
 import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
-import type { PendingSideClose, SideCloseOutcome } from "./shared/side-close";
+import type { SideCloseOutcome, SideCloseState } from "./shared/side-close";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -528,7 +528,7 @@ const api = {
 	sideChats: {
 		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
 		confirmClose: (sideId: string, alreadyClosed = false) => ipcRenderer.invoke("sideChats:confirmClose", sideId, alreadyClosed) as Promise<SideCloseOutcome>,
-		getPendingCloses: (sessionId: string) => ipcRenderer.invoke("sideChats:pendingCloses", sessionId) as Promise<PendingSideClose[]>,
+		getCloseState: (sessionId: string) => ipcRenderer.invoke("sideChats:closeState", sessionId) as Promise<SideCloseState>,
 		onPendingClosesChanged: (listener: () => void) => {
 			ipcRenderer.on("sideChats:pendingClosesChanged", listener);
 			return () => { ipcRenderer.removeListener("sideChats:pendingClosesChanged", listener); };
