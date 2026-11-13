@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -96,12 +98,34 @@ const ctx = vi.hoisted(() => {
 		params: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		enabled: true,
 		workspaces,
+		// The mocked route and workspace hooks subscribe here, as the real ones
+		// subscribe to the router and the query cache, so the memoized palette
+		// re-reads them when a test changes `params` or `workspaces`.
+		version: 0,
+		listeners: new Set<() => void>(),
 	};
 });
 
+function subscribeCtx(listener: () => void) {
+	ctx.listeners.add(listener);
+	return () => ctx.listeners.delete(listener);
+}
+
+function ctxVersion() {
+	return ctx.version;
+}
+
+function notifyCtxChange() {
+	ctx.version += 1;
+	for (const listener of ctx.listeners) listener();
+}
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
-	useParams: () => ctx.params,
+	useParams: () => {
+		useSyncExternalStore(subscribeCtx, ctxVersion);
+		return ctx.params;
+	},
 }));
 
 vi.mock("../hooks/useCommandPaletteEnabled", () => ({
@@ -120,6 +144,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: (options: { subscribed?: boolean }) => {
+		useSyncExternalStore(subscribeCtx, ctxVersion);
 		workspaceSubscriptionMock(options);
 		return { data: ctx.workspaces };
 	},
@@ -189,7 +214,13 @@ function renderPalette() {
 		</QueryClientProvider>
 	);
 	const result = render(wrap());
-	return { ...result, rerenderPalette: () => result.rerender(wrap()) };
+	return {
+		...result,
+		rerenderPalette: () => {
+			act(() => notifyCtxChange());
+			result.rerender(wrap());
+		},
+	};
 }
 
 function pressKey(init: KeyboardEventInit): KeyboardEvent {
@@ -249,6 +280,7 @@ beforeEach(() => {
 	createProjectFlowMock.lastOpenSignal = 0;
 	restoreMock.mockResolvedValue({ status: "success" });
 	act(() => {
+		useSessionImportStore.setState({ dialog: null });
 		useUiStore.setState({
 			isCommandPaletteOpen: false,
 			themePreference: "dark",
@@ -424,6 +456,20 @@ describe("CommandPalette workspace file search", () => {
 
 		fireEvent.click(screen.getByText(rowTitle("fix flake")));
 		expect(await screen.findByPlaceholderText("Search files")).toBeInTheDocument();
+	});
+
+	it("opens the current project's archive over the page without navigating", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		useUiStore.setState({ archiveModal: null });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+
+		fireEvent.click(document.querySelector('[cmdk-item][data-value="current-open-archive"]')!);
+
+		await waitFor(() => expect(useUiStore.getState().archiveModal).toMatchObject({ projectId: "proj-1" }));
+		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("does not call workspace search until two characters settle", async () => {
@@ -835,6 +881,30 @@ describe("CommandPalette drill-in + Enter", () => {
 });
 
 describe("CommandPalette actions", () => {
+	it("opens folder import with Enter from home and closes the palette", async () => {
+		mockSearch([]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "import claude code" } });
+		await waitFor(() => expect(document.querySelector('[cmdk-item][data-selected="true"]')?.textContent).toContain("Import projects and their chats"));
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(useSessionImportStore.getState().dialog).toEqual({ kind: "folders" });
+		await waitFor(() => expect(paletteInput()).toBeNull());
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("opens chat import for the selected project", async () => {
+		ctx.params = { projectId: "proj-1" };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.click(screen.getByText(rowTitle("Import chats…")));
+		expect(useSessionImportStore.getState().dialog).toEqual({ kind: "project", projectId: "proj-1" });
+		await waitFor(() => expect(paletteInput()).toBeNull());
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
 	it("shows disabled New task reason, skips it for selection, and ignores clicks", async () => {
 		ctx.params = {};
 		renderPalette();

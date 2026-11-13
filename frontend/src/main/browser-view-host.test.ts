@@ -734,9 +734,12 @@ describe("browser shortcut matching", () => {
 		expect(shouldHandleAppShortcutInBrowserContext("next-session", { ...chord, key: "}", code: "BracketRight", shift: true }, true)).toBe(true);
 	});
 
-	it("leaves ⌘D to the page instead of starting dictation", () => {
-		const chord = { key: "d", code: "KeyD", ctrl: false, meta: true, shift: false, alt: false };
-		expect(shouldHandleAppShortcutInBrowserContext("dictate", chord, true)).toBe(false);
+	it("leaves dictation and terminal splits to the page", () => {
+		const option = { key: "∂", code: "KeyD", ctrl: false, meta: false, shift: false, alt: true };
+		expect(shouldHandleAppShortcutInBrowserContext("dictate", option, true)).toBe(false);
+		const command = { key: "d", code: "KeyD", ctrl: false, meta: true, shift: false, alt: false };
+		expect(shouldHandleAppShortcutInBrowserContext("split-shell-terminal", command, true)).toBe(false);
+		expect(shouldHandleAppShortcutInBrowserContext("split-shell-terminal-down", { ...command, key: "D", shift: true }, true)).toBe(false);
 	});
 
 	it("leaves Space and Shift+Space to Chromium so browser form controls can accept spaces", () => {
@@ -2440,7 +2443,7 @@ describe("ensureNativeActiveTab automation-runtime resync", () => {
 
 		await expect(invoke("browser:selectTab", { viewId, tabId: "t1" })).rejects.toMatchObject({
 			code: "BROWSER_TARGET_MISMATCH",
-			message: "Browser automation could not target AO tab t1",
+			message: "Browser automation could not target Orchestrator tab t1",
 		});
 		await expect(host.execute("sess-1", "click", { ref: "e1" })).rejects.toMatchObject({
 			code: "BROWSER_TARGET_MISMATCH",

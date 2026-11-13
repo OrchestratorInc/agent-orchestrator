@@ -1,4 +1,3 @@
-import { resetLabel } from "./conversationChrome";
 import type { McpServer } from "./types";
 
 /**
@@ -9,8 +8,8 @@ import type { McpServer } from "./types";
  *
  * Every banner carries a `key` built from what it is reporting. Closing a banner
  * hides that key for the visit; when the underlying state changes — another
- * server fails, the quota crosses into critical — the key changes and the banner
- * comes back, because that is news.
+ * turn is rolled back — the key changes and the banner comes back, because that
+ * is news. Account quota has no banner: the composer's quota chip carries it.
  */
 export type BannerTone = "warning" | "danger" | "muted";
 
@@ -20,14 +19,24 @@ export type BannerCopy = {
 	body?: string;
 };
 
-export function mcpBanner(servers: readonly McpServer[], reloadError?: string): BannerCopy | undefined {
+/**
+ * Which run of a session the tool-server note belongs to: the machine, the
+ * session, and when it was created, as the desktop keys on `session.createdAt`.
+ * A restarted session starts its tool servers again, so it gets its own note.
+ */
+export function mcpNoticeKey(hostId: string | undefined, sessionId: string, createdAt: string | undefined): string {
+	return `${hostId ?? ""}:${sessionId}:${createdAt ?? ""}`;
+}
+
+/**
+ * The desktop's one-line tool-server note (`chat.mcpNotice.unavailable`): which
+ * servers did not start, and that the agent carries on without them. There is
+ * nothing to do from the conversation, so no reason text and no action.
+ */
+export function mcpNoticeText(servers: readonly McpServer[]): string | undefined {
 	if (servers.length === 0) return undefined;
-	const names = servers.map((server) => server.failureReason ? `${server.name} · ${server.failureReason}` : server.name);
-	return {
-		key: `mcp:${servers.map((server) => `${server.name}/${server.status}`).sort().join(",")}`,
-		title: servers.length === 1 ? "A tool server did not start" : `${servers.length} tool servers did not start`,
-		body: reloadError ? `Reload failed: ${reloadError}` : `${names.join(", ")}. The agent works around them silently.`,
-	};
+	const names = servers.map((server) => server.name.charAt(0).toUpperCase() + server.name.slice(1)).join(", ");
+	return `${names} didn’t start. Continuing without ${servers.length === 1 ? "it" : "them"}.`;
 }
 
 export function reauthBanner(reauthRequiredAt: string, command?: string): BannerCopy {
@@ -52,17 +61,6 @@ export function controllerStoppedBanner(terminated: boolean, error?: string): Ba
 	return terminated
 		? { key: "stopped:terminated", title: "This session is terminated", body: "Its conversation and worktree are preserved." }
 		: { key: `stopped:${error ?? ""}`, title: "The agent is stopped", body: error };
-}
-
-export function quotaBanner(quota: { percent: number; severity: "warn" | "critical"; resetsInSeconds?: number }): BannerCopy {
-	const resets = resetLabel(quota.resetsInSeconds);
-	return {
-		// Keyed on severity, not the exact percent: creeping from 81% to 82% is not
-		// news, crossing into critical is.
-		key: `quota:${quota.severity}`,
-		title: `${quota.percent}% of quota used`,
-		body: resets ? `Resets in ${resets}.` : undefined,
-	};
 }
 
 export function rolledBackBanner(count: number): BannerCopy | undefined {

@@ -94,6 +94,7 @@ const ROUTE_TEMPLATES = [
     "/api/v1/awake/recover", "/api/v1/awake/history", "/api/v1/awake/downloads",
     "/api/v1/awake/low-power/authorize", "/api/v1/awake/low-power/revoke", "/api/v1/awake/sessions/{awakeId}/end",
     "/api/v1/awake/sessions/{awakeId}/extend",
+    "/api/v1/session-import",
 	"/api/v1/agents",
 	"/api/v1/agents/install-jobs",
 	"/api/v1/agents/auth-plans",
@@ -147,6 +148,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/projects",
 "/api/v1/projects/clone",
 	"/api/v1/projects/clone/prepare",
+	"/api/v1/projects/clone/prepare/stream",
 	"/api/v1/projects/clone/check",
 	"/api/v1/projects/clone/cleanup",
 	"/api/v1/projects/initialize",
@@ -234,7 +236,9 @@ function fallbackNormalize(pathname: string): string {
 			i += 1;
 		}
 	}
-	return segments.join("/");
+	// Route words never contain a digit, apart from the API version; any other
+	// segment with one is an identifier (a side-chat UUID, a shell terminal ID).
+	return segments.map((segment) => (/\d/.test(segment) && !/^v\d+$/.test(segment) ? ":id" : segment)).join("/");
 }
 
 export function normalizeApiOperation(method: string, pathname: string): string {
@@ -289,10 +293,11 @@ function reportApiError(
 	const last = lastApiErrorAt.get(key);
 	if (last !== undefined && now - last < API_ERROR_DEDUPE_MS) return;
 	lastApiErrorAt.set(key, now);
-	void captureRendererEvent("ao.renderer.api_error", {
+	void captureRendererEvent("ao.requests.failed", {
 		operation,
 		error_category: category,
 		status,
+		error_code: code,
 	});
 	if (category !== "daemon_unavailable" && !(status !== undefined && status >= 400 && status < 500 && EXPECTED_PROBE_CONFLICTS.has(operation))) {
 		captureApiErrorToSentry(operation, category, status, code, requestId);
@@ -320,10 +325,32 @@ async function reportResponseError(operation: string, response: Response): Promi
 	);
 }
 
+// Agent prompts name the user's time zone. The daemon may run on a remote host
+// in another zone, so the app reports its own. Only writes carry it: spawns are
+// POSTs, and a custom header on GETs would add a CORS preflight per polled URL.
+export const CLIENT_TIME_ZONE_HEADER = "X-AO-Client-Time-Zone";
+let clientTimeZone: { value: string; at: number } | undefined;
+function currentTimeZone(): string {
+	const now = Date.now();
+	if (!clientTimeZone || now - clientTimeZone.at > 60_000) {
+		let value = "";
+		try { value = Intl.DateTimeFormat().resolvedOptions().timeZone ?? ""; } catch { /* unsupported */ }
+		clientTimeZone = { value, at: now };
+	}
+	return clientTimeZone.value;
+}
+export function tagClientTimeZone(input: Request): void {
+	if (input.method === "GET" || input.method === "HEAD" || input.method === "OPTIONS") return;
+	const zone = currentTimeZone();
+	if (!zone || input.headers.has(CLIENT_TIME_ZONE_HEADER)) return;
+	try { input.headers.set(CLIENT_TIME_ZONE_HEADER, zone); } catch { /* immutable headers: send without it */ }
+}
+
 // A fetch for clients that talk to a daemon directly (a connected remote host)
 // rather than through runtimeFetch's rebasing. Failures are reported the same
 // way the local client reports them; they used to be invisible.
 export async function reportingFetch(input: Request): Promise<Response> {
+	tagClientTimeZone(input);
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
 	let response: Response;
 	try {
@@ -338,6 +365,7 @@ export async function reportingFetch(input: Request): Promise<Response> {
 }
 
 async function runtimeFetch(input: Request): Promise<Response> {
+	tagClientTimeZone(input);
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
 	const baseUrl = runtimeApiBaseUrl;
 	if (baseUrl === null) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sessionInterfaceTransition } from "../test/interface-transition-fixtures";
 import type { WorkspaceSession } from "../types/workspace";
-import { canResumeAgent, resumeAgentErrorMessage } from "./useCanResumeAgent";
+import { canResumeAgent, resumeAgentError, resumeAgentErrorMessage, resumeOpenElsewhere } from "./useCanResumeAgent";
 
 const exitedSession: WorkspaceSession = {
 	id: "session-1",
@@ -38,5 +38,13 @@ describe("resumeAgentErrorMessage", () => {
 	});
 	it("preserves an unknown server message", () => {
 		expect(resumeAgentErrorMessage({ code: "OTHER_CONFLICT", message: "Another operation owns the session" }, 409)).toBe("Another operation owns the session");
+	});
+});
+
+describe("resumeOpenElsewhere", () => {
+	it("reads the error code, not the message text", () => {
+		expect(resumeOpenElsewhere(resumeAgentError({ code: "SESSION_OPEN_ELSEWHERE", message: "Reworded" }, 409))).toBe(true);
+		expect(resumeOpenElsewhere({ code: "AGENT_RESUME_FAILED", message: "this is open elsewhere" })).toBe(false);
+		expect(resumeOpenElsewhere(null)).toBe(false);
 	});
 });

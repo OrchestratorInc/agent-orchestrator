@@ -60,7 +60,7 @@ const changesRequested = [
 	"Review URL: https://github.com/o/r/pull/6974#pullrequestreview-1",
 	"Review ID: PRR_1",
 	"",
-	"Address the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what AO has provided here.",
+	"Address the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what Orchestrator has provided here.",
 ].join("\n");
 
 const mergeConflict = `There are merge conflicts on ${PR}. Rebase onto the base branch and resolve them.\nPR: ${URL}`;
@@ -250,6 +250,60 @@ describe("drawing AO's automation messages", () => {
 		expect(event).toHaveTextContent("ThisComputerAccess.tsx:97");
 		expect(event).toHaveTextContent("A failed turn-on does not undo what it started.");
 		expect(event).not.toHaveTextContent("Thread ID");
+	});
+
+	it("draws a review comment's HTML the way GitHub does, without remote images", async () => {
+		const body = [
+			"<!-- coderabbit-ai-generated:v1 -->",
+			"",
+			'**<picture><img src="https://storage.googleapis.com/a/amber-16.svg" width="16" height="16" alt=""></picture> Minor** · **Quick win**',
+			"",
+			"Inserting the path into `'<root>'` breaks the query.",
+			"",
+			"![Flow diagram](https://example.com/flow.png)",
+			"",
+			"<details>",
+			'<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/a/bot-dark.svg"><img src="https://storage.googleapis.com/a/bot.svg" alt=""></picture> Prompt for AI Agents</summary>',
+			"<dl>",
+			"<dd>",
+			"",
+			"```",
+			"Bind the root as a parameter.",
+			"```",
+			"",
+			"</dd>",
+			"</dl>",
+			"</details>",
+			"",
+			"<pre>first",
+			"  second</pre>",
+			"",
+			"<pre>third<br>fourth</pre>",
+			"",
+			"<!-- This is an auto-generated comment by CodeRabbit -->",
+		].join("\n");
+		draw(reviewComment.replace("A failed turn-on does not undo what it started.\n\nThe switch then shows **off**.", body));
+
+		const event = screen.getByTestId("pull-request-event");
+		expect(event).toHaveTextContent("Minor · Quick win");
+		expect(event).toHaveTextContent("Inserting the path into '<root>' breaks the query.");
+		expect(event).not.toHaveTextContent("<!--");
+		expect(event).not.toHaveTextContent("<picture");
+		expect(event).not.toHaveTextContent("storage.googleapis.com");
+		expect(event).toHaveTextContent("Flow diagram");
+		expect(event).not.toHaveTextContent("example.com/flow.png");
+		expect(event.querySelector("img, picture, source")).toBeNull();
+		const details = event.querySelector("details");
+		expect(details).not.toHaveAttribute("open");
+		expect(details?.querySelector("summary")).toHaveTextContent("Prompt for AI Agents");
+		expect(details).toHaveTextContent("Bind the root as a parameter.");
+		expect([...event.querySelectorAll("pre")].map((pre) => pre.textContent)).toContain("first\n  second");
+		expect([...event.querySelectorAll("pre")].map((pre) => pre.textContent)).toContain("third\nfourth");
+
+		await userEvent.click(within(details as HTMLElement).getByText("Prompt for AI Agents"));
+		expect(details).toHaveAttribute("open");
+		await userEvent.click(await within(event).findByRole("button", { name: "Show less" }));
+		expect(details).not.toHaveAttribute("open");
 	});
 
 	it("keeps the card for anything it cannot read", () => {

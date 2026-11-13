@@ -1,11 +1,14 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon } from "./icons";
-import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
+import { artifactFileIcon } from "./artifact-file-icon";
+import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
+import { ArtifactThumbnail } from "./ArtifactThumbnail";
+import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -34,9 +37,8 @@ import {
 	Info,
 	Play,
 	Loader2,
-	SearchCheck,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import type { components } from "../../api/schema";
 import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
@@ -75,7 +77,8 @@ import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../typ
 import {
 	openPRs,
 	resolveNextNavigationAfterSessionKill,
-	sessionArtifacts,
+	sessionDeliverables,
+	sessionWorkspaceReady,
 	sortedPRs,
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
@@ -122,37 +125,12 @@ const VIEW_DEFS: {
 	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
-	{
-		id: "summary",
-		labelKey: "inspector.summary",
-		icon: (
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-				<line x1="8" y1="7" x2="20" y2="7" />
-				<line x1="8" y1="12" x2="20" y2="12" />
-				<line x1="8" y1="17" x2="16" y2="17" />
-				<circle cx="4" cy="7" r="1" />
-				<circle cx="4" cy="12" r="1" />
-				<circle cx="4" cy="17" r="1" />
-			</svg>
-		),
-	},
-	{
-		id: "reviews",
-		labelKey: "inspector.reviewTab",
-		icon: <SearchCheck aria-hidden="true" />,
-	},
-	{
-		id: "browser",
-		labelKey: "inspector.browser",
-		icon: <BrowserIcon aria-hidden="true" />,
-	},
-	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
-	{
-		id: "files",
-		labelKey: "inspector.files",
-		icon: <FolderClosed aria-hidden="true" data-testid="files-viewer-icon" />,
-	},
-	{ id: "artifacts", labelKey: "artifacts.title", icon: <File aria-hidden="true" /> },
+	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
+	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
+	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
+	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
+	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
 ];
 
 const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
@@ -163,10 +141,10 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 };
 
 /**
- * Tabbed inspector rail beside the terminal (Summary · Reviews · Browser · Side chat · Files · Artifacts).
+ * Tabbed inspector rail beside the terminal (Summary · Files · Reviews · Browser · Side chat · Artifacts).
  */
 export const SessionInspector = memo(function SessionInspector({
-	browserOnly = false,
+	orchestrator = false,
 	session,
 	hostId: hostIdProp,
 	onOpenReviewerTerminal,
@@ -187,7 +165,8 @@ export const SessionInspector = memo(function SessionInspector({
 	view: viewProp,
 	onViewChange,
 }: {
-	browserOnly?: boolean;
+	/** An orchestrator's rail has Summary, Browser, and contextual Artifacts. */
+	orchestrator?: boolean;
 	session?: WorkspaceSession;
 	hostId?: string;
 	onOpenReviewerTerminal?: OpenReviewerTerminal;
@@ -212,7 +191,6 @@ export const SessionInspector = memo(function SessionInspector({
 }) {
 	const { t } = useTranslation();
 	const hostId = hostIdProp ?? session?.hostId;
-	const onlyBrowser = browserOnly;
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
@@ -222,9 +200,14 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
+	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
+	const artifactsUnseen = useUiStore((state) =>
+		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
+	);
 	const inspectorQueryClient = useQueryClient();
+	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
-		onlyBrowser || session?.cloud ? undefined : session?.id,
+		orchestrator || session?.cloud || session?.needsResume || (session && !sessionWorkspaceReady(session)) ? undefined : session?.id,
 		hostId,
 	);
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
@@ -263,25 +246,27 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
+	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
+		entry.id === "summary" || entry.id === "browser" || (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
-			// The tab is contextual: an artifact click opens it; leaving it hides it.
-			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+			// Artifacts shows whenever the session lists files, or while an artifact
+			// link waits for the list to refresh.
+			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !onlyBrowser)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, onlyBrowser, requestedView, sessionLoaded, view]);
+	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
 			...entry,
-			badge: entry.id === "browser" && browserUnseen,
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)
@@ -353,10 +338,12 @@ export const SessionInspector = memo(function SessionInspector({
 						<SummaryView
 							canOpenReviews={reviewsAvailable}
 							hostId={hostId}
+							inspectorVisible={isInspectorVisible}
 							key={sessionUiKey(session.id, hostId)}
 							onOpenArtifact={onOpenArtifact}
 							onOpenFiles={openFilesView}
 							onOpenReviews={openReviews}
+							orchestrator={orchestrator}
 							session={session}
 						/>
 					) : undefined
@@ -389,15 +376,20 @@ const SummaryView = memo(function SummaryView({
 	canOpenReviews,
 	onOpenArtifact,
 	hostId,
+	inspectorVisible,
 	onOpenFiles,
 	onOpenReviews,
+	orchestrator,
 	session,
 }: {
 	canOpenReviews: boolean;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	hostId?: string;
+	/** The Summary stays mounted while the inspector is closed. */
+	inspectorVisible: boolean;
 	onOpenFiles: () => void;
 	onOpenReviews: () => void;
+	orchestrator: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
@@ -431,7 +423,7 @@ const SummaryView = memo(function SummaryView({
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
-	const artifacts = sessionArtifacts(session);
+	const artifacts = sessionDeliverables(session);
 	const hasArtifacts = artifacts.length > 0;
 	const opensPR = hasPRs || session.outputType === "pr" || session.outputType === "pr_artifact";
 	const prSectionTitle = prCount > 1 ? t("inspector.pullRequests", { count: prCount }) : opensPR ? t("inspector.pullRequest") : t("inspector.branch");
@@ -445,8 +437,6 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
-	// Subscription accounts are a developer-mode preview.
-	const accountsPreview = useUiStore((state) => state.developerMode);
 	// Reached through a share: this person sees the session's pull requests but
 	// leaves managing them, and the session's policies, to its owner.
 	const guest = session.cloud?.shared === true;
@@ -455,7 +445,7 @@ const SummaryView = memo(function SummaryView({
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
-					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
+					{hostId ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -466,20 +456,13 @@ const SummaryView = memo(function SummaryView({
 			}
 			activityTitle={t("inspector.activity")}
 			artifactCards={
-				hasArtifacts ? (
-					artifacts.map((artifact) => (
-						<ArtifactSummaryCard
-							artifact={artifact}
-							key={artifact.path}
-							onOpenArtifact={onOpenArtifact}
-						/>
-					))
-				) : undefined
+				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
-			branch={
+			branch={orchestrator ? undefined : (
 				<SessionBranchSummary
 					hostId={hostId}
+					merged={prSummaries.some((pr) => pr.state === "merged" && pr.headSha === session.branchState?.remoteHead)}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					pullRequests={hasPRs ? (
@@ -504,7 +487,7 @@ const SummaryView = memo(function SummaryView({
 					session={session}
 					title={prSectionTitle}
 				/>
-			}
+			)}
 			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
@@ -841,7 +824,7 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 		if (nextNav.target === "session") {
 			void navigate(sessionNavigateTarget(session.workspaceId, nextNav.sessionId, hostId));
 		} else {
-			if (session.workspaceId === STANDALONE_WORKSPACE_ID) {
+			if (isStandaloneSession) {
 				void navigate({ to: "/" });
 				return;
 			}
@@ -1046,7 +1029,7 @@ export function PRSummaryCard({
 				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-on-foreground hover:bg-success/80 active:bg-success/70"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -1070,29 +1053,149 @@ export function PRSummaryCard({
 	);
 }
 
-/** One Summary row opens its file in the inspector's contextual Artifacts tab. */
-function ArtifactSummaryCard({
+/** The row holds as many previews as fit at this width or wider, up to the maximum. */
+const ARTIFACT_PREVIEW_MIN_WIDTH = 88;
+const ARTIFACT_PREVIEW_GAP = 8;
+const ARTIFACT_PREVIEW_MAX = 4;
+/** Fills a 5:4 preview tile with a page laid out 1000 wide. */
+const ARTIFACT_PREVIEW_PAGE_HEIGHT = 800;
+const ARTIFACT_ROWS_COLLAPSED = 3;
+
+/**
+ * The Summary's artifacts: previews of the most recently updated ones, as many
+ * as fit the width, then the rest by name. Each opens its file in the
+ * inspector's Artifacts tab.
+ */
+function ArtifactSummaryList({
+	artifacts,
+	onOpenArtifact,
+	previewLive,
+	session,
+}: {
+	artifacts: SessionArtifact[];
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	/** Off while the inspector is closed, so hidden pages and PDFs unload. */
+	previewLive: boolean;
+	session: WorkspaceSession;
+}) {
+	const { t } = useTranslation();
+	const container = useRef<HTMLDivElement>(null);
+	const [columns, setColumns] = useState(3);
+	const [expanded, setExpanded] = useState(false);
+	useLayoutEffect(() => {
+		const element = container.current;
+		if (!element) return;
+		const measure = (width: number) => {
+			if (width <= 0) return;
+			const fit = Math.floor((width + ARTIFACT_PREVIEW_GAP) / (ARTIFACT_PREVIEW_MIN_WIDTH + ARTIFACT_PREVIEW_GAP));
+			setColumns(Math.min(ARTIFACT_PREVIEW_MAX, Math.max(1, fit)));
+		};
+		measure(element.getBoundingClientRect().width);
+		const observer = new ResizeObserver(([entry]) => {
+			if (entry) measure(entry.contentRect.width);
+		});
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
+	const previews = artifacts.slice(0, columns);
+	const rest = artifacts.slice(columns);
+	const rows = expanded ? rest : rest.slice(0, ARTIFACT_ROWS_COLLAPSED);
+	return (
+		<div className="flex min-w-0 flex-col" ref={container}>
+			<div className="grid" style={{ gap: ARTIFACT_PREVIEW_GAP, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+				{previews.map((artifact) => (
+					<ArtifactPreviewTile artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} previewLive={previewLive} session={session} />
+				))}
+			</div>
+			{rest.length > 0 ? (
+				<ul className="mt-2 flex min-w-0 flex-col border-t border-border pt-1">
+					{rows.map((artifact) => (
+						<li key={artifact.path}>
+							<ArtifactSummaryRow artifact={artifact} onOpenArtifact={onOpenArtifact} />
+						</li>
+					))}
+					{rest.length > ARTIFACT_ROWS_COLLAPSED ? (
+						<li>
+							<Pressable
+								aria-expanded={expanded}
+								className="flex min-h-8 w-full min-w-0 items-center rounded-md px-1 text-sm text-muted-foreground transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+								onClick={() => setExpanded((current) => !current)}
+							>
+								{t(expanded ? "inspector.showLess" : "inspector.showMore")}
+							</Pressable>
+						</li>
+					) : null}
+				</ul>
+			) : null}
+		</div>
+	);
+}
+
+/** One Summary preview: a small thumbnail with the file's name and last update. */
+function ArtifactPreviewTile({
+	artifact,
+	onOpenArtifact,
+	previewLive,
+	session,
+}: {
+	artifact: SessionArtifact;
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+	previewLive: boolean;
+	session: WorkspaceSession;
+}) {
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud };
+	return (
+		<Pressable
+			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
+			onClick={() => onOpenArtifact?.({ path: artifact.path })}
+			title={artifact.path}
+		>
+			<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={ARTIFACT_PREVIEW_PAGE_HEIGHT} previewLive={previewLive} row={row} />
+			</span>
+			<span className="flex min-w-0 flex-col">
+				<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
+				{artifact.updatedAt ? (
+					<time
+						className="truncate text-caption leading-4 tabular-nums text-passive"
+						dateTime={artifact.updatedAt}
+						title={new Date(artifact.updatedAt).toLocaleString()}
+					>
+						{formatTimeCompact(artifact.updatedAt)}
+					</time>
+				) : null}
+			</span>
+		</Pressable>
+	);
+}
+
+/** One Summary row: icon, name and last update. */
+function ArtifactSummaryRow({
 	artifact,
 	onOpenArtifact,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 }) {
-	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
+	const KindIcon = artifactFileIcon(artifact);
 	return (
-		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
-			<Pressable
-				className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5"
-				onClick={handleOpen}
-			>
-				{artifact.kind === "html" ? (
-					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-				) : (
-					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
-				)}
-				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
-			</Pressable>
-		</div>
+		<Pressable
+			className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:ring-1 focus-visible:ring-ring"
+			onClick={() => onOpenArtifact?.({ path: artifact.path })}
+			title={artifact.path}
+		>
+			<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+			<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
+			{artifact.updatedAt ? (
+				<time
+					className="shrink-0 text-caption tabular-nums text-settings-muted"
+					dateTime={artifact.updatedAt}
+					title={new Date(artifact.updatedAt).toLocaleString()}
+				>
+					{formatTimeCompact(artifact.updatedAt)}
+				</time>
+			) : null}
+		</Pressable>
 	);
 }
 
@@ -1110,7 +1213,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		queryFn: sessionWorkspaceHistoryQueryOptions(session.id, undefined, hostId).queryFn,
 		staleTime: Infinity,
 		placeholderData: (previous) => previous,
-		enabled: !session.cloud && session.kind !== "orchestrator",
+		enabled: !session.cloud && session.kind !== "orchestrator" && !session.needsResume && sessionWorkspaceReady(session),
 	});
 	// A Cloud session's commits come from its worker's workspace review, the
 	// same read (and cache entry) the inspector polls for its Files count.
@@ -1128,11 +1231,13 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		events.push({ ...event, sortTime: timelineSortTime(timestamp) });
 	};
 	const createdAt = session.createdAt ?? session.updatedAt;
+	const isStandalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	const creationLabel = appI18n.t(isStandalone ? "inspector.timeline.createdSession" : "inspector.timeline.createdWorkspace");
 
 	pushEvent(
 		{
 			tone: "neutral",
-			content: <>{appI18n.t("inspector.timeline.createdWorkspace")}</>,
+			content: <>{creationLabel}</>,
 			timestamp: formatTimeCompact(createdAt),
 		},
 		createdAt,
@@ -1206,7 +1311,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	const activityView = accountMoving
 		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
 		: getAgentActivityView(session.activity);
-	const activityAt = session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
+	const activityAt = (accountMoving ? transition?.createdAt : undefined) ?? session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
 	pushEvent(
 		{
 			tone: "now",
@@ -2344,7 +2449,7 @@ function formatInlineReviewCommentMessage(comment: InspectorInlineComment & { re
 	if (url) {
 		lines.push("", `Comment URL: ${url}`);
 	}
-	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what AO has provided here.");
+	lines.push("", "You should not need to re-fetch review data unless you need additional context beyond what Orchestrator has provided here.");
 	return lines.join("\n");
 }
 
@@ -2352,9 +2457,9 @@ function formatReviewSummaryMessage(summary: InspectorReviewSummaryAction): stri
 	const reviewer = sanitizeWorkerMessagePart(summary.reviewerId.trim() || "reviewer");
 	const body = sanitizeWorkerMessagePart(summary.body.trim());
 	const url = sanitizeWorkerMessagePart((summary.url || summary.pullRequestUrl || "").trim());
-	const source = summary.source === "agent" ? "AO agent review" : "external PR review";
+	const source = summary.source === "agent" ? "Orchestrator review" : "external PR review";
 	const lines = [
-		`A ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
+		`An ${source} from ${reviewer} has feedback for your pull request. Address the actionable items, run relevant tests, commit the fixes, and push the branch.`,
 		"",
 		"Review summary:",
 		body,
@@ -2584,7 +2689,7 @@ function ReviewPanel({
 										onClick={onCloudInstallHarness}
 										size="sm"
 										type="button"
-										variant="outline"
+										variant="secondary"
 									>
 										{isInstallingCloudHarness ? "Installing…" : "Install"}
 									</Button>
@@ -2830,12 +2935,14 @@ function BrowserView({
 	// second BrowserPanelView — it would fight the overlay over the shared native
 	// view slot). Exit is via the overlay's own minimize button.
 	const { t } = useTranslation();
+	// Stable, so the memoized panel skips this view's unrelated renders.
+	const togglePopOut = useCallback((next: boolean) => onTogglePopOut?.(next), [onTogglePopOut]);
 	if (browserPoppedOut) {
 		return (
 			<div className="h-full min-h-0" data-browser-dock-target="" role="tabpanel">
 				<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 py-10 px-5 text-center")}>
 					<p className="text-md-sm text-muted-foreground">{t("inspector.browserInCenter")}</p>
-					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="outline">
+					<Button onClick={() => onTogglePopOut?.(false)} size="sm" type="button" variant="secondary">
 						{t("inspector.returnToPanel")}
 					</Button>
 				</div>
@@ -2852,7 +2959,7 @@ function BrowserView({
 			active={isActive}
 			annotationQueue={browserAnnotationQueue}
 			browserView={browserView}
-			onTogglePopOut={(next) => onTogglePopOut?.(next)}
+			onTogglePopOut={togglePopOut}
 			poppedOut={false}
 			session={session}
 			topbarHost={topbarHost}
@@ -2873,7 +2980,7 @@ function FilesView({ filesView, onOpenFiles }: { filesView?: ReactNode; onOpenFi
 		<div role="tabpanel">
 			<div className={cn(inspectorEmptyClass, "flex flex-col items-center gap-2 px-5 py-10 text-center")}>
 				<p className="text-md-sm text-muted-foreground">{t("inspector.filesUnavailable")}</p>
-				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="outline">
+				<Button disabled={!onOpenFiles} onClick={() => onOpenFiles?.()} size="sm" type="button" variant="secondary">
 					{t("inspector.openFiles")}
 				</Button>
 			</div>

@@ -32,7 +32,7 @@ function RecoveryDialogs({ origin }: { origin?: "create-project" }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<>
-			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
+			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} intakeVisible isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
 			<SettingsDialog />
 		</>
 	);
@@ -67,13 +67,14 @@ beforeEach(() => {
 		if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
 		if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
 		if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal" }] } } as never;
+		if (path === "/api/v1/agents/accounts") return { data: { accounts: [] } } as never;
+		if (path === "/api/v1/agents/accounts/usage") return { data: { usage: [] } } as never;
 		if (path === "/api/v1/agents/{agent}/models") return { data: { agentId: "codex", models: [], selectionMode: "text", allowCustom: true, source: "manual", fetchedAt: "2026-09-19T00:00:00Z", stale: false } } as never;
 		if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui", chatHarnesses: [], cloudEnabled: false, localEnabled: true, trackerIntakeEnabled: true } } as never;
 		throw new Error(`Unexpected GET ${path}`);
 	});
 	vi.spyOn(apiClient, "POST").mockImplementation(async (path) => {
 		if (path === "/api/v1/agents/readiness/ensure") return { data: catalog } as never;
-		if (path === "/api/v1/agents/codex/accounts/ensure") return { data: { accountRevision: 0, accounts: [], capabilities: {}, deviceReconciliation: { status: "verified", activeAccountVerified: false, reasonCode: "verified", retryable: false } } } as never;
 		throw new Error(`Unexpected POST ${path}`);
 	});
 	vi.spyOn(apiClient, "PUT").mockResolvedValue({ data: { project } } as never);
@@ -129,19 +130,20 @@ describe("Settings recovery modal integration", () => {
 	});
 
 	it("leaves focus on the targeted Harness action when readiness is already cached", async () => {
-		requireCodexLogin();
+		// Cursor has no subscription accounts, so Login is its Account tab's primary action.
+		catalog = { agents: [...catalog.agents, agentReadiness("cursor", "Cursor", { authentication: "unauthorized" })] };
 		const client = renderDialogs();
 		act(() => {
 			client.setQueryData(agentReadinessQueryKey, catalog);
 			client.setQueryData(["agent-installers"], []);
 			client.setQueryData(["agent-install-jobs"], []);
 			client.setQueryData(agentAuthPlansQueryKey, [
-				{ agentId: "codex", action: "login", available: true, launchMode: "terminal" },
+				{ agentId: "cursor", action: "login", available: true, launchMode: "terminal" },
 			]);
-			useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "codex" });
+			useUiStore.getState().openGlobalSettings("harness", { focusAgentId: "cursor" });
 		});
 
-		const row = (await screen.findByText("Codex")).closest('[data-agent="codex"]') as HTMLElement;
+		const row = (await screen.findByText("Cursor")).closest('[data-agent="cursor"]') as HTMLElement;
 		const login = await within(row).findByRole("button", { name: "Login" });
 		await waitFor(() => expect(document.activeElement).toBe(login));
 	});

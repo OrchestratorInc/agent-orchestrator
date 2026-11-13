@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
-import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { APP_MENU_ACTION_CHANNEL, SET_APP_MENU_AVAILABILITY_CHANNEL, type AppMenuActionId, type AppMenuAvailability, APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, type ArtifactZoomAction, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
 import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import type { PendingSideClose } from "./shared/side-close";
 import {
@@ -38,6 +38,7 @@ import type {
 	EditorHandoffStateOptions,
 	EditorId,
 	EditorPreferenceState,
+	OpenArtifactInBrowserInput,
 	OpenSessionArtifactsInput,
 	ChatPathActionInput,
 	OpenSessionTargetInput,
@@ -53,17 +54,23 @@ import {
 	type TelemetryPolicyView,
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
+import type { PrivacyGuideRequest, PrivacyPane } from "./main/privacy-guide";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
+	type CloudShareAccess,
 	type CloudShareFile,
+	type CloudShareGrant,
 	type CloudShareInspection,
+	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudShareProgress,
 	type CloudSharePublishResult,
 } from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
+import type { PushFolderInput, PushFolderPreview, PushFolderResult } from "./main/cloud-folder-push";
+export type { PushFolderInput, PushFolderPreview, PushFolderResult };
 import type {
 	CloudCpProxyRequestInit,
 	CloudCpProxyResponse,
@@ -236,6 +243,9 @@ const api = {
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
+		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
+		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
+		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
 		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
@@ -358,6 +368,16 @@ const api = {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
+		setMenuAvailability: (availability: AppMenuAvailability) => {
+			ipcRenderer.send(SET_APP_MENU_AVAILABILITY_CHANNEL, availability);
+		},
+		onMenuAction: (listener: (action: AppMenuActionId) => void) => {
+			const wrapped = (_event: unknown, action: AppMenuActionId) => listener(action);
+			ipcRenderer.on(APP_MENU_ACTION_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(APP_MENU_ACTION_CHANNEL, wrapped);
+			};
+		},
 		onScrollPhase: (listener: (phase: ScrollPhase) => void) => {
 			const wrapped = (_event: unknown, phase: ScrollPhase) => listener(phase);
 			ipcRenderer.on(SCROLL_PHASE_CHANNEL, wrapped);
@@ -376,6 +396,17 @@ const api = {
 			ipcRenderer.on(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+	},
+	artifactZoom: {
+		/** Whether an artifact viewer that can zoom is under the pointer or holds focus; main then claims the zoom chords. */
+		setEngaged: (engaged: boolean) => ipcRenderer.send(SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL, engaged),
+		onShortcut: (listener: (action: ArtifactZoomAction) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, action: ArtifactZoomAction) => listener(action);
+			ipcRenderer.on(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(ARTIFACT_ZOOM_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
 	},
@@ -431,7 +462,22 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
-	// Public share links, published from the share popover's Publish button.
+	// Cached artifact preview images, rendered once in a hidden window (main/artifact-snapshots.ts).
+	// Cards load them from the snapshot scheme; this only asks for a missing one.
+	artifactSnapshot: {
+		/** Renders a missing preview; true once it is cached. */
+		request: (job: unknown) => ipcRenderer.invoke("artifactSnapshot:request", job) as Promise<boolean>,
+	},
+	// Session and project share links this device made (main/session-share-urls.ts).
+	sessionShareUrls: {
+		remember: (baseUrl: string, linkId: string, url: string) =>
+			ipcRenderer.invoke("sessionShareUrls:remember", { baseUrl, linkId, url }) as Promise<void>,
+		recall: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:recall", { baseUrl, linkIds }) as Promise<Record<string, string>>,
+		forget: (baseUrl: string, linkIds: readonly string[]) =>
+			ipcRenderer.invoke("sessionShareUrls:forget", { baseUrl, linkIds }) as Promise<void>,
+	},
+	// Share links, published from the share popover's Publish button.
 	// The main process reads and uploads the file; the renderer never sees
 	// the file or the token. See shared/cloud-share.ts.
 	cloudShare: {
@@ -441,6 +487,13 @@ const api = {
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
 		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
+		setAccess: (baseUrl: string, shareId: string, access: CloudShareAccess) =>
+			ipcRenderer.invoke("cloudShare:setAccess", { baseUrl, shareId, access }) as Promise<CloudShareLink>,
+		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrant[]>,
+		invite: (baseUrl: string, shareId: string, emails: string[]) =>
+			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, emails }) as Promise<CloudShareGrant[]>,
+		removeGrant: (baseUrl: string, shareId: string, grantId: string) =>
+			ipcRenderer.invoke("cloudShare:removeGrant", { baseUrl, shareId, grantId }) as Promise<void>,
 		onProgress: (listener: (progress: CloudShareProgress) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, progress: CloudShareProgress) => listener(progress);
 			ipcRenderer.on(CLOUD_SHARE_PROGRESS_CHANNEL, wrapped);
@@ -451,8 +504,11 @@ const api = {
 	},
 	cloudArtifact: {
 		fetch: (url: string) => ipcRenderer.invoke("cloudArtifact:fetch", url) as Promise<Uint8Array>,
-		/** Copies the given artifacts of a cloud session to its folder under ~/.ao, replacing an earlier copy, and opens it, or shows `reveal` in it. */
-		openFolder: (input: { sessionId: string; files: Array<{ path: string; url: string }>; reveal?: string }) =>
+		/**
+		 * Copies the given artifacts of a cloud session to its folder under ~/.ao, replacing an earlier copy, and opens it,
+		 * or shows `reveal` in it; with `open: "browser"`, opens the copied `reveal` file in the default browser instead.
+		 */
+		openFolder: (input: { sessionId: string; files: Array<{ path: string; url: string }>; reveal?: string; open?: "browser" }) =>
 			ipcRenderer.invoke("cloudArtifact:openFolder", input) as Promise<void>,
 		onFrameNavigated: (listener: (navigation: { url: string; status: number }) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, navigation: { url: string; status: number }) => listener(navigation);
@@ -499,6 +555,8 @@ const api = {
 			ipcRenderer.invoke("editorHandoff:open", input) as Promise<OpenSessionTargetResult>,
 		openArtifacts: (input: OpenSessionArtifactsInput) =>
 			ipcRenderer.invoke("editorHandoff:openArtifacts", input) as Promise<OpenSessionTargetResult>,
+		openArtifactInBrowser: (input: OpenArtifactInBrowserInput) =>
+			ipcRenderer.invoke("editorHandoff:openArtifactInBrowser", input) as Promise<void>,
 		copyWorkspacePath: (sessionId: string) =>
 			ipcRenderer.invoke("editorHandoff:copyWorkspacePath", sessionId) as Promise<void>,
 	},
@@ -519,6 +577,8 @@ const api = {
 		},
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
+		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
+		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
 			applyTelemetryPolicy(view);
@@ -793,6 +853,11 @@ const api = {
 		unlink: (confirmReplacement: boolean, expectedTarget?: string | null) =>
 			ipcRenderer.invoke("cliLink:unlink", confirmReplacement, expectedTarget) as Promise<import("./shared/cli-link").CliLinkResult>,
 	},
+	cliShadow: {
+		inspect: (identity?: string) => ipcRenderer.invoke("cliShadow:inspect", identity) as Promise<import("./shared/cli-shadow").CliShadowStatus>,
+		replace: (path: string, target: string, identity: string) => ipcRenderer.invoke("cliShadow:replace", path, target, identity) as Promise<import("./shared/cli-shadow").CliShadowReplaceResult>,
+		reveal: () => ipcRenderer.invoke("cliShadow:reveal") as Promise<void>,
+	},
 	updateSettings: {
 		get: () => ipcRenderer.invoke("updateSettings:get") as Promise<UpdateSettings>,
 		set: (settings: UpdateSettings) => ipcRenderer.invoke("updateSettings:set", settings) as Promise<void>,
@@ -840,15 +905,15 @@ const api = {
 		list: () => ipcRenderer.invoke("featureBuilds:list") as Promise<FeatureBuild[]>,
 		getActive: () => ipcRenderer.invoke("featureBuilds:getActive") as Promise<{ pr: number } | null>,
 	},
-	// Saved AO daemons, shared with the CLI's ~/.ao/remotes.json. Everything the
-	// renderer receives back is password-free (see main/remotes-ipc.ts); the
-	// plaintext password only travels renderer -> main on add or credential edit.
+	// Saved AO daemons in ~/.ao/remotes.json. Everything the renderer receives
+	// back is password-free (see main/remotes-ipc.ts); a password only travels
+	// renderer -> main on add or credential edit. Account host tokens stay in main.
 	remotes: {
 		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
-		importAccountHost: (accountId: string, input: { hostId: string; label: string; url: string; password: string }) =>
-			ipcRenderer.invoke("remotes:importAccountHost", accountId, input) as Promise<void>,
-		pruneAccountHosts: (accountId: string, hostIds: string[]) => ipcRenderer.invoke("remotes:pruneAccountHosts", accountId, hostIds) as Promise<void>,
-		issueAccountToken: (url: string) => ipcRenderer.invoke("remotes:issueAccountToken", url) as Promise<{ token: string; hostKey?: string }>,
+		// Saves the account's machines from AO Cloud and forgets the ones it no longer lists.
+		syncAccountHosts: (accountId: string) => ipcRenderer.invoke("remotes:syncAccountHosts", accountId) as Promise<void>,
+		// Lists a paired host under the signed-in account.
+		linkAccountHost: (url: string) => ipcRenderer.invoke("remotes:linkAccountHost", url) as Promise<void>,
 		add: (input: { label: string; url: string; password: string }) =>
 			ipcRenderer.invoke("remotes:add", input) as Promise<RemoteHealth>,
 		// An edit carries only what changed: an omitted password keeps the saved
@@ -909,6 +974,14 @@ const api = {
 		},
 		// One that arrived before the window was ready, taken once.
 		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
+		// Uploads a local folder into the empty repository AO Cloud made for it
+		// (main/cloud-folder-push.ts); the token stays in main.
+		pushFolderToRepository: (input: PushFolderInput) =>
+			ipcRenderer.invoke("cloud:pushFolderToRepository", input) as Promise<PushFolderResult>,
+		// What uploading a picked folder would do, before anything is uploaded:
+		// the secret-looking files it leaves out, or why it cannot go.
+		previewFolderUpload: (input: { folder: string }) =>
+			ipcRenderer.invoke("cloud:previewFolderUpload", input) as Promise<PushFolderPreview>,
 		// The context a sign-in that just completed added (CloudSignInContext),
 		// with its account, taken once; null when there is none.
 		takePendingSignIn: () => ipcRenderer.invoke("cloud:takePendingSignIn") as Promise<CloudPendingSignIn | null>,

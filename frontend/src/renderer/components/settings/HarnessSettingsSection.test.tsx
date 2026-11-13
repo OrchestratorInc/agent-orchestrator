@@ -54,6 +54,15 @@ vi.mock("../../lib/host-clients", async (importOriginal) => {
 	};
 });
 
+// Claude Code and Codex list their subscription accounts on the Account tab.
+// Most tests here use them as sample harnesses for the Account card every
+// other harness shows, so no harness has accounts unless a test turns them on.
+const accountMocks = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useAgentAccounts")>();
+	return { ...actual, agentAccountProviderFor: (harness: string | undefined) => (accountMocks.enabled ? actual.agentAccountProviderFor(harness) : null) };
+});
+
 const { terminalFocusRequested, terminalStateCallback, terminalMuxFactory } = vi.hoisted(() => ({
 	terminalFocusRequested: { value: false },
 	terminalMuxFactory: { value: undefined as undefined | (() => unknown) },
@@ -235,6 +244,7 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.cloudEnabled = false;
 		cloudMocks.org = undefined;
 		cloudMocks.connections = [];
+		accountMocks.enabled = false;
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		vi.spyOn(apiClient, "GET").mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
@@ -738,7 +748,7 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const report = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0];
 		expect(report).toContain("Source: keychain");
-		expect(report).toContain("Checks use AO's process environment on the selected host.");
+		expect(report).toContain("Checks use Orchestrator's process environment on the selected host.");
 		expect(within(page).queryByText(/An inconclusive check does not mean you are signed out/)).toBeNull();
 		expect(report).toContain("Auth check: provider_validation (token_renewal_pending)");
 		expect(report).not.toContain("Next step:");
@@ -954,6 +964,58 @@ describe("HarnessSettingsSection", () => {
 			queryClient.clear();
 			vi.unstubAllGlobals();
 		}
+	});
+
+	it("lists Codex accounts on the Account tab without developer mode and signs the CLI login in from its row", async () => {
+		accountMocks.enabled = true;
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/accounts"
+			? { data: { accounts: [{ id: "device-codex", provider: "codex", device: true, signedIn: false, default: true }] } } as never
+			: get(path, options));
+		const post = vi.mocked(apiClient.POST).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth" ? { data: {
+			agentId: "codex", action: "login", terminal: { handleId: "auth-codex", workingDir: "/tmp", title: "Codex login", createdAt: "2026-10-07T00:00:00Z" },
+		} } as never : post(path, options));
+		renderSection();
+		const page = await findAgentRow("codex");
+		const row = await waitFor(() => {
+			const account = page.querySelector<HTMLElement>('[data-agent-account="device-codex"]');
+			if (!account) throw new Error("the CLI login row has not rendered");
+			return account;
+		});
+		expect(within(row).getByText("Codex CLI login")).toBeInTheDocument();
+		// The CLI's own login is a row of the accounts list, not a card of its own.
+		expect(within(page).queryByRole("button", { name: "Login" })).toBeNull();
+		await userEvent.click(within(row).getByRole("button", { name: "Sign in again" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "codex" } } });
+		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
+	});
+
+	// The CLI login does not depend on the accounts list: when it fails, the
+	// panel says so and still offers the CLI's own login.
+	it("shows a failed accounts list and keeps the CLI login on the Account tab", async () => {
+		accountMocks.enabled = true;
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/accounts"
+			? { error: { message: "accounts unavailable" } } as never
+			: get(path, options));
+		const post = vi.mocked(apiClient.POST).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth" ? { data: {
+			agentId: "codex", action: "login", terminal: { handleId: "auth-codex", workingDir: "/tmp", title: "Codex login", createdAt: "2026-10-07T00:00:00Z" },
+		} } as never : post(path, options));
+		renderSection();
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByText("accounts unavailable")).toBeInTheDocument();
+		expect(within(page).getByText("Codex CLI login")).toBeInTheDocument();
+		await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "codex" } } });
+		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
 	});
 
 	it("offers to log in again for a signed-in harness", async () => {
@@ -1564,7 +1626,7 @@ describe("HarnessSettingsSection", () => {
 		cloudMocks.org = undefined;
 		renderSection(undefined, undefined, "cloud");
 
-		expect(await screen.findByText(/Sign in to AO Cloud/)).toBeInTheDocument();
+		expect(await screen.findByText(/Sign in to Orchestrator Cloud/)).toBeInTheDocument();
 		expect(screen.queryByText("Claude Code")).toBeNull();
 	});
 
@@ -2810,7 +2872,7 @@ describe("HarnessSettingsSection", () => {
 		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
 		// The machine the install died on is part of the report.
 		expect(copied).toContain("permission denied");
-		expect(copied).toContain("Memory: AO 2.0 GB · available 4.0 GB of 32.0 GB");
+		expect(copied).toContain("Memory: Orchestrator 2.0 GB · available 4.0 GB of 32.0 GB");
 		expect(copied).toContain("CPU: 30% of 8 cores · load 1.25");
 		expect(copied).toContain("Live sessions: 1 · 612 MB");
 	});

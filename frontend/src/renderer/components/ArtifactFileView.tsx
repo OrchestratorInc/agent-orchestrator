@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import type { ArtifactSave } from "../hooks/useSessionWorkspaceFiles";
 import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
@@ -6,6 +6,8 @@ import { FileContentPane, type FileViewMode } from "./FileContentPane";
 import { isDelimitedTextPath } from "../lib/delimited-text";
 import { isMermaidPath, isSvgPath } from "../lib/image-files";
 import { isMarkdownPreviewPath } from "../lib/markdown-frontmatter";
+import type { ArtifactMenuActions } from "../lib/artifact-menu";
+import { useArtifactZoomRegistration } from "../lib/artifact-zoom";
 import { fileMediaKind } from "../lib/file-media";
 import { cn } from "../lib/utils";
 
@@ -47,6 +49,7 @@ export function ArtifactFileView({
 	sendMessage,
 	sessionId,
 	toolbarHost,
+	menuActions,
 	onEditingChange,
 }: {
 	artifactName: string;
@@ -73,6 +76,8 @@ export function ArtifactFileView({
 	sessionId: string;
 	/** The header the pane renders its mode and action buttons into. */
 	toolbarHost?: HTMLElement | null;
+	/** The host's file menu, which takes the mode and action buttons instead of the header. */
+	menuActions?: ArtifactMenuActions;
 }) {
 	const annotation = useFileAnnotation(sessionId, { hostId, source: artifactName, sendMessage });
 	const source = useMemo(
@@ -80,6 +85,47 @@ export function ArtifactFileView({
 		[rawUrl, readOnly, cloud, artifactRoot, onAccessRefused, save],
 	);
 	const scrollRef = useRef<HTMLDivElement>(null);
+	// The Send bar sits under the scrolling content, so the zoom never scales or moves it.
+	const [footerHost, setFooterHost] = useState<HTMLElement | null>(null);
+	const [editing, setEditing] = useState(initialEditing && !readOnly);
+	const editingChanged = useCallback((next: boolean) => {
+		setEditing(next);
+		onEditingChange?.(next);
+	}, [onEditingChange]);
+	// A document scales with a transform and pans by the pane's scroll; media
+	// zoom in their own viewers, and an open editor keeps its own size.
+	// Applied straight to the DOM, so a pinch does not re-render the document.
+	const zoomController = useArtifactZoomRegistration(!fileMediaKind(path) && !editing);
+	const contentRef = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		const element = scrollRef.current;
+		const content = contentRef.current;
+		if (!element || !content || !zoomController) return;
+		let zoom = 1;
+		const apply = () => {
+			const next = zoomController.getZoom();
+			const anchor = zoomController.takeAnchor();
+			if (next === zoom) return;
+			const ratio = next / zoom;
+			zoom = next;
+			// Below fit the document stays centered; zoomed in, it pans sideways too.
+			content.style.transform = next === 1 ? "" : `translateX(${next < 1 ? `${(1 - next) * 50}%` : "0"}) scale(${next})`;
+			element.style.overflowX = next > 1 ? "auto" : "";
+			// Keeps the point under the pinch (or the pane's center) in place.
+			const rect = element.getBoundingClientRect();
+			const ax = anchor ? anchor.clientX - rect.left : element.clientWidth / 2;
+			const ay = anchor ? anchor.clientY - rect.top : element.clientHeight / 2;
+			element.scrollLeft = (element.scrollLeft + ax) * ratio - ax;
+			element.scrollTop = (element.scrollTop + ay) * ratio - ay;
+		};
+		apply();
+		const unsubscribe = zoomController.subscribe(apply);
+		return () => {
+			unsubscribe();
+			content.style.transform = "";
+			element.style.overflowX = "";
+		};
+	}, [zoomController]);
 
 	useEffect(() => {
 		if (feedbackRequestKey === undefined) return;
@@ -94,8 +140,11 @@ export function ArtifactFileView({
 		<div className={cn("flex h-full min-h-0 flex-col", !fileMediaKind(path) && !isSvgPath(path) ? "ao-document-surface" : "bg-background")}>
 			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
 			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" ref={scrollRef}>
-				<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} onEditingChange={onEditingChange} />
+				<div className="h-full origin-top-left" ref={contentRef}>
+					<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} menuActions={menuActions} footerHost={footerHost} onEditingChange={editingChanged} />
+				</div>
 			</div>
+			<div className="shrink-0" ref={setFooterHost} />
 			<ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />
 		</div>
 	);

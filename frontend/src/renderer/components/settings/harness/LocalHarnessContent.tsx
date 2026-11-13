@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "@/components/app-icons";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
 import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
 import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
+import { CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
 import {
 	agentReadinessQueryKeyForHost,
 	cacheAgentReadiness,
@@ -51,6 +52,7 @@ import { Pressable } from "../../ui/pressable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
+import { cloudNeedsAttention, type HarnessCloudState } from "./HarnessCloudLine";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
@@ -58,6 +60,8 @@ import { HarnessHealthTab } from "./HarnessHealthTab";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
+import { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
+import { SessionImportPanel } from "./SessionImportPanel";
 
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -167,6 +171,31 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// The API has no durable update history. Only record verified updates we
 	// actually observed here; a restored job/check timestamp is not an update date.
 	const [lastUpdatedAt, setLastUpdatedAt] = useState<Partial<Record<AgentId, string>>>({});
+	// AO Cloud runs some of these harnesses too: its side is a second line of
+	// the same harness's row, and one Update covers both.
+	const cloud = useCloudHarnessVersions();
+	const [cloudPending, setCloudPending] = useState<ReadonlySet<AgentId>>(new Set());
+	const cloudPendingRef = useRef(new Set<AgentId>());
+	const [cloudErrors, setCloudErrors] = useState<Partial<Record<AgentId, string>>>({});
+	const cloudState = (agentId: AgentId): HarnessCloudState | undefined => !cloud.expected || !CLOUD_VERSIONED_HARNESSES.has(agentId) ? undefined : {
+		details: describeCloudHarness(cloud.data, agentId),
+		loading: cloud.isPending,
+		pending: cloudPending.has(agentId),
+		error: cloudErrors[agentId],
+	};
+	const runCloudChange = async (agentId: AgentId, change: (agentId: AgentId) => Promise<{ error?: string }>) => {
+		if (cloudPendingRef.current.has(agentId)) return;
+		cloudPendingRef.current.add(agentId);
+		setCloudPending(new Set(cloudPendingRef.current));
+		setCloudErrors((current) => ({ ...current, [agentId]: undefined }));
+		try {
+			const result = await change(agentId);
+			if (mountedRef.current && result.error) setCloudErrors((current) => ({ ...current, [agentId]: result.error }));
+		} finally {
+			cloudPendingRef.current.delete(agentId);
+			if (mountedRef.current) setCloudPending(new Set(cloudPendingRef.current));
+		}
+	};
 
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
 	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
@@ -510,6 +539,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		void startAgentOperation(agentId, method, "update");
 	};
 
+	// The one Update a harness's row offers: AO Cloud's side starts at once
+	// (it only saves the release new Cloud sessions run), this host's as before.
+	const requestCombinedUpdate = (agentId: AgentId) => {
+		if (cloudState(agentId)?.details?.actionable) void runCloudChange(agentId, cloud.startUpdate);
+		requestUpdate(agentId);
+	};
+
 	const verifyInstall = async (agentId: AgentId) => {
 		if (!beginAction(agentId)) return;
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
@@ -627,14 +663,15 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	checkAuthRef.current = (agentId) => checkAuth(agentId, { fresh: true });
 
 	// Reads the accounts again, so the CLI login's row shows a sign-in that just
-	// changed, and returns whether that login is signed in.
+	// changed, and returns whether the CLI is logged in by any method, an API
+	// key included.
 	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
 		const provider = hostId ? null : agentAccountProviderFor(agentId);
 		if (!provider) return undefined;
 		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
 		if (!accounts) return undefined;
 		queryClient.setQueryData(agentAccountsQueryKey, accounts);
-		return accounts.find((account) => account.provider === provider && account.device)?.signedIn;
+		return accounts.find((account) => account.provider === provider && account.device)?.loggedIn;
 	}, [hostId, queryClient]);
 
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
@@ -643,11 +680,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		setAuthWorkflow(authWorkflowRef.current);
 		const signingIn = workflow.action !== "logout";
 		const ownRow = cliLoginOnOwnRow(workflow.agentId);
-		let cliSignedIn: boolean | undefined;
+		let cliLoggedIn: boolean | undefined;
 		const completed = async (candidate: AgentAuthProbeResult | undefined) => {
 			if (ownRow) {
-				cliSignedIn = await refreshCliLogin(workflow.agentId);
-				return cliSignedIn === signingIn;
+				cliLoggedIn = await refreshCliLogin(workflow.agentId);
+				return cliLoggedIn === signingIn;
 			}
 			return authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
 		};
@@ -660,7 +697,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			done = await completed(result);
 		}
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		const signedOut = ownRow ? cliSignedIn === false : result?.agent?.authStatus === "unauthorized";
+		const signedOut = ownRow ? cliLoggedIn === false : result?.agent?.authStatus === "unauthorized";
 		if (done) {
 			if (!ownRow) void refreshCliLogin(workflow.agentId);
 			try {
@@ -765,6 +802,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		return <HarnessAccountTab
 			details={details}
 			hostId={hostId}
+			cloud={cloudState(agentId)}
+			onCloudUpdate={() => void runCloudChange(agentId, cloud.startUpdate)}
+			onCloudReset={() => void runCloudChange(agentId, cloud.resetVersion)}
 			loginPanel={uiLoginAgent === agentId ? <HarnessLoginPanel
 				key={agentId}
 				agentId={agentId}
@@ -777,8 +817,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						if (attempt) await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
 						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
 						const result = await checkAuth(agentId, { fresh: true });
-						const cliSignedIn = await refreshCliLogin(agentId);
-						if (cliLoginOnOwnRow(agentId) ? cliSignedIn === true : result?.agent?.authStatus === "authorized") return true;
+						const cliLoggedIn = await refreshCliLogin(agentId);
+						if (cliLoginOnOwnRow(agentId) ? cliLoggedIn === true : result?.agent?.authStatus === "authorized") return true;
 					}
 					return false;
 				}}
@@ -791,7 +831,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			onInstall={(methodId) => void startAgentOperation(agentId, methodId, "install")}
 			onSelectMethod={(methodId) => setSelectedMethods((current) => ({ ...current, [agentId]: methodId }))}
 			onCopyCommand={(command) => void copyText(agentId, command)}
-			onUpdate={() => requestUpdate(agentId)}
+			onUpdate={() => requestCombinedUpdate(agentId)}
 			onViewSessions={(waiting) => setInUseSessions({ agentId, inUse: waiting })}
 			onLogin={() => void startAuth(agentId)}
 			onLogout={() => setLogoutRequest(agentId)}
@@ -811,6 +851,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	};
 
 	const selectedDetails = selectedAgentId ? describe(selectedAgentId) : null;
+	// Import reads this computer's chat files, so other hosts have no Import tab.
+	const importable = !hostId && selectedDetails !== null && IMPORTABLE_AGENTS.has(selectedDetails.agentId);
 	const detailsOpen = Boolean(selectedDetails);
 	// The list and the open page each scroll on their own, so the layout always
 	// fills the Settings body and the body itself never scrolls. Its scrolling is
@@ -841,6 +883,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 						: "relative min-h-0 flex-1 harness-list-scrollbar divide-y divide-border overflow-y-auto overscroll-contain rounded-lg border border-border")}>
 						{rows.map((agentId) => {
 							const details = describe(agentId);
+							const cloudSide = cloudState(agentId);
+							const localUpdate = details.isInstalled && details.updateAvailable;
+							const cloudUpdate = Boolean(cloudSide?.details?.actionable);
 							const selected = split && selectedAgentId === agentId;
 							const statusId = `harness-list-status-${agentId}`;
 							return <Pressable key={agentId}
@@ -864,15 +909,17 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
 								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
-								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
-									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" />
-									: details.isInstalled && details.updateAvailable ? <CircleArrowUp
+								{/* AO Cloud's side shares it: one mark per harness, whichever places it covers. */}
+								{details.busy || cloudSide?.pending ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" aria-hidden="true" /><span className="sr-only">{details.busy ? details.progressLabel : t("settings.harness.updating")}</span></span>
+									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
+									: localUpdate || cloudUpdate ? <CircleArrowUp
 										className="size-4 shrink-0 text-settings-muted"
-										strokeWidth={1.75}
-										aria-label={t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })}
+										aria-label={localUpdate && cloudUpdate ? (hostId ? t("settings.harness.cloud.updatesAvailableBoth", { host: labelForHost(hostId) ?? hostId }) : t("settings.harness.cloud.updatesAvailableBothLocal"))
+											: localUpdate ? t("settings.harness.versionAvailable", { version: versionLabel(details.advisory!.latestVersion!) })
+											: t("settings.harness.cloud.versionAvailable", { version: versionLabel(cloudSide!.details!.latestVersion!) })}
 										role="img"
 									/>
-									: details.listTone === "error" ? <HarnessStatusDot tone="error" /> : null}
+									: details.listTone === "error" || cloudNeedsAttention(cloudSide) ? <HarnessStatusDot tone="error" /> : null}
 								{split ? null : <ChevronRight className="size-4 shrink-0 text-settings-muted" aria-hidden="true" />}
 							</Pressable>;
 						})}
@@ -898,11 +945,12 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							{/* Pane title: one step above row labels (15px), below the page heading. */}
 							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
-						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => { if (value !== "account") closeUILogin(); setDetailTab(value as HarnessDetailTab); }}>
+						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab === "import" && !importable ? "account" : detailTab} onValueChange={(value) => { if (value !== "account") closeUILogin(); setDetailTab(value as HarnessDetailTab); }}>
 							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="health">{t("settings.harness.tabHealth")}</TabsTrigger>
+								{importable ? <TabsTrigger className={HARNESS_TAB_CLASS} value="import">{t("settings.harness.tabImport")}</TabsTrigger> : null}
 							</TabsList>
 							<TabsContent value="account" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">{accountTab(selectedDetails)}</TabsContent>
 							<TabsContent value="models" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
@@ -930,6 +978,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									})()}
 								/>
 							</TabsContent>
+							{importable ? <TabsContent value="import" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
+								<SessionImportPanel harness={selectedDetails.agentId} />
+							</TabsContent> : null}
 						</Tabs>
 					</div>
 				) : null}

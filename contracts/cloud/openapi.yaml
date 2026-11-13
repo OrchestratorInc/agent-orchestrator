@@ -31,6 +31,8 @@ tags:
   - name: Worker Orchestration
   - name: Worker Transport
   - name: Remote Hosts
+  - name: Push Devices
+  - name: Billing
 paths:
   /api/cloud/v1/me:
     get:
@@ -139,10 +141,117 @@ paths:
         at once, and it frees its slot for another
         document. Publishing the same document again uploads it again and
         restores the link, under a new URL, when a slot is free; the revoked
-        URL never serves again. A link already revoked returns 404.
+        URL never serves again. A link already revoked returns 404. Who the
+        link was shared with is deleted with it: publishing again starts with
+        nobody invited.
       responses:
         "204":
           description: The link was revoked.
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: setArtifactShareAccess
+      tags: [Artifacts]
+      description: >-
+        Makes an active link private (restricted: only its owner and the
+        emails it is shared with, signed in with that verified email) or
+        public (anyone with the link). The URL never changes, so a link
+        already sent starts or stops opening for people without an invite,
+        and who it is shared with is kept either way. 409
+        artifact_share_private_unavailable for restricted when the control
+        plane's viewer has no sign-in (ArtifactShareList.privateLinks false).
+        A link the caller does not own, or revoked, returns 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareAccessInput"
+      responses:
+        "200":
+          description: The link with its new access.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShare"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/{shareId}/grants:
+    parameters:
+      - name: shareId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: listArtifactShareGrants
+      tags: [Artifacts]
+      description: >-
+        Lists the emails an active link of the caller's is shared with,
+        oldest first. Only the link's owner may list them; anyone else, and a
+        revoked link, gets 404.
+      responses:
+        "200":
+          description: Who the link is shared with.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareGrantList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: addArtifactShareGrants
+      tags: [Artifacts]
+      description: >-
+        Shares an active link of the caller's with emails, at once, and lists
+        everyone it is shared with now. Each gets view access once they sign
+        in with that verified email; nobody is emailed. Emails are matched
+        case-insensitively; one already listed, and the owner's own, change
+        nothing. 400 for a value that is not a bare email address or more
+        than 50 at once; 409 artifact_share_grant_limit past 200 emails on
+        one link; 409 artifact_share_private_unavailable where links cannot
+        be private. Only the link's owner may invite; anyone else gets 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareGrantsInput"
+      responses:
+        "200":
+          description: Everyone the link is shared with now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareGrantList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/{shareId}/grants/{grantId}:
+    parameters:
+      - name: shareId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: grantId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: removeArtifactShareGrant
+      tags: [Artifacts]
+      description: >-
+        Stops a link being shared with one email. Their next request for the
+        file is refused, even with a view token they already hold; a page they
+        have open keeps showing until it is refreshed. Only the link's owner
+        may remove someone; anyone else gets 404.
+      responses:
+        "204":
+          description: The email no longer has access.
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/me/artifact-shares/uploads:
@@ -152,15 +261,18 @@ paths:
       description: >-
         Starts uploading one file from a local session straight to storage,
         for a new document (project, feature, name), a revoked document to
-        restore, or an update of an active link (shareId, same name). The
+        restore, or an update of an active link (shareId). An update may give
+        the link a new name, after the file was renamed: the link keeps its
+        address and serves the file under that name. The
         file goes in partCount parts of partSize bytes, the last one shorter:
         presign them with presignArtifactShareParts, PUT each, then
         finalizeArtifactShare. There is no file size limit. Nothing reaches
         storage when the upload is refused: 415
         artifact_share_type_unsupported for video, 409
         artifact_share_limit_reached for a new or restored document over the
-        free plan's link limit, 409 artifact_share_name_changed for an update
-        with another name. Paid plans have no link limit.
+        free plan's link limit. Paid plans have no link limit. An older
+        control plane refuses an update with another name with 409
+        artifact_share_name_changed.
       requestBody:
         required: true
         content:
@@ -267,12 +379,45 @@ paths:
         file's name, type and size, its owner's display name, and the URL
         its file is served at. Needs no sign-in and never returns the
         owner's email. Readable from a browser only by the configured viewer
-        origin, and rate-limited per client (429 rate_limited). An unknown or
-        revoked link returns 404. Available only when the development-only
-        AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404.
+        origin, and rate-limited per client (429 rate_limited). An unknown,
+        revoked or private link returns 404, with the same body: a private
+        link's details come only from viewArtifactShare. Available only when
+        the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise
+        404.
       responses:
         "200":
           description: The link's public details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicArtifactShare"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/view:
+    parameters:
+      - name: linkId
+        in: path
+        required: true
+        description: The link's public ID, the slug of an ArtifactShare.
+        schema:
+          type: string
+    post:
+      operationId: viewArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Returns what the viewer page shows a signed-in person for a link: the
+        same details as getPublicArtifactShare, for a public link, a link they
+        own, or a private link shared with their verified email. For a private
+        link contentUrl carries a view token (?vt=) that opens the file for
+        10 minutes; the file host checks the token and the link's grants on
+        every request, so removing someone or unpublishing takes effect at
+        once. Any other link, private or not there at all, returns 404, so
+        the answer never says that a private link exists. For the link's
+        owner the answer adds you, with the link's ID, so they can unpublish
+        it from the viewer page. Rate-limited per person (429 rate_limited).
+      responses:
+        "200":
+          description: The link's details, with a contentUrl that opens it.
           content:
             application/json:
               schema:
@@ -406,6 +551,14 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
+        - name: standaloneAgents
+          in: query
+          description: >-
+            exclude lists the projects without the caller's standalone agents;
+            only lists those agents alone. Omitted lists both.
+          schema:
+            type: string
+            enum: [exclude, only]
       responses:
         "200":
           description: A page of projects in the tenant.
@@ -613,6 +766,122 @@ paths:
                 $ref: "#/components/schemas/CueEnvelope"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listProjectShareLinks
+      tags: [Projects]
+      description: >-
+        The project's share links, newest first, revoked ones included. No
+        link carries its token, url, code or shortUrl: only the create
+        response does. joinedCount says how many people the link still gives
+        more than what was shared with them directly.
+      responses:
+        "200":
+          description: The project's share links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShareLinkList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createProjectShareLink
+      tags: [Projects]
+      description: >-
+        Mint a share link for the whole project, or one of its sessions with
+        sessionId. Omitted fields default to role viewer, accessScope anyone
+        and interaction view. 400 invalid_request for a body that is not
+        JSON or names an unknown field; 422 validation_error for a role,
+        accessScope, interaction or modeCap outside its enum, or a recipient
+        that is not an email address. The response is the only one that
+        carries the link's token and url, and its code and shortUrl when the
+        control plane issues short codes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateShareLinkInput"
+      responses:
+        "201":
+          description: The created share link, with its secrets.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedShareLinkEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/shares/{linkId}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+      - name: linkId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: revokeProjectShareLink
+      tags: [Projects]
+      description: >-
+        Turn a share link off. Without a body, or with removeJoined false,
+        only the link stops working: what it already granted stays, and a
+        link that is unknown or already revoked is 404 not_found. With
+        removeJoined true the people who joined by the link lose what it
+        gave them too (access it alone gave is revoked; access also shared
+        directly drops back to that level), the answer is 200 with how many
+        grants changed, and a link already revoked is processed the same
+        way: only an unknown link is 404.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeShareLinkInput"
+      responses:
+        "200":
+          description: The link was revoked and the grants it gave were removed (removeJoined true).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevokeShareLinkResult"
+        "204":
+          description: The link was revoked; grants it gave are kept.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/share-links/redeem:
+    post:
+      operationId: redeemShareLink
+      tags: [Projects]
+      description: >-
+        Redeem a share link, by its short code or by its organization and
+        token, into the caller's own access grant (an existing one is only
+        ever raised). Someone already in the project's organization gets no
+        grant: member is true and grant is empty. 400 invalid_request for a
+        code that is not 22 letters and digits, or without a code, an orgId
+        that is not a UUID or an empty token. 404 not_found for an unknown,
+        revoked or expired link, or an archived project. 403 forbidden when
+        the caller created the link, or the link is restricted to recipients
+        that do not include the caller's email.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RedeemShareLinkInput"
+      responses:
+        "200":
+          description: Where the link leads, and the caller's grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SharedProjectEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/cues/{cueId}:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -768,6 +1037,49 @@ paths:
                 $ref: "#/components/schemas/GitHubRepositoryPage"
         default:
           $ref: "#/components/responses/Error"
+    post:
+      operationId: createGitHubRepository
+      tags: [GitHub]
+      description: >-
+        Create an empty private GitHub repository, for a folder uploaded from
+        the desktop, in an account the organization's GitHub App installation
+        covers, and grant it to the organization. With several accounts
+        connected, owner names the one (422 repository_owner_required without
+        it). An empty private repository of that name that already exists is
+        connected instead (200, created false); a public one is refused (422
+        repository_create_refused), as is a repository the member's own GitHub
+        account cannot push to when the installation is user-scoped. Push the
+        folder to pushPath, relative to the control plane, with the same bearer
+        token. That endpoint only accepts pushes to a repository this
+        operation returned for the organization, only pushes that create
+        branches, and answers 403 otherwise; GitHub's own refusals (for
+        example of .github/workflows changes the App may not make) reach git's
+        output unchanged. 422 codes: repository_owner_required,
+        github_installation_required, github_installation_ineligible,
+        repository_create_on_github, repository_create_refused,
+        validation_error. 502 SCM_BROKER_FAILED when GitHub could not be
+        reached or did not grant the repository in time; retry later.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGitHubRepositoryInput"
+      responses:
+        "200":
+          description: An existing empty repository was connected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateGitHubRepositoryResponse"
+        "201":
+          description: The repository was created and granted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateGitHubRepositoryResponse"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/github/projects:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -846,6 +1158,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProjectResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/standalone-agents:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    post:
+      operationId: createStandaloneAgent
+      tags: [Sessions]
+      description: >-
+        Start a standalone agent: one worker session with no repository and no
+        orchestrator, the caller's own. The control plane makes it a standalone
+        project the caller owns (standaloneAgent) and starts its one session
+        there, refused as a session create would be. Only its owner lists the
+        agent or is a member of it; anyone else reaches it through a share.
+        Offered when offering.features lists standalone_agents.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStandaloneAgentInput"
+      responses:
+        "201":
+          description: Standalone agent started.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [project, session]
+                properties:
+                  project:
+                    $ref: "#/components/schemas/Project"
+                  session:
+                    $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/chat-search:
@@ -2152,9 +2501,42 @@ paths:
         - $ref: "#/components/parameters/After"
         - $ref: "#/components/parameters/EventLimit"
         - $ref: "#/components/parameters/EventTypes"
+        - name: before
+          in: query
+          required: false
+          description: |
+            Read back from this sequence instead of forward from after: the
+            newest events with after < sequence < before (at most limit), oldest
+            first. Must be greater than after, or it is refused with 400.
+            9007199254740991 reads the newest page. The page then extends back,
+            once, to the prompt of every turn and the first step of every Setup
+            or Cleanup run among those events, by at most 1000 events and never
+            to after or below. What that brings in can begin partway through an
+            earlier turn or run (a prompt queued while another turn ran sits
+            inside that turn); the next older page holds the rest. Such a page
+            carries hasOlder and nextBefore; a control plane that predates this
+            parameter ignores it and answers with a page after `after` without
+            them.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+            maximum: 9007199254740991
+        - name: since
+          in: query
+          required: false
+          description: >-
+            With before only: read only events created at or after this time
+            (still at most limit, and still extended back to where their turns
+            start). Without before it is refused with 400.
+          schema:
+            type: string
+            format: date-time
       responses:
         "200":
-          description: Client-visible events after the supplied sequence.
+          description: |
+            Client-visible events after the supplied sequence or, with before,
+            the newest events below it.
           content:
             application/json:
               schema:
@@ -2528,6 +2910,112 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Offering"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listOrgHarnessVersions
+      tags: [Providers]
+      description: >-
+        The release of each coding-agent CLI the organization's new Cloud
+        sessions run, the newest release its publisher has, and how the last
+        install of a release the organization chose went (any member). A
+        harness runs the release AO tested (`defaultVersion`) until an
+        organization admin chooses a newer one (`selectedVersion`). Each entry
+        carries the local daemon's install plan, update advisory and install
+        job shapes, so a client shows AO Cloud's harnesses the way it shows a
+        computer's. `editable` says whether the caller may change them.
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          description: Look up the newest releases again instead of reading the control plane's cache.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Every harness whose version AO Cloud manages.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersions"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions/{agent}/install:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CloudHarnessAgent"
+    post:
+      operationId: installOrgHarnessVersion
+      tags: [Providers]
+      description: >-
+        Have the organization's new sessions run `expectedVersion` of this
+        harness in place of the AO-tested release (organization admins). The
+        version must be a stable release newer than the AO-tested one that the
+        publisher has (the npm registry, or Cursor's download host). Only the
+        harness's CLI moves: the tools it also runs (Claude Code's Chat
+        adapter) keep the release AO tested. Each new session's worker installs
+        the release and checks it against what the publisher listed; when that
+        fails the session runs the AO-tested release and the failure shows as
+        the entry's failed `job`. Sessions already running keep their release.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloudHarnessInstallInput"
+      responses:
+        "200":
+          description: The harness as new sessions now run it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersion"
+        "403":
+          description: ORG_ADMIN_REQUIRED. Only organization owners and admins change the version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: >-
+            INVALID_HARNESS_VERSION (not a stable release of the harness),
+            HARNESS_VERSION_NOT_NEWER (not newer than the AO-tested release),
+            UNKNOWN_HARNESS_VERSION (the publisher has no such release), or
+            UNVERIFIABLE_HARNESS_VERSION (the release installs something AO
+            Cloud cannot check against its publisher's listing).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: RELEASE_LOOKUP_UNAVAILABLE. The publisher could not be reached; nothing changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/harness-versions/{agent}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/CloudHarnessAgent"
+    delete:
+      operationId: resetOrgHarnessVersion
+      tags: [Providers]
+      description: >-
+        Have the organization's new sessions run the AO-tested release of this
+        harness's CLI again (organization admins; 403 ORG_ADMIN_REQUIRED
+        otherwise).
+      responses:
+        "200":
+          description: The harness as new sessions now run it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloudHarnessVersion"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/coder-config:
@@ -3109,6 +3597,40 @@ paths:
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/registrations:
+    post:
+      operationId: registerWorkerArtifacts
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Registers the committed files at paths in the worker's own session as
+        its deliverables, including the files inside a bundle directory, which
+        is what ao artifact add calls, and returns every file the session has
+        registered. A path with no committed file registers nothing and is
+        absent from the result, so the caller asks again once the worker's sync
+        has committed it. Registering a file again changes nothing; a newly
+        registered file appends an artifact.changed event and moves its
+        updatedAt. Requires `worker:connect`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerArtifactRegistrationInput"
+      responses:
+        "200":
+          description: The committed files at the paths are registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerArtifactRegistrationResult"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/children:
     get:
       operationId: listWorkerChildren
@@ -3547,6 +4069,33 @@ paths:
           $ref: "#/components/responses/WorkerScopeRequired"
         "409":
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/billing:
+    get:
+      operationId: getOrgBilling
+      tags: [Billing]
+      description: |
+        The organization's plan, its limits and its usage against them, for
+        any member. billingMode is self_serve only when the deployment has
+        Stripe and the organization is offered a billed provider; otherwise
+        plans do not apply and nothing is enforced. A self-serve organization
+        without an entitled subscription (active, trialing, or past due
+        within the grace period) is on Free, which runs no billed sessions:
+        creating or waking one answers 402 PLAN_REQUIRED. Usage counts every
+        running billed session per minute. Plans lists what the organization
+        can buy, cheapest first, for self-serve organizations only.
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: The organization's billing summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/notifications:
     get:
       operationId: listCloudNotifications
@@ -3715,6 +4264,48 @@ paths:
           $ref: "#/components/responses/BadRequest"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/push-devices/{installId}:
+    parameters:
+      - $ref: "#/components/parameters/PushInstallId"
+    put:
+      operationId: putPushDevice
+      tags: [Push Devices]
+      description: |
+        Registers this app install's Expo push token, so the account's new
+        cloud notifications reach the phone as pushes, or replaces the
+        install's earlier registration. Registrations follow the account, not
+        an organization; an account keeps its 20 most recent. A token already
+        registered under another account or install moves to this one. A
+        deployment that does not send pushes still accepts registrations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutPushDeviceInput"
+      responses:
+        "204":
+          description: Registered.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          description: "`validation_error`: the token is not an Expo push token, the platform is unknown, or the device name is too long."
+          $ref: "#/components/responses/ValidationError"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deletePushDevice
+      tags: [Push Devices]
+      description: |
+        Stops pushes to this app install, as on sign-out. Removing an install
+        that is not registered also succeeds.
+      responses:
+        "204":
+          description: Removed, or was not registered.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/remote-hosts/{hostId}/address:
     parameters:
       - $ref: "#/components/parameters/RemoteHostId"
@@ -3867,6 +4458,22 @@ components:
       schema:
         type: string
         pattern: "^h_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    PushInstallId:
+      name: installId
+      in: path
+      required: true
+      description: The app install's stable identifier.
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9_-]{8,128}$"
+    CloudHarnessAgent:
+      name: agent
+      in: path
+      required: true
+      description: A harness whose version AO Cloud manages.
+      schema:
+        type: string
+        enum: [claude-code, codex, cursor]
     OrgId:
       name: orgId
       in: path
@@ -4091,6 +4698,157 @@ components:
           type: string
           pattern: "^[A-Za-z0-9_-]{43}$"
           description: The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it.
+    BillingSummary:
+      type: object
+      additionalProperties: false
+      required: [enabled, billingMode, exempt, plan, entitled, features, plans]
+      properties:
+        enabled:
+          type: boolean
+          description: Stripe billing is configured on the deployment.
+        billingMode:
+          type: string
+          enum: [self_serve, contract, "off"]
+          description: Plans apply only to self_serve. contract is no longer sent and is kept for older clients.
+        exempt:
+          type: boolean
+          description: Always false; kept for older desktop releases.
+        plan:
+          type: string
+          description: The plan recorded on the organization; free without a subscription.
+        subscriptionStatus:
+          type: string
+          description: Stripe's status for the subscription (active, trialing, past_due, canceled, ...).
+        entitled:
+          type: boolean
+          description: The subscription may run billed sessions now.
+        currentPeriodEnd:
+          type: string
+          format: date-time
+        cancelAt:
+          type: string
+          format: date-time
+          description: When a subscription set to cancel ends and the organization moves to Free.
+        limits:
+          $ref: "#/components/schemas/PlanLimits"
+        usage:
+          $ref: "#/components/schemas/BillingUsage"
+        features:
+          type: array
+          description: Paywalled features the organization's plan includes.
+          items:
+            type: string
+        plans:
+          type: array
+          description: Plans the organization can choose, cheapest first; empty unless billingMode is self_serve.
+          items:
+            $ref: "#/components/schemas/PlanOffer"
+    PlanLimits:
+      type: object
+      additionalProperties: false
+      description: A plan's limits, from its Stripe product metadata.
+      required: [plan, maxActiveSandboxes, maxRunningSandboxes, orchestratorSlots, windowHours, windowSessionHours, weeklySessionHours, manualResetsPerMonth]
+      properties:
+        plan:
+          type: string
+        maxActiveSandboxes:
+          type: integer
+          description: Sessions with a sandbox, running or paused, orchestrators included.
+        maxRunningSandboxes:
+          type: integer
+          description: How many of them may run at once.
+        orchestratorSlots:
+          type: integer
+          description: Running slots reserved for orchestrators.
+        windowHours:
+          type: integer
+          description: Length of the rolling usage window.
+        windowSessionHours:
+          type: number
+        weeklySessionHours:
+          type: number
+        manualResetsPerMonth:
+          type: integer
+        features:
+          type: array
+          items:
+            type: string
+    BillingUsage:
+      type: object
+      additionalProperties: false
+      description: Usage against the plan, in session-minutes of running billed sandbox time.
+      required: [windowUsedMinutes, windowLimitMinutes, windowHours, weeklyUsedMinutes, weeklyLimitMinutes, manualResetsAllowed, manualResetsUsed, activeOrchestrators, activeWorkers, runningOrchestrators, runningWorkers]
+      properties:
+        windowUsedMinutes:
+          type: integer
+        windowLimitMinutes:
+          type: integer
+        windowHours:
+          type: integer
+        windowResetsAt:
+          type: string
+          format: date-time
+        weeklyUsedMinutes:
+          type: integer
+        weeklyLimitMinutes:
+          type: integer
+        weeklyResetsAt:
+          type: string
+          format: date-time
+        manualResetsAllowed:
+          type: integer
+        manualResetsUsed:
+          type: integer
+        manualResetsRenewAt:
+          type: string
+          format: date-time
+        activeOrchestrators:
+          type: integer
+        activeWorkers:
+          type: integer
+        runningOrchestrators:
+          type: integer
+        runningWorkers:
+          type: integer
+    PlanOffer:
+      type: object
+      additionalProperties: false
+      description: A plan the organization can choose. The price fields are zero or empty when Stripe could not be read.
+      required: [name, id, unitAmount, currency, interval]
+      properties:
+        name:
+          type: string
+        id:
+          type: string
+          description: The Stripe price.
+        unitAmount:
+          type: integer
+          format: int64
+          description: In the currency's smallest unit.
+        currency:
+          type: string
+        interval:
+          type: string
+        limits:
+          $ref: "#/components/schemas/PlanLimits"
+    PutPushDeviceInput:
+      type: object
+      additionalProperties: false
+      required: [token, platform]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          pattern: "^Expo(nent)?PushToken\\[[^\\]\\s]+\\]$"
+          description: The Expo push token the app minted.
+        platform:
+          type: string
+          enum: [ios, android]
+        deviceName:
+          type: string
+          maxLength: 200
+          description: The phone's name, shown wherever the account lists its devices.
     RemoteHostAddress:
       type: object
       additionalProperties: false
@@ -4301,6 +5059,12 @@ components:
           $ref: "#/components/schemas/OrganizationRole"
         offering:
           $ref: "#/components/schemas/Offering"
+        kind:
+          type: string
+          enum: [personal, team, enterprise]
+          description: >-
+            Whether this is someone's own workspace or a team's. Only /me
+            reports it; an older control plane leaves it out.
     PutOrgSandboxProviderInput:
       type: object
       additionalProperties: false
@@ -4309,6 +5073,176 @@ components:
         defaultProvider:
           type: string
           description: A provider from the organization's offering, or empty to clear the choice.
+    CloudHarnessVersions:
+      type: object
+      additionalProperties: false
+      required: [editable, agents]
+      properties:
+        editable:
+          type: boolean
+          description: The caller administers the organization, so may change the versions.
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudHarnessVersion"
+    CloudHarnessVersion:
+      type: object
+      additionalProperties: false
+      description: One harness as the organization's new Cloud sessions run it.
+      required: [agentId, defaultVersion, plan, advisory]
+      properties:
+        agentId:
+          type: string
+          enum: [claude-code, codex, cursor]
+        defaultVersion:
+          type: string
+          description: The release of the harness's CLI that AO tested and its images bake.
+        selectedVersion:
+          type: string
+          description: The newer release the organization chose in its place; absent while it runs the default.
+        supersededVersion:
+          type: string
+          description: >-
+            A release the organization chose that AO's tested release has since
+            caught up with or passed. New sessions run `defaultVersion` instead,
+            never an older CLI than AO tests; absent otherwise.
+        plan:
+          $ref: "#/components/schemas/CloudHarnessInstallPlan"
+        advisory:
+          $ref: "#/components/schemas/CloudHarnessUpdateAdvisory"
+        job:
+          $ref: "#/components/schemas/CloudHarnessInstallJob"
+        components:
+          type: array
+          description: Tools the harness's sessions run besides its CLI (Claude Code's Chat adapter). They always run the release AO tested; clients show them read-only.
+          items:
+            $ref: "#/components/schemas/CloudHarnessComponent"
+    CloudHarnessComponent:
+      type: object
+      additionalProperties: false
+      required: [tool, version, defaultVersion]
+      properties:
+        tool:
+          type: string
+        version:
+          type: string
+        defaultVersion:
+          type: string
+    CloudHarnessInstallPlan:
+      type: object
+      additionalProperties: false
+      description: The local daemon's AgentInstallPlan shape. AO Cloud has one method, ao-cloud.
+      required: [agentId, automatic, available, documentationUrl, method, methods]
+      properties:
+        agentId:
+          type: string
+        automatic:
+          type: boolean
+        available:
+          type: boolean
+        documentationUrl:
+          type: string
+        method:
+          type: string
+        methods:
+          type: array
+          items:
+            $ref: "#/components/schemas/CloudHarnessInstallMethod"
+    CloudHarnessInstallMethod:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's AgentInstallMethod shape. updateAvailable is false
+        for a caller who may not change the version, with updateReason saying
+        why.
+      required: [id, label, available, recommended, reinstallAvailable, updateAvailable]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        available:
+          type: boolean
+        recommended:
+          type: boolean
+        reinstallAvailable:
+          type: boolean
+        updateAvailable:
+          type: boolean
+        updateReason:
+          type: string
+    CloudHarnessUpdateAdvisory:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's AgentUpdateAdvisory shape. currentVersion is the
+        release new sessions run; latestVersion the newest the publisher has.
+      required: [agentId, checkedAt, status]
+      properties:
+        agentId:
+          type: string
+        checkedAt:
+          type: string
+          format: date-time
+        currentVersion:
+          type: string
+        latestVersion:
+          type: string
+        maintenanceMethod:
+          type: string
+        source:
+          type: string
+        reason:
+          type: string
+          enum: [lookup_failed, build_unordered]
+        status:
+          type: string
+          enum: [unknown, current, behind_latest, ahead_of_latest]
+    CloudHarnessInstallJob:
+      type: object
+      additionalProperties: false
+      description: >-
+        The local daemon's InstallJob shape, for the latest install of the
+        organization's chosen release a session's worker reported: failed when
+        it could not be installed (that session ran the AO-tested release),
+        succeeded once one installed it.
+      required: [target, status]
+      properties:
+        target:
+          type: string
+        status:
+          type: string
+          enum: [succeeded, failed]
+        method:
+          type: string
+        error:
+          type: string
+        output:
+          type: string
+          description: The end of the installer's output.
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CloudHarnessInstallInput:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        method:
+          type: string
+          enum: [ao-cloud]
+        operation:
+          type: string
+          enum: [update]
+        expectedVersion:
+          type: string
+          description: The release to run, as the advisory listed it (its latestVersion).
     Offering:
       type: object
       additionalProperties: false
@@ -4590,11 +5524,26 @@ components:
           $ref: "#/components/schemas/ProjectRules"
         workersRequestReview:
           $ref: "#/components/schemas/ProjectWorkersRequestReview"
+        coAuthorCommits:
+          $ref: "#/components/schemas/ProjectCoAuthorCommits"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
         source:
           type: string
           description: '"standalone" for a project created without a repository; "scratch" for one whose repository AO created.'
+        layout:
+          $ref: "#/components/schemas/ProjectLayout"
+    ProjectLayout:
+      type: string
+      enum: [workspace]
+      description: >-
+        "workspace" lays the project out like a local workspace: every session
+        checks the main repository and each additional one (repos) out side by
+        side inside one workspace folder, and the agent starts in that folder
+        (agentStartsIn is treated as parent). Set only when the project is
+        created; any settings write that includes layout is refused (422),
+        even with the project's current value. A standalone project has no
+        repository, so creating one with this layout is refused (422).
     ProjectAdditionalRepositories:
       type: array
       maxItems: 10
@@ -5018,6 +5967,8 @@ components:
           $ref: "#/components/schemas/ProjectRules"
         workersRequestReview:
           $ref: "#/components/schemas/ProjectWorkersRequestReview"
+        coAuthorCommits:
+          $ref: "#/components/schemas/ProjectCoAuthorCommits"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
     ProjectWorkersRequestReview:
@@ -5025,6 +5976,12 @@ components:
       description: >-
         Workers request AO's review of their own pull request once it is pushed
         and ready, instead of waiting to be asked. Defaults to off.
+    ProjectCoAuthorCommits:
+      type: boolean
+      description: >-
+        Commits a session's agent makes carry a Co-authored-by trailer naming
+        the AO GitHub App's bot account, so GitHub shows the App as a
+        co-author beside the person the commit is authored as. Defaults to on.
     ProjectTrackerIntake:
       type: object
       additionalProperties: false
@@ -5279,6 +6236,11 @@ components:
         standalone:
           type: boolean
           description: True for a project with no repository; its repositoryUrl is a placeholder that is never cloned.
+        standaloneAgent:
+          type: boolean
+          description: >-
+            True for a standalone agent's project: its owner's one worker
+            session, with no orchestrator. Only its owner lists it.
         config:
           $ref: "#/components/schemas/ProjectConfig"
         createdAt:
@@ -5348,6 +6310,269 @@ components:
             $ref: "#/components/schemas/Project"
         page:
           $ref: "#/components/schemas/PageInfo"
+    ShareRole:
+      type: string
+      enum: [viewer, editor]
+    ShareModeCap:
+      type: string
+      enum: [read-only, standard, trusted]
+    ShareLink:
+      type: object
+      additionalProperties: false
+      required: [id, orgId, projectId, role, status, accessScope, recipients, interaction, deniedCommands, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+          description: The one session the link shares; absent, the whole project.
+        role:
+          $ref: "#/components/schemas/ShareRole"
+        status:
+          type: string
+          enum: [active, revoked]
+        accessScope:
+          type: string
+          enum: [anyone, restricted]
+          description: anyone redeems the link; restricted, only the recipients.
+        recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          description: Lowercased email addresses; empty unless accessScope is restricted.
+        interaction:
+          type: string
+          enum: [view, interact]
+        modeCap:
+          $ref: "#/components/schemas/ShareModeCap"
+          description: Absent when there is no cap beyond the session's own mode.
+        deniedCommands:
+          type: array
+          items:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: Absent when the link never expires.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        joinedCount:
+          type: integer
+          minimum: 0
+          description: >-
+            How many people the link still gives more than what was shared
+            with them directly: the grants a revoke with removeJoined changes.
+            0 on a link just created. Absent from control planes that predate
+            it, which also ignore removeJoined.
+    CreatedShareLink:
+      description: >-
+        A share link as its create returns it, the only time its secrets are
+        sent: the store keeps only their hashes.
+      allOf:
+        - $ref: "#/components/schemas/ShareLink"
+        - type: object
+          required: [token, url]
+          properties:
+            token:
+              type: string
+              description: The link's raw token; with orgId it redeems the link.
+            url:
+              type: string
+              format: uri
+              description: >-
+                <scheme>://<host>/share/<orgId>/<token>, built from the host
+                this request reached (X-Forwarded-* when present). A
+                convenience for non-browser callers; browsers build the link
+                from their own origin and token.
+            code:
+              type: string
+              pattern: "^[A-Za-z0-9]{22}$"
+              description: >-
+                The link's short code, which redeems it on its own. Present
+                only when the control plane issues codes
+                (AO_CLOUD_SHARE_LINK_CODES); the client then shares a
+                /s/<code> link instead of the token.
+            shortUrl:
+              type: string
+              format: uri
+              description: >-
+                <origin>/s/<code> on the public share-link origin
+                (AO_CLOUD_SHARE_LINK_ORIGIN). Present only with a code and
+                when that origin is configured; the client shares it as is.
+    ShareLinkList:
+      type: object
+      additionalProperties: false
+      required: [links]
+      properties:
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/ShareLink"
+    CreatedShareLinkEnvelope:
+      type: object
+      additionalProperties: false
+      required: [link]
+      properties:
+        link:
+          $ref: "#/components/schemas/CreatedShareLink"
+    CreateShareLinkInput:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+          description: Shares one session of the project; omitted, the whole project.
+        role:
+          $ref: "#/components/schemas/ShareRole"
+          description: Defaults to viewer.
+        accessScope:
+          type: string
+          enum: [anyone, restricted]
+          description: Defaults to anyone. restricted lets only the recipients redeem it.
+        recipients:
+          type: array
+          items:
+            type: string
+            format: email
+        interaction:
+          type: string
+          enum: [view, interact]
+          description: Defaults to view.
+        modeCap:
+          $ref: "#/components/schemas/ShareModeCap"
+          description: Omitted, no cap beyond the session's own mode.
+        deniedCommands:
+          type: array
+          items:
+            type: string
+        expiresInHours:
+          type: integer
+          description: Hours until the link expires; omitted, zero or negative, it never expires.
+    RevokeShareLinkInput:
+      type: object
+      additionalProperties: false
+      properties:
+        removeJoined:
+          type: boolean
+          description: Also remove what the link gave the people who joined by it.
+    RevokeShareLinkResult:
+      type: object
+      additionalProperties: false
+      required: [removedGrants]
+      properties:
+        removedGrants:
+          type: integer
+          minimum: 0
+          description: How many grants were revoked or dropped back to their direct level.
+    RedeemShareLinkInput:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [code]
+          properties:
+            code:
+              type: string
+              pattern: "^[A-Za-z0-9]{22}$"
+              description: The link's short code; it names the organization itself.
+        - type: object
+          additionalProperties: false
+          required: [orgId, token]
+          properties:
+            orgId:
+              type: string
+              format: uuid
+            token:
+              type: string
+              minLength: 1
+    SharedProjectGrant:
+      type: object
+      additionalProperties: false
+      required: [id, role, status, deniedCommands, redeemedAt]
+      description: >-
+        The caller's grant. Empty when member is true: id, role and status
+        are empty strings, deniedCommands is null and redeemedAt is the zero
+        time.
+      properties:
+        id:
+          type: string
+          description: The grant's UUID, or empty when member is true.
+        role:
+          type: string
+          enum: [viewer, editor, ""]
+        status:
+          type: string
+          enum: [active, revoked, ""]
+        userEmail:
+          type: string
+        userDisplayName:
+          type: string
+        modeCap:
+          $ref: "#/components/schemas/ShareModeCap"
+        deniedCommands:
+          oneOf:
+            - type: array
+              items:
+                type: string
+            - type: "null"
+        redeemedAt:
+          type: string
+          format: date-time
+    SharedProject:
+      type: object
+      additionalProperties: false
+      required: [grant, project]
+      description: A project, or one of its sessions, shared with the caller.
+      properties:
+        grant:
+          $ref: "#/components/schemas/SharedProjectGrant"
+        project:
+          $ref: "#/components/schemas/Project"
+        member:
+          type: boolean
+          description: >-
+            True when the caller already belongs to the project's
+            organization and needs no grant; the link only says where to go.
+        sessionId:
+          type: string
+          format: uuid
+          description: The shared session; absent when the whole project is shared.
+        sessionName:
+          type: string
+        sharedByEmail:
+          type: string
+        sharedByName:
+          type: string
+        viaTeamId:
+          type: string
+          format: uuid
+          description: The team this reaches the caller through, when not shared with them directly.
+        viaTeamName:
+          type: string
+        source:
+          type: string
+          enum: [link, direct, team]
+          description: How the caller got it. Absent when member is true.
+    SharedProjectEnvelope:
+      type: object
+      additionalProperties: false
+      required: [shared]
+      properties:
+        shared:
+          $ref: "#/components/schemas/SharedProject"
     GitHubInstallationStatus:
       type: string
       enum: [active, suspended, removed]
@@ -5541,6 +6766,34 @@ components:
         config:
           type: object
           additionalProperties: true
+    CreateGitHubRepositoryInput:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: "^[A-Za-z0-9._-]+$"
+        owner:
+          type: string
+          description: The GitHub account login to create the repository in.
+        description:
+          type: string
+          maxLength: 350
+    CreateGitHubRepositoryResponse:
+      type: object
+      additionalProperties: false
+      required: [repository, created, pushPath]
+      properties:
+        repository:
+          $ref: "#/components/schemas/GitHubRepository"
+        created:
+          type: boolean
+        pushPath:
+          type: string
+          description: The repository's push-only git smart HTTP endpoint, relative to the control plane (/api/cloud/v1/orgs/{orgId}/github/git/{owner}/{name}.git).
     CreateGitHubScratchProjectInput:
       type: object
       additionalProperties: false
@@ -6245,6 +7498,21 @@ components:
             invalid_branch; a branch a live session of the project already
             works on is refused with 409 branch_in_use. The error's details
             carry the reason and, for branch_in_use, the session id.
+        model:
+          type: string
+          maxLength: 500
+          description: >-
+            Coding-agent model the worker runs (harness-native id). One the
+            account cannot run is refused with MODEL_UNAVAILABLE. Omitted, the
+            worker runs the project's worker model; without one, a worker on the
+            orchestrator's harness runs the orchestrator's current model, else
+            the harness default.
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            Reasoning effort the worker's opening prompt runs with. Optional;
+            empty uses the model's default.
     ChatMessageInput:
       type: object
       additionalProperties: false
@@ -6349,6 +7617,20 @@ components:
           items:
             type: string
             enum: [default, accept-edits, auto, bypass-permissions]
+        providerId:
+          description: >-
+            The model the account's provider listed behind this entry: its own
+            ID, or the model an alias such as opus resolves to. Absent when the
+            provider did not confirm the entry for the account, or from an
+            older worker. Only such a confirmation says the account runs the
+            model an alias describes.
+          type: string
+        sessionOnly:
+          description: >-
+            On a session's own list, a model its worker added only so the
+            session keeps its own selection. The account's provider did not
+            list it, so it is not kept as the account's.
+          type: boolean
     ChatModelsResponse:
       type: object
       additionalProperties: false
@@ -6374,6 +7656,12 @@ components:
             On a session's list, true when its worker listed the models for
             the signed-in account rather than from the CLI's built-in list.
             Only such a list becomes the user's catalog.
+          type: boolean
+        sessionOnlyMarked:
+          description: >-
+            On a session's list, true when its worker marks the models it
+            added for the session (sessionOnly). A Claude Code list without it
+            does not become the user's catalog.
           type: boolean
     SendMessageInput:
       type: object
@@ -6866,6 +8154,17 @@ components:
           $ref: "#/components/schemas/SessionInterfaceMode"
         policy:
           $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
+        model:
+          type: string
+          description: >-
+            The model the terminal agent starts with, as the Chat ran it.
+            Chat to terminal handoff only; validated as a Chat turn's model.
+        reasoningEffort:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            The effort the terminal agent starts at, as the Chat ran it. Chat
+            to terminal handoff only; validated as a Chat turn's effort.
     Session:
       type: object
       additionalProperties: false
@@ -6925,6 +8224,20 @@ components:
           description: >-
             Coding-agent model the session launched with; empty means the harness
             default.
+        currentModel:
+          type: string
+          description: >-
+            Coding-agent model the session runs now: its owner's Chat pick, else
+            the model it launched with. The control plane always sends it; an
+            empty string means the harness default. Absent only from older
+            control planes, which predate it; read `model` then.
+        currentReasoningEffort:
+          type: string
+          enum: [none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            Reasoning effort the session's turns run with now: its owner's Chat
+            pick, else the effort it launched with. Omitted when that is the
+            model's default.
         deniedCommands:
           type: array
           items:
@@ -7037,6 +8350,14 @@ components:
       additionalProperties: false
       required: [path, name, kind, contentType, size, sha256, updatedAt]
       properties:
+        id:
+          type: string
+          format: uuid
+          description: >-
+            The artifact's identity. It stays the same when the session's
+            agent renames or moves the file, so a client keys anything it keeps
+            about the file, such as its share link, by it. Absent from a
+            control plane that does not track artifacts across renames.
         path:
           type: string
           description: Slash-separated path in the session's artifact directory.
@@ -7058,7 +8379,25 @@ components:
           type: string
           format: date-time
           description: >-
-            When the control plane last committed a new version of the file.
+            When the control plane last committed a new version of the file,
+            or registered it as a deliverable.
+        registered:
+          type: boolean
+          description: >-
+            Set on a file the session's agent registered as a deliverable with
+            ao artifact add, or inside a bundle directory it registered. Absent
+            otherwise. A client lists only registered files as the session's
+            artifacts, or the files at the root of its artifact directory when
+            none is registered.
+        previousPaths:
+          type: array
+          maxItems: 20
+          description: >-
+            The paths the artifact had before it was renamed, most recent
+            last, so a link naming one still opens it. Absent when it was
+            never renamed.
+          items:
+            type: string
     SessionArtifactResult:
       type: object
       additionalProperties: false
@@ -7244,6 +8583,66 @@ components:
           type: string
           format: date-time
           description: When the link was revoked. A revoked link serves nothing and uses no slot.
+        access:
+          $ref: "#/components/schemas/ArtifactShareAccess"
+        grantCount:
+          type: integer
+          minimum: 0
+          description: >-
+            How many emails the link is shared with. Absent from a control
+            plane that predates private links.
+    ArtifactShareAccess:
+      type: string
+      enum: [restricted, anyone]
+      description: >-
+        Who a link opens for. restricted: only its owner and the emails it
+        is shared with, once they sign in with that verified email; its file
+        needs a view token (viewArtifactShare), so share viewerUrl, never
+        contentUrl. anyone: everyone with the link, no sign-in. Absent from a
+        control plane that predates private links, where every link is
+        anyone.
+    ArtifactShareAccessInput:
+      type: object
+      additionalProperties: false
+      required: [access]
+      properties:
+        access:
+          $ref: "#/components/schemas/ArtifactShareAccess"
+    ArtifactShareGrant:
+      type: object
+      additionalProperties: false
+      required: [id, email, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          description: The invited email, lowercased.
+        createdAt:
+          type: string
+          format: date-time
+    ArtifactShareGrantList:
+      type: object
+      additionalProperties: false
+      required: [grants]
+      properties:
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactShareGrant"
+    ArtifactShareGrantsInput:
+      type: object
+      additionalProperties: false
+      required: [emails]
+      properties:
+        emails:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: string
+          description: Bare email addresses to share the link with.
     ArtifactSharePublishResult:
       type: object
       additionalProperties: false
@@ -7276,6 +8675,13 @@ components:
           type: integer
           minimum: 0
           description: How many active links the user holds; revoked links do not count.
+        privateLinks:
+          type: boolean
+          description: >-
+            True when links may be private here: the viewer has sign-in.
+            Absent or false, links are public only, and publishing restricted,
+            inviting, or switching a link to restricted returns 409
+            artifact_share_private_unavailable.
     ArtifactShareUploadInput:
       type: object
       additionalProperties: false
@@ -7297,6 +8703,10 @@ components:
             the bytes; each part is checked against its own SHA-256.
         project:
           type: string
+          description: >-
+            With feature and name, the document the file is. On an update it
+            is optional: when sent, the link follows a file moved to another
+            document, as one moved to another folder.
         feature:
           type: string
         shareId:
@@ -7404,6 +8814,20 @@ components:
               etag:
                 type: string
                 description: The ETag the part's PUT returned.
+        access:
+          $ref: "#/components/schemas/ArtifactShareAccess"
+          description: >-
+            The access a new or restored link starts with. Absent, it is
+            anyone, as before links could be private. An active link keeps
+            its own access.
+        emails:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+          description: >-
+            Emails to share the link with as it is published, as
+            addArtifactShareGrants does.
     SessionArtifactShareInput:
       type: object
       additionalProperties: false
@@ -7423,7 +8847,21 @@ components:
         shareId:
           type: string
           format: uuid
-          description: An active link of the caller's, for a file of the same name, to point at this file.
+          description: An active link of the caller's to point at this file, also after the file was renamed.
+        access:
+          $ref: "#/components/schemas/ArtifactShareAccess"
+          description: >-
+            The access a new or restored link starts with. Absent, it is
+            anyone, as before links could be private. An active link keeps
+            its own access.
+        emails:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+          description: >-
+            Emails to share the link with as it is published, as
+            addArtifactShareGrants does.
     PublicArtifactShare:
       type: object
       additionalProperties: false
@@ -7452,7 +8890,30 @@ components:
               description: The owner's display name; empty when they set none.
         contentUrl:
           type: string
-          description: Where the link's file is served; the viewer frames it.
+          description: >-
+            Where the link's file is served; the viewer frames it. For a
+            private link (viewArtifactShare) it carries a short-lived view
+            token in its vt query parameter.
+        access:
+          $ref: "#/components/schemas/ArtifactShareAccess"
+        you:
+          type: object
+          additionalProperties: false
+          required: [owner, shareId, grantCount]
+          description: >-
+            Only from viewArtifactShare, and only for the link's owner: what
+            the viewer page needs to manage the link. shareId unpublishes it
+            (deleteArtifactShare); grantCount is how many emails it is shared
+            with. Absent for everyone else.
+          properties:
+            owner:
+              type: boolean
+            shareId:
+              type: string
+              format: uuid
+            grantCount:
+              type: integer
+              minimum: 0
     WorkerArtifactFile:
       type: object
       additionalProperties: false
@@ -7535,6 +8996,50 @@ components:
           description: Paths this worker previously synced and has since removed.
           items:
             type: string
+        moved:
+          type: array
+          maxItems: 200
+          description: >-
+            Files this worker previously synced that were renamed or moved:
+            each keeps its artifact, registration and version history at its
+            new path. Moves apply before files, so a file both moved and
+            changed is listed in both, with its new path in files.
+          items:
+            $ref: "#/components/schemas/WorkerArtifactMove"
+    WorkerArtifactMove:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from:
+          type: string
+          minLength: 1
+        to:
+          type: string
+          minLength: 1
+    WorkerArtifactRegistrationInput:
+      type: object
+      additionalProperties: false
+      required: [paths]
+      properties:
+        paths:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 1024
+    WorkerArtifactRegistrationResult:
+      type: object
+      additionalProperties: false
+      required: [registered]
+      properties:
+        registered:
+          type: array
+          description: Every file the session has registered.
+          items:
+            type: string
     SessionStartupError:
       type: object
       additionalProperties: false
@@ -7589,6 +9094,85 @@ components:
           format: uuid
         kind:
           $ref: "#/components/schemas/SessionKind"
+        harness:
+          type: string
+          minLength: 1
+          maxLength: 120
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        prompt:
+          type: string
+          maxLength: 65536
+        mode:
+          $ref: "#/components/schemas/SessionMode"
+          default: trusted
+        model:
+          type: string
+          maxLength: 200
+          description: >-
+            Coding-agent model the session launches with (harness-native id, e.g.
+            "anthropic/claude-opus-4-8"). Optional; empty uses the harness default.
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+          description: >-
+            Reasoning effort the opening prompt runs with. Optional; empty uses
+            the model's default.
+        approvalMode:
+          type: string
+          enum: [default, accept-edits, auto, bypass-permissions]
+          description: >-
+            Approval mode the opening prompt's turn runs with in a session that
+            starts in chat. Optional; empty lets the worker derive it from the
+            session's mode, as for any turn sent without one.
+        provider:
+          type: string
+          description: >-
+            Sandbox provider the session runs on, one the deployment offers
+            (see /me). Optional; empty uses the organization's default. A
+            project set up for a provider, or a worker linked to the project's
+            orchestrator, runs there instead.
+        deniedCommands:
+          type: array
+          items:
+            type: string
+          default: []
+        sandboxProviderConnectionId:
+          type: string
+          format: uuid
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        interfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: >-
+            Interface the session starts in. Optional; omitted resolves it
+            from defaultInterfaceMode, else starts in the terminal (tui). chat
+            needs a harness listed in the current account's chatHarnesses,
+            else the request is refused with SESSION_MODE_UNSUPPORTED. A
+            session that starts in chat queues its prompt as its first turn
+            and launches its terminal without it.
+        defaultInterfaceMode:
+          $ref: "#/components/schemas/SessionInterfaceMode"
+          description: >-
+            The user's default session interface, for a create without
+            interfaceMode. The control plane resolves the session's interface
+            from it as the local daemon resolves a spawn: an orchestrator
+            starts in chat, a worker in this default, and chat only for a
+            harness listed in chatHarnesses (any other starts in tui without
+            an error). A create with neither field (from a desktop that
+            predates them) starts in tui, an orchestrator too. An
+            orchestrator keeps it for the workers it spawns, which resolve
+            from the default stored when the orchestrator was created, unlike
+            local spawns, which read the user's default at spawn time; a
+            changed default reaches them once a new orchestrator is created.
+    CreateStandaloneAgentInput:
+      type: object
+      additionalProperties: false
+      description: A session create's body without projectId and kind (POST /standalone-agents).
+      required: [harness, displayName, prompt]
+      properties:
         harness:
           type: string
           minLength: 1
@@ -8778,6 +10362,21 @@ components:
           minimum: 0
           maximum: 9007199254740991
           description: Highest sequence returned, or the supplied after cursor when the page is empty.
+        hasOlder:
+          type: boolean
+          description: >-
+            Only on a page read with before: events older than the page remain
+            above the after cursor. Absent, the control plane read forward and
+            ignored before.
+        nextBefore:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            Only on a page read with before: the before cursor for the next
+            older page, the lowest sequence returned or the supplied before
+            cursor when the page is empty.
     TerminalKind:
       type: string
       enum: [agent, workspace]

@@ -41,13 +41,15 @@ to install the daemon with its Claude Chat runtime and start the OS user
 service. With `cloudflared` installed, setup `--tunnel` calls `ao remote-host
 enable --tunnel-only`: its authenticated listener binds only to loopback. At a
 terminal it then runs `ao remote-host link`; otherwise, or when the sign-in
-does not finish, it prints the host ID, address, and pairing password for
+does not finish, it prints the host ID, address, and a one-time pairing code for
 **Settings → Remote hosts** on another desktop. Direct
 `ao remote-host enable --tunnel` keeps both LAN and Cloudflare access for users
 who deliberately want both. Check `ao remote-host status` when the HTTPS
 address is ready.
-Running `enable` again prints the current details without rotating the
-password. `status` shows the password from the host's local shell. The LAN
+Running `enable` again prints the current details and a new pairing code
+without rotating the password. `ao remote-host pair` prints another code,
+`ao remote-host devices` lists and revokes paired devices, and
+`ao remote-host require-device-credentials on` stops accepting the password. The LAN
 listener uses plain HTTP; do not publish its port directly to the internet.
 Cloudflare terminates tunnel TLS and can see its traffic. Until the machine is
 linked to an account, by `ao remote-host link` or a signed-in desktop adding
@@ -185,10 +187,17 @@ preview. Agents must not create it automatically. Static HTML and Markdown use
 the direct file preview and must not cause package-manager scaffolding,
 dependency installation, or a development server to be introduced.
 
-When a browser-displayable file is the requested artifact, agents should call
-`ao preview <workspace-path>` immediately after creating or materially updating
-the primary output. Markdown, HTML, PDF, SVG, and common images can be served
-directly. Supporting assets must not replace an active application preview.
+Agents do not open artifacts with `ao preview`. A deliverable registered with
+`ao artifact add` appears in the session's Artifacts tab whatever its file type.
+The tab previews supported formats; an unsupported binary file shows that it
+can't be previewed. When it is registered while you are viewing a running
+session, the desktop also opens that tab on it, unless you are watching a live
+page in Browser or reviewing Files, where it badges the Artifacts tab and shows
+a notice with an Open button instead; an artifact registered before you opened
+the session, or in a terminated session, waits in the Artifacts tab. `ao
+preview` is for workspace pages and running apps, or an artifact the user
+explicitly asks to see in the Browser panel. Supporting assets must not replace
+an active application preview.
 
 `ao browser` also resolves its target from `AO_SESSION_ID`, but controls the
 session-owned live Electron browser rather than only setting its preview URL.
@@ -244,7 +253,8 @@ The CLI and daemon share the same environment-driven config:
 | `AO_RUN_FILE`         | `~/.ao/running.json` | PID/port handshake.                                                                            |
 | `AO_DATA_DIR`         | `~/.ao/data`         | SQLite data directory.                                                                         |
 | `AO_REQUEST_TIMEOUT`  | `60s`                | REST request timeout.                                                                          |
-| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (9x + 18s).    |
+| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (8x + 18s, plus the installer wait). |
+| `AO_INSTALLER_SHUTDOWN_TIMEOUT` | about `285s` | How long the daemon waits at shutdown for an agent CLI install or update it started to stop and clean up. Never less than `AO_SHUTDOWN_TIMEOUT`. A new daemon on the same data directory waits for this too. Tests set it low. |
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 

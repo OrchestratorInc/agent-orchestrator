@@ -1137,6 +1137,31 @@ tmux. They may still open session-scoped shell terminals as a worktree escape
 hatch; those shells are separate resources and do not become the agent
 controller.
 
+### Terminal titles
+
+The PTY host reads OSC 0/2 titles from terminal output without changing it,
+drops animated status glyphs, and keeps the latest title with or without viewers.
+`service/terminaltitle` watches live TUI sessions and shell terminals and stores
+changes at a bounded rate. It does not poll: it reads live sessions once at
+start, then one session per CDC event (spawn, restore, terminate and delete all
+emit one), and the shell terminal service reports user shells as they open and
+close. A watch ends when the runtime cannot report titles or the host stops
+answering, and starts again when the session gets a new launch. Session titles use `session_terminal_titles` because
+every `sessions` update bumps the revision that fences observer writes. A label
+is resolved at read time: an explicit name wins, then a meaningful program title
+(`terminalTitle`), then the existing fallback. A title never changes session
+identity. Chat transports and legacy tmux handles have no titles.
+
+### Agents in shell tabs
+
+`service/shellagent` names the agent a user started by hand in a local shell
+tab and whether it is working, idle or waiting. The PTY host reports the
+terminal's foreground process group and its argv (`tcgetpgrp` with
+`kern.procargs2` on macOS, `/proc` on Linux) when the program changes or starts
+or stops drawing; nothing polls, and watches run only while a client subscribes
+to the `shell-agents` mux channel. Windows ConPTY, tmux and remote or cloud
+shells keep plain tabs.
+
 ### Terminal architecture
 
 ```mermaid

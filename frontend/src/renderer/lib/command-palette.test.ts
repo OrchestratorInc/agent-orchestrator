@@ -18,6 +18,7 @@ import {
 } from "./command-palette";
 import type { PRReviewState } from "./session-reviews";
 import {
+	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
 	type PullRequestFacts,
@@ -73,6 +74,37 @@ function workspaces(): WorkspaceSummary[] {
 }
 
 const byId = (items: CommandItem[]) => new Map(items.map((item) => [item.id, item]));
+
+describe("session import commands", () => {
+	it("offers folder import on home and finds it by agent or session history", () => {
+		const items = buildCommands({ workspaces: workspaces() });
+		const command = byId(items).get("global-import-sessions");
+		expect(command?.action).toEqual({ kind: "open-session-import" });
+		expect(filterCommands(items, "")).toContain(command);
+		for (const query of ["import", "resume claude code", "import codex sessions", "existing terminal chats"]) {
+			expect(filterCommands(items, query)).toContain(command);
+		}
+	});
+
+	it("offers import for the current local project", () => {
+		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" });
+		const command = byId(items).get("current-import-sessions");
+		expect(command).toMatchObject({ group: "current", emphasis: "app", action: { kind: "open-session-import", projectId: "proj-1" } });
+		expect(filterCommands(items, "import app")).toContain(command);
+	});
+
+	it.each([
+		["Scratch", { id: STANDALONE_WORKSPACE_ID, kind: STANDALONE_PROJECT_KIND }],
+		["Cloud", { kind: CLOUD_PROJECT_KIND }],
+		["shared", { shared: {} }],
+		["connected host", { hostId: "host-a" }],
+	] satisfies [string, Partial<WorkspaceSummary>][])("omits project import for %s", (_name, overrides) => {
+		const workspace = { ...workspaces()[0]!, ...overrides };
+		const items = byId(buildCommands({ workspaces: [workspace], currentProjectId: workspace.id, currentHostId: workspace.hostId }));
+		expect(items.has("current-import-sessions")).toBe(false);
+		expect(items.get("global-import-sessions")?.action).toEqual({ kind: "open-session-import" });
+	});
+});
 
 describe("findSession", () => {
 	it("returns the workspace and session together", () => {
@@ -144,6 +176,26 @@ describe("buildCommands grouping", () => {
 		expect(map.get("current-copy-branch")?.action).toEqual({ kind: "copy-branch", branch: "feature/w-pr" });
 	});
 
+	it("offers Open usage only in Developer Mode", () => {
+		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-usage")).toBe(false);
+		expect(byId(buildCommands({ workspaces: workspaces(), developerMode: true })).has("global-usage")).toBe(true);
+	});
+
+	it("offers Open archive for the current project only when it has archived sessions", () => {
+		expect(byId(buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1" })).has("current-open-archive")).toBe(false);
+
+		const withArchive = workspaces();
+		withArchive[0]!.sessions.push(
+			session({ id: "w-ended", status: "terminated" }),
+			session({ id: "w-merged-ended", status: "merged", isTerminated: true }),
+			session({ id: "orch-ended", kind: "orchestrator", status: "terminated" }),
+		);
+		const archive = byId(buildCommands({ workspaces: withArchive, currentProjectId: "proj-1" })).get("current-open-archive");
+		expect(archive?.group).toBe("current");
+		expect(archive?.subtitle).toBe("2 archived sessions");
+		expect(archive?.action).toEqual({ kind: "open-archive", projectId: "proj-1" });
+	});
+
 	it("disables New task with a reason when the route project is absent from workspaces", () => {
 		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "missing", currentSessionId: undefined });
 		const newTask = byId(items).get("current-new-task");
@@ -162,9 +214,9 @@ describe("buildCommands grouping", () => {
 		});
 		const map = byId(items);
 		expect(map.get("current-new-task")?.disabled).toBe(true);
-		expect(map.get("current-new-task")?.disabledReason).toBe("Orchestrator restarting");
+		expect(map.get("current-new-task")?.disabledReason).toBe("The orchestrator agent is restarting.");
 		expect(map.get("current-open-orchestrator")?.disabled).toBe(true);
-		expect(map.get("current-open-orchestrator")?.disabledReason).toBe("Orchestrator restarting");
+		expect(map.get("current-open-orchestrator")?.disabledReason).toBe("The orchestrator agent is restarting.");
 		expect(map.get("current-project-settings")?.disabled).toBeFalsy();
 	});
 

@@ -69,7 +69,7 @@ describe("ChatComposer steering", () => {
 		expect(screen.queryByText(/steer/i)).not.toBeInTheDocument();
 	});
 
-	it("steers the next queued message on empty Enter and removes it immediately", async () => {
+	it("steers the next queued message on empty Enter", async () => {
 		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
 		render(
 			<ChatComposer
@@ -91,7 +91,6 @@ describe("ChatComposer steering", () => {
 		await userEvent.keyboard("{Enter}");
 
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
-		expect(screen.queryByTestId("queued-message-queued-1")).not.toBeInTheDocument();
 	});
 
 	it("drains every queued steer request that arrives while a promotion is pending", async () => {
@@ -125,6 +124,15 @@ describe("ChatComposer steering", () => {
 		);
 
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
+		rerender(
+			<QueuedMessageDock
+				messages={messages.slice(1)}
+				canSteer
+				canSteerNext
+				steerNextRequest={2}
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
 		resolveFirstPromotion?.();
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenNthCalledWith(2, "queued-2"));
 	});
@@ -406,7 +414,6 @@ describe("ChatWorkspace steering", () => {
 			}),
 		);
 		expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-2");
-		expect(screen.queryByTestId("queued-message-queued-2")).not.toBeInTheDocument();
 
 		await userEvent.click(within(screen.getByTestId("queued-message-queued-1")).getByRole("button", { name: "Edit queued message" }));
 		expect(onBeginQueuedEdit).toHaveBeenCalledWith("queued-1", "first queued");
@@ -660,6 +667,56 @@ describe("ChatWorkspace steering", () => {
 		await waitFor(() => expect(screen.queryByText(/editing/i)).not.toBeInTheDocument());
 	});
 
+	it("moves a steered message from the dock to the timeline before the daemon answers", async () => {
+		let refuse: ((error: Error) => void) | undefined;
+		const onPromoteQueuedTurn = vi.fn(() => new Promise((_resolve, reject) => { refuse = reject; }));
+		const queued = withQueuedMessages();
+		const snapshot = {
+			...queued,
+			turns: queued.turns.filter((turn) => turn.id !== "queued-2"),
+			items: queued.items.filter((item) => item.turnId !== "queued-2"),
+		};
+		render(<ChatWorkspace snapshot={snapshot} onSteer={vi.fn()} onPromoteQueuedTurn={onPromoteQueuedTurn} />);
+
+		await userEvent.click(
+			within(screen.getByTestId("queued-message-queued-1")).getByRole("button", {
+				name: "Steer this queued message into the running turn",
+			}),
+		);
+		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
+		expect(screen.getByText("first queued")).toBeVisible();
+
+		await act(async () => refuse?.(new Error("The running turn cannot take guidance.")));
+		const row = await screen.findByTestId("queued-message-queued-1");
+		expect(within(row).getByText("The running turn cannot take guidance.")).toBeVisible();
+	});
+
+	it("starts the steered segment at the click, not when the message was queued", async () => {
+		const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+		const queued = withQueuedMessages();
+		const snapshot = {
+			...queued,
+			turns: queued.turns
+				.filter((turn) => turn.id !== "queued-2")
+				.map((turn) => (turn.state === "running" ? { ...turn, requestedAt: minutesAgo(7), startedAt: minutesAgo(7) } : turn)),
+			items: queued.items
+				.filter((item) => item.turnId !== "queued-2" && item.id !== "a-steer-1")
+				.map((item) => (item.id === "queued-message-1" ? { ...item, createdAt: minutesAgo(3) } : item)),
+		};
+		render(
+			<ChatWorkspace snapshot={snapshot} onSteer={vi.fn()} onPromoteQueuedTurn={vi.fn(() => new Promise<void>(() => {}))} />,
+		);
+
+		await userEvent.click(
+			within(screen.getByTestId("queued-message-queued-1")).getByRole("button", {
+				name: "Steer this queued message into the running turn",
+			}),
+		);
+		const worked = [...document.querySelectorAll("[data-turn-worked]")].map((row) => row.textContent);
+		expect(worked).toEqual(expect.arrayContaining([expect.stringContaining("Worked for 7m")]));
+		expect(worked).not.toEqual(expect.arrayContaining([expect.stringContaining("Worked for 4m")]));
+	});
+
 	it("shows the queued dock while messages are still queued between turns", () => {
 		const snapshot = {
 			...withQueuedMessages(),
@@ -751,6 +808,150 @@ describe("ChatWorkspace steering", () => {
 	it("renders a landed steer as the user's own words", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
 		expect(screen.getByText(/Steered/)).toBeInTheDocument();
+	});
+
+	it("draws queued turns a steer carried at that steer, not after the running turn", () => {
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 14,
+					// The carried turn is not among the snapshot's turns, as the daemon sends it.
+					turns: [{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) }],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the review comments", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "review", turnId: "carried", sequence: 11, revision: 0, role: "user", origin: "automation", text: "Rename the pairing helper.", streaming: false, createdAt: at(1) },
+						{ kind: "activity", id: "work", turnId: "run", sequence: 12, revision: 0, activityKind: "command", status: "completed", summary: "go test ./...", detail: { command: "go test ./...", output: "ok" }, createdAt: at(2) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "Write the explainer", detail: { event: "steer", origin: "human", text: "Write the explainer", clientMessageId: "steer-1" }, createdAt: at(3) },
+						{ kind: "message", id: "answer", turnId: "run", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Writing the explainer first.", streaming: false, createdAt: at(4) },
+					],
+					batchedDeliveries: [{ turnId: "carried", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+				}}
+			/>,
+		);
+		const carried = screen.getByText(/Rename the pairing helper/);
+		const answer = screen.getByText("Writing the explainer first.");
+		expect(carried.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it("draws carried turns in the order the steer sent them, not the order they were queued", () => {
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 14,
+					turns: [{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) }],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the review comments", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "queued-first", turnId: "a", sequence: 11, revision: 0, role: "user", origin: "human", text: "Queued first, sent second.", streaming: false, createdAt: at(1) },
+						{ kind: "message", id: "queued-second", turnId: "b", sequence: 12, revision: 0, role: "user", origin: "human", text: "Queued second, sent first.", streaming: false, createdAt: at(2) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "Steer", detail: { event: "steer", origin: "human", text: "Steer", clientMessageId: "steer-1", providerInputSourceTurnIds: ["b", "a"] }, createdAt: at(3) },
+						{ kind: "message", id: "answer", turnId: "run", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "On it.", streaming: false, createdAt: at(4) },
+					],
+					batchedDeliveries: [
+						{ turnId: "a", deliveredWithTurnId: "run", steerActivityId: "steer-1" },
+						{ turnId: "b", deliveredWithTurnId: "run", steerActivityId: "steer-1" },
+					],
+				}}
+			/>,
+		);
+		const sentFirst = screen.getByText("Queued second, sent first.");
+		const sentSecond = screen.getByText("Queued first, sent second.");
+		expect(sentFirst.compareDocumentPosition(sentSecond) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it("keeps a carried message's own turn for editing after the carrying turn completes", async () => {
+		const user = userEvent.setup();
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		const onEditMessage = vi.fn(async () => undefined);
+		render(
+			<ChatWorkspace
+				onEditMessage={onEditMessage}
+				snapshot={{
+					...chatFixture,
+					controller: { state: "ready" },
+					hasMoreBefore: false,
+					latestSequence: 14,
+					turns: [{ id: "run", state: "completed", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0), completedAt: at(5) }],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the review comments", streaming: false, editAvailable: true, createdAt: at(0) },
+						{ kind: "message", id: "queued", turnId: "carried", sequence: 11, revision: 0, role: "user", origin: "human", text: "Also bump the version", streaming: false, editAvailable: true, createdAt: at(1) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "Write the explainer", detail: { event: "steer", origin: "human", text: "Write the explainer", clientMessageId: "steer-1" }, createdAt: at(3) },
+						{ kind: "message", id: "answer", turnId: "run", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Done.", streaming: false, createdAt: at(4) },
+					],
+					batchedDeliveries: [{ turnId: "carried", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+				}}
+			/>,
+		);
+		const edits = screen.getAllByRole("button", { name: "Edit user message" });
+		expect(edits).toHaveLength(1);
+		await user.click(edits[0]!);
+		expect(screen.getAllByRole("textbox", { name: "Edit message" })).toHaveLength(1);
+		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("Fix the review comments");
+		expect(screen.getByText("Also bump the version")).toBeVisible();
+	});
+
+	it("keeps a carried row above a steer sent right after the steer that carried it", async () => {
+		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
+		render(
+			<ChatWorkspace
+				onSteer={vi.fn(() => new Promise<void>(() => {}))}
+				snapshot={{
+					...chatFixture,
+					latestSequence: 13,
+					turns: [{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) }],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the review comments", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "review", turnId: "carried", sequence: 11, revision: 0, role: "user", origin: "automation", text: "Rename the pairing helper.", streaming: false, createdAt: at(1) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "Write the explainer", detail: { event: "steer", origin: "human", text: "Write the explainer", clientMessageId: "steer-1" }, createdAt: at(3) },
+					],
+					batchedDeliveries: [{ turnId: "carried", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+				}}
+			/>,
+		);
+		const field = screen.getByRole("combobox");
+		await typeInLexicalEditor(field, "Then update the docs");
+		act(() => {
+			fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
+		});
+		const echo = await screen.findByText("Then update the docs", { selector: ":not([contenteditable] *)" });
+		expect(screen.getByText(/Rename the pairing helper/).compareDocumentPosition(echo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it("keeps each steer's carried rows before the next row when many steers carry turns", () => {
+		const at = "2026-08-11T10:00:00Z";
+		const message = (id: string, turnId: string, sequence: number, text: string, role: "user" | "assistant" = "user") =>
+			({ kind: "message", id, turnId, sequence, revision: 0, role, origin: role === "user" ? "human" : "provider", text, streaming: false, createdAt: at }) as const;
+		const steer = (id: string, sequence: number) =>
+			({ kind: "activity", id, turnId: "run", sequence, revision: 0, activityKind: "system", status: "completed", summary: id, detail: { event: "steer", origin: "human", text: id, clientMessageId: id }, createdAt: at }) as const;
+		const early = Array.from({ length: 1000 }, (_, index) => message(`early-${index}`, `early-${index}`, 2 + index, `Early ${index}`));
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 1006,
+					turns: [{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at, startedAt: at }],
+					items: [
+						message("prompt", "run", 1, "Fix the review comments"),
+						...early,
+						steer("steer-1", 1002),
+						message("first-reply", "run", 1003, "First reply.", "assistant"),
+						message("late", "late", 1004, "Carried by the second steer."),
+						steer("steer-2", 1005),
+						message("second-reply", "run", 1006, "Second reply.", "assistant"),
+					],
+					batchedDeliveries: [
+						...early.map((item) => ({ turnId: item.turnId, deliveredWithTurnId: "run", steerActivityId: "steer-1" })),
+						{ turnId: "late", deliveredWithTurnId: "run", steerActivityId: "steer-2" },
+					],
+				}}
+			/>,
+		);
+		const late = screen.getByText("Carried by the second steer.");
+		expect(late.compareDocumentPosition(screen.getByText("Second reply.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.getByText("Early 999").compareDocumentPosition(screen.getByText("First reply.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("renders a steered browser annotation batch as its annotation card", () => {

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
@@ -119,13 +120,118 @@ const (
 	SessionArtifactGeneric  SessionArtifactKind = "file"
 )
 
+// MaxArtifactRegistrationPaths bounds how many paths one ao artifact add sends.
+const MaxArtifactRegistrationPaths = 100
+
 // SessionArtifactFile is one session-owned file discovered inside artifact_dir.
 type SessionArtifactFile struct {
+	// ID is the artifact's identity, kept across renames. It is empty for a
+	// file AO does not track yet.
+	ID        string              `json:"id,omitempty"`
 	Path      string              `json:"path"`
 	Name      string              `json:"name"`
 	Kind      SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
+	ShareURL  string              `json:"shareUrl,omitempty"`
+	// Registered is set on a file the agent registered as a deliverable, or
+	// inside a bundle directory it registered.
+	Registered bool `json:"registered,omitempty"`
+	// PreviousPaths are the paths the artifact had before it was renamed, most
+	// recent last, so a link to one of them still finds it.
+	PreviousPaths []string `json:"previousPaths,omitempty"`
+}
+
+// FileIdentity names a file on disk independently of its path: a rename keeps
+// it, while a copy or a newly written file gets another. Birth is the file's
+// creation time in nanoseconds, zero where the platform does not report it; a
+// file without one is never taken for a renamed file, because an inode number
+// alone is reused once its file is deleted.
+//
+// Linux birth times come from a coarse clock, so a file written right after
+// another is deleted can get both its inode and its birth time. There
+// Generation, the inode's generation number, tells them apart; where the file
+// system has none, ModTime does instead, and a file renamed and then modified
+// before AO next looks counts as a new file.
+type FileIdentity struct {
+	Dev        uint64
+	Ino        uint64
+	Birth      int64
+	Generation uint64
+	ModTime    int64
+}
+
+// SessionArtifactRegistration is a validated deliverable and the file observed
+// at its path, so registration can recognize a rename before the first scan.
+type SessionArtifactRegistration struct {
+	Path string
+	File FileIdentity
+}
+
+// SameFile reports whether f and other name the same file, and both are
+// complete enough to tell.
+func (f FileIdentity) SameFile(other FileIdentity) bool {
+	return f.Ino != 0 && f.Birth != 0 && f == other
+}
+
+// SessionArtifactRecord is the stored identity of one tracked file or bundle
+// directory in a session's artifact directory. Path changes on a rename; ID
+// does not.
+type SessionArtifactRecord struct {
+	ID            string
+	SessionID     SessionID
+	Path          string
+	RegisteredAt  *time.Time
+	File          FileIdentity
+	PreviousPaths []string
+	CreatedAt     time.Time
+	// HasVersions reports that the row's path has kept versions. Only the
+	// listing a scan reads sets it.
+	HasVersions bool
+}
+
+// ErrSessionArtifactsChanged reports artifact changes planned from rows that
+// have changed since; nothing was applied, and the next scan plans again.
+var ErrSessionArtifactsChanged = errors.New("session artifacts changed since they were read")
+
+// SessionArtifactChanges is what one scan of a session's artifact directory
+// changes in its artifact rows.
+type SessionArtifactChanges struct {
+	// Insert adds rows for files seen for the first time.
+	Insert []SessionArtifactRecord
+	// Move gives renamed artifacts their new path, with their version rows.
+	Move []SessionArtifactMove
+	// SetFile records the file now at a row's path: a file replaced in place,
+	// or none for a file that is gone.
+	SetFile []SessionArtifactFileUpdate
+	// Drop removes rows of files that were gone before a renamed artifact took
+	// their path, with their version rows.
+	Drop []SessionArtifactFileUpdate
+	// Forget removes rows of files that are gone and were never registered
+	// nor versioned, such as an editor's temporary files. A row with version
+	// history is kept, with no file, as SetFile would.
+	Forget []SessionArtifactFileUpdate
+}
+
+// Empty reports whether c changes nothing.
+func (c SessionArtifactChanges) Empty() bool {
+	return len(c.Insert) == 0 && len(c.Move) == 0 && len(c.SetFile) == 0 && len(c.Drop) == 0 && len(c.Forget) == 0
+}
+
+// SessionArtifactMove is one renamed artifact.
+type SessionArtifactMove struct {
+	ID            string
+	From          string
+	To            string
+	File          FileIdentity
+	PreviousPaths []string
+}
+
+// SessionArtifactFileUpdate names one artifact row by ID and current path.
+type SessionArtifactFileUpdate struct {
+	ID   string
+	Path string
+	File FileIdentity
 }
 
 // SessionArtifactVersion is one immutable snapshot of a session artifact file.
@@ -161,9 +267,46 @@ const (
 	ArtifactVersionSourceUser ArtifactVersionSource = "user"
 )
 
+// ImportedMessage is one visible message read from a provider's native history.
+type ImportedMessage struct {
+	Role MessageRole
+	Text string
+	At   time.Time
+}
+
+// SessionImportSource keeps provider provenance and durable workspace adoption facts.
+// Importing does not grant AO ownership of the source working directory.
+type SessionImportSource struct {
+	NativeID      string `json:"nativeId"`
+	ConfigDir     string `json:"configDir"`
+	CWD           string `json:"cwd"`
+	Adopted       bool   `json:"adopted"`
+	Transferred   bool   `json:"transferred"`
+	Prepared      bool   `json:"prepared"`
+	WorkingSubdir string `json:"workingSubdir,omitempty"`
+	// ResumeCwd is the launch directory AO prepared a directory-keyed provider's
+	// session for on the first open (see ports.AgentImportedSessionRelocator).
+	// Every later launch of the session uses it, so the provider keeps finding
+	// the same copy even if WorkingSubdir appears or disappears in between.
+	ResumeCwd string `json:"resumeCwd,omitempty"`
+	// ResumeNativeID and ResumeConfigDir name a provider-created import/fork.
+	// NativeID and ConfigDir remain the immutable source/deduplication identity.
+	ResumeNativeID       string `json:"resumeNativeId,omitempty"`
+	ResumeConfigDir      string `json:"resumeConfigDir,omitempty"`
+	ResumeTranscriptPath string `json:"resumeTranscriptPath,omitempty"`
+	// Fingerprint pins optional provider content/sidecar evidence from selection.
+	// First-open native preparation must verify it before copying that source.
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// HistoryThrough is the last conversation sequence the provider replayed
+	// while adopting. The timeline shows the archive in place of that replay.
+	HistoryThrough int64 `json:"historyThrough,omitempty"`
+}
+
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
+	ImportSource *SessionImportSource `json:"-"`
+
 	// Permissions pins the resolved launch policy independently of future project defaults.
 	Permissions PermissionMode `json:"permissions,omitempty"`
 
@@ -289,6 +432,9 @@ type SessionRecord struct {
 	ReviewerConfig    AgentConfig     `json:"reviewerConfig,omitempty"`
 	AutoReviewEnabled bool            `json:"autoReviewEnabled"`
 	DisplayName       string          `json:"displayName,omitempty"`
+	// DisplayNameExplicit marks a name a person or caller chose, which outranks
+	// a terminal program's title. Generated and prompt-derived names do not.
+	DisplayNameExplicit bool `json:"-"`
 	// Mode is the session's currently committed conversation controller. Every
 	// send, restore, kill, and reaper decision dispatches from it. Only the
 	// durable interface-transition coordinator may change it; the daemon default
@@ -411,6 +557,7 @@ type SessionBranchState struct {
 	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
 	// Empty means the branch has never been pushed.
 	RemoteBranch string `json:"remoteBranch,omitempty"`
+	RemoteHead   string `json:"remoteHead,omitempty"`
 	// Unpushed is how many branch commits are not on RemoteBranch. It equals
 	// Commits while RemoteBranch is empty.
 	Unpushed int `json:"unpushed"`
@@ -535,12 +682,17 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // plus derived display facts. None of Status, SCMStatus, or KanbanColumn is
 // persisted.
 type Session struct {
+	NeedsResume bool `json:"needsResume"`
 	SessionRecord
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
 	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an
 	// archive: clients list its failure but raise no error for it.
 	WorkspaceCleanupReportOnly bool `json:"workspaceCleanupReportOnly,omitempty"`
+	// WorkspacePublished says the session has a recorded workspace, so its
+	// workspace reads can succeed. An asynchronous start publishes it partway
+	// through, and a failed start can keep one. The path itself stays private.
+	WorkspacePublished bool `json:"workspacePublished" description:"Whether the session has a recorded workspace that workspace reads can use."`
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
 	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`
@@ -558,9 +710,13 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus    DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Interrupted,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	TerminalHandleID string                `json:"terminalHandleId,omitempty"`
-	ArtifactFiles    []SessionArtifactFile `json:"-"`
+	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	TerminalHandleID string        `json:"terminalHandleId,omitempty"`
+	// TerminalTitle is the title the session's terminal program set, present
+	// only when it should label the session: it is meaningful and no explicit
+	// name outranks it. It never replaces the session's id or stored name.
+	TerminalTitle string                `json:"terminalTitle,omitempty"`
+	ArtifactFiles []SessionArtifactFile `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.
@@ -589,4 +745,9 @@ func (s Session) LastEventAt() time.Time {
 		consider(pr.LastReviewAt)
 	}
 	return latest
+}
+
+// NeedsImportResume reports history that has not yet acquired an AO controller.
+func (s SessionRecord) NeedsImportResume() bool {
+	return s.Metadata.ImportSource != nil && !s.Metadata.ImportSource.Adopted
 }

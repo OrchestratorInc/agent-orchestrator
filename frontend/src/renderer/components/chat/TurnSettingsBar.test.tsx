@@ -648,10 +648,10 @@ describe("ACP session config options", () => {
 		);
 		expect(
 			within(tools).getByRole("button", { name: "Model and reasoning effort for the next turn" })
-				.querySelector(".lucide-chevron-down"),
+				.querySelector(".icon-chevron-down"),
 		).toBeNull();
 		// The permission button reads as a select: value first, caret second.
-		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".lucide-chevron-down")).not.toBeNull();
+		expect(within(tools).getByRole("button", { name: "Permission mode" }).querySelector(".icon-chevron-down")).not.toBeNull();
 		expect(within(tools).queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
 		expect(within(tools).queryByRole("button", { name: "Agent" })).not.toBeInTheDocument();
 		expect(screen.queryByText("Default")).not.toBeInTheDocument();
@@ -877,6 +877,40 @@ describe("ACP session config options", () => {
 		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
 		expect(screen.getByText("Asks before file edits; shell commands run without asking")).toBeInTheDocument();
 		expect(screen.getByRole("menuitemradio", { name: /Use agent permissions/ })).toHaveAttribute("aria-checked", "true");
+	});
+
+	it("passes a model's note, such as the orchestrator's model, to the agent picker", () => {
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[
+					{ id: "sonnet", displayName: "Sonnet", default: true },
+					{ id: "opus", displayName: "Opus", default: false, hint: "Same as orchestrator" },
+				]}
+				settings={{ model: "opus" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+		expect(agentPicker.current?.models.find((model) => model.id === "opus")?.hint).toBe("Same as orchestrator");
+		expect(agentPicker.current?.models.find((model) => model.id === "sonnet")?.hint).toBeUndefined();
+	});
+
+	it("passes a provider choice's note to the agent picker", () => {
+		render(
+			<TurnSettingsBar
+				harness="claude-code"
+				models={[]}
+				settings={{}}
+				configOptions={[{ id: "model", name: "Model", category: "model", type: "select", currentValue: "opus", choices: [
+					{ value: "sonnet", name: "Sonnet" },
+					{ value: "opus", name: "Opus", hint: "Same as orchestrator" },
+				] }]}
+				onChangeConfigOption={vi.fn()}
+				agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+			/>,
+		);
+		expect(agentPicker.current?.models.find((model) => model.id === "opus")?.hint).toBe("Same as orchestrator");
 	});
 
 	it("keeps Cloud model and effort choices without a per-turn permission picker", () => {		render(

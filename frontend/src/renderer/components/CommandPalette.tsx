@@ -1,9 +1,9 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "lucide-react";
+import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
-import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -40,6 +40,7 @@ import {
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
 import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
+import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
@@ -58,6 +59,7 @@ import {
 	workerSessions,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useSessionImportStore } from "../stores/session-import-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
@@ -94,7 +96,9 @@ function isRowNavigationKey(event: { key: string; ctrlKey: boolean }): boolean {
 		|| (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key));
 }
 
-export function CommandPalette() {
+// Memoized: it takes no props, so the shell's re-renders (several per route
+// change) skip the closed palette.
+export const CommandPalette = memo(function CommandPalette() {
 	const { i18n, t } = useTranslation();
 	const enabled = useCommandPaletteEnabled();
 	const navigate = useNavigate();
@@ -111,6 +115,7 @@ export function CommandPalette() {
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
 	const developerMode = useUiStore((s) => s.developerMode);
 	const diagnostics = useUiStore((s) => s.developerMode && s.diagnostics);
+	const splitPanes = useSplitPanesEnabled();
 	// The palette stays mounted to preserve its close animation and global
 	// shortcut. While closed, commands are invisible, so retain the cached
 	// snapshot without subscribing this hidden surface to streamed updates.
@@ -308,11 +313,12 @@ export function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
+				developerMode,
 			}, t),
-			...buildShortcutCommands(t),
+			...buildShortcutCommands(t, { splitPanes }),
 			...buildSettingsCommands(t, { developerMode, diagnostics }),
 		],
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -530,6 +536,7 @@ export function CommandPalette() {
 		(target: NavigateTarget) => {
 			switch (target.to) {
 				case "/":
+				case "/usage":
 					void navigate({ to: target.to });
 					break;
 				case "/settings":
@@ -731,6 +738,11 @@ export function CommandPalette() {
 					closePalette();
 					useUiStore.getState().openGlobalSettings(action.section, action.focus ? { focusSetting: action.focus } : undefined);
 					break;
+				case "open-session-import":
+					closePalette();
+					if (action.projectId) useSessionImportStore.getState().openProjectImport(action.projectId);
+					else useSessionImportStore.getState().openFolderImport();
+					break;
 				case "run-shortcut": {
 					closePalette();
 					// After the palette has closed, so the action sees the screen
@@ -763,6 +775,19 @@ export function CommandPalette() {
 					case "open-orchestrator":
 							await openOrchestrator(action.projectId, isCurrentRun);
 							break;
+					case "open-archive": {
+						// Over the current page, with no navigation. The palette's own
+						// focus goes with it, so the modal returns to where the palette
+						// was opened from (a composer, a terminal) when it closes.
+						const returnFocus = returnFocusRef.current;
+						useUiStore.getState().openArchive({
+							projectId: action.projectId,
+							hostId: params.hostId,
+							returnFocus: returnFocus instanceof HTMLElement ? returnFocus : null,
+						});
+						closePalette();
+						break;
+					}
 				}
 			} catch (err) {
 				if (isCurrentRun()) setError(err instanceof Error ? err.message : t("command.failed"));
@@ -773,7 +798,7 @@ export function CommandPalette() {
 				}
 			}
 		},
-		[findChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[findChatWorkspace, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -1054,7 +1079,7 @@ export function CommandPalette() {
 			) : null}
 		</>
 	);
-}
+});
 
 /** Whether a palette action closes the palette into another modal. */
 function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensModal: boolean): boolean {
@@ -1062,6 +1087,8 @@ function opensModal(action: NonNullable<CommandItemModel["action"]>, taskOpensMo
 		case "open-new-task":
 			return taskOpensModal;
 		case "open-new-project":
+		case "open-session-import":
+		case "open-archive":
 		case "open-shared-link":
 		case "open-settings-section":
 			return true;
@@ -1121,7 +1148,7 @@ function PaletteRow({
 				{item.status ? (
 					<span className={cn("size-2 rounded-full", item.status.className, item.status.breathe && "animate-status-pulse")} />
 				) : Icon ? (
-					<Icon strokeWidth={1.75} />
+					<Icon />
 				) : null}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">

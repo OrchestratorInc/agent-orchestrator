@@ -6,17 +6,18 @@ import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
-import { isNewSidebarDesign } from "../../lib/new-sidebar-design";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { CliShadowSettingsRow } from "./CliShadowSettingsRow";
 import { openChromeAgentsSettings } from "./BrowserChromeSection";
 import { Button } from "../ui/button";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight } from "@/components/app-icons";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
+import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
-import { SettingsInputRow, SettingsRow } from "./SettingsRow";
+import { SettingsInlineInput, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
@@ -28,6 +29,7 @@ import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
+import type { TerminalClickMode } from "../../lib/terminal-mouse";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -173,6 +175,13 @@ function SessionRetentionRow() {
 	);
 }
 
+const WINDOWS_SHELL_KINDS = ["pwsh", "powershell", "cmd", "git-bash", "wsl"] as const;
+// A shell picked from the detected list on macOS and Linux is stored as a
+// custom path, so the stored setting keeps one shape on every platform.
+const DETECTED_SHELL_PREFIX = "path:";
+
+type ShellOption = SettingsOption<string> & { path?: string };
+
 function TerminalShellRows() {
 	const { t } = useTranslation();
 	const preference = useTerminalShellStore((state) => state.preference);
@@ -180,7 +189,12 @@ function TerminalShellRows() {
 	const setPreference = useTerminalShellStore((state) => state.setPreference);
 	const saving = useTerminalShellStore((state) => state.saving);
 	const saveError = useTerminalShellStore((state) => state.saveError);
+	const { data: catalog } = useTerminalShells();
+	const windows = isWindowsPlatform();
+	const [customOpen, setCustomOpen] = useState(false);
 	const [customPath, setCustomPath] = useState(preference.path ?? "");
+	const [pathError, setPathError] = useState(false);
+	const [checking, setChecking] = useState(false);
 
 	useEffect(() => {
 		void load();
@@ -190,41 +204,115 @@ function TerminalShellRows() {
 		setCustomPath(preference.path ?? "");
 	}, [preference.path]);
 
-	const shellOptions = [
-		{ value: "auto", label: t("settings.terminalShell.auto") },
-		{ value: "git-bash", label: t("settings.terminalShell.gitBash") },
-		{ value: "pwsh", label: t("settings.terminalShell.pwsh") },
-		{ value: "powershell", label: t("settings.terminalShell.windowsPowerShell") },
-		{ value: "cmd", label: t("settings.terminalShell.cmd") },
-		{ value: "custom", label: t("settings.terminalShell.custom") },
-	] satisfies SettingsOption<TerminalShellKind>[];
+	const windowsLabels: Record<string, string> = {
+		pwsh: t("settings.terminalShell.pwsh"),
+		powershell: t("settings.terminalShell.windowsPowerShell"),
+		cmd: t("settings.terminalShell.cmd"),
+		"git-bash": t("settings.terminalShell.gitBash"),
+		wsl: t("settings.terminalShell.wsl"),
+	};
+	const detected = catalog?.shells ?? [];
+	const options: ShellOption[] = [{ value: "auto", label: t("settings.terminalShell.auto"), path: catalog?.default.path }];
+	if (windows) {
+		for (const kind of WINDOWS_SHELL_KINDS) {
+			const shell = detected.find((item) => item.id === kind);
+			if (shell || !catalog || preference.kind === kind) options.push({ value: kind, label: windowsLabels[kind], path: shell?.path });
+		}
+	} else {
+		for (const shell of detected) {
+			options.push({ value: DETECTED_SHELL_PREFIX + shell.path, label: shell.name, path: shell.path });
+		}
+	}
+	options.push({ value: "custom", label: t("settings.terminalShell.custom") });
+
+	let selected: string = preference.kind;
+	if (customOpen) selected = "custom";
+	else if (preference.kind === "custom" && preference.path && options.some((option) => option.value === DETECTED_SHELL_PREFIX + preference.path)) {
+		selected = DETECTED_SHELL_PREFIX + preference.path;
+	}
+	if (!options.some((option) => option.value === selected)) {
+		options.splice(options.length - 1, 0, { value: selected, label: windowsLabels[selected] ?? selected });
+	}
+
+	const choose = (value: string) => {
+		setPathError(false);
+		if (value === "custom") {
+			setCustomOpen(true);
+			setCustomPath(preference.path ?? "");
+			return;
+		}
+		setCustomOpen(false);
+		if (value.startsWith(DETECTED_SHELL_PREFIX)) {
+			void setPreference({ kind: "custom", path: value.slice(DETECTED_SHELL_PREFIX.length) });
+			return;
+		}
+		void setPreference({ kind: value as TerminalShellKind });
+	};
+
+	const commitCustomPath = async (value: string) => {
+		const path = value.trim();
+		if (!path || (preference.kind === "custom" && path === preference.path)) {
+			setCustomPath(preference.path ?? "");
+			setPathError(false);
+			return;
+		}
+		setChecking(true);
+		try {
+			const result = await checkTerminalShellPath(path);
+			setPathError(!result.executable);
+			if (result.executable) await setPreference({ kind: "custom", path });
+		} catch {
+			setPathError(true);
+		} finally {
+			setChecking(false);
+		}
+	};
 
 	return (
 		<>
 			<SettingsRow
 				label={t("settings.terminalShell.label")}
-				description={saveError ? <span role="alert" className="text-error">{t("settings.terminalShell.saveFailed")}</span> : undefined}
+				description={
+					saveError ? <span role="alert" className="text-error">{t("settings.terminalShell.saveFailed")}</span> : t("settings.terminalShell.hint")
+				}
 			>
 				<SettingsOptionMenu
 					aria-label={t("settings.terminalShell.label")}
-					value={preference.kind}
-					options={shellOptions}
+					value={selected}
+					options={options}
 					disabled={saving}
-					onChange={(kind) => {
-						void setPreference(kind === "custom" ? { kind, path: customPath } : { kind });
-					}}
+					onChange={choose}
+					menuClassName="max-w-[28rem]"
+					renderMenuItem={(option: ShellOption) => (
+						<span className="flex min-w-0 flex-1 items-baseline gap-3">
+							<span className="shrink-0">{option.label}</span>
+							{option.path ? (
+								<span className="ml-auto min-w-0 truncate font-mono text-xs text-settings-muted" title={option.path}>
+									{option.path}
+								</span>
+							) : null}
+						</span>
+					)}
 				/>
 			</SettingsRow>
-			{preference.kind === "custom" ? (
-				<SettingsInputRow
-					id="terminal-shell-custom-path"
+			{selected === "custom" ? (
+				<SettingsRow
 					label={t("settings.terminalShell.customPath")}
-					value={customPath}
-					onChange={setCustomPath}
-					onCommit={(path) => void setPreference({ kind: "custom", path })}
-					onCancel={() => setCustomPath(preference.path ?? "")}
-					placeholder={t("settings.terminalShell.customPathPlaceholder")}
-				/>
+					description={pathError ? <span role="alert" className="text-error">{t("settings.terminalShell.notExecutable")}</span> : undefined}
+				>
+					<SettingsInlineInput
+						id="terminal-shell-custom-path"
+						label={t("settings.terminalShell.customPath")}
+						value={customPath}
+						onChange={(next) => {
+							setCustomPath(next);
+							setPathError(false);
+						}}
+						onCommit={(path) => void commitCustomPath(path)}
+						onCancel={() => setCustomPath(preference.path ?? "")}
+						placeholder={checking ? t("settings.terminalShell.checking") : windows ? t("settings.terminalShell.customPathPlaceholder") : t("settings.terminalShell.customPathPlaceholderUnix")}
+					/>
+				</SettingsRow>
 			) : null}
 		</>
 	);
@@ -259,9 +347,14 @@ export function GeneralSettingsSection({
 	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+	const terminalClickMode = useUiStore((state) => state.terminalClickMode);
+	const setTerminalClickMode = useUiStore((state) => state.setTerminalClickMode);
+	const terminalClickOptions = [
+		{ value: "app", label: t("settings.terminalClicks.app") },
+		{ value: "select", label: t("settings.terminalClicks.select") },
+	] satisfies SettingsOption<TerminalClickMode>[];
 	const projectAvatars = useUiStore((state) => state.projectAvatars);
 	const setProjectAvatars = useUiStore((state) => state.setProjectAvatars);
-	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
 	const setChatSendKeyMode = useUiStore((state) => state.setChatSendKeyMode);
 	const chatSendKeyOptions = [
@@ -321,11 +414,9 @@ export function GeneralSettingsSection({
 					</div>
 				</SettingsRow>
 				{isMacPlatform() && <WindowTranslucencyRow />}
-				{newSidebarDesign && (
-					<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
-						<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />
-					</SettingsRow>
-				)}
+				<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
+					<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />
+				</SettingsRow>
 				<SettingsRow
 					label={t("settings.language")}
 					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
@@ -369,12 +460,23 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				<VersionRefreshRow />
 				<SessionRetentionRow />
-				{isWindowsPlatform() ? <TerminalShellRows /> : null}
+				<TerminalShellRows />
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch
 						aria-label={t("settings.terminalCopyOnSelect")}
 						checked={terminalCopyOnSelect}
 						onCheckedChange={setTerminalCopyOnSelect}
+					/>
+				</SettingsRow>
+				<SettingsRow
+					label={t("settings.terminalClicks")}
+					description={isMacPlatform() ? t("settings.terminalClicks.description.mac") : t("settings.terminalClicks.description.other")}
+				>
+					<SettingsOptionMenu
+						aria-label={t("settings.terminalClicks")}
+						value={terminalClickMode}
+						options={terminalClickOptions}
+						onChange={setTerminalClickMode}
 					/>
 				</SettingsRow>
 				<SettingsRow
@@ -410,9 +512,9 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
+				<CliShadowSettingsRow />
 				{developerMode && <SideChatsRow />}
-				{developerMode && <NewSidebarDesignRow />}
-				{developerMode && <SimplifiedTopbarRow />}
+				{developerMode && <SplitPanesRow />}
 				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
@@ -517,26 +619,14 @@ function SideChatsRow() {
 	);
 }
 
-/** Developer Mode-only switch for the new left sidebar design. On by default. */
-function NewSidebarDesignRow() {
+/** Developer Mode-only switch for dragging center tabs into split panes. Off by default. */
+function SplitPanesRow() {
 	const { t } = useTranslation();
-	const newSidebarDesign = useUiStore((state) => state.newSidebarDesign);
-	const setNewSidebarDesign = useUiStore((state) => state.setNewSidebarDesign);
+	const splitPanes = useUiStore((state) => state.splitPanes);
+	const setSplitPanes = useUiStore((state) => state.setSplitPanes);
 	return (
-		<SettingsRow label={t("settings.newSidebarDesign")} description={t("settings.newSidebarDesignHint")}>
-			<Switch aria-label={t("settings.newSidebarDesign")} checked={newSidebarDesign} onCheckedChange={setNewSidebarDesign} />
-		</SettingsRow>
-	);
-}
-
-/** Developer Mode-only switch for the simplified, floating top bar. On by default. */
-function SimplifiedTopbarRow() {
-	const { t } = useTranslation();
-	const simplifiedTopbar = useUiStore((state) => state.simplifiedTopbar);
-	const setSimplifiedTopbar = useUiStore((state) => state.setSimplifiedTopbar);
-	return (
-		<SettingsRow label={t("settings.simplifiedTopbar")} description={t("settings.simplifiedTopbarHint")}>
-			<Switch aria-label={t("settings.simplifiedTopbar")} checked={simplifiedTopbar} onCheckedChange={setSimplifiedTopbar} />
+		<SettingsRow label={t("settings.splitPanes")} description={t("settings.splitPanesHint")}>
+			<Switch aria-label={t("settings.splitPanes")} checked={splitPanes} onCheckedChange={setSplitPanes} />
 		</SettingsRow>
 	);
 }

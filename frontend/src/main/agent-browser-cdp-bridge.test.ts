@@ -64,7 +64,7 @@ describe("worker-scoped agent-browser CDP bridge", () => {
 				{ method: "Target.targetDestroyed", params: { targetId: "t2" } },
 			]);
 			const outsideWorker = await rpc(socket, 5, "Target.attachToTarget", { targetId: "sibling-worker-tab" });
-			expect(outsideWorker.error?.message).toBe("Target is outside this AO worker");
+			expect(outsideWorker.error?.message).toBe("Target is outside this worker");
 		} finally {
 			socket.close();
 			await bridge.close();
@@ -206,7 +206,7 @@ describe("worker-scoped agent-browser CDP bridge", () => {
 			expect(blockedNavigation.error?.message).toContain("Navigation scheme is not permitted");
 
 			const sibling = await rpc(socket, 4, "Target.attachToTarget", { targetId: "other-worker" });
-			expect(sibling.error?.message).toContain("outside this AO worker");
+			expect(sibling.error?.message).toContain("outside this worker");
 
 			const close = await rpc(socket, 5, "Browser.close");
 			expect(close.error?.message).toContain("not permitted");

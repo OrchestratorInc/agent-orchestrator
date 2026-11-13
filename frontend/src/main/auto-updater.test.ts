@@ -258,7 +258,7 @@ describe("macOS differential update policy", () => {
       ]),
     );
     expect(telemetryMessages().at(-1)?.payload).toMatchObject({
-      event: "ao.renderer.update_downloaded",
+      event: "ao.updates.downloaded",
       transfer_mode: "differential",
       fallback: true,
       transferred_bytes: 250,
@@ -715,6 +715,40 @@ describe("startAutoUpdates", () => {
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["manual", "automatic"])("uses exact-tag stable notes for %s checks", async (trigger) => {
+    const original = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    const resourcesPath = mkdtempSync(nodePath.join(os.tmpdir(), "ao-stable-feed-"));
+    writeFileSync(nodePath.join(resourcesPath, "app-update.yml"),
+      "provider: github\nowner: OrchestratorInc\nrepo: agent-orchestrator\n");
+    Object.defineProperty(process, "resourcesPath", { configurable: true, value: resourcesPath });
+    try {
+      const { module, autoUpdater } = await importAutoUpdater();
+      if (trigger === "manual") await module.checkForUpdatesNow(stateDir);
+      else await module.startAutoUpdates(stateDir);
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+        provider: "custom", updateProvider: expect.any(Function),
+        owner: "OrchestratorInc", repo: "agent-orchestrator",
+      });
+      expect(autoUpdater.setFeedURL).toHaveBeenCalledTimes(1);
+      expect(autoUpdater.allowPrerelease).toBe(false);
+      expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+      for (const settings of [
+        { channel: "nightly", feature: null },
+        { channel: "latest", feature: { pr: 123 } },
+      ] satisfies Pick<UpdateSettings, "channel" | "feature">[]) {
+        module.configureFeed(settings);
+        expect(autoUpdater.setFeedURL).toHaveBeenLastCalledWith({
+          provider: "github", owner: "OrchestratorInc", repo: "agent-orchestrator",
+        });
+        expect(autoUpdater.allowPrerelease).toBe(true);
+      }
+    } finally {
+      if (original) Object.defineProperty(process, "resourcesPath", original);
+      else Reflect.deleteProperty(process, "resourcesPath");
+      rmSync(resourcesPath, { recursive: true, force: true });
+    }
+  });
+
   it("manual nightly checks resolve the newest completed release without the Atom feed", async () => {
     const platformManifest =
       process.platform === "darwin"
@@ -778,14 +812,14 @@ describe("startAutoUpdates", () => {
         "https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases?per_page=100",
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
         provider: "generic",
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.1-nightly.202608231517",
         channel: "nightly",
         useMultipleRangeRequest: false,
       });
       expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, {
         provider: "github",
         owner: "Untrivial-ai",
         repo: "agent-orchestrator",
@@ -855,7 +889,7 @@ describe("startAutoUpdates", () => {
       // The user still learns an update exists, from what discovery already found.
       expect(statusMessages().at(-1)?.payload).toMatchObject({
         state: "available",
-        version: "v1.0.1-nightly.202608231517",
+        version: "1.0.1-nightly.202608231517",
       });
     } finally {
       if (originalResourcesPath) {
@@ -930,7 +964,7 @@ describe("startAutoUpdates", () => {
         "https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases?per_page=100",
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
         provider: "generic",
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.1-nightly.202608231517",
         channel: "nightly",
@@ -942,7 +976,7 @@ describe("startAutoUpdates", () => {
         expect.any(String),
         expect.objectContaining({ headers: expect.objectContaining({ "If-None-Match": '"release-v1"' }) }),
       );
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(5, expect.objectContaining({
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.1-nightly.202608231517",
       }));
       fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([{
@@ -950,11 +984,11 @@ describe("startAutoUpdates", () => {
         assets: [{ name: platformManifest }],
       }]), { status: 200, headers: { etag: '"release-v2"' } }));
       await module.checkForUpdatesNow(stateDir);
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(5, expect.objectContaining({
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(8, expect.objectContaining({
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.2-nightly.202608241000",
       }));
       expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(3);
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, {
         provider: "github",
         owner: "Untrivial-ai",
         repo: "agent-orchestrator",
@@ -1006,7 +1040,7 @@ describe("startAutoUpdates", () => {
     );
 
     try {
-      const { module, updaterEvents, statusMessages } = await importAutoUpdater({
+      const { module, autoUpdater, updaterEvents, statusMessages } = await importAutoUpdater({
         enabled: false,
         channel: "nightly",
         nightlyAck: true,
@@ -1021,6 +1055,26 @@ describe("startAutoUpdates", () => {
         state: "available",
         releaseNotes: "- Stopped the re-stage loop\n- Rebuilt the Updates page",
       });
+
+      // No nightly was staged. A stable lookup with no verified notes must not
+      // reuse the direct prerelease provider's cached notes.
+      autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+        updaterEvents.get("update-available")?.({ version: "1.0.1" });
+        return { isUpdateAvailable: true, updateInfo: { version: "1.0.1" } };
+      });
+      await module.checkForUpdatesNow(stateDir, { settings: {
+        enabled: false, channel: "latest", nightlyAck: false, feature: null,
+      } });
+      expect(module.getUpdateStatus()).toMatchObject({ state: "available", version: "1.0.1" });
+      expect(module.getUpdateStatus()).not.toHaveProperty("releaseNotes");
+
+      // Background stable checks must also forget the old nightly offer.
+      autoUpdater.checkForUpdates.mockImplementationOnce(async () => {
+        updaterEvents.get("checking-for-update")?.();
+        return { isUpdateAvailable: false, updateInfo: { version: "1.0.0" } };
+      });
+      await module.startAutoUpdates(stateDir);
+      expect(module.getUpdateStatus()).toMatchObject({ state: "not-available" });
     } finally {
       if (originalResourcesPath) {
         Object.defineProperty(process, "resourcesPath", originalResourcesPath);
@@ -1087,7 +1141,7 @@ describe("startAutoUpdates", () => {
 
       await module.startAutoUpdates(stateDir);
 
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
         provider: "generic",
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.1-nightly.202608231517",
         channel: "nightly",
@@ -1095,7 +1149,7 @@ describe("startAutoUpdates", () => {
       });
       expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
       // Later background checks start from the normal provider again.
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, {
         provider: "github",
         owner: "Untrivial-ai",
         repo: "agent-orchestrator",
@@ -1169,14 +1223,14 @@ describe("startAutoUpdates", () => {
 
       await module.startAutoUpdates(stateDir);
 
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(1, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
         provider: "generic",
         url: "https://github.com/Untrivial-ai/agent-orchestrator/releases/download/v1.0.0-pr4473.202608271542",
         channel: "pr4473",
         useMultipleRangeRequest: false,
       });
       expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
-      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(2, {
+      expect(autoUpdater.setFeedURL).toHaveBeenNthCalledWith(3, {
         provider: "github",
         owner: "Untrivial-ai",
         repo: "agent-orchestrator",
@@ -1356,7 +1410,7 @@ describe("startAutoUpdates", () => {
     // the signal.
     expect(telemetryMessages().map((m) => m.payload)).toEqual([
       {
-        event: "ao.renderer.update_failed",
+        event: "ao.updates.failed",
         phase: "check",
         trigger: "automatic",
         error_category: "unknown",
@@ -1765,7 +1819,7 @@ describe("startAutoUpdates", () => {
     expect(statusMessages()).toEqual([]);
     expect(telemetryMessages().map((m) => m.payload)).toEqual([
       {
-        event: "ao.renderer.update_failed",
+        event: "ao.updates.failed",
         phase: "check",
         trigger: "automatic",
         error_category: "unknown",
@@ -4016,7 +4070,7 @@ describe("quitAndInstallUpdate", () => {
         updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
         return transfer.promise;
       });
-      const assertion = expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch AO/);
+      const assertion = expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch Orchestrator/);
       await flushMicrotasks();
       await vi.advanceTimersByTimeAsync(180_000);
       await assertion;
@@ -5083,8 +5137,8 @@ it("recovers a timed-out native preparation when its native success arrives late
     updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
     await vi.advanceTimersByTimeAsync(3 * 60_000);
     expect(module.getUpdateStatus()).toMatchObject({ state: "error", staged: { ready: false } });
-    expect(module.getUpdateStatus().message).toContain("Relaunch AO");
-    await expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch AO/);
+    expect(module.getUpdateStatus().message).toContain("Relaunch Orchestrator");
+    await expect(module.quitAndInstallUpdate()).rejects.toThrow(/Relaunch Orchestrator/);
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     nativeUpdaterEvents.get("update-downloaded")?.({}, "notes", "2.0.0");
     expect(module.getUpdateStatus().state).toBe("downloaded");
@@ -5445,7 +5499,7 @@ describe("disk preflight refusal (#6607)", () => {
       expect(module.getUpdateStatus()).toMatchObject({
         state: "error",
         message: DISK_MESSAGE,
-        version: "v1.0.1-nightly.202608231517",
+        version: "1.0.1-nightly.202608231517",
       });
     } finally {
       if (originalResourcesPath) Object.defineProperty(process, "resourcesPath", originalResourcesPath);

@@ -1,4 +1,5 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
+import { sessionUiKey } from "../lib/hosts";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -261,7 +262,7 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 		{ id: "proj-1", name: "my-app", path: "/p", type: "main", sessions: [worker, secondWorker, orchestrator] },
 		{ id: "proj-2", name: "other-app", path: "/q", type: "main", sessions: [crossProjectWorker] },
 	];
-	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean } = {
+	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean; isStale?: boolean } = {
 		data: workspaces,
 		isLoading: false,
 	};
@@ -284,6 +285,13 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 
 // The terminal and inspector body pull in xterm/SSE machinery irrelevant to
 // the split under test.
+// The shared project control stands in as a marker: these tests check where it
+// renders, and SharedProjectPanel.test covers what it shows.
+vi.mock("./SharedProjectPanel", () => ({
+	SharedProjectPanel: ({ orchestrator }: { orchestrator: { id: string } }) => (
+		<button type="button" data-testid="shared-project-control">{orchestrator.id}</button>
+	),
+}));
 vi.mock("./SessionTopbarActions", () => ({
 	SessionTopbarActions: ({
 		sessionAction,
@@ -472,14 +480,25 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 		</div>
 	),
 }));
-// The session tab's menu is stood in for by the switch control it wraps.
-vi.mock("./TerminalAgentControls", () => ({
-	SessionTabMenu:({ switchControl }: { switchControl?: ReactNode }) => (
-		<>
-			{switchControl}
-		</>
-	),
-}));
+vi.mock("./TerminalAgentControls", () => ({ TerminalAgentPickerRow: () => null }));
+// The session tab's ⋮ menu is stood in for by its interface switch row, as a button.
+vi.mock("./TabContextMenu", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./TabContextMenu")>();
+	const { useContext } = await import("react");
+	return {
+		...actual,
+		SessionTabMenuButton: () => {
+			const menu = useContext(actual.SessionTabAgentMenuContext);
+			const action = menu?.switchAction;
+			if (!action) return null;
+			return (
+				<button disabled={action.disabled} onClick={action.run} title={action.reason} type="button">
+					{menu.switchTarget === "chat" ? "Switch to chat UI" : "Switch to terminal UI"}
+				</button>
+			);
+		},
+	};
+});
 vi.mock("./chat/ReviewerChatSurface", () => ({
 	ReviewerChatSurface: ({ reviewId }: { reviewId: string }) => (
 		<div data-testid="reviewer-chat-surface">{reviewId}</div>
@@ -828,6 +847,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 			?.flatMap((workspace) => workspace.sessions)
 			.find((session) => session.id === sessionId),
 		isLoading: workspaceQueryState.directLoading ?? workspaceQueryState.isLoading,
+		isStale: workspaceQueryState.isStale ?? false,
 		});
 	},
 }));
@@ -971,6 +991,7 @@ describe("SessionView", () => {
 			delete session.previewRevision;
 			delete session.isTerminated;
 			delete session.runtimeConnected;
+			delete session.needsResume;
 			delete session.cloud;
 			session.status = "working";
 			session.provider = "claude-code";
@@ -981,6 +1002,7 @@ describe("SessionView", () => {
 		workspaceQueryState.data = workspaces;
 		workspaceQueryState.isLoading = false;
 		workspaceQueryState.directLoading = undefined;
+		workspaceQueryState.isStale = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
 			workspaceFileOpenRequest: null,
@@ -1059,6 +1081,7 @@ describe("SessionView", () => {
 		resumeAgentPostMock.mockResolvedValue({ data: {}, error: undefined });
 		chatViewPostMock.mockReset().mockResolvedValue({ error: undefined });
 		reviewGetMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [] }, error: undefined };
 			if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
 				return {
 					data: {
@@ -1106,6 +1129,44 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.filesSelection).toBeUndefined();
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
 		expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
+	});
+
+	it.each(["idle", "exited"] as const)("automatically resumes imported history once on opening when activity is %s", async (state) => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		session.needsResume = true;
+		session.status = "working";
+		session.activity = { state, lastActivityAt: "" };
+		const view = render(<StrictMode><SessionView sessionId="sess-1" /></StrictMode>);
+		expect(chatSurfaceTransitionRenders[0]).toBe(true);
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+		expect(resumeAgentPostMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "sess-1" } },
+		});
+		await waitFor(() => expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false"));
+		view.rerender(<StrictMode><SessionView sessionId="sess-1" /></StrictMode>);
+		await act(async () => {});
+		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+		session.needsResume = undefined;
+	});
+
+	it("connects each imported chat on navigation without flashing a stopped surface", async () => {
+		for (const id of ["sess-1", "sess-2"]) {
+			const session = workerSession(id);
+			session.mode = "chat";
+			session.needsResume = true;
+			session.activity = { state: "idle", lastActivityAt: "" };
+		}
+		const view = render(<SessionView sessionId="sess-1" />);
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(view.client.isMutating()).toBe(0));
+		chatSurfaceTransitionRenders.length = 0;
+		view.rerender(<SessionView sessionId="sess-2" />);
+		expect(chatSurfaceTransitionRenders[0]).toBe(true);
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(2));
+		expect(resumeAgentPostMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "sess-2" } },
+		});
 	});
 
 	it("resumes only the opened stopped session once, including in StrictMode", async () => {
@@ -1172,11 +1233,12 @@ describe("SessionView", () => {
 		expect(resumeAgentPostMock).not.toHaveBeenCalled();
 	});
 
-	it("leaves a failed automatic resume stopped for manual retry", async () => {
+	it.each([false, true])("leaves a failed automatic resume stopped for manual retry (imported=%s)", async (imported) => {
 		const session = workerSession("sess-1");
 		session.mode = "chat";
 		session.status = "exited";
 		session.activity = { state: "exited", lastActivityAt: "" };
+		session.needsResume = imported;
 		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
 		const priorToast = useUiStore.getState().globalToast;
 		const view = render(<SessionView sessionId="sess-1" />);
@@ -1221,6 +1283,41 @@ describe("SessionView", () => {
 		];
 		view.rerender(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
 		expect(cloudSessionPoll).toHaveBeenLastCalledWith(false);
+	});
+
+	it.each(["chat", "terminal"] as const)(
+		"puts a Cloud orchestrator's shared project control in the header, not over the %s",
+		(mode) => {
+			const cloudOrchestrator: WorkspaceSession = {
+				...workerSession("sess-orch"),
+				workspaceId: "cloud-project",
+				workspaceName: "Cloud project",
+				mode: mode === "chat" ? "chat" : undefined,
+				cloud: { orgId: "cloud-org" },
+			};
+			workspaceQueryState.data = [
+				...workspaces,
+				{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudOrchestrator] },
+			];
+			render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-orch" />);
+			const controls = screen.getAllByTestId("shared-project-control");
+			expect(controls).toHaveLength(1);
+			expect(controls[0].closest(".session-topbar-session-chrome")).not.toBeNull();
+		},
+	);
+
+	it("shows no shared project control on a Cloud worker or a local orchestrator", () => {
+		const cloudWorker: WorkspaceSession = { ...workerSession("sess-1"), workspaceId: "cloud-project", cloud: { orgId: "cloud-org" } };
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudWorker] },
+		];
+		const view = render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(screen.queryByTestId("shared-project-control")).toBeNull();
+		view.unmount();
+		workspaceQueryState.data = workspaces;
+		render(<SessionView projectId="proj-1" sessionId="sess-orch" />);
+		expect(screen.queryByTestId("shared-project-control")).toBeNull();
 	});
 
 	it("uses the project route to distinguish local and Cloud sessions with the same ID", () => {
@@ -1643,6 +1740,30 @@ describe("SessionView", () => {
 		await waitFor(() => expect(chatViewPostMock.mock.calls.some(([, input]) => input.body.active === false)).toBe(true));
 		view.rerender(<SessionView sessionId="sess-1" />);
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
+	});
+
+	it("lets a hidden window's stalled Chat lease lapse and renews it on return", async () => {
+		workerSession("sess-1").mode = "chat";
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		let hidden = false;
+		Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+		const renewals = () => chatViewPostMock.mock.calls.filter(([, input]) => input.body.active).length;
+		try {
+			render(<SessionView sessionId="sess-1" />);
+			await waitFor(() => expect(renewals()).toBe(1));
+			hidden = true;
+			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+			expect(renewals()).toBe(2);
+			vi.setSystemTime(Date.now() + 60_000);
+			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+			expect(renewals()).toBe(2);
+			hidden = false;
+			act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+			await waitFor(() => expect(renewals()).toBe(3));
+		} finally {
+			Reflect.deleteProperty(document, "hidden");
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not wake Chat while restoring its selected shell tab", async () => {
@@ -2533,7 +2654,7 @@ describe("SessionView", () => {
 			render(<SessionView sessionId="sess-2" />);
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 			expect(screen.getByTestId("cloud-session-startup-note")).toHaveTextContent(
-				`${startupError.message} AO is still retrying.`,
+				`${startupError.message} Orchestrator is still retrying.`,
 			);
 			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
 		});
@@ -2559,6 +2680,20 @@ describe("SessionView", () => {
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 			expect(screen.queryByTestId("cloud-session-startup-error")).not.toBeInTheDocument();
 		});
+	});
+
+	it("shows a pending Terminal import archive and switches to Terminal after adoption", () => {
+		const session = workerSession("sess-1");
+		session.mode = "tui";
+		session.provider = "gemini";
+		session.needsResume = true;
+		session.status = "idle";
+		const view = render(<SessionView sessionId="sess-1" />);
+		expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
+		session.needsResume = undefined;
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("terminal-target")).toBeInTheDocument();
 	});
 
 	it("activates a new terminal opened while a file tab is selected", async () => {
@@ -2678,10 +2813,13 @@ describe("SessionView", () => {
 			reviews: [], runs: [],
 		}));
 		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
-		expect(screen.getByTestId("reviewer-chat-surface")).toBeInTheDocument();
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeVisible();
 		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
+		// Outside a split, a reviewer chat that is not selected is not kept mounted.
 		await waitFor(() => expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument());
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
+		fireEvent.click(screen.getByRole("button", { name: "open reviewer chat" }));
+		expect(screen.getByTestId("reviewer-chat-surface")).toBeVisible();
 	});
 
 	it("reveals the primary chat for each palette hit over a file tab", async () => {
@@ -2743,7 +2881,7 @@ describe("SessionView", () => {
 
 		expect(screen.queryByText("ao/sess-1")).not.toBeInTheDocument();
 		expect(screen.queryByTitle("ao/sess-1")).not.toBeInTheDocument();
-		expect(document.querySelector(".lucide-git-branch")).toBeNull();
+		expect(document.querySelector(".icon-git-branch")).toBeNull();
 		// The session's own actions still ride in the same top-bar slot.
 		expect(screen.getByTestId("mock-session-topbar")).toBeInTheDocument();
 		expect(Boolean(screen.queryByRole("button", { name: "New terminal" }))).toBe(offersNewTerminal);
@@ -3211,7 +3349,7 @@ describe("SessionView", () => {
 		expect(loader).toBeInTheDocument();
 		expect(within(loader).getByRole("status", { name: label })).toBeInTheDocument();
 		expect(loader).not.toHaveTextContent("Stopping controller");
-		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
+		expect(loader.querySelector(".icon-loader-circle.animate-spin")).not.toBeNull();
 		expect(loader.querySelector("[data-testid='multi-step-loader']")).toBeNull();
 		expect(loader.querySelector(".text-success")).toBeNull();
 	});
@@ -3269,7 +3407,7 @@ describe("SessionView", () => {
 		render(<SessionView sessionId="sess-1" />);
 		const loader = screen.getByTestId("cloud-interface-switch-loader-screen");
 		expect(within(loader).getByRole("status", { name: "Switching to Chat UI" })).toBeInTheDocument();
-		expect(loader.querySelector(".lucide-loader-circle.animate-spin")).not.toBeNull();
+		expect(loader.querySelector(".icon-loader-circle.animate-spin")).not.toBeNull();
 	});
 
 	it("keeps the Cloud switch loader over the stopped terminal until the session mode catches up", () => {
@@ -4415,7 +4553,7 @@ describe("SessionView", () => {
 			historyPolicy: "strict" as const,
 			phase: "recovery_required" as const,
 			errorCode: "DAEMON_RESTARTED",
-			errorDetail: "AO recovered the session in its last committed mode.",
+			errorDetail: "Orchestrator recovered the session in its last committed mode.",
 			createdAt: "2026-08-12T10:00:00Z",
 			updatedAt: "2026-08-12T10:01:00Z",
 			completedAt: "2026-08-12T10:01:00Z",
@@ -4550,7 +4688,7 @@ describe("SessionView", () => {
 				historyPolicy: "provider_history",
 				phase: "recovery_required",
 				errorCode: "DAEMON_RESTARTED",
-				errorDetail: "AO restored Terminal after the daemon restarted.",
+				errorDetail: "Orchestrator restored Terminal after the daemon restarted.",
 				createdAt: "2026-08-25T09:00:00Z",
 				updatedAt: "2026-08-25T09:00:01Z",
 				completedAt: "2026-08-25T09:00:01Z",
@@ -4602,7 +4740,7 @@ describe("SessionView", () => {
 			workerSession("sess-1").mode = "tui";
 			interfaceTransitionState.startError = startError;
 			const errorDetail =
-				"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. target still running";
+				"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface. target still running";
 			interfaceTransitionState.status = {
 				supported: true,
 				targetMode: "chat",
@@ -4689,7 +4827,7 @@ describe("SessionView", () => {
 		settingsState.chatHarnesses = ["claude-code", "codex"];
 		interfaceTransitionState.status = status;
 		const session = workerSession("sess-1");
-		session.provider = "goose";
+		session.provider = "gemini";
 		session.mode = "tui";
 		if (terminated) session.isTerminated = true;
 
@@ -5575,14 +5713,14 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 	});
 
-	it("starts the orchestrator Browser closed and opens it with the inspector shortcut", () => {
+	it("starts the orchestrator inspector closed on Summary and opens it with the inspector shortcut", () => {
 		render(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(screen.getByRole("button", { name: "Open Browser" })).toHaveAttribute("aria-pressed", "false");
+		expect(screen.getByRole("button", { name: "Open inspector panel" })).toHaveAttribute("aria-pressed", "false");
 		act(() => appShortcutBus.emit({ id: "toggle-inspector" }));
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		expect(screen.getByRole("button", { name: "Close Browser" })).toHaveAttribute("aria-pressed", "true");
-		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
+		expect(screen.getByRole("button", { name: "Close inspector panel" })).toHaveAttribute("aria-pressed", "true");
+		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("summary");
 	});
 
 	it("opens an absolute chat path at the workspace-relative path the daemon returns", async () => {
@@ -5655,6 +5793,213 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("opens a newly registered artifact of any file type in the Artifacts view", async () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "data.parquet", path: "data.parquet", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(await screen.findByText("selected data.parquet")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(inspectorOpen("sess-1")).toBe(true);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("does not reveal a remote host's artifact that only its refetch after entry lists", () => {
+		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
+		worker.artifactFiles = [];
+		// The sidebar's kept list from an earlier visit is stale and predates the artifact.
+		workspaceQueryState.isStale = true;
+		try {
+			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+			workspaceQueryState.isStale = false;
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("reveals the next registration at once when a remote host's data is fresh on entry", () => {
+		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
+		worker.artifactFiles = [];
+		workspaceQueryState.isStale = false;
+		try {
+			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("keeps Browser on a live page and only badges Artifacts when an artifact is registered", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		worker.previewUrl = "http://localhost:5173/";
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "browser");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "report.md", path: "report.md", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
+			expect(inspectorOpen("sess-1")).toBe(true);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
+			expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
+		} finally {
+			delete worker.artifactFiles;
+			delete worker.previewUrl;
+		}
+	});
+
+	it("opens Artifacts for a registration while Browser has no page", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "browser");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "report.md", path: "report.md", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("dismisses a session's artifact toast when the user leaves that session", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		const toastFor = (key: string) => useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === key);
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "files");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "shot.png", path: "shot.png", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(toastFor("artifact-registered:sess-1")).toBeDefined();
+
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(toastFor("artifact-registered:sess-1")).toBeUndefined();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("takes the baseline from a cloud session's artifact list once it loads", () => {
+		const worker = workerSession("sess-1");
+		// The session arrives before its artifact list.
+		worker.artifactFilesPending = true;
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			delete worker.artifactFilesPending;
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFilesPending;
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("only badges Artifacts for a registration while the user is in Files", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "files");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "shot.png", path: "shot.png", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
+			// The toast reaches a maximized Browser and screen readers; Open shows the file.
+			const toast = useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === "artifact-registered:sess-1");
+			expect(toast?.title).toContain("shot.png");
+			expect(toast?.action).toBeDefined();
+			act(() => toast?.action?.run());
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(screen.getByText("selected shot.png")).toBeInTheDocument();
+			act(() => useUiStore.getState().setInspectorView("sess-1", "files"));
+			act(() => useUiStore.getState().setInspectorView("sess-1", "artifacts"));
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(false);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("does not reveal artifacts already registered on entry, or unregistered files", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ kind: "file", name: "scratch.txt", path: "scratch.txt", size: 1, updatedAt: "2026-06-11T00:00:00Z" },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+			expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("opens an absolute orchestrator chat path to a listed artifact", async () => {
+		const orchestrator = workerSession("sess-orch");
+		orchestrator.mode = "chat";
+		orchestrator.artifactFiles = [{ kind: "html", name: "chart.html", path: "renders/chart.html", size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		mockAbsolutePathLookup({ data: { sessionId: "sess-orch", kind: "artifact", path: "renders/chart.html" }, error: undefined });
+		try {
+			render(<SessionView sessionId="sess-orch" />);
+			fireEvent.click(screen.getByRole("button", { name: "open chat absolute path" }));
+			expect(await screen.findByText("selected renders/chart.html")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("artifacts");
+			expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		} finally {
+			delete orchestrator.artifactFiles;
+			delete orchestrator.mode;
+		}
+	});
+
 	it("explains an artifact the session still does not list after a refresh", async () => {
 		workerSession("sess-1").mode = "chat";
 		mockAbsolutePathLookup({ data: { sessionId: "sess-1", kind: "artifact", path: "out/new.md" }, error: undefined });
@@ -5678,7 +6023,7 @@ describe("SessionView", () => {
 		fireEvent.click(screen.getByRole("button", { name: "open chat basename" }));
 		await waitFor(() => expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument());
 		expect(inspectorOpen("sess-orch")).toBe(false);
-		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
+		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("summary");
 	});
 
 	it("reveals each explicit orchestrator preview and respects closing it during passive activity", () => {
@@ -5688,11 +6033,11 @@ describe("SessionView", () => {
 		orchestrator.previewRevision = 1;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close inspector panel" }));
 		orchestrator.previewRevision = 2;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(true);
-		fireEvent.click(screen.getByRole("button", { name: "Close Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Close inspector panel" }));
 		browserViewState.agentBrowserActive = true;
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
@@ -5705,7 +6050,7 @@ describe("SessionView", () => {
 		rerender(<SessionView sessionId="sess-orch" />);
 		expect(inspectorOpen("sess-orch")).toBe(false);
 		expect(screen.getByTestId("orchestrator-browser-unseen-indicator")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Open Browser" }));
+		fireEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
 		expect(screen.queryByTestId("orchestrator-browser-unseen-indicator")).not.toBeInTheDocument();
 		expect(browserUnseen("sess-orch")).toBe(false);
 	});
@@ -5941,6 +6286,26 @@ describe("SessionView", () => {
 			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 		} finally {
 			delete worker.artifactFiles;
+		}
+	});
+
+	it.each([
+		["direct HTML file", "direct.html"],
+		["render saved as an artifact", "renders/chart.html"],
+	])("opens an orchestrator %s from its artifact link", (_source, path) => {
+		const orchestrator = workerSession("sess-orch");
+		orchestrator.artifactFiles = [{ kind: "html", name: path.split("/").at(-1)!, path, size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
+		try {
+			act(() => useUiStore.getState().requestWorkspaceFileOpen("sess-orch", path, undefined, "artifact"));
+
+			render(<SessionView sessionId="sess-orch" />);
+
+			expect(screen.getByText(`selected ${path}`)).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("artifacts");
+			expect(inspectorOpen("sess-orch")).toBe(true);
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		} finally {
+			delete orchestrator.artifactFiles;
 		}
 	});
 

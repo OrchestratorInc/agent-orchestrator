@@ -151,7 +151,8 @@ describe("CloudSessionChatSurface event stream", () => {
 		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1);
-		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { after: 0, limit: 500 });
+		// The newest page first.
+		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { before: 9007199254740991, limit: 150 });
 		view.unmount();
 	});
 
