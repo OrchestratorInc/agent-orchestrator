@@ -33,13 +33,17 @@ interface ShareLinkRecord {
 	/** The file's fingerprint when it was published; see scanShareFile. */
 	fingerprint?: string;
 	url?: string;
+	/** Kinds of credential the published copy looked like it held. */
+	secretFindings?: string[];
 }
 
 export interface ShareLinkRecordStore {
 	get(key: string): Promise<string | undefined>;
 	/** The fingerprint the file had when it was last published, if recorded. */
 	publishedFingerprint(key: string): Promise<string | undefined>;
-	set(key: string, shareId: string, fingerprint?: string, url?: string): Promise<void>;
+	/** Kinds of credential the copy last published looked like it held, if recorded. */
+	publishedSecretFindings(key: string): Promise<string[] | undefined>;
+	set(key: string, shareId: string, fingerprint?: string, url?: string, secretFindings?: string[]): Promise<void>;
 	/** Moves the record at `from` to `to`, unless `to` already has one. */
 	adopt(to: string, from: string): Promise<void>;
 	/** Drops every record of a link, after it is unpublished. */
@@ -65,9 +69,13 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 		return asRecord((await this.load())[key])?.fingerprint;
 	}
 
-	async set(key: string, shareId: string, fingerprint?: string, url?: string): Promise<void> {
+	async publishedSecretFindings(key: string): Promise<string[] | undefined> {
+		return asRecord((await this.load())[key])?.secretFindings;
+	}
+
+	async set(key: string, shareId: string, fingerprint?: string, url?: string, secretFindings?: string[]): Promise<void> {
 		const records = await this.load();
-		records[key] = encodeRecord({ shareId, fingerprint, url });
+		records[key] = encodeRecord({ shareId, fingerprint, url, secretFindings });
 		await this.save();
 	}
 
@@ -131,9 +139,10 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 	}
 }
 
-function encodeRecord({ shareId, fingerprint, url }: ShareLinkRecord): string | ShareLinkRecord {
-	if (!fingerprint && !url) return shareId;
-	return { shareId, ...(fingerprint ? { fingerprint } : {}), ...(url ? { url } : {}) };
+function encodeRecord({ shareId, fingerprint, url, secretFindings }: ShareLinkRecord): string | ShareLinkRecord {
+	const findings = secretFindings?.length ? secretFindings : undefined;
+	if (!fingerprint && !url && !findings) return shareId;
+	return { shareId, ...(fingerprint ? { fingerprint } : {}), ...(url ? { url } : {}), ...(findings ? { secretFindings: findings } : {}) };
 }
 
 function recordBaseUrl(key: string): string | undefined {
@@ -154,6 +163,8 @@ function isRecordMap(value: unknown): value is Record<string, string | ShareLink
 		Object.values(value).every((record) => typeof record === "string" || (
 			typeof record === "object" && record !== null && typeof (record as ShareLinkRecord).shareId === "string" &&
 			((record as ShareLinkRecord).fingerprint === undefined || typeof (record as ShareLinkRecord).fingerprint === "string") &&
-			((record as ShareLinkRecord).url === undefined || typeof (record as ShareLinkRecord).url === "string")
+			((record as ShareLinkRecord).url === undefined || typeof (record as ShareLinkRecord).url === "string") &&
+			((record as ShareLinkRecord).secretFindings === undefined || (Array.isArray((record as ShareLinkRecord).secretFindings) &&
+				(record as ShareLinkRecord).secretFindings!.every((kind) => typeof kind === "string")))
 		));
 }

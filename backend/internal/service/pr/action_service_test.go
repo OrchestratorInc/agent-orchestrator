@@ -275,6 +275,77 @@ func TestActionServiceMerge_FailsClosedForStaleHeadOrReadiness(t *testing.T) {
 	}
 }
 
+// fakeHeadChecks answers what a provider knows about a head's checks.
+type fakeHeadChecks struct {
+	facts ports.SCMHeadChecks
+	err   error
+	shas  []string
+}
+
+func (f *fakeHeadChecks) HeadChecks(_ context.Context, _ ports.SCMRepo, sha string) (ports.SCMHeadChecks, error) {
+	f.shas = append(f.shas, sha)
+	return f.facts, f.err
+}
+
+var mergeNow = time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+
+// An app that never runs here leaves a queued suite, and nothing else checks
+// the head: settled for longer than noChecksSettle.
+func settledNoChecks() *fakeHeadChecks {
+	return &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: mergeNow.Add(-3 * time.Minute)}}
+}
+
+// GitHub reports no status rollup for a head nothing checks, and also for one
+// pushed seconds ago whose checks haven't registered. Only a merge that asks
+// for it (the PR view's), on a head the provider confirms has had nothing
+// checking it for a while, treats no checks as passing.
+func TestActionServiceMerge_NoChecksMergesOnlyWhenAskedAndSettled(t *testing.T) {
+	noChecks := func(pr domain.PullRequest, scm *fakeSCMAction) {
+		scm.observation.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: pr.HeadSHA}
+	}
+	for _, tc := range []struct {
+		name   string
+		allow  bool
+		checks *fakeHeadChecks
+		setup  func(domain.PullRequest, *fakeSCMAction)
+		merges bool
+	}{
+		{name: "asked and settled", allow: true, checks: settledNoChecks(), setup: noChecks, merges: true},
+		{name: "not asked, as the CLI", allow: false, checks: settledNoChecks(), setup: noChecks},
+		{name: "pushed seconds ago", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: mergeNow.Add(-10 * time.Second)}}, setup: noChecks},
+		// An agent pushes and runs `ao pr merge` at once, before Actions registers its runs.
+		{name: "ao pr merge right after a push", allow: false, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 1, Since: mergeNow.Add(-3 * time.Second)}}, setup: noChecks},
+		{name: "a suite has started", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 4, Started: 1, Since: mergeNow.Add(-time.Hour)}}, setup: noChecks},
+		{name: "a status was posted", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Statuses: 1, Since: mergeNow.Add(-time.Hour)}}, setup: noChecks},
+		{name: "unknown since when", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3}}, setup: noChecks},
+		{name: "provider unreadable", allow: true, checks: &fakeHeadChecks{err: errors.New("rate limited")}, setup: noChecks},
+		{name: "no provider", allow: true, setup: noChecks},
+		{name: "a cancelled run", allow: true, checks: settledNoChecks(), setup: func(pr domain.PullRequest, scm *fakeSCMAction) {
+			scm.observation.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: pr.HeadSHA, FailedChecks: []ports.SCMCheckObservation{{Name: "test", Status: "cancelled"}}}
+		}},
+		{name: "blocked by the provider", allow: true, checks: settledNoChecks(), setup: func(pr domain.PullRequest, scm *fakeSCMAction) {
+			noChecks(pr, scm)
+			scm.observation.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked)}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pr, scm := mergeableActionFixture()
+			tc.setup(pr, scm)
+			deps := ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm, Clock: func() time.Time { return mergeNow }}
+			if tc.checks != nil {
+				deps.HeadChecks = tc.checks
+			}
+			_, err := NewActionService(deps).Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA, AllowNoChecks: tc.allow})
+			if tc.merges != (err == nil) || tc.merges != (scm.mergeCalls == 1) {
+				t.Fatalf("err = %v, calls = %d, want merged = %v", err, scm.mergeCalls, tc.merges)
+			}
+			if tc.merges && (len(tc.checks.shas) != 1 || tc.checks.shas[0] != pr.HeadSHA) {
+				t.Fatalf("head checks read for %v, want the PR's head", tc.checks.shas)
+			}
+		})
+	}
+}
+
 func TestScmRepoForPR_NestedNamespace(t *testing.T) {
 	tests := []struct {
 		name      string

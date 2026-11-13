@@ -15,8 +15,6 @@ const rootLayout = "_layout.tsx";
 const screenRoutes = [
 	"(tabs)/(workers)/index.tsx",
 	"(tabs)/(projects)/projects.tsx",
-	"(tabs)/(pull-requests)/pull-requests.tsx",
-	"(tabs)/(preferences)/preferences.tsx",
 	"prs/index.tsx",
 	"(tabs)/compose.tsx",
 	"artifact/[sessionId].tsx",
@@ -29,6 +27,9 @@ const screenRoutes = [
 	"files/[sessionId]/folder.tsx",
 	"settings/machine/[id]/index.tsx",
 	"settings/machine/[id]/edit.tsx",
+	"settings/cloud/index.tsx",
+	"settings/cloud/agent/[agent].tsx",
+	"cloud/terminal.tsx",
 	"browser/[id].tsx",
 	"settings/theme.tsx",
 	"notifications/index.tsx",
@@ -46,10 +47,14 @@ const screenRoutes = [
 ];
 
 const sheetRoutes = [
+	"cloud/new-project.tsx",
 	"sheets/agent.tsx",
 	"sheets/artifact-history.tsx",
+	"sheets/cloud-plan.tsx",
 	"sheets/composer-picker.tsx",
 	"sheets/conversation-usage.tsx",
+	"sheets/files-branch.tsx",
+	"sheets/files-changes.tsx",
 	"sheets/machine-name.tsx",
 	"sheets/model.tsx",
 	"sheets/review-actions.tsx",
@@ -62,8 +67,6 @@ const deferredRoutes = [
 	"(tabs)/_layout.tsx",
 	"(tabs)/(workers)/_layout.tsx",
 	"(tabs)/(projects)/_layout.tsx",
-	"(tabs)/(pull-requests)/_layout.tsx",
-	"(tabs)/(preferences)/_layout.tsx",
 	"settings/_layout.tsx",
 	"notifications/_layout.tsx",
 	"prs/_layout.tsx",

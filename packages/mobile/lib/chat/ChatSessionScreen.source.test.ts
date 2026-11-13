@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 const screenSource = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
 const composerSource = readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+const cloudScreenSource = readFileSync(new URL("../cloud/CloudSessionScreen.tsx", import.meta.url), "utf8");
 
 describe("active turn controls", () => {
 	it("remounts the composer when a same-ID session changes host", () => {
@@ -37,6 +38,14 @@ describe("active turn controls", () => {
 		expect(apiSource).toContain('`/turns/${encodeURIComponent(turnId)}/steer`');
 		expect(screenSource).toContain("onPromoteQueuedTurn={conversation.promoteQueuedTurn}");
 		expect(composerSource).toContain('accessibilityLabel={`Steer queued message: ${entry.message.text}`}');
+	});
+
+	// Orchestrator Cloud has no route to steer with or delete a queued turn: its
+	// queue showed both, and Steer hid a message that stayed queued.
+	it("offers a queued message's actions only where the host takes them", () => {
+		expect(composerSource).toContain("{canSteer && onPromoteQueuedTurn ? <Pressable");
+		expect(composerSource).toContain("{onCancelQueuedTurn ? <Pressable");
+		expect(cloudScreenSource).not.toMatch(/onPromoteQueuedTurn=|onCancelQueuedTurn=/);
 	});
 
 	it("keeps the queued row compact without a second labeled steer pill", () => {

@@ -2,6 +2,7 @@ import { createContext, Fragment, useContext, type ComponentType, type ReactNode
 import type { AppShortcutId } from "../../shared/shortcuts";
 import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
+import { actionMenuDestructiveItemClass } from "./ui/menu-styles";
 import {
 	ContextMenuItem,
 	ContextMenuSeparator,
@@ -110,8 +111,6 @@ export function useCloseMenu() {
 	return useContext(MenuCloseContext);
 }
 
-const destructiveClass = "text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive";
-
 /** Separators only between groups: none leading, trailing or doubled. */
 export function tidyMenuEntries(entries: MenuEntry[]): MenuEntry[] {
 	const out: MenuEntry[] = [];
@@ -157,7 +156,7 @@ export function MenuEntries({ entries }: { entries: MenuEntry[] }) {
 							<kit.Item
 								key={entry.id}
 								aria-label={entry.ariaLabel}
-								className={cn(entry.destructive && destructiveClass)}
+								className={cn(entry.destructive && actionMenuDestructiveItemClass)}
 								disabled={entry.disabled || !entry.onSelect}
 								onSelect={entry.onSelect ? () => entry.onSelect?.() : undefined}
 								title={entry.title}

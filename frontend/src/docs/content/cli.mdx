@@ -238,6 +238,9 @@ Lets your other devices use this machine through its authenticated remote listen
 | Command | Purpose |
 | --- | --- |
 | `ao remote-host status` | Show the host ID, addresses, and whether the address is fixed. Add `--show-password` to also print the pairing password; treat that output as a credential. |
+| `ao remote-host pair` | Print the address and a one-time pairing code. One device can use it, within 10 minutes, and gets its own token. |
+| `ao remote-host devices` | List the devices that can reach this machine. `devices revoke <ID>` revokes one; `devices revoke --all` revokes every device and unlinks the account. |
+| `ao remote-host require-device-credentials on\|off` | Stop accepting the pairing password, so each device needs its own token or the linked account's. |
 | `ao remote-host enable` | Turn on remote access. `--tunnel-only` serves it only through a Cloudflare tunnel; `--tunnel` keeps the LAN listener too. |
 | `ao remote-host disable` | Turn off remote access. Sessions keep running. |
 | `ao remote-host link` | Add this machine to your AO account: it prints a sign-in link and a QR code, and waits up to 5 minutes for you to sign in from any device. The machine then gets a fixed address and appears on every device signed in to the account. `--label` sets its name (default: the name the account already has for it, else the hostname); `--no-qr` prints only the link. On a LAN-only listener it adds a Cloudflare tunnel, as `--tunnel` does. |
@@ -265,3 +268,11 @@ Lets your other devices use this machine through its authenticated remote listen
 | `AO_PROJECT_ID` | unset | Current project context for spawn resolution. |
 
 All current Orchestrator application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it.
+
+## Report a problem
+
+Unreleased: `ao triage` collects bounded, redacted diagnostics and opens Claude Code
+or Codex to help draft a report, even with the daemon down. Files go under
+`$AO_DATA_DIR/triage` when set, otherwise `~/.ao/triage`. After the agent exits,
+review the text and answer `[y/N]` before posting. Use `--no-launch` to prepare
+files only, or `--agent claude|codex` to choose an installed agent.

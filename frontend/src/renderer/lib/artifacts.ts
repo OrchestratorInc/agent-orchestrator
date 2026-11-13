@@ -7,6 +7,7 @@ import {
 	type WorkspaceSession,
 } from "../types/workspace";
 import type { ArtifactBundle } from "../../../../packages/shared/artifacts/deliverables";
+import type { CloudShareAccess } from "../../shared/cloud-share";
 import { CloudCpError } from "./cloud-cp/errors";
 import { fileMediaKind } from "./file-media";
 import { isSvgPath } from "./image-files";
@@ -26,10 +27,19 @@ export type ArtifactRow = {
 	sessionId: string;
 	sessionTitle: string;
 	cloud?: WorkspaceSession["cloud"];
+	/** The remote host the session runs on; undefined for this computer's own and Cloud sessions. */
+	hostId?: string;
 	/** Undefined for a Scratchpad session. */
 	projectId?: string;
 	/** Set on a row that stands for a bundle directory; `path` is a file inside it. */
 	bundle?: ArtifactBundle;
+	/** The file's link while it is published; unset when it is not shared. */
+	shareUrl?: string;
+	/**
+	 * Who that link opens for, once the link list is read: restricted, only
+	 * the owner and the people invited. Unset reads as a public link.
+	 */
+	shareAccess?: CloudShareAccess;
 };
 
 /**
@@ -104,6 +114,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 					cloud: session.cloud,
 					projectId: isScratchpad ? undefined : workspace.id,
 					bundle: artifact.bundle,
+					...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
 				})),
 			)
 			.sort(newestFirst);
@@ -139,15 +150,52 @@ export function artifactLocation(row: Pick<ArtifactRow, "cloud">, group: Pick<Ar
 	return group.cloud || row.cloud ? "cloud" : "local";
 }
 
+/**
+ * What the Artifacts page shows. Each list keeps the rows matching any of its
+ * values; an empty or missing list keeps every row. The lists narrow together.
+ */
 export type ArtifactFilters = {
 	query: string;
-	/** Empty for every project. */
-	projectId: string;
+	projectIds?: readonly string[];
 	/** Undefined for both locations. */
 	location?: ArtifactLocation;
-	/** Undefined for every type. */
-	type?: ArtifactType;
+	types?: readonly ArtifactType[];
+	sharings?: readonly ArtifactSharing[];
 };
+
+/**
+ * Whether an artifact has a public link ("public"), a private one, open only
+ * to its owner and the people invited ("shared"), or none ("private").
+ */
+export type ArtifactSharing = "public" | "shared" | "private";
+
+export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "shared", "private"];
+
+/**
+ * Whether an artifact is known to be public, shared privately or not shared,
+ * or undefined when it cannot be told. Only a local session's files carry
+ * their link (the daemon reads it from this computer's publish records); a
+ * cloud session's file list says nothing about publishing, so its state is
+ * unknown rather than "not shared". A published file is unknown too until the
+ * link list says who its link opens for: until then, or when the list cannot
+ * be read, it is neither called public nor counted as such.
+ */
+export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud">): ArtifactSharing | undefined {
+	if (row.shareUrl) return row.shareAccess === "restricted" ? "shared" : row.shareAccess === "anyone" ? "public" : undefined;
+	return row.cloud ? undefined : "private";
+}
+
+/** Sets each published row's shareAccess from who its link opens for. */
+export function withShareAccess(groups: readonly ArtifactGroup[], accessByUrl: ReadonlyMap<string, CloudShareAccess>): ArtifactGroup[] {
+	if (accessByUrl.size === 0) return [...groups];
+	return groups.map((group) => ({
+		...group,
+		rows: group.rows.map((row) => {
+			const access = row.shareUrl ? accessByUrl.get(row.shareUrl) : undefined;
+			return access ? { ...row, shareAccess: access } : row;
+		}),
+	}));
+}
 
 /**
  * Keeps groups matching the project filter, and rows matching the location
@@ -155,10 +203,13 @@ export type ArtifactFilters = {
  * query. Groups left without rows are dropped.
  */
 export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ArtifactGroup[] {
-	const { projectId, location, type } = filters;
+	const { location } = filters;
+	const projectIds = filters.projectIds ?? [];
+	const types = filters.types ?? [];
+	const sharings = filters.sharings ?? [];
 	const needle = filters.query.trim().toLocaleLowerCase();
 	return groups
-		.filter((group) => !projectId || group.id === projectId)
+		.filter((group) => projectIds.length === 0 || projectIds.includes(group.id))
 		.map((group) => {
 			const groupMatches = !needle || group.name.toLocaleLowerCase().includes(needle)
 				|| Boolean(group.isScratchpad && scratchpadName?.toLocaleLowerCase().includes(needle));
@@ -166,7 +217,8 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 				...group,
 				rows: group.rows.filter((row) =>
 					(!location || artifactLocation(row, group) === location)
-					&& (!type || artifactType(row) === type)
+					&& (types.length === 0 || types.includes(artifactType(row)))
+					&& (sharings.length === 0 || matchesSharing(sharings, artifactSharing(row)))
 					&& (groupMatches
 						|| row.name.toLocaleLowerCase().includes(needle)
 						|| row.sessionTitle.toLocaleLowerCase().includes(needle)),
@@ -174,6 +226,11 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 			};
 		})
 		.filter((group) => group.rows.length > 0);
+}
+
+/** A sharing filter keeps only rows whose state is known and chosen. */
+function matchesSharing(sharings: readonly ArtifactSharing[], sharing: ArtifactSharing | undefined): boolean {
+	return sharing !== undefined && sharings.includes(sharing);
 }
 
 function newestFirst(left: Pick<ArtifactRow, "updatedAt">, right: Pick<ArtifactRow, "updatedAt">): number {

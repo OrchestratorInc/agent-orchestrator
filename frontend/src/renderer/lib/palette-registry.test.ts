@@ -43,6 +43,8 @@ describe("palette registry", () => {
 		expect(logins?.action).toEqual({ kind: "open-settings-section", section: "harness", focus: t("settings.harness.viewLabel") });
 		// Accounts live on the Harness page, so an accounts search lands there.
 		expect(filterCommands(items, "codex accounts")[0]?.action).toMatchObject({ kind: "open-settings-section", section: "harness" });
+		// API keys are set from a harness's Account, so a key search lands there too.
+		expect(filterCommands(items, "api key")[0]?.action).toMatchObject({ kind: "open-settings-section", section: "harness" });
 		// Any Mobile row is right: they all open the Mobile page.
 		expect(filterCommands(items, "pair phone")[0]?.action).toMatchObject({ kind: "open-settings-section", section: "mobile" });
 		expect(filterCommands(items, "dark mode")[0]?.id).toBe("setting:theme");

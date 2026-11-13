@@ -1,5 +1,6 @@
 import {
 	AgentAvatar as ProductAgentAvatar,
+	getAgentIdentity,
 	type AgentAvatarProps,
 	type AgentLogoSources,
 } from "@aoagents/product-ui";
@@ -124,6 +125,25 @@ const LOGOS: AgentLogoSources = {
  */
 export function AgentAvatar({ provider, className, decorative = false }: AgentAvatarProps) {
 	return <ProductAgentAvatar className={className} decorative={decorative} logoSources={LOGOS} provider={provider} />;
+}
+
+/** The logo an agent draws, or none. */
+function logoFor(provider: string): AgentLogoSources[string] {
+	const key = getAgentIdentity(provider).logoKey;
+	return key ? LOGOS[key] : undefined;
+}
+
+function sameLogo(a: AgentLogoSources[string], b: AgentLogoSources[string]): boolean {
+	if (!a || !b) return false;
+	if (typeof a === "string" || typeof b === "string") return a === b;
+	return a.light === b.light && a.dark === b.dark;
+}
+
+/** Whether another agent draws the same logo (OpenCode and OpenCode 2), so the mark alone does not name the agent. */
+export function sharesAgentMark(provider: string): boolean {
+	const logo = logoFor(provider);
+	const own = getAgentIdentity(provider).logoKey;
+	return Object.entries(LOGOS).some(([key, other]) => key !== own && sameLogo(logo, other));
 }
 
 export type { AgentAvatarProps };

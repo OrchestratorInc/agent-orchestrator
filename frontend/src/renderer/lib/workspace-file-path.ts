@@ -4,7 +4,8 @@ function normalizeWorkspacePath(path: string): string {
 	return path.trim().replace(/^\.\//, "").replace(/\\/g, "/");
 }
 
-function decodePath(path: string): string {
+/** A path with its percent escapes decoded, or as it is when it holds a malformed one. */
+export function decodePath(path: string): string {
 	try {
 		return decodeURIComponent(path);
 	} catch {

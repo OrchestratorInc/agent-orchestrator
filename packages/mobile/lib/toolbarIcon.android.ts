@@ -32,6 +32,7 @@ const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	compress: require("../assets/icons/compress.xml"),
 	content_copy: require("../assets/icons/content_copy.xml"),
 	contrast: require("../assets/icons/contrast.xml"),
+	create_new_folder: require("../assets/icons/create_new_folder.xml"),
 	data_usage: require("../assets/icons/data_usage.xml"),
 	delete: require("../assets/icons/delete.xml"),
 	description: require("../assets/icons/description.xml"),

@@ -30,16 +30,18 @@ export type TabSplitActions = { right?: () => void; down?: () => void; newTermin
 export const TabSplitMenuContext = createContext<((tabKey: string) => TabSplitActions) | undefined>(undefined);
 
 /**
- * The agent and interface rows of a local session's tab, provided by the
- * session view while they apply: the terminal's agent picker and the switch
- * to the other interface. Absent on Cloud sessions and while a switch runs.
+ * The agent and interface rows of a session's tab, provided by the session
+ * view while they apply: a local terminal's agent picker and the switch to
+ * the other interface. Absent while a switch runs.
  */
 export type SessionTabAgentMenu = {
 	session: WorkspaceSession;
 	hostId?: string;
 	/** The agent is working, so it cannot be replaced right now. */
 	blocked: boolean;
-	/** The interface a switch goes to; "chat" means the tab shows a terminal, which picks its agent here. */
+	/** A local terminal picks its agent here; a chat does so from its composer, and Cloud cannot. */
+	picksAgent: boolean;
+	/** The interface a switch goes to. */
 	switchTarget: SessionInterfaceMode;
 	switchAction?: { disabled: boolean; reason?: string; run: () => void };
 };
@@ -54,7 +56,10 @@ export const SessionTabAgentMenuContext = createContext<SessionTabAgentMenu | un
 export type TabMenuSpec = {
 	/** The tab's key in the strip, for split actions. */
 	tabKey?: string;
-	/** The tab's close action; absent, Close tab shows disabled. */
+	/**
+	 * The tab's close action. Absent, Close tab shows disabled, except on the
+	 * session's own tab, which never closes and so lists no Close tab at all.
+	 */
 	onClose?: () => void;
 	/** The active tab's close chord applies to this tab. */
 	closeShortcut?: boolean;
@@ -70,8 +75,8 @@ export type TabMenuSpec = {
 
 /**
  * The rows of a tab's menu, in order: the tab's own actions, Split (while
- * split panes are on), Close tab, then Archive for a session behind one
- * separator. A split group's tab leads with Ungroup.
+ * split panes are on), Close tab (not on the session's own tab), then Archive for a
+ * session behind one separator. A split group's tab leads with Ungroup.
  */
 export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 	const { t } = useTranslation();
@@ -95,8 +100,7 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 	if (!own) return entries;
 
 	if (session && agentMenu && agentMenu.session.id === session.session.id) {
-		// A terminal picks its agent here; a chat switches agent from its composer.
-		if (agentMenu.switchTarget === "chat") {
+		if (agentMenu.picksAgent) {
 			entries.push({
 				kind: "custom",
 				id: "agent-picker",
@@ -155,14 +159,19 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 			{ kind: "separator", id: "split-sep" },
 		);
 	}
-	entries.push({
-		kind: "item",
-		id: "close-tab",
-		icon: <X aria-hidden="true" />,
-		label: t("tabMenu.close"),
-		onSelect: own.onClose,
-		shortcutId: own.closeShortcut ? "close-shell-terminal" : undefined,
-	});
+	// The session's own tab never closes, so it gets no dead Close tab row
+	// (MenuEntries folds the separators around the gap into one). As a split
+	// group member it does close, so it keeps the row there.
+	if (own.kind !== "session" || own.onClose) {
+		entries.push({
+			kind: "item",
+			id: "close-tab",
+			icon: <X aria-hidden="true" />,
+			label: t("tabMenu.close"),
+			onSelect: own.onClose,
+			shortcutId: own.closeShortcut ? "close-shell-terminal" : undefined,
+		});
+	}
 	// Only where the ⇧⌘A confirmation is mounted (SessionTopbarActions).
 	if (session?.canArchive) {
 		entries.push(
@@ -241,7 +250,7 @@ export function TabDropdownMenu({ spec, label }: { spec: TabMenuSpec; label: str
 				{/* A native title: a Radix tooltip would reopen when the menu hands focus back. */}
 				<Pressable
 					aria-label={label}
-					className={cn(terminalTabActionClassName, "data-[state=open]:bg-interactive-hover data-[state=open]:text-foreground")}
+					className={cn(terminalTabActionClassName, "data-[state=open]:text-foreground")}
 					data-session-actions-trigger
 					title={label}
 					type="button"

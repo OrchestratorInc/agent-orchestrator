@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { useShellAgentStore } from "../stores/shell-agent-store";
 import { useUiStore } from "../stores/ui-store";
@@ -186,6 +186,14 @@ describe("ShellTerminalTab rename", () => {
 		expect(onSelect).not.toHaveBeenCalled();
 	});
 
+	it("closes on a middle-click", () => {
+		const { onClose, onSelect } = renderTab({ appearance: "connected" });
+		const frame = screen.getByRole("tab", { name: "ao" }).closest("[data-terminal-tab-frame]")!;
+		fireEvent(frame, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(onSelect).not.toHaveBeenCalled();
+	});
+
 	it("optically centers the auxiliary terminal glyph with its label", () => {
 		renderTab({ appearance: "connected" });
 
@@ -254,28 +262,23 @@ describe("ShellTerminalTab context menu", () => {
 
 describe("ShellTerminalTab agent name", () => {
 	const claude = { harness: "claude-code", state: "idle" } as const;
-	beforeEach(() => useUiStore.setState({ developerMode: true }));
 
-	it("shows a plain tab and does not subscribe when Developer Mode is off", () => {
+	it("shows the agent without Developer Mode", () => {
 		useUiStore.setState({ developerMode: false });
 		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
 		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
-		expect(screen.getByRole("tab", { name: "Terminal 3" })).toBeInTheDocument();
-		expect(useShellAgentStream).toHaveBeenLastCalledWith(false);
-		expect(screen.queryByRole("tab", { name: "Claude Code" })).not.toBeInTheDocument();
-		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
-		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-agent-shell-tab-max");
+		expect(useShellAgentStream).toHaveBeenLastCalledWith(true);
+		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-agent-shell-tab-max");
 	});
 
-	it("returns to the plain tab when Developer Mode is switched off", () => {
+	it.each([
+		{ where: "a remote host", place: { hostId: "box-a" } },
+		{ where: "the cloud", place: { cloud: { orgId: "org-1" } } },
+	])("keeps a shell on $where plain and unwatched", ({ place }) => {
 		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
-		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
-		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
-		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-agent-shell-tab-max");
-		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("max-w-shell-tab-max");
-		act(() => useUiStore.setState({ developerMode: false }));
-		expect(screen.getByRole("tab", { name: "Terminal 3" })).toBeInTheDocument();
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3", ...place } });
 		expect(useShellAgentStream).toHaveBeenLastCalledWith(false);
+		expect(screen.queryByRole("tab", { name: "Claude Code" })).not.toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
 	});
 
@@ -312,6 +315,13 @@ describe("ShellTerminalTab agent name", () => {
 		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
 		renderTab({ appearance: "connected" });
 		expect(screen.getByRole("tab", { name: "ao" })).toBeInTheDocument();
+	});
+
+	it("labels the tab with its program's title without Developer Mode", () => {
+		useUiStore.setState({ developerMode: false });
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3", terminalTitle: "Fix login" } });
+		expect(screen.getByRole("tab", { name: "Fix login" })).toBeInTheDocument();
 	});
 
 	it("renames from the stored title, not the agent's name", () => {

@@ -33,6 +33,7 @@ const bridgeMocks = vi.hoisted(() => ({
 	scanImportFolder: vi.fn(),
 	connectProviderAuth: vi.fn(),
 	openExternal: vi.fn(),
+	pushFolderToRepository: vi.fn(),
 }));
 
 const apiMocks = vi.hoisted(() => ({
@@ -58,6 +59,7 @@ vi.mock("../lib/bridge", () => ({
 		},
 		cloud: {
 			connectProviderAuth: bridgeMocks.connectProviderAuth,
+			pushFolderToRepository: bridgeMocks.pushFolderToRepository,
 		},
 	},
 }));
@@ -120,6 +122,7 @@ const cloudMocks = vi.hoisted(() => ({
 	syncGitHubInstallation: vi.fn(),
 	listGitHubRepositories: vi.fn(),
 	createGitHubProject: vi.fn(),
+	createGitHubRepository: vi.fn(),
 	createStandaloneProject: vi.fn(),
 	getCoderTemplateParameters: vi.fn(),
 	listProjects: vi.fn(),
@@ -177,6 +180,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			syncGitHubInstallation: cloudMocks.syncGitHubInstallation,
 			listGitHubRepositories: cloudMocks.listGitHubRepositories,
 			createGitHubProject: cloudMocks.createGitHubProject,
+			createGitHubRepository: cloudMocks.createGitHubRepository,
 			createStandaloneProject: cloudMocks.createStandaloneProject,
 			getCoderTemplateParameters: cloudMocks.getCoderTemplateParameters,
 			evaluateCoderTemplateParameters: (orgId: string, templateId: string, _values: unknown, options: unknown) =>
@@ -208,6 +212,24 @@ function CloudTestProviders({ children }: { children: ReactNode }) {
 	);
 }
 
+const PROJECT_AGENTS = vi.hoisted(() => ({ workerAgent: "opencode", orchestratorAgent: "opencode", reviewerAgent: "opencode" }));
+// The ranking itself is covered in agent-select-options.test.ts; with
+// Developer Mode on every project starts on this fixed agent set so the flow
+// tests can assert it is sent.
+vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useAgentReadinessQuery")>()),
+	useProjectAgentDefaults: () => async () => PROJECT_AGENTS,
+}));
+
+const settingsMocks = vi.hoisted(() => ({ trackerIntakeEnabled: false, isLoading: false }));
+vi.mock("../hooks/useSettings", () => ({
+	useSettings: () => ({
+		settings: settingsMocks.isLoading ? undefined : { trackerIntakeEnabled: settingsMocks.trackerIntakeEnabled },
+		isLoading: settingsMocks.isLoading,
+		error: undefined,
+	}),
+}));
+
 // Probe stand-in: the real sheet needs a QueryClientProvider + agent catalog to
 // render. These tests only care which path/kind CreateProjectFlow hands it and
 // whether it's open, so a thin stub keeps the suite fast and focused.
@@ -217,6 +239,7 @@ function CloudTestProviders({ children }: { children: ReactNode }) {
 vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 	...(await importOriginal<typeof import("./CreateProjectAgentSheet")>()),
 	CreateProjectAgentSheet: ({
+		chooseAgents = true,
 		error,
 		isCreating,
 		isInitializing,
@@ -227,23 +250,24 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 		path,
 		shake,
 	}: {
+		chooseAgents?: boolean;
 		error?: string | null;
 		isCreating: boolean;
 		isInitializing: boolean;
 		kind: string;
-		onSubmit: (selection: { workerAgent: string; orchestratorAgent: string }) => Promise<void>;
+		onSubmit: (selection: { workerAgent?: string; orchestratorAgent?: string }) => Promise<void>;
 		onKeepCheckout?: () => void;
 		open: boolean;
 		path: string | null;
 		shake?: boolean;
 	}) =>
 		open && (isCreating || isInitializing) ? null : open ? (
-			<div className={shake ? "modal-shake" : undefined} data-kind={kind} data-path={path ?? ""} data-testid="agent-sheet">
+			<div className={shake ? "modal-shake" : undefined} data-choose-agents={String(chooseAgents)} data-kind={kind} data-path={path ?? ""} data-testid="agent-sheet">
 				{error ? <span>{error}</span> : null}
 				{onKeepCheckout ? <button onClick={onKeepCheckout}>Keep checkout and close</button> : null}
 				<button
 					type="button"
-					onClick={() => void onSubmit({ workerAgent: "codex", orchestratorAgent: "codex" })}
+					onClick={() => void onSubmit(chooseAgents ? { workerAgent: "codex", orchestratorAgent: "codex" } : {})}
 				>
 					Submit agents
 				</button>
@@ -382,6 +406,9 @@ function projectValidation(
 }
 
 beforeEach(() => {
+	settingsMocks.trackerIntakeEnabled = false;
+	settingsMocks.isLoading = false;
+	useUiStore.setState({ developerMode: false });
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	bridgeMocks.checkAncestorRepo.mockReset().mockResolvedValue(undefined);
 	bridgeMocks.checkGitRepository.mockReset().mockResolvedValue(true);
@@ -433,6 +460,8 @@ beforeEach(() => {
 	cloudMocks.syncGitHubInstallation.mockReset().mockResolvedValue({ installation: {} });
 	cloudMocks.listGitHubRepositories.mockReset().mockResolvedValue({ items: [], page: { hasMore: false } });
 	cloudMocks.createGitHubProject.mockReset().mockResolvedValue({ project: { id: "cp-app" } });
+	cloudMocks.createGitHubRepository.mockReset();
+	bridgeMocks.pushFolderToRepository.mockReset();
 	cloudMocks.createStandaloneProject.mockReset().mockResolvedValue({ project: { id: "cp-standalone" } });
 	cloudMocks.getCoderTemplateParameters.mockReset().mockResolvedValue({ parameters: [] });
 	githubDaemonMocks.getGitHubStatus.mockReset().mockResolvedValue({ connected: false });
@@ -1782,6 +1811,83 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(bridgeMocks.getRepositoryBranch).not.toHaveBeenCalled();
 	});
 
+	// Developer Mode previews the automatic flow: no agent pickers, the project
+	// starts on the most preferred ready agent, and the sheet only appears when
+	// there is intake to set up, a repository notice, or a failed create.
+	describe("with Developer Mode on", () => {
+		beforeEach(() => {
+			useUiStore.setState({ developerMode: true });
+		});
+
+		it("creates a local project straight away, without opening the sheet, when there is nothing to ask", async () => {
+			const user = userEvent.setup();
+			const onCreateProject = vi.fn(async () => undefined);
+			bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+			apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/project") });
+
+			renderChooseFlow({ onCreateProject });
+			await openSource(user, "Open a local folder");
+
+			await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({ path: "/repo/project", asWorkspace: false, ...PROJECT_AGENTS }));
+			expect(onCreateProject).toHaveBeenCalledTimes(1);
+			expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
+		});
+
+		it("opens the sheet without agent pickers for intake, then starts on the default agents", async () => {
+			settingsMocks.trackerIntakeEnabled = true;
+			const user = userEvent.setup();
+			const onCreateProject = vi.fn(async () => undefined);
+			bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+			apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/project") });
+
+			renderChooseFlow({ onCreateProject });
+			await openSource(user, "Open a local folder");
+
+			expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-choose-agents", "false");
+			expect(onCreateProject).not.toHaveBeenCalled();
+			await user.click(screen.getByRole("button", { name: "Submit agents" }));
+			await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({ path: "/repo/project", asWorkspace: false, ...PROJECT_AGENTS }));
+		});
+
+		it("keeps the sheet up while settings load, then creates once they show nothing to ask", async () => {
+			settingsMocks.isLoading = true;
+			const user = userEvent.setup();
+			const onCreateProject = vi.fn(async () => undefined);
+			bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+			apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/project") });
+
+			const view = renderChooseFlow({ onCreateProject });
+			await openSource(user, "Open a local folder");
+
+			// The wait is a visible sheet the user can back out of, not a bare backdrop.
+			expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/project");
+			expect(onCreateProject).not.toHaveBeenCalled();
+
+			settingsMocks.isLoading = false;
+			view.rerender(
+				<CreateProjectFlow mode="choose" {...noop} onCreateProject={onCreateProject}>
+					{({ choosePath }) => <button onClick={choosePath}>New project</button>}
+				</CreateProjectFlow>,
+			);
+
+			await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith({ path: "/repo/project", asWorkspace: false, ...PROJECT_AGENTS }));
+			expect(onCreateProject).toHaveBeenCalledTimes(1);
+		});
+
+		it("shows the sheet with the error after an automatic create fails, without retrying on its own", async () => {
+			const user = userEvent.setup();
+			const onCreateProject = vi.fn().mockRejectedValue(new Error("disk full"));
+			bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+			apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/project") });
+
+			renderChooseFlow({ onCreateProject });
+			await openSource(user, "Open a local folder");
+
+			expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/project");
+			expect(onCreateProject).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	it("preserves the checked-out root branch when importing a workspace", async () => {
 		const user = userEvent.setup();
 		const onCreateProject = vi.fn(async () => undefined);
@@ -2105,6 +2211,72 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.queryByRole("button", { name: "Manually setup" })).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("GitHub PAT")).not.toBeInTheDocument();
 		expect(githubDaemonMocks.listGitHubRepos).not.toHaveBeenCalled();
+	});
+
+	it("switches the cloud card between a project and a workspace", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		const user = userEvent.setup();
+		render(<CreateProjectFlow embedded mode="choose" {...noop} />, { wrapper: CloudTestProviders });
+
+		await user.click(screen.getByRole("button", { name: "Cloud" }));
+		expect(screen.getByRole("tab", { name: "Project" })).toHaveAttribute("aria-selected", "true");
+		await user.click(screen.getByRole("tab", { name: "Workspace" }));
+
+		expect(screen.getByRole("heading", { name: "Create cloud workspace" })).toBeInTheDocument();
+		expect(screen.getByLabelText("Workspace name")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Add a local folder" })).toBeDisabled();
+		await user.click(screen.getByRole("tab", { name: "Project" }));
+		expect(screen.getByRole("heading", { name: "Create cloud project" })).toBeInTheDocument();
+	});
+
+	it("keeps the cloud dialog open while a workspace folder uploads", async () => {
+		cloudMocks.cloudEnabled = true;
+		cloudMocks.sessionStatus = "authenticated";
+		cloudMocks.listGitHubInstallations.mockResolvedValue({
+			installations: [{ id: "inst-1", githubInstallationId: "100", accountLogin: "acme", accountType: "Organization", status: "active", repositorySelection: "all", syncStatus: "ready", createdAt: "", updatedAt: "" }],
+		});
+		cloudMocks.listGitHubRepositories.mockResolvedValue({
+			items: [{ githubRepositoryId: "555", name: "api", fullName: "acme/api", htmlUrl: "https://github.com/acme/api", defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "" }],
+			page: { hasMore: false },
+		});
+		cloudMocks.createGitHubRepository.mockResolvedValue({
+			repository: { githubRepositoryId: "77", name: "notes", fullName: "acme/notes", htmlUrl: "https://github.com/acme/notes", defaultBranch: "main", visibility: "private", isPrivate: true, isArchived: false, access: "write", grantedAt: "" },
+			created: true,
+			pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git",
+		});
+		cloudMocks.createGitHubProject.mockResolvedValue({ project: { id: "ws-1", config: { layout: "workspace" } } });
+		bridgeMocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
+		bridgeMocks.scanImportFolder.mockResolvedValue({ path: "/Users/me/notes", repos: [] });
+		let finishPush: (value: unknown) => void = () => undefined;
+		bridgeMocks.pushFolderToRepository.mockReset().mockImplementation(() => new Promise((resolve) => { finishPush = resolve; }));
+		const user = userEvent.setup();
+		const openProject = vi.fn();
+		const view = render(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow mode="choose" sourceSignal={null} {...noop} />
+			</ShellProvider>,
+			{ wrapper: CloudTestProviders },
+		);
+		view.rerender(
+			<ShellProvider value={{ openProject } as unknown as ShellContextValue}>
+				<CreateProjectFlow mode="choose" sourceSignal={{ source: "cloud", nonce: 1 }} {...noop} />
+			</ShellProvider>,
+		);
+
+		await user.click(await screen.findByRole("tab", { name: "Workspace" }));
+		await user.type(screen.getByLabelText("Workspace name"), "Notes");
+		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
+		await user.click(await screen.findByRole("button", { name: "Create" }));
+		await waitFor(() => expect(bridgeMocks.pushFolderToRepository).toHaveBeenCalledOnce());
+
+		// The upload cannot be cancelled, so Escape leaves the dialog where it is.
+		await user.keyboard("{Escape}");
+		expect(screen.getByRole("heading", { name: "Create cloud workspace" })).toBeInTheDocument();
+
+		finishPush({ status: "pushed", branch: "main", commit: "abc", source: "import" });
+		await waitFor(() => expect(openProject).toHaveBeenCalledWith("ws-1"));
+		expect(cloudMocks.createGitHubProject).toHaveBeenCalledOnce();
 	});
 
 	it("creates a project from a connected GitHub App repository", async () => {

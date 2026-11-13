@@ -16,6 +16,7 @@ import { appI18n } from "../i18n";
 import { sessionUiKey } from "../lib/hosts";
 import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { clearOptimisticSessionKill, trackOptimisticSessionKill } from "./optimistic-session-kills";
+import { clearOptimisticProjectRemoval, trackOptimisticProjectRemoval } from "./optimistic-project-removals";
 import { remoteWorkspaceQueryKey, useRemoteWorkspaces, useWorkspaceQuery, useWorkspaceSession } from "./useWorkspaceQuery";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -39,7 +40,7 @@ async function prepareTwoHosts() {
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const url = input instanceof Request ? input.url : String(input);
 		return new Response(JSON.stringify(url.endsWith("/projects")
-			? { projects: [{ id: "project-1", name: "Remote", path: "/remote" }] }
+			? { projects: [{ id: "project-1", name: "Remote", path: "/remote", autoSpawnPauses: [{ harness: "claude-code", model: "sonnet", effort: "high", kind: "worker", errorCode: "UNSUPPORTED_MODEL", failures: 3, message: "Unavailable", pausedAt: "now" }] }]  }
 			: { sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] }] }),
 		{ status: 200, headers: { "content-type": "application/json" } });
 	}));
@@ -52,6 +53,7 @@ it("lists remote projects separately so local actions cannot target a same-named
 	await waitFor(() => expect(result.current.remote.data).toHaveLength(1));
 	expect(result.current.local.data?.map((project) => project.name)).toEqual(["Local"]);
 	expect(result.current.remote.data?.map((project) => [project.name, project.sessions[0]?.hostId])).toEqual([["Remote", "box-a"]]);
+	expect(result.current.remote.data?.[0].autoSpawnPauses?.[0]).toMatchObject({ model: "sonnet", effort: "high", kind: "worker" });
 });
 
 it("reports a failed remote query instead of treating the host as empty and healthy", async () => {
@@ -209,7 +211,8 @@ it("keeps the same lists across re-renders until a host's data changes", async (
 	await waitFor(() => expect(result.current.data[0]?.name).toBe("Renamed"));
 });
 
-it("re-maps remote session titles when Developer Mode changes with unchanged host data", async () => {
+it("labels remote sessions with their program title without Developer Mode", async () => {
+	useUiStore.setState({ developerMode: false });
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
 	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
 		const url = input instanceof Request ? input.url : String(input);
@@ -222,14 +225,7 @@ it("re-maps remote session titles when Developer Mode changes with unchanged hos
 	const { result } = renderHook(() => useRemoteWorkspaces(), {
 		wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
 	});
-	// Developer Mode is on (beforeEach): the terminal title shows.
 	await waitFor(() => expect(result.current.data[0]?.sessions[0]?.title).toBe("vim main.go"));
-	const sessionsData = client.getQueryData(["remote-workspaces", "box-a", "sessions"]);
-
-	act(() => useUiStore.setState({ developerMode: false }));
-
-	expect(client.getQueryData(["remote-workspaces", "box-a", "sessions"])).toBe(sessionsData);
-	expect(result.current.data[0]?.sessions[0]?.title).toBe("Fix login");
 });
 
 // A saved host whose lists are only in the cache: nothing below refetches, so
@@ -284,15 +280,52 @@ it("marks a remote session terminated while its kill is in flight, and rolls it 
 	expect(result.current.data[0]?.sessions[0]?.isTerminated).not.toBe(true);
 });
 
-it("renames a remote Scratchpad when the language changes", async () => {
+it("hides a remote project while its removal is in flight, even when a poll returns it", () => {
+	const live = { id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] };
+	const { client, result } = renderCachedHost([live]);
+	const projectsKey = ["remote-workspaces", "box-a", "projects"];
+	expect(result.current.data.map((project) => project.id)).toEqual(["project-1"]);
+	try {
+		act(() => trackOptimisticProjectRemoval("project-1", "box-a"));
+		expect(result.current.data).toEqual([]);
+
+		// The host still lists the project while it tears it down.
+		act(() => client.setQueryData(projectsKey, [{ id: "project-1", name: "Remote", path: "/remote" }]));
+		expect(result.current.data).toEqual([]);
+		// A local project with the same id is a different project.
+		act(() => trackOptimisticProjectRemoval("project-1"));
+		act(() => clearOptimisticProjectRemoval("project-1"));
+		expect(result.current.data).toEqual([]);
+	} finally {
+		act(() => clearOptimisticProjectRemoval("project-1", "box-a"));
+	}
+	// Rolled back: the host's list shows it again.
+	expect(result.current.data.map((project) => project.id)).toEqual(["project-1"]);
+});
+
+it("keeps a removed local project out of a list fetched while its removal is in flight", async () => {
+	localGet.mockImplementation(async (path: string) => path === "/api/v1/projects"
+		? { data: { projects: [{ id: "project-1", name: "Gone", path: "/gone" }, { id: "project-2", name: "Kept", path: "/kept" }] } }
+		: { data: { sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] }] } });
+	trackOptimisticProjectRemoval("project-1");
+	try {
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data).toBeDefined());
+		expect(result.current.data?.map((project) => project.id)).toEqual(["project-2"]);
+	} finally {
+		clearOptimisticProjectRemoval("project-1");
+	}
+});
+
+it("renames a remote Sessions list when the language changes", async () => {
 	const { result } = renderCachedHost([{ id: "session-1", harness: "codex", status: "working", prs: [] }], []);
-	expect(result.current.data.map((project) => project.name)).toEqual(["Scratchpad"]);
+	expect(result.current.data.map((project) => project.name)).toEqual(["Sessions"]);
 	try {
 		await act(() => appI18n.changeLanguage("de"));
-		expect(result.current.data.map((project) => project.name)).toEqual(["Notizblock"]);
-		expect(result.current.data[0]?.sessions[0]?.workspaceName).toBe("Notizblock");
+		expect(result.current.data.map((project) => project.name)).toEqual(["Sitzungen"]);
+		expect(result.current.data[0]?.sessions[0]?.workspaceName).toBe("Sitzungen");
 	} finally {
 		await act(() => appI18n.changeLanguage("en"));
 	}
-	expect(result.current.data.map((project) => project.name)).toEqual(["Scratchpad"]);
+	expect(result.current.data.map((project) => project.name)).toEqual(["Sessions"]);
 });

@@ -130,4 +130,6 @@ type AgentAccountIdentityCheck struct {
 	LoggedIn bool
 	Email    string
 	Plan     string
+	OrgID    string
+	OrgName  string
 }

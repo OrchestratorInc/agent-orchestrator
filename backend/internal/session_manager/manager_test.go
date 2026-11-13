@@ -6528,9 +6528,10 @@ func TestSystemPrompt_AppendsConfidentialityGuard(t *testing.T) {
 				!strings.Contains(sp, "Do not create `.ao/launch.json` unless the user asks") {
 				t.Fatalf("%s: system prompt missing static-first preview safeguards:\n%s", tc.name, sp)
 			}
-			if !strings.Contains(sp, "immediately after creating or materially updating it") ||
-				!strings.Contains(sp, "do not replace an active application preview with a supporting asset") {
-				t.Fatalf("%s: system prompt missing automatic artifact handoff guidance:\n%s", tc.name, sp)
+			if !strings.Contains(sp, "Never open an artifact with `ao preview`, whatever its file type") ||
+				!strings.Contains(sp, "in the session's Artifacts tab") ||
+				strings.Contains(sp, "browser-displayable artifact") {
+				t.Fatalf("%s: system prompt missing Artifacts-tab handoff guidance:\n%s", tc.name, sp)
 			}
 		})
 	}
@@ -12259,6 +12260,18 @@ func TestAOSkillPointerRemoteHostNamesRemoteBrowserGuide(t *testing.T) {
 	}
 }
 
+func TestAOSkillPointerNamesBugTriageSkill(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{dataDir: dir}
+	skill := filepath.ToSlash(filepath.Join(dir, "skills", "bug-triage", "SKILL.md"))
+	for _, chat := range []bool{false, true} {
+		pointer := m.aoSkillPointer(chat)
+		if !strings.Contains(pointer, "To report Orchestrator bugs, read `"+skill+"`.") {
+			t.Fatalf("chat=%v pointer does not lead to the skill:\n%s", chat, pointer)
+		}
+	}
+}
+
 func TestAOSkillPointerDesktopHostKeepsDesktopGuide(t *testing.T) {
 	m := &Manager{dataDir: t.TempDir()}
 	pointer := m.aoSkillPointer(false)
@@ -12280,6 +12293,56 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	var relaunchErr *RelaunchError
 	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime" {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
+	}
+}
+
+func TestSpawn_BaseBranchOverridesTheProjectDefaultForThisSessionOnly(t *testing.T) {
+	m, st, _, ws := newManager()
+	config := testRoleAgents()
+	config.DefaultBranch = "develop"
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: config}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ws.lastCfg.BaseBranch; got != "feat/parent" {
+		t.Fatalf("workspace base branch = %q", got)
+	}
+	if got := ws.resolves[0].configuredBranch; got != "feat/parent" {
+		t.Fatalf("resolved branch = %q", got)
+	}
+	if got := st.projects["mer"].Config.DefaultBranch; got != "develop" {
+		t.Fatalf("project default changed to %q", got)
+	}
+}
+
+// An existing branch keeps its own history and would not start from the base,
+// so a branch named with a base must be new.
+func TestSpawn_BaseBranchWithANamedBranchRequiresItToBeNew(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent", Branch: "feat/child"}); err != nil {
+		t.Fatal(err)
+	}
+	if !ws.lastCfg.RequireNewBranch || ws.lastCfg.Branch != "feat/child" {
+		t.Fatalf("workspace branch = %q, require new = %v", ws.lastCfg.Branch, ws.lastCfg.RequireNewBranch)
+	}
+	// Without a base, a named branch may be an existing one to continue.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Branch: "feat/other"}); err != nil {
+		t.Fatal(err)
+	}
+	if ws.lastCfg.RequireNewBranch {
+		t.Fatal("a named branch without a base must not be required to be new")
+	}
+}
+
+func TestSpawn_BaseBranchNeedsARepositoryProject(t *testing.T) {
+	for _, kind := range []domain.ProjectKind{domain.ProjectKindScratch, domain.ProjectKindWorkspace} {
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: kind}
+		_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"})
+		if !errors.Is(err, ErrBaseBranchUnsupported) {
+			t.Fatalf("%s: err = %v", kind, err)
+		}
 	}
 }
 

@@ -42,8 +42,8 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 vi.mock("react-native", async () => {
 	const { createElement } = await import("react");
 	// Draws every row, with the header, empty state and footer around them.
-	function FlatList(props: { data: unknown[]; renderItem(info: { item: unknown }): ReactElement; ListHeaderComponent?: ReactElement; ListEmptyComponent?: ReactElement; ListFooterComponent?: ReactElement }) {
-		return createElement("FlatList", props, props.ListHeaderComponent, ...props.data.map((item) => props.renderItem({ item })), props.data.length ? null : props.ListEmptyComponent, props.ListFooterComponent);
+	function FlatList(props: { data: unknown[]; renderItem(info: { item: unknown; index: number }): ReactElement; ListHeaderComponent?: ReactElement; ListEmptyComponent?: ReactElement; ListFooterComponent?: ReactElement }) {
+		return createElement("FlatList", props, props.ListHeaderComponent, ...props.data.map((item, index) => props.renderItem({ item, index })), props.data.length ? null : props.ListEmptyComponent, props.ListFooterComponent);
 	}
 	return {
 		FlatList,
@@ -62,7 +62,7 @@ vi.mock("./ThemeProvider", () => ({
 	useThemeState: () => ({ scheme: "dark" }),
 }));
 
-import { NativePickerList, type PickerOption } from "./NativePickerList";
+import { NativePickerList, pickerSections, type PickerOption } from "./NativePickerList";
 
 let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
@@ -147,5 +147,34 @@ describe("iOS picker list", () => {
 		const refresh = form.props.modifiers.find((modifier: { refreshable?: () => Promise<void> }) => modifier.refreshable).refreshable;
 		await refresh();
 		expect(onRefresh).toHaveBeenCalledOnce();
+	});
+});
+
+describe("picker sections", () => {
+	const grouped: PickerOption[] = [
+		{ id: "all", title: "All changes", section: "Working tree" },
+		{ id: "staged", title: "Staged", section: "Working tree" },
+		{ id: "commits", title: "All commits", section: "Commits" },
+		{ id: "c1", title: "Fix", section: "Commits" },
+	];
+
+	it("groups consecutive options that share a title", () => {
+		expect(pickerSections(grouped).map((section) => [section.title, section.options.map((option) => option.id)])).toEqual([
+			["Working tree", ["all", "staged"]],
+			["Commits", ["commits", "c1"]],
+		]);
+		expect(pickerSections(options)).toEqual([{ title: undefined, options }]);
+	});
+
+	it("titles each group as a Form section on iOS", () => {
+		platform.OS = "ios";
+		render({ options: grouped, selected: "all" });
+		expect(byType("FieldGroupSection").map((section) => section.props.title)).toEqual(["Working tree", "Commits"]);
+	});
+
+	it("heads each group on Android with a title its first row carries", () => {
+		render({ options: grouped, selected: "all" });
+		const headers = renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "header");
+		expect(headers.map((node) => node.props.children)).toEqual(["Working tree", "Commits"]);
 	});
 });

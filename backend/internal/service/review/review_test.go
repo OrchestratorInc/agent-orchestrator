@@ -27,9 +27,9 @@ type fakeStore struct {
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
 
-	updateCalls        int
-	activityUpdates    int
-	resolvedCommentIDs []string
+	updateCalls       int
+	activityUpdates   int
+	resolvedThreadIDs []string
 }
 
 type fakeNotificationSink struct {
@@ -147,17 +147,16 @@ func (f *fakeStore) ListPRComments(_ context.Context, prURL string) ([]domain.Pu
 	return out, nil
 }
 
-func (f *fakeStore) MarkPRCommentResolved(_ context.Context, prURL, commentID string) (bool, error) {
-	f.resolvedCommentIDs = append(f.resolvedCommentIDs, commentID)
+func (f *fakeStore) MarkPRReviewThreadResolved(_ context.Context, prURL, threadID string) error {
+	f.resolvedThreadIDs = append(f.resolvedThreadIDs, threadID)
 	comments := f.prComments[prURL]
 	for i := range comments {
-		if comments[i].ID == commentID {
+		if comments[i].ThreadID == threadID {
 			comments[i].Resolved = true
-			f.prComments[prURL] = comments
-			return true, nil
 		}
 	}
-	return false, nil
+	f.prComments[prURL] = comments
+	return nil
 }
 
 type fakeReviewResolver struct {
@@ -186,7 +185,10 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	store := &fakeStore{
 		prs: []domain.PullRequest{{URL: prURL, Number: 7, Provider: "github", Repo: "acme/widget"}},
 		prComments: map[string][]domain.PullRequestComment{
-			prURL: {{ThreadID: "thread-1", ID: "comment-1", URL: commentURL}},
+			prURL: {
+				{ThreadID: "thread-1", ID: "comment-1", URL: commentURL},
+				{ThreadID: "thread-1", ID: "comment-2", URL: commentURL + "-reply"},
+			},
 		},
 	}
 	resolver := &fakeReviewResolver{}
@@ -198,11 +200,37 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	if resolver.request.ThreadID != "thread-1" || resolver.request.PR.Number != 7 {
 		t.Fatalf("request = %#v", resolver.request)
 	}
-	if got := store.resolvedCommentIDs; len(got) != 1 || got[0] != "comment-1" {
-		t.Fatalf("resolved comment ids = %#v", got)
+	// The whole thread is marked, replies included, so the summary shows it resolved at once.
+	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
+		t.Fatalf("resolved thread ids = %#v", got)
 	}
-	if !store.prComments[prURL][0].Resolved {
-		t.Fatalf("comment was not marked resolved: %#v", store.prComments[prURL][0])
+	for _, comment := range store.prComments[prURL] {
+		if !comment.Resolved {
+			t.Fatalf("comment was not marked resolved: %#v", comment)
+		}
+	}
+}
+
+func TestResolveReviewCommentMarksThreadWhenCommentIsAlreadyResolved(t *testing.T) {
+	prURL := "https://github.com/acme/widget/pull/7"
+	commentURL := "https://github.com/acme/widget/pull/7#discussion_r1"
+	store := &fakeStore{
+		prs: []domain.PullRequest{{URL: prURL, Number: 7, Provider: "github", Repo: "acme/widget"}},
+		prComments: map[string][]domain.PullRequestComment{
+			prURL: {{ThreadID: "thread-1", ID: "comment-1", URL: commentURL, Resolved: true}},
+		},
+	}
+	resolver := &fakeReviewResolver{}
+	svc := New(nil, store, WithReviewResolver(resolver))
+
+	if err := svc.ResolveReviewComment(context.Background(), "mer-1", prURL, commentURL); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.request.ThreadID != "" {
+		t.Fatalf("provider asked again for a resolved comment: %#v", resolver.request)
+	}
+	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
+		t.Fatalf("resolved thread ids = %#v, want the thread marked locally", got)
 	}
 }
 
@@ -221,8 +249,8 @@ func TestResolveReviewCommentDoesNotPersistWhenProviderFails(t *testing.T) {
 	if err := svc.ResolveReviewComment(context.Background(), "mer-1", prURL, commentURL); err == nil {
 		t.Fatal("ResolveReviewComment error = nil, want provider failure")
 	}
-	if len(store.resolvedCommentIDs) != 0 {
-		t.Fatalf("resolved comment ids = %#v, want none", store.resolvedCommentIDs)
+	if len(store.resolvedThreadIDs) != 0 {
+		t.Fatalf("resolved thread ids = %#v, want none", store.resolvedThreadIDs)
 	}
 	if store.prComments[prURL][0].Resolved {
 		t.Fatalf("comment was marked resolved after provider failure")
