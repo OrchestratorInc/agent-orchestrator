@@ -521,7 +521,11 @@ export function useMobileConversation(
 	const setConfigOption = useCallback(
 		(optionId: string, value: { value: string } | { enabled: boolean }) =>
 			runAction("config", async () => {
+				const harness = harnessRef.current;
 				const options = await requireConfig(cfg, offline, (c) => setConversationConfigOption(c, sessionId, optionId, value));
+				// An agent switch during the request leaves these options the previous
+				// agent's: neither shown nor remembered for the new one.
+				if (harnessRef.current !== harness) return options;
 				// The provider's own post-change catalog: a load still in flight is older.
 				turnOptionsRequest.current++;
 				setConfigOptions(options);

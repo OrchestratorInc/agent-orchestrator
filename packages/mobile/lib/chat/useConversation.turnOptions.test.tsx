@@ -9,6 +9,8 @@ const fixture = vi.hoisted(() => ({
 	capabilities: ["config_options"] as string[],
 	options: [] as unknown[] | Error,
 	models: [] as unknown[],
+	harness: "claude-code",
+	patch: undefined as Promise<unknown[]> | undefined,
 }));
 vi.mock("../api", () => ({ apiRequest: fixture.request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
 vi.mock("../config", () => ({ machineIdentity: () => "qa-host", authHeaders: () => ({}), httpBase: () => "http://qa-host" }));
@@ -35,13 +37,15 @@ async function open(id: string) {
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.controller = "ready"; fixture.capabilities = ["config_options"]; fixture.options = []; fixture.models = [];
+	fixture.harness = "claude-code"; fixture.patch = undefined;
 	fixture.request.mockReset().mockImplementation(async (_cfg: ServerConfig, path: string) => {
+		if (path.includes("/conversation/config-options/")) return { json: async () => ({ options: await fixture.patch }) };
 		if (path.endsWith("/conversation/config-options")) {
 			if (fixture.options instanceof Error) throw fixture.options;
 			return { json: async () => ({ options: fixture.options }) };
 		}
 		if (path.endsWith("/conversation/models")) return { json: async () => ({ models: fixture.models }) };
-		return { json: async () => ({ controller: fixture.controller, capabilities: fixture.capabilities, messages: [] }) };
+		return { json: async () => ({ controller: fixture.controller, capabilities: fixture.capabilities, harness: fixture.harness, messages: [] }) };
 	});
 });
 afterEach(async () => { if (renderer) await act(async () => renderer!.unmount()); renderer = undefined; vi.unstubAllGlobals(); });
@@ -163,4 +167,26 @@ it("does not let an older load undo a newer one, whether it fails or lands late"
 	await act(async () => { await conversation.loadTurnOptions({ refresh: true }); });
 	await act(async () => { late.answer([{ ...modelOption, currentValue: "sonnet", choices: [{ value: "sonnet", name: "Sonnet" }] }]); await older; });
 	expect(conversation.configOptions[0]?.currentValue).toBe("opus");
+});
+
+// A setting changed just before an agent switch answers for the previous agent;
+// that answer must not show, nor be remembered for the new agent.
+it("drops a config change's answer that lands after the chat switched agents", async () => {
+	fixture.options = [modelOption];
+	await open("switch-during-config");
+	await act(async () => { await conversation.loadTurnOptions(); });
+	expect(conversation.configOptions.map((option) => option.id)).toEqual(["model"]);
+
+	let answer!: (options: unknown[]) => void;
+	fixture.patch = new Promise((resolve) => { answer = resolve; });
+	let change: Promise<unknown> | undefined;
+	await act(async () => { change = conversation.setConfigOption("fast", { enabled: true }); });
+	fixture.harness = "codex";
+	await act(async () => { await conversation.refresh(); });
+	await act(async () => { answer([{ id: "fast", name: "Fast mode", type: "boolean", currentBoolean: true, choices: [] }]); await change; });
+	expect(conversation.configOptions.map((option) => option.id)).not.toContain("fast");
+
+	fixture.options = [];
+	await act(async () => { await conversation.loadTurnOptions({ refresh: true }); });
+	expect(conversation.configOptions).toEqual([]);
 });
