@@ -2069,7 +2069,7 @@ const ProjectItem = memo(function ProjectItem({
 							</div>
 							{/* Per-project actions: orchestrator and kebab menu. Outside the row's
 		navigation surface so their own presses stay independent. */}
-						{!isStandalone && <div
+						<div
 								className={cn(
 									"sidebar-expanded-chrome z-chrome",
 									ROW_ACTIONS_CLASS,
@@ -2099,9 +2099,29 @@ const ProjectItem = memo(function ProjectItem({
 										<TooltipContent>{t("shell.unpinProject")}</TooltipContent>
 									</Tooltip>
 								) : null}
+								{isStandalone ? (
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<span className="inline-flex">
+												<Button
+													size="icon-xs"
+													variant="quiet"
+													aria-label={t("shell.openNewAgent")}
+													className={ROW_ACTION_BUTTON_CLASS}
+													disabled={isProjectRestarting}
+													onClick={() => requestNewTask(workspace.id, workspace.hostId)}
+													type="button"
+												>
+													<Plus aria-hidden="true" />
+												</Button>
+											</span>
+										</TooltipTrigger>
+										<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
+									</Tooltip>
+								) : null}
 								{/* A guest may open a shared orchestrator but never start one, and the
 								    project's own actions belong to its organization. */}
-								{!workspace.shared || orchestrator ? (
+								{!isStandalone && (!workspace.shared || orchestrator) ? (
 									<>
 										<Tooltip>
 											<TooltipTrigger asChild>
@@ -2146,7 +2166,7 @@ const ProjectItem = memo(function ProjectItem({
 										</Tooltip>
 									</>
 								) : null}
-								{workspace.shared ? null : (
+								{workspace.shared || isStandalone ? null : (
 									<>
 										<DropdownMenu>
 											<DropdownMenuTrigger asChild>
@@ -2170,7 +2190,7 @@ const ProjectItem = memo(function ProjectItem({
 										</DropdownMenu>
 									</>
 								)}
-							</div>}
+							</div>
 						</div>
 						{/* end outer relative */}
 					</div>
