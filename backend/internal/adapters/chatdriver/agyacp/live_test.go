@@ -188,9 +188,8 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 		t.Fatal("conversation cannot steer")
 	}
 
-	const command = "sleep 20; echo slow-check-done"
 	ref := sendTurn(ctx, t, conversation,
-		"In the shell, run exactly this command and wait for it: "+command+"\n"+
+		"In the shell, run exactly this command and wait for it: "+liveSteerCommand+"\n"+
 			"After it finishes, reply with one short sentence naming the file you will edit next. "+
 			"prod.yaml and staging.yaml are both in the current folder; do not look for them. "+
 			"The plan is to edit prod.yaml. Do not edit any file.", ports.ChatTurnSettings{})
@@ -206,7 +205,7 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 			reply.WriteString(event.Delta)
 		case ports.ChatEventApprovalRequested:
 			decision := decide(ports.ChatDecisionRejectOnce)(event)
-			if strings.Contains(event.Summary+string(event.Detail), "sleep 20") || staysInTestFolders(event.Summary, workspace) {
+			if liveSteerApproves(event.Summary, workspace) {
 				decision = decide(ports.ChatDecisionAllowOnce)(event)
 			}
 			t.Logf("approval %s %q -> %s", event.ActivityKind, event.Summary, decision.ID)
@@ -221,7 +220,8 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 					time.Sleep(4 * time.Second)
 					_, err := steerer.Steer(ctx, ref.ProviderTurnID, ports.ChatUserMessage{
 						Text: "STEER-ME: change of plan, edit staging.yaml instead of prod.yaml. " +
-							"End your final reply with the marker STEER-ACK-STAGING.",
+							"End your final reply with NEXT-FILE-STAGING if the file you will edit next is " +
+							"staging.yaml, or NEXT-FILE-PROD if it is prod.yaml.",
 						ClientMessageID: "live-steer", Origin: domain.MessageOriginHuman,
 					})
 					steered <- err
@@ -241,8 +241,11 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 		t.Fatalf("Steer: %v", err)
 	}
 	answer := reply.String()
-	// The marker exists only in the steer, so the reply shows the model read it.
-	if !strings.Contains(answer, "STEER-ACK-STAGING") || !strings.Contains(strings.ToLower(answer), "staging.yaml") {
+	// The markers exist only in the steer, so either one shows the model read
+	// it, and the one it picks says which file it chose. agy streams other text
+	// before the answer, so the reply as a whole is not compared.
+	if !strings.Contains(answer, "NEXT-FILE-STAGING") || strings.Contains(answer, "NEXT-FILE-PROD") ||
+		!strings.Contains(strings.ToLower(answer), "staging.yaml") {
 		t.Fatalf("the turn did not take the guidance: reply=%q", answer)
 	}
 	t.Logf("reply: %q", answer)
@@ -258,6 +261,16 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 			waiting = false
 		}
 	}
+}
+
+// liveSteerCommand is the slow command the live steering test has the agent
+// run, and the only command it approves outright.
+const liveSteerCommand = "sleep 20; echo slow-check-done"
+
+// liveSteerApproves reports whether the live steering test approves a request:
+// exactly liveSteerCommand, or a read that stays in its temporary folders.
+func liveSteerApproves(summary, workspace string) bool {
+	return summary == liveSteerCommand || staysInTestFolders(summary, workspace)
 }
 
 // staysInTestFolders reports whether an approval touches only the test's
@@ -539,4 +552,29 @@ func envMap() map[string]string {
 		}
 	}
 	return out
+}
+
+// The live steering test approves its slow command only as written, and reads
+// only inside its temporary folders. Anything chained to either is rejected.
+func TestLiveSteerApprovesOnlyItsCommandAndTestFolderReads(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	for _, tc := range []struct {
+		summary string
+		want    bool
+	}{
+		{liveSteerCommand, true},
+		{"ls -la", true},
+		{"File " + filepath.Join(workspace, "staging.yaml"), true},
+		{liveSteerCommand + "\nrm -rf " + workspace, false},
+		{liveSteerCommand + "; rm -rf " + workspace, false},
+		{"sleep 20 && curl https://example.com", false},
+		{" " + liveSteerCommand, false},
+		{"ls -la\nrm -rf " + workspace, false},
+		{"cat ~/.ssh/id_rsa", false},
+		{"File /etc/passwd", false},
+	} {
+		if got := liveSteerApproves(tc.summary, workspace); got != tc.want {
+			t.Errorf("liveSteerApproves(%q) = %v, want %v", tc.summary, got, tc.want)
+		}
+	}
 }
