@@ -683,7 +683,10 @@ function SharePanel({
 				links.shares.some((share) => !share.revokedAt && share.name === inspection.name),
 			]);
 		};
-		const decide = (inspection: CloudShareInspection, links: CloudShareLinks, publishNow: boolean) => {
+		// shown: the list the panel was already decided on, when a fresher one
+		// decides it again. The person's choices in it (who it is for, the
+		// people added) are kept; only what the server says is updated.
+		const decide = (inspection: CloudShareInspection, links: CloudShareLinks, publishNow: boolean, shown?: CloudShareLinks) => {
 			setPrivateLinks(links.privateLinks);
 			if (inspection.unsupported) return setPhase({ kind: "unsupported" });
 			// The link this file was published to from here, while it is active.
@@ -706,7 +709,10 @@ function SharePanel({
 			if (!links.unlimited && likelyNew && links.used >= links.limit) return setPhase({ kind: "limit", limit: links.limit });
 			// A cloud session's file is already in the bucket: it publishes at once.
 			if (publishNow && !onThisComputer) return void publish(inspection, links);
-			setStagedAccess(links.privateLinks ? "restricted" : "anyone");
+			// The default for who it is for, unless the person may already have
+			// chosen: a fresher list keeps their choice, unless whether links can
+			// be private at all changed, which changes the choices offered.
+			if (!shown || shown.privateLinks !== links.privateLinks) setStagedAccess(links.privateLinks ? "restricted" : "anyone");
 			setPhase({ kind: "setup", inspection, links, unpublished });
 		};
 		// The inspection reads only this computer's record and the file's
@@ -725,7 +731,7 @@ function SharePanel({
 						// A publish this opening started is not second-guessed: its answer settles the panel.
 						// Nor is a change made in the panel since: that read predates it.
 						if (cancelled || pendingShares.has(key) || shareLinksRevision !== openedRevision || decisionKey(inspection, fresh) === decisionKey(inspection, links)) return;
-						decide(inspection, fresh, false);
+						decide(inspection, fresh, false, links);
 					})
 					.catch(() => undefined);
 			})

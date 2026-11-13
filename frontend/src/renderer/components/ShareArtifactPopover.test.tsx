@@ -421,6 +421,26 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...localFile, baseUrl: "https://cp.test", fingerprint: "fp-1", access: "anyone" });
 	});
 
+	it("keeps who it is for, as chosen, when a fresher link list decides the panel again", async () => {
+		// The button reads the list for a link since unpublished, so the panel opens on that cached list.
+		const revoked = { ...share, revokedAt: "2026-11-01T00:00:00Z" };
+		const { listSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [revoked] }, { status: "published", replaced: false, share: { ...share, access: "anyone" } });
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Publish: report.html" });
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(1));
+		let answer: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		await userEvent.click(button);
+		await userEvent.click(await screen.findByRole("button", { name: "Only you" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: /Anyone with the link/ }));
+		// The background read answers late, with another link used since: the panel is decided again.
+		await act(async () => answer({ ...links, used: 2, shares: [revoked] }));
+		expect(screen.getByRole("button", { name: "Anyone with the link" })).toBeTruthy();
+		expect(screen.getByText("1 of 3 free links left")).toBeTruthy();
+		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...localFile, baseUrl: "https://cp.test", fingerprint: "fp-1", access: "anyone" });
+	});
+
 	it("says Publishing while it uploads, with Cancel, and keeps going when the popover closes", async () => {
 		stub(inspection, links);
 		let finish: (result: CloudSharePublishResult) => void = () => undefined;
