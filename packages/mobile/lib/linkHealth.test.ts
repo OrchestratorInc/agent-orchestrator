@@ -12,6 +12,7 @@ import {
 	UNKNOWN_PHONE_NETWORK,
 	UNREACHABLE_AFTER_FAILURES,
 	UNREACHABLE_AFTER_MS,
+	worthProbingForRecovery,
 	type LinkTracker,
 	type PollOutcome,
 } from "./linkHealth";
@@ -115,6 +116,31 @@ describe("trustedPhoneNetwork", () => {
 		const failures: PollOutcome[] = Array(UNREACHABLE_AFTER_FAILURES).fill("no-answer");
 		expect(classifyLink(track(failures, 0, 100), trusted, 200)).toBe("reconnecting");
 		expect(classifyLink(track(failures, 0, 100), trusted, UNREACHABLE_AFTER_MS)).toBe("unreachable");
+	});
+});
+
+describe("worthProbingForRecovery", () => {
+	const offlineOn = (type: string) => ({ connected: false, internet: false, type });
+
+	it("probes whenever the trusted network is not offline", () => {
+		expect(worthProbingForRecovery({ ...online, type: "WIFI" }, 0, 0, 0)).toBe(true);
+		expect(worthProbingForRecovery(offlineOn("NONE"), 0, 5, 5)).toBe(true);
+	});
+
+	// #8308 review: on the unvalidated network the OS report never changes, so
+	// once the answers expire only a probe can find the machine again.
+	it("keeps probing after the answers expire on a report they once overruled", () => {
+		expect(worthProbingForRecovery(offlineOn("NONE"), 0, 5, 5 + ANSWER_TRUSTED_FOR_MS)).toBe(true);
+	});
+
+	it("probes while the OS still names an interface", () => {
+		expect(worthProbingForRecovery(offlineOn("WIFI"), 1_000, 0, 60_000)).toBe(true);
+	});
+
+	it("skips the probe when the OS says there is no network and nothing has answered since", () => {
+		expect(worthProbingForRecovery(offlineOn("NONE"), 1_000, 999, 60_000)).toBe(false);
+		expect(worthProbingForRecovery(offlineOn("UNKNOWN"), 1_000, 0, 60_000)).toBe(false);
+		expect(worthProbingForRecovery({ connected: false, internet: undefined }, 1_000, 0, 60_000)).toBe(false);
 	});
 });
 

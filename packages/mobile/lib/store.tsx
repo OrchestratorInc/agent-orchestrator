@@ -54,6 +54,7 @@ import {
 	SLOW_POLL_MS,
 	trustedPhoneNetwork,
 	UNKNOWN_PHONE_NETWORK,
+	worthProbingForRecovery,
 	type LinkHealth,
 	type PhoneNetwork,
 	type PollOutcome,
@@ -746,10 +747,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Without this, a failed initial endpoint race leaves it closed until a tap.
 	useEffect(() => {
 		if (!appActive || !configResolved || selectedHostId === null || config) return;
-		// Pointless while the phone has no network: the network listener races
-		// the moment it comes back.
+		// Pointless while the phone has no network at all: the network listener
+		// races the moment it comes back. On a network the OS wrongly calls
+		// offline, its report never changes, so this probe is the only way back.
 		const timer = setInterval(() => {
-			if (!isPhoneOffline(trustedNetwork())) void reloadConfig();
+			if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
+				void reloadConfig();
+			}
 		}, 15_000);
 		return () => clearInterval(timer);
 	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);

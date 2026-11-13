@@ -117,6 +117,25 @@ export function trustedPhoneNetwork(os: PhoneNetwork, reportedAt: number, answer
 	};
 }
 
+/**
+ * Whether the selected machine's reconnect attempt is worth making, with no
+ * working connection to protect. The trusted network alone is not enough: on
+ * a network the OS already calls offline, its report never changes, so once
+ * an answer expires only a request can prove the network is back (#8308).
+ * Skipped only when the OS says there is no network at all and nothing has
+ * ever answered since it said so.
+ */
+export function worthProbingForRecovery(
+	os: PhoneNetwork & { type?: string },
+	reportedAt: number,
+	answeredAt: number,
+	now: number,
+): boolean {
+	if (!isPhoneOffline(trustedPhoneNetwork(os, reportedAt, answeredAt, now))) return true;
+	if (answeredAt > reportedAt) return true;
+	return os.type !== undefined && os.type !== "NONE" && os.type !== "UNKNOWN";
+}
+
 export function classifyLink(tracker: LinkTracker, phone: PhoneNetwork, now: number): LinkHealth {
 	if (isPhoneOffline(phone)) return "phone-offline";
 	const last = tracker.recent[tracker.recent.length - 1];

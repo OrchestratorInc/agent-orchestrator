@@ -228,6 +228,31 @@ it("calls the phone offline when answers stop and the OS report never changes", 
 	expect(current.linkHealth).toBe("phone-offline");
 });
 
+// #8308 review: the machine sleeps, the re-race finds nothing and clears the
+// config, and the answers expire. The OS report never changes on this network,
+// so the reconnect probe is the only way to notice the machine is back.
+it("reconnects after the answers expire on a network the OS calls offline", async () => {
+	state.sessions.mockImplementation(async () => { noteRequestAnswered(Date.now()); return board("Live"); });
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.linkHealth).toBe("ok");
+
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	state.resolve.mockResolvedValue(null);
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	expect(current.config).toBeNull();
+	expect(current.phoneOffline).toBe(true);
+
+	state.resolve.mockImplementation(async () => ({ hostId: "a", host: "a.test", httpPort: "3011", muxPort: "3011", password: "secret" }));
+	state.sessions.mockImplementation(async () => { noteRequestAnswered(Date.now()); return board("Awake"); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
+	expect(current.connection).toBe("open");
+	expect(current.sessions[0].displayName).toBe("Awake");
+	expect(current.phoneOffline).toBe(false);
+	expect(current.linkHealth).toBe("ok");
+});
+
 it("blames the machine, not the phone, when Cloud still answers on that network", async () => {
 	await mount();
 	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "WIFI" }); });
