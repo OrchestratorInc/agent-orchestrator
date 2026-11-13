@@ -75,7 +75,7 @@ function settleFavicon(src: string, result: FaviconTone | "failed") {
 	if (settledFavicons.size > MAX_SETTLED_FAVICONS) settledFavicons.delete(settledFavicons.keys().next().value as string);
 }
 
-function PreviewFavicon({ src, className, expired }: { src: string; className: string; expired: boolean }) {
+function PreviewFavicon({ src, className }: { src: string; className: string }) {
 	const settled = settledFavicons.get(src);
 	// Pixels are only readable from a CORS load, which hosts without CORS headers
 	// reject, so the second attempt loads the icon plainly and leaves it unmeasured.
@@ -84,6 +84,14 @@ function PreviewFavicon({ src, className, expired }: { src: string; className: s
 	const [failed, setFailed] = useState(settled === "failed");
 	// Unset until the icon has loaded; the shimmering globe holds its place until then.
 	const [tone, setTone] = useState<FaviconTone | undefined>(settled === "failed" ? undefined : settled);
+	// Each source gets its own window to load, so switching to a theme's other
+	// icon later is not cut off by the first one's.
+	const [expired, setExpired] = useState(false);
+	useEffect(() => {
+		if (tone || failed) return;
+		const timer = window.setTimeout(() => setExpired(true), FAVICON_TIMEOUT_MS);
+		return () => window.clearTimeout(timer);
+	}, [failed, tone]);
 	if (failed || (expired && !tone)) return <GlobeMark className={className} />;
 	return (
 		<>
@@ -117,8 +125,8 @@ function PreviewFavicon({ src, className, expired }: { src: string; className: s
  * A site's favicon for the app's color scheme (the page's dark icon in a dark
  * theme, when it names one). The globe shimmers while the icon is on its way
  * (`pending`, then the image loading) and stays, still, once there is none, it
- * fails, or FAVICON_TIMEOUT_MS passes. Both fill the same box, so nothing
- * around it moves when it settles.
+ * fails, or FAVICON_TIMEOUT_MS passes for the lookup or the image. Both fill
+ * the same box, so nothing around it moves when it settles.
  */
 export function LinkFavicon({ faviconUrl, faviconDarkUrl, pending = false, className = "size-3.5 shrink-0" }: {
 	faviconUrl?: string;
@@ -128,14 +136,18 @@ export function LinkFavicon({ faviconUrl, faviconDarkUrl, pending = false, class
 	className?: string;
 }) {
 	const src = (useResolvedTheme() === "dark" && faviconDarkUrl) || faviconUrl;
-	const [expired, setExpired] = useState(false);
+	// Only the lookup is timed here: an address that arrives after it gave up
+	// keeps the still globe. Once there is one, the image times itself.
+	const hasSrc = Boolean(src);
+	const [lookupExpired, setLookupExpired] = useState(false);
 	useEffect(() => {
-		const timer = window.setTimeout(() => setExpired(true), FAVICON_TIMEOUT_MS);
+		if (hasSrc) return;
+		const timer = window.setTimeout(() => setLookupExpired(true), FAVICON_TIMEOUT_MS);
 		return () => window.clearTimeout(timer);
-	}, []);
-	return src
-		? <PreviewFavicon key={src} src={src} className={className} expired={expired} />
-		: <GlobeMark className={className} loading={pending && !expired} />;
+	}, [hasSrc]);
+	return src && !lookupExpired
+		? <PreviewFavicon key={src} src={src} className={className} />
+		: <GlobeMark className={className} loading={!src && pending && !lookupExpired} />;
 }
 
 type OpenLinkProps = {
