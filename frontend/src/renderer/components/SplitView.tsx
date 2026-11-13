@@ -73,6 +73,130 @@ export function SplitPaneTerminal({
 const KEYBOARD_STEP = 0.05;
 
 /**
+ * The split's own box never depends on its own ratio, so a divider's ratio can
+ * be measured from the screen and the layout's fractions alone.
+ */
+function clampDividerRatio(divider: CssDivider, rect: DOMRect | undefined, ratio: number): number {
+	const span = rect ? (divider.dir === "row" ? divider.box.w * rect.width : divider.box.h * rect.height) : 0;
+	const min = span > 0 ? Math.min(0.45, MIN_PANE_PX / span) : 0.1;
+	return Math.min(1 - min, Math.max(min, ratio));
+}
+
+function ratioFromPoint(divider: CssDivider, rect: DOMRect, x: number, y: number): number {
+	const ratio =
+		divider.dir === "row"
+			? (x - rect.left - divider.box.x * rect.width) / (divider.box.w * rect.width)
+			: (y - rect.top - divider.box.y * rect.height) / (divider.box.h * rect.height);
+	return clampDividerRatio(divider, rect, ratio);
+}
+
+/**
+ * Where a vertical divider and a horizontal one meet: the horizontal one ends
+ * on the vertical one (or the other way round). Dragging that point moves both.
+ */
+export function findJunctions(dividers: CssDivider[]): { row: CssDivider; column: CssDivider }[] {
+	const eps = 1e-6;
+	const junctions: { row: CssDivider; column: CssDivider }[] = [];
+	for (const row of dividers) {
+		if (row.dir !== "row") continue;
+		const x = row.box.x + row.box.w * row.ratio;
+		for (const column of dividers) {
+			if (column.dir !== "column") continue;
+			const y = column.box.y + column.box.h * column.ratio;
+			const columnEndsOnRow = Math.abs(column.box.x - x) < eps || Math.abs(column.box.x + column.box.w - x) < eps;
+			const rowEndsOnColumn = Math.abs(row.box.y - y) < eps || Math.abs(row.box.y + row.box.h - y) < eps;
+			const rowReachesY = y > row.box.y + eps && y < row.box.y + row.box.h - eps;
+			const columnReachesX = x > column.box.x + eps && x < column.box.x + column.box.w - eps;
+			if ((columnEndsOnRow && rowReachesY) || (rowEndsOnColumn && columnReachesX)) junctions.push({ row, column });
+		}
+	}
+	return junctions;
+}
+
+/** The point where two dividers meet; dragging it resizes both panes' edges at once. */
+export function SplitJunction({
+	screenRef,
+	row,
+	column,
+	onResize,
+}: {
+	screenRef: RefObject<HTMLElement | null>;
+	row: CssDivider;
+	column: CssDivider;
+	onResize: (path: string, ratio: number) => void;
+}) {
+	const dragRef = useRef<{ frame: number | null; x: number; y: number } | null>(null);
+	useEffect(() => () => {
+		const drag = dragRef.current;
+		if (!drag) return;
+		dragRef.current = null;
+		if (drag.frame !== null) cancelAnimationFrame(drag.frame);
+		document.body.classList.remove("is-resizing-x");
+		document.body.style.cursor = "";
+	}, []);
+	const ratios = (x: number, y: number) => {
+		const rect = screenRef.current?.getBoundingClientRect();
+		if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+		return { row: ratioFromPoint(row, rect, x, y), column: ratioFromPoint(column, rect, x, y) };
+	};
+	const apply = (x: number, y: number) => {
+		const next = ratios(x, y);
+		if (!next) return null;
+		screenRef.current?.style.setProperty(ratioVar(row.path), String(next.row));
+		screenRef.current?.style.setProperty(ratioVar(column.path), String(next.column));
+		return next;
+	};
+	const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		event.currentTarget.setPointerCapture(event.pointerId);
+		dragRef.current = { frame: null, x: event.clientX, y: event.clientY };
+		document.body.classList.add("is-resizing-x");
+		document.body.style.cursor = "move";
+	};
+	const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+		const drag = dragRef.current;
+		if (!drag) return;
+		drag.x = event.clientX;
+		drag.y = event.clientY;
+		if (drag.frame !== null) return;
+		drag.frame = requestAnimationFrame(() => {
+			drag.frame = null;
+			apply(drag.x, drag.y);
+		});
+	};
+	const endDrag = () => {
+		const drag = dragRef.current;
+		if (!drag) return;
+		dragRef.current = null;
+		if (drag.frame !== null) cancelAnimationFrame(drag.frame);
+		const next = apply(drag.x, drag.y);
+		document.body.classList.remove("is-resizing-x");
+		document.body.style.cursor = "";
+		if (!next) return;
+		onResize(row.path, next.row);
+		onResize(column.path, next.column);
+	};
+	return (
+		<div
+			aria-hidden="true"
+			className="pane-split-junction"
+			data-testid="split-junction"
+			onDoubleClick={() => {
+				onResize(row.path, 0.5);
+				onResize(column.path, 0.5);
+			}}
+			onLostPointerCapture={endDrag}
+			onPointerCancel={endDrag}
+			onPointerDown={onPointerDown}
+			onPointerMove={onPointerMove}
+			onPointerUp={endDrag}
+			style={{ left: row.style.left, top: column.style.top }}
+		/>
+	);
+}
+
+/**
  * The boundary between two panes of a split. Dragging rewrites only that
  * split's ratio variable on the screen element, so no pane re-renders until
  * the drag ends; terminals refit through their own resize observers.
@@ -101,21 +225,10 @@ export function SplitDivider({
 		const value = Number.parseFloat(screenRef.current?.style.getPropertyValue(ratioVar(divider.path)) ?? "");
 		return Number.isFinite(value) ? value : 0.5;
 	};
-	// The split's own box never depends on its own ratio, so it can be measured
-	// once per move from the screen and the layout's fractions.
-	const clampRatio = (ratio: number) => {
-		const rect = screenRef.current?.getBoundingClientRect();
-		const span = rect ? (row ? divider.box.w * rect.width : divider.box.h * rect.height) : 0;
-		const min = span > 0 ? Math.min(0.45, MIN_PANE_PX / span) : 0.1;
-		return Math.min(1 - min, Math.max(min, ratio));
-	};
+	const clampRatio = (ratio: number) => clampDividerRatio(divider, screenRef.current?.getBoundingClientRect(), ratio);
 	const ratioAt = (x: number, y: number) => {
 		const rect = screenRef.current?.getBoundingClientRect();
-		if (!rect || rect.width <= 0 || rect.height <= 0) return ratioNow();
-		const ratio = row
-			? (x - rect.left - divider.box.x * rect.width) / (divider.box.w * rect.width)
-			: (y - rect.top - divider.box.y * rect.height) / (divider.box.h * rect.height);
-		return clampRatio(ratio);
+		return rect && rect.width > 0 && rect.height > 0 ? ratioFromPoint(divider, rect, x, y) : ratioNow();
 	};
 	const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
 		if (event.button !== 0) return;

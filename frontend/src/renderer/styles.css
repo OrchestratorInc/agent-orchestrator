@@ -6690,6 +6690,33 @@ body.is-pane-dragging webview {
 	background: var(--color-border);
 }
 
+/* Where two dividers meet: a wider hit area that moves both at once, with a
+ * soft dot on hover. Above the dividers so it wins the overlap. */
+.pane-split-junction {
+	position: absolute;
+	z-index: 7;
+	width: 15px;
+	height: 15px;
+	margin: -7px 0 0 -7px;
+	border-radius: 9999px;
+	cursor: move;
+	touch-action: none;
+}
+
+.pane-split-junction::after {
+	content: "";
+	position: absolute;
+	inset: 4px;
+	border-radius: 9999px;
+	background: color-mix(in oklch, var(--foreground) 30%, transparent);
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-junction:hover::after {
+	opacity: 1;
+}
+
 /* The hover grip, matching ResizeHandle: 2px, fading at both ends. */
 .pane-split-divider::after {
 	opacity: 0;
@@ -6720,7 +6747,8 @@ body.is-pane-dragging webview {
 @media (prefers-reduced-motion: reduce) {
 	.pane-drag-ghost,
 	.pane-drop-preview,
-	.pane-split-divider::after {
+	.pane-split-divider::after,
+	.pane-split-junction::after {
 		transition: none;
 	}
 }

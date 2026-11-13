@@ -26,7 +26,7 @@ import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pan
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
-import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitPaneHeader, SplitPaneTerminal, type SplitGroupMember } from "./SplitView";
+import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitJunction, SplitPaneHeader, SplitPaneTerminal, findJunctions, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 import { registerPaneDropTarget, type PaneDropResolution } from "../lib/pane-drag";
 import {
@@ -3033,6 +3033,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									/>
 								</div>
 							)) : null}
+							{shownGroup && shownLayout
+								? findJunctions(shownLayout.dividers).map(({ row, column }) => (
+									<SplitJunction
+										column={column}
+										key={`${shownGroup.id}:${row.path}:${column.path}`}
+										onResize={resizeSplit}
+										row={row}
+										screenRef={splitScreenRef}
+									/>
+								))
+								: null}
 							{interfaceUi.notice}
 						</div>
 					</div>
