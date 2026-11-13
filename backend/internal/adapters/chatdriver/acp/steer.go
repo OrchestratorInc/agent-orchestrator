@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -612,10 +613,8 @@ func (c *conversation) steerByPrompt(
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	settled := func(err error) (ports.ChatTurnRef, error) {
-		if err != nil && isACPSessionMissing(err) {
-			// The agent has no session to steer, so the guidance was not
-			// delivered and the provider cannot serve this conversation again.
-			return ports.ChatTurnRef{}, &providerRefusal{err: c.providerSessionLost(err)}
+		if errors.Is(err, ports.ErrChatProviderSessionLost) {
+			return ports.ChatTurnRef{}, err // a refusal; see finishTurnPrompt
 		}
 		if err != nil {
 			return ports.ChatTurnRef{}, steerPromptError(err)
@@ -708,7 +707,8 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		// turn ended without it, and another turn may be running now. The
 		// turn's own prompt keeps the path to finishPrompt it had before
 		// steering, unless its steered turn has already settled.
-		lateAnswer := seq > 0 || c.steerSettledTurn == turnID
+		straggler := c.takeStragglerLocked(turnID)
+		lateAnswer := seq > 0 || straggler || c.steerSettledTurn == turnID
 		c.mu.Unlock()
 		if !lateAnswer {
 			c.finishPrompt(turnID, resp, err)
@@ -724,6 +724,13 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 	}
 	acknowledged := c.steering.prompt != nil && c.steering.prompt.Ack != nil
 	cancelled := err == nil && resp.StopReason == acpsdk.StopReasonCancelled
+	// A steer prompt answered "Session not found" was not delivered, and the
+	// provider can never serve this conversation again. It is stopped below,
+	// whether or not the steer's Steer is still waiting for the answer.
+	lostSession := seq > 0 && err != nil && isACPSessionMissing(err)
+	if lostSession {
+		c.sessionLost = true
+	}
 	// A handoff passes the work to the next prompt of the turn, the one that
 	// arrived after this one. A cancelled answer hands nothing on, and an
 	// acknowledging agent says itself whether a steer took.
@@ -736,6 +743,8 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 			continue
 		}
 		switch {
+		case w.seq == seq && lostSession:
+			w.settle(&providerRefusal{err: fmt.Errorf("%w: %w", ports.ErrChatProviderSessionLost, err)})
 		case w.seq == seq && err != nil:
 			w.settle(err) // refused
 		case w.seq == seq && cancelled:
@@ -762,14 +771,21 @@ func (c *conversation) finishTurnPrompt(turnID string, seq int, resp acpsdk.Prom
 		go c.finishAfterStragglers(turnID, c.turnResult, wait)
 	}
 	c.mu.Unlock()
-	if !done {
-		if err != nil {
-			c.log.Debug("ACP prompt returned an error while another prompt keeps the turn",
-				"turn", turnID, "prompt", seq, "error", err)
-		}
-		return
+	if done {
+		c.finishPrompt(turnID, final.resp, final.err)
+	} else if err != nil && !lostSession {
+		c.log.Debug("ACP prompt returned an error while another prompt keeps the turn",
+			"turn", turnID, "prompt", seq, "error", err)
 	}
-	c.finishPrompt(turnID, final.resp, final.err)
+	if lostSession {
+		// Stop it now rather than when the turn's other prompts fail.
+		c.log.Warn("chat: ACP provider no longer holds the session; stopping it so the session can be resumed",
+			"turn", turnID, "error", err)
+		if stopErr := c.stopLostProvider(); stopErr != nil {
+			c.log.Error("chat: failed to stop ACP provider after its session was lost",
+				"turn", turnID, "error", stopErr)
+		}
+	}
 }
 
 // turnEndLocked reports whether every prompt of the turn has returned, and if
@@ -801,6 +817,21 @@ func (c *conversation) dropUnsentPromptLocked(turnID string, seq int) (promptAns
 	return c.turnEndLocked(turnID)
 }
 
+// takeStragglerLocked reports whether turnID ended without the answers of some
+// of its prompts, and counts this answer as one of them. Callers must hold c.mu.
+func (c *conversation) takeStragglerLocked(turnID string) bool {
+	left, ok := c.stragglers[turnID]
+	if !ok {
+		return false
+	}
+	if left <= 1 {
+		delete(c.stragglers, turnID)
+	} else {
+		c.stragglers[turnID] = left - 1
+	}
+	return true
+}
+
 // promptStragglerWait bounds how long a turn whose host result has arrived
 // waits for its other prompts' answers, which normally follow at once.
 const promptStragglerWait = 10 * time.Second
@@ -819,6 +850,12 @@ func (c *conversation) finishAfterStragglers(turnID string, result *promptAnswer
 	}
 	c.log.Warn("ACP turn ended without every prompt answering; finishing it with the host's result",
 		"turn", turnID, "unanswered", len(c.outstanding))
+	// Their answers can still come after later turns have settled, so this
+	// turn is remembered until each has arrived.
+	if c.stragglers == nil {
+		c.stragglers = map[string]int{}
+	}
+	c.stragglers[turnID] = len(c.outstanding)
 	c.steerSettledTurn = turnID
 	c.settlingTurn = turnID // the stragglers' answers are late from here on
 	c.mu.Unlock()
@@ -828,10 +865,13 @@ func (c *conversation) finishAfterStragglers(turnID string, result *promptAnswer
 // adoptedPromptHandoff hears that the prompt an earlier attachment sent
 // answered while a steer prompt of this attachment's still runs: the agent
 // took the guidance and carries the turn on under the steer.
-func (c *conversation) adoptedPromptHandoff(err error) {
-	if err != nil {
-		c.log.Debug("adopted ACP prompt returned an error while a steer prompt keeps the turn", "error", err)
+func (c *conversation) adoptedPromptHandoff(answer promptAnswer) {
+	if answer.err != nil {
+		c.log.Debug("adopted ACP prompt returned an error while a steer prompt keeps the turn", "error", answer.err)
 		return
+	}
+	if answer.resp.StopReason == acpsdk.StopReasonCancelled {
+		return // a cancelled answer hands nothing on, as in finishTurnPrompt
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -966,11 +1006,19 @@ func (c *conversation) awaitSteerAck(w *promptSteer) {
 const noPrompt = -2
 
 // nextOutstandingLocked returns the earliest prompt sent after seq that has
-// not returned yet, or noPrompt. Callers must hold c.mu.
+// not returned yet, or noPrompt. A steer prompt registered but not yet written
+// has not reached the agent, so the work cannot have gone to it. Callers must
+// hold c.mu.
 func (c *conversation) nextOutstandingLocked(seq int) int {
+	unsent := map[int]bool{}
+	for _, w := range c.promptSteers {
+		if w.turn == c.activeTurn && !w.sent {
+			unsent[w.seq] = true
+		}
+	}
 	next := noPrompt
 	for other := range c.outstanding {
-		if other > seq && (next == noPrompt || other < next) {
+		if other > seq && !unsent[other] && (next == noPrompt || other < next) {
 			next = other
 		}
 	}
@@ -1046,12 +1094,18 @@ var errSteerTurnStopping = fmt.Errorf("%w: the turn is being stopped", ports.Err
 // any later steer for the running turn. Stop calls it before taking the Chat
 // controller's dispatch lock, so a steer that already holds the lock but has
 // not reached the agent yet is turned away too. A later turn steers as usual.
-func (c *conversation) WithdrawPendingSteers() {
+//
+// The returned restore lets that turn take steers again after a Stop that did
+// not stop it. Stops can overlap: while another of them is still stopping the
+// turn, its steers stay refused. A restore that comes after the turn has
+// ended does nothing, so it cannot lift the next turn's Stop.
+func (c *conversation) WithdrawPendingSteers() func() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.activeTurn != "" {
-		if c.stoppingTurn != c.activeTurn {
-			c.stoppingTurn, c.stopAttempts = c.activeTurn, 0
+	turn := c.activeTurn
+	if turn != "" {
+		if c.stoppingTurn != turn {
+			c.stoppingTurn, c.stopAttempts = turn, 0
 		}
 		c.stopAttempts++
 	}
@@ -1063,7 +1117,7 @@ func (c *conversation) WithdrawPendingSteers() {
 	// cannot be taken back: its Steer returns now, so Stop does not wait out
 	// the steer's wait, and whether the agent took it is not known.
 	for _, w := range c.promptSteers {
-		if w.turn != c.activeTurn {
+		if w.turn != turn {
 			continue
 		}
 		if !w.sent {
@@ -1073,17 +1127,23 @@ func (c *conversation) WithdrawPendingSteers() {
 		}
 		w.settle(errSteerStopping)
 	}
+	if turn == "" {
+		return nil
+	}
+	return sync.OnceFunc(func() { c.restoreSteering(turn) })
 }
 
 // errSteerStopping settles a steer prompt still waiting when Stop begins.
 var errSteerStopping = fmt.Errorf("%w: the turn is being stopped", errSteerUnconfirmed)
 
-// RestoreSteering lets the running turn take steers again after a Stop that
-// did not stop it. See WithdrawPendingSteers. Stops can overlap: while another
-// of them is still stopping the turn, its steers stay refused.
-func (c *conversation) RestoreSteering() {
+// restoreSteering gives back one withdrawal of turn's steering. See
+// WithdrawPendingSteers.
+func (c *conversation) restoreSteering(turn string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.stoppingTurn != turn {
+		return // that turn is over, and a later Stop may own the guard now
+	}
 	if c.stopAttempts > 0 {
 		c.stopAttempts--
 	}

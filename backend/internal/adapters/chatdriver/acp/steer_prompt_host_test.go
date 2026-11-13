@@ -591,11 +591,25 @@ func TestACPSteerPromptIntoALostSessionIsARefusalAndStopsTheProvider(t *testing.
 	if !errors.Is(err, ports.ErrChatProviderSessionLost) || !errors.As(err, &refusal) || !refusal.ChatRefusal() {
 		t.Fatalf("Steer into a lost session = %v, want a refusal carrying ErrChatProviderSessionLost", err)
 	}
-	conv.mu.Lock()
-	lost, closed := conv.sessionLost, conv.closed
-	conv.mu.Unlock()
-	if !lost || !closed {
-		t.Fatalf("after a lost session: sessionLost=%v closed=%v, want the provider stopped", lost, closed)
+	waitProviderStoppedForLostSession(t, conv)
+}
+
+// waitProviderStoppedForLostSession waits for the conversation to record the
+// lost session and stop its provider.
+func waitProviderStoppedForLostSession(t *testing.T, conv *conversation) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		conv.mu.Lock()
+		lost, closed := conv.sessionLost, conv.closed
+		conv.mu.Unlock()
+		if lost && closed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after a lost session: sessionLost=%v closed=%v, want the provider stopped", lost, closed)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -652,5 +666,132 @@ func TestACPSteerPromptTakenStartsTheNextSegmentAtOnce(t *testing.T) {
 	}
 	if after != before+1 {
 		t.Fatalf("steer segment = %d after the steer took, want %d", after, before+1)
+	}
+}
+
+// A "Session not found" answer that comes after Steer stopped waiting still
+// stops the provider, though the turn's own prompt has not answered.
+func TestACPSteerPromptLostSessionAfterTheWaitStillStopsTheProvider(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	conv.steering.prompt = testSteerPrompt(80 * time.Millisecond)
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, _ := startScriptedTurn(t, conv, host)
+	steer, outcome := steerAsync(t, conv, host, turn)
+	if err := steerOutcome(t, outcome); !errors.Is(err, errSteerUnconfirmed) {
+		t.Fatalf("Steer = %v, want an uncertain delivery after the wait", err)
+	}
+
+	host.send(`{"jsonrpc":"2.0","id":` + steer + `,"error":{"code":-32603,"message":"Internal error","data":{"details":"Session not found"}}}`)
+	waitProviderStoppedForLostSession(t, conv)
+}
+
+// The work can only go to a prompt the agent has. A steer prompt that is
+// registered but not yet written is no handoff target, so an earlier prompt's
+// answer does not report it taken before it is even sent.
+func TestACPSteerPromptHandoffSkipsAPromptNotYetSent(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	turn, root := startScriptedTurn(t, conv, host)
+	registered := make(chan struct{})
+	release := make(chan struct{})
+	conv.promptSending = func(int) {
+		close(registered)
+		<-release
+	}
+	outcome := make(chan error, 1)
+	go func() {
+		_, err := conv.Steer(context.Background(), turn, ports.ChatUserMessage{Text: "edit staging.yaml instead"})
+		outcome <- err
+	}()
+	<-registered
+
+	host.send(plainResult(root)) // an end_turn that could read as a handoff
+	select {
+	case err := <-outcome:
+		t.Fatalf("Steer = %v before its prompt was written, want it still waiting", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	steer := host.nextPrompt()
+	host.send(receiptResult(steer, "acp-host:21"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("Steer = %v, want delivered by its own answer", err)
+	}
+	done := completionsOf(t, conv, turn)
+	if len(done) != 1 || done[0].ProviderEventID != "acp-host:21" {
+		t.Fatalf("turn completions = %+v, want one with the steer prompt's receipt", done)
+	}
+}
+
+// After a restart, the host passes the adopted prompt's answer on. A cancelled
+// answer hands nothing on, so the steer waits for its own answer.
+func TestACPSteerPromptCancelledAdoptedAnswerIsNoHandoff(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "durable-turn")
+	_ = nextEvent(t, conv.Events()) // controller.ready
+	steer, outcome := steerAsync(t, conv, host, "durable-turn")
+	host.send(`{"jsonrpc":"2.0","method":"` + persistenthost.ACPPromptHandoffMethod + `","params":{"result":{"stopReason":"cancelled"}}}`)
+	select {
+	case err := <-outcome:
+		t.Fatalf("Steer = %v after a cancelled adopted answer, want it still waiting", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	host.send(`{"jsonrpc":"2.0","id":` + steer + `,"result":{"stopReason":"cancelled","_meta":{"` +
+		persistenthost.ACPEventIDMetaKey + `":"acp-host:22"}}}`)
+	if err := steerOutcome(t, outcome); !errors.Is(err, errSteerCancelled) {
+		t.Fatalf("Steer = %v, want uncertain because its own answer was cancelled", err)
+	}
+}
+
+// A turn the straggler wait ended remembers the prompts that never answered.
+// If one answers after a later steered turn has settled, it is still dropped,
+// so it cannot complete the old turn again under the newer turn's items.
+func TestACPSteerPromptStragglerAnswersAfterALaterSteeredTurnAreDropped(t *testing.T) {
+	conv, host := startScriptedHostConversation(t, "")
+	conv.stragglerWait = 100 * time.Millisecond
+	_ = nextEvent(t, conv.Events()) // controller.ready
+
+	first, firstRoot := startScriptedTurn(t, conv, host)
+	firstSteer, outcome := steerAsync(t, conv, host, first)
+	// The host's result arrives on the steer prompt; the turn's own prompt
+	// never answers in time.
+	host.send(receiptResult(firstSteer, "acp-host:23"))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("first Steer = %v, want delivered", err)
+	}
+	if done := completionsOf(t, conv, first); len(done) != 1 {
+		t.Fatalf("first turn completions = %+v, want one", done)
+	}
+	if err := conv.AcknowledgeProviderEvent(context.Background(), "acp-host:23"); err != nil {
+		t.Fatalf("AcknowledgeProviderEvent: %v", err)
+	}
+
+	second, secondRoot := startScriptedTurn(t, conv, host)
+	secondSteer, outcome := steerAsync(t, conv, host, second)
+	host.send(plainResult(secondRoot))
+	if err := steerOutcome(t, outcome); err != nil {
+		t.Fatalf("second Steer = %v, want delivered at the handoff", err)
+	}
+	host.send(receiptResult(secondSteer, "acp-host:24"))
+	if done := completionsOf(t, conv, second); len(done) != 1 {
+		t.Fatalf("second turn completions = %+v, want one", done)
+	}
+
+	host.send(plainResult(firstRoot))
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case event := <-conv.Events():
+			if event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventControllerState {
+				t.Fatalf("the first turn's late answer emitted %+v", event)
+			}
+		case <-deadline:
+			conv.mu.Lock()
+			left := len(conv.stragglers)
+			conv.mu.Unlock()
+			if left != 0 {
+				t.Fatalf("stragglers left = %d, want the answered one forgotten", left)
+			}
+			return
+		}
 	}
 }

@@ -37,12 +37,13 @@ func (w *waitingSteerer) Steer(
 	}
 }
 
-func (w *waitingSteerer) WithdrawPendingSteers() {
+func (w *waitingSteerer) WithdrawPendingSteers() func() {
 	select {
 	case <-w.withdrawn:
 	default:
 		close(w.withdrawn)
 	}
+	return nil
 }
 
 // A steer waiting on the agent holds the dispatch lock. Stop must withdraw it
@@ -101,11 +102,14 @@ func (f *failingStopSteerer) Interrupt(context.Context, string) error {
 	return errors.New("session/cancel did not reach the agent")
 }
 
-func (f *failingStopSteerer) RestoreSteering() {
-	select {
-	case <-f.restored:
-	default:
-		close(f.restored)
+func (f *failingStopSteerer) WithdrawPendingSteers() func() {
+	f.waitingSteerer.WithdrawPendingSteers()
+	return func() {
+		select {
+		case <-f.restored:
+		default:
+			close(f.restored)
+		}
 	}
 }
 
