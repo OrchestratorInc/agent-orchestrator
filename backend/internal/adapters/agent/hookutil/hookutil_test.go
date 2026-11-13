@@ -155,6 +155,33 @@ func TestBugTriageSkillInstallsCleanlyAndUninstalls(t *testing.T) {
 	}
 }
 
+func TestBugTriageSkillRepairsAnInterruptedInstall(t *testing.T) {
+	for name, marker := range map[string]bool{"marker without skill": true, "empty folder": false} {
+		t.Run(name, func(t *testing.T) {
+			skillsDir := t.TempDir()
+			skillDir := filepath.Join(skillsDir, "bug-triage")
+			if err := os.MkdirAll(skillDir, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if marker {
+				if err := os.WriteFile(filepath.Join(skillDir, bugTriageMarkerFile), []byte(bugTriageSentinel+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := InstallBugTriageSkill(skillsDir); err != nil {
+				t.Fatal(err)
+			}
+			skill, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+			if err != nil || !bytes.Equal(skill, skillassets.BugTriageSkill()) {
+				t.Fatalf("interrupted install not repaired: err=%v", err)
+			}
+			if managed, err := bugTriageManaged(skillDir); err != nil || !managed {
+				t.Fatalf("repaired skill is not marked as AO's: managed=%v err=%v", managed, err)
+			}
+		})
+	}
+}
+
 func TestBugTriageSkillLeavesAProjectsOwnSkill(t *testing.T) {
 	skillsDir := t.TempDir()
 	own := filepath.Join(skillsDir, "bug-triage", "SKILL.md")
