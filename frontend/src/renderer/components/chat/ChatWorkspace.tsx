@@ -1705,7 +1705,13 @@ function ChatWorkspaceContent({
 	// The warning holds the model's place briefly; a full window holds it until reset.
 	const quotaFlash = useQuotaFlash(nearQuota, snapshot.conversationId);
 	const pickerOverride = useMemo(
-		() => (nearQuota && quotaFlash ? { label: <QuotaReadout quota={nearQuota} />, title: quotaTitle(nearQuota, t) } : undefined),
+		() => (nearQuota && quotaFlash
+			? {
+				key: `${nearQuota.kind}:${nearQuota.percent >= 100 ? "full" : "warn"}`,
+				label: <QuotaReadout quota={nearQuota} />,
+				title: quotaTitle(nearQuota, t),
+			}
+			: undefined),
 		[nearQuota, quotaFlash, t],
 	);
 	const pickerNotice = useMemo(() => (nearQuota ? <QuotaMenuNotice quota={nearQuota} /> : undefined), [nearQuota]);

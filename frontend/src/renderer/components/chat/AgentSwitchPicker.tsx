@@ -7,7 +7,7 @@
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { Brain, ChevronRight, Loader2, Star, TriangleAlert, Zap } from "@/components/app-icons";
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
@@ -48,6 +48,7 @@ import { CloseButton } from "../ui/close-button";
 import { Pressable } from "../ui/pressable";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
+import { SmoothSwap } from "./SmoothSwap";
 import { sharesAgentMark } from "../AgentAvatar";
 import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
 
@@ -111,6 +112,8 @@ export interface AgentSwitchProps {
 
 /** Something to show beside the agent's logo for now, such as the usage limit near its end. */
 export interface PickerOverride {
+	/** Changes when the label means something else, so the picker crossfades to it. */
+	key: string;
 	label: ReactNode;
 	/** Leads the hover title, ahead of the model the picker still opens to. */
 	title: string;
@@ -407,14 +410,27 @@ export function AgentModelPicker({
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
-	// When an override steps aside, the model fades back in rather than snapping.
-	const overriding = Boolean(override && !terminal);
-	const wasOverriding = useRef(overriding);
-	const [labelReturn, setLabelReturn] = useState(0);
-	useEffect(() => {
-		if (wasOverriding.current && !overriding) setLabelReturn((count) => count + 1);
-		wasOverriding.current = overriding;
-	}, [overriding]);
+	// The agent's model, effort and flags as the trigger shows them.
+	const labelContent = () => (<>
+		{loadingModels && !savedLabel && !pending && !terminal ? (
+			<span className="flex items-center gap-1.5 text-muted-foreground">
+				<Loader2 aria-hidden="true" className="size-3 animate-spin" />
+				{t("settings.models.loading")}
+			</span>
+		) : <>
+		<span className={cn("min-w-0 max-w-[28ch] truncate", shownUltra && !terminal ? "ultra-text" : undefined)}>
+			{terminal ? agentLabel(currentHarness) : shownModel}
+		</span>
+		{terminal ? <ChevronRight aria-hidden="true" className="ml-auto size-icon-sm shrink-0 text-muted-foreground" /> : (
+			<>
+				{shownFast ? <Zap aria-label={t("agentSwitch.fastMode")} className="size-3 shrink-0 fill-current" /> : null}
+				{shownThinking ? <Brain aria-label={t("agentSwitch.thinking")} className="size-3 shrink-0" /> : null}
+				{shownEffort ? <span className={cn("shrink-0", shownUltra ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
+				{mark}
+			</>
+		)}
+		</>}
+	</>);
 
 	return (
 		// Not modal, so one click on the composer both closes the menu and focuses it.
@@ -433,27 +449,12 @@ export function AgentModelPicker({
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 			>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
-				{override && !terminal ? override.label : <span key={labelReturn}
-					className={cn("flex min-w-0 items-center gap-1.5", terminal ? "flex-1" : undefined, labelReturn > 0 ? "picker-label-in" : undefined)}>
-				{loadingModels && !savedLabel && !pending && !terminal ? (
-					<span className="flex items-center gap-1.5 text-muted-foreground">
-						<Loader2 aria-hidden="true" className="size-3 animate-spin" />
-						{t("settings.models.loading")}
-					</span>
-				) : <>
-				<span className={cn("min-w-0 max-w-[28ch] truncate", shownUltra && !terminal ? "ultra-text" : undefined)}>
-					{terminal ? agentLabel(currentHarness) : shownModel}
-				</span>
-				{terminal ? <ChevronRight aria-hidden="true" className="ml-auto size-icon-sm shrink-0 text-muted-foreground" /> : (
-					<>
-						{shownFast ? <Zap aria-label={t("agentSwitch.fastMode")} className="size-3 shrink-0 fill-current" /> : null}
-						{shownThinking ? <Brain aria-label={t("agentSwitch.thinking")} className="size-3 shrink-0" /> : null}
-						{shownEffort ? <span className={cn("shrink-0", shownUltra ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
-						{mark}
-					</>
+				{/* The model and an override crossfade, and the trigger's width eases between them. */}
+				{terminal ? labelContent() : (
+					<SmoothSwap swapKey={override ? `override:${override.key}` : "model"}>
+						{override ? override.label : labelContent()}
+					</SmoothSwap>
 				)}
-				</>}
-				</span>}
 			</OptionMenuTrigger>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}
 			<OptionMenuContent align="start" side={terminal ? "right" : "top"} steady className="chat-settings-menu w-64 text-[12px]!"
