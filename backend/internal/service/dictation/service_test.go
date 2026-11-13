@@ -3,6 +3,7 @@ package dictation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -252,7 +253,7 @@ func TestOpenCanCancelWhileWorkerResets(t *testing.T) {
 	s.worker = &worker{resetting: make(chan struct{}), cancel: func() {}}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := s.Open(ctx); err != context.DeadlineExceeded {
+	if _, err := s.Open(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Open returned %v", err)
 	}
 }
