@@ -31,6 +31,7 @@ describe("requestDownscaledImage", () => {
 		expect(first).toEqual({ url: "blob:small-0" });
 		expect(second).toBe(first);
 		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(fetch).toHaveBeenCalledWith(`http://x/shot.png?v=${encodeURIComponent(version)}`, { cache: "no-store" });
 		expect(bitmaps).toEqual([{ options: { resizeWidth: DOWNSCALED_IMAGE_WIDTH, resizeQuality: "medium" } }]);
 		// A card that comes back reads the kept copy without asking again.
 		expect(downscaledImage("http://x/shot.png", version)).toBe(first);
@@ -56,5 +57,26 @@ describe("requestDownscaledImage", () => {
 			`${src}&v=${encodeURIComponent("2026-11-13T10:05:00Z")}`,
 		]);
 		expect(downscaledImage(src, "2026-11-13T10:05:00Z")).toBe(after);
+	});
+
+	it("converts a few images at a time and drops a queued one no card waits for", async () => {
+		const answers: Array<() => void> = [];
+		vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => {
+			answers.push(() => resolve(new Response("png", { headers: { "content-type": "image/png" } })));
+		})));
+		const { requestDownscaledImage, MAX_CONVERTING } = await import("./downscaled-image");
+		const scrolledPast = new AbortController();
+		const first = requestDownscaledImage("http://x/1.png", "v1");
+		void requestDownscaledImage("http://x/2.png", "v1");
+		void requestDownscaledImage("http://x/3.png", "v1", scrolledPast.signal);
+		const fourth = requestDownscaledImage("http://x/4.png", "v1");
+		expect(fetch).toHaveBeenCalledTimes(MAX_CONVERTING);
+		// The third card scrolled away before its turn: its image is never fetched.
+		scrolledPast.abort();
+		answers[0]?.();
+		await first;
+		expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual(["http://x/1.png?v=v1", "http://x/2.png?v=v1", "http://x/4.png?v=v1"]);
+		answers[2]?.();
+		expect(await fourth).toMatchObject({ url: expect.stringMatching(/^blob:/) });
 	});
 });

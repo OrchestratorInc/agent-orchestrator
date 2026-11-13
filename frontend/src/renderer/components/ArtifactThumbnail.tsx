@@ -59,13 +59,17 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	const imageSrc = smallImage && smallImage !== "failed" ? smallImage : image;
 	// A cross-origin iframe fires load even for a 404 JSON response, so the readable artifact
 	// route is checked before the page is framed, without keeping the HTML. The answer is kept
-	// for this version of the file: a card scrolling back into view does not ask again.
+	// for this version of the file: a card scrolling back into view does not ask again. Only a
+	// file that is not there is kept as unavailable; any other failure may pass, so it is an
+	// error, which the next card to mount asks about again.
 	const pageCheck = useQuery({
 		queryKey: ["artifact-page-available", contentUrl ?? "", row.updatedAt],
 		queryFn: async ({ signal }) => {
 			const response = await fetch(contentUrl ?? "", { signal, cache: "no-store" });
 			await response.body?.cancel();
-			return response.ok;
+			if (response.ok) return true;
+			if (response.status === 404 || response.status === 410) return false;
+			throw new Error(`artifact page check failed: ${response.status}`);
 		},
 		enabled: !cloud && visible && Boolean(page) && Boolean(contentUrl),
 		staleTime: Infinity,
@@ -156,7 +160,7 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		|| (!page && !image && !video && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
 	// A preview that failed to load for a reason that may pass (the network, an expired access link, a read error).
-	const loadFailed = failed || access.isError || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400))) || frameState === "failed";
+	const loadFailed = failed || access.isError || (!cloud && Boolean(page) && pageCheck.isError) || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400))) || frameState === "failed";
 	// What a snapshot of this card may wait for: the preview drawn, nothing worth drawing for good, or a failure to try again later.
 	const previewState = accessPending || imagePending || downscaling || !visible || (readText && file.isPending) || (page && !cloud && pageAvailable === undefined) || frameState === "loading"
 		? "loading"

@@ -42,11 +42,21 @@ let snapshot: CloudSessionSnapshot = { session: null, status: "loading" };
 let snapshotKey: string | undefined;
 let readAt = 0;
 let reading: Promise<void> | undefined;
+// Counts the session changes main pushed and the sign-outs here. A read answers as of when it
+// started: one that finishes after a newer change (a sign-out, say) would bring the old account
+// back, so it is dropped.
+let changes = 0;
 let unsubscribeBridge: (() => void) | undefined;
 const listeners = new Set<() => void>();
 
 function statusOf(session: CloudAccount | null): CloudSessionStatus {
   return session ? "authenticated" : "unauthenticated";
+}
+
+/** Publishes a change that supersedes every read still in flight. */
+function publishChange(session: CloudAccount | null): void {
+  changes += 1;
+  publish(session);
 }
 
 // Each answer from main is a new object; keep the old snapshot when nothing
@@ -69,10 +79,14 @@ function readSession(): void {
     return;
   }
   if (reading || (snapshot.status !== "loading" && Date.now() - readAt < SESSION_REUSE_MS)) return;
+  const startedAt = changes;
   reading = cloud.getSession().then((s) => {
+    if (startedAt !== changes) return;
     noteCloudSession(s, true);
     publish(s);
-  }, () => publish(null)).finally(() => {
+  }, () => {
+    if (startedAt === changes) publish(null);
+  }).finally(() => {
     readAt = Date.now();
     reading = undefined;
   });
@@ -85,7 +99,7 @@ function subscribe(listener: () => void): () => void {
       // A change that brings a new signed-in user is a completed sign-in;
       // token refreshes re-send the same user and are not counted.
       noteCloudSession(s, false);
-      publish(s);
+      publishChange(s);
     });
   }
   return () => {
@@ -112,7 +126,7 @@ export function useCloudSession(): UseCloudSessionResult {
 
   const signOut = async () => {
     await aoBridge.cloud.signOut();
-    publish(null);
+    publishChange(null);
   };
 
   return { configured, session, status, signIn, signOut };
