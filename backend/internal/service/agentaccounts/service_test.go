@@ -941,3 +941,51 @@ func TestASlowCheckOnAPlanWithoutWindowsStillBacksOff(t *testing.T) {
 		}
 	}
 }
+
+func TestConfirmedLoginsFollowTheIdentityWithoutALimitReading(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{
+		signedInAs: map[string]string{"": "a@example.com", "/folders/s": "t@example.com"},
+		failing:    map[string]bool{},
+		windows:    []domain.AgentAccountLimitWindow{{ID: "seven_day", UsedPercent: 40}},
+	}
+	store := &memStore{
+		accounts: []domain.AgentAccount{{ID: "acct-s", Provider: domain.AgentAccountProviderClaude, Home: "/folders/s", Email: "s@example.com"}},
+		defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{},
+	}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, t.TempDir(), fakeTerminals{}, nil)
+	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
+	read := func() map[string]domain.AgentAccountIdentityCheck {
+		t.Helper()
+		if _, err := svc.List(ctx, true); err != nil {
+			t.Fatal(err)
+		}
+		return svc.ConfirmedLogins()
+	}
+
+	got := read()
+	if !got[device].SignedIn || got[device].Email != "a@example.com" {
+		t.Fatalf("device = %+v, want a@", got[device])
+	}
+	if folder, ok := got["acct-s"]; !ok || folder.SignedIn {
+		t.Fatalf("folder on another login = %+v (known %v), want known and not signed in", folder, ok)
+	}
+
+	claude.signedInAs[""] = "b@example.com"
+	claude.limitsErr = errors.New("claude could not fetch its usage limits")
+	if got := read()[device]; !got.SignedIn || got.Email != "b@example.com" {
+		t.Fatalf("after a switch whose limits failed = %+v, want b@", got)
+	}
+
+	claude.failing[""] = true
+	read()
+	if got := read()[device]; !got.SignedIn || got.Email != "b@example.com" {
+		t.Fatalf("after two failed checks = %+v, want b@ kept", got)
+	}
+
+	claude.failing[""] = false
+	delete(claude.signedInAs, "")
+	if got, ok := read()[device]; !ok || got.SignedIn {
+		t.Fatalf("after signing out = %+v (known %v), want known and signed out", got, ok)
+	}
+}

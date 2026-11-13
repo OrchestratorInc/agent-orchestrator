@@ -16,15 +16,20 @@ type limitReadingStore interface {
 	ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, error)
 }
 
+type confirmedLogins interface {
+	ConfirmedLogins() map[string]domain.AgentAccountIdentityCheck
+}
+
 // LimitHistoryReader turns the limit readings AO took into the windows each login went through.
 type LimitHistoryReader struct {
-	store limitReadingStore
-	now   func() time.Time
+	store  limitReadingStore
+	logins confirmedLogins
+	now    func() time.Time
 }
 
 // NewLimitHistoryReader constructs a limit history reader.
-func NewLimitHistoryReader(store limitReadingStore) *LimitHistoryReader {
-	return &LimitHistoryReader{store: store, now: time.Now}
+func NewLimitHistoryReader(store limitReadingStore, logins confirmedLogins) *LimitHistoryReader {
+	return &LimitHistoryReader{store: store, logins: logins, now: time.Now}
 }
 
 const (
@@ -57,7 +62,11 @@ func (r *LimitHistoryReader) History(ctx context.Context, days int) (domain.Usag
 	if err != nil {
 		return domain.UsageLimitHistory{}, err
 	}
-	out.Logins = limitLogins(readings, heldLogins(readings, saved), until)
+	var confirmed map[string]domain.AgentAccountIdentityCheck
+	if r.logins != nil {
+		confirmed = r.logins.ConfirmedLogins()
+	}
+	out.Logins = limitLogins(readings, heldLogins(readings, saved, confirmed), until)
 	return out, nil
 }
 
@@ -66,29 +75,46 @@ type loginKey struct {
 	who      string
 }
 
-func readingLogin(reading domain.AgentLimitReading) loginKey {
-	who := strings.ToLower(strings.TrimSpace(reading.Email))
+func loginOf(provider domain.AgentAccountProvider, email, accountID string) loginKey {
+	who := strings.ToLower(strings.TrimSpace(email))
 	if who == "" {
-		who = "account:" + reading.AccountID
+		who = "account:" + accountID
 	}
-	return loginKey{reading.Provider, who}
+	return loginKey{provider, who}
 }
 
-func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount) map[loginKey]bool {
-	exists := map[string]bool{}
+func readingLogin(reading domain.AgentLimitReading) loginKey {
+	return loginOf(reading.Provider, reading.Email, reading.AccountID)
+}
+
+func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount, confirmed map[string]domain.AgentAccountIdentityCheck) map[loginKey]bool {
+	accounts := map[string]domain.AgentAccount{}
 	for _, p := range domain.AgentAccountProviders {
-		exists[domain.DeviceAgentAccountID(p)] = true
+		accounts[domain.DeviceAgentAccountID(p)] = domain.AgentAccount{Provider: p}
 	}
 	for _, account := range saved {
-		exists[account.ID] = true
+		accounts[account.ID] = account
+	}
+	held := map[loginKey]bool{}
+	for id, identity := range confirmed {
+		account, exists := accounts[id]
+		if !exists || !identity.SignedIn {
+			continue
+		}
+		email := identity.Email
+		if email == "" {
+			email = account.Email
+		}
+		held[loginOf(account.Provider, email, id)] = true
 	}
 	latest := map[string]domain.AgentLimitReading{}
 	for _, reading := range readings {
-		if last, seen := latest[reading.AccountID]; exists[reading.AccountID] && (!seen || reading.ReadAt.After(last.ReadAt)) {
+		_, exists := accounts[reading.AccountID]
+		_, known := confirmed[reading.AccountID]
+		if last, seen := latest[reading.AccountID]; exists && !known && (!seen || reading.ReadAt.After(last.ReadAt)) {
 			latest[reading.AccountID] = reading
 		}
 	}
-	held := map[loginKey]bool{}
 	for _, reading := range latest {
 		held[readingLogin(reading)] = true
 	}

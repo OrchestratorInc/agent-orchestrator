@@ -86,8 +86,9 @@ type reading struct {
 	limitsErr     string
 	limitsProblem domain.AgentAccountProblemKind
 	// failures counts checks in a row that failed on their own.
-	failures int
-	at       time.Time
+	failures  int
+	at        time.Time
+	confirmed *domain.AgentAccountIdentityCheck
 }
 
 // failedOnItsOwn reports a reading whose check failed in a way the next check
@@ -351,8 +352,11 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		// A failed check (a timeout under load) says nothing about the login:
 		// keep what the last good one found, so it does not read as signed out.
 		s.mu.Lock()
-		if prev := s.readings[account.ID]; prev != nil && prev.identityErr == "" {
-			r.identity, r.limits = prev.identity, prev.limits
+		if prev := s.readings[account.ID]; prev != nil {
+			r.confirmed = prev.confirmed
+			if prev.identityErr == "" {
+				r.identity, r.limits = prev.identity, prev.limits
+			}
 		}
 		s.mu.Unlock()
 	}
@@ -395,6 +399,10 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 			s.recordLimits(ctx, account, email, plan, limits)
 		}
 	}
+	if err == nil {
+		confirmed := r.identity
+		r.confirmed = &confirmed
+	}
 	// A caller that went away (a closed request, a cancelled move) says nothing
 	// about the account; caching its failure would refuse the account for the
 	// rest of the cache window.
@@ -420,6 +428,20 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		confirmed(account, r.at)
 	}
 	return r
+}
+
+// ConfirmedLogins is, per account, the identity its last successful check
+// found. A failed check keeps the one before it.
+func (s *Service) ConfirmedLogins() map[string]domain.AgentAccountIdentityCheck {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]domain.AgentAccountIdentityCheck, len(s.readings))
+	for id, r := range s.readings {
+		if r.confirmed != nil {
+			out[id] = *r.confirmed
+		}
+	}
+	return out
 }
 
 // accounts is the computer's own account per provider, then the saved ones.
