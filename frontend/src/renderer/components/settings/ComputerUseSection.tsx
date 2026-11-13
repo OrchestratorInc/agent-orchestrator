@@ -4,7 +4,7 @@ import { Check, Copy, ExternalLink, LoaderCircle, Settings } from "@/components/
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
-import { PRIVACY_PANES, type PrivacyGuideAppearance, type PrivacyPane } from "../../../main/privacy-guide";
+import { PRIVACY_PANES, type PrivacyGuideAppearance, type PrivacyGuideTarget, type PrivacyPane } from "../../../main/privacy-guide";
 import { useSettings, useUpdateComputerUse } from "../../hooks/useSettings";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
@@ -20,6 +20,7 @@ type ComputerUseStatus = components["schemas"]["ComputerUseStatus"];
 type PermissionState = components["schemas"]["ComputerUsePermissions"]["accessibility"];
 
 export const computerUseStatusQueryKey = ["computer-use", "status"] as const;
+const appPrivacyQueryKey = ["computer-use", "app-privacy"] as const;
 const installJobQueryKey = ["system-install", "cua-driver"] as const;
 const JOB_POLL_MS = 1_500;
 const GRANT_POLL_MS = 2_000;
@@ -41,16 +42,19 @@ async function fetchInstallJob(): Promise<InstallJob> {
  * Cua Driver, the computer-use driver behind the agents' computer-use tools. Installs
  * through the daemon's fixed installer allowlist like the agent CLIs do, then
  * shows the facts that decide whether agents can use it: the background
- * service and, on macOS, the privacy permissions CuaDriver.app holds.
+ * service and, on macOS, the privacy permissions CuaDriver.app holds. Also on
+ * macOS, Orchestrator's own permissions, which Claude Code's built-in computer
+ * use needs in terminal sessions: macOS checks Orchestrator, not Claude, for
+ * everything a session runs.
  */
 export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const theme = useResolvedTheme();
-	// Set while the floating guide beside System Settings is up; it follows the
-	// grants until the guide closes (everything granted, its X, or System
-	// Settings quitting).
-	const [guiding, setGuiding] = useState(false);
+	// The app the floating guide beside System Settings is up for; it follows
+	// that app's grants until the guide closes (everything granted, its X, or
+	// System Settings quitting).
+	const [guiding, setGuiding] = useState<PrivacyGuideTarget | null>(null);
 	// The guide is driven from here alone: leaving this page takes it down, so
 	// it never sits beside System Settings with grants nobody updates.
 	const mounted = useRef(true);
@@ -67,14 +71,24 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 		queryKey: computerUseStatusQueryKey,
 		queryFn: fetchStatus,
 		// A permission request waits on the user in System Settings; follow it.
-		refetchInterval: (query) => (query.state.data?.permissions?.granting || guiding ? GRANT_POLL_MS : false),
+		refetchInterval: (query) => (query.state.data?.permissions?.granting || guiding === "cuaDriver" ? GRANT_POLL_MS : false),
+	});
+	const mac = isMac();
+	// Orchestrator's own grants, read fresh on each fetch (and on window focus,
+	// as the user comes back from System Settings); null when macOS cannot be
+	// asked, and the row then says so.
+	const appPrivacy = useQuery({
+		queryKey: appPrivacyQueryKey,
+		queryFn: async () => (await aoBridge.app.getAppPrivacy()) ?? null,
+		enabled: mac,
+		refetchInterval: guiding === "orchestrator" ? GRANT_POLL_MS : false,
 	});
 	const job = useQuery({
 		queryKey: installJobQueryKey,
 		queryFn: fetchInstallJob,
 		refetchInterval: (query) => (query.state.data?.status === "running" ? JOB_POLL_MS : false),
 	});
-	const [action, setAction] = useState<"install" | "start" | "grant" | "guide" | null>(null);
+	const [action, setAction] = useState<"install" | "start" | "grant" | "guide" | "appGrant" | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const [copied, setCopied] = useState(false);
 	const agentAccess = useUpdateComputerUse();
@@ -117,17 +131,18 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 		if (error || !data) throw apiErrorException(error);
 		queryClient.setQueryData(computerUseStatusQueryKey, data);
 	});
-	const showGuide = async (pane: PrivacyPane, permissions: ComputerUseStatus["permissions"]) => {
-		if (!permissions) return;
+	const showGuide = async (target: PrivacyGuideTarget, granted: Record<PrivacyPane, boolean>) => {
 		guideOpened.current = true;
+		const app = target === "orchestrator" ? "appGuide" : "guide";
 		await aoBridge.app.showPrivacyGuide({
-			pane,
-			granted: grantedMap(permissions),
+			target,
+			pane: firstMissing(granted),
+			granted,
 			appearance: guideAppearance(theme),
 			text: {
-				drag: t("settings.computerUse.guide.drag"),
+				drag: t(`settings.computerUse.${app}.drag`),
 				hint: t("settings.computerUse.guide.hint"),
-				allowed: t("settings.computerUse.guide.allowed"),
+				allowed: t(`settings.computerUse.${app}.allowed`),
 				allowedHint: t("settings.computerUse.guide.allowedHint"),
 				labels: { accessibility: t("settings.computerUse.accessibility"), screenRecording: t("settings.computerUse.screenRecording") },
 				granted: t("settings.computerUse.permission.granted"),
@@ -139,14 +154,24 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 			void aoBridge.app.closePrivacyGuide();
 			return;
 		}
-		setGuiding(true);
+		setGuiding(target);
 	};
 	const grant = () => run("grant", async () => {
 		const { data, error } = await apiClient.POST("/api/v1/computer-use/permissions/grant");
 		if (error || !data) throw apiErrorException(error);
 		queryClient.setQueryData(computerUseStatusQueryKey, data);
 		// The request lists CuaDriver in System Settings; point the user at it.
-		if (data.permissions) await showGuide(firstMissing(data.permissions), data.permissions);
+		if (data.permissions) await showGuide("cuaDriver", grantedMap(data.permissions));
+	});
+	// Asks macOS for whatever Orchestrator is missing, which lists it in those
+	// panes, then docks the guide there; with everything granted it opens the
+	// guide to review them.
+	const grantApp = () => run("appGrant", async () => {
+		const current = appPrivacy.data;
+		if (!current) return;
+		const granted = allGrantedMap(current) ? current : (await aoBridge.app.requestAppPrivacy()) ?? current;
+		queryClient.setQueryData(appPrivacyQueryKey, granted);
+		await showGuide("orchestrator", granted);
 	});
 	const copyCommand = async (command: string) => {
 		await navigator.clipboard.writeText(command);
@@ -169,18 +194,25 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	// Every poll reports in, so a guide closed from its own side (X, System
 	// Settings quitting) ends the polling at the next one.
 	const statusUpdatedAt = status.dataUpdatedAt;
+	const appAccessibility = appPrivacy.data?.accessibility;
+	const appScreenRecording = appPrivacy.data?.screenRecording;
+	const appUpdatedAt = appPrivacy.dataUpdatedAt;
 	useEffect(() => {
-		if (!guiding || !accessibilityState || !screenRecordingState) return;
+		let granted: Record<PrivacyPane, boolean>;
+		if (guiding === "cuaDriver" && accessibilityState && screenRecordingState) {
+			granted = { accessibility: accessibilityState === "granted", screenRecording: screenRecordingState === "granted" };
+		} else if (guiding === "orchestrator" && appAccessibility !== undefined && appScreenRecording !== undefined) {
+			granted = { accessibility: appAccessibility, screenRecording: appScreenRecording };
+		} else return;
 		let current = true;
-		const granted = { accessibility: accessibilityState === "granted", screenRecording: screenRecordingState === "granted" };
 		void aoBridge.app.updatePrivacyGuide(granted).then((open) => {
 			if (current && !open) {
 				guideOpened.current = false;
-				setGuiding(false);
+				setGuiding(null);
 			}
 		}, () => undefined);
 		return () => { current = false; };
-	}, [guiding, accessibilityState, screenRecordingState, statusUpdatedAt]);
+	}, [guiding, accessibilityState, screenRecordingState, statusUpdatedAt, appAccessibility, appScreenRecording, appUpdatedAt]);
 
 	const driverAction = installing ? (
 		<span role="status" className="inline-flex items-center gap-1.5 text-xs text-settings-muted">
@@ -247,12 +279,28 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 									busy={permissions.granting || action === "grant" || action === "guide"}
 									disabled={action !== null}
 									onClick={() => void (allGranted(permissions.accessibility, permissions.screenRecording)
-										? run("guide", () => showGuide(firstMissing(permissions), permissions))
+										? run("guide", () => showGuide("cuaDriver", grantedMap(permissions)))
 										: grant())}
 								/>
 							</SettingsRow>
 						) : null}
 					</>
+				) : null}
+				{mac ? (
+					<SettingsRow
+						label={t("settings.computerUse.appPermissions")}
+						description={appPrivacy.isPending ? undefined
+							: !appPrivacy.data ? t("settings.computerUse.appPermissionsUnknown")
+							: allGrantedMap(appPrivacy.data) ? t("settings.computerUse.appPermissionsDescription")
+							: `${t("settings.computerUse.accessibility")}: ${t(`settings.computerUse.permission.${appPrivacy.data.accessibility ? "granted" : "missing"}`)} · ${t("settings.computerUse.screenRecording")}: ${t(`settings.computerUse.permission.${appPrivacy.data.screenRecording ? "granted" : "missing"}`)}`}
+					>
+						<PermissionsGear
+							label={t("settings.computerUse.openAppPermissions")}
+							busy={appPrivacy.isPending || action === "appGrant"}
+							disabled={action !== null || !appPrivacy.data}
+							onClick={() => void grantApp()}
+						/>
+					</SettingsRow>
 				) : null}
 				{status.isError ? (
 					<div className="settings-content-row">
@@ -307,9 +355,9 @@ function isMac(): boolean {
 }
 
 /** The macOS permissions row's only control: a gear, spinning while state loads or System Settings is waited on. */
-function PermissionsGear({ busy, disabled, onClick }: { busy: boolean; disabled: boolean; onClick: () => void }) {
+function PermissionsGear({ label: labelOverride, busy, disabled, onClick }: { label?: string; busy: boolean; disabled: boolean; onClick: () => void }) {
 	const { t } = useTranslation();
-	const label = t("settings.computerUse.openPermissions");
+	const label = labelOverride ?? t("settings.computerUse.openPermissions");
 	return (
 		<Button type="button" size="icon-sm" variant="ghost" aria-label={label} title={label} aria-busy={busy || undefined} disabled={disabled || busy} onClick={onClick} className="relative">
 			<Settings aria-hidden="true" />
@@ -339,8 +387,11 @@ function grantedMap(permissions: NonNullable<ComputerUseStatus["permissions"]>):
 	return { accessibility: permissions.accessibility === "granted", screenRecording: permissions.screenRecording === "granted" };
 }
 
+function allGrantedMap(granted: Record<PrivacyPane, boolean>): boolean {
+	return PRIVACY_PANES.every((pane) => granted[pane]);
+}
+
 /** The pane the guide opens on: the first permission still missing. */
-function firstMissing(permissions: NonNullable<ComputerUseStatus["permissions"]>): PrivacyPane {
-	const granted = grantedMap(permissions);
+function firstMissing(granted: Record<PrivacyPane, boolean>): PrivacyPane {
 	return PRIVACY_PANES.find((pane) => !granted[pane]) ?? "accessibility";
 }

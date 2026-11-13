@@ -155,6 +155,8 @@ if (typeof window !== "undefined") {
 			showPrivacyGuide: async () => undefined,
 			updatePrivacyGuide: async () => false,
 			closePrivacyGuide: async () => undefined,
+			getAppPrivacy: async () => undefined,
+			requestAppPrivacy: async () => undefined,
 			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,

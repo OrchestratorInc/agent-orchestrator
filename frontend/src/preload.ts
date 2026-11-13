@@ -246,6 +246,8 @@ const api = {
 		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
 		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
 		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
+		getAppPrivacy: () => ipcRenderer.invoke("app:getAppPrivacy") as Promise<Record<PrivacyPane, boolean> | undefined>,
+		requestAppPrivacy: () => ipcRenderer.invoke("app:requestAppPrivacy") as Promise<Record<PrivacyPane, boolean> | undefined>,
 		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
