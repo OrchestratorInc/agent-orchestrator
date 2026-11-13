@@ -34,6 +34,7 @@ import {
 	Bot,
 	ArrowRight,
 	ArrowRightLeft,
+	Ban,
 	Brain,
 	ChevronDown,
 	ChevronRight,
@@ -610,6 +611,13 @@ const TURN_OUTCOME_COPY = {
 		tone: "font-medium text-destructive",
 		iconTone: "text-destructive",
 	},
+	// It ended before the agent started on it; the reason follows in the turn's voice.
+	not_run: {
+		label: "This message was not run",
+		icon: Ban,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
 	// The controller went away mid-turn, so nothing reported how it ended.
 	unknown: {
 		label: "The agent stopped before this turn finished",
@@ -640,7 +648,7 @@ export function TurnOutcome({
 	rollbackDisabled,
 	timestamp,
 }: {
-	state: "recovered" | "interrupted" | "failed" | "unknown";
+	state: "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
 	error?: string;
 	failureCode?: "provider_key_missing";
 	onConfigure?: () => void;

@@ -700,6 +700,13 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const items: ConversationItem[] = [];
 	// A person's message by its turn, for an edit made while it was queued.
 	const humanMessages = new Map<string, ConversationMessage>();
+	// Which turns' prompts and starts are loaded, to tell a turn that ended
+	// before the agent started on it from one that ran.
+	const promptedTurns = new Set<string>();
+	const startedTurns = new Set<string>();
+	// Messages stopped before the agent started on them (deleted from the queue,
+	// or the queue ended by a switch to the terminal).
+	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
 	// Live Setup and Cleanup logs. A run with step events replaces the older
 	// one-line workspace.setup summary the worker still sends after it; workers
@@ -756,10 +763,12 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
 			});
 		}
+		if (turnID && event.type === "chat.user_message") promptedTurns.add(turnID);
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
+			startedTurns.add(turnID);
 		}
 		if (turnID && event.type === "chat.turn_capabilities" && eventPayload(event).steering === true) {
 			steerableTurns.add(turnID);
@@ -770,6 +779,26 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			turn.completedAt = event.createdAt;
 			const error = eventPayload(event).error;
 			turn.errorMessage = typeof error === "string" ? error : undefined;
+			// No agent started on it: its prompt is loaded with no start after it
+			// (a turn starts after its prompt), or it ended at attempt 0, never
+			// claimed, which holds on a page without its prompt too.
+			const neverStarted = !startedTurns.has(turnID) && (promptedTurns.has(turnID) || eventPayload(event).attempt === 0);
+			if (neverStarted && event.type === "chat.turn_interrupted") {
+				// Stopped before it ran: it leaves the conversation, as a local chat
+				// drops a queued message deleted from its dock.
+				turn.state = "cancelled";
+				delete turn.startedAt;
+				withdrawnTurns.add(turnID);
+			} else if (neverStarted && event.type === "chat.turn_aborted") {
+				// Refused when its turn came: not run, with the reason, rather than
+				// a run that failed.
+				turn.notRun = true;
+				delete turn.startedAt;
+				if (turn.errorMessage) {
+					const reason = turn.errorMessage.replace(/^Not run:\s*/i, "");
+					turn.errorMessage = reason.charAt(0).toUpperCase() + reason.slice(1);
+				}
+			}
 		}
 		if (event.type === "chat.approval_requested") {
 			const payload = eventPayload(event);
@@ -995,6 +1024,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			approval.revision += 1;
 		}
 	}
+	// A withdrawn message shows nowhere: not its bubble, its files or its edits.
+	const shownItems = withdrawnTurns.size > 0 ? items.filter((item) => !item.turnId || !withdrawnTurns.has(item.turnId)) : items;
 	const orderedTurns = [...turns.values()];
 	// The first durable send may wait briefly for the worker to claim it. It is
 	// the active request; only later messages should appear in the queue. While
@@ -1015,7 +1046,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
 	return {
 		conversationId: `cloud:${session.id}`, sessionId: session.id, harness: session.provider, mode: "chat",
-		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items,
+		controller: { state: hasRunningTurn ? "busy" : "ready" }, turns: orderedTurns, items: shownItems,
 		latestSequence: events.at(-1)?.sequence ?? 0, oldestSequence: events[0]?.sequence ?? 1,
 		hasMoreBefore: partial, settings: {}, capabilities: activeTurn && steerableTurns.has(activeTurn.id) ? ["steer"] : [],
 		...(usage ? { usage } : {}),

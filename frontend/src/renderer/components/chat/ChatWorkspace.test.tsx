@@ -1183,6 +1183,34 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
 	});
 
+	// A turn that ended before the agent started on it (a Cloud message refused
+	// when its turn came) says it was not run, with the reason, in the turn's
+	// own voice: it did not work, and nothing went wrong in a run.
+	it("shows a turn that never started as not run, without Worked for", () => {
+		const turnId = "turn-not-run";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 1,
+			turns: [{
+				id: turnId, state: "failed", notRun: true,
+				requestedAt: "2026-11-13T09:00:00Z", completedAt: "2026-11-13T09:01:00Z",
+				errorMessage: "The person who sent this message can no longer write to this session.",
+			}],
+			items: [{
+				kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+				role: "user", origin: "human", text: "write a file",
+				streaming: false, createdAt: "2026-11-13T09:00:00Z",
+			}],
+		};
+		render(<ChatWorkspace snapshot={snapshot} />);
+		expect(document.querySelector('[data-turn-outcome="not_run"]')).not.toBeNull();
+		expect(screen.getByText("This message was not run")).toBeInTheDocument();
+		expect(screen.getByText("The person who sent this message can no longer write to this session.")).toBeInTheDocument();
+		expect(screen.queryByText(/Worked for/)).toBeNull();
+		expect(screen.queryByText("The agent ran into a problem")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+	});
+
 	it("heads a turn with no work to fold with Worked for as plain text", () => {
 		const turnId = "turn-straight-to-answer";
 		const snapshot: ConversationSnapshot = {

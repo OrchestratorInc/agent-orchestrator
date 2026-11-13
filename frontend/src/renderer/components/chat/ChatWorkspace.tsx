@@ -6226,8 +6226,11 @@ type TimelineGroup = {
 	anchor: number;
 	items: ConversationItem[];
 	outcome?: {
-		/** `unknown`: the controller stopped while the turn ran, so nothing reported how it ended. */
-		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown";
+		/**
+		 * `unknown`: the controller stopped while the turn ran, so nothing reported how it ended.
+		 * `not_run`: it ended before the agent started on it (ConversationTurn.notRun).
+		 */
+		state: "completed" | "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
@@ -6473,9 +6476,10 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		group.rollbackable = Boolean(turn.providerTurnId);
 		group.accountSwitched = group.items.some((item) => item.kind === "activity" && item.detail?.event === "account.switched");
 		group.outcome = {
-			state: turn.state,
+			state: turn.notRun ? "not_run" : turn.state,
 			usageLimit: turn.usageLimit,
-			durationMs: settledTurnDuration(turn),
+			// A turn that never started did no work to time.
+			durationMs: turn.notRun ? undefined : settledTurnDuration(turn),
 			error: turn.errorMessage || (turn.state === "failed"
 				? [...group.items].reverse().find(
 					(item): item is ConversationActivity => item.kind === "activity" && item.activityKind === "error",

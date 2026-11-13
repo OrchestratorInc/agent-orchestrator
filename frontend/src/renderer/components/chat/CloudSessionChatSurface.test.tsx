@@ -536,6 +536,54 @@ describe("CloudSessionChatSurface", () => {
 			.toMatchObject({ message: "The request could not be completed." });
 	});
 
+	// A message deleted from the queue (or ended with the queue) before the
+	// agent started on it leaves the conversation, as a local chat drops a
+	// queued message deleted from its dock: no bubble, no "Worked for", no
+	// "interrupted by you". The control plane ends it with turn_interrupted of
+	// attempt 0, so it is known on a page without its message too.
+	it("drops a queued message deleted before the agent started on it", () => {
+		const at = (sequence: number, type: string, payload: Record<string, unknown>) =>
+			({ sessionId: session.id, sequence, type, payload, createdAt: `2026-11-13T09:0${sequence}:00Z` });
+		const events = [
+			at(1, "chat.user_message", { text: "long job", turnId: "turn-run" }),
+			at(2, "chat.turn_started", { turnId: "turn-run", attempt: 1 }),
+			at(3, "chat.user_message", { text: "deleted while queued", turnId: "turn-deleted" }),
+			at(4, "chat.user_message", { text: "still queued", turnId: "turn-next" }),
+			at(5, "chat.turn_interrupted", { turnId: "turn-deleted", attempt: 0 }),
+		];
+		const full = toSnapshot(session, events);
+		expect(full.items.filter((item) => item.kind === "message").map((item) => item.turnId)).toEqual(["turn-run", "turn-next"]);
+		expect(full.turns.find((turn) => turn.id === "turn-deleted")?.state).toBe("cancelled");
+		expect(full.turns.map((turn) => [turn.id, turn.state])).toEqual([["turn-run", "running"], ["turn-deleted", "cancelled"], ["turn-next", "queued"]]);
+		// A page that starts below the deleted message knows it by its attempt.
+		const partial = toSnapshot(session, events.slice(4), undefined, { partial: true });
+		expect(partial.items).toEqual([]);
+		expect(partial.turns.find((turn) => turn.id === "turn-deleted")?.state).toBe("cancelled");
+	});
+
+	// A queued message the control plane refused when its turn came never ran:
+	// it reads as not run, with the reason, not as a run that failed.
+	it("shows a queued message refused when its turn came as not run, with its reason", () => {
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "write a file", turnId: "turn-refused" }, createdAt: "2026-11-13T09:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_aborted", payload: { turnId: "turn-refused", attempt: 1, error: "Not run: the person who sent this message can no longer write to this session." }, createdAt: "2026-11-13T09:01:00Z" },
+		]);
+		expect(snapshot.items.filter((item) => item.kind === "message")).toHaveLength(1);
+		expect(snapshot.turns[0]).toMatchObject({ id: "turn-refused", state: "failed", notRun: true, errorMessage: "The person who sent this message can no longer write to this session." });
+	});
+
+	// A turn the agent ran and the person stopped reads as it always did.
+	it("keeps a running turn the person stopped as interrupted", () => {
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "long job", turnId: "turn-1" }, createdAt: "2026-11-13T09:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1", attempt: 1 }, createdAt: "2026-11-13T09:00:01Z" },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_interrupted", payload: { turnId: "turn-1", attempt: 1 }, createdAt: "2026-11-13T09:00:30Z" },
+		]);
+		expect(snapshot.items.filter((item) => item.kind === "message")).toHaveLength(1);
+		expect(snapshot.turns[0]).toMatchObject({ id: "turn-1", state: "interrupted", startedAt: "2026-11-13T09:00:01Z", completedAt: "2026-11-13T09:00:30Z" });
+		expect(snapshot.turns[0]).not.toHaveProperty("notRun");
+	});
+
 	// The control plane lets only a message's author edit it.
 	it("knows the turns of the viewer's own messages", () => {
 		const events: CloudCpClientEvent[] = [
