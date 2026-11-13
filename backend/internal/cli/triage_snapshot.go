@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/lifecyclelog"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -76,7 +77,14 @@ func (c *commandContext) triageSnapshot(ctx context.Context, state, data, run st
 	}
 	home, _ := os.UserHomeDir()
 	logLines := 0
-	for _, path := range []string{filepath.Join(data, "daemon.log"), filepath.Join(data, "desktop.log"), filepath.Join(data, "hooks.log")} {
+	// A daemon panic never reaches daemon.log: Go writes it to stderr and to the
+	// crash file the daemon keeps beside running.json (see lifecyclelog).
+	lifecycleRoot := data
+	if run != "" {
+		lifecycleRoot = filepath.Dir(run)
+	}
+	crashLog := filepath.Join(lifecycleRoot, "logs", lifecyclelog.CrashFileName)
+	for _, path := range []string{filepath.Join(data, "daemon.log"), filepath.Join(data, "desktop.log"), filepath.Join(data, "hooks.log"), crashLog} {
 		fmt.Fprintf(&b, "\n## Log: %s\n", path)
 		tail, err := triageLogTail(ctx, path)
 		if err != nil {

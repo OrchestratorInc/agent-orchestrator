@@ -321,6 +321,26 @@ func TestTriageSnapshotIncludesUncaughtDesktopErrors(t *testing.T) {
 	}
 }
 
+func TestTriageSnapshotIncludesDaemonCrashOutput(t *testing.T) {
+	deps, _, dir := triageTestDeps(t)
+	crashDir := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(crashDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	crash := "=== daemon pid 42 version 1.2.3 started 2026-11-10T00:00:00Z\n" +
+		"panic: runtime error: index out of range [5] with length 3\n\n" +
+		"goroutine 1 [running]:\nmain.main()\n"
+	if err := os.WriteFile(filepath.Join(crashDir, "daemon-crash.log"), []byte(crash), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
+	for name, text := range map[string]string{"snapshot": snapshot, "draft": draft} {
+		if !strings.Contains(text, "- Log excerpt: runtime error: index out of range [5] with length 3\n") {
+			t.Errorf("%s missing daemon panic: %s", name, text)
+		}
+	}
+}
+
 func TestTriageSnapshotRedactsNestedLogValues(t *testing.T) {
 	deps, _, dir := triageTestDeps(t)
 	var logs bytes.Buffer
