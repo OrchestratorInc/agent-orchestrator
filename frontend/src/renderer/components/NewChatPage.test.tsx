@@ -7,6 +7,7 @@ import type { ApprovalMode } from "../types/conversation";
 import { rememberChatSettingsTemplate } from "../lib/chat-settings-template";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
+import { useUiStore } from "../stores/ui-store";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 
@@ -245,6 +246,32 @@ describe("NewChatPage", () => {
 		await act(async () => { await h.workspace?.onSend?.("What is this?", files, "cid-1"); });
 
 		expect(h.launch).toHaveBeenCalledWith("What is this?", expect.objectContaining({ clientRequestId: "cid-1", attachments: files }));
+	});
+
+	it("takes the session's top bar from the send until the page returns the brief or closes", async () => {
+		useUiStore.setState({ newChatSending: false });
+		let refuse!: (error: unknown) => void;
+		h.launch.mockReturnValueOnce(new Promise<string>((_, fail) => { refuse = fail; }));
+		renderPage();
+		expect(useUiStore.getState().newChatSending).toBe(false);
+
+		let sent!: Promise<unknown>;
+		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => undefined); });
+		// Set before the first message paints, so it lands where the session shows it.
+		expect(useUiStore.getState().newChatSending).toBe(true);
+		await waitFor(() => expect(h.launch).toHaveBeenCalled());
+		await act(async () => {
+			refuse(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
+			await sent;
+		});
+		expect(useUiStore.getState().newChatSending).toBe(false);
+
+		// Leaving mid-send gives the bar back too.
+		h.launch.mockReturnValueOnce(new Promise<string>(() => undefined));
+		act(() => { void Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-2")).catch(() => undefined); });
+		expect(useUiStore.getState().newChatSending).toBe(true);
+		cleanup();
+		expect(useUiStore.getState().newChatSending).toBe(false);
 	});
 
 	it("returns a refused brief to the composer and restores the selectors", async () => {
