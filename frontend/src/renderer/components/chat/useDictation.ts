@@ -34,8 +34,8 @@ export function useDictation(target: DictationTarget) {
 	const targetRef = useRef(target);
 	targetRef.current = target;
 	const self = useRef<Owner>(null!);
-	/** Set while this composer waits for another one's recording to deliver its words. */
-	const pendingStart = useRef(false);
+	/** The handoff this composer is waiting on, while it waits for another one's recording to deliver its words. */
+	const handoff = useRef<{ timer?: number } | null>(null);
 	const owns = () => owner === self.current;
 	// Listening only while this composer owns a dictation.
 	const unsubscribe = useRef<(() => void) | null>(null);
@@ -92,8 +92,9 @@ export function useDictation(target: DictationTarget) {
 
 	/** Cancels a start that is still waiting for another composer's recording to finish. */
 	const cancelPendingStart = useCallback(() => {
-		if (!pendingStart.current) return false;
-		pendingStart.current = false;
+		if (!handoff.current) return false;
+		window.clearTimeout(handoff.current.timer);
+		handoff.current = null;
 		setPhase("idle");
 		return true;
 	}, []);
@@ -114,7 +115,8 @@ export function useDictation(target: DictationTarget) {
 		setPhase("idle");
 		const onEnd = targetRef.current.onEnd;
 		return () => {
-			pendingStart.current = false;
+			window.clearTimeout(handoff.current?.timer);
+			handoff.current = null;
 			if (!owns()) return;
 			generation.current += 1;
 			for (const resolve of waiting.current) resolve(false);
@@ -143,23 +145,26 @@ export function useDictation(target: DictationTarget) {
 	}, [onEvent, end]);
 
 	const start = useCallback(() => {
-		if (pendingStart.current) return;
+		if (handoff.current) return;
 		const previous = owner;
 		if (previous && previous !== self.current) {
 			// Another composer is still recording or finishing. Let it deliver its words first, so
 			// they are not lost, then take over.
 			const done = previous.finish();
 			if (done) {
-				pendingStart.current = true;
+				// Each handoff has its own identity, so a callback from one that was cancelled can never act
+				// on a newer one.
+				const mine: { timer?: number } = {};
+				handoff.current = mine;
 				setPhase("starting");
 				const proceed = () => {
-					if (!pendingStart.current) return;
-					pendingStart.current = false;
-					window.clearTimeout(fallback);
+					if (handoff.current !== mine) return;
+					window.clearTimeout(mine.timer);
+					handoff.current = null;
 					if (owner === previous) previous.end(true);
 					begin();
 				};
-				const fallback = window.setTimeout(proceed, HANDOFF_TIMEOUT_MS);
+				mine.timer = window.setTimeout(proceed, HANDOFF_TIMEOUT_MS);
 				void done.then(proceed);
 				return;
 			}

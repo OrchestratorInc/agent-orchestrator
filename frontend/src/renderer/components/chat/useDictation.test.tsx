@@ -234,6 +234,36 @@ describe("handing dictation from one composer to another", () => {
 		expect(bridge.start).not.toHaveBeenCalled();
 	});
 
+	it("ignores the timer of a handoff that was cancelled when a newer one has started", async () => {
+		vi.useFakeTimers();
+		try {
+			record();
+			const second = renderHook(() => useDictation({ onText: vi.fn(), onEnd: vi.fn(), ownerKey: "chat-b" }));
+			bridge.start.mockClear();
+			act(() => second.result.current.toggle());
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1000);
+			});
+			act(() => second.result.current.toggle());
+			expect(second.result.current.phase).toBe("idle");
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1000);
+			});
+			act(() => second.result.current.toggle());
+			// The first handoff's timer would fire here, but the second one is the one waiting now.
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(6000);
+			});
+			expect(bridge.start).not.toHaveBeenCalled();
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(2000);
+			});
+			expect(bridge.start).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not wait forever for a recording that never finishes", async () => {
 		vi.useFakeTimers();
 		try {
