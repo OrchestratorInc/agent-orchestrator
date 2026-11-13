@@ -28,6 +28,7 @@ func TestHandoffHeadroomSelectsRequestBucket(t *testing.T) {
 		{"codex default model counts the overall bucket", codex, AgentAccountProviderCodex, "", true, 70},
 		{"codex model bucket counts for its model", codex, AgentAccountProviderCodex, "gpt-5.3-codex-spark", false, 0},
 		{"codex other model ignores the spark bucket", codex, AgentAccountProviderCodex, "gpt-5.5", true, 70},
+		{"codex model ignores a longer sibling bucket", codex, AgentAccountProviderCodex, "gpt-5.3-codex", true, 70},
 		{"a nearly full account still has room", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: 98}}}, AgentAccountProviderCodex, "", true, 2},
 		{"a full account has no room", AgentAccountLimits{Windows: []AgentAccountLimitWindow{{UsedPercent: 100}}}, AgentAccountProviderCodex, "", false, 0},
 		{"no meter verifies nothing", AgentAccountLimits{}, AgentAccountProviderClaude, "claude-opus-5", false, 0},

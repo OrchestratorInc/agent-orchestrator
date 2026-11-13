@@ -100,7 +100,7 @@ func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string
 		switch {
 		case scope == "":
 		case model == "" && p == AgentAccountProviderClaude:
-		case model != "" && (strings.Contains(model, scope) || strings.Contains(scope, model)):
+		case model != "" && (strings.Contains(model, scope) || p == AgentAccountProviderClaude && strings.Contains(scope, model)):
 		default:
 			continue
 		}
