@@ -439,8 +439,12 @@ describe("CloudSessionChatSurface", () => {
 			await act(async () => { thrown = await edit("Use the parser").catch((reason: unknown) => reason); });
 			return thrown;
 		};
-		expect(await outcome(new CloudCpError("The agent already started on this message, so it can no longer be edited.", { status: 409, code: "TURN_NOT_QUEUED" })))
-			.toMatchObject({ code: "CHAT_TURN_NOT_QUEUED", message: "The agent already started on this message, so it can no longer be edited." });
+		// The control plane's own words, true of a turn the agent took and of one that was stopped.
+		expect(await outcome(new CloudCpError("This message is no longer queued: the agent started on it, or it was stopped. It can no longer be edited.", { status: 409, code: "TURN_NOT_QUEUED" })))
+			.toMatchObject({ code: "CHAT_TURN_NOT_QUEUED", message: "This message is no longer queued: the agent started on it, or it was stopped. It can no longer be edited." });
+		// A session that ended meanwhile lets go of the message the same way, said for an edit.
+		expect(await outcome(new CloudCpError("This session was deleted. Restore it to continue.", { status: 409, code: "SESSION_TERMINATED" })))
+			.toMatchObject({ code: "CHAT_TURN_NOT_QUEUED", message: "This session has ended, so this message can no longer be edited." });
 		expect(await outcome(new CloudCpError("text must be at most 65536 bytes", { status: 422, code: "validation_error" })))
 			.toMatchObject({ code: "CHAT_QUEUED_EDIT_REFUSED", message: "text must be at most 65536 bytes" });
 		expect(await outcome(new CloudCpError("This session's sandbox runs an older AO worker that cannot receive attached files.", { status: 409, code: "ATTACHMENTS_UNSUPPORTED" })))

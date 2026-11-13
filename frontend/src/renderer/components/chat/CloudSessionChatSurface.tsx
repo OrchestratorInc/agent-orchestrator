@@ -1512,10 +1512,13 @@ export function CloudSessionChatSurface({
 					...(message.attachmentIds.length ? { attachmentIds: message.attachmentIds } : {}),
 				});
 			} catch (error) {
-				// The agent took the message meanwhile: the queue editor lets go of it
+				// The agent took the message, it was stopped, or its session ended
+				// meanwhile: the queue editor lets go of it, keeping the edit's text,
 				// as it does for a local turn that is no longer queued.
-				if (error instanceof CloudCpError && error.code === "TURN_NOT_QUEUED") {
-					throw Object.assign(new Error(error.message), { code: "CHAT_TURN_NOT_QUEUED" });
+				if (error instanceof CloudCpError && (error.code === "TURN_NOT_QUEUED" || error.code === "SESSION_TERMINATED")) {
+					const reason = error.code === "SESSION_TERMINATED"
+						? "This session has ended, so this message can no longer be edited." : error.message;
+					throw Object.assign(new Error(reason), { code: "CHAT_TURN_NOT_QUEUED" });
 				}
 				// Any other refusal (a text too long, files the worker cannot take)
 				// left the message as it was, so the editor gets the edit back with
