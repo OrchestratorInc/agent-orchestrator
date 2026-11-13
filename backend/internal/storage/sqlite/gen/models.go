@@ -952,6 +952,14 @@ type TelemetryLifetimeSession struct {
 	Count     int64
 }
 
+type TmuxServerClient struct {
+	SocketName      string
+	BinaryPath      string
+	BinarySha256    string
+	ManagedRetained bool
+	ConfirmedAt     time.Time
+}
+
 type UsageBinding struct {
 	ID             int64
 	SessionID      domain.SessionID
