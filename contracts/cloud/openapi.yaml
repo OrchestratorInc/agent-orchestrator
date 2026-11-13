@@ -2504,6 +2504,47 @@ paths:
                     $ref: "#/components/schemas/UserMessageEditedEvent"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/delete:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/TurnId"
+    post:
+      operationId: deleteQueuedMessage
+      tags: [Sessions]
+      description: >-
+        Take back a message whose turn is still queued, before the agent
+        starts on it: the turn ends at once with chat.turn_interrupted of
+        attempt 0 and reason deleted, and a client drops the message. Unlike
+        cancelTurn it never stops a turn that left the queue. Allowed for
+        whoever may stop the turn: the person whose message started it, the
+        composer lease holder, the session's creator, and the organization's
+        owners and admins. Deleting a message already deleted answers 202
+        again. Offered when offering.features lists queued-delete.
+      responses:
+        "202":
+          description: The queued message was deleted, now or before.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerOKResponse"
+        "403":
+          description: forbidden. The caller may not stop this turn, or only watches the session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            TURN_NOT_QUEUED: the agent started on the message, or it was
+            stopped or ended otherwise, so it can no longer be deleted (the
+            turn is left as it is). SESSION_TERMINATED: the session ended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/approvals/{requestId}/decide:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -5337,7 +5378,9 @@ components:
             The organization's product features (share lets it share
             sessions) and the deployment's own: attachments when the session
             attachment routes are on, queued-edit when a queued message can be
-            edited (editQueuedMessage). Empty when none apply.
+            edited (editQueuedMessage), queued-delete when a queued message can
+            be deleted without stopping a started turn (deleteQueuedMessage).
+            Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
