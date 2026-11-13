@@ -1,6 +1,7 @@
 import { ArrowRight, ArrowUpRight, Circle, CircleAlert, CircleCheck, CircleDashed, CircleMinus, CircleX, Contrast, FileText, MessageSquare, X, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { usePRContentPoll } from "../hooks/usePRContentPoll";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
 import { usePREdit } from "../hooks/usePREdit";
 import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
@@ -263,6 +264,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	// The title and description are edited here, never on the sidebar's card.
 	const canEdit = usePRViewEnabled() && !session.cloud;
 	const edit = usePREdit(pr, session.id, hostId, canEdit);
+	usePRContentPoll(session.id, hostId, canEdit && (pr?.state === "open" || pr?.state === "draft"));
 	usePRNoChecksClock([pr]);
 	const [section, setSection] = useState<PRTabSection>(request?.section ?? "summary");
 	const scrollerRef = useRef<HTMLDivElement>(null);
