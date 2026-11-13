@@ -2109,10 +2109,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current("right"), splitPanes && Boolean(session) && !isOrchestrator);
 	useSessionShortcut("split-shell-terminal-down", () => splitNewTerminalRef.current("bottom"), splitPanes && Boolean(session) && !isOrchestrator);
 
-	// Agents split this session's panes with `ao pane` (Developer Mode, local
-	// sessions only). While this view is on screen the relay hands it their
+	// Agents split this session's panes with `ao pane` (where split panes are
+	// on, local sessions only). While this view is on screen the relay hands it their
 	// requests, and it reports what it shows whenever that changes.
-	const paneRelayEnabled = developerMode && Boolean(session) && !hostId && !session?.cloud;
+	const paneRelayEnabled = splitPanes && Boolean(session) && !hostId && !session?.cloud;
 	const describePaneTab = (key: string): PaneTabDescription => {
 		if (key === SESSION_TAB_KEY) return { key, kind: "session", title: sessionLabel };
 		if (key.startsWith("file:")) {
