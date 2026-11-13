@@ -2137,9 +2137,10 @@ paths:
         mentions people or teams starts an aside: a thread between people
         about that message, which its event names by asideId (its
         chat.user_message event, or for a steer the event the steer request
-        returned, chat.turn_steer_requested). Only mentions start one. The message still goes to the agent like any
-        other, but the agent never reads the aside: its replies never reach a
-        worker, a prompt, a prompt suggestion or the agent's context. Anyone
+        returned, chat.turn_steer_requested). Only mentions start one. The
+        message still goes to the agent like any other, but the agent never
+        reads the aside: its replies never reach a worker, a prompt, a prompt
+        suggestion or the agent's context. Anyone
         who can open the session (read or write) may list them; a client draws
         each message's aside icon, and its unread dot, from this list.
       responses:
@@ -2216,8 +2217,8 @@ paths:
         unless they muted it, gets an aside_reply notification; each person or
         team member the reply mentions joins the aside and gets a mentioned
         notification instead (mentions are checked as on sendMessage).
-        Replying marks the aside read for the author and resolves the
-        author's mentioned and aside_reply notifications for it. A retry with
+        Replying marks the aside read for the author, and resolves the
+        author's aside_reply and mentioned notifications for it. A retry with
         the same clientMessageId returns the reply the first try created.
       requestBody:
         required: true
@@ -2263,8 +2264,8 @@ paths:
       description: >-
         Marks the aside read for the caller up to now: its unread becomes
         false until someone else replies. Also marks read the caller's
-        aside_reply notification for it, and a mentioned notification that
-        points at it. A client calls it when it opens the aside.
+        aside_reply notification for it, and their mentioned notification for
+        it. A client calls it when it opens the aside.
       responses:
         "200":
           description: The aside after the change.
@@ -5512,16 +5513,18 @@ components:
       required: [authorUserId, authorName, sequence]
       description: >-
         The metadata of a `mentioned` notification. The recipient has one
-        active mention notification per aside (per session on a control plane
-        without asides), so a session can hold one per aside: a newer mention
-        in the same aside replaces it (same id, new title, body and metadata,
-        unread again, and a notification_created event so it alerts again). If they were named
-        both directly and through a team, the notification is the personal
-        one. Their own message in the session resolves it, and so does their
-        reply in the aside. title is "{author}
-        mentioned you", or "{author} mentioned {team}" when only the team
-        named them; body is the message's first line, about 200 characters,
-        with each mention as @Name.
+        active mention notification per aside: a newer mention in the same
+        aside (its message, or a reply that names them) replaces it (same id,
+        new title, body and metadata, unread again, and a
+        notification_created event so it alerts again); a mention in another
+        aside of the session is another notification. Named both directly
+        and through a team in one aside, the notification is the personal
+        one. Their own message or steer in the session resolves every one of
+        theirs there, and their reply in an aside resolves that aside's.
+        title is "{author} mentioned you", or "{author} mentioned {team}"
+        when only the team named them; body is the message's (or the
+        reply's) first line, about 200 characters, with each mention as
+        @Name.
       properties:
         authorUserId:
           type: string
@@ -5569,14 +5572,14 @@ components:
         the aside are the author of the message that started it, everyone it
         named (a team's members as they were when it was sent), everyone who
         replied, and everyone a reply named. Someone a reply names gets a
-        mentioned notification for it instead. The recipient has one
+        mentioned notification for it instead. The recipient has one active
         aside_reply notification per aside: a newer reply replaces it (same
         id, new title, body and metadata, unread again, and a
         notification_created event so it alerts again). Opening the aside
-        (markSessionAsideRead) marks it read, and replying in it resolves it.
-        title is
-        "{author} replied in an aside"; body is the reply's first line, about
-        200 characters, with each mention as @Name.
+        (markSessionAsideRead) marks it read; replying in it resolves it, and
+        the next reply starts a new one. title is "{author} replied in an
+        aside"; body is the reply's first line, about 200 characters, with
+        each mention as @Name.
       properties:
         asideId:
           type: string

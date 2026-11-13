@@ -1382,7 +1382,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Replies in an aside. Anyone who can open the session may reply, a viewer too, and it needs no composer lease. The reply never reaches the agent. Everyone watching the session receives it as a chat.aside_reply event. Everyone in the aside except the author, and unless they muted it, gets an aside_reply notification; each person or team member the reply mentions joins the aside and gets a mentioned notification instead (mentions are checked as on sendMessage). Replying marks the aside read for the author and resolves the author's mentioned and aside_reply notifications for it. A retry with the same clientMessageId returns the reply the first try created. */
+        /** @description Replies in an aside. Anyone who can open the session may reply, a viewer too, and it needs no composer lease. The reply never reaches the agent. Everyone watching the session receives it as a chat.aside_reply event. Everyone in the aside except the author, and unless they muted it, gets an aside_reply notification; each person or team member the reply mentions joins the aside and gets a mentioned notification instead (mentions are checked as on sendMessage). Replying marks the aside read for the author, and resolves the author's aside_reply and mentioned notifications for it. A retry with the same clientMessageId returns the reply the first try created. */
         post: operations["replyToSessionAside"];
         delete?: never;
         options?: never;
@@ -1404,7 +1404,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Marks the aside read for the caller up to now: its unread becomes false until someone else replies. Also marks read the caller's aside_reply notification for it, and a mentioned notification that points at it. A client calls it when it opens the aside. */
+        /** @description Marks the aside read for the caller up to now: its unread becomes false until someone else replies. Also marks read the caller's aside_reply notification for it, and their mentioned notification for it. A client calls it when it opens the aside. */
         post: operations["markSessionAsideRead"];
         delete?: never;
         options?: never;
@@ -3214,7 +3214,7 @@ export interface components {
             items: components["schemas"]["CloudNotificationEvent"][];
             hasMore: boolean;
         };
-        /** @description The metadata of a `mentioned` notification. The recipient has one active mention notification per aside (per session on a control plane without asides), so a session can hold one per aside: a newer mention in the same aside replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again). If they were named both directly and through a team, the notification is the personal one. Their own message in the session resolves it, and so does their reply in the aside. title is "{author} mentioned you", or "{author} mentioned {team}" when only the team named them; body is the message's first line, about 200 characters, with each mention as @Name. */
+        /** @description The metadata of a `mentioned` notification. The recipient has one active mention notification per aside: a newer mention in the same aside (its message, or a reply that names them) replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again); a mention in another aside of the session is another notification. Named both directly and through a team in one aside, the notification is the personal one. Their own message or steer in the session resolves every one of theirs there, and their reply in an aside resolves that aside's. title is "{author} mentioned you", or "{author} mentioned {team}" when only the team named them; body is the message's (or the reply's) first line, about 200 characters, with each mention as @Name. */
         MentionNotificationMetadata: {
             /** Format: uuid */
             authorUserId: string;
@@ -3248,7 +3248,7 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** @description The metadata of an `aside_reply` notification. A reply notifies everyone in the aside except its author and anyone who muted it. In the aside are the author of the message that started it, everyone it named (a team's members as they were when it was sent), everyone who replied, and everyone a reply named. Someone a reply names gets a mentioned notification for it instead. The recipient has one aside_reply notification per aside: a newer reply replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again). Opening the aside (markSessionAsideRead) marks it read, and replying in it resolves it. title is "{author} replied in an aside"; body is the reply's first line, about 200 characters, with each mention as @Name. */
+        /** @description The metadata of an `aside_reply` notification. A reply notifies everyone in the aside except its author and anyone who muted it. In the aside are the author of the message that started it, everyone it named (a team's members as they were when it was sent), everyone who replied, and everyone a reply named. Someone a reply names gets a mentioned notification for it instead. The recipient has one active aside_reply notification per aside: a newer reply replaces it (same id, new title, body and metadata, unread again, and a notification_created event so it alerts again). Opening the aside (markSessionAsideRead) marks it read; replying in it resolves it, and the next reply starts a new one. title is "{author} replied in an aside"; body is the reply's first line, about 200 characters, with each mention as @Name. */
         AsideReplyNotificationMetadata: {
             /** Format: uuid */
             asideId: string;
