@@ -158,6 +158,16 @@ describe("moveSession", () => {
 			expect(cp.createSession.mock.calls[0][1]).not.toHaveProperty("transcriptImportId");
 		});
 
+		it("moves the handoff note alone when reading the conversation gets no answer", async () => {
+			const cp = cloud();
+			const uploadTranscript = vi.fn(async () => {});
+			const source = fakeDaemon({ ...replies, "/api/v1/sessions/{sessionId}/move/transcript": undefined as unknown as Reply }, []);
+			const result = await moveSession({ sessionId: "app-1", moveId: "m-8", target }, { source, cloud: cp, uploadTranscript });
+			expect(result).toEqual({ sessionId: "cloud-9", conversation: "note" });
+			expect(uploadTranscript).not.toHaveBeenCalled();
+			expect(cp.createSession.mock.calls[0][1]).not.toHaveProperty("transcriptImportId");
+		});
+
 		it("is not uploaded again when a retry resends the first Cloud request", async () => {
 			const calls: string[] = [];
 			const uploadTranscript = vi.fn(async () => {});

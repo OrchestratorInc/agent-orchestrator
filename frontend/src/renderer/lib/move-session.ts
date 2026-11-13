@@ -146,9 +146,9 @@ export async function moveSession(
  */
 async function carryTranscript(deps: MoveDeps, path: { params: { path: { sessionId: string } } }, moveId: string): Promise<string | undefined> {
 	if (!deps.uploadTranscript) return undefined;
-	const transcript = await deps.source.GET("/api/v1/sessions/{sessionId}/move/transcript", path);
-	if (!transcript.data) return undefined;
 	try {
+		const transcript = await deps.source.GET("/api/v1/sessions/{sessionId}/move/transcript", path);
+		if (!transcript.data) return undefined;
 		const gzip = Uint8Array.from(atob(transcript.data.transcriptGzip), (c) => c.charCodeAt(0));
 		await deps.uploadTranscript(moveId, transcript.data.agentSessionId, gzip);
 		return moveId;
