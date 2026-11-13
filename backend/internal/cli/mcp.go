@@ -31,7 +31,7 @@ const (
 var mcpProtocolVersions = []string{mcpDefaultProtocolVersion, "2025-03-26", "2024-11-05"}
 
 func newMCPCommand(ctx *commandContext) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:    "mcp",
 		Short:  "Serve Orchestrator's chat tools over stdio MCP (internal)",
 		Hidden: true,
@@ -40,6 +40,8 @@ func newMCPCommand(ctx *commandContext) *cobra.Command {
 			return ctx.serveMCP(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
+	cmd.AddCommand(newMCPServeCommand(ctx))
+	return cmd
 }
 
 type mcpRequest struct {
