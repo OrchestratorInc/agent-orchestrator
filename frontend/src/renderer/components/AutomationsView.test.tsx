@@ -153,9 +153,11 @@ describe("AutomationsView", () => {
 		expect(screen.queryByRole("combobox", { name: "Session kind" })).not.toBeInTheDocument();
 	});
 
-	it("offers no Cloud standalone agent as an automation's project", async () => {
+	it("offers no Cloud project or Cloud standalone agent as an automation's project", async () => {
+		// The local daemon runs automations and answers "Unknown project" for a Cloud one.
 		mocks.workspaces = [
 			{ id: "demo", name: "Demo" },
+			{ id: "cloud-1", name: "Cloud app", kind: "cloud", cloudOrgId: "org-1", sessions: [] },
 			{ id: "agent-1", name: "Fix the flaky test", kind: "cloud", standaloneAgent: true, sessions: [] },
 		];
 		const user = userEvent.setup();
@@ -165,6 +167,7 @@ describe("AutomationsView", () => {
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
 		expect(await screen.findByRole("option", { name: "Demo" })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: "Fix the flaky test" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("option", { name: "Cloud app" })).not.toBeInTheDocument();
 	});
 
 	it("edits an automation from its card action", async () => {
