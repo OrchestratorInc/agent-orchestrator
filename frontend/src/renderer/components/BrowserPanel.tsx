@@ -6,6 +6,7 @@ import {
 	useEffect,
 	useId,
 	useLayoutEffect,
+	useMemo,
 	useRef,
 	useState,
 	type FocusEvent,
@@ -63,7 +64,7 @@ import {
 	Trash2,
 	UserRound,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
@@ -364,16 +365,19 @@ export function useBrowserAnnotationQueue({
 		drainAnnotationQueue();
 	}, [drainAnnotationQueue]);
 
-	return {
-		status: state.status,
-		error: state.error,
-		queuedCount: state.queuedCount,
-		beginPicking,
-		cancelPicking,
-		enqueue,
-		failPicking,
-		retryQueued,
-	};
+	return useMemo(
+		() => ({
+			status: state.status,
+			error: state.error,
+			queuedCount: state.queuedCount,
+			beginPicking,
+			cancelPicking,
+			enqueue,
+			failPicking,
+			retryQueued,
+		}),
+		[state.status, state.error, state.queuedCount, beginPicking, cancelPicking, enqueue, failPicking, retryQueued],
+	);
 }
 
 export function BrowserPanel({
@@ -409,7 +413,11 @@ export function BrowserPanel({
 	);
 }
 
-export function BrowserPanelView({
+// Memoized: SessionView renders several times per session switch for reasons
+// that never reach this panel, and each pass re-rendered every toolbar
+// tooltip and tab. Its props (the browser model included) are stable objects
+// that change only when what the panel shows changes.
+export const BrowserPanelView = memo(function BrowserPanelView({
 	session,
 	active,
 	poppedOut,
@@ -505,8 +513,6 @@ export function BrowserPanelView({
 	const {
 		scrollRef: tabScrollRef,
 		scrollToEnd: scrollTabsToEnd,
-		showLeftFade: showTabsLeftFade,
-		showRightFade: showTabsRightFade,
 	} = useTabScrollEdges([tabs.length]);
 	const previousTabCountRef = useRef(tabs.length);
 
@@ -1116,7 +1122,7 @@ export function BrowserPanelView({
 					<div className="browser-panel__tab-region">
 						<div
 							aria-label={t("browser.tabs")}
-							className="browser-panel__tab-strip"
+							className="browser-panel__tab-strip edge-fade edge-fade-x"
 							onKeyDown={draggedTopTabId ? undefined : handleTabListKeyDown}
 							ref={tabScrollRef}
 							role="tablist"
@@ -1131,10 +1137,6 @@ export function BrowserPanelView({
 								/>
 							))}
 						</div>
-						{showTabsLeftFade ? (
-							<div aria-hidden="true" className="browser-panel__tab-fade browser-panel__tab-fade--left" />
-						) : null}
-						{showTabsRightFade ? <div aria-hidden="true" className="browser-panel__tab-fade" /> : null}
 					</div>
 				</SortableContext>
 				<DragOverlay adjustScale={false} dropAnimation={null} modifiers={browserTopTabDragModifiers}>
@@ -1317,7 +1319,7 @@ export function BrowserPanelView({
 											onClick={() => void reconnectRuntime()}
 											size="sm"
 											type="button"
-											variant="outline"
+											variant="secondary"
 										>
 											{t("browser.reconnectRuntime")}
 										</Button>
@@ -1813,7 +1815,7 @@ export function BrowserPanelView({
 			</div>
 		</div>
 	);
-}
+});
 
 function BrowserControlTooltip({
 	children,
@@ -2049,7 +2051,7 @@ function StaticPreview({ url }: { url: string }) {
 	return (
 		<div className="absolute inset-0 overflow-auto bg-background text-foreground">
 			<div className="border-b border-border bg-surface px-4 py-3">
-				<div className="text-caption font-semibold uppercase tracking-wide-md text-muted-foreground">AO Preview</div>
+				<div className="text-caption font-semibold uppercase tracking-wide-md text-muted-foreground">Orchestrator Preview</div>
 				<div className="mt-1 truncate font-mono text-xs text-accent">{url}</div>
 			</div>
 			<div className="mx-auto max-w-preview-max px-5 py-6">

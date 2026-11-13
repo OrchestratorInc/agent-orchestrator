@@ -126,6 +126,21 @@ func (t SessionInterfaceTransition) Active() bool { return !t.Phase.Terminal() }
 // AccountMove reports a handoff to another provider account in the same mode.
 func (t SessionInterfaceTransition) AccountMove() bool { return t.TargetAccountID != "" }
 
+// AccountMoveAwaitsTarget reports an account move whose old agent stopped and whose new one has not taken over.
+func (t SessionInterfaceTransition) AccountMoveAwaitsTarget() bool {
+	if !t.AccountMove() {
+		return false
+	}
+	switch t.Phase {
+	case SessionInterfaceTransitionSourceStopped,
+		SessionInterfaceTransitionTargetStarting,
+		SessionInterfaceTransitionActivating:
+		return true
+	default:
+		return false
+	}
+}
+
 // SessionInterfaceTransitionMessage is an automation/lifecycle message held
 // while neither controller is allowed to accept work.
 type SessionInterfaceTransitionMessage struct {

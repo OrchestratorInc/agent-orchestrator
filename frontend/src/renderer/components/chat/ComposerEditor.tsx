@@ -18,10 +18,12 @@ import {
 	$createTextNode,
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
+	COMMAND_PRIORITY_LOW,
 	DecoratorNode,
 	getDOMSelectionFromTarget,
 	HISTORY_MERGE_TAG,
 	HISTORY_PUSH_TAG,
+	KEY_BACKSPACE_COMMAND,
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
@@ -50,12 +52,14 @@ import {
 	type JSX,
 	type KeyboardEvent,
 } from "react";
-import { Box, Image as ImageIcon } from "lucide-react";
+import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
 import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
 import { splitInlineImagePaths } from "./messageAttachments";
+import type { ComposerSentToken } from "./sentComposerTokens";
 
 export type ComposerTrigger = {
 	kind: TriggerKind;
@@ -109,6 +113,8 @@ export type ComposerEditorHandle = {
 	 */
 	pruneImages(attached: string[]): void;
 	getSnapshot(): ComposerEditorSnapshot;
+	/** The skill and file chips in the text, so the sent message can draw them again. */
+	getTokens(): ComposerSentToken[];
 };
 
 /** What an inline image chip shows for a staged path; the path itself is the wire text. */
@@ -174,6 +180,22 @@ type SerializedComposerTokenNode = Spread<
 const DICTATION_FADE_MS = 300;
 /** Letters that arrive together fade in this far apart, left to right. */
 const DICTATION_LETTER_STAGGER_MS = 14;
+
+/** The draft's text sits this far inside the composer's padding on both sides. */
+const COMPOSER_TEXT_INSET = "px-[7px]";
+/**
+ * Reserved on both edges of whichever element scrolls the draft, and on the placeholder
+ * standing in for it. A classic scrollbar then neither reflows the text when it appears
+ * nor pushes the text off-centre; overlay scrollbars reserve nothing.
+ */
+const COMPOSER_SCROLL_GUTTER = "chat-composer-scrollbar [scrollbar-gutter:stable_both-edges]";
+/**
+ * Pulls the composer's trailing send controls in from the right edge. The leading +
+ * is a 28px ghost button whose glyph's ink starts ~10px inside it (7px of centring
+ * plus the icon's own margin); the filled send circle is its own edge. This inset
+ * puts the circle that same ~22px from the right as the + glyph is from the left.
+ */
+export const COMPOSER_SEND_INSET = "me-2.5";
 
 /**
  * One letter of a dictation in progress. A letter fades in once, when it first
@@ -328,6 +350,17 @@ function $serializeComposer(): string {
 		.getChildren()
 		.map((child) => child.getTextContent())
 		.join("\n");
+}
+
+function $composerTokens(): ComposerSentToken[] {
+	return $getRoot()
+		.getChildren()
+		.flatMap((paragraph) => ($isElementNode(paragraph) ? paragraph.getChildren() : []))
+		.flatMap<ComposerSentToken>((child) =>
+			child instanceof ComposerTokenNode && child.__kind !== "image"
+				? [{ kind: child.__kind, value: child.__value, display: child.__display, wire: child.__wire }]
+				: [],
+		);
 }
 
 function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean {
@@ -495,6 +528,47 @@ function $caretOffset(): number | undefined {
 		offset += paragraph.getTextContent().length + 1;
 	}
 	return undefined;
+}
+
+/**
+ * The caret's line as $serializeComposer counts it, with the lines above it.
+ * Only for a collapsed caret in the plain text node the line starts with, since
+ * list keys rewrite the line's start; anything else keeps the default key.
+ */
+function $caretLine() {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection) || !selection.isCollapsed() || selection.anchor.type !== "text") return undefined;
+	const node = selection.anchor.getNode();
+	if (!$isTextNode(node) || node.getType() !== "text") return undefined;
+	const caret = $caretOffset();
+	if (caret === undefined) return undefined;
+	const text = $serializeComposer();
+	const start = caret === 0 ? 0 : text.lastIndexOf("\n", caret - 1) + 1;
+	const column = caret - start;
+	if (selection.anchor.offset !== column) return undefined;
+	const end = text.indexOf("\n", caret);
+	return {
+		selection,
+		node,
+		column,
+		line: text.slice(start, end < 0 ? undefined : end),
+		previous: start === 0 ? [] : text.slice(0, start - 1).split("\n"),
+	};
+}
+
+/** Rewrites the start of the caret's line as one undo step, keeping the caret on the same text. */
+function $applyLinePrefixEdit(node: TextNode, column: number, edit: LinePrefixEdit): boolean {
+	if (node.getTextContentSize() < edit.remove) return false;
+	$addUpdateTag(HISTORY_PUSH_TAG);
+	const selection = node.select(0, edit.remove);
+	if (edit.insert) selection.insertText(edit.insert);
+	else selection.removeText();
+	const caret = Math.max(column - edit.remove, 0) + edit.insert.length;
+	if (caret === edit.insert.length) return true;
+	const after = $getSelection();
+	const anchor = $isRangeSelection(after) ? after.anchor.getNode() : undefined;
+	if ($isTextNode(anchor)) anchor.select(caret, caret);
+	return true;
 }
 
 function editorSnapshot(): ComposerEditorSnapshot {
@@ -675,6 +749,7 @@ const EditorBridge = forwardRef<
 				editor.update(() => $removeImageTokens((candidate) => !attached.includes(candidate)), { discrete: true });
 			},
 			getSnapshot: () => editor.getEditorState().read(editorSnapshot),
+			getTokens: () => editor.getEditorState().read($composerTokens),
 			caretBoundary: () => editor.read(() => $caretBoundary(editor)),
 		}),
 		[attachedImages, editor],
@@ -764,6 +839,48 @@ const EditorBridge = forwardRef<
 			removeEscape();
 		};
 	}, [editor, enterSends, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
+
+	// Markdown list keys. They run after send and completion above decline the
+	// key, so they only ever replace a plain newline, Tab focus move or Backspace.
+	useEffect(() => {
+		const plainKey = (event: globalThis.KeyboardEvent | null): event is globalThis.KeyboardEvent =>
+			event !== null && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229 &&
+			!editor.isComposing() && !event.metaKey && !event.ctrlKey && !event.altKey;
+		const handled = (event: globalThis.KeyboardEvent) => {
+			event.preventDefault();
+			return true;
+		};
+		const removeEnter = editor.registerCommand(KEY_ENTER_COMMAND, (event) => {
+			if (!plainKey(event)) return false;
+			const caret = $caretLine();
+			const action = caret && listEnter(caret.line, caret.column, caret.previous);
+			if (!caret || !action) return false;
+			if (action.kind === "exit") return $applyLinePrefixEdit(caret.node, caret.column, action.edit) && handled(event);
+			$addUpdateTag(HISTORY_PUSH_TAG);
+			caret.selection.insertRawText(action.text);
+			return handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		const removeTab = editor.registerCommand(KEY_TAB_COMMAND, (event) => {
+			if (!plainKey(event)) return false;
+			const caret = $caretLine();
+			const edit = caret && listIndent(caret.line, caret.previous, event.shiftKey);
+			return Boolean(caret && edit && $applyLinePrefixEdit(caret.node, caret.column, edit)) && handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		const removeBackspace = editor.registerCommand(KEY_BACKSPACE_COMMAND, (event) => {
+			if (!plainKey(event) || event.shiftKey) return false;
+			// A marker always ends in a space or tab; skip reading the draft on every other Backspace.
+			const selection = $getSelection();
+			if (!$isRangeSelection(selection) || !/[ \t]/.test(selection.anchor.getNode().getTextContent()[selection.anchor.offset - 1] ?? "")) return false;
+			const caret = $caretLine();
+			const edit = caret && listBackspace(caret.line, caret.column, caret.previous);
+			return Boolean(caret && edit && $applyLinePrefixEdit(caret.node, caret.column, edit)) && handled(event);
+		}, COMMAND_PRIORITY_LOW);
+		return () => {
+			removeEnter();
+			removeTab();
+			removeBackspace();
+		};
+	}, [editor]);
 
 	return null;
 });
@@ -869,10 +986,12 @@ export const ComposerEditor = forwardRef<
 	const placeholderNode = useCallback(
 		() => (
 			<div className={cn(
-				"py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground",
+				"py-1 text-base! leading-relaxed text-muted-foreground",
+				COMPOSER_TEXT_INSET,
 				suggestion
 					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
-					: "pointer-events-none absolute inset-x-0 top-0",
+					// Same gutter as the field below, so the first typed character lands where the placeholder began.
+					: cn("pointer-events-none absolute inset-x-0 top-0 overflow-hidden", COMPOSER_SCROLL_GUTTER),
 			)}>
 				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : (
 					// Both stay mounted in one grid cell, so turning dictation on or off crossfades them.
@@ -893,7 +1012,7 @@ export const ComposerEditor = forwardRef<
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
 			<ComposerImages.Provider value={images}>
-			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")}>
+			<div className={cn("relative", suggestion && cn("max-h-40 overflow-y-auto overscroll-contain", COMPOSER_SCROLL_GUTTER))}>
 				<PlainTextPlugin
 					contentEditable={
 						<ContentEditable
@@ -919,7 +1038,9 @@ export const ComposerEditor = forwardRef<
 								if (event.defaultPrevented) event.stopPropagation();
 							}}
 							className={cn(
-								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								"max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								COMPOSER_TEXT_INSET,
+								COMPOSER_SCROLL_GUTTER,
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
 								dictating && "caret-transparent",
 								concealed ? "invisible" : disabled && "opacity-50",

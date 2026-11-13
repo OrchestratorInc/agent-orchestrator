@@ -1,5 +1,6 @@
+import { apiErrorException } from "./api-error-exception";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "./api-client";
+import { apiClient } from "./api-client";
 import type { CloudCpClient } from "./cloud-cp";
 
 export type CueDTO = components["schemas"]["CueResponse"];
@@ -24,7 +25,7 @@ export async function fetchProjectCues(projectId: string, cloud?: CueHost): Prom
 	const { data, error } = await apiClient.GET("/api/v1/projects/{projectId}/cues", {
 		params: { path: { projectId } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Could not load cues"));
+	if (error) throw apiErrorException(error, "Could not load cues");
 	return data?.cues ?? [];
 }
 
@@ -34,7 +35,7 @@ export async function createCue(projectId: string, input: CueInput, cloud?: CueH
 		params: { path: { projectId } },
 		body: input,
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Could not create cue"));
+	if (error) throw apiErrorException(error, "Could not create cue");
 	return data.cue;
 }
 
@@ -44,7 +45,7 @@ export async function updateCue(cueId: string, input: CueInput, cloud?: CueHost)
 		params: { path: { cueId } },
 		body: input,
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Could not update cue"));
+	if (error) throw apiErrorException(error, "Could not update cue");
 	return data.cue;
 }
 
@@ -53,7 +54,7 @@ export async function deleteCue(cueId: string, cloud?: CueHost): Promise<void> {
 	const { error } = await apiClient.DELETE("/api/v1/cues/{cueId}", {
 		params: { path: { cueId } },
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Could not delete cue"));
+	if (error) throw apiErrorException(error, "Could not delete cue");
 }
 
 export async function invokeCue(
@@ -68,7 +69,7 @@ export async function invokeCue(
 		params: { path: { cueId } },
 		body,
 	});
-	if (error) throw new Error(apiErrorMessage(error, "Could not run cue"));
+	if (error) throw apiErrorException(error, "Could not run cue");
 	return data;
 }
 

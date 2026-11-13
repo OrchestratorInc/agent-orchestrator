@@ -432,8 +432,8 @@ test.describe("Add to chat from highlighted code", () => {
 		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
 	});
 
-	test("the button hides on Escape, when scrolled away (returning when back), and when the rows redraw", async ({ page }) => {
-		const { inspector } = await openChatSession(page);
+	test("the button hides on Escape and when scrolled away (returning when back), and survives the rows redrawing", async ({ page }) => {
+		const { inspector, sentToChat } = await openChatSession(page);
 		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4));
 		await expect(askButton(page)).toBeVisible();
 		await page.keyboard.press("Escape");
@@ -457,13 +457,53 @@ test.describe("Add to chat from highlighted code", () => {
 		await scroll("top");
 		await expect(askButton(page)).toBeVisible();
 
-		// Replace every row with a fresh copy, as Pierre does when it redraws.
+		// Replace every row with a fresh copy, as the viewer does when it redraws.
+		// The selection survives the rebuild (so a drag or shift+click anchor
+		// outlives it), and the button with it.
 		await page.locator(`${CENTER} diffs-container`).first().evaluate((host) => {
 			for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
 				column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
 			}
 		});
-		await expect(askButton(page)).toBeHidden();
+		await expect(askButton(page)).toBeVisible();
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+		await page.keyboard.type("why these lines?");
+		await page.keyboard.press("Enter");
+		await expect.poll(() => sentToChat.length).toBe(1);
+		expect(sentToChat[0].text).toBe("why these lines?");
+		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 3, endLine: 6 });
+	});
+
+	test("whole-line boundaries survive repeated redraws without attaching the following line", { tag: "@P0" }, async ({ page }) => {
+		const { sentToChat } = await openChatSession(page);
+		await row(page, REVIEW, 2).evaluate(element => {
+			if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+			const root = element.getRootNode() as ShadowRoot & { getSelection: () => Selection };
+			const end = root.querySelector('[data-line="4"][data-line-type]')!;
+			root.getSelection().setBaseAndExtent(element, 0, end, 0);
+			document.dispatchEvent(new Event("selectionchange"));
+		});
+		await expect(askButton(page)).toBeVisible();
+		for (let redraw = 0; redraw < 2; redraw++) {
+			await page.locator(`${REVIEW} diffs-container`).first().evaluate(async host => {
+				for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+					column.replaceChildren(...[...column.children].map(child => child.cloneNode(true)));
+				}
+				await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+			});
+			await expect.poll(() => row(page, REVIEW, 2).evaluate(element =>
+				(element.getRootNode() as ShadowRoot & { getSelection: () => Selection }).getSelection().toString(),
+			)).toBe("  step(2);\n  step(3);\n");
+			await expect(askButton(page)).toBeVisible();
+		}
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+		await page.keyboard.type("explain these two lines");
+		await page.keyboard.press("Enter");
+		await expect.poll(() => sentToChat.length).toBe(1);
+		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 2, endLine: 3 });
+		expect(sentToChat[0].fileReferences[0].lines.map(line => line.text)).toEqual(["  step(2);", "  step(3);"]);
 	});
 
 	test("a plain click in the code shows no button", async ({ page }) => {
@@ -471,6 +511,99 @@ test.describe("Add to chat from highlighted code", () => {
 		await row(page, REVIEW, 3).click({ position: { x: 40, y: 8 } });
 		await page.waitForTimeout(400);
 		await expect(askButton(page)).toBeHidden();
+	});
+
+	for (const action of ["Escape", "click-away"] as const) test(`${action} stays dismissed when rows redraw in the same frame`, { tag: "@P0" }, async ({ page }) => {
+		await openChatSession(page);
+		await row(page, REVIEW, 2).evaluate(element => {
+			if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+			const root = element.getRootNode() as ShadowRoot & { getSelection: () => Selection };
+			const end = root.querySelector('[data-line="4"][data-line-type]')!;
+			root.getSelection().setBaseAndExtent(element, 0, end, end.childNodes.length);
+			document.dispatchEvent(new Event("selectionchange"));
+		});
+		await expect(askButton(page)).toBeVisible();
+		const dismissed = await page.locator(`${REVIEW} diffs-container`).first().evaluate(async (host, action) => {
+			const root = host.shadowRoot as ShadowRoot & { getSelection: () => Selection };
+			const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+			if (action === "Escape") document.dispatchEvent(escape);
+			else {
+				document.body.dispatchEvent(new PointerEvent("pointerdown", { button: 0, bubbles: true }));
+				root.getSelection().removeAllRanges();
+				document.dispatchEvent(new Event("selectionchange"));
+			}
+			const cleared = root.getSelection().anchorNode === null;
+			for (const column of root.querySelectorAll("[data-content]")) {
+				column.replaceChildren(...[...column.children].map(child => child.cloneNode(true)));
+			}
+			await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+			return { handled: escape.defaultPrevented, cleared, restored: root.getSelection().toString() };
+		}, action);
+		expect(dismissed).toEqual({ handled: action === "Escape", cleared: true, restored: "" });
+		await expect(askButton(page)).toBeHidden();
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toHaveCount(0);
+	});
+
+	test("shift+click extends the highlight across lines", { tag: "@P0" }, async ({ page }) => {
+		const { sentToChat } = await openChatSession(page);
+		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4));
+		await expect(askButton(page)).toBeVisible();
+		const box = (await row(page, REVIEW, 6).boundingBox())!;
+		await page.keyboard.down("Shift");
+		await page.mouse.click(box.x + 60, box.y + box.height / 2);
+		await page.keyboard.up("Shift");
+		// Extending the selection keeps the toolbar by its first selected line.
+		await expect.poll(async () => {
+			const button = await askButton(page).boundingBox();
+			const line = await row(page, REVIEW, 2).boundingBox();
+			return button && line && button.y > line.y - button.height - 24 && button.y < line.y + line.height + 24;
+		}, { timeout: 5_000 }).toBe(true);
+		await expectButtonInView(page);
+		await expect(askButton(page).getByRole("button", { name: "Add to chat" })).toBeEnabled();
+		await expect(askButton(page)).not.toHaveCSS("pointer-events", "none");
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+		await page.keyboard.type("why these lines?");
+		await page.keyboard.press("Enter");
+		await expect.poll(() => sentToChat.length).toBe(1);
+		expect(sentToChat[0].text).toBe("why these lines?");
+		expect(sentToChat[0].fileReferences).toHaveLength(1);
+		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 2, endLine: 6 });
+		expect(sentToChat[0].fileReferences[0].lines.map(line => line.text)).toEqual([
+			"  step(2);", "  step(3);", "const value4 = 4;", "  step(5);", "  step(5, { retry: true });", "  step(6);",
+		]);
+	});
+
+	test("a redraw mid-drag keeps the selection when dragging continues", { tag: "@P0" }, async ({ page }) => {
+		const { sentToChat } = await openChatSession(page);
+		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4), { release: false });
+		// Replace every row with a fresh copy WHILE the button is still held, as
+		// the viewer does when a loaded highlighter re-tokenizes or a snapshot lands.
+		await page.locator(`${REVIEW} diffs-container`).first().evaluate(async (host) => {
+			for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+				column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
+			}
+			await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+		});
+		const extended = (await row(page, REVIEW, 6).boundingBox())!;
+		await page.mouse.move(extended.x + 60, extended.y + extended.height / 2, { steps: 8 });
+		await page.mouse.up();
+		await expect(askButton(page)).toBeVisible();
+		// Visibility also holds during dragging; wait for the release capture.
+		await expect(askButton(page).getByRole("button", { name: "Add to chat" })).toBeEnabled();
+		await expect(askButton(page)).not.toHaveCSS("pointer-events", "none");
+		await page.keyboard.press("ControlOrMeta+L");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+		await page.keyboard.type("why these lines?");
+		await page.keyboard.press("Enter");
+		await expect.poll(() => sentToChat.length).toBe(1);
+		expect(sentToChat[0].text).toBe("why these lines?");
+		expect(sentToChat[0].fileReferences).toHaveLength(1);
+		expect(sentToChat[0].fileReferences[0]).toMatchObject({ path: filePath, line: 2, endLine: 6 });
+		expect(sentToChat[0].fileReferences[0].lines.map(line => line.text)).toEqual([
+			"  step(2);", "  step(3);", "const value4 = 4;", "  step(5);", "  step(5, { retry: true });", "  step(6);",
+		]);
 	});
 
 	test("the gutter + still opens the single-line feedback composer, and sits clear of the code and the line number", async ({ page }) => {

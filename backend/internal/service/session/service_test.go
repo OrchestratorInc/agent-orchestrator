@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -66,6 +67,7 @@ func (f *fakeAgentReadiness) RecheckAgent(agentID string) {
 }
 
 type fakeStore struct {
+	artifacts           map[domain.SessionID][]string
 	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
@@ -89,6 +91,7 @@ type fakeStore struct {
 	num                 int
 	conversations       map[domain.SessionID]domain.ConversationRecord
 	activities          []domain.ConversationActivity
+	runningTurns        map[string][]string
 
 	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
 	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
@@ -149,7 +152,11 @@ func (f *fakeStore) ActivityStatusByProviderItem(_ context.Context, conversation
 	return "", false, nil
 }
 
-func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, activity domain.ConversationActivity, now time.Time) error {
+func (f *fakeStore) ListVisibleRunningTurnProviderIDs(_ context.Context, conversationID string) ([]string, error) {
+	return f.runningTurns[conversationID], nil
+}
+
+func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error {
 	if activity.ProviderItemID != "" {
 		for i, existing := range f.activities {
 			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
@@ -172,6 +179,7 @@ func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, 
 		}
 	}
 	activity.ConversationID = conversationID
+	activity.TurnID = providerTurnID
 	activity.Sequence = int64(len(f.activities) + 1)
 	activity.Revision = 1
 	activity.CreatedAt = now
@@ -221,7 +229,7 @@ func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Awaiting PR"}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Idle"}
 	for _, sess := range list {
 		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
 			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
@@ -373,6 +381,47 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	}
 	r, ok := f.sessions[id]
 	return r, ok, nil
+}
+
+func (f *fakeStore) AddSessionArtifacts(_ context.Context, id domain.SessionID, registrations []domain.SessionArtifactRegistration, _ time.Time) ([]string, bool, error) {
+	if _, ok := f.sessions[id]; !ok {
+		return nil, false, nil
+	}
+	if f.artifacts == nil {
+		f.artifacts = map[domain.SessionID][]string{}
+	}
+	for _, registration := range registrations {
+		path := registration.Path
+		if !slices.Contains(f.artifacts[id], path) {
+			f.artifacts[id] = append(f.artifacts[id], path)
+		}
+	}
+	return f.artifacts[id], true, nil
+}
+
+func (f *fakeStore) ListSessionArtifactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.SessionArtifactRecord, error) {
+	out := make(map[domain.SessionID][]domain.SessionArtifactRecord, len(ids))
+	registeredAt := time.Unix(0, 0)
+	for _, id := range ids {
+		paths, ok := f.artifacts[id]
+		if !ok {
+			continue
+		}
+		for _, path := range paths {
+			out[id] = append(out[id], domain.SessionArtifactRecord{ID: "artifact:" + path, SessionID: id, Path: path, RegisteredAt: &registeredAt})
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) RemoveSessionArtifact(_ context.Context, id domain.SessionID, path string) error {
+	f.artifacts[id] = slices.DeleteFunc(f.artifacts[id], func(p string) bool { return p == path })
+	return nil
+}
+
+func (f *fakeStore) ClearSessionArtifacts(_ context.Context, id domain.SessionID) error {
+	delete(f.artifacts, id)
+	return nil
 }
 
 func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
@@ -975,12 +1024,12 @@ func TestLinkedWorkspaceMissingCommonRepository(t *testing.T) {
 }
 
 func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
-	busy := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
+	busy := classifyWorkspaceGitError(context.Background(), "/repo", "status", errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
 	var apiErr *apierr.Error
 	if !errors.As(busy, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
 		t.Fatalf("lock error = %v, want retryable WORKSPACE_GIT_BUSY", busy)
 	}
-	unknown := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: bad object")
+	unknown := classifyWorkspaceGitError(context.Background(), "/repo-unknown", "status", errors.New("git exit"), "fatal: bad object")
 	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
 		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
 	}
@@ -3391,7 +3440,7 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("events = %#v, want spawned + first_session", sink.events)
 	}
-	if sink.events[0].Name != "ao.session.spawned" || sink.events[1].Name != "ao.onboarding.first_session_spawned" {
+	if sink.events[0].Name != "ao.sessions.spawned" || sink.events[1].Name != "ao.sessions.first_spawned" {
 		t.Fatalf("event names = %#v", []string{sink.events[0].Name, sink.events[1].Name})
 	}
 	if got := sink.events[0].Payload["duration_ms"]; got != int64(0) {
@@ -3408,8 +3457,8 @@ func TestStandaloneSessionTelemetryKind(t *testing.T) {
 	st.sessions[rec.ID] = rec
 	sink := &fakeTelemetrySink{}
 	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
-	svc.emitSpawned(context.Background(), rec, 1, false, false, domain.SessionCreatedByUser)
-	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("launch failed"), 1)
+	svc.emitSpawned(rec, 1, 1, false, false, spawnFacts{createdBy: domain.SessionCreatedByUser})
+	svc.emitSpawnFailed(spawnFailure{kind: domain.KindWorker, harness: domain.HarnessCodex}, errors.New("launch failed"), 1, 1)
 	originalCapture := captureRelaunchError
 	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
 	t.Cleanup(func() { captureRelaunchError = originalCapture })
@@ -3695,7 +3744,7 @@ func TestSpawnFailedEmitsDuration(t *testing.T) {
 	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err == nil {
 		t.Fatal("Spawn should fail")
 	}
-	if len(sink.events) != 1 || sink.events[0].Name != "ao.session.spawn_failed" {
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.sessions.spawn_failed" {
 		t.Fatalf("events = %#v, want one spawn_failed", sink.events)
 	}
 	if got := sink.events[0].Payload["duration_ms"]; got != int64(1500) {
@@ -3738,7 +3787,7 @@ func TestSpawnEmitsTelemetryOnSuccess(t *testing.T) {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
 	}
 	ev := ts.events[0]
-	if ev.Name != "ao.session.spawned" || ev.Source != "session_service" {
+	if ev.Name != "ao.sessions.spawned" || ev.Source != "session_service" {
 		t.Fatalf("event = %+v", ev)
 	}
 	if ev.ProjectID == nil || *ev.ProjectID != "mer" || ev.SessionID == nil || *ev.SessionID != "mer-9" {
@@ -3770,7 +3819,7 @@ func TestSpawnEmitsTelemetryOnFailure(t *testing.T) {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
 	}
 	ev := ts.events[0]
-	if ev.Name != "ao.session.spawn_failed" || ev.Source != "session_service" || ev.Level != ports.TelemetryLevelError {
+	if ev.Name != "ao.sessions.spawn_failed" || ev.Source != "session_service" || ev.Level != ports.TelemetryLevelError {
 		t.Fatalf("event = %+v", ev)
 	}
 	if ev.ProjectID == nil || *ev.ProjectID != "mer" || ev.SessionID != nil {
@@ -3903,6 +3952,11 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"chat driver incompatible", fmt.Errorf("spawn: %w", ports.ErrChatDriverIncompatible), apierr.KindConflict, "CHAT_DRIVER_INCOMPATIBLE"},
 		{"chat auth required", fmt.Errorf("spawn: %w", ports.ErrChatAuthRequired), apierr.KindConflict, "CHAT_AUTH_REQUIRED"},
 		{"agent auth required", fmt.Errorf("spawn: %w", ports.ErrAgentAuthRequired), apierr.KindConflict, "AGENT_AUTH_REQUIRED"},
+		{"chat resume refused its login", &sessionmanager.RelaunchError{Step: "chat start", Err: fmt.Errorf(
+			"resume agent mer-1: resume chat: %w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired)},
+			apierr.KindConflict, "AGENT_AUTH_REQUIRED"},
+		{"chat spawn refused its login", fmt.Errorf("spawn: %w: persistent ACP host: %w", ports.ErrChatDriverUnavailable, ports.ErrAgentAuthRequired),
+			apierr.KindConflict, "CHAT_DRIVER_UNAVAILABLE"},
 		{"interface notice not acknowledgeable", fmt.Errorf("acknowledge interface notice: %w", sessionmanager.ErrInterfaceTransitionNoticeNotAcknowledgeable), apierr.KindConflict, "INTERFACE_TRANSITION_NOTICE_NOT_ACKNOWLEDGEABLE"},
 		{"provider history recovery unavailable", fmt.Errorf("recover interface: %w", sessionmanager.ErrInterfaceProviderHistoryRecoveryUnavailable), apierr.KindConflict, "PROVIDER_HISTORY_RECOVERY_UNAVAILABLE"},
 		{"native conversation missing", fmt.Errorf("switch interface: %w", sessionmanager.ErrNativeConversationMissing), apierr.KindConflict, "NATIVE_SESSION_MISSING"},
@@ -4043,11 +4097,11 @@ func TestEmitSpawnFailedClassifiesRawStageSentinel(t *testing.T) {
 	})
 
 	raw := fmt.Errorf("spawn mer-1: %w: tmux runtime: create session mer-1: boom", sessionmanager.ErrRuntimeCreate)
-	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{
-		ProjectID: "mer",
-		Kind:      domain.KindWorker,
-		Harness:   domain.HarnessCodex,
-	}, raw, 42)
+	svc.emitSpawnFailed(spawnFailure{
+		projectID: "mer",
+		kind:      domain.KindWorker,
+		harness:   domain.HarnessCodex,
+	}, raw, 42, 42)
 
 	if len(ts.events) != 1 {
 		t.Fatalf("telemetry events = %d, want 1", len(ts.events))
@@ -5553,6 +5607,45 @@ func TestListPRSummariesSuppressesFailingChecksUnlessCIFailing(t *testing.T) {
 	}
 }
 
+func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
+	cases := []struct {
+		name string
+		ci   domain.CIState
+		want []string
+	}{
+		{name: "failing lists only real failures", ci: domain.CIFailing, want: []string{"build"}},
+		{name: "unknown lists cancelled checks", ci: domain.CIUnknown, want: []string{"lint"}},
+		{name: "pending lists nothing", ci: domain.CIPending},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+			prURL := "https://github.com/acme/repo/pull/8"
+			stList := &multiPRFakeStore{fakeStore: st, prs: []domain.PullRequest{{
+				URL:       prURL,
+				SessionID: "mer-1",
+				Number:    8,
+				CI:        tc.ci,
+				HeadSHA:   "new-sha",
+				UpdatedAt: time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC),
+			}}}
+			stList.checks[prURL] = []domain.PullRequestCheck{
+				{Name: "build", CommitHash: "new-sha", Status: domain.PRCheckFailed, Conclusion: "failure"},
+				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled"},
+			}
+
+			got, err := (&Service{store: stList}).ListPRSummaries(context.Background(), "mer-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if names := failingCheckNames(got[0].CI.FailingChecks); !sameStrings(names, tc.want) {
+				t.Fatalf("listed checks = %v, want %v", names, tc.want)
+			}
+		})
+	}
+}
+
 func TestListPRSummariesExposesPerPRAutoInjectCIPolicy(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
@@ -5864,7 +5957,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5922,15 +6015,15 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sess.KanbanColumn != "needs_review" {
 		t.Fatalf("column = %q, want needs_review", sess.KanbanColumn)
 	}
-	if sess.DisplayStatus != "Needs human review" {
-		t.Fatalf("displayStatus = %q, want Needs human review", sess.DisplayStatus)
+	if sess.DisplayStatus != "Awaiting review" {
+		t.Fatalf("displayStatus = %q, want Awaiting review", sess.DisplayStatus)
 	}
 }
 
@@ -6298,12 +6391,12 @@ func (m memMilestones) Claim(name string) (bool, bool) {
 func spawnedFirstForInstall(t *testing.T, sink *fakeTelemetrySink) (any, bool) {
 	t.Helper()
 	for i := len(sink.events) - 1; i >= 0; i-- {
-		if sink.events[i].Name == "ao.session.spawned" {
+		if sink.events[i].Name == "ao.sessions.spawned" {
 			v, ok := sink.events[i].Payload["first_for_install"]
 			return v, ok
 		}
 	}
-	t.Fatalf("no ao.session.spawned in %#v", sink.events)
+	t.Fatalf("no ao.sessions.spawned in %#v", sink.events)
 	return nil, false
 }
 
@@ -6329,7 +6422,7 @@ func TestSpawnFirstForInstallIsDurableNotTableEmpty(t *testing.T) {
 	}
 	var legacy int
 	for _, ev := range sink.events {
-		if ev.Name == "ao.onboarding.first_session_spawned" {
+		if ev.Name == "ao.sessions.first_spawned" {
 			legacy++
 		}
 	}
@@ -6455,7 +6548,7 @@ func TestSpawnFirstForInstallSurvivesALaterSpawnFinishingFirst(t *testing.T) {
 	got := map[domain.SessionID]any{}
 	sink.mu.Lock()
 	for _, ev := range sink.events {
-		if ev.Name == "ao.session.spawned" {
+		if ev.Name == "ao.sessions.spawned" {
 			got[*ev.SessionID] = ev.Payload["first_for_install"]
 		}
 	}
@@ -6539,5 +6632,68 @@ func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
 	mgr.refuse["mer-old"] = errors.New("disk I/O error")
 	if err := svc.DeleteExpired(ctx, 30); err == nil || !strings.Contains(err.Error(), "mer-old") {
 		t.Fatalf("failed delete err = %v, want it reported", err)
+	}
+}
+
+// A polled read against a repository stuck in one broken state reports to
+// Sentry once per state change, not once per poll (AO-DAEMON-9).
+func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "w-1")
+	read := func(detail string) error {
+		return classifyWorkspaceGitError(context.Background(), root, "status", errors.New("git exit"), detail)
+	}
+	steps := []struct {
+		name   string
+		run    func() error
+		repeat bool
+	}{
+		{"first failure", func() error { return read("fatal: bad object HEAD") }, false},
+		{"same failure on the next poll", func() error { return read("fatal: bad object HEAD") }, true},
+		{"and the poll after", func() error { return read("fatal: bad object HEAD") }, true},
+		{"a different failure", func() error { return read("fatal: your current branch appears to be broken") }, false},
+		{"after a successful read", func() error {
+			noteWorkspaceGitReadOK(root, "status")
+			return read("fatal: your current branch appears to be broken")
+		}, false},
+	}
+	for _, step := range steps {
+		err := step.run()
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+			t.Fatalf("%s: client sees %v, want WORKSPACE_GIT_READ_FAILED", step.name, err)
+		}
+		if got := sentryobs.IsRepeat(err); got != step.repeat {
+			t.Errorf("%s: skipped by Sentry = %v, want %v", step.name, got, step.repeat)
+		}
+	}
+	other := classifyWorkspaceGitError(context.Background(), filepath.Join(t.TempDir(), "w-2"), "status", errors.New("git exit"), "fatal: bad object HEAD")
+	if sentryobs.IsRepeat(other) {
+		t.Error("a second workspace's first failure was skipped")
+	}
+}
+
+func TestWorkspaceGitRecoveryIsScopedToOperation(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	read := func(op string) error {
+		return classifyWorkspaceGitError(t.Context(), root, op, errors.New("git exit"), "fatal: bad object HEAD")
+	}
+	read("diff")
+	for _, capped := range []bool{false, true} {
+		read("status")
+		if capped {
+			if _, _, err := gitWorkspaceOutputCapped(t.Context(), root, 1, "status"); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if _, err := gitWorkspaceOutput(t.Context(), root, "status"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if sentryobs.IsRepeat(read("status")) {
+			t.Error("recovered status was still suppressed")
+		}
+		if !sentryobs.IsRepeat(read("diff")) {
+			t.Error("successful status rearmed unrelated diff")
+		}
 	}
 }

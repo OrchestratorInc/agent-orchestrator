@@ -154,6 +154,10 @@ func (f *fakeProjectManager) PrepareClone(_ context.Context, in projectsvc.Clone
 	return projectsvc.ClonePreparationResult{Path: "/tmp/" + in.RemoteURL, RemoteURL: in.RemoteURL}, nil
 }
 
+func (f *fakeProjectManager) PrepareCloneWithProgress(ctx context.Context, in projectsvc.CloneInput, _ func(projectsvc.CloneProgress)) (projectsvc.ClonePreparationResult, error) {
+	return f.PrepareClone(ctx, in)
+}
+
 func (f *fakeProjectManager) CheckCloneDestination(_ context.Context, in projectsvc.CloneInput) (projectsvc.CloneDestination, error) {
 	return projectsvc.CloneDestination{RemoteURL: in.RemoteURL}, nil
 }
@@ -163,7 +167,7 @@ func (f *fakeProjectManager) CleanupPreparedClone(context.Context, projectsvc.Cl
 }
 
 func (f *fakeProjectManager) InitializeRepository(_ context.Context, in projectsvc.InitializeRepositoryInput) (projectsvc.InitializeRepositoryResult, error) {
-	return projectsvc.InitializeRepositoryResult(in), nil
+	return projectsvc.InitializeRepositoryResult{Path: in.Path}, nil
 }
 
 func (f *fakeProjectManager) UpdateSettings(_ context.Context, id domain.ProjectID, in projectsvc.UpdateSettingsInput) (projectsvc.Project, error) {

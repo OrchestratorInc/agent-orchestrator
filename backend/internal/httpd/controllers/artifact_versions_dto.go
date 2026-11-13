@@ -27,8 +27,12 @@ type ArtifactVersionSummary struct {
 // ListArtifactVersionsResponse lists a file's kept versions, newest first. The
 // first entry is the current version.
 type ListArtifactVersionsResponse struct {
-	Path     string                   `json:"path"`
-	Versions []ArtifactVersionSummary `json:"versions"`
+	Path string `json:"path"`
+	// MediaVersions tells a client on another host that this daemon can show
+	// and restore a media version: an older one ignores the version request
+	// and serves the live file, under the label of the version asked for.
+	MediaVersions bool                     `json:"mediaVersions,omitempty" description:"This daemon serves a version's bytes on the preview route and restores any file type. Absent from an older daemon."`
+	Versions      []ArtifactVersionSummary `json:"versions"`
 }
 
 // ArtifactVersionResponse is one version with its text content.

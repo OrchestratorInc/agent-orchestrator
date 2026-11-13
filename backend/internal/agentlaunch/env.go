@@ -55,8 +55,8 @@ func RedactValues(output string, configured map[string]string) string {
 	return output
 }
 
-// RedactError drops the original error when it contains a sensitive value so
-// unwrapping and telemetry cannot expose that value.
+// RedactError hides the original error when it contains a sensitive value so
+// unwrapping and telemetry cannot expose that value; errors.Is still matches it.
 func RedactError(err error, configured map[string]string) error {
 	if err == nil {
 		return nil
@@ -65,8 +65,17 @@ func RedactError(err error, configured map[string]string) error {
 	if message == err.Error() {
 		return err
 	}
-	return errors.New(message)
+	return redactedError{message: message, cause: err}
 }
+
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (e redactedError) Error() string { return e.message }
+
+func (e redactedError) Is(target error) bool { return errors.Is(e.cause, target) }
 
 // PinnedPATH prepends an AO-only directory to the supplied
 // PATH. It rejects executables not named ao because their directory cannot

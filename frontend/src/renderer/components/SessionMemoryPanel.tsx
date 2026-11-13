@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, Loader2 } from "@/components/app-icons";
 import {
 	chipTone,
 	largestSession,
@@ -269,14 +269,14 @@ function cpuOrder<T extends { id: string; session: WorkspaceSession; reading: Se
  */
 function SortHeader({ active, ascending, className, label, onSort, sortable }: { active: boolean; ascending: boolean; className: string; label: string; onSort: () => void; sortable: boolean }) {
 	if (!sortable) {
-		return <th className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">{label}</th>;
+		return <th className={cn("pb-2 pt-3 font-medium", className)} scope="col">{label}</th>;
 	}
 	// Visible whenever it works, so the header reads as sortable before any
 	// click: faint on an idle column, full strength showing the direction on
 	// the active one.
 	const Arrow = active && ascending ? ChevronUp : ChevronDown;
 	return (
-		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("bg-popover pb-2 pt-3 font-medium", className)} scope="col">
+		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("pb-2 pt-3 font-medium", className)} scope="col">
 			<Pressable
 				className={cn(
 					"inline-flex items-center gap-1 rounded-sm transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -294,7 +294,7 @@ function SortHeader({ active, ascending, className, label, onSort, sortable }: {
 }
 
 /** Every live session and AO's own processes, largest first. */
-export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (rows: ReportRow[]) => void; projectId?: string; underToolbar?: boolean }) {
+export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onRows?: (rows: ReportRow[]) => void; pinned?: boolean; projectId?: string; underToolbar?: boolean }) {
 	const { t } = useTranslation();
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory(projectId).data;
@@ -371,16 +371,18 @@ export function SessionsTable({ onRows, projectId, underToolbar }: { onRows?: (r
 			</colgroup>
 			{/* The columns stay readable however far the list scrolls. */}
 			{/* Below the pinned summary (h-8) and, on the settings page, the window's
-			    transparent toolbar strip. */}
-			<thead className={cn("sticky z-10 bg-popover", underToolbar ? "top-[calc(var(--spacing-toolbar)+--spacing(8))]" : "top-8")}>
+			    transparent toolbar strip. At rest the header is part of the card, only
+			    its divider showing; once pinned it is filled so rows scroll under it,
+			    not through it. */}
+			<thead className={cn("sticky z-10", pinned && "bg-popover", underToolbar ? "top-[calc(var(--spacing-toolbar)+--spacing(8))]" : "top-8")}>
 				<tr className="border-b border-(--color-border-settings-dialog-header) text-xs text-settings-muted">
-					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
-					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
-					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.pid)} scope="col">{t("shell.memoryColumnPid")}</th>
+					<th className={cn("pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
+					<th className={cn("pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
+					<th className={cn("pb-2 pt-3 font-medium", cell.pid)} scope="col">{t("shell.memoryColumnPid")}</th>
 					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className={cell.cpu} label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} sortable={live.length > 1} />
 					{/* Memory next to Share: the bar is the memory figure drawn. */}
 					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className={cell.memory} label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} sortable={live.length > 1} />
-					<th className={cn("bg-popover pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
+					<th className={cn("pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
 				</tr>
 			</thead>
 			<tbody className="[&_tr+tr.memory-group]:border-t [&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-group]:border-(--color-border-settings-dialog-header) [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
@@ -505,7 +507,7 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 					) : null}
 				</div>
 			</div>
-			<SessionsTable onRows={setRows} projectId={projectId} underToolbar={underToolbar} />
+			<SessionsTable onRows={setRows} pinned={scrolledPast} projectId={projectId} underToolbar={underToolbar} />
 			</div>
 		</>
 	);
@@ -761,7 +763,7 @@ export function sessionReport(
 	const working = session.activity?.state === "active";
 	const identity = [session.workspaceName, session.kind ?? "worker", session.provider, session.mode].filter(Boolean).join(" · ");
 	const lines = [session.title, identity];
-	// The daemon's lane ("Needs review") and what the agent is doing right now
+	// The daemon's lane ("Awaiting review") and what the agent is doing right now
 	// ("Bash · 38s") are different facts, but on an idle session they collapse
 	// to the same word; print it once.
 	const lane = session.displayStatus ?? session.status;
@@ -832,14 +834,14 @@ export function diagnosticsReport(
 	const { app, system } = machine;
 	const lines = [t("shell.memorySectionMachine")];
 	if (app && system) {
-		lines.push(`Memory   AO ${formatMemory(app.rssBytes)} · ${formatMemory(system.availableBytes)} free of ${formatMemory(system.totalBytes)}`);
+		lines.push(`Memory   Orchestrator ${formatMemory(app.rssBytes)} · ${formatMemory(system.availableBytes)} free of ${formatMemory(system.totalBytes)}`);
 	} else if (app) {
-		lines.push(`Memory   AO ${formatMemory(app.rssBytes)}`);
+		lines.push(`Memory   Orchestrator ${formatMemory(app.rssBytes)}`);
 	}
 	if (system) {
 		// A negative load average is Windows' "not applicable" sentinel, never a real reading.
 		const load = system.load1 >= 0 ? ` · load ${system.load1.toFixed(2)}` : "";
-		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · AO ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))}${load}`);
+		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · Orchestrator ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))}${load}`);
 		if (system.swapBytesPerSec > 0) lines.push(`Swapping ${formatMemory(system.swapBytesPerSec)}/s`);
 	}
 	lines.push(`Sessions ${rows.length}`);

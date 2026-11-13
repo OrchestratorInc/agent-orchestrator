@@ -1,4 +1,4 @@
-import { Share2 } from "lucide-react";
+import { Share2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -6,9 +6,8 @@ import { useCloudSessionLive } from "../hooks/useCloudSessionLive";
 import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { orderSessionPeople, personInitials, SESSION_PEOPLE_SHOWN, sessionPeopleFromLive, type SessionPerson } from "../lib/session-people";
 import { cn } from "../lib/utils";
-import { ShareLinkDialog } from "./ShareLinkDialog";
 import { ShareSessionDialog } from "./ShareSessionDialog";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import { Pressable } from "./ui/pressable";
 
@@ -109,16 +108,22 @@ function SessionPersonAvatar({ person }: { person: SessionPerson }) {
 }
 
 /**
- * The session header's sharing control. While someone else has the session
- * open it shows who is there as circles; otherwise the owner sees a Share
- * button. Either opens the share dialog for the owner; a guest only sees who
- * is there.
+ * The session header's sharing control, as Google Docs has it: one Share
+ * button that opens the share dialog, which holds people and teams, their
+ * access, General access and Copy link. While someone else has the session
+ * open it shows who is there as circles instead, which open the same dialog
+ * for the owner; a guest only sees who is there. The whole project is shared
+ * from the dialog or from Project settings.
  */
-export function SessionPeopleControl({ orgId, projectId, sessionId, canShare }: {
+export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName, standaloneAgent }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string;
 	canShare: boolean;
+	sessionName?: string;
+	projectName?: string;
+	/** The session is a Cloud standalone agent's: shared on its own, never as a project. */
+	standaloneAgent?: boolean;
 }) {
 	const { t } = useTranslation();
 	const { userId } = useCloudCp();
@@ -136,15 +141,24 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare }: 
 					<SessionPeopleStack people={others} list={present} me={me} onActivate={canShare ? () => setOpen(true) : undefined} ringClassName="ring-background" />
 				</span>
 			) : (
-				<TopbarButton variant="accent" className="topbar-control--labeled" onClick={() => setOpen(true)} data-share-session-button>
+				<Button type="button" size="sm" variant="secondary" onClick={() => setOpen(true)} data-share-session-button>
 					<Share2 className="size-icon-md" aria-hidden="true" />
 					<span data-compact-label>{t("share.button")}</span>
-				</TopbarButton>
+				</Button>
 			)}
-			{/* Sharing with people and teams is Teams; without it, Share makes links. */}
-			{canShare ? (teams
-				? <ShareSessionDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} />
-				: <ShareLinkDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} />) : null}
+			{canShare ? (
+				<ShareSessionDialog
+					open={open}
+					onOpenChange={setOpen}
+					orgId={orgId}
+					projectId={projectId}
+					sessionId={sessionId}
+					sessionName={sessionName}
+					projectName={projectName}
+					people={teams}
+					standaloneAgent={standaloneAgent}
+				/>
+			) : null}
 		</>
 	);
 }

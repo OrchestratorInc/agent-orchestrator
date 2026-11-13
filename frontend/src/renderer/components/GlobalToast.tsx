@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check } from "lucide-react";
+import { Check } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
 import { CloseButton } from "./ui/close-button";
@@ -48,7 +48,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 	const [paused, setPaused] = useState(false);
 
 	useEffect(() => {
-		if (paused) return;
+		if (paused || dismissMs === 0) return;
 		const exitTimer = window.setTimeout(() => setExiting(true), Math.max(0, dismissMs - 180));
 		const dismissTimer = window.setTimeout(() => dismissGlobalToast(toast.nonce), dismissMs);
 		return () => {
