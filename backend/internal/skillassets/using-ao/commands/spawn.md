@@ -23,7 +23,7 @@ ao spawn [flags]
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
 | `--mode chat\|tui` | Initial session interface; Chat requires harness support (including Grok Build via native ACP) | Daemon default, otherwise Terminal UI |
 | `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |
-| `--no-auto-fix` | Start with automatic CI and review-comment fixing off, before any `--claim-pr` claim | - |
+| `--no-auto-fix` | Start with automatic CI and review-comment fixing and native auto-review off, before any `--claim-pr` claim | - |
 | `--no-takeover` | Refuse if another active session owns the claimed PR (requires `--claim-pr`) | - |
 | `--project string` | Project id to spawn the session in | Optional when `--standalone` is used; defaults to `AO_PROJECT_ID` or the current repo's registered project |
 | `--standalone` | Spawn a projectless worker session in an Orchestrator-managed directory | Disabled when `--project` is set |
@@ -53,7 +53,8 @@ ao spawn --project agent-orchestrator --name "continue-pr-88" --claim-pr 88 --pr
 
 ```bash
 # Spawn a worker to review someone else's PR: it claims the PR with automatic
-# fixing off, so it gets none of the PR's CI failures or review comments
+# fixing and native auto-review off, so it gets none of the PR's CI failures or
+# review comments
 ao spawn --project agent-orchestrator --name "review-pr-88" --claim-pr 88 --no-takeover --no-auto-fix --prompt "Review PR 88 and submit only the requested provider review. The PR is not the user's; do not change it."
 ```
 

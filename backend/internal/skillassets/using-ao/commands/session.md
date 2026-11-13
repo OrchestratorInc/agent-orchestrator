@@ -377,26 +377,29 @@ ao session claim-pr 88 --no-takeover
 ### ao session auto-fix
 
 Turn a session's "Automatically fix CI failures" and "Automatically fix review
-comments" switches on or off. These are the same switches the session inspector
-shows.
+comments" switches, and its native auto-review, on or off. These are the same
+switches the session inspector shows.
 
 **Syntax:**
 ```
-ao session auto-fix [<session-id>] [--ci on|off] [--reviews on|off]
+ao session auto-fix [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]
 ```
 
 With no session id, `AO_SESSION_ID` supplies the session. Pass at least one of
-`--ci` and `--reviews`.
+`--ci`, `--reviews`, and `--auto-review`.
 
 - `--ci off` stops CI failures and merge conflicts for every PR the session owns.
 - `--reviews off` stops review comments and change requests that arrive after
   the change. Comments posted while it is off are never sent, even after it is
   turned back on, so read them on the PR.
+- `--auto-review off` stops Orchestrator's native reviewer from starting on its
+  own for the session's PRs.
 
-To review someone else's PR, turn both off before claiming it, and use a
+To review someone else's PR, turn all three off before claiming it, and use a
 session that owns no other PR, because the switches cover all of the session's
 PRs. The PR is not the user's: do not commit, push, rebase, or otherwise change
-it unless the user explicitly asks. To take it over, turn both back on.
+it unless the user explicitly asks. To take it over, turn `--ci` and
+`--reviews` back on.
 
 **Flags:**
 
@@ -404,13 +407,14 @@ it unless the user explicitly asks. To take it over, turn both back on.
 |---|---|---|
 | `--ci on\|off` | Send the session CI failures and merge conflicts for its PRs | Unchanged |
 | `--reviews on\|off` | Send the session new review comments and change requests | Unchanged |
+| `--auto-review on\|off` | Let Orchestrator's native reviewer start on its own for the session's PRs | Unchanged |
 | `-p, --project string` | Project id to scope the lookup | - |
 
 **Examples:**
 
 ```bash
 # Review someone else's PR from the current worker
-ao session auto-fix --ci off --reviews off
+ao session auto-fix --ci off --reviews off --auto-review off
 ao session claim-pr 88 --no-takeover
 ```
 

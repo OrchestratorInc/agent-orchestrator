@@ -211,10 +211,11 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			}
 			res.Session = started
 			if opts.noAutoFix {
-				// Turn both switches off before the claim, so the claimed PR's CI
-				// failures and review comments never reach the agent.
+				// Turn every switch off before the claim, so the claimed PR's CI
+				// failures and review comments never reach the agent and the
+				// native reviewer never starts on it.
 				off := false
-				if err := ctx.setSessionAutoFix(cmd.Context(), res.Session.ID, &off, &off); err != nil {
+				if err := ctx.setSessionAutoFix(cmd.Context(), res.Session.ID, &off, &off, &off); err != nil {
 					if killErr := ctx.rollbackSpawnedSession(cmd.Context(), res.Session.ID); killErr != nil {
 						return fmt.Errorf("failed to turn off automatic fixing: %w; rollback of session %s failed: %w", err, res.Session.ID, killErr)
 					}
@@ -281,7 +282,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.name, "name", "", "Display name shown in the sidebar (required, max 100 characters)")
 	f.StringVar(&opts.claimPR, "claim-pr", "", "Claim PR ownership metadata only for the spawned session; does not check out the PR branch")
 	f.BoolVar(&opts.noTakeover, "no-takeover", false, "Refuse if another active session owns the claimed PR (requires --claim-pr)")
-	f.BoolVar(&opts.noAutoFix, "no-auto-fix", false, "Start with automatic CI and review-comment fixing off, before any --claim-pr claim (use to review someone else's PR)")
+	f.BoolVar(&opts.noAutoFix, "no-auto-fix", false, "Start with automatic CI and review-comment fixing and native auto-review off, before any --claim-pr claim (use to review someone else's PR)")
 	f.BoolVar(&opts.skipAgentCheck, "skip-agent-check", false, "Skip CLI readiness warnings (the daemon still validates launch readiness)")
 	return cmd
 }

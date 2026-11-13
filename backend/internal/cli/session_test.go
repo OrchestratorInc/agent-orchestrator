@@ -1242,6 +1242,8 @@ func autoFixServer(t *testing.T) (*httptest.Server, func() []string) {
 			_, _ = io.WriteString(w, `{"session":`+sessionJSON("demo-1", "demo", "worker", "working", false)+`}`)
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-1/auto-inject-"):
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1"}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-1/auto-review":
+			_, _ = io.WriteString(w, `{"session":`+sessionJSON("demo-1", "demo", "worker", "working", false)+`}`)
 		default:
 			_, _ = io.WriteString(w, `{}`)
 		}
@@ -1254,13 +1256,13 @@ func autoFixServer(t *testing.T) (*httptest.Server, func() []string) {
 	}
 }
 
-func TestSessionAutoFix_TurnsBothSwitchesOffForTheCurrentSession(t *testing.T) {
+func TestSessionAutoFix_TurnsEverySwitchOffForTheCurrentSession(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "demo-1")
 	cfg := setConfigEnv(t)
 	srv, requests := autoFixServer(t)
 	writeRunFileFor(t, cfg, srv)
 
-	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "auto-fix", "--ci", "off", "--reviews", "off")
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "auto-fix", "--ci", "off", "--reviews", "off", "--auto-review", "off")
 	if err != nil {
 		t.Fatalf("auto-fix failed: %v stderr=%s", err, errOut)
 	}
@@ -1268,11 +1270,12 @@ func TestSessionAutoFix_TurnsBothSwitchesOffForTheCurrentSession(t *testing.T) {
 		"GET /api/v1/sessions/demo-1",
 		`PATCH /api/v1/sessions/demo-1/auto-inject-ci {"autoInjectCI":false}`,
 		`PATCH /api/v1/sessions/demo-1/auto-inject-review {"autoInjectReview":false}`,
+		`PUT /api/v1/sessions/demo-1/auto-review {"enabled":false}`,
 	}
 	if got := requests(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests=%#v want %#v", got, want)
 	}
-	if !strings.Contains(out, "session demo-1: automatic fixing of CI failures and merge conflicts off, review comments off") {
+	if !strings.Contains(out, "session demo-1: automatic fixing of CI failures and merge conflicts off, automatic fixing of review comments off, native auto-review off") {
 		t.Fatalf("unexpected output: %s", out)
 	}
 }
@@ -1305,7 +1308,8 @@ func TestSessionAutoFix_UsageErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{args: []string{"session", "auto-fix"}, want: "pass --ci on|off, --reviews on|off, or both"},
+		{args: []string{"session", "auto-fix"}, want: "pass at least one of --ci on|off, --reviews on|off, --auto-review on|off"},
+		{args: []string{"session", "auto-fix", "--auto-review", "yes"}, want: `--auto-review must be on or off, got "yes"`},
 		{args: []string{"session", "auto-fix", "--ci", "maybe"}, want: `--ci must be on or off, got "maybe"`},
 	} {
 		_, _, err := executeCLI(t, Deps{}, tc.args...)

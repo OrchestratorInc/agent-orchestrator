@@ -53,9 +53,10 @@ type sessionClaimPROptions struct {
 }
 
 type sessionAutoFixOptions struct {
-	project string
-	ci      string
-	reviews string
+	project    string
+	ci         string
+	reviews    string
+	autoReview string
 }
 
 type sessionRenameRequest struct {
@@ -484,17 +485,18 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 func newSessionAutoFixCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionAutoFixOptions
 	cmd := &cobra.Command{
-		Use:   "auto-fix [<session-id>] [--ci on|off] [--reviews on|off]",
-		Short: "Turn a session's automatic CI and review-comment fixing on or off",
-		Long: "Turn a session's \"Automatically fix CI failures\" and \"Automatically fix review comments\" switches on or off. " +
+		Use:   "auto-fix [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]",
+		Short: "Turn a session's automatic CI and review-comment fixing, and native auto-review, on or off",
+		Long: "Turn a session's \"Automatically fix CI failures\" and \"Automatically fix review comments\" switches, and its native auto-review, on or off. " +
 			"When session-id is omitted, the current session is read from AO_SESSION_ID.\n\n" +
 			"With --ci off, Orchestrator stops sending the session CI failures and merge conflicts for its PRs. " +
 			"With --reviews off, it stops sending review comments and change requests that arrive after the change. " +
-			"Both switches cover every PR the session owns.\n\n" +
-			"To review someone else's PR, turn both off before claiming it. To take the PR over later, turn them back on; " +
+			"With --auto-review off, Orchestrator's native reviewer no longer starts on its own for the session's PRs. " +
+			"Each switch covers every PR the session owns.\n\n" +
+			"To review someone else's PR, turn all three off before claiming it. To take the PR over later, turn --ci and --reviews back on; " +
 			"review comments posted while the switch was off are not sent, so read them on the PR.",
 		Example: `  # Before claiming a PR to review it
-  ao session auto-fix --ci off --reviews off
+  ao session auto-fix --ci off --reviews off --auto-review off
   ao session claim-pr 88 --no-takeover
 
   # Take the PR over
@@ -519,21 +521,26 @@ func newSessionAutoFixCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if ci == nil && reviews == nil {
-				return usageError{errors.New("pass --ci on|off, --reviews on|off, or both")}
+			autoReview, err := parseOnOffFlag("auto-review", opts.autoReview)
+			if err != nil {
+				return err
+			}
+			if ci == nil && reviews == nil && autoReview == nil {
+				return usageError{errors.New("pass at least one of --ci on|off, --reviews on|off, --auto-review on|off")}
 			}
 			if _, err := ctx.fetchScopedSession(cmd.Context(), id, opts.project); err != nil {
 				return err
 			}
-			if err := ctx.setSessionAutoFix(cmd.Context(), id, ci, reviews); err != nil {
+			if err := ctx.setSessionAutoFix(cmd.Context(), id, ci, reviews, autoReview); err != nil {
 				return err
 			}
-			return writeSessionAutoFix(cmd.OutOrStdout(), id, ci, reviews)
+			return writeSessionAutoFix(cmd.OutOrStdout(), id, ci, reviews, autoReview)
 		},
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
 	cmd.Flags().StringVar(&opts.ci, "ci", "", "on or off: send the session CI failures and merge conflicts for its PRs")
 	cmd.Flags().StringVar(&opts.reviews, "reviews", "", "on or off: send the session new review comments and change requests for its PRs")
+	cmd.Flags().StringVar(&opts.autoReview, "auto-review", "", "on or off: let Orchestrator's native reviewer start on its own for the session's PRs")
 	return cmd
 }
 
@@ -572,9 +579,13 @@ type sessionAutoInjectReviewRequest struct {
 	AutoInjectReview bool `json:"autoInjectReview"`
 }
 
-// setSessionAutoFix sets the session's CI and review-comment switches. A nil
-// value leaves that switch unchanged.
-func (c *commandContext) setSessionAutoFix(ctx context.Context, id string, ci, reviews *bool) error {
+type sessionAutoReviewRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// setSessionAutoFix sets the session's CI and review-comment switches and its
+// native auto-review. A nil value leaves that switch unchanged.
+func (c *commandContext) setSessionAutoFix(ctx context.Context, id string, ci, reviews, autoReview *bool) error {
 	base := "sessions/" + url.PathEscape(id)
 	if ci != nil {
 		if err := c.patchJSON(ctx, base+"/auto-inject-ci", sessionAutoInjectCIRequest{AutoInjectCI: *ci}, nil); err != nil {
@@ -586,10 +597,15 @@ func (c *commandContext) setSessionAutoFix(ctx context.Context, id string, ci, r
 			return fmt.Errorf("set automatic review-comment fixing: %w", err)
 		}
 	}
+	if autoReview != nil {
+		if err := c.putJSON(ctx, base+"/auto-review", sessionAutoReviewRequest{Enabled: *autoReview}, nil); err != nil {
+			return fmt.Errorf("set native auto-review: %w", err)
+		}
+	}
 	return nil
 }
 
-func writeSessionAutoFix(w io.Writer, id string, ci, reviews *bool) error {
+func writeSessionAutoFix(w io.Writer, id string, ci, reviews, autoReview *bool) error {
 	onOff := func(v bool) string {
 		if v {
 			return "on"
@@ -598,12 +614,15 @@ func writeSessionAutoFix(w io.Writer, id string, ci, reviews *bool) error {
 	}
 	var parts []string
 	if ci != nil {
-		parts = append(parts, "CI failures and merge conflicts "+onOff(*ci))
+		parts = append(parts, "automatic fixing of CI failures and merge conflicts "+onOff(*ci))
 	}
 	if reviews != nil {
-		parts = append(parts, "review comments "+onOff(*reviews))
+		parts = append(parts, "automatic fixing of review comments "+onOff(*reviews))
 	}
-	_, err := fmt.Fprintf(w, "session %s: automatic fixing of %s\n", id, strings.Join(parts, ", "))
+	if autoReview != nil {
+		parts = append(parts, "native auto-review "+onOff(*autoReview))
+	}
+	_, err := fmt.Fprintf(w, "session %s: %s\n", id, strings.Join(parts, ", "))
 	return err
 }
 
@@ -704,7 +723,7 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintln(out, "  Only reviewing someone else's PR? It is not the user's: run `ao session auto-fix --ci off --reviews off` and do not change it unless the user asks.")
+	_, err := fmt.Fprintln(out, "  Only reviewing someone else's PR? It is not the user's: run `ao session auto-fix --ci off --reviews off --auto-review off` and do not change it unless the user asks.")
 	return err
 }
 

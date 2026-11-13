@@ -140,8 +140,9 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 }
 
 // TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim: a reviewer spawned with
-// --no-auto-fix must have both switches off before the PR is claimed, so the
-// claimed PR's CI failures and review comments never reach the agent.
+// --no-auto-fix must have every switch off before the PR is claimed, so the
+// claimed PR's CI failures and review comments never reach the agent and the
+// native reviewer never starts on it.
 func TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -167,6 +168,12 @@ func TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim(t *testing.T) {
 				t.Errorf("auto-inject-review request = %#v err=%v, want off", req, err)
 			}
 			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-9/auto-review":
+			var req sessionAutoReviewRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Enabled {
+				t.Errorf("auto-review request = %#v err=%v, want off", req, err)
+			}
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-9","status":"idle"}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-9/pr/claim":
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/142","number":142,"state":"open","ci":"failing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
 		default:
@@ -186,6 +193,7 @@ func TestSpawnNoAutoFixTurnsSwitchesOffBeforeClaim(t *testing.T) {
 		"POST /api/v1/sessions",
 		"PATCH /api/v1/sessions/demo-9/auto-inject-ci",
 		"PATCH /api/v1/sessions/demo-9/auto-inject-review",
+		"PUT /api/v1/sessions/demo-9/auto-review",
 		"POST /api/v1/sessions/demo-9/pr/claim",
 	}
 	if !reflect.DeepEqual(requests, want) {

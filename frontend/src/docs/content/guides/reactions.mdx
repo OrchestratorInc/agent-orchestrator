@@ -20,10 +20,10 @@ The one-argument form uses `AO_SESSION_ID` and is preferred inside a worker sess
 
 Orchestrator then routes failing checks, requested changes, unresolved comments, and eligible merge conflicts to that session. Delivery is mode-aware, so the same workflow works for structured Chat and Terminal UI.
 
-Each session has two switches in its inspector: "Automatically fix CI failures", which also covers merge conflicts, and "Automatically fix review comments". To review someone else's PR without being sent its feedback, turn both off before claiming it:
+Each session has two switches in its inspector: "Automatically fix CI failures", which also covers merge conflicts, and "Automatically fix review comments". To review someone else's PR without being sent its feedback, turn both off, along with native auto-review, before claiming it:
 
 ```bash
-ao session auto-fix --ci off --reviews off
+ao session auto-fix --ci off --reviews off --auto-review off
 ao session claim-pr <pr-number-or-url> --no-takeover
 ```
 

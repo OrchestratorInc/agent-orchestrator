@@ -137,7 +137,7 @@ func TestEmbeddedReviewGuidanceClaimsWithAutoFixOff(t *testing.T) {
 		{"using-ao/commands/review.md", "ao spawn --claim-pr <pr-ref> --no-takeover --no-auto-fix"},
 		{"using-ao/commands/review.md", "ao session auto-fix --ci on --reviews on"},
 		{"using-ao/commands/spawn.md", `--name "review-pr-88" --claim-pr 88 --no-takeover --no-auto-fix`},
-		{"using-ao/commands/session.md", "ao session auto-fix [<session-id>] [--ci on|off] [--reviews on|off]"},
+		{"using-ao/commands/session.md", "ao session auto-fix [<session-id>] [--ci on|off] [--reviews on|off] [--auto-review on|off]"},
 		{"using-ao/commands/session.md", "do not commit, push, rebase, or otherwise change it unless the user explicitly asks"},
 	} {
 		body, err := files.ReadFile(tc.path)
