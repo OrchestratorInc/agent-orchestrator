@@ -845,6 +845,37 @@ describe("ArtifactsView", () => {
 		expect(within(artifactList()).getByTitle("No preview available")).toBeInTheDocument();
 	});
 
+	it("asks again about a page whose check failed for a passing reason, but keeps a good answer", async () => {
+		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		html.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }];
+		const fetch = vi.fn()
+			.mockResolvedValueOnce(new Response(null, { status: 503 }))
+			.mockResolvedValue(new Response("<h1>Design review</h1>"));
+		vi.stubGlobal("fetch", fetch);
+		// One query cache across mounts, as the app keeps while a card scrolls away and back.
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const tree = (mount: string) => (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<ArtifactsView key={mount} />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(tree("first"));
+		await waitFor(() => expect(within(artifactList()).getByTitle("No preview available")).toBeInTheDocument());
+		expect(view.container.querySelector("iframe")).toBeNull();
+		// The daemon was briefly unavailable: the next mount asks again and frames the page.
+		view.rerender(tree("second"));
+		await waitFor(() => expect(view.container.querySelector("iframe")).not.toBeNull());
+		expect(fetch).toHaveBeenCalledTimes(2);
+		// A good answer is kept for this version of the file.
+		view.rerender(tree("third"));
+		await waitFor(() => expect(view.container.querySelector("iframe")).not.toBeNull());
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
 	it("draws a pinned page once, at the top, with one live thumbnail", async () => {
 		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
 		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
@@ -954,13 +985,17 @@ describe("ArtifactsView", () => {
 		expect(preview).toHaveAttribute("data-src", "http://127.0.0.1:3002/report.pdf?v=2026-10-11T10%3A00%3A00Z");
 	});
 
-	it("shows image previews and falls back to a placeholder when the image fails", () => {
+	it("shows image previews and falls back to a placeholder when the image fails", async () => {
 		const image = session("ao-image", "Cover image", [{ name: "cover.png", kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
 		image.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/cover.png";
 		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [image] }];
+		// No small copy can be made here, so the card shows the original.
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
 		renderView();
 		const project = within(artifactList());
-		const preview = project.getByRole("button", { name: /^cover\.png/ }).closest("li")!.querySelector("img")!;
+		const card = project.getByRole("button", { name: /^cover\.png/ }).closest("li")!;
+		await waitFor(() => expect(card.querySelector("img")).not.toBeNull());
+		const preview = card.querySelector("img")!;
 		expect(preview).toHaveAttribute("src", image.artifactFiles![0].rawUrl);
 		fireEvent.error(preview);
 		expect(project.getByRole("button", { name: /^cover\.png/ }).closest("li")!.querySelector("img")).toBeNull();
