@@ -13,6 +13,8 @@ import {
 	ProviderSwitchMarker,
 	TurnOutcome,
 } from "./ChatTimelineItems";
+import claudeCodeLogo from "../../assets/agents/claude-code.svg";
+import codexLogo from "../../assets/agents/codex.svg";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { groupScriptRuns } from "../../lib/cloud-script-runs";
 import type { ConversationMessage } from "../../types/conversation";
@@ -828,8 +830,8 @@ describe("ProviderSwitchMarker", () => {
 		expect(from).toHaveAttribute("aria-hidden", "true");
 		expect(to).toHaveAttribute("aria-hidden", "true");
 		expect(from?.tagName).toBe("IMG");
-		expect(from).toHaveAttribute("src", expect.stringMatching(/claude-code/));
-		expect(to).toHaveAttribute("src", expect.stringMatching(/codex/));
+		expect(from).toHaveAttribute("src", claudeCodeLogo);
+		expect(to).toHaveAttribute("src", codexLogo);
 		// Marks are decorative: the separator still names the switch in words.
 		expect(screen.getByRole("separator", { name: "Switched from Claude Code to Codex" })).toBeInTheDocument();
 		expect(container.querySelectorAll('[role="separator"] [aria-hidden="true"].size-icon-base')).toHaveLength(2);
@@ -839,7 +841,7 @@ describe("ProviderSwitchMarker", () => {
 		const { container } = render(switched("claude-code", "codex", { targetModel: "gpt-6", targetEffort: "high" }));
 		const marks = container.querySelectorAll('[role="separator"] [aria-hidden="true"].size-icon-base');
 		expect(marks).toHaveLength(2);
-		expect(marks[1]).toHaveAttribute("src", expect.stringMatching(/codex/));
+		expect(marks[1]).toHaveAttribute("src", codexLogo);
 		expect(marks[1]?.nextElementSibling).toHaveTextContent("GPT Six");
 	});
 
