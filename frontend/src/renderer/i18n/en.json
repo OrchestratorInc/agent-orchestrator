@@ -2783,8 +2783,6 @@
 	"splitPane.label": "Split pane",
 	"splitPane.resize": "Resize split",
 	"splitPane.ungroup": "Ungroup",
-	"splitPane.unsplit": "Unsplit",
-	"splitPane.unsplitHint": "Move {{name}} to its own tab",
 	"terminal.unableRestore": "Unable to restore session",
 	"terminal.cloudConnectTitle": "Cannot connect to terminal",
 	"terminal.cloudConnectDescription": "The terminal ticket was issued but the WebSocket connection failed repeatedly. This is usually caused by a browser Content Security Policy, firewall, or proxy blocking WebSocket traffic.",

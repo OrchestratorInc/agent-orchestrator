@@ -2873,8 +2873,6 @@
 	"splitPane.label": "Разделённая панель",
 	"splitPane.resize": "Изменить размер разделения",
 	"splitPane.ungroup": "Разгруппировать",
-	"splitPane.unsplit": "Разъединить",
-	"splitPane.unsplitHint": "Перенести «{{name}}» в отдельную вкладку",
 	"terminal.unableRestore": "Не удалось восстановить сессию",
 	"terminal.cloudConnectTitle": "Не удалось подключиться к терминалу",
 	"terminal.cloudConnectDescription": "Билет терминала выдан, но соединение WebSocket неоднократно завершалось ошибкой. Обычно причина — Content Security Policy браузера, брандмауэр или прокси, блокирующий трафик WebSocket.",

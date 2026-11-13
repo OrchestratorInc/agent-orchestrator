@@ -2015,14 +2015,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [centerFileRequestsBySession, closePane, reviewerHarness, selectTab, sessionLabel, sessionProvider, shellTerminals, t, uiSessionId]);
 	// Pressing a file pane's title bar moves keyboard focus into that file.
 	const [paneFocusRequests, setPaneFocusRequests] = useState<Record<string, number>>({});
-	// Takes a pane out of its split and shows it as a tab of its own.
-	const unsplitPane = useCallback(
-		(key: string) => {
-			updateGroups((current) => withoutTab(current, key));
-			selectTab(key);
-		},
-		[selectTab, updateGroups],
-	);
 	const groupWorkspaceTabs = useMemo(() => {
 		const groupFocus = (group: TabGroup) => {
 			const members = leafKeys(group.root);
@@ -3010,7 +3002,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								))
 								: null}
 							{/* Every pane of a split has a title bar: it names the pane as the
-							    tab it is, is the handle to drag it, and offers Unsplit. */}
+							    tab it is, is the handle to drag it. */}
 							{shownGroup && shownLayout
 								? [...shownLayout.leaves.entries()].map(([key, box]) => (
 									<SplitPaneHeader
@@ -3029,7 +3021,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 												}
 											});
 										}}
-										onUnsplit={() => unsplitPane(key)}
 										style={{ left: box.left, top: box.top, width: box.width, height: PANE_HEADER_PX }}
 									/>
 								))

@@ -2350,8 +2350,6 @@
 	"splitPane.label": "分割ペイン",
 	"splitPane.resize": "分割サイズを変更",
 	"splitPane.ungroup": "グループ解除",
-	"splitPane.unsplit": "分割解除",
-	"splitPane.unsplitHint": "{{name}} を独立したタブに移動",
 	"terminal.unableRestore": "セッションを復元できません",
 	"terminal.cloudConnectTitle": "ターミナルに接続できません",
 	"terminal.cloudConnectDescription": "ターミナルチケットは発行されましたが、WebSocket接続が繰り返し失敗しました。これは通常、ブラウザのコンテンツセキュリティポリシー、ファイアウォール、またはプロキシがWebSocketトラフィックをブロックしていることが原因です。",

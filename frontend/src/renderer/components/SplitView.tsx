@@ -11,7 +11,7 @@ import {
 	type RefObject,
 } from "react";
 import { agentLabel } from "@aoagents/product-ui";
-import { GripVertical, Ungroup, X } from "@/components/app-icons";
+import { GripVertical, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { beginPaneTabDrag } from "../lib/pane-drag";
 import { MIN_PANE_PX, ratioVar, type CssDivider } from "../lib/pane-split";
@@ -209,8 +209,8 @@ export const PANE_HEADER_PX = 28;
 /**
  * The title bar of one pane in a split. It is what makes a pane read as a tab:
  * it carries the tab's icon and name, is the handle to drag the pane (onto a
- * pane's edge to rearrange, onto the strip to unsplit), and has plain buttons
- * to unsplit or close it. Pressing anywhere on it focuses the pane at once.
+ * pane's edge to rearrange, onto the strip to unsplit), and has a close
+ * button where the pane can close. Pressing anywhere on it focuses the pane at once.
  */
 export function SplitPaneHeader({
 	member,
@@ -218,7 +218,6 @@ export function SplitPaneHeader({
 	closable,
 	style,
 	menu,
-	onUnsplit,
 	onPress,
 }: {
 	member: SplitGroupMember;
@@ -226,7 +225,6 @@ export function SplitPaneHeader({
 	closable: boolean;
 	style: CSSProperties;
 	menu: TabMenuSpec & { kind: "group" };
-	onUnsplit: () => void;
 	/** The header was pressed: the pane should take keyboard focus. */
 	onPress?: () => void;
 }) {
@@ -261,26 +259,6 @@ export function SplitPaneHeader({
 				<span className="truncate">{shown.label}</span>
 			</span>
 			<span className="min-w-1 flex-1" />
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Pressable
-						className="inline-flex h-5 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-control leading-none text-muted-foreground hover:bg-raised hover:text-foreground"
-						onClick={(event) => {
-							event.stopPropagation();
-							onUnsplit();
-						}}
-						onPointerDown={(event) => {
-							event.stopPropagation();
-							member.onSelect();
-						}}
-						type="button"
-					>
-						<Ungroup aria-hidden="true" className="size-icon-sm" />
-						{t("splitPane.unsplit")}
-					</Pressable>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("splitPane.unsplitHint", { name: shown.label })}</TooltipContent>
-			</Tooltip>
 			{closable ? (
 				<Pressable
 					aria-label={t("splitPane.closePane", { name: shown.label })}

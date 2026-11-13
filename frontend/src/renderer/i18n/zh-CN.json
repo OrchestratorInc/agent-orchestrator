@@ -2409,8 +2409,6 @@
 	"splitPane.label": "拆分窗格",
 	"splitPane.resize": "调整拆分大小",
 	"splitPane.ungroup": "取消分组",
-	"splitPane.unsplit": "取消拆分",
-	"splitPane.unsplitHint": "将 {{name}} 移到独立标签页",
 	"terminal.unableRestore": "无法恢复会话",
 	"terminal.cloudConnectTitle": "无法连接到终端",
 	"terminal.cloudConnectDescription": "已发放终端 Key/Ticket，但 WebSocket 连接反复失败。这通常是因为浏览器内容安全策略 (CSP)、防火墙或代理拦截了 WebSocket 流量。",
