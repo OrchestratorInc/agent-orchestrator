@@ -4807,5 +4807,17 @@
 	"sessionFork.forkedInto_other": "이 세션에서 {{count}}개의 세션이 포크되었습니다:",
 	"sessionFork.forkDeleted": "{{title}} (삭제됨)",
 	"sessionFork.textCopy": "대화를 텍스트로 복사함",
-	"sessionFork.textCopyNotice": "{{title}}에서 포크했습니다. 이 에이전트는 자신의 대화를 복사할 수 없어 원본 세션의 대화를 텍스트로 받았습니다."
+	"sessionFork.textCopyNotice": "{{title}}에서 포크했습니다. 이 에이전트는 자신의 대화를 복사할 수 없어 원본 세션의 대화를 텍스트로 받았습니다.",
+	"command.sessionText": "지난 세션",
+	"command.searchingSessions": "지난 세션 검색 중…",
+	"command.searchSessionsError": "지난 세션을 검색할 수 없습니다.",
+	"command.noSessionMatches": "일치하는 지난 세션이 없습니다.",
+	"command.searchSessionsBackfilling_one": "아직 일치 항목이 없습니다. 색인이 채워지는 중입니다(소스 {{count}}개 대기).",
+	"command.searchSessionsBackfilling_other": "아직 일치 항목이 없습니다. 색인이 채워지는 중입니다(소스 {{count}}개 대기).",
+	"command.searchSessionsUnindexed": "다음 에이전트의 트랜스크립트는 색인되지 않습니다: {{harnesses}}.",
+	"command.searchSessionsUnavailable": "일치하는 항목이 없지만, 인덱스를 끝까지 만들지 못해 일부 세션이 빠졌을 수 있습니다.",
+	"command.copyResumeCommand": "재개 명령 복사",
+	"command.recentSessions": "최근 세션",
+	"command.sessionMatches_one": "{{count}}개 일치",
+	"command.sessionMatches_other": "{{count}}개 일치"
 }

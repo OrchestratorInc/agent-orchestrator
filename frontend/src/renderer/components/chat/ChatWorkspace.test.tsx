@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatWorkspace, forgetReadingPositions, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
+import { activityRevealScrollDelta, ChatWorkspace, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -2091,6 +2091,47 @@ describe("ChatWorkspace timeline", () => {
 		}
 	});
 
+	it("opens a long prompt folded behind Show more when the navigated text is below its fold", async () => {
+		// A search result, find in chat or an annotation landing on a word the fold
+		// clips must open the message, not center text nobody can see.
+		const text = "A long prompt about the renderer.\nIts closing line names the zephyr fallback.";
+		const snapshot = {
+			...chatFixtureSettled,
+			items: chatFixtureSettled.items.map((item) => item.id === "m-1" ? { ...item, text } : item),
+		} as ConversationSnapshot;
+		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
+		// jsdom has no layout: only the long prompt's content is tall enough to fold.
+		const tall = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+			const prompt = this.classList.contains("flow-root") && this.querySelector("[data-chat-message-body]")?.textContent?.includes("zephyr");
+			return prompt ? 900 : offsetHeight.call(this);
+		});
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+		const rangeGeometry = vi.spyOn(Range.prototype, "getBoundingClientRect");
+		try {
+			const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+			const log = screen.getByRole("log", { name: "Conversation" });
+			const source = log.querySelector<HTMLElement>('[data-chat-message-id="m-1"]')!;
+			const clip = source.querySelector<HTMLElement>(".chat-human-fold")!;
+			expect(clip).toHaveAttribute("data-folded");
+			geometry.mockImplementation(function (this: HTMLElement) {
+				if (this === log) return new DOMRect(0, 0, 600, 500);
+				if (this === clip) return new DOMRect(0, 100, 400, 220);
+				return bounds.call(this);
+			});
+			// "zephyr" is on the last line, below the 220px fold.
+			rangeGeometry.mockReturnValue(new DOMRect(40, 380, 60, 20));
+			rerender(<ChatWorkspace snapshot={snapshot} annotationNavigationRequest={{ id: "search:1", text: "zephyr", messageId: "m-1" }} />);
+			await waitFor(() => expect(clip).not.toHaveAttribute("data-folded"));
+			expect(within(source).getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+			await waitFor(() => expect(source.querySelector("[data-chat-message-body]")).toHaveClass("chat-annotation-target"));
+		} finally {
+			tall.mockRestore();
+			geometry.mockRestore();
+			rangeGeometry.mockRestore();
+		}
+	});
+
 	it("applies a navigation request once, so another session's chat never replays it", () => {
 		type Request = { id: string; text: string; messageId?: string };
 		// A surface that stays mounted across sessions, as the Cloud one does,
@@ -2117,6 +2158,148 @@ describe("ChatWorkspace timeline", () => {
 		rerender(<Host snapshot={chatFixtureSettled} initial={request} />);
 		rerender(<Host snapshot={other} initial={request} />);
 		expect(screen.queryByText("The referenced message is no longer available in this chat.")).not.toBeInTheDocument();
+	});
+
+	// A search match in a command's output once scrolled to its turn but left the
+	// output folded away under "Worked for", with nothing marked.
+	it("opens a search match in command output: the folds open on its row and mark the word", async () => {
+		const anchor = chatFixtureSettled.items.find((item) => item.kind === "message")!.id;
+		const { rerender } = render(<ChatWorkspace snapshot={chatFixtureSettled} />);
+		rerender(<ChatWorkspace snapshot={chatFixtureSettled} annotationNavigationRequest={{ id: "search:cmd", text: "manager.go", messageId: anchor, activitySequence: 3 }} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		await waitFor(() => expect(log.querySelector('[data-chat-activity-id="a-2"]')).toHaveClass("chat-annotation-target"));
+		const row = log.querySelector<HTMLElement>('[data-chat-activity-id="a-2"]')!;
+		expect(within(row).getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true");
+		expect(row).toHaveTextContent("backend/internal/session_manager/manager.go");
+		expect(screen.queryByText("The referenced message could not be brought into view.")).not.toBeInTheDocument();
+	});
+
+	// Review: two finished calls of the same command fold into one row keyed by
+	// the last call, so a match in the first call's output never opened the row.
+	it("opens a search match in the first of two folded repeated commands", async () => {
+		const items = chatFixtureSettled.items;
+		const at = items.findIndex((item) => item.id === "a-2");
+		const original = items[at] as Extract<ConversationSnapshot["items"][number], { kind: "activity" }>;
+		const first = { ...original, detail: { ...original.detail, output: " M frontend/first_call_only.ts\n" } };
+		const second = { ...original, id: "a-2-again", sequence: original.sequence + 1 };
+		const snapshot = {
+			...chatFixtureSettled,
+			items: [
+				...items.slice(0, at),
+				first,
+				second,
+				...items.slice(at + 1).map((item) => ({ ...item, sequence: item.sequence + 1 })),
+			],
+		} as ConversationSnapshot;
+		const anchor = items.find((item) => item.kind === "message")!.id;
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+		rerender(<ChatWorkspace snapshot={snapshot} annotationNavigationRequest={{ id: "search:repeat", text: "first_call_only.ts", messageId: anchor, activitySequence: original.sequence }} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		// One row for both calls, opened, with the first call's output marked.
+		await waitFor(() => expect(log.querySelector('[data-chat-activity-id="a-2"]')).toHaveClass("chat-annotation-target"));
+		const row = log.querySelector<HTMLElement>('[data-chat-activity-id="a-2-again"]')!;
+		expect(within(row).getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true");
+		expect(row.querySelector('[data-chat-activity-id="a-2"]')).toHaveTextContent("frontend/first_call_only.ts");
+		expect(screen.queryByText("The referenced message could not be brought into view.")).not.toBeInTheDocument();
+	});
+
+	// Opening an old command match once paged back through every newer page, one
+	// request at a time (25 s on a long session). One window around it is enough.
+	it("loads one window around a command match outside the loaded history, not every older page", async () => {
+		try {
+			const all = chatFixtureSettled;
+			const anchor = all.items.find((item) => item.kind === "message")!.id;
+			const get = vi.fn(async () => ({
+				data: { ...all, controller: "ready", messages: all.items.filter((item) => item.kind === "message"), activities: all.items.filter((item) => item.kind === "activity") },
+				response: new Response(),
+			}));
+			vi.spyOn(clientForSessionHost(), "GET").mockImplementation(get as never);
+			const visible = { ...all, hasMoreBefore: true, oldestSequence: 5, items: all.items.filter((item) => item.sequence >= 5) } as ConversationSnapshot;
+			const onLoadOlder = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={visible}
+					hasOlder
+					onLoadOlder={onLoadOlder}
+					annotationNavigationRequest={{ id: "search:old", text: "manager.go", messageId: anchor, activitySequence: 3 }}
+				/>,
+			);
+			const log = screen.getByRole("log", { name: "Conversation" });
+			await waitFor(() => expect(log.querySelector('[data-chat-activity-id="a-2"]')).toHaveClass("chat-annotation-target"));
+			const windows = get.mock.calls.filter((call) => String((call as unknown[])[0]).endsWith("find-window"));
+			expect(windows).toHaveLength(1);
+			expect(get).toHaveBeenCalledWith("/api/v1/conversations/{conversationId}/find-window", expect.objectContaining({
+				params: { path: { conversationId: all.conversationId }, query: { sequence: 3 } },
+			}));
+			expect(onLoadOlder).not.toHaveBeenCalled();
+		} finally { vi.restoreAllMocks(); }
+	});
+
+	// A stream update while the window loads must not give up on the row: it
+	// falls back to the turn only once the window answered without it.
+	it("keeps waiting for the window when the chat updates before it answers", async () => {
+		try {
+			const all = chatFixtureSettled;
+			const anchor = all.items.find((item) => item.kind === "message")!.id;
+			let answer: (value: unknown) => void = () => {};
+			const get = vi.fn((path: string) => path.endsWith("find-window")
+				? new Promise((resolve) => { answer = resolve; })
+				: Promise.resolve({ data: {}, response: new Response() }));
+			vi.spyOn(clientForSessionHost(), "GET").mockImplementation(get as never);
+			const visible = { ...all, hasMoreBefore: true, oldestSequence: 5, items: all.items.filter((item) => item.sequence >= 5) } as ConversationSnapshot;
+			const request = { id: "search:deferred", text: "manager.go", messageId: anchor, activitySequence: 3 };
+			const onLoadOlder = vi.fn();
+			const { rerender } = render(<ChatWorkspace snapshot={visible} hasOlder onLoadOlder={onLoadOlder} annotationNavigationRequest={request} />);
+			await waitFor(() => expect(get.mock.calls.filter(([path]) => String(path).endsWith("find-window"))).toHaveLength(1));
+			// The conversation streams an update while the window is still loading.
+			const updated = { ...visible, items: visible.items.map((item) => item.kind === "message" ? { ...item, revision: item.revision + 1 } : item) } as ConversationSnapshot;
+			rerender(<ChatWorkspace snapshot={updated} hasOlder onLoadOlder={onLoadOlder} annotationNavigationRequest={request} />);
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			await act(async () => {
+				answer({
+					data: { ...all, controller: "ready", messages: all.items.filter((item) => item.kind === "message"), activities: all.items.filter((item) => item.kind === "activity") },
+					response: new Response(),
+				});
+			});
+			const log = screen.getByRole("log", { name: "Conversation" });
+			await waitFor(() => expect(log.querySelector('[data-chat-activity-id="a-2"]')).toHaveClass("chat-annotation-target"));
+			expect(get.mock.calls.filter(([path]) => String(path).endsWith("find-window"))).toHaveLength(1);
+			expect(onLoadOlder).not.toHaveBeenCalled();
+		} finally { vi.restoreAllMocks(); }
+	});
+
+	// A search result opens find in chat through findRequest. Its owner is told
+	// once it applied and drops it: the chat remounts when its conversation
+	// reloads, and a request still held would open find again after the reader
+	// closed it.
+	it("opens find for a request once, so a remount does not open it again", async () => {
+		const get = vi.fn(async () => ({ data: { conversationId: chatFixtureSettled.conversationId, transcriptRevision: "find-request", occurrences: [], total: 0 }, response: new Response() }));
+		const client = vi.spyOn(clientForSessionHost(), "GET").mockImplementation(get as never);
+		const handled = vi.fn();
+		function Host({ mount }: { mount: number }) {
+			const [request, setRequest] = useState<ChatFindRequest | undefined>({ id: "search:1", query: "zephyr", messageId: "m-1" });
+			return (
+				<ChatWorkspace
+					key={mount}
+					snapshot={chatFixtureSettled}
+					findRequest={request}
+					onFindRequestHandled={(id) => { handled(id); setRequest((current) => current?.id === id ? undefined : current); }}
+				/>
+			);
+		}
+		try {
+			const view = render(<Host mount={1} />);
+			const input = await screen.findByRole("searchbox", { name: "Find in chat" });
+			expect(input).toHaveValue("zephyr");
+			expect(handled).toHaveBeenCalledWith("search:1");
+			fireEvent.keyDown(input, { key: "Escape" });
+			expect(screen.queryByRole("searchbox", { name: "Find in chat" })).not.toBeInTheDocument();
+			view.rerender(<Host mount={2} />);
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			expect(screen.queryByRole("searchbox", { name: "Find in chat" })).not.toBeInTheDocument();
+		} finally {
+			client.mockRestore();
+		}
 	});
 
 	it("hides Add to chat on surfaces whose send does not forward excerpts", () => {
@@ -6927,5 +7110,23 @@ describe("sent message recall", () => {
 		expect(composerText()).toBe("Beta ask");
 		expect(press("ArrowUp")).toBe(false);
 		expect(readChatSessionDraft("recall-alpha").composer.text).toBe("");
+	});
+});
+
+describe("activityRevealScrollDelta", () => {
+	const view = { top: 0, bottom: 800, height: 800 };
+	it("leaves a matched word that is already well inside the view", () => {
+		expect(activityRevealScrollDelta({ top: 300, bottom: 320, height: 20 }, view, true)).toBe(0);
+	});
+	it("centres a matched word outside the view", () => {
+		expect(activityRevealScrollDelta({ top: 1200, bottom: 1220, height: 20 }, view, true)).toBe(1210 - 400);
+	});
+	// A command match once opened with its row's header at the bottom edge, the
+	// output still animating open, and the matched lines out of sight.
+	it("lifts a row whose body is still opening from the bottom edge to the upper quarter", () => {
+		expect(activityRevealScrollDelta({ top: 760, bottom: 784, height: 24 }, view, false)).toBe(760 - 200);
+	});
+	it("leaves a row whose header is already in the upper half", () => {
+		expect(activityRevealScrollDelta({ top: 150, bottom: 174, height: 24 }, view, false)).toBe(0);
 	});
 });

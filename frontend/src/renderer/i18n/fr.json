@@ -4924,5 +4924,19 @@
 	"sessionFork.forkedInto_other": "{{count}} sessions ont été dérivées de celle-ci :",
 	"sessionFork.forkDeleted": "{{title}} (supprimée)",
 	"sessionFork.textCopy": "Conversation copiée en texte",
-	"sessionFork.textCopyNotice": "Dérivée de {{title}}. Cet agent ne peut pas copier sa propre conversation : il a donc reçu la conversation de l'original sous forme de texte."
+	"sessionFork.textCopyNotice": "Dérivée de {{title}}. Cet agent ne peut pas copier sa propre conversation : il a donc reçu la conversation de l'original sous forme de texte.",
+	"command.sessionText": "Sessions passées",
+	"command.searchingSessions": "Recherche dans les sessions passées…",
+	"command.searchSessionsError": "Impossible de rechercher dans les sessions passées.",
+	"command.noSessionMatches": "Aucune session passée ne correspond.",
+	"command.searchSessionsBackfilling_one": "Aucun résultat pour l’instant — l’index est encore en cours de remplissage ({{count}} source en attente).",
+	"command.searchSessionsBackfilling_other": "Aucun résultat pour l’instant — l’index est encore en cours de remplissage ({{count}} sources en attente).",
+	"command.searchSessionsUnindexed": "Les transcriptions ne sont pas indexées pour : {{harnesses}}.",
+	"command.searchSessionsUnavailable": "Aucun résultat, mais l’index n’a pas pu être construit entièrement : certaines sessions peuvent manquer.",
+	"command.copyResumeCommand": "Copier la commande de reprise",
+	"command.searchSessionsBackfilling_many": "Aucun résultat pour l’instant — l’index est encore en cours de remplissage ({{count}} sources en attente).",
+	"command.recentSessions": "Sessions récentes",
+	"command.sessionMatches_one": "{{count}} résultat",
+	"command.sessionMatches_other": "{{count}} résultats",
+	"command.sessionMatches_many": "{{count}} résultats"
 }

@@ -4807,5 +4807,17 @@
 	"sessionFork.forkedInto_other": "このセッションから {{count}} 件のセッションがフォークされました:",
 	"sessionFork.forkDeleted": "{{title}}(削除済み)",
 	"sessionFork.textCopy": "会話をテキストとしてコピー済み",
-	"sessionFork.textCopyNotice": "{{title}} からフォークしました。このエージェントは自分の会話をコピーできないため、元のセッションの会話をテキストとして受け取りました。"
+	"sessionFork.textCopyNotice": "{{title}} からフォークしました。このエージェントは自分の会話をコピーできないため、元のセッションの会話をテキストとして受け取りました。",
+	"command.sessionText": "過去のセッション",
+	"command.searchingSessions": "過去のセッションを検索中…",
+	"command.searchSessionsError": "過去のセッションを検索できませんでした。",
+	"command.noSessionMatches": "一致する過去のセッションはありません。",
+	"command.searchSessionsBackfilling_one": "まだ一致はありません。インデックスは構築中です（{{count}}件のソースが保留中）。",
+	"command.searchSessionsBackfilling_other": "まだ一致はありません。インデックスは構築中です（{{count}}件のソースが保留中）。",
+	"command.searchSessionsUnindexed": "次のエージェントのトランスクリプトは索引化されていません: {{harnesses}}。",
+	"command.searchSessionsUnavailable": "一致するものはありませんが、インデックスの作成を完了できなかったため、一部のセッションが含まれていない可能性があります。",
+	"command.copyResumeCommand": "再開コマンドをコピー",
+	"command.recentSessions": "最近のセッション",
+	"command.sessionMatches_one": "{{count}}件の一致",
+	"command.sessionMatches_other": "{{count}}件の一致"
 }

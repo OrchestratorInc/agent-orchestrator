@@ -5033,5 +5033,21 @@
 	"sessionFork.forkedInto_other": "От этого сеанса ответвлено {{count}} сеанса:",
 	"sessionFork.forkDeleted": "{{title}} (удалён)",
 	"sessionFork.textCopy": "Разговор скопирован как текст",
-	"sessionFork.textCopyNotice": "Ответвление от {{title}}. Этот агент не умеет копировать собственный разговор, поэтому получил разговор оригинала в виде текста."
+	"sessionFork.textCopyNotice": "Ответвление от {{title}}. Этот агент не умеет копировать собственный разговор, поэтому получил разговор оригинала в виде текста.",
+	"command.sessionText": "Прошлые сессии",
+	"command.searchingSessions": "Поиск по прошлым сессиям…",
+	"command.searchSessionsError": "Не удалось выполнить поиск по прошлым сессиям.",
+	"command.noSessionMatches": "Прошлых сессий не найдено.",
+	"command.searchSessionsBackfilling_one": "Пока ничего не найдено — индекс ещё заполняется (в очереди {{count}} источник).",
+	"command.searchSessionsBackfilling_few": "Пока ничего не найдено — индекс ещё заполняется (в очереди {{count}} источника).",
+	"command.searchSessionsBackfilling_many": "Пока ничего не найдено — индекс ещё заполняется (в очереди {{count}} источников).",
+	"command.searchSessionsBackfilling_other": "Пока ничего не найдено — индекс ещё заполняется (в очереди {{count}} источника).",
+	"command.searchSessionsUnindexed": "Транскрипты не индексируются для: {{harnesses}}.",
+	"command.searchSessionsUnavailable": "Совпадений нет, но индекс не удалось построить полностью, поэтому часть сессий может отсутствовать.",
+	"command.copyResumeCommand": "Скопировать команду возобновления",
+	"command.recentSessions": "Недавние сессии",
+	"command.sessionMatches_one": "{{count}} совпадение",
+	"command.sessionMatches_few": "{{count}} совпадения",
+	"command.sessionMatches_many": "{{count}} совпадений",
+	"command.sessionMatches_other": "{{count}} совпадения"
 }

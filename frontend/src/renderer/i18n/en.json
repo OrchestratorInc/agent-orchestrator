@@ -4787,5 +4787,17 @@
 	"sessionFork.forkedInto_other": "{{count}} sessions were forked from this one:",
 	"sessionFork.forkDeleted": "{{title}} (deleted)",
 	"sessionFork.textCopy": "Conversation copied as text",
-	"sessionFork.textCopyNotice": "Forked from {{title}}. This agent can't copy its own conversation, so it was given the original's conversation as text."
+	"sessionFork.textCopyNotice": "Forked from {{title}}. This agent can't copy its own conversation, so it was given the original's conversation as text.",
+	"command.sessionText": "Past sessions",
+	"command.searchingSessions": "Searching past sessions…",
+	"command.searchSessionsError": "Could not search past sessions.",
+	"command.noSessionMatches": "No past sessions matched.",
+	"command.searchSessionsBackfilling_one": "No matches yet — the index is still backfilling ({{count}} source pending).",
+	"command.searchSessionsBackfilling_other": "No matches yet — the index is still backfilling ({{count}} sources pending).",
+	"command.searchSessionsUnindexed": "Transcripts are not indexed for: {{harnesses}}.",
+	"command.searchSessionsUnavailable": "No matches, but the index could not finish building, so some sessions may be missing.",
+	"command.copyResumeCommand": "Copy resume command",
+	"command.recentSessions": "Recent sessions",
+	"command.sessionMatches_one": "{{count}} match",
+	"command.sessionMatches_other": "{{count}} matches"
 }

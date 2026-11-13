@@ -4807,5 +4807,17 @@
 	"sessionFork.forkedInto_other": "{{count}} Sitzungen wurden von dieser abgezweigt:",
 	"sessionFork.forkDeleted": "{{title}} (gelöscht)",
 	"sessionFork.textCopy": "Unterhaltung als Text kopiert",
-	"sessionFork.textCopyNotice": "Abgezweigt von {{title}}. Dieser Agent kann seine Unterhaltung nicht selbst kopieren, deshalb hat er die Unterhaltung des Originals als Text erhalten."
+	"sessionFork.textCopyNotice": "Abgezweigt von {{title}}. Dieser Agent kann seine Unterhaltung nicht selbst kopieren, deshalb hat er die Unterhaltung des Originals als Text erhalten.",
+	"command.sessionText": "Frühere Sitzungen",
+	"command.searchingSessions": "Frühere Sitzungen werden durchsucht…",
+	"command.searchSessionsError": "Frühere Sitzungen konnten nicht durchsucht werden.",
+	"command.noSessionMatches": "Keine früheren Sitzungen gefunden.",
+	"command.searchSessionsBackfilling_one": "Noch keine Treffer — der Index wird noch aufgebaut ({{count}} Quelle ausstehend).",
+	"command.searchSessionsBackfilling_other": "Noch keine Treffer — der Index wird noch aufgebaut ({{count}} Quellen ausstehend).",
+	"command.searchSessionsUnindexed": "Transkripte werden nicht indiziert für: {{harnesses}}.",
+	"command.searchSessionsUnavailable": "Keine Treffer, aber der Index konnte nicht fertig erstellt werden, daher fehlen möglicherweise Sitzungen.",
+	"command.copyResumeCommand": "Fortsetzen-Befehl kopieren",
+	"command.recentSessions": "Letzte Sitzungen",
+	"command.sessionMatches_one": "{{count}} Treffer",
+	"command.sessionMatches_other": "{{count}} Treffer"
 }
