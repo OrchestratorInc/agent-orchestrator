@@ -171,9 +171,9 @@ export const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQue
 export const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
 const lastRemoteHealthRecheck = new Map<string, number>();
 
-function recheckRemoteHost(hostId: string, status: number): void {
+function recheckRemoteHost(hostId: string, status?: number): void {
 	// 530: Cloudflare answers for a fixed address whose machine is offline.
-	if (![401, 403, 426, 502, 503, 530].includes(status)) return;
+	if (status !== undefined && ![401, 403, 426, 502, 503, 530].includes(status)) return;
 	const now = Date.now();
 	const last = lastRemoteHealthRecheck.get(hostId);
 	if (last !== undefined && now >= last && now - last < 2_000) return;
@@ -341,7 +341,10 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 }
 
 async function fetchRemoteProjects(hostId: string) {
-	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/projects");
+	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/projects").catch((cause: unknown) => {
+		recheckRemoteHost(hostId);
+		throw cause;
+	});
 	if (error) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;
@@ -350,7 +353,10 @@ async function fetchRemoteProjects(hostId: string) {
 }
 
 async function fetchRemoteSessions(hostId: string) {
-	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/sessions");
+	const { data, error, response } = await clientForHost(hostId).GET("/api/v1/sessions").catch((cause: unknown) => {
+		recheckRemoteHost(hostId);
+		throw cause;
+	});
 	if (error) {
 		recheckRemoteHost(hostId, response.status);
 		throw error;

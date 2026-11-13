@@ -86,6 +86,16 @@ it.each([
 	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-host-check" && (event as CustomEvent<string>).detail === hostId)).toBe(shouldRecheck);
 });
 
+it("rechecks a connected host when a remote read gets no answer", async () => {
+	remoteConnect.mockResolvedValue({ hostId: "box-silent", label: "Box", url: "http://box:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("fetch failed"); }));
+	await connectHost("http://box:3001");
+	const dispatched = vi.spyOn(window, "dispatchEvent");
+	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
+	await waitFor(() => expect(result.current.failedHostIds).toEqual(["box-silent"]), { timeout: 3000 });
+	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-host-check" && (event as CustomEvent<string>).detail === "box-silent")).toBe(true);
+});
+
 it("coalesces simultaneous and repeated remote request failures into one host recheck", async () => {
 	remoteConnect.mockResolvedValue({ hostId: "box-gate", label: "Box", url: "http://box:3001", base: "http://127.0.0.1:4000" });
 	vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "unauthorized", code: "BAD_PASSWORD" }, { status: 401 })));
