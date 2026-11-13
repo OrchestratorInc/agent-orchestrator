@@ -54,7 +54,7 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	// A local photo or screenshot shows a small copy: the original is decoded once, off the main
 	// thread, rather than in full by every card each time it scrolls into view. An SVG stays
 	// vector, and a Cloud image is shown as it is served.
-	const smallImage = useDownscaledImage(visible && !cloud && image && isRasterImagePath(row.path) ? image : undefined);
+	const smallImage = useDownscaledImage(visible && !cloud && image && isRasterImagePath(row.path) ? image : undefined, row.updatedAt);
 	const downscaling = visible && !cloud && Boolean(image) && isRasterImagePath(row.path) && smallImage === undefined;
 	const imageSrc = smallImage && smallImage !== "failed" ? smallImage : image;
 	// A cross-origin iframe fires load even for a 404 JSON response, so the readable artifact

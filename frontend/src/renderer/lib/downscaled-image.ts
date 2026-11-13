@@ -31,6 +31,15 @@ function keep(src: string, entry: Entry): Entry {
 	return entry;
 }
 
+/**
+ * The URL a version of a file is fetched from, which is also its key here. A local artifact's
+ * URL stays the same when an agent overwrites the file, so its version (the time it changed)
+ * names the copy: an overwritten image gets a new one, never the old picture.
+ */
+function versionedSrc(src: string, version: string): string {
+	return `${src}${src.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
+}
+
 async function downscale(src: string): Promise<Entry> {
 	try {
 		const response = await fetch(src);
@@ -48,49 +57,53 @@ async function downscale(src: string): Promise<Entry> {
 	}
 }
 
-/** The kept copy of `src`, or undefined while it is being made. */
-export function downscaledImage(src: string): Entry | undefined {
-	const entry = kept.get(src);
-	if (entry) keep(src, entry);
+/** The kept copy of this version of `src`, or undefined while it is being made. */
+export function downscaledImage(src: string, version: string): Entry | undefined {
+	const key = versionedSrc(src, version);
+	const entry = kept.get(key);
+	if (entry) keep(key, entry);
 	return entry;
 }
 
-/** Makes the copy of `src` once, however many cards ask at the same time. */
-export function requestDownscaledImage(src: string): Promise<Entry> {
-	const entry = kept.get(src);
+/** Makes the copy of this version of `src` once, however many cards ask at the same time. */
+export function requestDownscaledImage(src: string, version: string): Promise<Entry> {
+	const key = versionedSrc(src, version);
+	const entry = kept.get(key);
 	if (entry) return Promise.resolve(entry);
-	let request = pending.get(src);
+	let request = pending.get(key);
 	if (!request) {
-		request = downscale(src).then((made) => {
-			pending.delete(src);
-			return keep(src, made);
+		request = downscale(key).then((made) => {
+			pending.delete(key);
+			return keep(key, made);
 		});
-		pending.set(src, request);
+		pending.set(key, request);
 	}
 	return request;
 }
 
 /**
- * A small copy of the image at `src` for a card: its URL once made, "failed"
- * when it cannot be made (the card then shows the original), undefined while
- * it is being made. Pass undefined to make none.
+ * A small copy of the image at `src`, as of `version` (when the file last
+ * changed), for a card: its URL once made, "failed" when it cannot be made
+ * (the card then shows the original), undefined while it is being made. Pass
+ * undefined to make none.
  */
-export function useDownscaledImage(src: string | undefined): string | "failed" | undefined {
+export function useDownscaledImage(src: string | undefined, version: string): string | "failed" | undefined {
 	const read = (value: string | undefined) => {
-		const entry = value ? downscaledImage(value) : undefined;
+		const entry = value ? downscaledImage(value, version) : undefined;
 		return entry ? ("url" in entry ? entry.url : "failed") : undefined;
 	};
-	const [state, setState] = useState(() => ({ src, url: read(src) }));
-	const current = state.src === src ? state.url : read(src);
+	const key = src ? versionedSrc(src, version) : undefined;
+	const [state, setState] = useState(() => ({ key, url: read(src) }));
+	const current = state.key === key ? state.url : read(src);
 	useEffect(() => {
 		if (!src || current !== undefined) return;
 		let active = true;
-		void requestDownscaledImage(src).then((entry) => {
-			if (active) setState({ src, url: "url" in entry ? entry.url : "failed" });
+		void requestDownscaledImage(src, version).then((entry) => {
+			if (active) setState({ key: versionedSrc(src, version), url: "url" in entry ? entry.url : "failed" });
 		});
 		return () => {
 			active = false;
 		};
-	}, [src, current]);
+	}, [src, version, current]);
 	return current;
 }
