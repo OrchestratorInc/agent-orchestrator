@@ -177,11 +177,6 @@ type SerializedComposerTokenNode = Spread<
 	SerializedLexicalNode
 >;
 
-/** How long a dictated letter takes to fade in (the `stream-char` animation in styles.css). */
-const DICTATION_FADE_MS = 300;
-/** Letters that arrive together fade in this far apart, left to right. */
-const DICTATION_LETTER_STAGGER_MS = 14;
-
 /** The draft's text sits this far inside the composer's padding on both sides. */
 const COMPOSER_TEXT_INSET = "px-[7px]";
 /**
@@ -192,15 +187,10 @@ const COMPOSER_TEXT_INSET = "px-[7px]";
 const COMPOSER_SCROLL_GUTTER = "chat-composer-scrollbar [scrollbar-gutter:stable_both-edges]";
 
 /**
- * One letter of a dictation in progress. A letter fades in once, when it first
- * appears (the streamed-prose `stream-char` fade), after a delay that staggers
- * the letters of a word. Revisions change the letter in place, and copies
- * Lexical makes later (clone, split) never fade, so nothing flashes. The run
- * becomes plain text once the last fade has finished.
+ * One letter of a dictation in progress, kept apart from the draft's own text
+ * until recording ends, when the run becomes plain text.
  */
 class DictationLetterNode extends TextNode {
-	__fadeDelay: number | undefined;
-
 	static getType(): string {
 		return "dictation-letter";
 	}
@@ -211,22 +201,6 @@ class DictationLetterNode extends TextNode {
 
 	static importJSON(serialized: SerializedTextNode): DictationLetterNode {
 		return new DictationLetterNode(serialized.text).updateFromJSON(serialized);
-	}
-
-	constructor(text: string, key?: NodeKey, fadeDelay?: number) {
-		super(text, key);
-		this.__fadeDelay = fadeDelay;
-	}
-
-	createDOM(config: EditorConfig, editor?: LexicalEditor): HTMLElement {
-		const dom = super.createDOM(config, editor);
-		if (this.__fadeDelay !== undefined) {
-			dom.classList.add("stream-char");
-			// Hidden until its turn, then fades in like the rest.
-			dom.style.animationDelay = `${this.__fadeDelay}ms`;
-			dom.style.animationFillMode = "backwards";
-		}
-		return dom;
 	}
 }
 
@@ -625,8 +599,8 @@ const EditorBridge = forwardRef<
 	}
 >(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
-	/** The dictated letters, after an empty anchor node, and when the last fade ends. */
-	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
+	/** The dictated letters, after an empty anchor node. */
+	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; original: ReturnType<typeof editor.getEditorState> } | null>(null);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
 
@@ -670,6 +644,7 @@ const EditorBridge = forwardRef<
 			},
 			dictate: (text) => {
 				const continuing = dictation.current !== null;
+				const original = editor.getEditorState();
 				editor.update(() => {
 					let run = dictation.current;
 					if (!run) {
@@ -685,7 +660,7 @@ const EditorBridge = forwardRef<
 						// Holds the run's place; it stays empty.
 						const anchorNode = new DictationLetterNode("");
 						selection.insertNodes([anchorNode]);
-						run = { anchor: anchorNode.getKey(), keys: [], prefix: before && !/\s$/.test(before) ? " " : "", settled: 0 };
+						run = { anchor: anchorNode.getKey(), keys: [], prefix: before && !/\s$/.test(before) ? " " : "", original };
 						dictation.current = run;
 					}
 					const letters = Array.from(run.prefix + text);
@@ -693,17 +668,13 @@ const EditorBridge = forwardRef<
 					let last: TextNode | null = $getNodeByKey<TextNode>(run.anchor);
 					if (!last) return;
 					const keys: NodeKey[] = [];
-					let arriving = 0;
 					letters.forEach((letter, index) => {
 						let node = nodes[index];
 						if (node) {
-							// A revised letter changes in place, so it does not flash.
 							if (node.getTextContent() !== letter) node.setTextContent(letter);
 						} else {
-							const delay = arriving++ * DICTATION_LETTER_STAGGER_MS;
-							node = new DictationLetterNode(letter, undefined, delay);
+							node = new DictationLetterNode(letter);
 							last!.insertAfter(node);
-							run!.settled = Math.max(run!.settled, performance.now() + delay + DICTATION_FADE_MS);
 						}
 						last = node;
 						keys.push(node.getKey());
@@ -717,7 +688,11 @@ const EditorBridge = forwardRef<
 				const run = dictation.current;
 				dictation.current = null;
 				if (!run) return;
-				const finish = () => editor.update(() => {
+				const editable = editor.isEditable();
+				// Reconcile the DOM caret too; read-only updates leave its old position behind.
+				editor.setEditable(true);
+				if (!keep) { editor.setEditorState(run.original); editor.setEditable(editable); return; }
+				editor.update(() => {
 					const letters = run.keys.map((key) => $getNodeByKey(key)).filter($isTextNode);
 					const anchor = $getNodeByKey(run.anchor);
 					const text = letters.map((letter) => letter.getTextContent()).join("");
@@ -728,9 +703,7 @@ const EditorBridge = forwardRef<
 					}
 					for (const node of [anchor, ...letters]) node?.remove();
 				}, { discrete: true, tag: HISTORY_MERGE_TAG });
-				// Kept letters become plain text after their fades, so none is cut short.
-				if (keep) window.setTimeout(finish, Math.max(run.settled - performance.now(), 0));
-				else finish();
+				editor.setEditable(editable);
 			},
 			insertReference: (path, display, wire) => {
 				editor.update(() => {
@@ -921,8 +894,10 @@ export const ComposerEditor = forwardRef<
 		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
-		/** While dictating, the words arrive on their own: no caret, placeholder or suggestion. */
+		/** While dictating, the words arrive on their own: no caret or suggestion, and a placeholder says what is happening. */
 		dictating?: boolean;
+		/** Dictation has stopped listening and the final words are still being worked out. */
+		finishing?: boolean;
 		label: string;
 		placeholder: string;
 		promptSuggestion?: ComposerPromptSuggestion;
@@ -943,6 +918,7 @@ export const ComposerEditor = forwardRef<
 		enterSends,
 		concealed,
 		dictating,
+		finishing,
 		label,
 		placeholder,
 		promptSuggestion,
@@ -998,20 +974,17 @@ export const ComposerEditor = forwardRef<
 					// Same gutter as the field below, so the first typed character lands where the placeholder began.
 					: cn("pointer-events-none absolute inset-x-0 top-0 overflow-hidden", COMPOSER_SCROLL_GUTTER),
 			)}>
-				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : (
-					// Both stay mounted in one grid cell, so turning dictation on or off crossfades them.
-					<span className="grid *:col-start-1 *:row-start-1 *:transition-[opacity,filter] *:duration-300 *:ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:*:transition-none">
-						<span aria-hidden={dictating} className={dictating ? "opacity-0 blur-[2px]" : "opacity-100 blur-0"}>
-							<FadingPlaceholder text={placeholder} />
-						</span>
-						<span aria-hidden={!dictating} className={dictating ? "opacity-100 blur-0" : "opacity-0 blur-[2px]"}>
-							{t("chat.dictation.placeholder")}
-						</span>
-					</span>
+				{suggestion ? (
+					<span data-testid="prompt-suggestion">{suggestion.text}</span>
+				) : dictating ? (
+					// Swapped instantly, with no fade, so starting and finishing never wait on an animation.
+					<span>{t(finishing ? "chat.dictation.transcribing" : "chat.dictation.placeholder")}</span>
+				) : (
+					<FadingPlaceholder text={placeholder} />
 				)}
 			</div>
 		),
-		[dictating, placeholder, suggestion, t],
+		[dictating, finishing, placeholder, suggestion, t],
 	);
 
 	return (

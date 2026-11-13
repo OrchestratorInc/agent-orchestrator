@@ -1,5 +1,7 @@
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { CLOUD_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
+import { dictationClient } from "../../lib/dictation-client";
+import type { DictationEvent } from "../../../shared/dictation";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
 import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
@@ -3726,4 +3728,125 @@ describe("unsent message strip", () => {
 		expect(readChatSessionDraft("unsent-observed").unsent).toBeUndefined();
 		expect(onSend).not.toHaveBeenCalled();
 	});
+});
+
+
+describe("sending a dictated message", () => {
+	it("shows dictated words only when each recording finishes, in order across restarts", async () => {
+		const listeners = new Set<(event: DictationEvent) => void>();
+		const subscription = vi.spyOn(dictationClient, "onEvent").mockImplementation((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; });
+		const start = vi.spyOn(dictationClient, "start").mockResolvedValue();
+		const previous = useUiStore.getState().developerMode;
+		useUiStore.setState({ developerMode: true });
+		const view = render(<ChatComposer onSend={vi.fn()} />);
+		const emit = (event: DictationEvent) => act(() => { for (const listener of listeners) listener(event); });
+		try {
+			const field = screen.getByLabelText("Message the agent");
+			await userEvent.click(screen.getByRole("button", { name: /^Dictate$/ }));
+			emit({ type: "listening" });
+			emit({ type: "text", text: "First sentence." });
+			expect(composerWireText(field)).toBe("");
+			emit({ type: "text", text: "First sentence. Second sentence." });
+			expect(composerWireText(field)).toBe("");
+			emit({ type: "end", text: "First sentence. Second sentence." });
+			expect(composerWireText(field)).toBe("First sentence. Second sentence.");
+			await userEvent.click(screen.getByRole("button", { name: /^Dictate$/ }));
+			emit({ type: "listening" });
+			emit({ type: "text", text: "Third sentence." });
+			expect(composerWireText(field)).toBe("First sentence. Second sentence.");
+			emit({ type: "end", text: "Third sentence." });
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1000)); });
+			expect(composerWireText(field)).toBe("First sentence. Second sentence. Third sentence.");
+		} finally {
+			view.unmount(); subscription.mockRestore(); start.mockRestore(); useUiStore.setState({ developerMode: previous });
+		}
+	});
+	it("fills the empty box with a placeholder while listening and while finishing", async () => {
+		const listeners = new Set<(event: DictationEvent) => void>();
+		const subscription = vi.spyOn(dictationClient, "onEvent").mockImplementation((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; });
+		const start = vi.spyOn(dictationClient, "start").mockResolvedValue();
+		const stop = vi.spyOn(dictationClient, "stop").mockResolvedValue();
+		const previous = useUiStore.getState().developerMode;
+		useUiStore.setState({ developerMode: true });
+		const view = render(<ChatComposer onSend={vi.fn()} />);
+		try {
+			await userEvent.click(screen.getByRole("button", { name: /^Dictate$/ }));
+			act(() => { for (const listener of listeners) listener({ type: "listening" }); });
+			expect(screen.getByText("Start speaking")).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Finish dictation" }));
+			expect(await screen.findByText("Transcribing…")).toBeInTheDocument();
+			expect(screen.queryByText("Start speaking")).not.toBeInTheDocument();
+		} finally {
+			view.unmount(); subscription.mockRestore(); start.mockRestore(); stop.mockRestore(); useUiStore.setState({ developerMode: previous });
+		}
+	});
+	it("waits for final corrections and sends once after repeated submission", async () => {
+		const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+		const listeners = new Set<(event: DictationEvent) => void>();
+		const subscription = vi.spyOn(dictationClient, "onEvent").mockImplementation((listener) => {
+			listeners.add(listener);
+			return () => { listeners.delete(listener); };
+		});
+		const stop = vi.spyOn(dictationClient, "stop").mockResolvedValue();
+		const start = vi.spyOn(dictationClient, "start").mockResolvedValue();
+		const previousDeveloperMode = useUiStore.getState().developerMode;
+		useUiStore.setState({ developerMode: true });
+		const onSend = vi.fn();
+		const view = render(<ChatComposer onSend={onSend} />);
+		try {
+			await userEvent.click(screen.getByRole("button", { name: /^Dictate$/ }));
+			act(() => {
+				for (const listener of listeners) {
+					listener({ type: "listening" });
+					listener({ type: "text", text: "Change forty" });
+				}
+			});
+			const form = screen.getByLabelText("Message the agent").closest("form");
+			if (!form) throw new Error("Composer form missing");
+			fireEvent.submit(form);
+			fireEvent.submit(form);
+			expect(stop).toHaveBeenCalledTimes(1);
+			expect(onSend).not.toHaveBeenCalled();
+			await act(async () => {
+				for (const listener of listeners) listener({ type: "end", text: "Change 42." });
+			});
+			await waitFor(() => expect(onSend).toHaveBeenCalledExactlyOnceWith("Change 42."));
+		} finally {
+			view.unmount();
+			platform.mockRestore();
+			subscription.mockRestore();
+			stop.mockRestore();
+			start.mockRestore();
+			useUiStore.setState({ developerMode: previousDeveloperMode });
+		}
+	});
+});
+
+it("Escape restores the draft and cancels a send waiting for dictation", async () => {
+ const listeners = new Set<(event: DictationEvent) => void>();
+ const subscription = vi.spyOn(dictationClient, "onEvent").mockImplementation((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; });
+ const start = vi.spyOn(dictationClient, "start").mockResolvedValue();
+ const stop = vi.spyOn(dictationClient, "stop").mockResolvedValue();
+ const cancel = vi.spyOn(dictationClient, "cancel").mockResolvedValue();
+ const previous = useUiStore.getState().developerMode;
+ useUiStore.setState({ developerMode: true });
+ const onSend = vi.fn();
+ const view = render(<ChatComposer onSend={onSend} />);
+ try {
+  const field = screen.getByLabelText("Message the agent");
+  await typeInComposer(field, "Keep my draft");
+  expect(composerWireText(field)).toBe("Keep my draft");
+  await userEvent.click(screen.getByRole("button", { name: /^Dictate$/ }));
+  act(() => { for (const listener of listeners) { listener({ type: "listening" }); listener({ type: "text", text: "Discard these words" }); } });
+  expect(field).toHaveAttribute("contenteditable", "false");
+  fireEvent.keyDown(window, { key: "Enter" });
+  expect(stop).toHaveBeenCalledTimes(1);
+  fireEvent.keyDown(window, { key: "Escape" });
+  await waitFor(() => expect(field).toHaveTextContent("Keep my draft"));
+  expect(field).not.toHaveTextContent("Discard these words");
+  expect(cancel).toHaveBeenCalled();
+  expect(onSend).not.toHaveBeenCalled();
+ } finally {
+  view.unmount();subscription.mockRestore();start.mockRestore();stop.mockRestore();cancel.mockRestore();useUiStore.setState({ developerMode: previous });
+ }
 });
