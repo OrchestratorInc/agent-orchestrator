@@ -21,7 +21,7 @@ type Transfer = {
 	release: () => void;
 };
 
-type Sender = Pick<IpcMainInvokeEvent["sender"], "id" | "once" | "removeListener">;
+type Sender = Pick<IpcMainInvokeEvent["sender"], "id" | "isDestroyed" | "once" | "removeListener">;
 
 export function registerFileDownloadIpc(deps: FileDownloadIpcDeps): void {
 	const mark = deps.markDownloaded ?? ((filePath: string, appName: string) => markDownloaded(filePath, appName));
@@ -49,8 +49,13 @@ export function registerFileDownloadIpc(deps: FileDownloadIpcDeps): void {
 		if (result.canceled || !result.filePath) return null;
 		const partPath = path.join(path.dirname(result.filePath), `.${path.basename(result.filePath)}.${randomUUID()}.download`);
 		const file = await open(partPath, "wx");
-		const key = randomUUID();
 		const sender: Sender = event.sender;
+		if (sender.isDestroyed()) {
+			await file.close().catch(() => undefined);
+			await rm(partPath, { force: true });
+			return null;
+		}
+		const key = randomUUID();
 		const onDestroyed = () => void discard(key);
 		sender.once("destroyed", onDestroyed);
 		transfers.set(key, {
